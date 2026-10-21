@@ -254,12 +254,28 @@ export class AssistantSchedulerService {
   }
 
   /**
-   * Acknowledge one unattended run: drop its ledger entry and push the fresh
-   * list, so the "While you were away" surface and every assistant history lose
-   * the row. A no-op for an id the ledger does not hold.
+   * Acknowledge one unattended run: its notification row leaves the "While you
+   * were away" surface and every notification list, while the run history keeps
+   * the entry as the evidence it ran. A no-op for an id the ledger does not hold
+   * or already acknowledged.
    */
   dismissBackgroundRun(id: string): void {
-    if (this.deps.backgroundLedger?.dismiss(id)) this.notifyChange()
+    if (this.deps.backgroundLedger?.acknowledge(id)) this.notifyChange()
+  }
+
+  /**
+   * Acknowledge several runs at once: the missed scheduled fires and the
+   * unattended-run ledger entries a surface is showing.
+   *
+   * This is the bulk half of the notification panel's clear-all, which only owns
+   * the notices. Both records live here, so the run rows are retired in one pass
+   * and announced once instead of one row at a time, and the ledger keeps them as
+   * history rather than deleting evidence.
+   */
+  dismissRuns(missedRunIds: readonly string[], backgroundRunIds: readonly string[]): void {
+    const misses = this.missed.dismissMany(missedRunIds)
+    const runs = this.deps.backgroundLedger?.acknowledgeMany(backgroundRunIds) ?? 0
+    if (misses > 0 || runs > 0) this.notifyChange()
   }
 
   /**

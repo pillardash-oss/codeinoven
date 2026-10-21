@@ -2,10 +2,11 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { onDestroy, tick } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
-  import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
-  import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
+  import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
   import {
+    annotationAtPoint,
     anchorTextMatches,
     annotationFallbackAnchor,
     applyAnnotationHighlights,
@@ -16,6 +17,11 @@
     ANNOTATION_BUBBLE_SIZE,
     type AnnotationBubblePosition
   } from '$lib/selection-anchors'
+  import {
+    registerSelectionAnnotationClaim,
+    isEditingTarget,
+    trackLiveSelection
+  } from '$lib/selection-menu'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -36,14 +42,23 @@
     path: string
     /** Source being rendered, which is the file's draft while it is edited. */
     content: string
-    /** True when this view is the fullscreen reader. Its sidebar is behind the
-     *  modal, so an action that lands there has to give the modal up. */
+    /** True when this view is the fullscreen reader. */
     fullscreen?: boolean
-    /** Dismiss the fullscreen reader. Required to leave it from an action. */
+    /** Reveal the existing temporary chat inside the fullscreen reader. */
+    onOpenTemporaryChat?: () => void
+    /** Dismiss the fullscreen reader when opening a separate thread. */
     onExitFullscreen?: () => void
   }
 
-  let { projectId, threadId, path, content, fullscreen = false, onExitFullscreen }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    path,
+    content,
+    fullscreen = false,
+    onOpenTemporaryChat,
+    onExitFullscreen
+  }: Props = $props()
 
   /** Highlight registry name for document annotations. A conversation
    *  publishes its own name, so both a conversation and a document can be
@@ -57,6 +72,11 @@
   /** The rendered document every anchor offset is resolved against. */
   let documentRoot = $state<HTMLDivElement | null>(null)
   let pendingSelection = $state<DocumentSelectionCandidate | null>(null)
+  /** Whether the selection menu is on screen. Read as a flag rather than as the
+   *  candidate itself: the menu follows the passage the user keeps highlighting,
+   *  and a tracker keyed on the candidate would re-register on every keystroke of
+   *  the selection instead of once while the menu is open. */
+  const selectionMenuOpen = $derived(Boolean(pendingSelection))
   let editingId = $state<string | null>(null)
   let bubblePositions = $state<Record<string, AnnotationBubblePosition>>({})
   const ranges = new SvelteMap<string, Range>()
@@ -173,6 +193,114 @@
     document.getSelection()?.removeAllRanges()
   }
 
+  /**
+   * The candidate a right-click opens for a passage already annotated here.
+   *
+   * A right-click on a highlight asks to work on that passage again, so the
+   * candidate is rebuilt from the annotation rather than from the document
+   * selection, which is collapsed when the user right-clicks without selecting
+   * the passage first.
+   */
+  function annotationSelectionCandidate(
+    referenceId: string,
+    x: number,
+    y: number
+  ): DocumentSelectionCandidate | null {
+    const reference = annotations.find((candidate) => candidate.id === referenceId)
+    const range = ranges.get(referenceId)
+    if (!reference || !range) return null
+    if (reference.startOffset === undefined || reference.endOffset === undefined) return null
+    return {
+      text: reference.text,
+      range,
+      startOffset: reference.startOffset,
+      endOffset: reference.endOffset,
+      anchor: { x, y },
+      referenceId
+    }
+  }
+
+  /**
+   * Take a right-click that landed in the rendered document.
+   *
+   * The menu is the one a highlight opens, at the cursor instead of beside the
+   * passage, so both ways of reaching a passage's actions are one control. A
+   * click on a passage that already carries a note opens that note's editor
+   * along with the menu, which is how a note is found again from the words it
+   * was written about.
+   */
+  function claimDocumentSelectionMenu(event: MouseEvent): boolean {
+    const target = event.target
+    if (!(target instanceof Element)) return false
+    if (!target.closest('[data-annotation-surface]')) return false
+    if (isEditingTarget(target)) return false
+    // A link and an external-address control answer for themselves, so their
+    // menu keeps the items that open them.
+    if (target.closest('a, [data-external-url]')) return false
+    const annotatedId = annotationAtPoint(ranges, event.clientX, event.clientY)
+    const candidate = annotatedId
+      ? annotationSelectionCandidate(annotatedId, event.clientX, event.clientY)
+      : captureDocumentSelection(documentRoot)
+    if (!candidate) return false
+    event.preventDefault()
+    event.stopPropagation()
+    if (annotatedId) editingId = annotatedId
+    pendingSelection = candidate
+    return true
+  }
+
+  /** What the menu's note item does: write a note on a passage, or reopen the
+   *  one a passage already carries. */
+  function writeNoteOnSelection(): void {
+    const candidate = pendingSelection
+    if (!candidate) return
+    const referenceId = candidate.referenceId
+    if (referenceId) {
+      closeSelection()
+      editingId = referenceId
+      return
+    }
+    addAnnotation()
+  }
+
+  /**
+   * Follow the selection while the menu is open.
+   *
+   * Shift and an arrow key extend or trim a selection with no pointer event, and
+   * the menu has to describe the passage highlighted now rather than the one
+   * highlighted when the pointer came up. A selection that collapses or leaves
+   * the document closes the menu, which is what its absence means.
+   */
+  /**
+   * Whether an emptied selection happened inside this document.
+   *
+   * A caret that has moved into a field is not the user clearing this passage:
+   * the note editor takes focus the moment the menu opens a note, and a menu
+   * that closed on that would take the actions away from the note being written.
+   * A selection that emptied inside the document is the passage being cleared,
+   * and closes the menu.
+   */
+  function selectionTouchesDocument(): boolean {
+    const selection = document.getSelection()
+    const root = documentRoot
+    if (!selection || !root) return true
+    return root.contains(selection.anchorNode) || root.contains(selection.focusNode)
+  }
+
+  $effect(() => {
+    if (!selectionMenuOpen) return
+    return trackLiveSelection(
+      () => captureDocumentSelection(documentRoot),
+      (candidate) => {
+        if (!candidate && !selectionTouchesDocument()) return
+        pendingSelection = candidate
+      }
+    )
+  })
+
+  /** Own the right-click menu inside this document while its view is mounted. */
+  $effect(() => registerSelectionAnnotationClaim(claimDocumentSelectionMenu))
+
   /** Attach the passage to the conversation's composer and open its note editor,
    *  exactly like a response selection: the passage is already part of the next
    *  message before the note is written. */
@@ -218,9 +346,7 @@
       mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
     closeSelection()
-    // The side chat opens in the sidebar, which the fullscreen reader covers.
-    // Leaving fullscreen is what makes the action visible at all.
-    if (fullscreen) onExitFullscreen?.()
+    if (fullscreen) onOpenTemporaryChat?.()
   }
 
   /** Spin the selected passage into a thread of its own, seeded as its draft. */
@@ -307,7 +433,7 @@
     onpointerup={captureSelection}
     onscroll={scheduleBubbleUpdate}
   >
-    <div bind:this={documentRoot}>
+    <div bind:this={documentRoot} data-annotation-surface>
       <MarkdownView text={content} class="text-sm text-foreground" />
     </div>
   </div>
@@ -317,27 +443,31 @@
 {#each annotations as reference (reference.id)}
   {@const position = bubblePositions[reference.id]}
   {#if position?.visible}
-    <ResponseAnnotationBubble
-      x={position.x}
-      y={position.y}
+    <AnnotationIndicator
+      id={reference.id}
+      surface={`file:${path}`}
+      left={`${position.x}px`}
+      top={`${position.y}px`}
+      fixed
       number={annotationNumber(reference.id)}
       hasComment={Boolean(reference.comment)}
       active={editingId === reference.id}
       title={reference.comment
-        ? `Edit the note on this passage of ${path}`
-        : `Add a note to this passage of ${path}`}
-      onClick={() => (editingId = reference.id)}
+        ? `Edit the note on this passage of ${path}. Drag to move it, click to edit.`
+        : `Add a note to this passage of ${path}. Drag to move it, click to write.`}
+      class="z-40"
+      onOpen={() => (editingId = reference.id)}
     />
   {/if}
 {/each}
 
 {#if pendingSelection}
-  <ResponseSelectionPopover
+  <SelectionActionMenu
     text={pendingSelection.text}
-    x={pendingSelection.x}
-    y={pendingSelection.y}
+    anchor={pendingSelection.anchor}
     selectionLabel="passage"
-    onAdd={addAnnotation}
+    annotated={Boolean(pendingSelection.referenceId)}
+    onComment={writeNoteOnSelection}
     onElaborate={() => openPassageChat('elaborate')}
     onQuickChat={() => openPassageChat('quick')}
     onNewThread={openPassageThread}

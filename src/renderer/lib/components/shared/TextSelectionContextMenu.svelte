@@ -1,12 +1,15 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioLink from '$lib/components/icons/cio/CioLink.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioEraser from '@pdslng/cio-icon/CioEraser.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioLink from '@pdslng/cio-icon/CioLink.svelte'
+  import CioScissors from '@pdslng/cio-icon/CioScissors.svelte'
+  import CioSelectAll from '@pdslng/cio-icon/CioSelectAll.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { SUPPORT_EMAIL } from '$shared/brand'
   import { onMount } from 'svelte'
-  import { Eraser, Scissors, TextSelect } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
@@ -21,6 +24,7 @@
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { claimSelectionAnnotationMenu } from '$lib/selection-menu'
 
   type MenuKind = 'text' | 'editable' | 'terminal'
 
@@ -219,6 +223,12 @@
   }
 
   function handleContextMenu(event: MouseEvent): void {
+    // An annotatable surface owns the menu for the text it annotates: a
+    // selection in an assistant response or in a rendered document opens the
+    // same action menu a highlight opens, which is where its annotation is
+    // written and where the plain copy item now lives. Asked first because this
+    // listener runs in the capture phase, ahead of any element handler.
+    if (claimSelectionAnnotationMenu(event)) return
     const resolved = resolveTarget(event)
     if (!resolved) return
     event.preventDefault()
@@ -426,13 +436,28 @@
 </script>
 
 {#if target}
+  <!--
+    The menu is drawn above every modal, not merely above the panels.
+
+    It is a window-level surface: the terminal it serves can be a full screen
+    action's output, an Oven's own shell or a provider's sign-in, and all of
+    those live inside `ui/Modal.svelte`, whose panel stacks at `z-60` (and `z-80`
+    over a browser page). At `z-50` the menu opened *behind* that panel and was
+    invisible to the user, which read as the terminal having no context menu at
+    all. `data-layer-above-modal` is the other half of the contract: a modal locks
+    the page with `body { pointer-events: none }` and treats an outside press as a
+    backdrop press, so this layer opts back into pointer events in `app.css` and
+    `lib/layer-above-modal.ts` keeps a press on it from dismissing the modal
+    underneath.
+  -->
   <div
     {@attach captureMenu}
     bind:clientWidth={menuWidth}
     bind:clientHeight={menuHeight}
-    class="fixed z-50 min-w-44 border border-border bg-surface p-1 shadow-xl"
+    class="fixed z-90 min-w-44 border border-border bg-surface p-1 shadow-xl"
     style={positionStyle}
     role="menu"
+    data-layer-above-modal
   >
     {#if target.kind === 'editable'}
       <button
@@ -442,7 +467,7 @@
         disabled={!target.text}
         onclick={() => cut(target!)}
       >
-        <Scissors class="size-3.5 shrink-0 text-text-muted" />
+        <CioScissors class="size-3.5 shrink-0 text-text-muted" />
         Cut
       </button>
       <button
@@ -460,7 +485,7 @@
         Paste
       </button>
       <button type="button" class={itemClass} role="menuitem" onclick={() => selectAll(target!)}>
-        <TextSelect class="size-3.5 shrink-0 text-text-muted" />
+        <CioSelectAll class="size-3.5 shrink-0 text-text-muted" />
         Select All
       </button>
     {:else if target.kind === 'terminal'}
@@ -489,7 +514,7 @@
         role="menuitem"
         onclick={() => selectAllInTerminal(target!)}
       >
-        <TextSelect class="size-3.5 shrink-0 text-text-muted" />
+        <CioSelectAll class="size-3.5 shrink-0 text-text-muted" />
         Select All
       </button>
       <button
@@ -498,7 +523,7 @@
         role="menuitem"
         onclick={() => clearTerminal(target!)}
       >
-        <Eraser class="size-3.5 shrink-0 text-text-muted" />
+        <CioEraser class="size-3.5 shrink-0 text-text-muted" />
         Clear
       </button>
     {:else}
@@ -564,7 +589,7 @@
                 title="Open in the CIO browser tab for this project"
                 onclick={() => openLinkInCioBrowser(target!.linkHref!)}
               >
-                <CioBrowser class="size-3.5 shrink-0 text-text-muted" />
+                <CioThreadBrowser class="size-3.5 shrink-0 text-text-muted" />
                 Open in Thread Browser
               </button>
             {/if}

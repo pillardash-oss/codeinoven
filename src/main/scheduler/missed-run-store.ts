@@ -122,6 +122,25 @@ export class MissedRunStore {
   }
 
   /**
+   * Acknowledge the given missed runs at once, for a panel's clear-all.
+   *
+   * Runs the same dismissal as `dismiss` for every pending record it is given and
+   * persists once, so clearing a long list never becomes one file write per row.
+   * Returns how many records were retired.
+   */
+  dismissMany(ids: readonly string[]): number {
+    let dismissed = 0
+    for (const id of ids) {
+      const run = this.runs.get(id)
+      if (!run || run.status !== 'pending') continue
+      this.runs.set(id, { ...run, status: 'dismissed' })
+      dismissed += 1
+    }
+    if (dismissed > 0) this.persist()
+    return dismissed
+  }
+
+  /**
    * Drop a record outright, for a miss that is no longer real (its slot
    * predates the schedule, or its task is gone). Unlike `dismiss`, no trace is
    * kept, so it can never resurface in a task-scoped list.

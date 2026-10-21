@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
+  import CioChat from '@pdslng/cio-icon/CioChat.svelte'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { appPanelSlot } from '$lib/app-panel-portal'
@@ -34,10 +34,17 @@
      *  transition: a drag has to track the pointer exactly, and a hosted native
      *  page must not chase an easing frame. */
     onWidthChange?: (width: number) => void
+    /** The width this rail actually occupies, when the host caps it to keep room
+     *  for the page. Defaults to the stored preference, for a host that has no
+     *  ceiling of its own. */
+    width?: number
   }
 
-  let { onClose, onWidthChange = (width: number) => contextSidebarState.setWidth(width) }: Props =
-    $props()
+  let {
+    onClose,
+    onWidthChange = (width: number) => contextSidebarState.setWidth(width),
+    width = contextSidebarState.width
+  }: Props = $props()
 
   /**
    * The browser view's right rail.
@@ -62,7 +69,7 @@
 
   // The note is docked by the store the moment a tab becomes active and while
   // this rail is shown, so nothing here creates it; this only reads the one the
-  // store owns.
+  // Store owns.
   const noteTab = $derived(
     activeTab ? contextSidebarState.noteTabFor(GLOBAL_BROWSER_PROJECT_ID, activeTab.id) : null
   )
@@ -545,12 +552,12 @@
     if (agentChat) void browserAssistant.refreshArtifacts(agentChat.threadId)
   }}
   class="min-h-0 min-w-0 shrink-0"
-  style:width="{contextSidebarState.width}px"
+  style:width="{width}px"
 >
   <ContextSidebar
     {tabs}
     {activeTabId}
-    width={contextSidebarState.width}
+    width={width}
     height={contextSidebarState.terminalHeight}
     placement="right"
     content={railContent}

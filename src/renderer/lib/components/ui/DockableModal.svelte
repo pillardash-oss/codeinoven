@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioGrip from '$lib/components/icons/cio/CioGrip.svelte'
-  import CioMinus from '$lib/components/icons/cio/CioMinus.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
+  import CioMinus from '@pdslng/cio-icon/CioMinus.svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { Snippet } from 'svelte'
   import { BitsConfig } from 'bits-ui'
@@ -519,7 +519,7 @@
         wrapping to a second row. Panels that already fit are unaffected.
       -->
         <div
-          class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3"
+          class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3 [&>[data-modal-dismiss]:first-child]:mr-auto"
           data-modal-footer
         >
           {@render footer()}

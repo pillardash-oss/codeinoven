@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import { FileCheck2 } from '@lucide/svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioFileCheck from '@pdslng/cio-icon/CioFileCheck.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -146,7 +146,7 @@
               : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'
   )
 
-  const headIcon = $derived(failed || interrupted || partial ? CioAlertCircle : FileCheck2)
+  const headIcon = $derived(failed || interrupted || partial ? CioAlertCircle : CioFileCheck)
   const headTone = $derived(failed || interrupted || partial ? 'warn' : 'default')
 
   const chip = $derived.by<CardChipData>(() => {

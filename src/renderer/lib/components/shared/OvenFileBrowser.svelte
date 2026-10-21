@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
-  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { Home } from '@lucide/svelte'
+  import CioFolderPlus from '@pdslng/cio-icon/CioFolderPlus.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioHome from '@pdslng/cio-icon/CioHome.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenFile } from '$shared/ovens'
 
@@ -73,7 +73,7 @@
   /** The create row is open only while the user is still in the directory it opened in. */
   let creating = $derived(Boolean(createAt) && createAt === current)
 
-  /** Drop a trailing separator so `/home/user/` and `/home/user` compare equal. */
+  /** Drop a trailing separator so `/Home/user/` and `/Home/user` compare equal. */
   function trimTrailingSeparator(path: string): string {
     return path.replace(/[\\/]+$/u, '') || path
   }
@@ -87,7 +87,7 @@
   /**
    * The directory one level up, or null when already at a filesystem root.
    *
-   * `/home` climbs to `/`   the root is a real listing, not a dead end   and a
+   * `/Home` climbs to `/`   the root is a real listing, not a dead end   and a
    * Windows drive root (`C:\`) is the only place with nowhere above it.
    */
   function parentDirectory(path: string): string | null {
@@ -208,7 +208,7 @@
       disabled={disabled || !root}
       onclick={() => void open(root)}
     >
-      <Home size={14} />
+      <CioHome size={14} />
     </button>
     <button
       type="button"

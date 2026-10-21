@@ -56,7 +56,7 @@ export function registerGatewayIpc(
     const password = await supervisor.dashboardPassword(
       validateEntityId(rawPluginId, 'Gateway plugin ID')
     )
-    clipboard.writeText(password)
+    await clipboard.writeText(password)
   })
 
   return supervisor

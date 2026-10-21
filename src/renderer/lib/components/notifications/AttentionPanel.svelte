@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'

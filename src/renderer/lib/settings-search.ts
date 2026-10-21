@@ -1,26 +1,23 @@
-import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
-import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
-import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
-import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
-import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
-import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
-import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
-import {
-  ChartColumn,
-  HeartPulse,
-  Keyboard,
-  MonitorUp,
-  Router,
-  SlidersHorizontal,
-  UsersRound
-} from '@lucide/svelte'
+import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
+import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
+import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
+import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
+import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
+import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
+import CioTeam from '@pdslng/cio-icon/CioTeam.svelte'
+import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
 import { feature } from '$lib/feature-registry'
 import type { Component } from 'svelte'
 import type { SettingsSection } from './stores/renderer-recovery'
@@ -62,7 +59,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'General',
     description: 'Appearance, notifications, git, threads, and power defaults.',
     keywords: ['settings', 'preferences'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'ovens',
@@ -94,25 +91,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Agents',
     description: 'Agent names, audits, and per-agent behavior.',
     keywords: ['workers', 'audit'],
-    icon: UsersRound
-  },
-  {
-    id: 'design-work-folders',
-    section: 'design',
-    blockId: 'design-work-folders',
-    title: 'Work folders',
-    description: 'Where designs and videos are saved, and whether Git tracks them.',
-    keywords: [
-      'design folder',
-      'video folder',
-      'save path',
-      'version control',
-      'git',
-      'commit',
-      'move',
-      'output'
-    ],
-    icon: CioFiles
+    icon: CioTeam
   },
   {
     id: 'design-generation',
@@ -180,7 +159,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Heartbeat',
     description: 'Timed pings that keep a model’s usage window warm.',
     keywords: ['ping', 'pong', 'usage window', 'reset', 'schedule'],
-    icon: HeartPulse
+    icon: CioHeartPulse
   },
   {
     id: 'harnesses',
@@ -221,7 +200,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Gateways',
     description: 'Gateway routing and endpoints.',
     keywords: ['routing', 'endpoints'],
-    icon: Router
+    icon: CioNetwork
   },
   {
     id: 'computer-use',
@@ -229,7 +208,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Computer use',
     description: 'Bridge settings for computer-control agents.',
     keywords: ['cua', 'bridge', 'automation', 'update'],
-    icon: MonitorUp
+    icon: CioDisplay
   },
   {
     id: 'sound',
@@ -266,7 +245,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Keymap',
     description: 'Keyboard shortcuts for every app action.',
     keywords: ['shortcuts', 'hotkeys', 'keyboard'],
-    icon: Keyboard
+    icon: CioKeyboard
   },
   {
     id: 'cloud-deployments',
@@ -282,7 +261,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Usage',
     description: 'Local usage, cost, and model rankings.',
     keywords: ['quota', 'usage', 'spend', 'activity'],
-    icon: ChartColumn
+    icon: CioMessage
+  },
+  {
+    id: 'archives',
+    section: 'archives',
+    title: 'Archives',
+    description: 'Archived projects, threads, chats, and assistants.',
+    keywords: ['archive', 'restore', 'unarchive'],
+    icon: CioArchive
   },
   {
     id: 'about',
@@ -298,9 +285,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-appearance',
     title: 'Appearance',
-    description: 'Theme — follow the system or pick light or dark.',
-    keywords: ['theme', 'light', 'dark', 'system'],
-    icon: SlidersHorizontal
+    description: 'Theme, contrast, font, size, weight, and zoom.',
+    keywords: ['theme', 'light', 'dark', 'system', 'contrast', 'accessibility', 'readability'],
+    icon: CioTabSettings
   },
   {
     id: 'general-notifications',
@@ -309,7 +296,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Notifications',
     description: 'System notification alerts, in-app notification sounds, and permission status.',
     keywords: ['alerts', 'permission', 'test', 'sound', 'in-app', 'toast'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-power',
@@ -318,7 +305,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Power',
     description: 'Keep the device awake while work is in progress.',
     keywords: ['sleep', 'keep awake', 'battery'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-recovery',
@@ -327,7 +314,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Recovery',
     description: 'Resume interrupted work and auto-resume after usage resets.',
     keywords: ['resume', 'restart', 'auto-resume', 'rate limit'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-git',
@@ -347,16 +334,26 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'file size',
       'too large'
     ],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-threads',
     section: 'general',
     blockId: 'general-threads',
     title: 'Threads',
-    description: 'Thread limits, slash command behavior, and question timeout.',
-    keywords: ['limit', 'slash commands', 'timeout'],
-    icon: SlidersHorizontal
+    description:
+      'Thread limits, slash command behavior, question timeout, and which panel tabs the switcher lists.',
+    keywords: [
+      'limit',
+      'slash commands',
+      'timeout',
+      'switcher',
+      'ctrl+tab',
+      'terminal tabs',
+      'file tabs',
+      'browser tabs'
+    ],
+    icon: CioTabSettings
   },
   {
     id: 'general-cio-cleanup',
@@ -377,7 +374,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'videos',
       'utilities'
     ],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-cio-cleanup-retention',
@@ -386,7 +383,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'CIO Cleanup retention',
     description: 'How many days scratch content is kept before CIO Cleanup removes it.',
     keywords: ['cleanup', 'scratch', 'retention', 'days', 'stale'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-background',
@@ -395,7 +392,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Run in the background',
     description: 'Keep Assistants on schedule after the window closes.',
     keywords: ['background', 'menu bar', 'tray', 'scheduled', 'close', 'quit'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-background-mode',
@@ -404,7 +401,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Background mode',
     description: 'Park only when work is running or due, or never quit on close.',
     keywords: ['scheduled', 'always', 'background', 'close', 'quit'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-launch-at-login',
@@ -413,7 +410,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Start at login',
     description: 'Launch CodeInOven at login so a schedule can fire after a restart.',
     keywords: ['login', 'autostart', 'startup', 'boot'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-missed-runs',
@@ -422,7 +419,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Run missed scheduled work on return',
     description: 'Catch up on assistant slots missed to sleep or a closed app.',
     keywords: ['missed', 'catch up', 'scheduled', 'sleep', 'resume'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'general-wake-lead',
@@ -431,7 +428,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Wake lead',
     description: 'How long before a due run the device is held awake.',
     keywords: ['wake', 'sleep', 'lead', 'prevent sleep', 'battery'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   // ── Blocks on Browser ─────────────────────────────────────────────────
   {
@@ -523,7 +520,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Community',
     description: 'Report a bug, send feedback, or contribute on GitHub.',
     keywords: ['feedback', 'bug report', 'contribute', 'github', 'issue'],
-    icon: UsersRound
+    icon: CioTeam
   },
   {
     id: 'about-privacy',

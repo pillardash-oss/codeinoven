@@ -1,15 +1,17 @@
 <script lang="ts">
-  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSun from '@pdslng/cio-icon/CioSun.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -19,6 +21,7 @@
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
+    CONTRAST_LEVEL_OPTIONS,
     FONT_FAMILY_OPTIONS,
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
@@ -56,7 +59,6 @@
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
-  import { Moon, Sun } from '@lucide/svelte'
   import { onMount, tick, type Component } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
@@ -69,6 +71,7 @@
   import Modal from '../ui/Modal.svelte'
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -77,7 +80,6 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
-  import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
@@ -273,8 +275,8 @@
 
   const themeOptions = [
     { id: 'system' as const, label: 'System', icon: CioDisplay },
-    { id: 'light' as const, label: 'Light', icon: Sun },
-    { id: 'dark' as const, label: 'Dark', icon: Moon }
+    { id: 'light' as const, label: 'Light', icon: CioSun },
+    { id: 'dark' as const, label: 'Dark', icon: CioMoon }
   ]
 
   const slashCommandOptions: Array<{
@@ -555,11 +557,13 @@
 
   const isNightlyChannel = $derived(config.updateChannel === 'nightly')
 
-  /** Installed build's version, marked as nightly when the user is on the nightly channel. */
-  const displayVersion = $derived.by(() => {
-    const base = updaterState.status.currentVersion ?? '0.1.0'
-    return base.includes('nightly') ? base : isNightlyChannel ? `${base}-nightly` : base
-  })
+  /**
+   * The installed build's own version, exactly as it was packaged. No channel
+   * suffix is synthesised: a stable build subscribed to the nightly channel is
+   * still that stable build, and the Changelog below reads the release for this
+   * exact version, so the two always agree.
+   */
+  const displayVersion = $derived(updaterState.status.currentVersion ?? '0.1.0')
 
   /**
    * Load the blockers, then show the modal over the settings page.
@@ -679,6 +683,30 @@
                     onclick={() => setPreference(option.id)}
                   >
                     <Icon size={13} />
+                    {option.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Contrast</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  Strengthen text and rules for a dim or washed-out display
+                </p>
+              </div>
+              <div class="flex items-center gap-0.5 border bg-elevated p-0.5">
+                {#each CONTRAST_LEVEL_OPTIONS as option (option.id)}
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium transition-colors {config.contrastLevel ===
+                    option.id
+                      ? 'bg-surface text-foreground'
+                      : 'text-muted hover:text-foreground'}"
+                    aria-pressed={config.contrastLevel === option.id}
+                    disabled={!settingsReady}
+                    title={option.hint}
+                    onclick={() => void updateConfig({ contrastLevel: option.id })}
+                  >
                     {option.label}
                   </button>
                 {/each}
@@ -1148,6 +1176,55 @@
                   onchange={saveAgentQuestionCap}
                 />
               </div>
+              <div class="space-y-2 border-t border-border pt-3">
+                <div>
+                  <p class="text-sm font-medium">Switcher panel tabs</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Let Ctrl+Tab also cycle these panels' own tabs
+                  </p>
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Terminal tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open terminal</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherTerminalTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherTerminalTabs: !config.switcherTerminalTabs })}
+                    aria-label="Toggle listing terminal tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Project file tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open file</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherFileTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherFileTabs: !config.switcherFileTabs })}
+                    aria-label="Toggle listing project file tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Thread browser tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open browser tab</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherThreadBrowserTabs}
+                    onchange={() =>
+                      void updateConfig({
+                        switcherThreadBrowserTabs: !config.switcherThreadBrowserTabs
+                      })}
+                    aria-label="Toggle listing thread browser tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+              </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Run in the background</p>
@@ -1351,17 +1428,14 @@
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
           <p class="mt-0.5 text-sm text-muted">
-            Where design and video work is saved, which model does each kind of it, and the optional
-            video pack.
+            Which model does each kind of design and video work, and the optional video pack. Save
+            folders belong to each project and are changed from its design or video board.
           </p>
           {#if error}
             <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
-        </div>
-        <div class="mb-6">
-          <DesignWorkFoldersSettings {config} {settingsReady} {updateConfig} />
         </div>
         <div class="mb-6">
           <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
@@ -1475,6 +1549,8 @@
       />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
+    {:else if section === 'archives'}
+      <ArchivesSettingsTab />
     {:else if section === 'about'}
       <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { CircleStop } from '@lucide/svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import { toast } from 'svelte-sonner'
   import { showToastError } from '$lib/stores/app-errors.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -76,7 +76,7 @@
     {#if busy}
       <CioSpinner size={11} class="animate-spin" />
     {:else}
-      <CircleStop size={11} />
+      <CioStop size={11} />
     {/if}
     {#if !compact}
       <span>Cancel</span>

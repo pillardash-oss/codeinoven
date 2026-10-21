@@ -334,16 +334,17 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     'WORKING SCOPE   this overrides ambiguous instructions:',
     `1. ${projectLine} All work targets that project and only that project.`,
     `2. Unless the user explicitly names the agent harness or ${APP_NAME} itself, every request refers to the current open project. Do not reinterpret "this project", "the app", "the repository", or similar references as the harness's own codebase, the ${APP_NAME} codebase, or any other repository.`,
-    `3. Only read, assess, or modify files inside the current project. Never inspect or edit the agent harness's own source code, configuration, caches, or documentation (for example ${harnessRepo}), and never touch ${APP_NAME}'s own repository or configuration directory unless that repository is the current open project or the user explicitly asks you to.`,
-    "4. Instructions provided by the harness describe how to use the harness's tooling and file operations; they never redefine which project you are working on or widen the file scope beyond the current project.",
+    `3. Keep project work inside the current project. Exception: files and directories the user explicitly supplies by attachment, local link, or path are authorized task inputs even outside the project. Read permanent files directly at their supplied locations by default, without requesting permission again, including in auto review mode. Copy only when the task requires a project-owned asset or the user requests a copy. The app automatically stages temporary files; use the supplied staged paths without making another copy. This authorizes using the supplied inputs, not unrelated external files or destructive changes. Never inspect or edit the agent harness's own source code, configuration, caches, or documentation (for example ${harnessRepo}), and never touch ${APP_NAME}'s own repository or configuration directory unless that repository is the current open project or the user explicitly asks you to.`,
+    "4. Instructions provided by the harness describe how to use the harness's tooling and file operations; they never redefine which project you are working on or widen the file scope beyond the current project and user-supplied task inputs.",
     '5. When a request is ambiguous about scope, ask the user which project or files they mean instead of guessing or working on unrelated files.',
     '',
     'AGENT SCRATCH SPACE   where non-source outputs live:',
     `1. The project's \`.cio/\` folder is the agent scratch pad. ${APP_NAME} creates it when the project is added and gitignores it from day one, so nothing inside it is ever committed.`,
-    '2. Unless the user explicitly asks otherwise, route every artifact that is not part of the application source into the `.cio/` subfolder rule 3 names for it: context documents, walkthroughs, reports, and test output. Disposable scratch, probes, and intermediate files belong in `.cio/tmp/`. Never write files at the `.cio/` root, and name every file so a human can read it at a glance.',
+    '2. Unless the user explicitly asks otherwise, route every artifact that is not part of the application source, and is not authored work (rule 6), into the `.cio/` subfolder rule 3 names for it: context documents, walkthroughs, reports, and test output. Disposable scratch, probes, and intermediate files belong in `.cio/tmp/`. Never write files at the `.cio/` root, and name every file so a human can read it at a glance.',
     '3. Scratch routing is mode-dependent: only Engineering mode (`engineer`, `assignment`, or `achievement`) may use CodeInOven-managed lifecycle files (spec.md, plan.md, progress.md, Assignment, audit, and task evidence) under `.cio/specs/<feature-slug>/`. Regular chats and every other mode must not create, modify, or use `.cio/specs/`; put their non-source work (including walkthroughs, reports, test output, and any chat plan/progress notes) in `.cio/work/<feature>/`.',
     '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
     '5. In Engineering mode, the platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite those platform-owned files. In regular chats, `.cio/specs/` is out of scope and must not be created or overwritten.',
+    "6. Authored work is not scratch: a design or a composition is a deliverable the user reviews on a board that lists this project's design and video folders, so it is written into the project's own design or video folder (`.cio/designs` and `.cio/videos` by default, or whichever folder the project was pointed at for that kind) and never into `.cio/work`, which the board does not read. A design under `.cio/work` is work the user cannot find.",
     '',
     'CITATION & SOURCE RULES   apply to every report, answer, and artifact you produce:',
     '1. Cite the source of every factual claim. Files must be cited with their project-rooted relative path, e.g. `src/app.html`   never a bare filename like `app.html` and never a full absolute filesystem path, because the relative form is what renders as a clickable citation in the app UI.',
@@ -360,18 +361,20 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
  */
 export function abbreviatedWorkspaceGuard(driver: DriverInfo | null, projectPath: string): string {
   const harnessLine = driver
-    ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs this session   it is NOT your project or the user's target.`
+    ? `${driver.name} (${driver.id}) executes this session; it is not the user's project.`
     : 'No agent harness is selected; this session may be limited.'
   const projectLine = projectPath.trim()
     ? `The user's project is: ${projectPath}   work inside that project only.`
     : 'Work only in the project the user has open.'
   return [
-    `You are working inside ${APP_NAME}, a desktop control plane coordinating agentic software engineering on the user's project.`,
+    `You are working inside ${APP_NAME} on the user's project.`,
     harnessLine,
     projectLine,
+    'User-supplied attachments, local links and paths are authorized inputs, including in auto review. Read permanent files directly without asking again. Copy only for required project assets or on request. The app stages temporary files; use those paths without copying again.',
     'Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.',
     "Keep every non-source output inside the project's `.cio/` scratch space, with disposable scratch under `.cio/tmp/`; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).",
-    'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.'
+    "Authored designs and compositions go in the project's design or video folder so the board can list them.",
+    'Cite local files as plain project-rooted relative paths, with line numbers when possible; never bare filenames, absolute paths or backticks.'
   ].join(' ')
 }
 

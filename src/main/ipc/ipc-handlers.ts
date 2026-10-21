@@ -1,7 +1,8 @@
+import { registerArchiveHandlers } from './handlers/archive-handlers'
 import { resolveOvenThreadRoot } from '../ovens/oven-thread-root'
-import { app } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import { join } from 'path'
 import { getConfigRoot, getScopeRootPath } from '../../lib/utils'
 import { appearanceImagesDirectory } from '../../lib/icon-file'
@@ -308,7 +309,7 @@ export function registerIpcHandlers(
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.
-  const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+  const isProduction = isShippedBuild() || process.env['NODE_ENV'] === 'production'
   const privilegedIpc = new PrivilegedIpcValidator({
     navigationTargets: appRendererNavigationTargets(),
     allowDevelopmentHttp: !isProduction,
@@ -532,6 +533,7 @@ export function registerIpcHandlers(
   registerNotesHandlers(ctx)
   registerHistoryHandlers(ctx)
   registerSearchHandlers(ctx)
+  registerArchiveHandlers(ctx)
   registerPlanHandlers(ctx)
   registerUpdaterHandlers(ctx)
   registerAssistantHandlers(ctx)

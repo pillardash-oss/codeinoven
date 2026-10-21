@@ -1,6 +1,12 @@
 import type { WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
-import type { AppControlRequest, AppControlResponse, AppControlTarget } from '../../lib/app-control'
+import type {
+  AppControlCapture,
+  AppControlRequest,
+  AppControlResponse,
+  AppControlTarget
+} from '../../lib/app-control'
+import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 
@@ -114,4 +120,37 @@ export async function requestAppControl<T = unknown>(
   }
   Logger.dev('App control request dispatched', { requestId, kind: target.kind })
   return answer
+}
+
+/**
+ * Capture the live app window, for an agent that has to see the interface.
+ *
+ * Capture never uses the renderer round-trip above: only main can read a
+ * window's pixels, so this reads the responder window directly. The responder is
+ * the window the user is actually looking at, which is also the window the app
+ * shell marked as the bridge's executor.
+ *
+ * The image is folded into a data URL and bounded to the same dimension the rest
+ * of the app uses, so a capture reaches the model as one image content part
+ * rather than as a base64 paragraph billed at text rates.
+ */
+export async function captureAppWindow(): Promise<AppControlCapture> {
+  const contents = responder && !responder.isDestroyed() ? responder : null
+  if (!contents) throw new Error('No running CodeInOven window can be captured.')
+  const captured = await contents.capturePage()
+  if (captured.isEmpty()) {
+    throw new Error('The app window produced an empty capture; show it and try again.')
+  }
+  const size = captured.getSize()
+  const fitted = fitWithin(size.width, size.height, MAX_SCREENSHOT_DIMENSION)
+  const image =
+    fitted.width === size.width && fitted.height === size.height
+      ? captured
+      : captured.resize(fitted)
+  const finalSize = image.getSize()
+  return {
+    dataUrl: `data:image/png;base64,${image.toPNG().toString('base64')}`,
+    width: finalSize.width,
+    height: finalSize.height
+  }
 }

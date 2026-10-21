@@ -361,6 +361,32 @@ export type SessionAgentEvent = Exclude<
 >
 
 /**
+ * A render-only agent event another CodeInOven instance produced for a shared
+ * thread.
+ *
+ * Two instances share one thread table and mirror, while each process receives
+ * only its own harness stream. The owning process therefore forwards the
+ * observations of a run (streamed parts, session lifecycle, telemetry) over the
+ * cross-instance bus, and the conversation they name is what lets a sibling
+ * window render them exactly as the owning window does. `projectId`/`threadId`
+ * are empty when the sending process could not resolve the session's
+ * conversation, in which case a window that already bound the session still
+ * renders the event.
+ *
+ * Actionable events never appear here: only the process that owns the harness
+ * process can answer a permission or a question.
+ */
+export interface RemoteAgentEventPayload {
+  projectId: string
+  threadId: string
+  event: AgentEvent
+  /** Process that produced the event, for logging and echo rejection. */
+  from: number
+  /** Monotonic per publisher, so a frame delivered twice is applied once. */
+  seq: number
+}
+
+/**
  * Driver-internal marker on a `message.completed` event: the turn hit a
  * recoverable finish-reason flake and the driver intends to silently continue
  * instead of surfacing the error. Never broadcast to renderers   drivers strip

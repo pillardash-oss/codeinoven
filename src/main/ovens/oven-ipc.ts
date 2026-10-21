@@ -11,7 +11,7 @@ import type { ProjectFilesService } from '../editor/project-files-service'
 import { app } from 'electron'
 import { OvenTransfers } from './oven-transfers'
 import { OvenPreview } from './oven-preview'
-import type { OvenTransferInput, OvenWorkspaceRequest } from '../../lib/ovens'
+import type { OvenConnectionStatus, OvenTransferInput, OvenWorkspaceRequest } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
@@ -26,6 +26,7 @@ import { validateOvenHarnessId, validateStartOvenSetup } from './oven-validation
 import { validateOvenAgentRegistration, validateOvenAgentScriptRequest } from './oven-validation'
 import { OvenAgentService } from './oven-agent-service'
 import { Logger } from '../system/logger'
+import { registerOvenHostTrustIpc } from './oven-host-trust'
 
 export function registerOvenIpc(
   storage: StorageEngine,
@@ -36,6 +37,7 @@ export function registerOvenIpc(
   projectFiles: ProjectFilesService,
   scopeNames: (projectId: string) => Record<string, string>
 ): OvenService {
+  registerOvenHostTrustIpc()
   const registry = new OvenRegistry(storage, vault)
   const service = new OvenService(registry)
   const transfers = new OvenTransfers(service)
@@ -89,8 +91,36 @@ export function registerOvenIpc(
     if (id === LOCAL_OVEN_ID) throw new Error('The Local oven does not run oven setup.')
     return id
   }
-  ipcMain.handle('oven:testConnection', (_event, raw: unknown) =>
-    testDraftConnection(registry, validateSaveOven(raw))
+  const connectionTests = new Map<string, AbortController>()
+  const testKey = (senderId: number, requestId: unknown): string => {
+    if (typeof requestId !== 'string' || requestId.length > 100 || !requestId)
+      throw new Error('Invalid connection test request.')
+    return `${senderId}:${requestId}`
+  }
+  ipcMain.handle('oven:cancelConnectionTest', (event, requestId: unknown) => {
+    connectionTests
+      .get(testKey(event.sender.id, requestId))
+      ?.abort(new Error('Connection test cancelled.'))
+  })
+  const runConnectionTest = async (
+    senderId: number,
+    requestId: unknown,
+    run: (signal: AbortSignal) => Promise<OvenConnectionStatus>
+  ) => {
+    const key = testKey(senderId, requestId)
+    const controller = new AbortController()
+    connectionTests.get(key)?.abort()
+    connectionTests.set(key, controller)
+    try {
+      return await run(controller.signal)
+    } finally {
+      if (connectionTests.get(key) === controller) connectionTests.delete(key)
+    }
+  }
+  ipcMain.handle('oven:testConnection', (event, raw: unknown, requestId: unknown) =>
+    runConnectionTest(event.sender.id, requestId, (signal) =>
+      testDraftConnection(registry, validateSaveOven(raw), signal)
+    )
   )
   ipcMain.handle('oven:connectionHealth', async (_event, raw: unknown) => {
     const id = ovenId(raw)
@@ -100,6 +130,9 @@ export function registerOvenIpc(
     return result
   })
   app.once('before-quit', () => previews.dispose())
+  // The warm request channel is a live ssh process per Oven; close them instead
+  // of letting the OS reap children of a dying app.
+  app.once('before-quit', () => service.disposeChannels())
   // One shared SSH connection per Oven backs every command in the app; release
   // it on quit instead of leaving the background master to time out on its own.
   app.once('before-quit', () => {
@@ -116,7 +149,13 @@ export function registerOvenIpc(
         Logger.dev('Closing shared Oven connections failed on quit:', error)
       )
   })
-  ipcMain.handle('oven:state', () => registry.state())
+  ipcMain.handle('oven:state', async () => {
+    const state = await registry.state()
+    // The default Oven is the one a surface opens first, so its channel starts
+    // with the registry read rather than with the first request that needs it.
+    if (state.defaultOvenId !== LOCAL_OVEN_ID) void service.warm(state.defaultOvenId)
+    return state
+  })
   ipcMain.handle('oven:validateIdentity', (_event, raw: unknown) => validateIdentityPath(raw))
   ipcMain.handle('oven:save', async (_event, raw: unknown) => {
     const input = validateSaveOven(raw)
@@ -124,10 +163,29 @@ export function registerOvenIpc(
       input.connection.identityFile = await validateIdentityPath(input.connection.identityFile)
     return registry.save(input)
   })
-  ipcMain.handle('oven:remove', (_event, raw: unknown) => registry.remove(ovenId(raw)))
-  ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
+  ipcMain.handle('oven:remove', async (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    service.disposeChannel(id)
+    return await registry.remove(id)
+  })
+  ipcMain.handle('oven:setDefault', async (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    const state = await registry.setDefault(id)
+    // A default Oven is one the user is about to work in, so its channel starts
+    // now rather than on the first request that needs it.
+    if (id !== LOCAL_OVEN_ID) void service.warm(id)
+    return state
+  })
   ipcMain.handle('oven:reorder', (_event, raw: unknown) => registry.reorder(ovenOrder(raw)))
-  ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
+  ipcMain.handle('oven:install', async (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    const probe = await service.install(id)
+    // The Oven now runs a new service, so the check that described the old one
+    // is no longer true: the next surface reads the Oven again instead of
+    // repeating the failure the replaced service produced.
+    peekService.invalidate(id)
+    return probe
+  })
   ipcMain.handle('oven:probe', async (_event, raw: unknown, refresh: unknown) => {
     const id = ovenId(raw)
     const forceRefresh = refresh === true
@@ -157,9 +215,19 @@ export function registerOvenIpc(
     }
   })
   ipcMain.handle('oven:runs', (_event, raw: unknown) => service.runs(ovenId(raw)))
-  ipcMain.handle('oven:peek', (_event, raw: unknown, refresh: unknown) =>
-    peekService.peek(ovenId(raw), refresh === true)
-  )
+  ipcMain.handle('oven:peek', (_event, raw: unknown, refresh: unknown) => {
+    const id = ovenId(raw)
+    // Opening an Oven's surface is the moment to have it ready: the peek read
+    // below then costs one round trip instead of a remote process start.
+    if (id !== LOCAL_OVEN_ID) void service.warm(id)
+    return peekService.peek(id, refresh === true)
+  })
+  ipcMain.handle('oven:warm', (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    // The session opens in the background: this answers at once, and the caller
+    // is opening a thread rather than waiting for a connection check.
+    if (id !== LOCAL_OVEN_ID) void service.warm(id)
+  })
   ipcMain.handle('oven:workspace', (_event, raw: unknown, input: unknown) => {
     if (!input || typeof input !== 'object' || JSON.stringify(input).length > 512 * 1024)
       throw new Error('Invalid workspace request.')
@@ -259,9 +327,13 @@ export function registerOvenIpc(
     const report = await setupRuntime.preflight(id)
     return setupRuntime.gitIdentity.verify(id, report)
   })
-  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown, rawRefresh?: unknown) =>
-    harnessService.getInventory(ovenId(rawId), rawRefresh === true)
-  )
+  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown, rawRefresh?: unknown) => {
+    const id = ovenId(rawId)
+    // Switching an Oven anywhere in the app asks for its harnesses, so this is
+    // the composer's signal that the Oven is now in use.
+    if (id !== LOCAL_OVEN_ID) void service.warm(id)
+    return harnessService.getInventory(id, rawRefresh === true)
+  })
   ipcMain.handle('oven:agent:script', (_event, raw: unknown) =>
     agentService.script(validateOvenAgentScriptRequest(raw))
   )
@@ -269,12 +341,10 @@ export function registerOvenIpc(
     if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
     return agentService.preview(raw)
   })
-  ipcMain.handle('oven:agent:reachable', (_event, raw: unknown) => {
-    if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
-    return agentService.reachableEndpoint(raw)
-  })
-  ipcMain.handle('oven:agent:test', (_event, raw: unknown) =>
-    agentService.test(validateOvenAgentRegistration(raw))
+  ipcMain.handle('oven:agent:test', (event, raw: unknown, requestId: unknown) =>
+    runConnectionTest(event.sender.id, requestId, (signal) =>
+      agentService.test(validateOvenAgentRegistration(raw), signal)
+    )
   )
   ipcMain.handle('oven:agent:register', (_event, raw: unknown) =>
     agentService.register(validateOvenAgentRegistration(raw))

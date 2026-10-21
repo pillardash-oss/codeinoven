@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
-  import { GitCommit as GitCommitIcon } from '@lucide/svelte'
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'
@@ -144,7 +144,7 @@
   </div>
 {:else if rows.length === 0}
   <div class="flex flex-col items-center justify-center py-12 text-center">
-    <GitCommitIcon size={22} class="mx-auto mb-2 text-dimmed" />
+    <CioCommit size={22} class="mx-auto mb-2 text-dimmed" />
     <p class="text-xs font-medium text-muted">No commits yet</p>
     <p class="mt-1 text-[0.625rem] text-dimmed">Make your first commit to see history.</p>
   </div>

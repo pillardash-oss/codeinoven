@@ -1,6 +1,4 @@
 <script lang="ts" module>
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-
   /**
    * The reading in a card header, in the design's language: a bordered chip with
    * a clock, sitting before the fold at the far right of the row.
@@ -25,6 +23,7 @@
 </script>
 
 <script lang="ts">
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   type Props = CardChipData
 
   let { text, tone = 'default', title, label }: Props = $props()

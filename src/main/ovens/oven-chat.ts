@@ -11,6 +11,7 @@ import type {
   PendingAgentQuestionRequest
 } from '../../lib/types'
 import { LOCAL_OVEN_ID, isRemoteOvenId } from '../../lib/ovens'
+import { MAX_PROMPT_ATTACHMENTS } from '../../lib/types'
 import type { OvenAppearance, OvenFile } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { ProjectManager } from '../../lib/engines/project-manager'
@@ -218,7 +219,7 @@ export class OvenChat {
       const { root, dataRoot, sessionsRoot } = prepared
       if (prepared.branch && prepared.branch !== thread.branch)
         await this.threads.setBranch(thread.projectId, thread.id, prepared.branch)
-      await this.threads.updateSettings(thread.projectId, thread.id, {
+      await this.threads.bindOvenCheckout(thread.projectId, thread.id, {
         ...settings,
         ovenPath: root
       })
@@ -557,7 +558,9 @@ export class OvenChat {
     attachments: PromptAttachment[]
   ): Promise<string[]> {
     const result: string[] = []
-    if (attachments.length > 20) throw new Error('Attach at most 20 files per Oven turn.')
+    if (attachments.length > MAX_PROMPT_ATTACHMENTS) {
+      throw new Error(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files per Oven turn.`)
+    }
     if (attachments.length)
       await this.service.workspace(ovenId, {
         operation: 'mkdir',

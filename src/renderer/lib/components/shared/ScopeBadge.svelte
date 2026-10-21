@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import type { ScopeBucket } from '$shared/types'
 

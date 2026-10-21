@@ -1,4 +1,5 @@
 import { toast } from 'svelte-sonner'
+import { appConfirm } from '$lib/stores/app-confirm.svelte'
 import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
@@ -30,7 +31,8 @@ import {
   type InstanceRole,
   type OpenedPath,
   type Project,
-  type Thread
+  type Thread,
+  type ThreadSearchResult
 } from '$shared/types'
 import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
@@ -59,6 +61,16 @@ export interface AppIpcSubscriptionDeps {
   goBack: () => Promise<void>
   goForward: () => Promise<void>
   handleOpenedPaths: (paths: OpenedPath[]) => Promise<void>
+  /**
+   * Fold the semantic half of a spotlight thread search into the panel that
+   * asked for it. Delivered after the keyword rows so the panel replaces rows
+   * instead of waiting on the local embedding model.
+   */
+  applyThreadSearchIntent: (payload: {
+    query: string
+    requestId: number
+    results: ThreadSearchResult[]
+  }) => void
 }
 
 async function openNotificationThread(
@@ -270,6 +282,11 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     temporaryChatUnread.clearThread(projectId, threadId)
     if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
   })
+  // The spotlight's ranking by meaning is computed after its keyword rows land;
+  // the open panel takes the merged ranking from here.
+  const unsubscribeThreadSearchIntent = subscribeGuarded('threads:searchIntent', (payload) => {
+    deps.applyThreadSearchIntent(payload)
+  })
   // An agent created, renamed, archived, deleted, synced or merged a scope:
   // reload the board it changed so the user sees the worktree it made instead
   // of a stale snapshot.
@@ -280,6 +297,35 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // answer is what releases the agent's parked tool call.
   const unsubscribeScopeConfirmation = subscribeGuarded('scope:agentConfirmation', (request) => {
     scopeConfirmations.enqueue(request)
+  })
+  const hostTrustPrompts = new Map<string, AbortController>()
+  const unsubscribeHostTrust = subscribeGuarded('oven:hostTrust:request', (request) => {
+    const controller = new AbortController()
+    hostTrustPrompts.set(request.requestId, controller)
+    void appConfirm
+      .request(
+        {
+          title: 'Trust this Oven host?',
+          body: [
+            request.prompt,
+            'Compare this fingerprint with the machine before accepting. OpenSSH will remember the approved key on this computer.'
+          ],
+          confirmLabel: 'Yes, trust host',
+          cancelLabel: 'No, cancel',
+          tone: 'primary'
+        },
+        controller.signal
+      )
+      .then(async (approved) => {
+        hostTrustPrompts.delete(request.requestId)
+        if (!controller.signal.aborted)
+          await invoke('oven:hostTrust:respond', request.requestId, approved)
+      })
+      .catch((error: unknown) => logRendererError('Oven host verification response failed', error))
+  })
+  const unsubscribeHostTrustClosed = subscribeGuarded('oven:hostTrust:closed', (requestId) => {
+    hostTrustPrompts.get(requestId)?.abort()
+    hostTrustPrompts.delete(requestId)
   })
   // Listen from app start (not from the first local job): an agent-run
   // worktree has no renderer-owned job until its first progress event.
@@ -334,8 +380,13 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeThreadUpdated()
     unsubscribeThreadAuthoredWorkUpdated()
     unsubscribeThreadDeleted()
+    unsubscribeThreadSearchIntent()
     unsubscribeScopeBoardChanged()
     unsubscribeScopeConfirmation()
+    unsubscribeHostTrust()
+    unsubscribeHostTrustClosed()
+    for (const controller of hostTrustPrompts.values()) controller.abort()
+    hostTrustPrompts.clear()
     unsubscribeCloseShortcut()
     unsubscribeNewTerminalShortcut()
     unsubscribeHistoryBack()

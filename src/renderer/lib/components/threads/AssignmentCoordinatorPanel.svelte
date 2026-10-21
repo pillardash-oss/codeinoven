@@ -1,11 +1,12 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioArrowUpRight from '$lib/components/icons/cio/CioArrowUpRight.svelte'
-  import CioClipboardCheck from '$lib/components/icons/cio/CioClipboardCheck.svelte'
-  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { Rows3, Square } from '@lucide/svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioArrowUpRight from '@pdslng/cio-icon/CioArrowUpRight.svelte'
+  import CioClipboardCheck from '@pdslng/cio-icon/CioClipboardCheck.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioRows3 from '@pdslng/cio-icon/CioRows3.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
@@ -244,7 +245,7 @@
           aria-label="Stop the Sr. Engineer, workers, and auditor"
           onclick={() => (showStopConfirmation = true)}
         >
-          <Square size={12} fill="currentColor" />
+          <CioSquare size={12} fill="currentColor" />
           Stop
         </button>
       {/if}
@@ -315,7 +316,7 @@
     {#if stalled}
       <section class="border-b border-border p-4" aria-label="Assignment needs direction">
         <div class="flex items-start gap-2">
-          <Rows3 size={14} class="mt-0.5 shrink-0 text-warning" />
+          <CioRows3 size={14} class="mt-0.5 shrink-0 text-warning" />
           <div class="min-w-0">
             <h3 class="text-xs font-semibold text-foreground">Coordination paused</h3>
             <p class="mt-1 text-xs leading-relaxed text-muted">
@@ -493,7 +494,7 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      class="flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
       disabled={stopBusy}
       onclick={() => void confirmStop()}
     >

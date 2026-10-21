@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
@@ -528,8 +528,17 @@
                 </div>
 
                 {#if footer}
+                  <!--
+                    Falsy actions lead. A dismissal is the one action a footer
+                    always offers and it belongs on the far left, away from the
+                    primary on the right, so the first dismiss button claims the
+                    free space instead of every button bunching at the right
+                    edge. Footers that place their own groups (a dismiss on the
+                    left and the truthy actions on the right) still win, because
+                    the rule only looks at a direct child.
+                  -->
                   <div
-                    class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
+                    class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4 [&>[data-modal-dismiss]:first-child]:mr-auto"
                     data-modal-footer
                   >
                     {@render footer()}

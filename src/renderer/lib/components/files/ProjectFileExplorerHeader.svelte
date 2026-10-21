@@ -1,9 +1,11 @@
 <script lang="ts">
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
-  import { ChevronsDown, ChevronsUp } from '@lucide/svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import CioChevronsDown from '@pdslng/cio-icon/CioChevronsDown.svelte'
+  import CioChevronsUp from '@pdslng/cio-icon/CioChevronsUp.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {
@@ -127,9 +129,9 @@
     onclick={onToggleExpandAll}
   >
     {#if anyDirExpanded}
-      <ChevronsUp size={12} />
+      <CioChevronsUp size={12} />
     {:else}
-      <ChevronsDown size={12} />
+      <CioChevronsDown size={12} />
     {/if}
   </button>
   <button
@@ -139,7 +141,7 @@
       filterOpen ? 'bg-elevated text-foreground' : ''
     ]}
     aria-label="Search project files"
-    title="Search project files (Cmd/Ctrl+F)"
+    title={`Search project files (${keymapState.labelFor('nav-find')})`}
     aria-pressed={filterOpen}
     onclick={onToggleFilter}
   >

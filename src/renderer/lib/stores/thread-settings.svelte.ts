@@ -83,9 +83,21 @@ export class ThreadSettingsStore {
 
   constructor(
     private readonly storageKey: string,
-    private readonly defaults: ThreadSettings
+    private readonly defaults: ThreadSettings,
+    /**
+     * Whether this family remembers the machine its last conversation ran on.
+     *
+     * A chat and an assistant task have no project binding to answer "which
+     * computer?" from, so their own memory is the only place an Oven survives;
+     * dropping it there silently puts the next conversation back on this
+     * computer. A project thread always has a better answer instead (its
+     * project's Oven, or the sibling thread it was minted from, see
+     * `withProjectOven`), so that family keeps the Oven out of its memory and
+     * one project's machine can never follow a thread into another project.
+     */
+    private readonly rememberOven = false
   ) {
-    this.lastUsed = { ...load(storageKey, defaults), ovenId: undefined, ovenPath: undefined }
+    this.lastUsed = this.remember(load(storageKey, defaults))
   }
 
   /** Initial settings for a thread: its own persisted values, else the last-used ones. */
@@ -97,18 +109,36 @@ export class ThreadSettingsStore {
 
   /** Remember these settings as the default for future threads. */
   commit(settings: ThreadSettings): void {
-    this.lastUsed = { ...settings, ovenId: undefined, ovenPath: undefined }
+    this.lastUsed = this.remember(settings)
     persist(this.storageKey, this.lastUsed)
+  }
+
+  /**
+   * The settings this family is allowed to remember.
+   *
+   * The behavior-editing session is always dropped: it belongs to one assistant
+   * thread and must never seed another. The Oven and its workspace are kept only
+   * for the families whose memory is the sole authority on where they run (see
+   * `rememberOven`).
+   */
+  private remember(settings: ThreadSettings): ThreadSettings {
+    const remembered: ThreadSettings = {
+      ...settings,
+      assistantBehaviorSession: undefined
+    }
+    if (this.rememberOven) return remembered
+    return { ...remembered, ovenId: undefined, ovenPath: undefined }
   }
 }
 
 export const threadSettings = new ThreadSettingsStore(THREAD_SETTINGS_KEY, DEFAULT_SETTINGS)
 
-export const chatSettings = new ThreadSettingsStore(CHAT_SETTINGS_KEY, CHAT_DEFAULT_SETTINGS)
+export const chatSettings = new ThreadSettingsStore(CHAT_SETTINGS_KEY, CHAT_DEFAULT_SETTINGS, true)
 
 export const assistantSettings = new ThreadSettingsStore(
   ASSISTANT_SETTINGS_KEY,
-  ASSISTANT_DEFAULT_SETTINGS
+  ASSISTANT_DEFAULT_SETTINGS,
+  true
 )
 
 /**
@@ -157,10 +187,19 @@ function effectiveSettings(
   projectFallback: ThreadSettings
 ): ThreadSettings {
   const seed = own.modelId ? own : withModelFrom(defaults, projectFallback)
-  return {
-    ...seed,
-    permissionLevel: seed.fileSystemMode ? seed.permissionLevel : ('auto_review' as const)
-  }
+  return normalizeChatSettings(seed)
+}
+
+/**
+ * A chat or an assistant task never runs above auto review until it is granted
+ * File System access. Once File System is on, the permission picker unlocks up
+ * to Full Access, so the level the user chose is carried through instead of
+ * being clobbered back to auto review.
+ */
+export function normalizeChatSettings(settings: ThreadSettings): ThreadSettings {
+  return settings.fileSystemMode === true
+    ? settings
+    : { ...settings, permissionLevel: 'auto_review' }
 }
 
 /** The same settings, running on the model another settings object carries. */

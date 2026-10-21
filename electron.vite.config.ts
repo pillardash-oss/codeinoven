@@ -206,7 +206,14 @@ const __dirname = import.meta.dirname;
 const require = __cioCreateRequire(import.meta.url);`
 
 export function rendererPlugins(): PluginOption[] {
-  return [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()]
+  // Each factory returns its own plugin array, so spread them into one flat
+  // list. The assertion is exact rather than a widening: these are plugins, and
+  // Vite's recursive PluginOption (a Thenable union that nests itself) pushes
+  // TypeScript's structural comparison past its stack depth on the newer types.
+  return [
+    ...svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
+    ...tailwindcss()
+  ] as PluginOption[]
 }
 
 export default defineConfig(({ mode }) => {
@@ -339,7 +346,17 @@ export default defineConfig(({ mode }) => {
           '@codemirror/commands',
           '@codemirror/language',
           '@codemirror/language-data',
-          'jsonc-parser'
+          'jsonc-parser',
+          // `@pdslng/cio-icon` is a Svelte component library whose icons are
+          // reached from markup all over the renderer, including panels that
+          // load lazily. The startup scan cannot see the ones behind those lazy
+          // panels, so without this glob each unseen group made Vite discover
+          // them at runtime, re-optimize the whole library, and full-reload the
+          // renderer   the same icons re-bundled several times on one cold
+          // start. The package's `./*.svelte` export is itself a glob, so this
+          // entry expands to every shipped icon and follows the package as
+          // icons are added, instead of pinning a hand-maintained list.
+          '@pdslng/cio-icon/*.svelte'
         ]
       },
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
@@ -374,6 +391,11 @@ export default defineConfig(({ mode }) => {
             // stylesheet and nothing else of the app, so a second renderer stays
             // cheap.
             'browser-overlay': resolve(__dirname, 'src/renderer/browser-overlay.html'),
+            // The launch screen: the first Electron window, shown before the app
+            // bundle has loaded anything. It is its own entry because it wears the
+            // brand face, and its stylesheet is one @import of the family rather
+            // than app.css.
+            splash: resolve(__dirname, 'src/renderer/splash.html'),
             // The browser permission prompt: one card, floating over the in-app
             // browser's page in a transparent window of its own. It is an entry
             // of its own because it draws the card with the app's stylesheet,

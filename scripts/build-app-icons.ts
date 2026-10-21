@@ -32,6 +32,7 @@ import { Resvg } from '@resvg/resvg-js'
 import pngToIco from 'png-to-ico'
 import { Logger } from '../src/main/system/logger'
 import { buildWindowsTrayIcons } from './build-windows-tray-icons'
+import { buildMacTrayCountStrip } from './build-mac-tray-count-strip'
 
 const root = join(import.meta.dir, '..')
 const staticDir = join(root, 'src/renderer/static')
@@ -228,6 +229,9 @@ if (!Bun.argv.includes('--windows-tray-only')) {
   Logger.dev(
     `[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`
   )
+  // The working-thread figures, as one strip per resolution: the main process
+  // cuts the cell it needs instead of the repository carrying every count.
+  buildMacTrayCountStrip(monoSmall, macosDir)
 }
 await buildWindowsTrayIcons(monoSmall, monoSmallAttention, join(staticDir, 'windows'))
 Logger.dev('[build-app-icons] Done.')

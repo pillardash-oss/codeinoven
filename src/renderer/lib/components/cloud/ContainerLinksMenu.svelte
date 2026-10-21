@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { openInBrowser } from '$lib/open-in-browser'
 
@@ -60,7 +60,7 @@
             data-external-url={url}
             onSelect={() => void openInBrowser(url)}
           >
-            <CioBrowser size={13} class="shrink-0 text-muted" />
+            <CioThreadBrowser size={13} class="shrink-0 text-muted" />
             <span class="truncate font-mono text-[0.625rem]">{linkLabel(url)}</span>
           </DropdownMenu.Item>
         {/each}

@@ -1,4 +1,61 @@
-import type { AgentContextUsage, AgentRateLimitWindow } from '$shared/types'
+import type {
+  AgentContextUsage,
+  AgentMessage,
+  AgentRateLimitWindow,
+  ThreadContextUsage
+} from '$shared/types'
+
+/** Project conversation occupancy without transferring another provider's accounting. */
+export function composerContextUsage(
+  displayed: AgentContextUsage | undefined,
+  messages: readonly AgentMessage[],
+  snapshot: ThreadContextUsage | undefined,
+  selection: { harnessId: string; providerId: string; contextWindow?: number }
+): AgentContextUsage | undefined {
+  let source: AgentMessage | ThreadContextUsage | undefined
+  let contextUsed: number | undefined
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message.role !== 'assistant') continue
+    // Never resurrect occupancy from before a compaction boundary.
+    if (
+      message.origin === 'compaction' ||
+      message.parts.some((part) => part.type === 'compaction-summary')
+    ) {
+      return displayed
+    }
+    const tokens =
+      message.tokens?.total ||
+      message.parts.reduce(
+        (total, part) => total + (part.type === 'step-finish' ? (part.tokens?.total ?? 0) : 0),
+        0
+      )
+    if (message.contextUsed !== undefined || tokens > 0) {
+      source = message
+      contextUsed = message.contextUsed ?? tokens
+      break
+    }
+  }
+  source ??= snapshot
+  contextUsed ??= source?.contextUsed ?? source?.tokens?.total
+  if (contextUsed === undefined) return displayed
+  const sameProvider =
+    source?.harnessId === selection.harnessId && source?.providerId === selection.providerId
+  // Keep the normal settled reading once the selected harness has reported.
+  if (sameProvider && displayed?.contextUsed !== undefined) return displayed
+  const contextWindow =
+    selection.contextWindow ?? (sameProvider ? source?.contextWindow : undefined)
+  return {
+    ...(displayed ?? { costUsd: 0, rateLimits: [] }),
+    contextUsed,
+    contextWindow,
+    contextEstimated: !sameProvider || source?.contextEstimated === true,
+    contextPercent:
+      contextWindow !== undefined && contextWindow > 0
+        ? (contextUsed / contextWindow) * 100
+        : undefined
+  }
+}
 
 /**
  * Merging rules for usage data that arrives from more than one source.

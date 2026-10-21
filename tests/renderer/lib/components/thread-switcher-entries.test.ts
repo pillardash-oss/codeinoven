@@ -87,7 +87,8 @@ describe('buildThreadSwitcherEntries', () => {
         visits,
         threads: [thread],
         tabs,
-        currentBrowserTabId: null
+        currentBrowserTabId: null,
+        limit: 10
       })
 
       expect(keys(entries)).toEqual(visits.slice(0, 10))
@@ -141,7 +142,8 @@ describe('buildThreadSwitcherEntries', () => {
       visits: threads.slice(0, 4).map(threadVisitKey),
       threads,
       tabs: [makeTab('browser:1', 30)],
-      currentBrowserTabId: null
+      currentBrowserTabId: null,
+      limit: 10
     })
 
     expect(entries).toHaveLength(10)

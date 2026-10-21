@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
-  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioSkipForward from '$lib/components/icons/cio/CioSkipForward.svelte'
-  import { SkipBack } from '@lucide/svelte'
+  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioSkipBack from '@pdslng/cio-icon/CioSkipBack.svelte'
+  import CioSkipForward from '@pdslng/cio-icon/CioSkipForward.svelte'
   import { onMount } from 'svelte'
   import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -391,7 +391,7 @@
         disabled={!tab}
         onclick={() => step(-1)}
       >
-        <SkipBack size={13} />
+        <CioSkipBack size={13} />
       </button>
       <button
         type="button"

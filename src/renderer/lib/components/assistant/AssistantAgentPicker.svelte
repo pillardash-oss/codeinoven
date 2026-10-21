@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import ModelPicker from '$lib/components/shared/ModelPicker.svelte'
   import { modelKey } from '$lib/model-keys'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'

@@ -1,36 +1,44 @@
 <script lang="ts">
-  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
-  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
-  import CioDot from '$lib/components/icons/cio/CioDot.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
-  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioRocket from '$lib/components/icons/cio/CioRocket.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSkipForward from '$lib/components/icons/cio/CioSkipForward.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
-  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioBellOff from '@pdslng/cio-icon/CioBellOff.svelte'
+  import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
+  import CioBookmarkCheck from '@pdslng/cio-icon/CioBookmarkCheck.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioCheckCheck from '@pdslng/cio-icon/CioCheckCheck.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+  import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+  import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioFileMinus from '@pdslng/cio-icon/CioFileMinus.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioGitGraph from '@pdslng/cio-icon/CioGitGraph.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioRocket from '@pdslng/cio-icon/CioRocket.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSkipForward from '@pdslng/cio-icon/CioSkipForward.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
+  import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
@@ -79,17 +87,6 @@
     GitStashEntry,
     ThreadStatus
   } from '$shared/types'
-  import {
-    ArchiveRestore,
-    BellOff,
-    BookmarkCheck,
-    CheckCheck,
-    FileMinus,
-    FolderGit2,
-    GitGraph,
-    NetworkIcon,
-    RotateCcwClock
-  } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -2294,7 +2291,7 @@
     originReplaceConfirm = false
   }
 
-  /** First step of the save button: replace routes through a destructive
+  /** First step of the save button: Replace routes through a destructive
    *  confirmation first; add commits immediately. */
   function requestSetOrigin(): void {
     if (!originUrl.trim() || originBusy) return
@@ -2548,6 +2545,13 @@
     await projectFilesWorkspace.openFile(projectId, path)
   }
 
+  async function openDirectory(path: string): Promise<void> {
+    contextSidebarState.openFiles(projectId, threadId)
+    await projectFilesWorkspace.ensureState(projectId)
+    await projectFilesWorkspace.loadDirectory(projectId, '')
+    await projectFilesWorkspace.revealDirectory(projectId, path)
+  }
+
   async function stashChanges(): Promise<void> {
     await gitState.stash(projectId, stashMessage.trim() || undefined, stashPaths ?? undefined)
     if (!gitState.error) {
@@ -2736,8 +2740,8 @@
         icon: CioDiff,
         count: changes.length > 0 ? changes.length : null
       },
-      { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
-      { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
+      { id: 'history', label: 'History', icon: CioUndo, count: null },
+      { id: 'branches', label: 'Branches', icon: CioNetwork, count: null },
       { id: 'pulls', label: 'PRs', icon: CioPullRequest, count: null },
       { id: 'issues', label: 'Issues', icon: CioDot, count: null }
     ]
@@ -2934,7 +2938,7 @@
         disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
         onclick={startAmend}
       >
-        <GitGraph size={12} aria-hidden="true" />
+        <CioGitGraph size={12} aria-hidden="true" />
         <span class="view-action-label">Amend</span>
       </button>
     {/if}
@@ -3022,7 +3026,7 @@
           void githubNotifications.setDone(openNotification.id, !openNotification?.done)}
       >
         {#if openNotification.done}
-          <ArchiveRestore size={12} aria-hidden="true" />
+          <CioArchive size={12} aria-hidden="true" />
         {:else}
           <CioArchive size={12} aria-hidden="true" />
         {/if}
@@ -3035,7 +3039,7 @@
         disabled={notificationBusy}
         onclick={() => void githubNotifications.unsubscribe(openNotification.id)}
       >
-        <BellOff size={12} aria-hidden="true" />
+        <CioBellOff size={12} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -3047,7 +3051,7 @@
           void githubNotifications.setSaved(openNotification.id, !openNotification?.saved)}
       >
         {#if openNotification.saved}
-          <BookmarkCheck size={12} class="text-primary" aria-hidden="true" />
+          <CioBookmarkCheck size={12} class="text-primary" aria-hidden="true" />
         {:else}
           <CioBookmark size={12} aria-hidden="true" />
         {/if}
@@ -3073,7 +3077,7 @@
           githubNotifications.busyThreadId !== null}
         onclick={() => void githubNotifications.markAllRead()}
       >
-        <CheckCheck size={12} aria-hidden="true" />
+        <CioCheckCheck size={12} aria-hidden="true" />
         <span class="view-action-label">Mark all read</span>
       </button>
       <button
@@ -3133,7 +3137,7 @@
       aria-label="Show the changed files as a folder tree"
       onclick={() => (changesView = 'tree')}
     >
-      <FolderGit2 size={12} aria-hidden="true" />
+      <CioFolderGit size={12} aria-hidden="true" />
       <span class="view-action-label">Tree</span>
     </button>
   </div>
@@ -3484,7 +3488,7 @@
               disabled={batchBusy}
               onSelect={() => requestRemoveCommitChanges(selectedPathList)}
             >
-              <FileMinus size={12} class="shrink-0" />
+              <CioFileMinus size={12} class="shrink-0" />
               Remove from commit…
             </DropdownMenu.Item>
           </DropdownMenu.Content>
@@ -4122,6 +4126,7 @@
             {stagePathsAction}
             {requestStashFor}
             {openInEditor}
+            {openDirectory}
             {ignorePathsAction}
             {requestDiscard}
             {routeConflictResolution}

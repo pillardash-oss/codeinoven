@@ -10,9 +10,12 @@ const { handlers, listeners, showOpenDialog, showSaveDialog, safeStorage } = vi.
   showOpenDialog: vi.fn(),
   showSaveDialog: vi.fn(),
   safeStorage: {
-    isEncryptionAvailable: vi.fn(() => true),
-    encryptString: vi.fn((value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
-    decryptString: vi.fn((buffer: Buffer) => buffer.toString('utf-8').replace(/^enc:/u, ''))
+    isAsyncEncryptionAvailable: vi.fn(async () => true),
+    encryptStringAsync: vi.fn(async (value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
+    decryptStringAsync: vi.fn(async (buffer: Buffer) => ({
+      result: buffer.toString('utf-8').replace(/^enc:/u, ''),
+      shouldReEncrypt: false
+    }))
   }
 }))
 
@@ -95,9 +98,13 @@ const defaultConfig: AppConfig = {
   fontFamily: 'jetbrains-mono',
   appFontSize: 15,
   fontWeight: 200,
+  contrastLevel: 'normal',
   zoomLevel: 1,
   onboardingCompleted: false,
   threadLimit: 70,
+  switcherTerminalTabs: true,
+  switcherFileTabs: true,
+  switcherThreadBrowserTabs: true,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
@@ -113,7 +120,6 @@ const defaultConfig: AppConfig = {
   auxiliaryAgents: {},
   design: { assignments: [] },
   modelProfiles: [],
-  workRoots: { design: '.cio/designs', video: '.cio/videos' },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -150,8 +156,8 @@ beforeEach(async () => {
   vi.restoreAllMocks()
   showOpenDialog.mockReset()
   showSaveDialog.mockReset()
-  safeStorage.isEncryptionAvailable.mockReset()
-  safeStorage.isEncryptionAvailable.mockReturnValue(true)
+  safeStorage.isAsyncEncryptionAvailable.mockReset()
+  safeStorage.isAsyncEncryptionAvailable.mockResolvedValue(true)
   database = await createTestDb()
 })
 
@@ -867,7 +873,7 @@ describe('git IPC', () => {
   it('surfaces a clear fallback when secure credential storage is unavailable', async () => {
     const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-git-cred2-'))
     const storage = new StorageEngine(storageRoot)
-    safeStorage.isEncryptionAvailable.mockReturnValue(false)
+    safeStorage.isAsyncEncryptionAvailable.mockResolvedValue(false)
     registerIpcHandlers(storage, database)
 
     const statusHandler = handlers.get('git:getCredentialStatus')

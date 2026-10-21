@@ -28,6 +28,9 @@ interface AgentRunEntry {
   live: boolean
   /** When the current busy run started, used for the live working timer. */
   busySince: number | null
+  /** When this thread last parked on a provider wait. A run start older than
+   *  this belongs to the parked attempt, never to the run that resumed it. */
+  parkedAt: number | null
   /** User message ID that started the current turn; used as the trace key. */
   currentTurnUserMessageId: string | null
   /** Whether the working trace is currently open. */
@@ -66,6 +69,7 @@ class AgentRunsStore {
         activityDetail: null,
         live: false,
         busySince: null,
+        parkedAt: null,
         currentTurnUserMessageId: null,
         traceOpen: false,
         retryAt: null,
@@ -206,11 +210,18 @@ class AgentRunsStore {
       busy &&
       turnUserMessageId !== undefined &&
       turnUserMessageId !== entry.currentTurnUserMessageId
+    // A start time older than the last park is the run that was parked, not the
+    // run that just resumed it. Honoring it is what kept a retried turn on the
+    // parked attempt's clock, so its trace read minutes of work with no steps.
+    const runStart =
+      startedAt !== undefined && startedAt > 0 && startedAt >= (entry.parkedAt ?? 0)
+        ? startedAt
+        : undefined
     if (busy) {
       if (!wasBusy || isNewTurn) {
-        entry.busySince = startedAt && startedAt > 0 ? startedAt : Date.now()
-      } else if (startedAt && startedAt > 0) {
-        entry.busySince = Math.min(entry.busySince ?? startedAt, startedAt)
+        entry.busySince = runStart ?? Date.now()
+      } else if (runStart !== undefined) {
+        entry.busySince = Math.min(entry.busySince ?? runStart, runStart)
       }
     }
     entry.busy = busy
@@ -292,6 +303,61 @@ class AgentRunsStore {
     entry.traceUserOpened = userOpened
     entry.traceUserFolded = userFolded
     this.#notify()
+  }
+
+  /**
+   * A session parked on a provider wait (a reset window, or a connection the
+   * device lost) is not working: no work is being produced, and its harness
+   * session reports `waiting` until it is admitted again. End the live run so
+   * the conversation shows its waiting card instead of a live trace ticking
+   * over zero steps, and keep the retry deadline on the entry so the surfaces
+   * that schedule and order retries still read it. `parkedAt` invalidates the
+   * parked attempt's start time, so the clock restarts when the retry fires.
+   */
+  setWaiting(projectId: string, threadId: string, retryAt: number | null): void {
+    const entry = this.entry(projectId, threadId)
+    const previousBusy = entry.busy
+    const previousActivity = entry.activity
+    const previousActivityDetail = entry.activityDetail
+    const previousLive = entry.live
+    const previousBusySince = entry.busySince
+    const previousTurnUserMessageId = entry.currentTurnUserMessageId
+    const previousTraceOpen = entry.traceOpen
+    const previousRetryAt = entry.retryAt
+    const previousParkedAt = entry.parkedAt
+    // The park transition is the first waiting status after a run: later ones
+    // keep it, so the deadline clock cannot drift on repeated statuses.
+    entry.parkedAt = previousBusy || previousParkedAt === null ? Date.now() : previousParkedAt
+    // A background workflow (a Brainstorm report refresh) owns the busy state
+    // when it runs, so parking the session must not clear work that is still
+    // live.
+    if (entry.busy && entry.activity !== 'session') {
+      entry.retryAt = retryAt
+      if (entry.retryAt !== previousRetryAt) this.#notify()
+      return
+    }
+    if (previousBusy) entry.settledAt = Date.now()
+    entry.busy = false
+    entry.activity = 'session'
+    entry.activityDetail = null
+    entry.live = false
+    entry.busySince = null
+    entry.currentTurnUserMessageId = null
+    entry.retryAt = retryAt
+    if (!entry.traceUserOpened) entry.traceOpen = false
+    if (
+      entry.busy !== previousBusy ||
+      entry.activity !== previousActivity ||
+      entry.activityDetail !== previousActivityDetail ||
+      entry.live !== previousLive ||
+      entry.busySince !== previousBusySince ||
+      entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.traceOpen !== previousTraceOpen ||
+      entry.retryAt !== previousRetryAt ||
+      entry.parkedAt !== previousParkedAt
+    ) {
+      this.#notify()
+    }
   }
 
   /** Mark the run idle and close the trace unless the user opened it. */

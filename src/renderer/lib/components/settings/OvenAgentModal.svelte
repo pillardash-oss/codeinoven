@@ -1,15 +1,16 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { Cable } from '@lucide/svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCable from '@pdslng/cio-icon/CioCable.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import type { OvenAgentPreview, OvenConnectionStatus, OvenEndpoint } from '$shared/ovens'
+  import type { OvenAgentPreview, OvenConnectionStatus } from '$shared/ovens'
+  import StatusPill from '../ui/StatusPill.svelte'
 
   interface Props {
     open: boolean
@@ -21,7 +22,7 @@
   let { open, onClose, onRegistered }: Props = $props()
 
   /** The one command that prepares a machine; the pasted code carries the rest. */
-  const START_COMMAND = 'npx cio-oven start'
+  const START_COMMAND = 'npx @pdslng/cio-oven start'
 
   let code = $state('')
   let preview = $state<OvenAgentPreview | null>(null)
@@ -39,12 +40,9 @@
   /** The address this computer reaches the machine on, editable before saving. */
   let host = $state('')
   let port = $state(22)
-  /** True while the machine's own candidates are being dialed. */
-  let detecting = $state(false)
-  /** The endpoint that answered, when one did. */
-  let detected = $state<OvenEndpoint | null>(null)
   /** True while a full SSH probe is running against the machine. */
   let testing = $state(false)
+  let connectionTestId: string | undefined
   /** The result of the last Test connection, cleared when the target changes. */
   let testResult = $state<OvenConnectionStatus | null>(null)
   let error = $state('')
@@ -66,16 +64,17 @@
   }
 
   function onCodeInput(value: string): void {
+    cancelConnectionTest()
     code = value
     // A preview belongs to the code it was read from. Editing the code
     // invalidates it rather than letting a stale machine be registered.
     if (preview) preview = null
-    detected = null
     testResult = null
   }
 
   /** Drop a stale probe result the moment its target changes. */
   function onTargetChange(): void {
+    cancelConnectionTest()
     testResult = null
   }
 
@@ -93,16 +92,23 @@
       error = 'Enter the address or SSH alias this computer reaches the machine on.'
       return
     }
+    const requestId = crypto.randomUUID()
+    connectionTestId = requestId
     testing = true
     error = ''
     testResult = null
     try {
-      testResult = await invoke('oven:agent:test', { code, host: address, port })
+      const result = await invoke('oven:agent:test', { code, host: address, port }, requestId)
+      if (connectionTestId !== requestId) return
+      testResult = result
       if (testResult.state === 'connected') toast.success('Connection works')
     } catch (cause) {
-      error = message(cause)
+      if (connectionTestId === requestId) error = message(cause)
     } finally {
-      testing = false
+      if (connectionTestId === requestId) {
+        connectionTestId = undefined
+        testing = false
+      }
     }
   }
 
@@ -111,48 +117,17 @@
     previewing = true
     error = ''
     preview = null
-    detected = null
     try {
       const checked = await invoke('oven:agent:preview', code)
       preview = checked
       // The code carries every address the machine answers on. Show the first
-      // one immediately so the field is never empty, then replace it with the
-      // one that actually answers here.
+      // one so the field is never empty; the user can pick another below.
       host = checked.addresses[0] ?? checked.host
       port = checked.port
-      previewing = false
-      void detectAddress()
     } catch (cause) {
       error = message(cause)
-      previewing = false
-    }
-  }
-
-  /**
-   * Dial the machine's own candidates and keep the endpoint that answers.
-   *
-   * A machine reports its interface addresses but cannot know which one this
-   * computer can reach, and the port it was told is an answer the machine cannot
-   * verify from the outside. Both are settled here: the address and port that
-   * answered are written back into the fields, so a wrong port is corrected
-   * rather than saved and timed out on later. When nothing answers, the field
-   * keeps the machine's own first choice and the user can still edit it.
-   */
-  async function detectAddress(): Promise<void> {
-    if (detecting) return
-    detecting = true
-    try {
-      const reachable = await invoke('oven:agent:reachable', code)
-      if (reachable) {
-        detected = reachable
-        host = reachable.host
-        port = reachable.port
-      }
-    } catch {
-      // A probe that cannot run is not a registration failure: the field already
-      // holds a usable candidate from the machine itself.
     } finally {
-      detecting = false
+      previewing = false
     }
   }
 
@@ -181,12 +156,18 @@
     }
   }
 
+  function cancelConnectionTest(): void {
+    const requestId = connectionTestId
+    connectionTestId = undefined
+    testing = false
+    if (requestId) void invoke('oven:cancelConnectionTest', requestId).catch(() => undefined)
+  }
+
   function close(): void {
+    cancelConnectionTest()
     code = ''
     preview = null
     host = ''
-    detected = null
-    detecting = false
     testResult = null
     error = ''
     onClose()
@@ -286,14 +267,23 @@
       </button>
 
       {#if preview}
+        {@const verified = testResult?.state === 'connected'}
         <div class="space-y-3 border bg-elevated/40 p-3 text-xs">
           <div class="flex items-center gap-2">
-            {#if preview.identityPresent}
+            {#if verified}
               <CioCheckCircle size={14} class="text-success" />
             {:else}
-              <CioAttention size={14} class="text-warning" />
+              <CioCable size={14} class="text-muted" aria-hidden="true" />
             {/if}
             <span class="font-medium">{preview.name}</span>
+            <StatusPill
+              tone={verified ? 'success' : 'neutral'}
+              title={verified
+                ? 'This computer reached the machine'
+                : 'Read from the pasted code. The machine has not been contacted yet.'}
+            >
+              {verified ? 'Verified' : 'From the code'}
+            </StatusPill>
           </div>
 
           <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-muted">
@@ -337,45 +327,17 @@
             </label>
           </div>
 
-          {#if detecting}
-            <span class="flex items-center gap-1.5 text-muted" role="status">
-              <CioSpinner size={12} class="animate-spin" /> Reaching the machine on the addresses and
-              port it reported…
-            </span>
-          {:else if detected}
-            <span class="flex items-center gap-1.5 text-success">
-              <CioCheckCircle size={12} />
-              SSH answered on {detected.host}:{detected.port}, so that is where the Oven will
-              connect.
-            </span>
-            {#if detected.port !== preview.port}
-              <span class="text-warning">
-                The command on the machine reported port {preview.port}, but SSH is not answering
-                there. This computer uses {detected.port}. Update the machine's SSH port if that is
-                wrong.
-              </span>
-            {/if}
-          {:else}
-            <span class="text-warning">
-              Nothing is serving SSH on the machine's own addresses and port from this computer.
-              Check the machine's SSH port and firewall, or enter the address you reach it on.
-            </span>
-          {/if}
-
-          {#if testResult}
-            <p
-              class="px-2 py-1 {testResult.state === 'connected'
-                ? 'bg-success/10 text-success'
-                : 'bg-danger/10 text-danger'}"
-              role={testResult.state === 'connected' ? 'status' : 'alert'}
-            >
-              {#if testResult.state === 'connected'}
-                Connection works: SSH, the key, and the remote shell all answered on {host}:{port}{testResult.specs
-                  ? ` (${testResult.specs.hostname})`
-                  : ''}.
-              {:else}
-                {testResult.error ?? 'The connection failed.'}
-              {/if}
+          {#if testResult?.state === 'connected'}
+            <p class="px-2 py-1 bg-success/10 text-success" role="status">
+              Connection works: SSH, the key, and the remote shell all answered on {host}:{port}{testResult.specs
+                ? ` (${testResult.specs.hostname})`
+                : ''}{preview.serviceCurrent
+                ? ', and the machine runs the same service as this app'
+                : ''}.
+            </p>
+          {:else if testResult}
+            <p class="px-2 py-1 bg-danger/10 text-danger" role="alert">
+              {testResult.error ?? 'The connection failed.'}
             </p>
           {/if}
 
@@ -401,17 +363,17 @@
           {/if}
 
           <p class="text-muted">
-            The machine reports every address it answers on. This computer dials them and uses the
-            first that connects; the machine's host name (<span class="text-foreground"
-              >{preview.hostname}</span
-            >) is only a fallback, since it often does not resolve here.
+            The machine reports the addresses it answers on. Pick the one this computer reaches; its
+            host name (<span class="text-foreground">{preview.hostname}</span>) is only a fallback,
+            since it often does not resolve here.
           </p>
 
-          <p class={preview.serviceCurrent ? 'text-success' : 'text-warning'}>
-            {preview.serviceCurrent
-              ? 'The machine runs the same service as this app.'
-              : 'The machine runs a different service. Register it, then update the Oven service from its row.'}
-          </p>
+          {#if !preview.serviceCurrent}
+            <p class="text-warning">
+              The machine runs a different service. Register it, then update the Oven service from
+              its row.
+            </p>
+          {/if}
           {#if !preview.identityPresent}
             <p class="text-warning">
               No key was included. The Oven is saved against your SSH agent; edit it if it needs
@@ -424,40 +386,35 @@
   </div>
 
   {#snippet footer()}
-    <div class="flex items-center justify-between gap-2">
-      <div>
-        {#if preview}
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
-            disabled={testing}
-            onclick={() => void testConnection()}
-          >
-            {#if testing}<CioSpinner size={14} class="animate-spin" />{:else}<Cable
-                size={14}
-              />{/if}
-            Test connection
-          </button>
-        {/if}
-      </div>
-      <div class="flex items-center gap-2">
-        <button
-          type="button"
-          data-modal-dismiss
-          class="h-8 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
-          onclick={close}>Close</button
-        >
-        {#if preview}
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            disabled={registering || testing}
-            onclick={() => void register()}
-          >
-            {#if registering}<CioSpinner size={14} class="animate-spin" />{/if} Register Oven
-          </button>
-        {/if}
-      </div>
-    </div>
+    <!--
+      The buttons stay direct children of the footer on purpose: the shell sends a
+      leading dismiss action to the far left with `mr-auto`, which only reaches a
+      direct child. Wrapping them in a row put Close back on the right.
+    -->
+    <button
+      type="button"
+      data-modal-dismiss
+      class="h-8 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+      onclick={close}>Close</button
+    >
+    {#if preview}
+      <button
+        type="button"
+        class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+        disabled={testing}
+        onclick={() => void testConnection()}
+      >
+        {#if testing}<CioSpinner size={14} class="animate-spin" />{:else}<CioCable size={14} />{/if}
+        Test connection
+      </button>
+      <button
+        type="button"
+        class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        disabled={registering || testing}
+        onclick={() => void register()}
+      >
+        {#if registering}<CioSpinner size={14} class="animate-spin" />{/if} Register Oven
+      </button>
+    {/if}
   {/snippet}
 </Modal>

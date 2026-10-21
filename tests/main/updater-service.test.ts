@@ -69,7 +69,10 @@ const { autoUpdater, autoUpdaterHandlers } = vi.hoisted(() => {
 vi.mock('electron-updater', () => ({ default: { autoUpdater } }))
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
-  app: { getVersion: () => '0.1.0' }
+  // The updater only runs in a shipped build, so the fixture is one: a
+  // development launch (isPackaged without a handed app path) has nothing to
+  // update and never reaches these flows.
+  app: { getVersion: () => '0.1.0', isPackaged: true }
 }))
 
 const DEFERRED_POLL_MS = 5_000
@@ -80,9 +83,13 @@ function defaultConfig(): AppConfig {
     fontFamily: 'jetbrains-mono',
     appFontSize: 15,
     fontWeight: 200,
+    contrastLevel: 'normal',
     zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
+    switcherTerminalTabs: true,
+    switcherFileTabs: true,
+    switcherThreadBrowserTabs: true,
     questionTimeoutMs: 300_000,
     agentQuestionCap: 3,
     keybindings: {},
@@ -98,7 +105,6 @@ function defaultConfig(): AppConfig {
     auxiliaryAgents: {},
     design: { assignments: [] },
     modelProfiles: [],
-    workRoots: { design: '.cio/designs', video: '.cio/videos' },
     mediaGeneration: { providerId: null },
     rankingJudge: { kind: 'automatic' },
     agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,

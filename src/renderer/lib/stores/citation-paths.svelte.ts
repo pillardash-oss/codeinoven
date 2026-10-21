@@ -1,7 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { isAbsoluteCitationPath } from '$lib/agent-source-citations'
-import { CHATS_CWD_DIR, INBOX_PROJECT_ID } from '$shared/types'
+import { conversationWorkspaceDirectory, usesThreadWorkspaceMount } from '$shared/types'
 
 /**
  * Shared, reactive cache of file citations confirmed to exist on disk.
@@ -31,6 +31,27 @@ import { CHATS_CWD_DIR, INBOX_PROJECT_ID } from '$shared/types'
  * because a path that is missing now may exist one write later.
  */
 const NEGATIVE_RETRY_MS = 3_000
+
+/**
+ * Cache key for one citation mount.
+ *
+ * A conversation container (a chat, an assistant task, a browser tab) mounts the
+ * thread's own app-storage directory, so the thread belongs in the key: two
+ * chats resolve the same relative path against different roots, and a path that
+ * exists in one must not turn into a link in the other.
+ */
+function mountKey(
+  projectId: string,
+  scopeBucketId: string | undefined,
+  threadId: string | undefined
+): string {
+  const scope = scopeBucketId ?? ''
+  // Only a conversation container keys off the thread; a project mount resolves
+  // against its root whoever is looking, so both sides of a lookup agree even
+  // when one of them passes the open thread along.
+  const thread = threadId && usesThreadWorkspaceMount(projectId) ? threadId : undefined
+  return thread ? `${projectId}:thread:${thread}:${scope}` : `${projectId}:${scope}`
+}
 
 interface CitationPathsCache {
   /** Candidate strings confirmed to resolve to an existing project entry. */
@@ -84,19 +105,29 @@ class CitationPathsState {
     return cache
   }
 
-  /** Whether a normalized citation path is a real entry in the active project. */
+  /** Whether a normalized citation path is a real entry in the active mount. */
   isValidPath(path: string): boolean {
     const projectId = workspaceState.activeProject?.id
     if (!projectId) return false
     void this.refreshKey
-    const cacheKey = `${projectId}:${workspaceState.activeScopeBucketIdFor(projectId)}`
+    const thread = workspaceState.selectedThread
+    const threadId =
+      thread && thread.projectId === projectId && usesThreadWorkspaceMount(projectId)
+        ? thread.id
+        : undefined
+    const cacheKey = mountKey(projectId, workspaceState.activeScopeBucketIdFor(projectId), threadId)
     return this.cacheFor(cacheKey).known.has(path)
   }
 
   /** Whether a path was resolved for the specific thread render context. */
-  isThreadPathValid(projectId: string, scopeBucketId: string | undefined, path: string): boolean {
+  isThreadPathValid(
+    projectId: string,
+    scopeBucketId: string | undefined,
+    path: string,
+    threadId?: string
+  ): boolean {
     void this.refreshKey
-    return this.cacheFor(`${projectId}:${scopeBucketId ?? ''}`).known.has(path)
+    return this.cacheFor(mountKey(projectId, scopeBucketId, threadId)).known.has(path)
   }
 
   /** Whether an absolute path (outside the project root) exists on disk. */
@@ -111,30 +142,22 @@ class CitationPathsState {
    *  belongs to a managed scope. */
   ensureActiveProjectChecked(candidates: string[]): void {
     const project = workspaceState.activeProject
-    if (
-      !project ||
-      project.source !== 'local' ||
-      candidates.length === 0 ||
-      (project.id !== INBOX_PROJECT_ID && !project.path.trim())
-    ) {
-      return
-    }
-    // Inbox chats have no project root; absolute citations inside the open
-    // thread's `chats-cwd/<threadId>/` workspace directory are still probed
-    // externally so they can become clickable links in the conversation.
-    if (project.id === INBOX_PROJECT_ID) {
-      const threadId =
-        workspaceState.selectedThread?.projectId === project.id
-          ? workspaceState.selectedThread.id
-          : null
-      if (!threadId) return
-      const workspaceCandidates = candidates.filter(
-        (candidate) =>
-          isAbsoluteCitationPath(candidate) && candidate.includes(`/${CHATS_CWD_DIR}/${threadId}/`)
+    if (!project || project.source !== 'local' || candidates.length === 0) return
+    // A conversation container mounts the open thread's own workspace directory
+    // instead of a project root, so its citations resolve against that thread,
+    // not against a path the project does not have.
+    if (usesThreadWorkspaceMount(project.id)) {
+      const thread = workspaceState.selectedThread
+      if (!thread || thread.projectId !== project.id) return
+      this.ensureThreadChecked(
+        project.id,
+        thread.id,
+        workspaceState.activeScopeBucketIdFor(project.id),
+        candidates
       )
-      if (workspaceCandidates.length > 0) this.ensureExternalChecked(workspaceCandidates)
       return
     }
+    if (!project.path.trim()) return
     const external: string[] = []
     const projectCandidates: string[] = []
     for (const candidate of candidates) {
@@ -162,12 +185,26 @@ class CitationPathsState {
     candidates: string[]
   ): void {
     if (candidates.length === 0) return
-    if (projectId === INBOX_PROJECT_ID) {
-      const workspaceCandidates = candidates.filter(
-        (candidate) =>
-          isAbsoluteCitationPath(candidate) && candidate.includes(`/${CHATS_CWD_DIR}/${threadId}/`)
+    if (usesThreadWorkspaceMount(projectId)) {
+      const directory = conversationWorkspaceDirectory(
+        projectId,
+        threadId,
+        this.assistantIdFor(threadId)
       )
-      if (workspaceCandidates.length > 0) this.ensureExternalChecked(workspaceCandidates)
+      const marker = directory ? `/${directory}/` : null
+      const relative: string[] = []
+      const workspaceAbsolute: string[] = []
+      for (const candidate of candidates) {
+        if (!isAbsoluteCitationPath(candidate)) {
+          relative.push(candidate)
+          continue
+        }
+        // Outside the conversation's own directory nothing is probed: a chat
+        // may cite what it produced, not arbitrary files on this machine.
+        if (marker && candidate.includes(marker)) workspaceAbsolute.push(candidate)
+      }
+      if (relative.length > 0) this.ensureChecked(projectId, relative, scopeBucketId, threadId)
+      if (workspaceAbsolute.length > 0) this.ensureExternalChecked(workspaceAbsolute)
       return
     }
     const external: string[] = []
@@ -182,6 +219,14 @@ class CitationPathsState {
     if (external.length > 0) this.ensureExternalChecked(external)
   }
 
+  /** The assistant a conversation thread belongs to, when it is the open one.
+   *  An assistant task mounts `assistant-cwd/<assistantId ?? threadId>`, so the
+   *  mount cannot be derived from the thread id alone. */
+  private assistantIdFor(threadId: string): string | null | undefined {
+    const thread = workspaceState.selectedThread
+    return thread && thread.id === threadId ? thread.assistantId : undefined
+  }
+
   /**
    * Queue existence checks, coalescing bursts (e.g. every MarkdownView mounting
    * at once) into one inflight drain per project. A candidate already resolved
@@ -189,9 +234,13 @@ class CitationPathsState {
    * retry window so a path created later still becomes a link without turning
    * every render into an IPC round trip.
    */
-  ensureChecked(projectId: string, candidates: string[], scopeBucketId?: string): void {
-    if (projectId === INBOX_PROJECT_ID) return
-    const cacheKey = `${projectId}:${scopeBucketId ?? ''}`
+  ensureChecked(
+    projectId: string,
+    candidates: string[],
+    scopeBucketId?: string,
+    threadId?: string
+  ): void {
+    const cacheKey = mountKey(projectId, scopeBucketId, threadId)
     const cache = this.cacheFor(cacheKey)
     const now = Date.now()
     for (const candidate of candidates) {
@@ -202,7 +251,7 @@ class CitationPathsState {
     }
     if (cache.pending.size === 0 || this.inflight.has(cacheKey)) return
 
-    const drain = this.drain(projectId, scopeBucketId, cache)
+    const drain = this.drain(projectId, scopeBucketId, cache, threadId)
     this.inflight.set(cacheKey, drain)
     void drain.finally(() => {
       if (this.inflight.get(cacheKey) === drain) this.inflight.delete(cacheKey)
@@ -212,7 +261,8 @@ class CitationPathsState {
   private async drain(
     projectId: string,
     scopeBucketId: string | undefined,
-    cache: CitationPathsCache
+    cache: CitationPathsCache,
+    threadId?: string
   ): Promise<void> {
     while (cache.pending.size > 0) {
       const batch = [...cache.pending]
@@ -222,7 +272,8 @@ class CitationPathsState {
           'projectFiles:resolveCitationPaths',
           projectId,
           batch,
-          scopeBucketId
+          scopeBucketId,
+          threadId
         )
         const known = cache.known
         let changed = false

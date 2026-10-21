@@ -11,6 +11,7 @@ import type {
 } from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
 import { isWindowsStorePackage } from '../../lib/utils'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
@@ -39,12 +40,22 @@ import {
   type UpdateArtifactInfo
 } from './updater-download'
 
+const UPDATE_CHECK_TIMEOUT_MS = 30_000
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
+/**
+ * How long a dispatched install may leave this process running before it counts
+ * as failed. The payload is handed to the platform installer, which quits us to
+ * swap the bundle; macOS ShipIt can reject a staged build without ever quitting
+ * us or reporting anything, and that is exactly the shape that used to leave the
+ * install surface spinning forever.
+ */
+const INSTALL_QUIT_WATCHDOG_MS = 30_000
 const PENDING_INSTALL_FILE = 'updater/install-pending.json'
-/** GitHub releases API for the published feed (public repo, no auth needed). */
-const GITHUB_RELEASES_URL =
-  'https://api.github.com/repos/pillardash-oss/codeinoven/releases?per_page=40'
+/** GitHub release lookup by exact tag (public repo, no auth needed). */
+function githubReleaseTagUrl(tag: string): string {
+  return `https://api.github.com/repos/pillardash-oss/codeinoven/releases/tags/${encodeURIComponent(tag)}`
+}
 /** Refetch window for the cached changelog; avoids hammering the API per visit. */
 const CHANGELOG_CACHE_MS = 15 * 60 * 1000
 /** Hard cap on the notes body sent over IPC and rendered. */
@@ -113,7 +124,8 @@ export class UpdaterService {
   private changelogCache: {
     changelog: UpdaterChangelog | null
     fetchedAt: number
-    nightlyChannel: boolean
+    /** Exact release tag the cached notes belong to (the installed version). */
+    tag: string
   } | null = null
   /** Feed info of the newest available update, captured for the resumable seed. */
   private pendingUpdateInfo: UpdateArtifactInfo | null = null
@@ -146,6 +158,8 @@ export class UpdaterService {
   private installFailure: InstallFailureState | null = null
   /** True between handing the payload to the platform installer and its exit. */
   private installDispatched = false
+  /** Bounds how long a dispatched install may leave us running; see its arm site. */
+  private installQuitWatchdog: ReturnType<typeof setTimeout> | null = null
   private installRecoveryPending = false
   /**
    * Runs at the start of every update-check cycle (startup, periodic, explicit).
@@ -162,7 +176,16 @@ export class UpdaterService {
       // identity the Store owns delivery. Gating here is enough: the periodic
       // timer, the explicit check, the tray path, the updater IPC and the fatal
       // recovery path all key off `canAutoUpdate`.
-      canAutoUpdate: autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
+      //
+      // A development launch is gated the same way, and not by
+      // `autoUpdater.isUpdaterActive()` alone: that only asks
+      // `app.isPackaged`, which a misbranded dev runtime reports as true, and
+      // the check then opens `app-update.yml` in the Electron download's
+      // Resources directory, where no packaged feed config exists (ENOENT).
+      // Nothing updates during development anyway, so the app's own shipped
+      // build signal decides.
+      canAutoUpdate:
+        isShippedBuild() && autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
       state: 'idle',
       currentVersion: app.getVersion()
     }
@@ -248,15 +271,28 @@ export class UpdaterService {
       // installer, so record it here instead of waiting for the relaunch to
       // reveal it: macOS ShipIt, the NSIS installer, and the AppImage runtime
       // all fail silently from our side.
-      if (this.installDispatched) {
+      const failedDispatch = this.installDispatched
+      if (failedDispatch) {
         this.installDispatched = false
+        this.clearInstallQuitWatchdog()
         void this.recordInstallFailure(this._status.availableVersion)
       }
       // An install that failed before it could quit must not leave the park gate
       // disabled: the app has to stay parkable in the menu bar.
       this.updateQuitHooks?.end()
+      // An install that had already been handed over is never a background blip:
+      // we are still running, the user clicked install, and nothing else is
+      // going to tell them. Report it before the idle-state guard below, which
+      // exists for transient check failures and would otherwise swallow it.
+      if (failedDispatch) {
+        this.updateState({
+          state: 'error',
+          errorMessage: `The update could not be installed: ${error.message}`
+        })
+        return
+      }
       // During a check, the rejected check promise settles the state (see
-      // `settleCheckFailure`)   the event must not race it into a sticky error.
+      // `settleCheckFailure`): the event must not race it into a sticky error.
       // Idle/checking states mean the failure came from a background check, so
       // a transient network issue must not leave a sticky sidebar badge.
       if (
@@ -436,6 +472,7 @@ export class UpdaterService {
       this.timer = null
     }
     this.clearDeferredInstall()
+    this.clearInstallQuitWatchdog()
     // Persist a still-pending install so the next launch resumes it.
     if (this.installPending) {
       void this.persistPendingInstall()
@@ -459,25 +496,30 @@ export class UpdaterService {
       Logger.error('Updater: check-cycle hook failed', error)
     }
     if (!this._status.canAutoUpdate) return this.status
+    if (this.checkInFlight) return this.status
     this.explicitCheckInFlight = explicit
     this.checkInFlight = true
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       await this.applyConfiguredChannel()
-      await autoUpdater
-        .checkForUpdates()
-        .catch((error: unknown) => {
-          Logger.error('Updater: check failed', error)
-          this.settleCheckFailure(error)
+      await Promise.race([
+        autoUpdater.checkForUpdates(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error('Update check timed out. Please try again.')),
+            UPDATE_CHECK_TIMEOUT_MS
+          )
         })
-        .finally(() => {
-          this.checkInFlight = false
-          this.explicitCheckInFlight = false
-        })
+      ])
+      // Some updater implementations resolve without emitting a terminal event.
+      if (this._status.state === 'checking') this.updateState({ state: 'idle' })
     } catch (error: unknown) {
       Logger.error('Updater: check failed', error)
+      this.settleCheckFailure(error)
+    } finally {
+      if (timeout) clearTimeout(timeout)
       this.checkInFlight = false
       this.explicitCheckInFlight = false
-      this.settleCheckFailure(error)
     }
     return this.status
   }
@@ -542,60 +584,50 @@ export class UpdaterService {
   }
 
   /**
-   * Release notes of the newest published release for the configured channel:
-   * the newest nightly prerelease while the nightly channel is selected, else
-   * the newest stable release. Served from a short in-memory cache so repeated
-   * About visits never hit the GitHub API. Returns null when offline or when
-   * the feed cannot be resolved   the renderer shows a quiet fallback.
+   * Release notes of the build the user is running, resolved by its own version:
+   * a stable install reads its stable release notes and a nightly install reads
+   * that exact nightly. Never the channel's newest release, which drifted from
+   * the version the About header shows (a 0.5.63 install displaying
+   * 0.5.64-nightly notes). A development or unpublished build has no release of
+   * its own, so it gets null. Served from a short in-memory cache so repeated
+   * About visits never hit the GitHub API.
    */
   async fetchChangelog(): Promise<UpdaterChangelog | null> {
-    let nightlyChannel = false
-    try {
-      nightlyChannel = (await this.storage.getConfig()).updateChannel === 'nightly'
-    } catch (error: unknown) {
-      Logger.error('Updater: failed to read update channel for changelog', error)
-    }
+    const version = app.getVersion()
+    const tag = version.startsWith('v') ? version : `v${version}`
     if (
-      this.changelogCache?.nightlyChannel === nightlyChannel &&
+      this.changelogCache?.tag === tag &&
       Date.now() - this.changelogCache.fetchedAt < CHANGELOG_CACHE_MS
     ) {
       return this.changelogCache.changelog
     }
     try {
-      // The latest stable endpoint cannot be crowded out by frequent nightlies.
-      const releaseUrl = nightlyChannel
-        ? GITHUB_RELEASES_URL
-        : 'https://api.github.com/repos/pillardash-oss/codeinoven/releases/latest'
-      const response = await fetch(releaseUrl, {
+      const response = await fetch(githubReleaseTagUrl(tag), {
         headers: { Accept: 'application/vnd.github+json' },
         signal: AbortSignal.timeout(10_000)
       })
+      if (response.status === 404) {
+        // An unpublished build has no release of its own. Cache the absence for
+        // the same window so About does not re-probe the API on every visit.
+        this.changelogCache = { changelog: null, fetchedAt: Date.now(), tag }
+        return null
+      }
       if (!response.ok) throw new Error(`GitHub releases responded ${String(response.status)}`)
       interface GhRelease {
         tag_name?: unknown
         published_at?: unknown
-        prerelease?: unknown
         body?: unknown
       }
-      const payload = (await response.json()) as GhRelease | GhRelease[]
-      const releases = Array.isArray(payload) ? payload : [payload]
-      const nightlyPattern = /^v\d+\.\d+\.\d+-nightly[.-]\d+$/
-      const entry = releases.find((release) =>
-        nightlyChannel
-          ? release.prerelease === true &&
-            typeof release.tag_name === 'string' &&
-            nightlyPattern.test(release.tag_name)
-          : release.prerelease === false
-      )
+      const entry = (await response.json()) as GhRelease
       const changelog: UpdaterChangelog | null =
-        entry && typeof entry.tag_name === 'string' && typeof entry.body === 'string'
+        typeof entry.tag_name === 'string' && typeof entry.body === 'string'
           ? {
               tag: entry.tag_name,
               publishedAt: typeof entry.published_at === 'string' ? entry.published_at : '',
               notes: entry.body.slice(0, CHANGELOG_MAX_NOTES_CHARS)
             }
           : null
-      this.changelogCache = { changelog, fetchedAt: Date.now(), nightlyChannel }
+      this.changelogCache = { changelog, fetchedAt: Date.now(), tag }
       return changelog
     } catch (error: unknown) {
       Logger.error('Updater: changelog fetch failed', error)
@@ -883,23 +915,26 @@ export class UpdaterService {
    * fetches fresh bytes instead of replaying the artifact that was rejected.
    */
   private async purgeStaging(dropPendingPayload: boolean): Promise<void> {
-    const cacheLocation = resolveUpdaterCacheLocation()
-    let bundleId: string | null = null
-    if (process.platform === 'darwin') {
-      bundleId = await readMacBundleIdentifier(process.resourcesPath)
-      if (bundleId === null) {
-        Logger.dev('Updater: no bundle identifier resolved, skipping ShipIt staging sweep')
-      }
-    }
-    const context: StagingSweepContext = {
-      platform: process.platform,
-      tmpDir: os.tmpdir(),
-      cacheHome: getAppCacheDir(process.platform, os.homedir()),
-      updaterCacheDir: cacheLocation?.cacheDir ?? null,
-      bundleId,
-      appName: app.getName().toLowerCase()
-    }
+    // Everything that can fail lives inside the try, including reading the app's
+    // own name: this runs from a failure path that is fired and forgotten, so a
+    // rejection here would surface as an unhandled one instead of a swept disk.
     try {
+      const cacheLocation = resolveUpdaterCacheLocation()
+      let bundleId: string | null = null
+      if (process.platform === 'darwin') {
+        bundleId = await readMacBundleIdentifier(process.resourcesPath)
+        if (bundleId === null) {
+          Logger.dev('Updater: no bundle identifier resolved, skipping ShipIt staging sweep')
+        }
+      }
+      const context: StagingSweepContext = {
+        platform: process.platform,
+        tmpDir: os.tmpdir(),
+        cacheHome: getAppCacheDir(process.platform, os.homedir()),
+        updaterCacheDir: cacheLocation?.cacheDir ?? null,
+        bundleId,
+        appName: app.getName().toLowerCase()
+      }
       await purgeAbandonedInstallStaging(context, { dropPendingPayload })
     } catch (error: unknown) {
       Logger.error('Updater: staging sweep failed', error)
@@ -1048,6 +1083,46 @@ export class UpdaterService {
     // applied; `begin` clears that gate and `end` (on failure) restores it.
     this.updateQuitHooks?.begin()
     autoUpdater.quitAndInstall(background, background)
+    // The install is supposed to take this process down with it. If it does not,
+    // nothing else reports back, so bound it here rather than leaving a click
+    // that never finishes on screen.
+    if (this.installDispatched) this.armInstallQuitWatchdog(targetVersion)
+  }
+
+  /**
+   * Bound a dispatched install that has not taken the process down.
+   *
+   * The installer runs outside this process and reports nothing on success, so
+   * "we are still alive" is the only failure signal available on every platform.
+   * Without it, a payload the platform installer rejects silently (ShipIt
+   * validates the staged bundle after we are gone, and has refused a nightly
+   * build for an unmet code requirement) leaves the user watching a spinner for
+   * an install that will never happen. Counted as a failed attempt, so the same
+   * build is not re-armed on every launch.
+   */
+  private armInstallQuitWatchdog(version: string | undefined): void {
+    this.clearInstallQuitWatchdog()
+    const timer = setTimeout(() => {
+      this.installQuitWatchdog = null
+      if (!this.installDispatched) return
+      this.installDispatched = false
+      Logger.error(`Updater: install of ${version ?? 'the update'} did not restart the app`)
+      this.updateQuitHooks?.end()
+      void this.recordInstallFailure(version)
+      this.updateState({
+        state: 'error',
+        errorMessage: `The update to ${version ?? 'the latest version'} did not install. Try again, or download it from the releases page.`
+      })
+    }, INSTALL_QUIT_WATCHDOG_MS)
+    // Never keep the process alive just for this bound.
+    timer.unref()
+    this.installQuitWatchdog = timer
+  }
+
+  private clearInstallQuitWatchdog(): void {
+    if (!this.installQuitWatchdog) return
+    clearTimeout(this.installQuitWatchdog)
+    this.installQuitWatchdog = null
   }
 
   private clearDeferredInstall(): void {

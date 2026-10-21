@@ -2,11 +2,24 @@ import { APP_SLUG } from '$shared/brand'
 import {
   VIEW_GUIDES,
   workspaceTourViewFor,
-  type GuideAction,
+  type GuideActionKind,
   type GuideStop,
   type ViewGuide,
   type WorkspaceTourView
 } from './guide-stops'
+
+/**
+ * What the app is asked to do for the stop on screen.
+ *
+ * `advance` separates the stop's own step button from a control inside the stop:
+ * pressing Next after adding a project moves the guide on, while clicking one of
+ * the harnesses a stop lists does its job where the user is and leaves the guide
+ * standing, because the stop's Next is what moves it.
+ */
+export interface GuideActionRequest {
+  run: GuideActionKind
+  advance: boolean
+}
 
 const STORAGE_KEY = `${APP_SLUG}.viewGuides.v1`
 
@@ -42,11 +55,13 @@ function loadSeen(): SeenRecord {
  * does, which is what keeps an abandoned guide an invitation instead of a
  * crossed-off chore.
  *
- * There is one exception, and it is a step the user themselves took: when a
- * stop's own action opens another view (setup, for instance), the guide waits
- * instead of ending, holds its place, and comes back when the user returns to
- * the view it belongs to. Otherwise every onboarding step that hands the user
- * somewhere else would end the tour that asked them to go.
+ * There is one exception, and it is a step the user themselves took: when the
+ * app takes them somewhere else to finish the step the guide is on (a harness
+ * that has to be installed first, the settings page that owns it), the guide
+ * waits instead of ending, holds its place through `holdForUser`, and comes back
+ * when the user returns to the view it belongs to. Otherwise every onboarding
+ * step that hands the user somewhere else would end the tour that asked them to
+ * go.
  */
 class GuideStateStore {
   #view = $state<WorkspaceTourView | null>(null)
@@ -55,7 +70,7 @@ class GuideStateStore {
   #seen = $state<SeenRecord>(loadSeen())
 
   /** The action a stop asked the app to perform, waiting to be picked up. */
-  #pendingAction: GuideAction | null = $state(null)
+  #pendingAction: GuideActionRequest | null = $state(null)
   #actionRequests = $state(0)
   #consumedActionRequests = 0
 
@@ -95,6 +110,18 @@ class GuideStateStore {
     return this.stopCount > 0 && this.#stopIndex === this.stopCount - 1
   }
 
+  /**
+   * Whether the stop on screen has let the user walk on. A stop with a gate is
+   * the one step a first run cannot skip: its Next stays disabled while this
+   * machine has no agent it can actually run. The value is supplied by the app
+   * shell, which is the only place that knows what a harness needs to be usable.
+   */
+  #stepReady = $state(true)
+
+  get stepReady(): boolean {
+    return this.#stepReady
+  }
+
   /** Whether this view's guide has been walked to the end, at any time. */
   hasSeen(view: WorkspaceTourView): boolean {
     return this.#seen[view] === true
@@ -105,11 +132,26 @@ class GuideStateStore {
     this.#view = view
     this.#stopIndex = 0
     this.#waiting = false
+    this.#stepReady = true
+  }
+
+  /**
+   * Record whether the stop on screen has met its own requirement. Called by the
+   * app shell from the state the requirement is about, so a harness that becomes
+   * usable while the stop is on screen (its install finished, its account just
+   * connected) enables Next without the user having to touch anything.
+   */
+  setStepReady(ready: boolean): void {
+    if (this.#stepReady === ready) return
+    this.#stepReady = ready
   }
 
   /** Advance, and finish the guide when it was the last stop. */
   next(): void {
     if (!this.#view) return
+    // A gated stop is the one step that cannot be skipped, so the keyboard chord
+    // is held to the same rule as the button beside it.
+    if (this.stop?.gate && !this.#stepReady) return
     if (this.onLastStop) {
       this.#markSeen(this.#view)
       this.#view = null
@@ -141,29 +183,51 @@ class GuideStateStore {
   /**
    * Ask the app to perform the current stop's action. The request is consumed by
    * the app shell, which is the only place that knows how to add a project or
-   * open a settings page, and `completeAction` closes the loop afterwards.
+   * open a harness, and `completeAction` closes the loop afterwards.
    */
   requestAction(): void {
-    this.#request(this.stop?.action ?? null)
+    const action = this.stop?.action
+    if (action) this.#request(action.run, true)
   }
 
   /** The other way to take this step, for a user the primary does not fit. */
   requestAlternative(): void {
-    this.#request(this.stop?.alternative ?? null)
+    const action = this.stop?.alternative
+    if (action) this.#request(action.run, true)
   }
 
-  #request(action: GuideAction | null): void {
-    if (!action) return
-    // A step that opens another view puts the guide in waiting *before* the
-    // navigation lands, so the view change it causes is read as this step
-    // rather than as the user wandering off.
-    if (action.leavesTheView) this.#waiting = true
-    this.#pendingAction = action
+  /**
+   * A control inside the stop, rather than the stop's own step: a harness the
+   * user picked from the list, a tour they started from the actions a stop
+   * offers. It does its job where the user is, so the guide never moves on it.
+   */
+  requestChoice(run: GuideActionKind): void {
+    this.#request(run, false)
+  }
+
+  #request(run: GuideActionKind, advance: boolean): void {
+    this.#pendingAction = { run, advance }
     this.#actionRequests += 1
   }
 
+  /**
+   * Hold the guide's place while the app takes the user somewhere else to finish
+   * the step it is on: the harness that still has to be installed, the settings
+   * page that owns it. The dock stands down rather than pointing at a view the
+   * user has left, and the guide comes back on the same stop the moment they are
+   * back in the view it belongs to.
+   *
+   * The app calls this in the same block as its own navigation, because only the
+   * app knows whether the action it is performing leaves the view: a step that
+   * opens a modal where the user already is must not hold, or its dock would
+   * stand down with nothing to come back from.
+   */
+  holdForUser(): void {
+    if (this.#view) this.#waiting = true
+  }
+
   /** One-shot read of the requested action, for the app shell. */
-  consumeActionRequest(): GuideAction | null {
+  consumeActionRequest(): GuideActionRequest | null {
     if (this.#consumedActionRequests === this.#actionRequests) return null
     this.#consumedActionRequests = this.#actionRequests
     return this.#pendingAction

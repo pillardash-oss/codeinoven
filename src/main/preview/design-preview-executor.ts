@@ -1,8 +1,9 @@
 import { requireLocalProject, requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
+import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
 import { openDesignPreview } from '../design/design-preview-session'
-import { currentWorkRoot } from '../design/work-roots-state'
+import { currentWorkRoot, projectWorkRootPaths } from '../design/work-roots-state'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { DirectoryPreviewService } from './directory-preview-service'
@@ -111,6 +112,16 @@ export function createDesignPreviewExecutor(
       kind: 'design'
     })
 
+    const designRoot = currentWorkRoot('design', context.projectId)
+    const folderNote = workFolderNote(
+      'design',
+      result.directory,
+      projectWorkRootPaths(context.projectId, 'design'),
+      designRoot
+    )
+    const tabNote = result.tab
+      ? 'Activate the in-app browser capability to screenshot this tab, change its viewport, or read its console.'
+      : 'No browser tab was opened, so this URL is for the user to open while the app is running.'
     return {
       url: result.url,
       directory: result.directory,
@@ -118,9 +129,7 @@ export function createDesignPreviewExecutor(
       served: result.served,
       attention,
       tab: result.tab,
-      note: result.tab
-        ? 'Activate the in-app browser capability to screenshot this tab, change its viewport, or read its console.'
-        : 'No browser tab was opened, so this URL is for the user to open while the app is running.'
+      note: [folderNote, tabNote].filter(Boolean).join(' ')
     }
   }
 }

@@ -1,18 +1,22 @@
 <script lang="ts">
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioNotes from '$lib/components/icons/cio/CioNotes.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioRedo from '@pdslng/cio-icon/CioRedo.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '$lib/components/speech/VoiceInputButton.svelte'
+  import FindInSurface from '$lib/components/threads/FindInSurface.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import PanelTabStrip from '$lib/components/workspace/PanelTabStrip.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { motionDuration, slideWidth } from '$lib/motion'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { findNavState } from '$lib/stores/find-nav.svelte'
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { StickyNoteAppearance } from '$shared/types'
@@ -36,6 +40,7 @@
   })
   let historyController = $state<{ undo: () => void; redo: () => void } | null>(null)
   let richEditor = $state<RichMarkdownEditor>()
+  let noteBodyEl = $state<HTMLDivElement | null>(null)
   let canUndo = $state(false)
   let canRedo = $state(false)
 
@@ -86,6 +91,15 @@
 
   function stopEditing(noteId: string): void {
     if (stickyNotes.activeNoteId === noteId) activeNoteMode = { noteId, mode: 'read' }
+  }
+
+  /** The inline rail and the full screen surface each render their own note
+   *  body, so switching layout destroys the DOM a find query was measured
+   *  against. Leaving the bar open would reopen it over a body it never
+   *  scanned, so the query goes with the surface it belonged to. */
+  function toggleFullscreen(next: boolean): void {
+    fullscreen = next
+    findNavState.closeStickyNotesFind()
   }
 
   function selectNote(noteId: string): void {
@@ -209,56 +223,85 @@
     class="h-7 w-7 text-dimmed"
   />
   {@render noteActions()}
+  {#if activeNote?.loaded}
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title={`Find in this note (${keymapState.labelFor('nav-find')})`}
+      aria-label="Find in this note"
+      onclick={() => findNavState.openStickyNotesFind()}
+    >
+      <CioFind size={14} />
+    </button>
+  {/if}
 {/snippet}
 
 {#snippet noteBody(note: StickyNoteEntry)}
-  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto bg-app">
-    {#if note.loading}
-      <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
-    {:else if !note.loaded}
-      <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-        <p class="text-sm text-muted">{note.saveError ?? 'Could not load this sticky note.'}</p>
-        <button
-          type="button"
-          class="border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
-          title="Retry loading this note"
-          aria-label="Retry loading this note"
-          onclick={() => selectNote(note.id)}
+  <!-- `relative` is what the find bar anchors to, and it sits outside the
+       scrolling body so the bar stays put while the note scrolls. The bound
+       container is the scroll body itself: it holds the editor and the reading
+       view alike, and it survives the `{#key note.id}` that recreates the
+       editor, so a note switch never leaves the finder pointing at dead DOM. -->
+  <div data-region="sticky-notes" class="relative flex min-h-0 flex-1 flex-col">
+    <div bind:this={noteBodyEl} class="flex min-h-0 flex-1 flex-col overflow-y-auto bg-app">
+      {#if note.loading}
+        <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
+      {:else if !note.loaded}
+        <div
+          class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
         >
-          Retry
-        </button>
-      </div>
-    {:else}
-      {#key note.id}
-        <RichMarkdownEditor
-          bind:this={richEditor}
-          id={`sticky-note-editor-${note.id}`}
-          value={note.body}
-          onValueChange={(body) => stickyNotes.setBody(note.id, body)}
-          placeholder="Write a note…"
-          ariaLabel={`Sticky note: ${note.title}`}
-          containerClass={activeIsEditing ? 'min-h-0 flex-1' : 'hidden'}
-          class="min-h-full w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
-          onHistoryControllerChange={(controller) => {
-            if (stickyNotes.activeNoteId === note.id) historyController = controller
-          }}
-          onHistoryStateChange={(state) => {
-            if (stickyNotes.activeNoteId === note.id) {
-              canUndo = state.canUndo
-              canRedo = state.canRedo
-            }
-          }}
-        />
-      {/key}
-      {#if activeIsEditing}
-        {#if note.saveError}
-          <p class="px-3.5 pb-3 text-sm text-danger" role="alert">{note.saveError}</p>
-        {/if}
-      {:else if note.body.trim()}
-        <MarkdownView text={note.body} class="w-full px-3.5 py-3 text-sm leading-5" />
+          <p class="text-sm text-muted">{note.saveError ?? 'Could not load this sticky note.'}</p>
+          <button
+            type="button"
+            class="border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
+            title="Retry loading this note"
+            aria-label="Retry loading this note"
+            onclick={() => selectNote(note.id)}
+          >
+            Retry
+          </button>
+        </div>
       {:else}
-        <p class="px-3.5 py-3 text-sm leading-5 text-dimmed">Nothing written yet.</p>
+        {#key note.id}
+          <RichMarkdownEditor
+            bind:this={richEditor}
+            id={`sticky-note-editor-${note.id}`}
+            value={note.body}
+            onValueChange={(body) => stickyNotes.setBody(note.id, body)}
+            placeholder="Write a note…"
+            ariaLabel={`Sticky note: ${note.title}`}
+            containerClass={activeIsEditing ? 'min-h-0 flex-1' : 'hidden'}
+            class="min-h-full w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
+            onHistoryControllerChange={(controller) => {
+              if (stickyNotes.activeNoteId === note.id) historyController = controller
+            }}
+            onHistoryStateChange={(state) => {
+              if (stickyNotes.activeNoteId === note.id) {
+                canUndo = state.canUndo
+                canRedo = state.canRedo
+              }
+            }}
+          />
+        {/key}
+        {#if activeIsEditing}
+          {#if note.saveError}
+            <p class="px-3.5 pb-3 text-sm text-danger" role="alert">{note.saveError}</p>
+          {/if}
+        {:else if note.body.trim()}
+          <MarkdownView text={note.body} class="w-full px-3.5 py-3 text-sm leading-5" />
+        {:else}
+          <p class="px-3.5 py-3 text-sm leading-5 text-dimmed">Nothing written yet.</p>
+        {/if}
       {/if}
+    </div>
+    {#if findNavState.stickyNotesFindOpen && activeNote?.loaded}
+      <FindInSurface
+        container={noteBodyEl}
+        focusTrigger={findNavState.stickyNotesFindFocusTrigger}
+        label="Find in this note"
+        placeholder="Find in this note…"
+        onClose={() => findNavState.closeStickyNotesFind()}
+      />
     {/if}
   </div>
 {/snippet}
@@ -316,7 +359,7 @@
         activeTabId={stickyNotes.activeNoteId}
         newLabel="New sticky note"
         trailingLabel="Fullscreen"
-        onTrailingAction={() => (fullscreen = true)}
+        onTrailingAction={() => toggleFullscreen(true)}
         onSelect={selectNote}
         onNew={() => void createNote()}
         onCloseTab={requestDelete}
@@ -352,7 +395,7 @@
     newLabel="New sticky note"
     minimizeLabel="Exit fullscreen"
     onNew={() => void createNote()}
-    onMinimize={() => (fullscreen = false)}
+    onMinimize={() => toggleFullscreen(false)}
     onSelect={selectNote}
     onCloseTab={requestDelete}
     onMoveTab={(id, targetId, position) => stickyNotes.move(id, targetId, position)}

@@ -15,12 +15,12 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
+import { appResourcesRoot, isShippedBuild } from './app-resources'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
 import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
-import { workRootsFromConfig } from '../../lib/design/work-roots'
-import { loadProjectWorkRoots, setWorkRoots } from '../design/work-roots-state'
+import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -33,11 +33,12 @@ import {
   broadcastThreadUpdate,
   publishThreadMessagesChanged,
   subscribeThreadCorpus,
-  setBackgroundAttention,
+  setBackgroundTray,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
+import { instanceEventBus } from '../system/instance-event-bus'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -135,8 +136,8 @@ async function attachBrowserService(
   chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
     service.executeUtility(operation, input, browserContext)
   )
-  service.setTabMarkRecogniser((projectId, threadId, url, recordThread) =>
-    designService.observeShownFolder(projectId, threadId, url, recordThread)
+  service.setTabMarkRecogniser((projectId, threadId, url) =>
+    designService.observeShownFolder(projectId, threadId, url)
   )
 }
 
@@ -180,6 +181,12 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
+  // This independent prerequisite must not hold the feature graph, a first
+  // message, or terminal creation behind a download/extraction promise.
+  if (process.platform === 'win32')
+    void import('../drivers/windows-git-runtime')
+      .then(({ startWindowsGitPreparation }) => startWindowsGitPreparation())
+      .catch((error: unknown) => Logger.error('Windows Git startup preparation failed', error))
   const [
     { registerIpcHandlers },
     { ProjectManager },
@@ -420,7 +427,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       at: report.at
     })
     broadcastAutoAnswersChanged(store.list())
-    state.backgroundLifecycle?.refreshAttention()
+    state.backgroundLifecycle?.refreshTrayState()
   })
   state.assistantScheduler = new AssistantSchedulerService(storage, {
     assistants: assistantManager,
@@ -431,7 +438,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     onRunFailed: (runThreadId) => {
       try {
         new ThreadRepo(database).markUnread(runThreadId)
-        state.backgroundLifecycle?.refreshAttention()
+        state.backgroundLifecycle?.refreshTrayState()
       } catch (error) {
         Logger.error('Could not flag a failed run as unread:', error)
       }
@@ -499,7 +506,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     broadcastMissedRunsChanged(state.assistantScheduler?.listMissedRuns() ?? [])
     broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])
     broadcastSkippedRunsChanged(state.assistantScheduler?.listSkippedRuns() ?? [])
-    state.backgroundLifecycle?.refreshAttention()
+    state.backgroundLifecycle?.refreshTrayState()
   })
   // Background wake: the machine is held awake inside the lead window before a
   // due scheduled run, capped so a mis-scheduled task cannot pin it. The next
@@ -533,33 +540,45 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // A settled run's outcome now belongs in the "While you were away" list.
     broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])
   })
-  state.speechService = new SpeechService(
-    {
-      catalogPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/model-catalog.json')
-        : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
-      mlxWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/mlx-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker'),
-      coremlWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/coreml-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/coreml-worker'),
-      nativeCaptureWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/speech-capture-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/speech-capture-worker')
-    },
-    undefined,
-    (input) => state.chatEngine!.cleanupSpeechTranscript(input),
-    (input) => state.chatEngine!.transcribeSpeechAudio(input),
-    (input) => state.chatEngine!.learnSpeechLessons(input),
-    (pid, command, cwd) =>
-      state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
-  )
-  await state.speechService.initialize()
+  // Speech is an optional capability, and its resources are the first bundled
+  // assets a misresolved resources root breaks. A failure here must degrade
+  // dictation only: throwing past this point would abort the rest of the graph,
+  // leaving every feature channel (file reads included) unregistered.
+  const speechResourcesRoot = appResourcesRoot()
+  const speechIsPackaged = isShippedBuild()
+  const speechWorkerPath = (worker: string): string =>
+    speechIsPackaged
+      ? join(speechResourcesRoot, 'speech', worker)
+      : join(speechResourcesRoot, 'speech/runtime/darwin-arm64', worker)
+  try {
+    const speechService = new SpeechService(
+      {
+        catalogPath: join(speechResourcesRoot, 'speech/model-catalog.json'),
+        mlxWorkerPath: speechWorkerPath('mlx-worker'),
+        coremlWorkerPath: speechWorkerPath('coreml-worker'),
+        nativeCaptureWorkerPath: speechWorkerPath('speech-capture-worker')
+      },
+      undefined,
+      (input) => state.chatEngine!.cleanupSpeechTranscript(input),
+      (input) => state.chatEngine!.transcribeSpeechAudio(input),
+      (input) => state.chatEngine!.learnSpeechLessons(input),
+      (pid, command, cwd) =>
+        state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
+    )
+    await speechService.initialize()
+    state.speechService = speechService
+    state.unregisterSpeechIpc = registerSpeechIpc(
+      speechService,
+      () => state.mainWindow?.webContents ?? null
+    )
+  } catch (error) {
+    state.speechService = null
+    Logger.error('Speech services unavailable; dictation stays disabled', error)
+  }
   // Initialize auto-evict timers from persisted sound settings
   try {
     const cfg = await storage.getConfig()
-    state.speechService.updateUnloadOptions({
+    state.speechService?.updateUnloadOptions({
       asr: cfg.sound.asrUnload,
       cleanup: cfg.sound.cleanupUnload,
       tts: cfg.sound.ttsUnload
@@ -567,10 +586,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   } catch {
     // defaults already applied
   }
-  state.unregisterSpeechIpc = registerSpeechIpc(
-    state.speechService,
-    () => state.mainWindow?.webContents ?? null
-  )
   // Intent search shares the one local llama.cpp runtime with speech, so both
   // draw from the same discovered/downloaded binary and the same process journal.
   state.searchService = new SearchService(database, {
@@ -591,11 +606,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   try {
     const startupConfig = await storage.getConfig()
     state.prototypePreviewService.setCdnPolicy(prototypeCdnPolicyFromConfig(startupConfig))
-    // The folders designs and videos are written into. Held for the whole run so a
-    // path resolver never touches the config file, and replaced on every save.
-    setWorkRoots(workRootsFromConfig(startupConfig))
   } catch {
-    // The strict policy and the default folders stand until the config can be read.
+    // The strict policy stands until the config can be read.
   }
   await loadProjectWorkRoots(database)
   state.directoryPreviewService = new DirectoryPreviewService()
@@ -782,7 +794,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.powerWakeService?.onRetryScheduleChanged()
     // A tracked provider issue (and the retry that clears it) is the durable
     // half of the thread's error card, which the icon mirrors.
-    state.backgroundLifecycle?.requestAttentionRefresh()
+    state.backgroundLifecycle?.requestTrayRefresh()
   })
   // The engine counts the working sessions but cannot name them; the shared
   // report is what the close gate lists too, so an install prompt and a quit
@@ -826,7 +838,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     threadCreation: context.threadCreation,
     threadDeletion: context.threadDeletion,
     hydrationHandlersRegistered: true,
-    speechService: state.speechService,
+    speechService: state.speechService ?? undefined,
     utilityFootprint,
     onScopedPathResolver: (resolve) => {
       state.appfileScopedPathResolver = resolve
@@ -845,6 +857,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.foreignRuns = new ForeignRunService(database)
   state.foreignRuns.registerIpc()
   state.foreignRuns.start()
+  // The cross-instance stream bus: it serves this process and dials its live
+  // peers so a sibling window renders the same run this one renders. It arms its
+  // listener only while the registry proves another instance is running.
+  instanceEventBus.start()
   // Shared rows and transcripts a sibling writes into: the writer announces the
   // threads it touched, and this instance re-reads and pushes them.
   state.crossInstanceThreads = new CrossInstanceThreadService(database)
@@ -949,6 +965,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         }
       })
     }
+    // A pid the task manager ends can be a terminal's own shell. The PTY
+    // service announces that stop so the renderer does not respawn it as a
+    // crash, which is the difference between a kill that holds and a shell that
+    // is back a moment later.
+    state.chatEngine?.setPtyStopAnnouncer(
+      (pid) => state.ptyService?.announceStopForPid(pid) ?? false
+    )
     state.ptyService.register()
     state.providerConnection.register()
     state.openCodeV2Service.register()
@@ -1042,8 +1065,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     // Every persisted thread update now re-evaluates the menu bar icon, so a
     // thread that breaks while the window is closed flips it and a thread that
-    // recovers flips it back.
-    if (state.backgroundLifecycle) setBackgroundAttention(state.backgroundLifecycle)
+    // recovers flips it back   including the figure, which rises and falls with
+    // the threads that are actually running.
+    if (state.backgroundLifecycle) setBackgroundTray(state.backgroundLifecycle)
 
     try {
       await state.retryScheduler?.start()

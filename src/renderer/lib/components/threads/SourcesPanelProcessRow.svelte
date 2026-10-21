@@ -1,9 +1,8 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-
   import type { AgentRunningProcess } from '$shared/types'
   import { processName, processStartedAt } from './sources-panel-helpers'
 

@@ -190,7 +190,7 @@ export function describeVoiceRecordingShortcut(
   if (binding.doubleTap) return `Double-press ${modifierLabel(binding.code)}`
   const mac = isMacPlatform()
   const modifiers: string[] = []
-  if (binding.meta) modifiers.push(mac ? '⌘' : 'Cmd')
+  if (binding.meta) modifiers.push(mac ? '⌘' : 'Super')
   if (binding.ctrl) modifiers.push(mac ? '⌃' : 'Ctrl')
   if (binding.alt) modifiers.push(mac ? '⌥' : 'Alt')
   if (binding.shift) modifiers.push(mac ? '⇧' : 'Shift')

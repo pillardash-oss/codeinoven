@@ -1,10 +1,11 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { FileQuestion, WrapText } from '@lucide/svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioFileQuestion from '@pdslng/cio-icon/CioFileQuestion.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -229,7 +230,7 @@
         type="button"
         class="titlebar-no-drag flex h-7 items-center gap-1 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!dirty || saving}
-        title="Save attachment (Cmd/Ctrl+S)"
+        title={`Save attachment (${keymapState.labelFor('files-save')})`}
         onclick={() => void saveText()}
       >
         {#if saving}
@@ -250,7 +251,7 @@
         title={wrapTitle}
         onclick={() => wrapTextState.toggle()}
       >
-        <WrapText size={14} />
+        <CioWrapText size={14} />
       </button>
       <button
         type="button"
@@ -351,7 +352,8 @@
       class="relative flex min-h-0 flex-1 items-center justify-center"
       onclick={requestClose}
       onkeydown={(e: KeyboardEvent) => {
-        if (keymapState.matches('ui-activate', e)) requestClose()
+        // Keys from editors and embedded artifact controls must not dismiss the preview.
+        if (e.target === e.currentTarget && keymapState.matches('ui-activate', e)) requestClose()
       }}
     >
       <div
@@ -418,13 +420,27 @@
           <div
             class="flex h-full w-full flex-col items-center justify-center gap-2 bg-surface text-muted shadow-2xl"
           >
-            <FileQuestion size={32} class="text-dimmed" />
+            <CioFileQuestion size={32} class="text-dimmed" />
             <span class="text-xs">No preview available for this file type</span>
           </div>
         {/if}
       </div>
       {#if pagerState || (kind === 'image' && src)}
-        <div class="absolute right-3 bottom-3 flex items-center gap-2">
+        <!-- The floating controls belong to the content, not to the backdrop
+             behind it: the lightbox dismisses on a press of its backdrop, so the
+             cluster's own box and the gap between its controls must not read as
+             one, and an activation key pressed on a focused control (Enter on
+             the zoom toolbar) must not reach the lightbox's activate handler
+             either. The controls guard their own buttons; this guards the
+             region. -->
+        <div
+          class="absolute right-3 bottom-3 flex items-center gap-2"
+          role="presentation"
+          onclick={(event: MouseEvent) => event.stopPropagation()}
+          onkeydown={(event: KeyboardEvent) => {
+            if (keymapState.matches('ui-activate', event)) event.stopPropagation()
+          }}
+        >
           {#if pagerState}
             <PreviewPager pager={pagerState} />
           {/if}

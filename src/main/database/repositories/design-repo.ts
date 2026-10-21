@@ -52,6 +52,22 @@ function toCurrent(row: ThreadDesignRow): ThreadDesignCurrent {
   }
 }
 
+/**
+ * The folder a preview's entry names inside the previewed root, or null.
+ *
+ * `entry` is a page inside `directory`, and a session may name a screen one folder
+ * down (`entry: 'rail-icon-set/weight.html'` while the root is `.cio/designs`). The
+ * design that session is working on is the folder holding that screen, not the root,
+ * and the board lists folders rather than roots, so that is the folder that has to
+ * carry a creator. Only the first segment counts, because the board reads a screen
+ * as an HTML file in a design folder or one folder below it.
+ */
+function entryFolder(entry: string | null): string | null {
+  if (entry === null) return null
+  const segment = entry.split('/')[0]
+  return segment === undefined || segment === '' || segment === entry ? null : segment
+}
+
 /** Columns every read of the table selects, so the row mappers stay one shape. */
 const CURRENT_COLUMNS = 'thread_id, project_id, directory, entry, kind, updated_at'
 
@@ -106,12 +122,11 @@ export class DesignRepo {
     )
     // A generic HTML preview is not a new design. Register only a folder directly
     // under an authored-work root, including the project's explicit custom roots.
-    if (
-      [
-        DEFAULT_WORK_ROOTS[input.kind],
-        ...projectWorkRootPaths(input.projectId, input.kind)
-      ].includes(dirname(input.directory))
-    ) {
+    const roots = [
+      DEFAULT_WORK_ROOTS[input.kind],
+      ...projectWorkRootPaths(input.projectId, input.kind)
+    ]
+    if (roots.includes(dirname(input.directory))) {
       this.db.run(
         `INSERT INTO authored_work_folders (project_id, directory, kind, created_at, updated_at, missing)
         VALUES (?, ?, ?, ?, ?, 0) ON CONFLICT(project_id, directory) DO UPDATE SET kind = excluded.kind, missing = 0`,
@@ -129,16 +144,34 @@ export class DesignRepo {
         input.directory
       )
     }
-    // The first thread to preview a folder is the one that created it, because the
-    // agent writes a folder before showing it. The insert is ignored once the
-    // folder has an origin, so a second thread previewing someone else's design,
-    // and the same thread previewing it again, both leave the creator alone.
+    this.recordCreator(input.projectId, input.directory, input.threadId)
+    // A preview of a root that names a screen inside a subfolder is showing that
+    // subfolder's design, so the subfolder is the folder this thread created and the
+    // folder the board has to name. It lists the designs under a root and offers to
+    // reveal each one's creator, so recording the root alone left the design that was
+    // open on screen looking unclaimed: the creator was filed against the root, the
+    // root is not a design the board shows, and the design under it had no thread to
+    // send the user to.
+    const held = roots.includes(input.directory) ? entryFolder(input.entry) : null
+    if (held !== null)
+      this.recordCreator(input.projectId, `${input.directory}/${held}`, input.threadId)
+  }
+
+  /**
+   * Record the thread that created a folder, once.
+   *
+   * The first thread to preview a folder is the one that created it, because the
+   * agent writes a folder before showing it. The insert is ignored once the folder
+   * has an origin, so a second thread previewing someone else's design, and the
+   * same thread previewing it again, both leave the creator alone.
+   */
+  private recordCreator(projectId: string, directory: string, threadId: string): void {
     this.db.run(
       `INSERT OR IGNORE INTO design_origins (project_id, directory, thread_id, created_at)
        VALUES (?, ?, ?, ?)`,
-      input.projectId,
-      input.directory,
-      input.threadId,
+      projectId,
+      directory,
+      threadId,
       Date.now()
     )
   }
@@ -150,10 +183,17 @@ export class DesignRepo {
    * control for every folder it lists, so this sits on an interaction path and must
    * not touch SQLite on the Electron main thread (see `docs/APP-BIBLE.md`). A
    * directory with no row is simply absent from the map.
+   *
+   * A creator whose thread has since been deleted is not reported either. The
+   * reveal control acts on this map, and a row naming a thread that no longer
+   * exists is a control that looks live and does nothing when it is clicked: the
+   * folder reads as unclaimed, which is what it now is, and the title says so.
    */
   async originsViaWorker(projectId: string): Promise<Map<string, string>> {
     const result = await this.db.queryViaWorker(
-      'SELECT directory, thread_id FROM design_origins WHERE project_id = ?',
+      `SELECT o.directory, o.thread_id FROM design_origins o
+         JOIN threads t ON t.id = o.thread_id
+        WHERE o.project_id = ?`,
       [projectId],
       0
     )

@@ -1,23 +1,10 @@
-import DOMPurify from 'dompurify'
+/// <reference types="electron-vite/node" />
+import createValidationWorker from './pele-validation-worker.ts?nodeWorker'
 import { Logger } from '../system/logger'
 
 const MAX_MERMAID_BLOCKS = 12
-const MAX_MERMAID_SOURCE_CHARS = 50_000
-const ERROR_DETAIL_LIMIT = 1_000
 const MERMAID_FENCE_PATTERN =
   /(?:^|\r?\n)[ \t]{0,3}(`{3,}|~{3,})[ \t]*mermaid(?:[ \t]+[^\r\n]*)?\r?\n([\s\S]*?)\r?\n[ \t]{0,3}\1[ \t]*(?=\r?\n|$)/gi
-
-interface HeadlessPurifier {
-  addHook?: (entryPoint: string, hookFunction: (node: Element) => void) => void
-  sanitize?: (source: string) => string
-}
-
-interface MermaidParser {
-  parse(
-    source: string,
-    options?: { suppressErrors?: boolean }
-  ): Promise<{ diagramType: string } | false>
-}
 
 export interface MermaidValidationFailure {
   block: number
@@ -29,39 +16,37 @@ export interface MermaidOutputValidation {
   failures: MermaidValidationFailure[]
 }
 
-let parserPromise: Promise<MermaidParser> | undefined
+// Parsing stays off Electron's main thread, including hostile or deeply nested sources.
+let validationQueue: Promise<unknown> = Promise.resolve()
 
-function loadParser(): Promise<MermaidParser> {
-  parserPromise ??= (async () => {
-    // Mermaid's parser initializes diagram databases that expect DOMPurify's
-    // browser hooks, even though syntax validation itself does not touch the DOM.
-    // Supply inert hooks in Electron's main process before Mermaid is imported.
-    const purifier = DOMPurify as unknown as HeadlessPurifier
-    purifier.addHook ??= () => undefined
-    purifier.sanitize ??= (source) => source
-    const module = await import('mermaid')
-    return module.default
-  })().catch((error) => {
-    parserPromise = undefined
-    throw error
-  })
-  return parserPromise
+function parseSources(sources: string[]): Promise<MermaidValidationFailure[]> {
+  const result = validationQueue.then(
+    () =>
+      new Promise<MermaidValidationFailure[]>((resolve, reject) => {
+        const worker = createValidationWorker({ workerData: sources })
+        let settled = false
+        const finish = (error?: Error, failures: MermaidValidationFailure[] = []): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          void worker.terminate()
+          if (error) reject(error)
+          else resolve(failures)
+        }
+        const timer = setTimeout(() => finish(new Error('Diagram validation timed out')), 5_000)
+        worker.on('message', (failures: MermaidValidationFailure[]) => finish(undefined, failures))
+        worker.on('error', (error: Error) => finish(error))
+        worker.on('exit', (code: number) => {
+          if (!settled) finish(new Error(`Diagram validator exited (${code})`))
+        })
+      })
+  )
+  validationQueue = result.catch(() => undefined)
+  return result
 }
 
 function extractMermaidSources(markdown: string): string[] {
   return [...markdown.matchAll(MERMAID_FENCE_PATTERN)].map((match) => match[2]?.trim() ?? '')
-}
-
-function errorDetail(error: unknown): string {
-  const detail = error instanceof Error ? error.message : String(error)
-  return detail.slice(0, ERROR_DETAIL_LIMIT)
-}
-
-function isModuleLoadFailure(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-  const code = 'code' in error ? error.code : undefined
-  if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') return true
-  return error instanceof Error && /Cannot find module .+ imported from/u.test(error.message)
 }
 
 export async function validateMermaidOutput(markdown: string): Promise<MermaidOutputValidation> {
@@ -79,43 +64,12 @@ export async function validateMermaidOutput(markdown: string): Promise<MermaidOu
     }
   }
 
-  let parser: MermaidParser
   try {
-    parser = await loadParser()
+    return { diagramCount: sources.length, failures: await parseSources(sources) }
   } catch (error) {
-    Logger.error('Mermaid output validation unavailable; preserving completed response', error)
+    Logger.error('Pele output validation unavailable; preserving completed response', error)
     return { diagramCount: sources.length, failures: [] }
   }
-  const failures: MermaidValidationFailure[] = []
-  for (const [index, source] of sources.entries()) {
-    if (!source) {
-      failures.push({ block: index + 1, detail: 'Mermaid diagram is empty.' })
-      continue
-    }
-    if (source.length > MAX_MERMAID_SOURCE_CHARS) {
-      failures.push({
-        block: index + 1,
-        detail: `Mermaid diagram exceeds ${MAX_MERMAID_SOURCE_CHARS} characters.`
-      })
-      continue
-    }
-    try {
-      const result = await parser.parse(source)
-      if (result === false) {
-        failures.push({ block: index + 1, detail: 'Mermaid parser rejected the diagram.' })
-      }
-    } catch (error) {
-      if (isModuleLoadFailure(error)) {
-        Logger.error('Mermaid output validation unavailable; preserving completed response', error)
-        return {
-          diagramCount: sources.length,
-          failures: []
-        }
-      }
-      failures.push({ block: index + 1, detail: errorDetail(error) })
-    }
-  }
-  return { diagramCount: sources.length, failures }
 }
 
 export function mermaidRepairPrompt(failures: MermaidValidationFailure[]): string {

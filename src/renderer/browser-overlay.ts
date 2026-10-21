@@ -1,8 +1,9 @@
 import './app.css'
 import { mount } from 'svelte'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { applyAppTypography } from '$lib/app-typography'
+import { applyAppTypography, applyContrastLevel } from '$lib/app-typography'
 import { logRendererError } from '$lib/system/renderer-logger'
+import type { AppConfig } from '$shared/types'
 
 /**
  * The entry for the browser overlay window.
@@ -27,13 +28,24 @@ document.documentElement.classList.toggle(
   new URLSearchParams(window.location.search).get('theme') === 'dark'
 )
 
+/**
+ * Read the app's own appearance into this document.
+ *
+ * The windows this entry serves are the toast overlay and the floating tab
+ * strip, and both draw with the app's stylesheet. Typography and the contrast
+ * level are not part of the content that arrives afterwards, so they are applied
+ * here, once, and again whenever the user changes one.
+ */
+function applyAppearance(config: AppConfig): void {
+  applyAppTypography(document.documentElement, config)
+  applyContrastLevel(document.documentElement, config.contrastLevel)
+}
+
 void invoke('config:get')
-  .then((config) => applyAppTypography(document.documentElement, config))
+  .then(applyAppearance)
   .catch(() => {})
 
-const stopTypography = subscribe('config:changed', (config) =>
-  applyAppTypography(document.documentElement, config)
-)
+const stopTypography = subscribe('config:changed', applyAppearance)
 window.addEventListener('pagehide', stopTypography, { once: true })
 
 const target = document.getElementById('browser-overlay')

@@ -173,6 +173,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   constructor(protected readonly storage: StorageEngine) {}
 
+  /**
+   * The base CLI drivers fold a history recap into the turn's own prompt text
+   * (see the invitation at `sendPrompt`), so the harness records it in its
+   * transcript and the engine sends a restored delta once. pi overrides this
+   * because it serves the recap from a context hook instead.
+   */
+  readonly retainsRecapInTranscript: boolean = true
+
   setProcessObserver(observer: AgentProcessObserver): void {
     this.processObserver = observer
   }
@@ -214,13 +222,23 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     const session = await this.requireSession(projectPath, sessionId)
     this.deletedSessions.add(session.id)
-    const active = this.activeProcesses.get(session.id)
+    this.releaseSessionRuntime(session.id)
+    await this.storage.remove(this.sessionPath(session.id))
+  }
+
+  /**
+   * Stop a session's process and drop its in-memory record cache while leaving
+   * its durable record alone, so a parked session can be resumed later. Parking
+   * is not deleting: the record and its native transcript are the branch a
+   * switch back to this harness resumes.
+   */
+  protected releaseSessionRuntime(sessionId: string): void {
+    const active = this.activeProcesses.get(sessionId)
     if (active) {
       active.kill()
-      this.activeProcesses.delete(session.id)
+      this.activeProcesses.delete(sessionId)
     }
-    this.sessionCache.delete(session.id)
-    await this.storage.remove(this.sessionPath(session.id))
+    this.sessionCache.delete(sessionId)
   }
 
   /** Run one auxiliary one-shot completion per disposable session, cheapest candidate first. */
@@ -265,7 +283,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       projectPath,
       options,
       candidates,
-      buildTitlePrompt(options.message.slice(0, 2_000)),
+      buildTitlePrompt(options.message),
       sanitizeGeneratedTitle
     )
     this.lastTitleAttempts = outcome.attempts
@@ -1166,6 +1184,60 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     threadId: string
   ): Promise<PersistentCliSession | null> {
     return findLatestThreadCliSession(this.storage, this.id, projectPath, threadId)
+  }
+
+  /**
+   * The session this driver can still resume for a thread after a harness
+   * switch parked it. `native` reports whether the record carries a native
+   * conversation binding: a record without one only holds the engine's mirror,
+   * so adopting it would replace a cold replay with an equally cold replay.
+   */
+  async findThreadSession(
+    projectPath: string,
+    threadId: string
+  ): Promise<{ sessionId: string; lastMessageId?: string; native: boolean } | null> {
+    const session = await this.findLatestThreadSession(projectPath, threadId)
+    if (!session) return null
+    const lastMessageId = session.messages.at(-1)?.id
+    return {
+      sessionId: session.id,
+      ...(lastMessageId ? { lastMessageId } : {}),
+      native: Boolean(session.nativeSessionId)
+    }
+  }
+
+  /**
+   * Park a session after the thread moved to another harness: keep its record
+   * so this harness can resume it later, and drop the older records this
+   * driver still holds for the same thread so a thread that keeps switching
+   * keeps exactly one parked branch per harness instead of growing without
+   * bound. The transcripts are already mirrored before this runs.
+   */
+  async parkThreadSession(projectPath: string, threadId: string, sessionId: string): Promise<void> {
+    this.releaseSessionRuntime(sessionId)
+    await this.tagSessionThread(projectPath, sessionId, threadId)
+    const hash = cliProjectPathHash(projectPath)
+    let names: string[]
+    try {
+      names = await this.storage.list(`drivers/${this.id}/sessions`)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      const parkedId = name.slice(0, -'.json'.length)
+      if (parkedId === sessionId) continue
+      try {
+        const record = await this.storage.read<PersistentCliSession>(
+          cliSessionPath(this.id, parkedId)
+        )
+        if (!record || record.projectPathHash !== hash) continue
+        if (record.threadId !== threadId) continue
+        await this.deleteSession(projectPath, parkedId)
+      } catch {
+        // An unreadable record cannot be this thread's branch; leave it alone.
+      }
+    }
   }
 
   protected emit(event: AgentEvent): void {

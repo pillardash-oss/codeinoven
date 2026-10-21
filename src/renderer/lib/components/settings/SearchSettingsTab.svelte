@@ -1,11 +1,12 @@
 <script lang="ts">
-  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
-  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { onDestroy, onMount } from 'svelte'
 
   import { invoke } from '$lib/ipc.svelte'
@@ -125,8 +126,9 @@
     <div class="min-w-0">
       <h1 class="text-xl font-bold tracking-tight">Search by intent</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Blends keyword hits with meaning-based matches on every thread search. Title matches stay
-        first, semantic matches follow, keyword-only finds come last.
+        Ranks the {keymapState.labelFor('nav-command-palette')} thread search with meaning-based matches
+        as well as keywords. Title matches stay first, semantic matches follow, keyword-only finds come
+        last. The search buttons on the panels stay keyword-only.
       </p>
       {#if !canEnable}
         <p class="mt-1.5 text-xs text-dimmed">

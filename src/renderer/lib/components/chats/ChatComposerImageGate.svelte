@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import { slide } from 'svelte/transition'
   import CardHead from '../shared/CardHead.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -71,9 +71,9 @@ are the shared card shape. -->
     <div transition:slide={foldSlide()}>
       <div class="flex flex-col gap-2 px-3 py-2.5">
         <p class="text-xs leading-relaxed text-muted">
-          You're about to send an image to a model without vision capability. Image Descriptor is a
-          tool the model can call to describe the image for it but you need to pick the vision model
-          that does the describing.
+          You're about to send an image to a model without vision capability. The
+          <span class="font-mono">cio:see-image</span> utility is a tool the model can call to describe
+          the image for it, but you need to pick the vision model that does the describing.
         </p>
         <ModelPicker
           {providers}

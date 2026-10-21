@@ -1,11 +1,16 @@
-import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
-import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-import CioEyeOff from '$lib/components/icons/cio/CioEyeOff.svelte'
-import CioFork from '$lib/components/icons/cio/CioFork.svelte'
-import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-import CioSend from '$lib/components/icons/cio/CioSend.svelte'
-import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+import { archiveItem } from '$lib/archive-actions'
+import CioBoard from '@pdslng/cio-icon/CioBoard.svelte'
+import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
+import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
+import CioFork from '@pdslng/cio-icon/CioFork.svelte'
+import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
+import CioSend from '@pdslng/cio-icon/CioSend.svelte'
+import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
 import { copyText } from '$lib/copy-text'
 import { feature } from '$lib/feature-registry'
@@ -15,7 +20,6 @@ import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import { threadTracksReadStatus, type Thread } from '$shared/types'
-import { Kanban, Mail, PinOff } from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
 
 export interface ThreadActionsMenuConfig {
@@ -156,12 +160,12 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     return [
       { label: 'Rename', icon: CioPencil, onClick: startRename },
       ...(canMarkUnread
-        ? [{ label: 'Mark as unread', icon: Mail, onClick: () => void markUnread() }]
+        ? [{ label: 'Mark as unread', icon: CioMessage, onClick: () => void markUnread() }]
         : []),
       ...(knowledgeThread
         ? [
             {
-              label: 'Hide knowledge thread',
+              label: 'Hide assistant behavior thread',
               icon: CioEyeOff,
               onClick: () => config.onHideKnowledge?.(thread)
             }
@@ -183,7 +187,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
               ? [
                   {
                     label: thread.pinned ? 'Unpin' : 'Pin',
-                    icon: thread.pinned ? PinOff : CioPin,
+                    icon: thread.pinned ? CioPinOff : CioPin,
                     onClick: () => void config.onTogglePin(thread)
                   }
                 ]
@@ -199,7 +203,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
             }
           ]
         : []),
-      ...(showScope ? [{ label: 'Change Scope', icon: Kanban, onClick: startChangeScope }] : []),
+      ...(showScope ? [{ label: 'Change Scope', icon: CioBoard, onClick: startChangeScope }] : []),
       ...(showNotesItem
         ? [
             {
@@ -214,7 +218,16 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
         : []),
       // A knowledge thread cannot be deleted: hiding is the only way to get it out
       // of the list, and it can always be revealed again from the knowledge panel.
-      ...(knowledgeThread ? [] : [{ label: '', divider: true }]),
+      ...(knowledgeThread
+        ? []
+        : [
+            {
+              label: 'Archive thread',
+              icon: CioArchive,
+              onClick: () => void archiveItem('thread', thread.id, thread.title)
+            },
+            { label: '', divider: true }
+          ]),
       ...(knowledgeThread
         ? []
         : [{ label: 'Delete', icon: CioTrash, onClick: startDelete, danger: true }])

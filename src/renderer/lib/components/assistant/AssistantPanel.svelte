@@ -1,12 +1,12 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioActions from '@pdslng/cio-icon/CioActions.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBan from '@pdslng/cio-icon/CioBan.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
-  import { Gauge } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
   import AssistantIcon, {
@@ -77,6 +77,8 @@
   } from './connection-library'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import CardFoot from '$lib/components/shared/CardFoot.svelte'
+  import CardButton from '$lib/components/shared/CardButton.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
   import AssistantAgentPicker from './AssistantAgentPicker.svelte'
   import AssistantExecutionPicker from './AssistantExecutionPicker.svelte'
@@ -266,7 +268,7 @@
     editingId = null
     await persistAssistant(
       { knowledge: serializeKnowledgeSections(next) },
-      'Could not save the knowledge'
+      'Could not save the assistant behavior'
     )
   }
 
@@ -622,6 +624,7 @@
 
   /** The soonest intended fire across this panel's tasks, or null when none is scheduled. */
   const nextRunAt = $derived.by(() => {
+    if (assistant?.paused) return null
     let earliest: number | null = null
     for (const entry of runScopeTasks) {
       const candidate = assistants.nextRunForTask(entry)
@@ -630,7 +633,9 @@
     }
     return earliest
   })
-  const nextRunLabel = $derived(nextRunAt === null ? 'Not scheduled' : formatDateTime(nextRunAt))
+  const nextRunLabel = $derived(
+    assistant?.paused ? '-' : nextRunAt === null ? 'Not scheduled' : formatDateTime(nextRunAt)
+  )
   const nextRunRelative = $derived(
     nextRunAt === null ? null : describeRelativeTime(nextRunAt, Date.now())
   )
@@ -710,7 +715,9 @@
     } catch (error) {
       reportError(
         error,
-        revealing ? 'Could not show the knowledge thread' : 'Could not hide the knowledge thread'
+        revealing
+          ? 'Could not show the assistant behavior thread'
+          : 'Could not hide the assistant behavior thread'
       )
     } finally {
       knowledgeThreadBusy = false
@@ -735,7 +742,7 @@
    * runs on a fresh thread, so the first run is opened to show it happening.
    */
   async function runNow(): Promise<void> {
-    if (!assistant || running) return
+    if (!assistant || !scheduled || running) return
     running = true
     try {
       const runs = await assistants.runNow(assistant.id)
@@ -916,8 +923,8 @@
       <button
         type="button"
         class="mt-1 border border-border px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open this assistant's knowledge thread"
-        aria-label="Open this assistant's knowledge thread"
+        title="Open this assistant's behavior thread"
+        aria-label="Open this assistant's behavior thread"
         onclick={openKnowledgeTask}
       >
         Open the task
@@ -997,57 +1004,61 @@
 {#snippet panelContent()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if activeTab === 'all'}
-      <div class="flex flex-col gap-2 p-3">
+      <div class="flex flex-col gap-3 p-3">
         {#if assistant}
-          <div class="flex flex-col gap-2 border border-border bg-surface px-2.5 py-2">
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                class="flex shrink-0 items-center gap-1.5 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-                title="Run this assistant now, even while paused"
-                aria-label="Run this assistant now"
-                disabled={running || !knowledgeComplete}
-                onclick={() => void runNow()}
-              >
-                <CioUndo size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
-                Run now
-              </button>
-              <span class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
-                {knowledgeComplete
-                  ? 'Test it without waiting for the schedule.'
-                  : 'Save a knowledge first.'}
-              </span>
+          {#if scheduled}
+            <div class="flex flex-col border border-border bg-surface">
+              <dl class="flex flex-wrap gap-x-5 gap-y-2 p-3">
+                <div class="flex flex-col gap-0.5">
+                  <dt
+                    class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                    title="The last time a run was dispatched"
+                  >
+                    Last run
+                  </dt>
+                  <dd class="text-[0.75rem] text-foreground">{lastRunLabel}</dd>
+                </div>
+                <div class="flex flex-col gap-0.5">
+                  <dt
+                    class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                    title="The last time a run finished successfully"
+                  >
+                    Last success
+                  </dt>
+                  <dd class="text-[0.75rem] text-foreground">{lastSuccessLabel}</dd>
+                </div>
+                <div class="flex flex-col gap-0.5">
+                  <dt
+                    class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                    title="The next time this assistant is due to run"
+                  >
+                    Next run
+                  </dt>
+                  <dd class="text-[0.75rem] text-foreground">{nextRunLabel}</dd>
+                </div>
+              </dl>
+              <CardFoot>
+                {#snippet left()}
+                  <p class="text-[0.6875rem] leading-relaxed text-muted">
+                    {knowledgeComplete
+                      ? 'Run a task now without waiting for the schedule.'
+                      : 'Save the assistant instructions first.'}
+                  </p>
+                {/snippet}
+                {#snippet right()}
+                  <CardButton
+                    label="Run now"
+                    title="Run a task now, even while the assistant is paused"
+                    icon={CioUndo}
+                    variant="primary"
+                    loading={running}
+                    disabled={running || !knowledgeComplete}
+                    onclick={() => void runNow()}
+                  />
+                {/snippet}
+              </CardFoot>
             </div>
-            <dl class="flex flex-wrap gap-x-5 gap-y-1">
-              <div class="flex flex-col gap-0.5">
-                <dt
-                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
-                  title="The last time a run was dispatched"
-                >
-                  Last run
-                </dt>
-                <dd class="text-[0.75rem] text-foreground">{lastRunLabel}</dd>
-              </div>
-              <div class="flex flex-col gap-0.5">
-                <dt
-                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
-                  title="The last time a run finished successfully"
-                >
-                  Last success
-                </dt>
-                <dd class="text-[0.75rem] text-foreground">{lastSuccessLabel}</dd>
-              </div>
-              <div class="flex flex-col gap-0.5">
-                <dt
-                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
-                  title="The next time this assistant is due to run"
-                >
-                  Next run
-                </dt>
-                <dd class="text-[0.75rem] text-foreground">{nextRunLabel}</dd>
-              </div>
-            </dl>
-          </div>
+          {/if}
 
           <ul class="flex flex-col gap-2">
             <li>
@@ -1056,7 +1067,7 @@
                 icon: 'knowledge',
                 detail: knowledgeComplete
                   ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
-                  : 'No knowledge yet. Describe the assistant to the agent in its task.',
+                  : 'No behavior yet. Describe the assistant to the agent in its task.',
                 target: 'assistant',
                 warn: !knowledgeComplete
               })}
@@ -1095,18 +1106,20 @@
                 warn: !deliveryReady
               })}
             </li>
-            <li>
-              {@render glanceRow({
-                title: 'Issues',
-                icon: 'run',
-                detail:
-                  issueCount === 0
-                    ? 'Nothing needs attention.'
-                    : `${missedRuns.length} missed · ${runIssues.length} run issue${runIssues.length === 1 ? '' : 's'}.`,
-                target: 'issues',
-                warn: issueCount > 0
-              })}
-            </li>
+            {#if scheduled || issueCount > 0}
+              <li>
+                {@render glanceRow({
+                  title: 'Issues',
+                  icon: 'run',
+                  detail:
+                    issueCount === 0
+                      ? 'Nothing needs attention.'
+                      : `${missedRuns.length} missed · ${runIssues.length} run issue${runIssues.length === 1 ? '' : 's'}.`,
+                  target: 'issues',
+                  warn: issueCount > 0
+                })}
+              </li>
+            {/if}
           </ul>
         {:else}
           {@render noAssistantState()}
@@ -1116,7 +1129,7 @@
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-2 p-3">
+        <div class="flex flex-col gap pl-3">
           {#if !knowledgeComplete}
             {@render assistantEmptyState()}
           {:else}
@@ -1133,7 +1146,7 @@
             {/if}
             <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
               <div class="flex items-center justify-between gap-2">
-                <h2 class="text-[0.875rem] font-semibold text-foreground">What it knows</h2>
+                <h2 class="text-[0.875rem] font-semibold text-foreground">Assistant behavior</h2>
                 <span class="text-[0.625rem] text-dimmed"
                   >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
                 >
@@ -1377,19 +1390,21 @@
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-2 p-3">
+        <div class="flex flex-col gap-4 p-3">
           <p class="text-[0.6875rem] leading-relaxed text-muted">
-            The services this assistant reaches out to. A connection that is not ready pauses only
-            the step that depends on it.
+            Connect the services this assistant needs to do its work. Review their status, finish
+            setup, or add another connection below.
           </p>
-          {#each connectionViews as view (view.connection.utilityId)}
-            <ConnectionRow
-              {view}
-              onRemove={removeConnection}
-              onSetup={openConnectionSetup}
-              onView={openConnectionDetails}
-            />
-          {/each}
+          <div class="flex flex-col gap-2">
+            {#each connectionViews as view (view.connection.utilityId)}
+              <ConnectionRow
+                {view}
+                onRemove={removeConnection}
+                onSetup={openConnectionSetup}
+                onView={openConnectionDetails}
+              />
+            {/each}
+          </div>
           <UtilityPicker
             entries={connectionLibrary}
             {connectedIds}
@@ -1403,9 +1418,10 @@
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-3 p-3">
+        <div class="flex flex-col gap-4 p-3">
           <p class="text-[0.6875rem] leading-relaxed text-muted">
-            Which model does the work, and what to fall back to when it cannot.
+            Choose where this assistant runs and which AI model does its work. Add fallback models
+            to use if the primary model is unavailable.
           </p>
           {#key assistant.id}
             <div class="border border-border bg-surface p-2.5">
@@ -1426,7 +1442,7 @@
         </div>
       {/if}
     {:else}
-      <div class="flex flex-col gap-3 p-3">
+      <div class="flex flex-col gap-3 pl-3">
         <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
           <h2 class="text-[0.875rem] font-semibold text-foreground">Missed runs</h2>
           {#if missedRuns.length === 0}
@@ -1454,16 +1470,18 @@
                     >
                       Dismiss
                     </button>
-                    <button
-                      type="button"
-                      class="flex items-center gap-1 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                      title="Run this missed sweep now"
-                      aria-label="Run the missed run {run.title} now"
-                      onclick={() => void runMissedNow(run)}
-                    >
-                      <CioUndo size={12} strokeWidth={1.8} />
-                      Run now
-                    </button>
+                    {#if scheduled}
+                      <button
+                        type="button"
+                        class="flex items-center gap-1 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                        title="Run this missed sweep now"
+                        aria-label="Run the missed run {run.title} now"
+                        onclick={() => void runMissedNow(run)}
+                      >
+                        <CioUndo size={12} strokeWidth={1.8} />
+                        Run now
+                      </button>
+                    {/if}
                   </div>
                 </div>
               {/each}
@@ -1489,7 +1507,7 @@
                 >
                   <span class="mt-0.5 shrink-0" style="color: var(--color-warning)">
                     {#if issue.kind === 'Rate limited'}
-                      <Gauge size={13} strokeWidth={1.8} />
+                      <CioActions size={13} strokeWidth={1.8} />
                     {:else if issue.kind === 'Interrupted'}
                       <CioBan size={13} strokeWidth={1.8} />
                     {:else}
@@ -1568,14 +1586,16 @@
       type="button"
       class="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title={knowledgeThreadHidden
-        ? 'Show the assistant’s knowledge thread again'
-        : 'Hide the assistant’s knowledge thread from the sidebar'}
+        ? 'Show the assistant behavior thread again'
+        : 'Hide the assistant behavior thread from the sidebar'}
       disabled={knowledgeThreadBusy}
       onclick={() => void toggleKnowledgeThread()}
     >
       <AssistantIcon mark="knowledge" size={14} class="shrink-0" />
       <span class="truncate">
-        {knowledgeThreadHidden ? 'Show knowledge thread' : 'Hide knowledge thread'}
+        {knowledgeThreadHidden
+          ? 'Show assistant behavior thread'
+          : 'Hide assistant behavior thread'}
       </span>
     </button>
   {/if}

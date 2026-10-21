@@ -1,5 +1,6 @@
 import { dialog as nativeDialog, type BrowserWindow } from 'electron'
 import { stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from './logger'
@@ -38,10 +39,10 @@ async function defaultDirectory(): Promise<string | undefined> {
         lastDirectory = config.lastAttachmentDialogPath ?? config.lastFolderDialogPath
       }
     }
-    return lastDirectory ? await existingDirectory(lastDirectory) : undefined
+    return (lastDirectory ? await existingDirectory(lastDirectory) : undefined) ?? homedir()
   } catch (error) {
     Logger.error('Could not restore file dialog location', error)
-    return undefined
+    return homedir()
   }
 }
 
@@ -118,3 +119,6 @@ async function showSaveDialog(
 
 /** One local picker history across every feature, project and Oven. */
 export const dialog = { ...nativeDialog, showOpenDialog, showSaveDialog }
+
+/** Agent pickers must never update the human's persisted picker location. */
+export const agentDialog = nativeDialog

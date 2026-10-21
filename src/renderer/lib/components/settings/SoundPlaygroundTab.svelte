@@ -1,13 +1,15 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioMic from '$lib/components/icons/cio/CioMic.svelte'
-  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioFileAudio from '@pdslng/cio-icon/CioFileAudio.svelte'
+  import CioMic from '@pdslng/cio-icon/CioMic.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import { onDestroy } from 'svelte'
-  import { FileAudio, Square, WandSparkles } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { SpeechSettings } from '../../../../lib/speech/types'
   import type { SpeechModelArtifact, SpeechRuntime } from '../../../../lib/speech/types'
@@ -462,7 +464,7 @@
           aria-label="Stop recording"
           onclick={() => void stopRecording()}
         >
-          <Square size={14} aria-hidden="true" /> Stop · {formatClock(recordedMs)}
+          <CioSquare size={14} aria-hidden="true" /> Stop · {formatClock(recordedMs)}
         </button>
       {:else}
         <button
@@ -481,7 +483,7 @@
           aria-label="Pick an audio file"
           onclick={() => void pickAudioFile()}
         >
-          <FileAudio size={14} aria-hidden="true" /> Pick audio file
+          <CioFileAudio size={14} aria-hidden="true" /> Pick audio file
         </button>
       {/if}
     </div>
@@ -526,7 +528,7 @@
           {#if transcribing === 'plain'}
             <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
           {:else}
-            <FileAudio size={13} aria-hidden="true" />
+            <CioFileAudio size={13} aria-hidden="true" />
           {/if}
           Transcribe
         </button>
@@ -543,7 +545,7 @@
           {#if transcribing === 'cleanup'}
             <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
           {:else}
-            <WandSparkles size={13} aria-hidden="true" />
+            <CioSparkles size={13} aria-hidden="true" />
           {/if}
           Transcribe &amp; cleanup
         </button>
@@ -648,7 +650,7 @@
         disabled={!readingDraft.trim()}
         onclick={addReadingDraft}
       >
-        <FileAudio size={14} aria-hidden="true" /> Add text
+        <CioFileAudio size={14} aria-hidden="true" /> Add text
       </button>
       <button
         type="button"
@@ -661,7 +663,7 @@
         {#if readingImporting}
           <CioSpinner size={14} class="animate-spin" aria-hidden="true" />
         {:else}
-          <FileAudio size={14} aria-hidden="true" />
+          <CioFileAudio size={14} aria-hidden="true" />
         {/if}
         Import file
       </button>

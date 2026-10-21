@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitHubNotificationGroup } from '$shared/types'
 

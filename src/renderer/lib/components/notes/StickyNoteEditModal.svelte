@@ -155,14 +155,6 @@
 
   {#snippet footer()}
     <div class="flex w-full items-center justify-between">
-      <button
-        type="button"
-        class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
-        title="Reset note appearance"
-        onclick={resetAppearance}
-      >
-        Reset appearance
-      </button>
       <div class="flex items-center gap-2">
         <button
           type="button"
@@ -175,15 +167,23 @@
         </button>
         <button
           type="button"
-          data-modal-primary
-          class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-          title="Apply sticky note changes"
-          disabled={saving || title.trim() === ''}
-          onclick={() => void save()}
+          class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+          title="Reset note appearance"
+          onclick={resetAppearance}
         >
-          {saving ? 'Applying…' : 'Apply'}
+          Reset appearance
         </button>
       </div>
+      <button
+        type="button"
+        data-modal-primary
+        class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+        title="Apply sticky note changes"
+        disabled={saving || title.trim() === ''}
+        onclick={() => void save()}
+      >
+        {saving ? 'Applying…' : 'Apply'}
+      </button>
     </div>
   {/snippet}
 </Modal>

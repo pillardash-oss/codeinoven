@@ -11,8 +11,10 @@
  * This service owns the decisions and the surfaces:
  *   - whether a close parks or quits (`shouldPark`, which is only true while the
  *     process still has something to preserve; see `evaluateResidency`),
- *   - the menu bar icon and its two states (normal / error, the latter a bold
- *     exclamation beside the mark whenever a thread holds a live problem),
+ *   - the menu bar icon and its states: the mark alone, the mark with a bold
+ *     exclamation beside it whenever a thread holds a live problem, and (on
+ *     macOS) the mark carrying the number of working threads in that same slot
+ *     (see {@link trayImage}),
  *   - the Dock icon hiding while windowless and returning with a window,
  *   - the login item,
  *   - this process's role against the shared backend (`instanceRegistry`), so a
@@ -43,6 +45,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   watch,
   writeFileSync,
@@ -51,7 +54,14 @@ import {
 import { join } from 'node:path'
 import type { AppConfig, BackgroundMode, InstanceRole } from '../../lib/types'
 import type { UpdaterStatus } from '../../lib/ipc-contract'
+import {
+  trayCountCells,
+  trayCountLabel,
+  trayCountMetrics,
+  type TrayCountScale
+} from '../../lib/tray-count-art'
 import { getConfigRoot, isBackgroundRegistrationDisabled } from '../../lib/utils'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import { APP_ID, APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
 import { forceRestartMenuItem } from './force-restart'
@@ -84,7 +94,7 @@ const RESIDENCY_DRAIN_GRACE_MS = 15_000
 /**
  * How long thread-update bursts are coalesced before the icon is recomputed.
  * A turn settles many thread updates in a row (status, read flag, messages),
- * and the icon only ever needs the final state, so the predicate runs once per
+ * and the icon only ever needs the final state, so the predicates run once per
  * burst instead of once per update.
  */
 const ATTENTION_REFRESH_DEBOUNCE_MS = 150
@@ -116,10 +126,22 @@ export interface BackgroundLifecycleDeps {
   residencyReason: () => ResidencyReason | null
   /** Something needs the user: a parked gate or an unread failure. */
   computeAttention: () => boolean
+  /**
+   * How many threads are producing work right now, for the menu bar figure.
+   * Read on the database worker, because it is refreshed from thread-update
+   * paths and so must not hold the main thread on SQLite.
+   */
+  countWorkingThreads: () => Promise<number>
   /** Called when this instance becomes the owner of scheduled work. */
   onBecameOwner: () => void
   /** Absolute path to platform tray art, using the Windows taskbar theme. */
   resolveTrayIcon: (attention: boolean, darkTaskbar?: boolean) => string
+  /**
+   * Absolute paths to the menu bar working-figure strip: the plain resolution
+   * and the Retina one. The strip holds every figure as one cell; the service
+   * cuts the cell it needs out of it.
+   */
+  resolveTrayCountStrip: () => { base: string; retina: string }
 }
 
 /**
@@ -149,6 +171,19 @@ export class BackgroundLifecycleService {
   private readonly optedOut = isBackgroundRegistrationDisabled()
   private config: AppConfig | null = null
   private attention = false
+  /**
+   * How many threads are working right now. The macOS menu bar shows this as
+   * the figure beside the mark, and it wins the slot over the attention
+   * exclamation: a number is the more useful thing to read while runs are in
+   * flight, and the exclamation returns the moment the last one settles.
+   */
+  private workingCount = 0
+  /** Serial number of the newest count read, so a slow one cannot win. */
+  private workingCountRequest = 0
+  /** Decoded figure strips, so a count change never re-decodes the art. */
+  private countStrips: { base: NativeImage; retina: NativeImage } | null = null
+  /** The figure last built, so repeatedly landing on the same count is free. */
+  private countImage: { count: number; image: NativeImage } | null = null
   /** Pending coalesced attention recompute, or null when none is scheduled. */
   private attentionRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
@@ -185,7 +220,7 @@ export class BackgroundLifecycleService {
     // A launch can inherit problems from the last one: a run that failed
     // overnight, a thread still parked on an approval gate. The icon states
     // that from the first frame instead of waiting for the next event.
-    this.refreshAttention()
+    this.refreshTrayState()
   }
 
   stop(): void {
@@ -291,7 +326,7 @@ export class BackgroundLifecycleService {
     // back instead of waiting for the next periodic tick.
     this.syncTray()
     this.pushRoleTo(window)
-    this.refreshAttention()
+    this.refreshTrayState()
     // With a visible window there is nothing to activate, so the drain stops.
     this.refreshActivationWatch()
   }
@@ -301,21 +336,22 @@ export class BackgroundLifecycleService {
     this.windowlessSince = Date.now()
     if (this.mode !== 'off' && !this.optedOut) this.hideDock()
     this.syncTray()
-    this.refreshAttention()
+    this.refreshTrayState()
     // Windowless is the one state the drain exists for.
     this.refreshActivationWatch()
   }
 
   /**
-   * Recompute the attention state and update the icon.
+   * Recompute the icon's whole state   what needs the user, and how many
+   * threads are working   and update the icon.
    *
    * Safe to call for every state change: the menu bar only ever shows the
-   * latest truth, so it is enough to run the predicate once however many
+   * latest truth, so it is enough to run the predicates once however many
    * changes landed. Callers that must be reflected immediately (a config
    * change, a window opening) use this directly; the per-update hooks use
-   * {@link requestAttentionRefresh}.
+   * {@link requestTrayRefresh}.
    */
-  refreshAttention(): void {
+  refreshTrayState(): void {
     // Every state change the icon reacts to is also one that can drain the last
     // reason to stay: a run settling, a retry firing, an assistant being paused.
     // Deciding here means the residency exit happens on the change rather than at
@@ -325,27 +361,52 @@ export class BackgroundLifecycleService {
       clearTimeout(this.attentionRefreshTimer)
       this.attentionRefreshTimer = null
     }
-    let next = false
+    let attention = false
     try {
-      next = this.deps.computeAttention()
+      attention = this.deps.computeAttention()
     } catch (error) {
       Logger.error('Background attention check failed', error)
     }
-    if (next === this.attention && this.tray) return
-    this.attention = next
+    // The figure is read on the database worker, so it lands a moment after the
+    // attention state does and redraws the icon when it arrives.
+    void this.refreshWorkingCount()
+    if (attention === this.attention && this.tray) return
+    this.attention = attention
     this.updateTrayAppearance()
   }
 
   /**
-   * Ask for an attention recompute, coalescing a burst into one pass. Wired to
-   * every persisted thread update and to the retry scheduler, which is what
-   * makes the icon clear itself the moment the error does.
+   * Re-read the working count, and redraw the icon when it moved.
+   *
+   * The read is asynchronous, so two can overlap (a burst of thread updates, a
+   * run settling while another starts). Only the newest answer is applied, which
+   * is what stops a slow earlier read from overwriting a newer count.
    */
-  requestAttentionRefresh(): void {
+  private async refreshWorkingCount(): Promise<void> {
+    const request = ++this.workingCountRequest
+    let count = 0
+    try {
+      count = await this.deps.countWorkingThreads()
+    } catch (error) {
+      Logger.error('Working-thread count failed', error)
+    }
+    if (this.stopped || request !== this.workingCountRequest) return
+    if (count === this.workingCount) return
+    this.workingCount = count
+    this.updateTrayAppearance()
+  }
+
+  /**
+   * Ask for an icon recompute, coalescing a burst into one pass. Wired to
+   * every persisted thread update and to the retry scheduler, which is what
+   * makes the icon clear itself   and the figure fall   the moment a run
+   * settles.
+   */
+  requestTrayRefresh(): void {
     if (this.stopped || this.attentionRefreshTimer !== null) return
     this.attentionRefreshTimer = setTimeout(() => {
       this.attentionRefreshTimer = null
-      this.refreshAttention()
+      this.refreshTrayState()
     }, ATTENTION_REFRESH_DEBOUNCE_MS)
   }
 
@@ -443,8 +504,7 @@ export class BackgroundLifecycleService {
       return
     }
     try {
-      const image = this.loadTrayImage(this.attention)
-      this.tray = new Tray(image)
+      this.tray = new Tray(this.trayImage())
       this.tray.setToolTip(this.trayTooltip())
       this.tray.setContextMenu(this.buildContextMenu())
       // A left click on the icon opens the app, matching every other menu bar app.
@@ -470,12 +530,15 @@ export class BackgroundLifecycleService {
     }
     this.tray?.destroy()
     this.tray = null
+    // The strips and the figure are only worth holding for an icon that exists.
+    this.countStrips = null
+    this.countImage = null
   }
 
   private updateTrayAppearance(): void {
     if (!this.tray) return
     try {
-      this.tray.setImage(this.loadTrayImage(this.attention))
+      this.tray.setImage(this.trayImage())
       this.tray.setToolTip(this.trayTooltip())
     } catch (error) {
       Logger.error('Could not update the menu bar icon', error)
@@ -484,6 +547,97 @@ export class BackgroundLifecycleService {
 
   private readonly refreshWindowsTray = (): void => {
     this.updateTrayAppearance()
+  }
+
+  /**
+   * The image for the icon's current state.
+   *
+   * The working figure owns the slot the attention exclamation uses   the same
+   * slot, because the two answer the same question about the same icon   but
+   * only on macOS: the Windows notification area draws every icon into a fixed
+   * small square, so an appended figure there would be scaled down along with
+   * the mark. Windows therefore keeps its plain and attention states, and its
+   * tooltip still reports the count.
+   */
+  private trayImage(): NativeImage | string {
+    if (this.workingCount > 0 && process.platform === 'darwin') {
+      const image = this.workingCountImage()
+      if (image) return image
+    }
+    return this.loadTrayImage(this.attention)
+  }
+
+  /**
+   * Cut the current figure out of the shipped strip, cached per count.
+   *
+   * The strip holds every figure as one cell per resolution, so the icon is a
+   * crop rather than a hundred committed templates. Both resolutions go into
+   * one image, which is what gives a Retina menu bar the sharp one.
+   *
+   * Returns null when the art cannot be read, so the caller falls back to the
+   * plain mark rather than leaving the user without an icon.
+   */
+  private workingCountImage(): NativeImage | null {
+    if (this.countImage?.count === this.workingCount) return this.countImage.image
+    const label = trayCountLabel(this.workingCount)
+    if (label === null) return null
+    try {
+      const strips = this.countStrips ?? this.loadCountStrips()
+      if (!strips) return null
+      const scales: readonly TrayCountScale[] = [1, 2]
+      let image: NativeImage | null = null
+      for (const scale of scales) {
+        const metrics = trayCountMetrics(scale)
+        const cell = trayCountCells(scale).find((entry) => entry.label === label)
+        if (!cell) continue
+        const strip = scale === 1 ? strips.base : strips.retina
+        const cropped = strip
+          .crop({ x: cell.x, y: 0, width: cell.width, height: metrics.height })
+          .toBitmap()
+        if (!image) {
+          image = nativeImage.createFromBitmap(cropped, {
+            width: cell.width,
+            height: metrics.height,
+            scaleFactor: scale
+          })
+        } else {
+          image.addRepresentation({
+            scaleFactor: scale,
+            width: cell.width,
+            height: metrics.height,
+            buffer: cropped
+          })
+        }
+      }
+      if (!image || image.isEmpty()) return null
+      image.setTemplateImage(true)
+      this.countImage = { count: this.workingCount, image }
+      return image
+    } catch (error) {
+      Logger.error('Could not build the menu bar working-thread figure', error)
+      return null
+    }
+  }
+
+  /**
+   * Decode the figure strips once and keep them.
+   *
+   * Read as buffers rather than paths on purpose: a path lets Electron pair a
+   * `@2x` sibling in automatically, and the two resolutions have to stay
+   * separate here because the cell grid is computed per resolution.
+   */
+  private loadCountStrips(): { base: NativeImage; retina: NativeImage } | null {
+    try {
+      const paths = this.deps.resolveTrayCountStrip()
+      const base = nativeImage.createFromBuffer(readFileSync(paths.base))
+      const retina = nativeImage.createFromBuffer(readFileSync(paths.retina))
+      if (base.isEmpty() || retina.isEmpty()) return null
+      this.countStrips = { base, retina }
+      return this.countStrips
+    } catch (error) {
+      Logger.error('Could not read the menu bar working-thread strip', error)
+      return null
+    }
   }
 
   private loadTrayImage(attention: boolean): NativeImage | string {
@@ -502,6 +656,12 @@ export class BackgroundLifecycleService {
   }
 
   private trayTooltip(): string {
+    if (this.workingCount > 0) {
+      const threads = this.workingCount === 1 ? 'thread' : 'threads'
+      return this.attention
+        ? `${APP_NAME} is working ${this.workingCount} ${threads}, and one needs your attention`
+        : `${APP_NAME} is working ${this.workingCount} ${threads}`
+    }
     if (this.attention) return `${APP_NAME} has a thread that needs your attention`
     if (this.deps.hasUpcomingWork()) return `${APP_NAME} is running a scheduled task`
     return `${APP_NAME} is running in the menu bar`
@@ -643,7 +803,7 @@ export class BackgroundLifecycleService {
     if (process.platform !== 'darwin' && process.platform !== 'win32') return
     // Never register a development launch as a login item: the dev Electron
     // binary is not the app, and a stray entry would start it at every login.
-    if (!app.isPackaged) return
+    if (!isShippedBuild()) return
     const openAtLogin = config.backgroundMode !== 'off' && config.launchAtLogin
     try {
       app.setLoginItemSettings({ openAtLogin })
@@ -733,7 +893,7 @@ export class BackgroundLifecycleService {
    * A parked process is a scheduler: it exists for the work it still has to do or
    * to hold, and once that drains there is nothing left to preserve, so it goes
    * instead of sitting in the menu bar. The decision is taken again on every state
-   * change (see `refreshAttention`) and on the drain tick below, so a drain is
+   * change (see `refreshTrayState`) and on the drain tick below, so a drain is
    * acted on when it happens rather than at the next launch.
    *
    * Free while a window is on screen: a visible window is the user being here, so

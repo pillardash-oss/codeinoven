@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import MarkdownView from '../markdown/MarkdownView.svelte'

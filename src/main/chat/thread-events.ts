@@ -1,11 +1,12 @@
 import { BrowserWindow } from 'electron'
-import type { AgentEvent, Thread } from '../../lib/types'
+import type { AgentEvent, RemoteAgentEventPayload, Thread } from '../../lib/types'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { broadcastAppToast } from '../ipc/app-toast'
 import { instanceRegistry } from '../system/instance-registry'
+import { instanceEventBus } from '../system/instance-event-bus'
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
 
@@ -13,11 +14,12 @@ type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }
  * The service that owns the menu bar icon. Injected as a narrow port rather
  * than imported, because this module is loaded by the chat engine and must not
  * pull in the whole background lifecycle: every persisted thread update is
- * exactly the moment the icon's error state can have changed.
+ * exactly the moment the icon's error state and its working-thread figure can
+ * have changed.
  */
-interface BackgroundAttentionPort {
+interface BackgroundTrayPort {
   /** Coalesced, so calling it on every thread update is cheap. */
-  requestAttentionRefresh: () => void
+  requestTrayRefresh: () => void
 }
 
 interface ThreadCorpusListener {
@@ -36,7 +38,7 @@ export function subscribeThreadCorpus(listener: ThreadCorpusListener): () => voi
 
 let _notificationService: NotificationService | null = null
 let _powerWakeService: PowerWakeService | null = null
-let _backgroundAttention: BackgroundAttentionPort | null = null
+let _backgroundTray: BackgroundTrayPort | null = null
 
 export function setNotificationService(service: NotificationService | null): void {
   _notificationService = service
@@ -46,8 +48,8 @@ export function setPowerWakeService(service: PowerWakeService | null): void {
   _powerWakeService = service
 }
 
-export function setBackgroundAttention(port: BackgroundAttentionPort | null): void {
-  _backgroundAttention = port
+export function setBackgroundTray(port: BackgroundTrayPort | null): void {
+  _backgroundTray = port
 }
 
 export function markNotificationAborting(projectId: string, threadId: string): void {
@@ -82,9 +84,10 @@ export function broadcastThreadUpdate(thread: Thread): void {
     dismissThreadNotifications(thread.projectId, thread.id)
   }
   _powerWakeService?.onThreadUpdate(thread)
-  // The menu bar mirrors the thread's error card, so every persisted status or
-  // read change is a moment its state can have changed.
-  _backgroundAttention?.requestAttentionRefresh()
+  // The menu bar mirrors the thread's error card and carries the number of
+  // working threads, so every persisted status or read change is a moment the
+  // icon's state can have changed.
+  _backgroundTray?.requestTrayRefresh()
   void _notificationService?.notify(thread)
   // The row is shared with every other instance, and none of them receives this
   // fan-out, so the change is also announced for a sibling to re-read.
@@ -122,7 +125,7 @@ export function broadcastCrossInstanceThreadUpdate(thread: Thread): void {
   }
   // The menu bar mirrors the thread states of the shared database, so a row
   // corrected from a sibling's write is a moment its own state can have changed.
-  _backgroundAttention?.requestAttentionRefresh()
+  _backgroundTray?.requestTrayRefresh()
 }
 
 /**
@@ -273,6 +276,24 @@ function deliverCrossInstanceCheckpointUpdated(event: CheckpointUpdatedEvent): v
 }
 
 instanceRegistry.onCheckpointUpdated(deliverCrossInstanceCheckpointUpdated)
+
+/**
+ * Deliver one stream event another instance produced for a shared thread.
+ *
+ * Deliberately its own channel rather than `agent:event`: the local channel is
+ * wired to every action that follows a run this process owns (approving a
+ * permission, answering a question, dispatching a queued message, refreshing a
+ * git panel), and none of those can act on a harness process held by a sibling.
+ * This channel is consumed by the transcript cache and the conversation surface,
+ * which only render.
+ */
+function deliverCrossInstanceAgentEvent(payload: RemoteAgentEventPayload): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'agent:remoteEvent', payload)
+  }
+}
+
+instanceEventBus.onRemoteEvent(deliverCrossInstanceAgentEvent)
 
 /**
  * Pipe a temporary chat (side chat) completion through the parent thread's

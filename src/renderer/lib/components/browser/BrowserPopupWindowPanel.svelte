@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
+  import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
 

@@ -56,8 +56,22 @@ const PRESSURE_AVAILABLE_RATIO = 0.05
 const DARWIN_SYSCTL_PATH = '/usr/sbin/sysctl'
 /** `sysctl` key holding the kernel's own memory pressure verdict. */
 const DARWIN_PRESSURE_LEVEL_KEY = 'kern.memorystatus_vm_pressure_level'
-/** The first level above normal: the kernel has started reclaiming memory. */
-const DARWIN_PRESSURE_WARN = 2
+/**
+ * The level at which the kernel is genuinely out of memory: 1 normal, 2 warning,
+ * 4 critical. Warning is not a usable eviction signal on macOS, because a Mac
+ * that is merely busy sits at 2 for hours: evicting there unloaded every resident
+ * model on each one-minute check, so a model warmed while the user was speaking
+ * was gone again before the recording ended and the transcription paid the whole
+ * load after send. The capability's own unload window is the latency preference;
+ * only the kernel's critical verdict overrides it.
+ */
+const DARWIN_PRESSURE_CRITICAL = 4
+/**
+ * A runtime used more recently than this is never released for memory pressure.
+ * The user just asked for it, so an eviction here would undo work already paid
+ * for without buying the machine anything it can keep.
+ */
+const PRESSURE_MIN_RESIDENCY_MS = 60_000
 /** A `sysctl` read that has not answered within this window counts as absent. */
 const DARWIN_SYSCTL_TIMEOUT_MS = 2_000
 
@@ -208,10 +222,7 @@ export class SpeechRuntimeEviction {
     this.unloadTimers.clear()
     this.runtimeLastUsed.clear()
     this.pressureCheckInFlight = false
-    if (this.pressureTimer) {
-      clearInterval(this.pressureTimer)
-      this.pressureTimer = null
-    }
+    this.stopPressureWatch()
   }
 
   /**
@@ -225,6 +236,12 @@ export class SpeechRuntimeEviction {
     unrefTimer(this.pressureTimer)
   }
 
+  private stopPressureWatch(): void {
+    if (!this.pressureTimer) return
+    clearInterval(this.pressureTimer)
+    this.pressureTimer = null
+  }
+
   /**
    * Release every idle runtime the user has not pinned when the machine is out
    * of memory, so a resident model cannot push a tight machine into swap for the
@@ -233,6 +250,13 @@ export class SpeechRuntimeEviction {
    * already struggling.
    */
   private async relieveMemoryPressure(): Promise<void> {
+    // Nothing resident means nothing to relieve: the watch disarms and the next
+    // `touch` arms it again. A timer that keeps firing against an empty set is
+    // background work the app has no use for.
+    if (this.host.residentRuntimes().length === 0) {
+      this.stopPressureWatch()
+      return
+    }
     if (this.pressureCheckInFlight) return
     this.pressureCheckInFlight = true
     try {
@@ -320,9 +344,9 @@ export class SpeechRuntimeEviction {
     }
     if (process.platform !== 'darwin') return false
     const level = await darwinPressureLevel()
-    // Anything above normal means the kernel is already reclaiming, so an idle
-    // model is memory the machine gets back at once.
-    return level !== null && level >= DARWIN_PRESSURE_WARN
+    // Only the kernel's critical verdict counts on macOS; see
+    // DARWIN_PRESSURE_CRITICAL for why warning is not a signal.
+    return level !== null && level >= DARWIN_PRESSURE_CRITICAL
   }
 
   private scheduleEvict(capability: SpeechCapability): void {
@@ -360,7 +384,16 @@ export class SpeechRuntimeEviction {
       return
     }
     const runtimes = CAPABILITY_RUNTIME_MAP[capability]
-    const targets = runtimes.filter((runtime) => this.host.isRuntimeIdle(runtime))
+    // Only a runtime that actually holds a process can be released, and a
+    // runtime the user touched moments ago is still earning its memory.
+    const residents = new Set(this.host.residentRuntimes())
+    const now = Date.now()
+    const targets = runtimes.filter(
+      (runtime) =>
+        residents.has(runtime) &&
+        this.host.isRuntimeIdle(runtime) &&
+        !(force && now - (this.runtimeLastUsed.get(runtime) ?? 0) < PRESSURE_MIN_RESIDENCY_MS)
+    )
     if (targets.length === 0) return
     Logger.dev(force ? 'Speech pressure evict' : 'Speech auto-evict', {
       capability,

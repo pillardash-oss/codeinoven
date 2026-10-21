@@ -1,8 +1,9 @@
 <script lang="ts">
-  import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
-  import CioFileCode from '$lib/components/icons/cio/CioFileCode.svelte'
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import { File, FileJson, Hash } from '@lucide/svelte'
+  import CioBraces from '@pdslng/cio-icon/CioBraces.svelte'
+  import CioFile from '@pdslng/cio-icon/CioFile.svelte'
+  import CioFileCode from '@pdslng/cio-icon/CioFileCode.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
+  import CioTag from '@pdslng/cio-icon/CioTag.svelte'
   import { getFileTypeIconDataUri } from './file-type-icons'
 
   interface Props {
@@ -46,17 +47,17 @@
 {#if dataUri}
   <img src={dataUri} alt="" width={size} height={size} class="shrink-0 {className}" />
 {:else if kind === 'json'}
-  <FileJson {size} class="shrink-0 text-accent {className}" />
+  <CioFileCode {size} class="shrink-0 text-accent {className}" />
 {:else if kind === 'code'}
   <CioFileCode {size} class="shrink-0 text-info {className}" />
 {:else if kind === 'markup'}
   <CioBraces {size} class="shrink-0 text-danger {className}" />
 {:else if kind === 'systems'}
-  <Hash {size} class="shrink-0 text-success {className}" />
+  <CioTag {size} class="shrink-0 text-success {className}" />
 {:else if kind === 'config'}
   <CioBraces {size} class="shrink-0 text-primary {className}" />
 {:else if kind === 'text'}
   <CioFileText {size} class="shrink-0 text-muted {className}" />
 {:else}
-  <File {size} class="shrink-0 text-dimmed {className}" />
+  <CioFile {size} class="shrink-0 text-dimmed {className}" />
 {/if}

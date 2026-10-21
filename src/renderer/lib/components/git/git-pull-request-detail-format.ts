@@ -1,7 +1,7 @@
-import CioBan from '$lib/components/icons/cio/CioBan.svelte'
-import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-import CioDot from '$lib/components/icons/cio/CioDot.svelte'
+import CioBan from '@pdslng/cio-icon/CioBan.svelte'
+import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+import CioDot from '@pdslng/cio-icon/CioDot.svelte'
 import type {
   PrAuthorAssociation,
   PrCommentKind,

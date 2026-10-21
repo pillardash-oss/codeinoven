@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import { tick } from 'svelte'
 
   import { keymapState } from '$lib/keymap/keymap-state.svelte'

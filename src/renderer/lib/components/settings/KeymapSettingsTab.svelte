@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Keyboard } from '@lucide/svelte'
+  import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
   import { KEYMAP, isMacPlatform, keymapKeyGroups } from '$lib/keymap/keymap'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
@@ -12,7 +12,7 @@
 <div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="flex items-center gap-2 text-xl font-bold tracking-tight">
-      <Keyboard size={18} class="text-muted" />
+      <CioKeyboard size={18} class="text-muted" />
       Keymap
     </h1>
     <p class="mt-0.5 text-sm text-muted">
@@ -25,15 +25,15 @@
 
   {#each KEYMAP.categories as category (category.id)}
     <section class="mb-7">
-      <h2 class="mb-2 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+      <h2
+        class="mb-2 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
         {category.label}
       </h2>
       <div class="space-y-1.5">
         {#each category.shortcuts as shortcut (shortcut.id)}
           {@const keyGroups = keymapKeyGroups(keymapState.keysFor(shortcut.id), isMac)}
-          <div
-            class="flex items-start justify-between gap-4 border border-border bg-surface p-3"
-          >
+          <div class="flex items-start justify-between gap-4 border border-border bg-surface p-3">
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium text-foreground">{shortcut.label}</p>
               <p class="mt-0.5 text-xs leading-relaxed text-muted">{shortcut.description}</p>

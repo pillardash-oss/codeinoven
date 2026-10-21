@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { ComposerDropRegion } from './chat-composer-drop'
 

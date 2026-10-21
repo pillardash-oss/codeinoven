@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
   import type { MemoryEntry } from '$shared/types'
   import { memoryScopeLabel } from './sources-panel-helpers'
 

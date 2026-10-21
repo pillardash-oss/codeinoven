@@ -11,7 +11,8 @@ import type {
   UtilityKind,
   PermissionLevel,
   AgentUtilitySuggestionEntry,
-  UtilityDefinitionInput
+  UtilityDefinitionInput,
+  ThreadSearchResult
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -29,8 +30,9 @@ import {
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
-import type { DesignSessionMode } from './cio-design-prompt'
-import type { VideoSessionMode } from './cio-video-prompt'
+import { designSessionBriefing, type DesignSessionMode } from './cio-design-prompt'
+import { videoSessionBriefing, type VideoSessionMode } from './cio-video-prompt'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -66,12 +68,13 @@ import {
   type EngineeringToolOperation
 } from '../../lib/engineering-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
+import { PAWN_AGENT_TOOL_NAME, isPawnTool } from '../../lib/pawn-tools'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
 import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/video-skill'
 import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
-import { currentWorkRoots } from '../design/work-roots-state'
+import { currentWorkRoot, currentWorkRoots } from '../design/work-roots-state'
 import { gatewayStructuredResult } from '../../lib/image-payload'
 import {
   budgetGatewayOutput,
@@ -203,17 +206,20 @@ export interface UtilityTurnRequest {
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
   /**
-   * Whether this turn belongs to a design session the user opened with
-   * `@cio-design`. A session promotes the app-owned design capability to an
-   * active capability for the turn, so the playbook is already in context and
-   * its preview operation is callable without a search and an activation.
+   * Whether this turn belongs to a design session: either the user opened it with
+   * `@cio-design`, or an earlier turn opened it by activating the capability and
+   * the app recorded it on the thread. A session promotes the app-owned design
+   * capability to an active capability for the turn, so the playbook is already
+   * in context and its preview operation is callable without a search and an
+   * activation.
    */
   designSession?: DesignSessionMode
   /**
-   * Whether this turn belongs to a video session the user opened with
-   * `@cio-video`. It does for the video capability what `designSession` does for
-   * the design capability: promotes it to an active capability for the turn, so
-   * the edit pass is in context and `preview` and `capture` are callable at once.
+   * Whether this turn belongs to a video session: either the user opened it with
+   * `@cio-video`, or an earlier turn opened it by activating the capability. It
+   * does for the video capability what `designSession` does for the design
+   * capability: promotes it to an active capability for the turn, so the edit
+   * pass is in context and `preview` and `capture` are callable at once.
    */
   videoSession?: VideoSessionMode
   /**
@@ -244,6 +250,8 @@ export interface UtilityTurnRequest {
    * answers rather than at the end of the interview.
    */
   saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
+  /** Persist the clock choice during the live setup interview. */
+  saveAssistantSchedule?: (scheduled: boolean) => Promise<void>
   /** Persist settled reporting choices during the live setup interview. */
   saveAssistantReporting?: (reporting: AssistantReportingPatch) => Promise<void>
   budgetContext: UtilityTurnBudgetContext
@@ -365,6 +373,18 @@ export type VideoCapabilityExecutor = (
 ) => Promise<unknown>
 
 /**
+ * Reports that a turn entered an authored-work session by activating the
+ * app-owned capability for it. The chat engine supplies this because it owns the
+ * thread rows: recording the kind there is what docks the coordinator board and
+ * keeps the session alive on the thread's later turns.
+ */
+export type AuthoredWorkSessionRecorder = (input: {
+  projectId: string
+  threadId: string
+  kind: AuthoredWorkKind
+}) => void
+
+/**
  * Runs one gateway invocation of the app-owned scope and worktree capability
  * for the turn that made it. The chat engine supplies it because it owns the
  * thread's scope, project root and permission tier.
@@ -467,6 +487,25 @@ export interface EngineeringToolContext {
   sessionId: string
   harnessId: string
 }
+
+/** The turn a pawn agent call came from. */
+export interface PawnToolContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
+/**
+ * Runs one pawn agent tool call for the turn that asked for it: it spawns or
+ * continues a background thread owned by that turn's agent. The chat engine
+ * supplies it because it owns thread creation, sessions and turn completion.
+ */
+export type PawnToolExecutor = (
+  input: Record<string, unknown>,
+  context: PawnToolContext
+) => Promise<unknown>
 
 /** The turn an app-control call came from. */
 export interface AppControlContext {
@@ -592,6 +631,9 @@ export class UtilityOrchestrationService {
   private orchestrationExecutor: OrchestrationExecutor | null = null
   private appControlExecutor: AppControlExecutor | null = null
   private engineeringExecutor: EngineeringToolExecutor | null = null
+  private pawnExecutor: PawnToolExecutor | null = null
+  /** How the app learns that this turn entered a design or video session. */
+  private authoredWorkSessionRecorder: AuthoredWorkSessionRecorder | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -609,6 +651,22 @@ export class UtilityOrchestrationService {
     this.vault = new SecretVault(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
     this.structuredRoutes = this.buildStructuredRoutes()
+  }
+
+  /**
+   * Hybrid thread search, wired by the engine that owns the thread manager.
+   *
+   * The diagnostics tool is the one app capability every turn carries, so this
+   * is how an agent reaches the user's other conversations: keyword and semantic
+   * matching over titles and content, bounded by the caller's own timeout.
+   */
+  private threadSearch: ((query: string) => Promise<ThreadSearchResult[]>) | null = null
+
+  /** Attach the hybrid thread search used by the diagnostics `search_threads` action. */
+  setThreadSearchProvider(
+    provider: ((query: string) => Promise<ThreadSearchResult[]>) | null
+  ): void {
+    this.threadSearch = provider
   }
 
   /**
@@ -701,6 +759,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.engineering(state, input, 'spec')
       case CREATE_ASSIGNMENT_TOOL_NAME:
         return (state, input) => this.engineering(state, input, 'assignment')
+      case PAWN_AGENT_TOOL_NAME:
+        return (state, input) => this.pawn(state, input)
       default:
         return null
     }
@@ -731,6 +791,21 @@ export class UtilityOrchestrationService {
    */
   setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designPreviewExecutor = executor
+  }
+
+  /**
+   * Register what the app does when an agent picks up an authored-work
+   * capability.
+   *
+   * Activating `cio:design` or `cio:video` is an agent entering that session,
+   * whether or not the user typed the tag for it. The app records the kind the
+   * moment that happens, which is what docks the coordinator board while the
+   * work is being made rather than at the first preview, and what keeps the
+   * thread's later turns inside the session. The engine supplies this because it
+   * owns the thread rows and their broadcasts.
+   */
+  setAuthoredWorkSessionRecorder(recorder: AuthoredWorkSessionRecorder | null): void {
+    this.authoredWorkSessionRecorder = recorder
   }
 
   /**
@@ -858,6 +933,34 @@ export class UtilityOrchestrationService {
    */
   setEngineeringExecutor(executor: EngineeringToolExecutor | null): void {
     this.engineeringExecutor = executor
+  }
+
+  /**
+   * Register the executor that spawns and continues pawn agents. The chat engine
+   * supplies it because it owns thread creation and turn completion.
+   */
+  setPawnExecutor(executor: PawnToolExecutor | null): void {
+    this.pawnExecutor = executor
+  }
+
+  /**
+   * Run one pawn agent operation for the turn that asked for it.
+   *
+   * The executor owns thread creation, model resolution and turn completion, so
+   * this handler only forwards the call with the turn it belongs to. A missing
+   * executor means the feature is unavailable in this deployment, reported
+   * plainly rather than as an empty result.
+   */
+  private async pawn(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const executor = this.pawnExecutor
+    if (!executor) throw new Error('Pawn agents are unavailable in this deployment')
+    return executor(input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
   }
 
   /**
@@ -1035,12 +1138,14 @@ export class UtilityOrchestrationService {
     const imageDescriptorEligible = eligible.some(
       ({ utility }) => utility.kind === 'image_descriptor'
     )
-    // MCP servers are always `on_demand` and always reached through the gateway, so
-    // they never appear in the native `always` overlay. Keep the kind check even though
-    // the registry normalizes the activation: a legacy entry read straight from disk
-    // must not sneak into a harness launch. See normalizeActivation in the registry.
+    // Neither an MCP server nor a skill is ever launched natively into a harness:
+    // both are `on_demand` and reached through the gateway. Keep the kind check even
+    // though the registry normalizes the activation: a legacy entry read straight
+    // from disk must not sneak into a harness launch. See normalizeActivation in the
+    // registry.
     const always = eligible.filter(
-      ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
+      ({ utility }) =>
+        utility.activation === 'always' && utility.kind !== 'mcp' && utility.kind !== 'skill'
     )
     // A design session was opened by the user, so the design capability is active
     // from the first token: the playbook travels with the turn and the preview
@@ -1128,6 +1233,13 @@ export class UtilityOrchestrationService {
       if (isEngineeringTool(name)) {
         return request.artifactTools === true
       }
+      // A pawn agent is how any agent keeps work out of its own context: the
+      // tool spawns a thread that answers only to the caller, so it is offered
+      // on every turn that carries the gateway at all, the same way asking for
+      // a secret or reporting a problem is.
+      if (isPawnTool(name)) {
+        return true
+      }
       // The app-control tools let a turn drive the app itself. A thread running
       // in full access reaches them with no tag, which is the starting block for
       // the per-channel permission gates to come; every other thread reaches
@@ -1206,10 +1318,17 @@ export class UtilityOrchestrationService {
     const toolInstructions = [
       GATEWAY_DISCOVERY_INSTRUCTION,
       'Use available code mode to batch independent tool calls in one model request. Run independent reads with bounded parallelism and inspect every result; keep dependent operations, mutations, approvals and retries sequential. Filter large results before returning them to the model. Reuse loaded documentation and activated utilities. Read workstation targets only when dispatching work, and the app catalog only when driving the app.',
+      'When you need more than one MCP request or tool call, ALWAYS batch them in ONE code mode script: MAKING EACH REQUEST ONE AT A TIME IS FORBIDDEN, and a burst of individual MCP or tool calls that could have been batched is as good as failing the task. NEVER break this rule, it is of the most importance.',
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
+      `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a needed capability is missing, load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer its installation card. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
       `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
+      ...(gatewayTools.some(({ name }) => isPawnTool(name))
+        ? [
+            `A pawn agent (${PAWN_AGENT_TOOL_NAME}) is an independent worker thread that answers only to you: it is how you do real work without spending your own context. Spawn one for a long implementation, a broad refactor, independent verification, or research that would otherwise flood this conversation, and give it the complete task, the files it owns, and how to check its own work. It runs on the user's pawn default model when one is configured, otherwise on your model at the lowest thinking level, and it never commits: read its report, inspect the files it touched, and commit them yourself. You keep directing it: when the user corrects or redirects a pawn's work, call the tool again with that pawn's pawn_id and their instruction, and it reaches the work in progress instead of starting over. Do not spawn a second pawn to change direction.`
+          ]
+        : []),
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
             `For a requested Brainstorm, PRD, spec or Assignment, discover the matching cio_create_* schema through cio:gateway and invoke it. Ask once whether the user wants independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
@@ -1242,7 +1361,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
           ]
         : []),
       ...(hasDesignCapability
@@ -1736,8 +1855,10 @@ export class UtilityOrchestrationService {
 
   /** Read-only app diagnostics, granted on every turn that carries the gateway. */
   private async runDiagnostics(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
-    state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
-      this.projectNames()
+    state.diagnostics ??= new CioDiagnosticsService(
+      requiredDatabase(this.database),
+      () => this.projectNames(),
+      this.threadSearch ?? undefined
     )
     const diagnostics = state.diagnostics
     const action = input['action']
@@ -2102,10 +2223,17 @@ export class UtilityOrchestrationService {
       }
     }
     state.activated.set(utilityId, resolved)
+    // The agent just entered an authored-work session by picking the capability
+    // up, so the app is told about it now rather than at the first preview.
+    this.noteAuthoredWorkSession(state, utilityId)
     // First activation in this thread registers the utility in the durable
     // thread utilities bank so every later turn can invoke it by id directly.
     await this.registerThreadBankEntry(state, resolved.utility)
-    const capability = await this.capabilityFor(state, resolved)
+    const capability = await this.capabilityFor(
+      state,
+      resolved,
+      this.sessionOpeningFor(state, utilityId)
+    )
     await this.audit(state, 'utility.activated', {
       utilityId,
       kind: resolved.utility.kind
@@ -2117,6 +2245,36 @@ export class UtilityOrchestrationService {
         kind: resolved.utility.kind
       },
       capability
+    }
+  }
+
+  /**
+   * Tell the app that this turn entered an authored-work session.
+   *
+   * Only the two app-owned authored-work capabilities count as entering one:
+   * picking up any other utility is neither a design nor a composition. Reported
+   * on the real activation and not on the already-active no-op, because the
+   * first activation is the moment the agent entered the session. Best-effort,
+   * because the record is how the user watches the work rather than the work
+   * itself, and a failed write must never fail the activation that was asked
+   * for.
+   */
+  private noteAuthoredWorkSession(state: TurnState, utilityId: string): void {
+    const kind: AuthoredWorkKind | null =
+      utilityId === APP_DESIGN_UTILITY_ID
+        ? 'design'
+        : utilityId === APP_VIDEO_UTILITY_ID
+          ? 'video'
+          : null
+    if (!kind) return
+    try {
+      this.authoredWorkSessionRecorder?.({
+        projectId: state.request.projectId,
+        threadId: state.request.threadId,
+        kind
+      })
+    } catch (error) {
+      Logger.error('Authored-work session record failed:', error)
     }
   }
 
@@ -2184,7 +2342,47 @@ export class UtilityOrchestrationService {
   /** Build the capability payload (tools, operations, or instructions) that
    *  activation and cio_util_docs_lookup hand back to the model. Shared so a
    *  post-compaction docs re-dump is byte-identical to the original listing. */
-  private async capabilityFor(state: TurnState, resolved: ResolvedUtility): Promise<unknown> {
+  /**
+   * The session briefing to hand back with an activation, when that activation is
+   * what opens the session.
+   *
+   * A turn the user tagged carries its contract in the prompt, which was composed
+   * before the agent read anything. A turn where the agent reaches for the
+   * capability itself has no such prompt, so the briefing travels with the
+   * activation and the session opens the same way, naming the folder the project is
+   * pointed at right now. That folder is read live rather than left to the playbook,
+   * because by the time an agent activates the capability it may already have written
+   * files somewhere else, and the briefing is the one place it is certain to read
+   * before it writes more. Empty when the turn already carries the session, because
+   * the prompt is then the copy in hand and a second one would say the same thing
+   * twice.
+   */
+  private sessionOpeningFor(state: TurnState, utilityId: string): string {
+    if (utilityId === APP_DESIGN_UTILITY_ID) {
+      const session = state.request.designSession
+      return session === undefined || session === 'off'
+        ? designSessionBriefing('activation', currentWorkRoot('design', state.request.projectId))
+        : ''
+    }
+    if (utilityId === APP_VIDEO_UTILITY_ID) {
+      const session = state.request.videoSession
+      return session === undefined || session === 'off'
+        ? videoSessionBriefing('activation', currentWorkRoot('video', state.request.projectId))
+        : ''
+    }
+    return ''
+  }
+
+  private async capabilityFor(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    /**
+     * The session briefing that opens a design or video session, handed to the
+     * agent with the capability it just activated. Empty for a docs re-dump and
+     * for any activation in a turn that already carries its session.
+     */
+    sessionOpening = ''
+  ): Promise<unknown> {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
     }
@@ -2220,9 +2418,13 @@ export class UtilityOrchestrationService {
     }
     if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // The operation catalog travels with the playbook, because unlike the scope
-      // capability this one is invoked with typed fields.
+      // capability this one is invoked with typed fields. The briefing an
+      // activation that opens the session carries sits in front of it, so the
+      // turn reads how to run the session before it reads what it can call.
       return {
-        instructions: await this.designPlaybook(state.request.threadId),
+        instructions: [sessionOpening, await this.designPlaybook(state.request.threadId)]
+          .filter(Boolean)
+          .join('\n\n'),
         tools: designUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
@@ -2231,7 +2433,9 @@ export class UtilityOrchestrationService {
       // catalog, handed back together so an activation or a post-compaction
       // docs re-dump is one payload.
       return {
-        instructions: await this.videoPlaybook(state.request.threadId),
+        instructions: [sessionOpening, await this.videoPlaybook(state.request.threadId)]
+          .filter(Boolean)
+          .join('\n\n'),
         tools: videoUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
@@ -2441,7 +2645,17 @@ export class UtilityOrchestrationService {
       )
       result = await state.request.saveBrainstormNotes(markdown)
     } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
-      if (operation === 'save_reporting') {
+      if (operation === 'save_schedule') {
+        if (!state.request.saveAssistantSchedule) {
+          throw new Error('Scheduling can only be saved in an assistant setup conversation')
+        }
+        const scheduled = operationInput['scheduled']
+        if (typeof scheduled !== 'boolean') {
+          throw new Error('save_schedule needs a boolean scheduled value')
+        }
+        await state.request.saveAssistantSchedule(scheduled)
+        result = { status: 'saved', scheduled }
+      } else if (operation === 'save_reporting') {
         if (!state.request.saveAssistantReporting) {
           throw new Error('Reporting can only be saved in an assistant setup conversation')
         }
@@ -2498,7 +2712,7 @@ export class UtilityOrchestrationService {
         result = await state.request.saveAssistantIdentity(identity)
       } else {
         throw new Error(
-          'The getting-started capability exposes save_checkpoint, save_identity and save_reporting'
+          'The getting-started capability exposes save_checkpoint, save_identity, save_schedule and save_reporting'
         )
       }
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {

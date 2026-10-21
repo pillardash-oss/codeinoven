@@ -1,6 +1,6 @@
 import type { Thread } from '$shared/types'
 import type { Component } from 'svelte'
-import CioChat from './components/icons/cio/CioChat.svelte'
+import CioChat from '@pdslng/cio-icon/CioChat.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from './content-view-threads'
 import AssistantIcon from './components/icons/cio/AssistantIcon.svelte'
 

@@ -42,6 +42,37 @@ describe('changedPathsFromTool', () => {
     expect(changedPathsFromTool('/project', part)).toEqual([])
   })
 
+  // Regression: the Codex harness edits files through an inline `python3`
+  // heredoc that reuses one `Path(...)` variable per file. The writer is a bare
+  // variable, so no target was extracted, the turn claimed nothing, and
+  // completion dropped every real edit from the changes card.
+  it('extracts paths from a Codex inline script that writes through a Path variable', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-script',
+      messageID: 'message-script',
+      callID: 'call-script',
+      tool: 'command_execution',
+      state: {
+        status: 'completed',
+        input: {
+          command: `/bin/zsh -lc "python3 - <<'PY'
+from pathlib import Path
+p=Path('src/lib/assistant-authoring.ts');s=p.read_text();p.write_text(s)
+p=Path('src/main/utilities/utility-orchestration-service.ts');s=p.read_text().replace('a','b');p.write_text(s)
+p=Path('src/main/chat/chat-engine.ts');p.write_text('''import type { X } from 'y'\n''')
+PY"`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'src/lib/assistant-authoring.ts',
+      'src/main/utilities/utility-orchestration-service.ts',
+      'src/main/chat/chat-engine.ts'
+    ])
+  })
+
   it('extracts paths from Codex file-change items', () => {
     const part: Extract<AgentPart, { type: 'tool' }> = {
       type: 'tool',

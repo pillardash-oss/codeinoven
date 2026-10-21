@@ -126,7 +126,7 @@ export function taskReconcilePrompt(labels: readonly string[]): string {
   return (
     'Your turn ended, but the task list you published still shows unfinished work: ' +
     labels.join('; ') +
-    '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, publish the final list once more with the same task-list tool you used: mark every task you completed as completed, and drop (or clear) tasks you no longer intend to do. Then give your final response. Do not start new work just to satisfy the list.'
+    '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, publish the final list once more with the same task-list tool you used: mark every task you completed as completed, and drop (or clear) tasks you no longer intend to do. When the work is truly complete and only the list lagged, make that one task-list call and nothing else: add no prose. The app keeps the final answer you already gave the user and shows it, so any words you add here would only replace that answer with a redundant second version of it. Write text only if something material truly changed since that answer, and never mark a task complete that you did not actually finish. Do not start new work just to satisfy the list.'
   )
 }
 

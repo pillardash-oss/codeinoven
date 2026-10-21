@@ -67,6 +67,11 @@
     inlineFileTags?: ReadonlyArray<InlineFileTag>
     /** Fired when a file citation is clicked. */
     onCiteFile?: (path: string, line?: number) => void
+    /**
+     * Opens the assistant thread a tag chip names (`thread:<id>` or
+     * `assistant:<id>`). A tag chip is a reference to that conversation.
+     */
+    onOpenAssistantTag?: (reference: string) => void
     /** Fired when an explicit local file URL is clicked. */
     onOpenLocalFile?: (url: string) => void
     /** Fired when an annotatable Mermaid diagram requests a review comment. */
@@ -91,6 +96,7 @@
     repository = null,
     inlineFileTags = [],
     onCiteFile,
+    onOpenAssistantTag,
     onOpenLocalFile,
     onAnnotateMermaid,
     citationThread,
@@ -384,7 +390,22 @@
     if (projectId) void revealCitationFile(projectId, path, line)
   }
 
+  /** The assistant tag chip under the event, if any. It carries the kind and id
+   *  of the assistant or thread it names, and nothing about its label. */
+  function assistantTagFromEvent(event: Event): string | null {
+    const chip = (event.target as Element | null)?.closest('[data-assistant-tag]')
+    if (!(chip instanceof HTMLElement)) return null
+    return chip.dataset.assistantTag ?? null
+  }
+
   function handleClick(event: MouseEvent): void {
+    const assistantTag = assistantTagFromEvent(event)
+    if (assistantTag && onOpenAssistantTag) {
+      event.preventDefault()
+      clearTooltip()
+      onOpenAssistantTag(assistantTag)
+      return
+    }
     const chip = chipFromEvent(event)
     if (chip) {
       const path = chipPath(chip)
@@ -426,6 +447,13 @@
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Enter' && event.key !== ' ') return
+    const assistantTag = assistantTagFromEvent(event)
+    if (assistantTag && onOpenAssistantTag) {
+      event.preventDefault()
+      clearTooltip()
+      onOpenAssistantTag(assistantTag)
+      return
+    }
     const chip = chipFromEvent(event)
     if (!chip) return
     const path = chipPath(chip)

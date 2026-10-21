@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   /**
    * A colour picker built only from controls the native dock can carry.
    *
@@ -9,7 +10,6 @@
    * directions, so dragging a slider in the native window reaches exactly the same
    * handler a drag in the app window reaches.
    */
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
 
   interface Props {

@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { Gauge } from '@lucide/svelte'
+  import CioActions from '@pdslng/cio-icon/CioActions.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
   import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -803,9 +803,6 @@
             <CioArrowLeft size={13} /> Back
           </button>
         {/if}
-        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
-      </div>
-      <div class="flex items-center gap-2">
         <button
           class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           type="button"
@@ -815,6 +812,9 @@
         >
           Cancel
         </button>
+        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+      </div>
+      <div class="flex items-center gap-2">
         <button
           class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
@@ -1008,7 +1008,7 @@
             <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Testing…
           {:else}
-            <Gauge size={13} aria-hidden="true" />
+            <CioActions size={13} aria-hidden="true" />
             Test
           {/if}
         </button>

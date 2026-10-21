@@ -58,8 +58,42 @@ export { EXPLAIN_SELECTION_PROMPT, STICKY_NOTES_TAB } from './context-sidebar-ty
 
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
+/**
+ * The room the rail always leaves for the surface beside it.
+ *
+ * The rail shares its row with the conversation (and, in the global browser,
+ * with the page). Its width is a user preference stored in pixels, so without
+ * this floor the drag had no viewport-aware ceiling and the surface beside it
+ * could be squeezed down to nothing. 360 is the same floor the workspace grid
+ * already keeps for a conversation (`minmax(360px, 1fr)`), so the rail, the grid
+ * and the browser view all agree on how much is untouchable.
+ */
+export const CONTEXT_SIDEBAR_MAIN_MIN_WIDTH = 360
 const TERMINAL_DOCK_MIN_HEIGHT = 180
 const TERMINAL_DOCK_MAX_HEIGHT = 560
+
+/**
+ * The widest the rail may be inside a viewport of `viewportWidth`.
+ *
+ * `CONTEXT_SIDEBAR_MAX_WIDTH` alone is not enough: a 1600px rail is legal in a
+ * wide window and fatal in a narrow one, where it would push the conversation or
+ * the page out of existence. The ceiling therefore drops with the window and
+ * never falls below the rail's own minimum.
+ */
+export function contextSidebarMaxWidth(viewportWidth: number): number {
+  return Math.max(
+    CONTEXT_SIDEBAR_MIN_WIDTH,
+    Math.min(CONTEXT_SIDEBAR_MAX_WIDTH, Math.round(viewportWidth) - CONTEXT_SIDEBAR_MAIN_MIN_WIDTH)
+  )
+}
+
+/** The window width to clamp against, or the widest window that needs no clamp.
+ *  Module-scope safety only: the rail is a renderer surface. */
+function currentViewportWidth(): number {
+  return typeof window === 'undefined'
+    ? CONTEXT_SIDEBAR_MAX_WIDTH + CONTEXT_SIDEBAR_MAIN_MIN_WIDTH
+    : window.innerWidth
+}
 
 class ContextSidebarState {
   private activeProjectId: string | null = $state(null)
@@ -390,6 +424,40 @@ class ContextSidebarState {
     return this.activeProjectId === projectId ? this.activeThreadId : null
   }
 
+  /** The project the sidebar's context is docked on. A caller that shows a
+   *  thread reads this to tell whether the sidebar already follows it. */
+  get dockedProjectId(): string | null {
+    return this.activeProjectId
+  }
+
+  /**
+   * Keep the sidebar docked on the thread the workspace is showing.
+   *
+   * Every ordinary thread open goes through `activateThread`, so this is a
+   * repair rather than the normal path. It exists because a surface that changes
+   * the visible thread without going through that call leaves the sidebar on the
+   * project it was docked on before, and the sidebar's panels are scoped to the
+   * project it is docked on: another project's coordinator board then stays on
+   * screen until the user toggles something. Acting only on a mismatch means a
+   * sidebar that is already correct is never re-activated.
+   */
+  ensureDockedThread(
+    projectId: string,
+    threadId: string,
+    threadTitle?: string,
+    rowThreadId?: string
+  ): void {
+    const row = rowThreadId ?? threadId
+    if (
+      this.activeProjectId === projectId &&
+      this.activeThreadId === threadId &&
+      this.activeRowThreadId === row
+    ) {
+      return
+    }
+    this.activateThread(projectId, threadId, threadTitle, rowThreadId)
+  }
+
   /** `rowThreadId` is the sidebar row that represents `threadId`. A worker or
    *  auditor child passes its coordinator so the child opens the parent's tab
    *  context, which is where the coordinator panel is docked. It defaults to
@@ -410,13 +478,13 @@ class ContextSidebarState {
       this.attentionScope.threadId === threadId
     const projectChanged = this.activeProjectId !== projectId
     const previousTab = this.sidebarActiveTab
+    // Only the entering thread's own board is restored. A board never follows the
+    // user onto a thread that is not in the session, so coming from a design
+    // thread opens the new thread's own panel (or nothing) instead of the board
+    // the user just left.
     const inheritedWork =
       !projectChanged && previousTab?.kind === 'coordinator'
-        ? coordinatorDockState.inheritWork(
-            projectId,
-            this.activeRowThreadId ?? '',
-            rowThreadId ?? threadId
-          )
+        ? coordinatorDockState.inheritWork(projectId, rowThreadId ?? threadId)
         : null
     // Capture before `activeProjectId` moves: the native view (if any) belongs
     // to the outgoing project and must be detached from the store layer so the
@@ -1031,7 +1099,23 @@ class ContextSidebarState {
   }
 
   setWidth(width: number): void {
-    this.width = Math.max(CONTEXT_SIDEBAR_MIN_WIDTH, Math.min(width, CONTEXT_SIDEBAR_MAX_WIDTH))
+    this.width = Math.min(
+      Math.max(width, CONTEXT_SIDEBAR_MIN_WIDTH),
+      contextSidebarMaxWidth(currentViewportWidth())
+    )
+  }
+
+  /**
+   * The width to paint the rail at in a viewport of `viewportWidth`.
+   *
+   * The stored width is the user's preference and survives a window resize, so a
+   * surface that paints the rail reads it through here instead of using the raw
+   * value: a window that shrank must never let the rail keep claiming room the
+   * surface beside it needs. Surfaces that clamp in CSS already (the workspace
+   * grid) may keep doing so; this is the same rule stated in pixels.
+   */
+  widthForViewport(viewportWidth: number = currentViewportWidth()): number {
+    return Math.min(this.width, contextSidebarMaxWidth(viewportWidth))
   }
 
   setTerminalHeight(height: number): void {

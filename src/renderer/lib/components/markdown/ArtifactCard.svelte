@@ -1,16 +1,17 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { onDestroy } from 'svelte'
   import { artifactThemeStyles } from './artifact-theme'
   import { artifactKeyFor } from '$lib/artifact-element-reference'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import ArtifactInspector from './ArtifactInspector.svelte'
-  import { SquareDashedMousePointer, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
@@ -288,7 +289,7 @@
         aria-pressed={wrapped}
         onclick={() => wrapTextState.toggle()}
       >
-        <WrapText size={13} class={wrapped ? 'text-primary' : ''} />
+        <CioWrapText size={13} class={wrapped ? 'text-primary' : ''} />
       </button>
       <button
         class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
@@ -330,7 +331,7 @@
     title={inspecting ? 'Stop inspecting this SVG' : 'Inspect: pick an element to comment on'}
     onclick={toggleInspect}
   >
-    <SquareDashedMousePointer size={14} />
+    <CioMarquee size={14} />
     <span>{inspecting ? 'Stop inspecting' : 'Inspect an element'}</span>
   </button>
 {/snippet}

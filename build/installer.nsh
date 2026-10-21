@@ -27,13 +27,18 @@
 ; after the launcher is stopped. Match exact paths, not every app with that name.
 !macro customCheckAppRunning
   InitPluginsDir
+  ; Ownership proof for bounded cleanup of abandoned installer directories.
+  FileOpen $R0 "$PLUGINSDIR\codeinoven-update-owner" w
+  FileWrite $R0 "CodeInOven"
+  FileClose $R0
   File /oname=$PLUGINSDIR\close-windows-app.ps1 "${CIO_CLOSE_APP_SCRIPT}"
+  StrCpy $R3 "0"
   ${If} ${isUpdated}
-    ; The app's shutdown pipeline starts before NSIS, but finishes asynchronously.
-    Sleep 5000
+    ; Wait for the full shutdown, including the background runtime and launcher.
+    StrCpy $R3 "25"
   ${EndIf}
   ${Do}
-    nsExec::ExecToStack /TIMEOUT=30000 '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\close-windows-app.ps1" -InstallDirectory "$INSTDIR" -LauncherFileName "${APP_EXECUTABLE_FILENAME}"'
+    nsExec::ExecToStack /TIMEOUT=45000 '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\close-windows-app.ps1" -InstallDirectory "$INSTDIR" -LauncherFileName "${APP_EXECUTABLE_FILENAME}" -WaitSeconds $R3'
     Pop $R0
     Pop $R2
     ${If} $R0 == 0
@@ -52,7 +57,7 @@
       ${EndIf}
     ${EndIf}
     DetailPrint "$R2"
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY +2
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)$\r$\n$\r$\n$R2" /SD IDCANCEL IDRETRY +2
     Quit
   ${Loop}
 !macroend

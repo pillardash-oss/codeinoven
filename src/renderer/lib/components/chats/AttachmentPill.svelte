@@ -1,7 +1,9 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import { AudioLines, Image as ImageIcon, Video } from '@lucide/svelte'
+  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
+  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
+  import CioImage from '@pdslng/cio-icon/CioImage.svelte'
   import { attachmentPreviewKind } from '$lib/mime'
   import type { PromptAttachment } from '$shared/types'
 
@@ -37,12 +39,12 @@
       {#if previewUrl}
         <img src={previewUrl} alt={name} class="h-5 w-5 shrink-0 object-cover" />
       {:else}
-        <ImageIcon size={11} class="shrink-0" />
+        <CioImage size={11} class="shrink-0" />
       {/if}
     {:else if previewKind === 'video'}
-      <Video size={11} class="shrink-0" />
+      <CioClapper size={11} class="shrink-0" />
     {:else if previewKind === 'audio'}
-      <AudioLines size={11} class="shrink-0" />
+      <CioAudioLines size={11} class="shrink-0" />
     {:else}
       <CioFileText size={11} class="shrink-0" />
     {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   export type BrainstormNextStep = 'lofi' | 'hifi' | 'prd' | 'spec' | 'implement'

@@ -6,6 +6,7 @@ import type {
   PromptReference,
   UserMessagePresentation
 } from '$shared/types'
+import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 import { uuidv7 } from '$shared/id'
 import { MAX_MARK_POINTS, type MarkPoint } from '$lib/annotation-marks'
 
@@ -30,6 +31,7 @@ export type SettingsSection =
   | 'keymap'
   | 'cloud-deployments'
   | 'ovens'
+  | 'archives'
   | 'about'
 
 export type MainView =
@@ -57,6 +59,7 @@ export type MainView =
   | 'settings-keymap'
   | 'settings-cloud-deployments'
   | 'settings-ovens'
+  | 'settings-archives'
   | 'settings-about'
 
 export interface SelectedThreadReference {
@@ -97,11 +100,14 @@ export interface QueuedResponseReference extends PromptReference {
   selector?: string
   /** Design references: the browser tab the element was picked from. */
   tabId?: string
+  /** Design references: the page's entry file inside that design folder, so a
+   *  comment whose page was closed reopens on the screen it was made on. */
+  designEntry?: string
   /** Document annotations: the project-relative path of the document. */
   filePath?: string
   /** Video notes: the second on the composition the note was written at. */
   seconds?: number
-  /** Video notes: the project-relative composition folder the moment belongs to. */
+  /** Video notes and design references: the project-relative folder of the work. */
   directory?: string
   /** Media marks: the artifact part the stroke was drawn on, a still or a video. */
   mediaUrl?: string
@@ -203,6 +209,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-sound',
   'settings-search',
   'settings-keymap',
+  'settings-archives',
   'settings-about'
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -223,6 +230,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'search',
   'keymap',
   'cloud-deployments',
+  'archives',
   'about'
 ]
 const SETTINGS_VIEW_PREFIX = 'settings-'
@@ -321,6 +329,7 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.endOffset !== undefined && typeof value.endOffset !== 'number') return false
   if (value.selector !== undefined && typeof value.selector !== 'string') return false
   if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
+  if (value.designEntry !== undefined && typeof value.designEntry !== 'string') return false
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
   if (value.seconds !== undefined && typeof value.seconds !== 'number') return false
   if (value.directory !== undefined && typeof value.directory !== 'string') return false
@@ -499,7 +508,7 @@ export function parseComposerDraftEntry(value: unknown): ComposerDraftEntry | nu
   const text = typeof value.text === 'string' ? value.text : ''
   if (text.length > MAX_DRAFT_LENGTH) return null
   const attachments = Array.isArray(value.attachments)
-    ? value.attachments.filter(isPromptAttachment)
+    ? value.attachments.filter(isPromptAttachment).slice(0, MAX_PROMPT_ATTACHMENTS)
     : []
   const projectReferences = Array.isArray(value.projectReferences)
     ? value.projectReferences.filter(isPromptProjectReference).slice(0, 20)
@@ -508,7 +517,7 @@ export function parseComposerDraftEntry(value: unknown): ComposerDraftEntry | nu
     ? value.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
     : []
   const promptReferences = Array.isArray(value.promptReferences)
-    ? value.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+    ? value.promptReferences.filter(isQueuedResponseReference)
     : []
   const startAfterThreads = parseStartAfterThreads(value.startAfterThreads)
   return {
@@ -558,10 +567,10 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[
       if (text.length === 0 || text.length > MAX_DRAFT_LENGTH) continue
 
       const attachments = Array.isArray(item.attachments)
-        ? item.attachments.filter(isPromptAttachment)
+        ? item.attachments.filter(isPromptAttachment).slice(0, MAX_PROMPT_ATTACHMENTS)
         : []
       const promptReferences = Array.isArray(item.promptReferences)
-        ? item.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+        ? item.promptReferences.filter(isQueuedResponseReference)
         : []
       const projectReferences = Array.isArray(item.projectReferences)
         ? item.projectReferences.filter(isPromptProjectReference).slice(0, 20)

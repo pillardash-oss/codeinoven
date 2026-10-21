@@ -1,4 +1,4 @@
-import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+import CioClock from '@pdslng/cio-icon/CioClock.svelte'
 import {
   isThreadAwaitingUser,
   isThreadRetryPaused,

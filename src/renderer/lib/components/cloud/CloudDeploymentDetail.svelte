@@ -1,18 +1,19 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioChevronUp from '$lib/components/icons/cio/CioChevronUp.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import { ArrowDown, Clock3 } from '@lucide/svelte'
+  import CioArrowDown from '@pdslng/cio-icon/CioArrowDown.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioBraces from '@pdslng/cio-icon/CioBraces.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pdslng/cio-icon/CioChevronUp.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -37,7 +38,7 @@
     projectId: string
     container: CloudDeploymentContainer
     onBack: () => void
-    /** Push an updated status snapshot back into the panel/store cache. */
+    /** Push an updated status snapshot back into the panel/Store cache. */
     onUpdated: (container: CloudDeploymentContainer) => void
     /** Hand the failing deployment to an agent, given its readable log text. */
     onRemediate: (logText: string) => void
@@ -412,7 +413,7 @@
           aria-label="Jump to the latest log lines"
           onclick={toggleTail}
         >
-          <ArrowDown size={12} class={tail ? 'text-foreground' : ''} />
+          <CioArrowDown size={12} class={tail ? 'text-foreground' : ''} />
         </button>
       {/if}
       {#if containerUrls(container).length > 0}
@@ -461,7 +462,7 @@
           <button
             type="button"
             class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Search log (Ctrl/Cmd+F)"
+            title={`Search log (${keymapState.labelFor('files-deployment-find')})`}
             aria-label="Search log"
             onclick={openSearch}
           >
@@ -622,7 +623,7 @@
               onclick={() => void selectDeployment(deployment)}
             >
               {#if deployment.status === 'building'}
-                <Clock3 size={14} class="shrink-0 text-warning" />
+                <CioClock size={14} class="shrink-0 text-warning" />
               {:else if deployment.status === 'success'}
                 <CioCheckCircle size={14} class="shrink-0 text-success" />
               {:else if deployment.status === 'failed'}

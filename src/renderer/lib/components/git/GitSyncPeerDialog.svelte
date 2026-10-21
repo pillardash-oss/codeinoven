@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   /**
    * The sync chooser: which end to trade commits with, which way, and how.
    *
@@ -8,8 +10,6 @@
    * user has to dismiss before they can keep working. What this file reads is
    * the list of ends, which is a fast question about the repository.
    */
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
 
   import { gitState } from '$lib/stores/git.svelte'

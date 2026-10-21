@@ -84,11 +84,19 @@ const SENSITIVE_CONFIG_KEY = /(api[-_]?key|authorization|credential|password|sec
 const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brave', 'custom'])
 
 /** Stable id of the app-seeded image-descriptor utility. */
-export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
+export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:see-image'
 
-/** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
+/**
+ * App-owned ids earlier builds seeded, mapped to the ids this build uses.
+ *
+ * `codeinoven:` ids predate the `cio:` rename; `cio:image-descriptor` is the
+ * name this entry shipped under before it became `cio:see-image`. A registry
+ * written by either build is renamed in place, so a renamed entry never
+ * survives beside its current one and a pinned vision model is never lost.
+ */
 const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
-  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID
+  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+  'cio:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID
 }
 
 /**
@@ -153,7 +161,7 @@ export class UtilityRegistryService {
       {
         id: APP_IMAGE_DESCRIPTOR_UTILITY_ID,
         kind: 'image_descriptor',
-        name: 'Image descriptor',
+        name: 'cio:see-image',
         description:
           'Describes images with a vision-capable model so text-only agents can reason about screenshots, video frames, and other media. Pick a vision model to pin it; otherwise the app chooses one automatically.',
         enabled: true,
@@ -334,7 +342,8 @@ export class UtilityRegistryService {
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
     const rebound = this.normalizeAppOwnedBindings(registry)
-    if (missing.length > 0 || migrated || retired || rebound) {
+    const relabelled = refreshAppOwnedPresentation(registry, defaults)
+    if (missing.length > 0 || migrated || retired || rebound || relabelled) {
       registry.utilities.push(...missing)
       await this.storage.write(REGISTRY_PATH, registry)
     }
@@ -370,8 +379,8 @@ export class UtilityRegistryService {
   }
 
   /**
-   * Renames legacy `codeinoven:` app-owned utilities to their current ids so
-   * registries created before the rename do not keep stale duplicates.
+   * Renames app-owned utilities an earlier build seeded under a different id,
+   * so a registry created before the rename does not keep a stale duplicate.
    */
   private migrateLegacyAppUtilities(registry: UtilityRegistryFile): boolean {
     let changed = false
@@ -578,7 +587,8 @@ export class UtilityRegistryService {
       // App-owned identity stays the app's call, and so does availability, with
       // one exception: app-owned knowledge is advice rather than wiring, so a
       // user who already has a better runbook for a topic may switch ours off.
-      // See `canToggleUtilityEnabled`.
+      // See `canToggleUtilityEnabled`. Configuration is the app's too, apart
+      // from what `appOwnedConfigIsWritable` allows through.
       const lockedAppOwnedField =
         patch.name ??
         patch.description ??
@@ -595,6 +605,15 @@ export class UtilityRegistryService {
       if (current.appOwned && lockedAppOwnedField !== undefined) {
         throw new Error(
           'App-owned utility identity, activation, scope, credentials, and bindings are locked'
+        )
+      }
+      if (
+        current.appOwned &&
+        patch.config !== undefined &&
+        !appOwnedConfigIsWritable(current, patch.config)
+      ) {
+        throw new Error(
+          'This app-owned utility is managed by the app: its configuration cannot be changed'
         )
       }
       const normalized = normalizeInput({
@@ -785,6 +804,80 @@ function sameUtilityIdentity(
   if ([...incomingNames].some((name) => existingNames.has(name))) return true
   if (incomingNames.size > 0 && existingNames.size > 0) return false
   return existing.name.trim().toLocaleLowerCase() === incoming.name.trim().toLocaleLowerCase()
+}
+
+/**
+ * Whether an app-owned utility's `config` may be rewritten.
+ *
+ * The app supplies the wiring these entries stand for, so their configuration
+ * is the app's: a browser backend or an MCP command a whole turn depends on
+ * must not be editable into a state the user cannot explain. Two writes stay
+ * allowed. The image descriptor exists only to choose a vision model, which is
+ * the one thing its editor offers, so any of its fields may move. The OAuth
+ * block belongs to whichever connection was authorized, so a grant may still
+ * be recorded or dropped   every other key must come back unchanged.
+ */
+function appOwnedConfigIsWritable(
+  current: UtilityDefinition,
+  config: UtilityConfigMap[UtilityKind]
+): boolean {
+  if (current.kind === 'image_descriptor') return true
+  const next = asConfigRecord(config)
+  const previous = asConfigRecord(current.config)
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
+  keys.delete('oauth')
+  return [...keys].every((key) => valuesEqual(previous[key], next[key]))
+}
+
+function asConfigRecord(config: UtilityConfigMap[UtilityKind]): Record<string, unknown> {
+  return isRecord(config) ? config : {}
+}
+
+/**
+ * Keeps an app-owned entry's name and description equal to what this build
+ * ships.
+ *
+ * App-owned identity is the app's call, so a registry written by an earlier
+ * build must not keep calling a renamed utility by its old name: the seed only
+ * adds missing ids, and an entry renamed in place (see
+ * `migrateLegacyAppUtilities`) would otherwise carry its old label forever.
+ */
+function refreshAppOwnedPresentation(
+  registry: UtilityRegistryFile,
+  defaults: readonly UtilityDefinition[]
+): boolean {
+  const shipped = new Map(defaults.map((utility) => [utility.id, utility]))
+  let changed = false
+  for (let index = 0; index < registry.utilities.length; index += 1) {
+    const utility = registry.utilities[index]
+    if (!utility.appOwned) continue
+    const current = shipped.get(utility.id)
+    if (!current) continue
+    if (utility.name === current.name && utility.description === current.description) continue
+    registry.utilities[index] = {
+      ...utility,
+      name: current.name,
+      description: current.description,
+      updatedAt: Date.now()
+    }
+    changed = true
+  }
+  return changed
+}
+
+/** Structural equality for the plain JSON values a utility config holds. */
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => valuesEqual(value, right[index]))
+  }
+  if (isRecord(left) && isRecord(right)) {
+    const leftKeys = Object.keys(left)
+    if (leftKeys.length !== Object.keys(right).length) return false
+    return leftKeys.every((key) => key in right && valuesEqual(left[key], right[key]))
+  }
+  return false
 }
 
 function utilityTransportNames(utility: UtilityDefinition | UtilityDefinitionInput): Set<string> {
@@ -996,14 +1089,17 @@ function defaultBinding(kind: UtilityKind): Omit<HarnessUtilityBinding, 'harness
 }
 
 /**
- * App-owned activation invariant. An MCP server is never launched natively into
- * a harness: the app starts its client inside the turn and exposes its tools
- * through the utility gateway, so `always` has no path to run and would leave
- * the utility inert. Normalize it to `on_demand` on every write and on every
- * registry read, which also repairs entries stored before this invariant.
+ * App-owned activation invariant. Neither an MCP server nor a skill is ever
+ * launched natively into a harness. An MCP client runs inside the turn behind
+ * the utility gateway, so `always` has no path to run and would leave the
+ * utility inert. A skill is knowledge rather than wiring: whether it applies is
+ * a property of the task, not of the utility, so the agent reads its
+ * description and loads the ones that match. Either way it normalizes to
+ * `on_demand` on every write and on every registry read, which also repairs
+ * entries stored before this invariant.
  */
 function normalizeActivation(kind: UtilityKind, activation: UtilityActivation): UtilityActivation {
-  return kind === 'mcp' ? 'on_demand' : activation
+  return kind === 'mcp' || kind === 'skill' ? 'on_demand' : activation
 }
 
 function parseScope(value: unknown): UtilityScope {

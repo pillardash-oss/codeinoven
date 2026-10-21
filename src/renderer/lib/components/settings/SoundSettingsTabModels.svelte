@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { listRowMove } from '$lib/motion'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
@@ -192,7 +192,7 @@
         : 'bg-elevated text-muted border-border hover:text-foreground'}"
       onclick={() => (runtimeFilter = 'all')}>All</button
     >
-    {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
+    {#each runtimesForSubTab(activeModelSubTab).filter( (runtime) => catalogArtifacts.some((artifact) => artifact.runtime === runtime) ) as rt (rt)}
       <button
         type="button"
         class="border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt
@@ -278,21 +278,21 @@
   {@const label = artifact?.label ?? parsedImport?.displayName ?? row.installed.artifactId}
   {@const byteSize = artifact?.byteSize ?? row.installed.byteSize ?? 0}
   <span
-    class="size-1.5 shrink-0 {isActive
-      ? 'bg-primary'
-      : row.installed.available
-        ? 'bg-border-strong'
-        : 'bg-danger'}"
+    class="size-1.5 shrink-0 {!row.installed.available
+      ? 'bg-danger'
+      : isActive
+        ? 'bg-primary'
+        : 'bg-border-strong'}"
     aria-hidden="true"
   ></span>
   <div class="min-w-0 flex-1">
     <p class="truncate text-sm font-medium" title={label}>{label}</p>
-    <p class="truncate text-xs text-dimmed">
+    <p class="truncate text-xs text-dimmed" title={row.installed.unavailableReason}>
       {runtimeBadge(row.installed.runtime)}{#if byteSize}
         · {formatBytes(byteSize)}{/if}{#if artifact}
         · {artifact.license}{/if}{#if artifact?.languages.length}
         · {artifact.languages.join(', ')}{/if}{#if !row.installed.available}
-        · Not found{/if}
+        · {row.installed.unavailableReason ?? 'Unavailable'}{/if}
     </p>
     {#if !artifact && row.installed.importPath}
       <p class="truncate font-mono text-[0.6875rem] text-dimmed" title={row.installed.importPath}>
@@ -300,7 +300,7 @@
       </p>
     {/if}
   </div>
-  {#if isActive}
+  {#if isActive && row.installed.available}
     <span
       class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
       >Active</span

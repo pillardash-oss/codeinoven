@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import { ListChecks } from '@lucide/svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioListChecks from '@pdslng/cio-icon/CioListChecks.svelte'
   import { fly } from 'svelte/transition'
   import CardStack from '../shared/CardStack.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
@@ -117,7 +117,7 @@
 
 <CardStack
   label="Agent task progress"
-  icon={ListChecks}
+  icon={CioListChecks}
   title="Tasks"
   {chip}
   warn={stoppedUnfinished}

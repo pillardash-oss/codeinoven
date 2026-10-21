@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-  import { Lightbulb } from '@lucide/svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
+  import CioLightbulb from '@pdslng/cio-icon/CioLightbulb.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -176,7 +176,7 @@
                 title={retryChoice === 'brainstorm'
                   ? 'Retry generating the brainstorm'
                   : 'Retry generating the specification'}
-                icon={busy ? undefined : retryChoice === 'brainstorm' ? Lightbulb : CioFileText}
+                icon={busy ? undefined : retryChoice === 'brainstorm' ? CioLightbulb : CioFileText}
                 variant="primary"
                 disabled={busy}
                 loading={busy}

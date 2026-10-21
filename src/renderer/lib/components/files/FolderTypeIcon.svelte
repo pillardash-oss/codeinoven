@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import { getFolderTypeIconDataUri } from './file-type-icons'
   import { CIO_ICON_DATA_URI, isCioFolderName } from './cio-folder-icons'
 

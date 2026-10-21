@@ -1,15 +1,15 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioArrowUpCircle from '@pdslng/cio-icon/CioArrowUpCircle.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import { ArrowUpCircle } from '@lucide/svelte'
   import type {
     CuaBridgeStatus,
     CuaInstallationSource,
@@ -410,7 +410,7 @@
                 title={`Try updating Cua Driver to ${update.latestVersion} again`}
                 onclick={() => (confirmingUpdate = true)}
               >
-                <ArrowUpCircle size={13} /> Try the update again
+                <CioArrowUpCircle size={13} /> Try the update again
               </button>
             {/if}
           </div>
@@ -434,7 +434,7 @@
               title={`Update Cua Driver to ${update.latestVersion}`}
               onclick={() => (confirmingUpdate = true)}
             >
-              <ArrowUpCircle size={14} /> Update to {update.latestVersion}
+              <CioArrowUpCircle size={14} /> Update to {update.latestVersion}
             </button>
             {#if update.releaseNotesUrl}
               <button

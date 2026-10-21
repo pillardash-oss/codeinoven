@@ -71,7 +71,8 @@ export async function inspectOvenConnection(
 
 export async function testDraftConnection(
   registry: OvenRegistry,
-  input: SaveOvenInput
+  input: SaveOvenInput,
+  signal?: AbortSignal
 ): Promise<OvenConnectionStatus> {
   const existing = input.id ? await registry.require(input.id) : undefined
   const secrets = new Map<string, string>()
@@ -101,14 +102,23 @@ export async function testDraftConnection(
     secrets.set(key, input[field])
     draft[ref] = key
   }
-  const ssh = new OvenSsh({
-    storage: registry.storage,
-    require: async () => draft,
-    vault: { resolve: async (ref) => secrets.get(ref) ?? registry.vault.resolve(ref) }
-  })
+  const deadline = new AbortController()
+  const timer = setTimeout(() => {
+    deadline.abort(new Error('Connection timed out after 60 seconds.'))
+  }, 60_000)
+  const connectionSignal = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal
+  const ssh = new OvenSsh(
+    {
+      storage: registry.storage,
+      require: async () => draft,
+      vault: { resolve: async (ref) => secrets.get(ref) ?? registry.vault.resolve(ref) }
+    },
+    connectionSignal
+  )
   try {
     return await inspectOvenConnection(ssh, 'draft')
   } finally {
+    clearTimeout(timer)
     secrets.clear()
   }
 }

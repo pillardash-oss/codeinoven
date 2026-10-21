@@ -1,7 +1,7 @@
 import { IPC_INVOKE_CONTRACT } from '../../lib/ipc-contract'
 import type { AppControlActionSummary, AppControlTarget } from '../../lib/app-control'
 import type { PermissionLevel } from '../../lib/types'
-import { requestAppControl } from './app-control-bridge'
+import { captureAppWindow, requestAppControl } from './app-control-bridge'
 
 /**
  * The plan behind the app-control tools.
@@ -29,6 +29,28 @@ export interface AppControlContext {
 export interface AppControlExecutor {
   catalog: (input: Record<string, unknown>, context: AppControlContext) => Promise<unknown>
   call: (input: Record<string, unknown>, context: AppControlContext) => Promise<unknown>
+}
+
+/**
+ * Config fields the user owns alone, stripped from every agent-driven patch.
+ *
+ * `agentDefaults.pawn` picks the model a pawn agent runs on. An agent spawns a
+ * pawn on its own model when the value is unset, so it never has a reason to
+ * write it, and a default that an agent could repoint would stop meaning what
+ * the user chose. The settings page writes it through the same
+ * `config:update` channel, so the field is only removed here, at the
+ * agent-facing door.
+ */
+function withoutUserOwnedConfig(patch: unknown): unknown {
+  if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) return patch
+  const candidate = patch as Record<string, unknown>
+  const agentDefaults = candidate['agentDefaults']
+  if (typeof agentDefaults !== 'object' || agentDefaults === null || Array.isArray(agentDefaults))
+    return patch
+  const defaults = { ...(agentDefaults as Record<string, unknown>) }
+  if (!('pawn' in defaults)) return patch
+  delete defaults['pawn']
+  return { ...candidate, agentDefaults: defaults }
 }
 
 /**
@@ -193,6 +215,8 @@ export function createAppControlExecutor(
       context,
       controlPolicy:
         'Try background IPC/data operations first. UI-only navigation and panel actions remain available as foreground fallback. browser.open defaults to a thread-owned background tab; params.attention="focus" explicitly reveals it.',
+      windowCapture:
+        'The interface only exists inside Electron, so the in-app browser cannot render it. Pass capture: true to this tool to see the live app window as an image and verify what you changed.',
       destructiveChannels: CHANNEL_NAMES.filter((channel) => isDestructiveAppControl(channel)),
       domains,
       channelArgs,
@@ -206,8 +230,14 @@ export function createAppControlExecutor(
   ): Promise<unknown> => {
     const channel = readString(input, 'channel')
     const action = readString(input, 'action')
+    // Seeing the app is neither a channel nor a UI action: the interface only
+    // exists inside Electron, so the capture is the one way an agent can look at
+    // what it just changed instead of concluding the app is unverifiable.
+    if (input['capture'] === true) {
+      return { ok: true, result: await captureAppWindow() }
+    }
     if (channel === null && action === null) {
-      throw new Error('Provide either a `channel` or an `action` from cio_app_catalog.')
+      throw new Error('Provide either a `channel`, an `action`, or `capture: true`.')
     }
     const confirmed = input['destructiveConfirmed'] === true
 
@@ -228,7 +258,8 @@ export function createAppControlExecutor(
           `"${channel}" is a destructive operation. Ask the user to confirm, then call again with destructiveConfirmed: true.`
         )
       }
-      target = { kind: 'channel', channel, args }
+      const safeArgs = channel === 'config:update' ? args.map(withoutUserOwnedConfig) : args
+      target = { kind: 'channel', channel, args: safeArgs }
     } else if (action !== null) {
       const known = await actions()
       const match = known.find((entry) => entry.id === action)
@@ -251,7 +282,7 @@ export function createAppControlExecutor(
       }
       target = { kind: 'action', action, params }
     } else {
-      throw new Error('Provide either a `channel` or an `action` from cio_app_catalog.')
+      throw new Error('Provide either a `channel`, an `action`, or `capture: true`.')
     }
 
     const result = await requestAppControl(target)

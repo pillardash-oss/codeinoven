@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import Modal from '../ui/Modal.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'

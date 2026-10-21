@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
 

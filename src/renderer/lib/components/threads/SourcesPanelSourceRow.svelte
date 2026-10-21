@@ -1,8 +1,9 @@
 <script lang="ts">
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
+  import CioImage from '@pdslng/cio-icon/CioImage.svelte'
+  import CioTag from '@pdslng/cio-icon/CioTag.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import { Hash, Image as ImageIcon } from '@lucide/svelte'
   import type {
     AgentSource,
     FileAgentSource,
@@ -55,7 +56,7 @@
       </span>
     {:else if source.kind === 'section'}
       <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary">
-        <Hash size={15} />
+        <CioTag size={15} />
       </span>
     {:else if isImageSource(source)}
       <button
@@ -137,7 +138,7 @@
     </div>
 
     {#if source.kind === 'generated-image'}
-      <ImageIcon size={13} class="mt-1 shrink-0 text-dimmed" />
+      <CioImage size={13} class="mt-1 shrink-0 text-dimmed" />
     {/if}
   </div>
 </div>

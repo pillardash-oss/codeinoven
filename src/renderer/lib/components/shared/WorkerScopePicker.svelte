@@ -1,10 +1,10 @@
 <script lang="ts">
+  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   /**
    * Assignment review: the trigger and bubble a worker task uses to choose the
    * Git scope it will run in, mirroring the model picker's popover mechanism so
    * it escapes the review card's scroll container.
    */
-  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import { onMount } from 'svelte'
   import { Popover } from 'bits-ui'
 

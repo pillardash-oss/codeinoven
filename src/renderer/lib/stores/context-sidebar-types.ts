@@ -359,6 +359,25 @@ export type TemporaryChatMode = 'elaborate' | 'quick'
 export const EXPLAIN_SELECTION_PROMPT =
   'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only do not make changes or run commands. and your response should not be more than one paragraph unless explicitly asked for more. Be very terse and avoid words salad, prioritize human understanding!'
 
+/**
+ * A passage a side chat attached to its composer.
+ *
+ * A side chat owns no Thread row to keep references against, so the quoted
+ * passage, the comment written on it and the range it was taken from travel
+ * together on its tab. The range fields are what let the side chat draw the
+ * highlight and pin the comment the way a thread's reference does, and the
+ * comment is what rides to the harness with the passage.
+ */
+export interface TemporaryChatSelection {
+  id: string
+  text: string
+  comment?: string
+  /** The response the passage was quoted from. */
+  messageId?: string
+  startOffset?: number
+  endOffset?: number
+}
+
 export interface TemporaryChatContextTab {
   id: string
   kind: 'temporary-chat'
@@ -369,7 +388,7 @@ export interface TemporaryChatContextTab {
   /** Isolated harness session for the side chat, once the first turn starts. */
   sessionId: string | null
   mode: TemporaryChatMode
-  selections: string[]
+  selections: TemporaryChatSelection[]
   initialContext: string
   settings: ThreadSettings
   selectionAttached: boolean

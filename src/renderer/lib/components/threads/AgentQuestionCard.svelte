@@ -1,8 +1,9 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPaperclip from '$lib/components/icons/cio/CioPaperclip.svelte'
-  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
-  import { CircleHelp, ClipboardList } from '@lucide/svelte'
+  import CioClipboardList from '@pdslng/cio-icon/CioClipboardList.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioPaperclip from '@pdslng/cio-icon/CioPaperclip.svelte'
+  import CioSend from '@pdslng/cio-icon/CioSend.svelte'
+  import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
   import { fly, slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
@@ -487,7 +488,7 @@
      it. The countdown chip is the card's real reading, and it turns urgent only
      while the clock is running. -->
   <CardHead
-    icon={CircleHelp}
+    icon={TriangleQuestionMark}
     title={question.header ?? 'Question'}
     chip={{
       text: remainingLabel,
@@ -565,7 +566,7 @@
                       title={`View instruction: ${option.label}`}
                       aria-label={`View instruction for ${option.label}`}
                     >
-                      <ClipboardList size={14} />
+                      <CioClipboardList size={14} />
                     </button>
                   {/if}
                 {/snippet}

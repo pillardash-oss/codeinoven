@@ -2,12 +2,13 @@ import { APP_SLUG } from '$shared/brand'
 
 const STORAGE_KEY = `${APP_SLUG}.threadGrouping.v1`
 
-export type ThreadGroup = 'Attention' | 'Unread' | 'Errors' | 'Spec' | 'Working' | 'Done'
+export type ThreadGroup = 'Attention' | 'Drafts' | 'Unread' | 'Errors' | 'Spec' | 'Working' | 'Done'
 
 /** Every group key, used to validate a stored fold map. Display order lives in
  *  `groupThreadsByStatus` in `workspace-thread-helpers.ts`. */
 export const THREAD_GROUPS: readonly ThreadGroup[] = [
   'Attention',
+  'Drafts',
   'Unread',
   'Errors',
   'Spec',
@@ -27,6 +28,7 @@ function defaults(): StoredGrouping {
     hiddenGroups: [],
     folded: {
       Attention: false,
+      Drafts: false,
       Unread: false,
       Errors: false,
       Spec: false,

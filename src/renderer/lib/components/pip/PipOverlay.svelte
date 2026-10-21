@@ -1,6 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import { MousePointer2, PictureInPicture2 } from '@lucide/svelte'
+  import CioCursor from '@pdslng/cio-icon/CioCursor.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -73,7 +74,7 @@
   let overlaySize = $state({ width: 0, height: 0 })
   let overlayElement = $state<HTMLDivElement | undefined>()
   let userMoved = $state(false)
-  /** Scale that pins every dimension: preview, cursor projection and the
+  /** Scale that pins every dimension: preview, MousePointer2 projection and the
    *  occlusion rectangle all follow it, so the aspect ratio is never negotiable. */
   let scale = $state(MIN_SCALE)
   let resizingEdge = $state<ResizeEdge | null>(null)
@@ -349,6 +350,11 @@
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return
+    // A press that starts on a control inside the drag strip must stay a click.
+    // Capturing the pointer on the strip retargets the pointerup to the strip, and
+    // the browser then dispatches the click to the pair's common ancestor (the
+    // strip) instead of the control, which is what left the close button dead.
+    if (event.target instanceof Element && event.target.closest('button') !== null) return
     dragging = true
     dragStart = { x: event.clientX, y: event.clientY }
     dragOrigin = { ...position }
@@ -461,7 +467,7 @@
       title="Drag to move · click preview to bring the app to the front"
     >
       <span class="flex min-w-0 items-center gap-1.5 text-xs font-medium text-foreground">
-        <PictureInPicture2 size={13} class="shrink-0 text-accent" />
+        <CioWindow size={13} class="shrink-0 text-accent" />
         <span class="truncate">{pipState.appName}</span>
       </span>
       <button
@@ -493,7 +499,7 @@
           draggable="false"
         />
         {#if cursorPosition}
-          <MousePointer2
+          <CioCursor
             size={cursorSize}
             strokeWidth={2.5}
             class="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 text-accent drop-shadow-md"

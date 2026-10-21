@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Minimize2 } from '@lucide/svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import type { Snippet } from 'svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import PanelTabStrip from './PanelTabStrip.svelte'
@@ -154,7 +154,7 @@
     titlebar
   >
     {#snippet trailingIcon()}
-      <Minimize2 size={14} />
+      <CioMinimize size={14} />
     {/snippet}
   </PanelTabStrip>
   {@render children()}

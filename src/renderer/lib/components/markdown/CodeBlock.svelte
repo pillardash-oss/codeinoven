@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { onMount } from 'svelte'
-  import { WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
 
@@ -69,7 +69,7 @@
           aria-pressed={wrapped}
           onclick={() => wrapTextState.toggle()}
         >
-          <WrapText size={12} class={wrapped ? 'text-primary' : ''} />
+          <CioWrapText size={12} class={wrapped ? 'text-primary' : ''} />
         </button>
         <button
           class="flex items-center gap-1 p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"

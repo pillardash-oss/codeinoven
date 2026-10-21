@@ -1,16 +1,16 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
-  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { Store } from '@lucide/svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioStore from '@pdslng/cio-icon/CioStore.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
+  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
@@ -374,7 +374,7 @@
   }[] = [
     {
       id: 'store',
-      icon: Store,
+      icon: CioStore,
       label: 'Chrome Web Store',
       hint: "Open the store, then install from the extension's page with the button beside the address.",
       run: browseStore

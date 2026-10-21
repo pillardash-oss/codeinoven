@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioZap from '$lib/components/icons/cio/CioZap.svelte'
+  import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'

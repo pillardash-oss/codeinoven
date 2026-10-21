@@ -1,26 +1,27 @@
-import CioBook from '$lib/components/icons/cio/CioBook.svelte'
-import CioBoard from '$lib/components/icons/cio/CioBoard.svelte'
-import CioChart from '$lib/components/icons/cio/CioChart.svelte'
-import CioFind from '$lib/components/icons/cio/CioFind.svelte'
-import CioHarness from '$lib/components/icons/cio/CioHarness.svelte'
-import CioKeyboard from '$lib/components/icons/cio/CioKeyboard.svelte'
-import CioLearn from '$lib/components/icons/cio/CioLearn.svelte'
-import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
-import CioTeam from '$lib/components/icons/cio/CioTeam.svelte'
-import CioThreads from '$lib/components/icons/cio/CioThreads.svelte'
-import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-import CioChat from '$lib/components/icons/cio/CioChat.svelte'
-import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
-import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
-import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
-import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
-import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
+import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+import CioBoard from '@pdslng/cio-icon/CioBoard.svelte'
+import CioBook from '@pdslng/cio-icon/CioBook.svelte'
+import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+import CioChart from '@pdslng/cio-icon/CioChart.svelte'
+import CioChat from '@pdslng/cio-icon/CioChat.svelte'
+import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+import CioFolderPlus from '@pdslng/cio-icon/CioFolderPlus.svelte'
+import CioHarness from '@pdslng/cio-icon/CioHarness.svelte'
+import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
+import CioLearn from '@pdslng/cio-icon/CioLearn.svelte'
+import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
+import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
+import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
+import CioTeam from '@pdslng/cio-icon/CioTeam.svelte'
+import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
+import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
 import type { Component } from 'svelte'
 import { APP_NAME } from '$shared/brand'
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
@@ -134,6 +135,12 @@ export const settingsTabs: Array<{
     icon: CioChart
   },
   {
+    id: 'archives',
+    label: 'Archives',
+    keywords: ['archive', 'restore', 'unarchive'],
+    icon: CioArchive
+  },
+  {
     id: 'about',
     label: 'About',
     keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug'],
@@ -231,15 +238,6 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       source: applicationSource,
       icon: CioNotifications,
       keywords: ['alerts', 'completed', 'attention']
-    },
-    {
-      id: 'app:getting-started',
-      title: 'Open getting started guide',
-      description: 'Tour the workspace and set up a project and coding agent',
-      category: 'navigation',
-      source: applicationSource,
-      icon: CioLearn,
-      keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
     }
   ]
 

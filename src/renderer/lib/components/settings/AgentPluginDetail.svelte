@@ -1,15 +1,15 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
-  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBook from '@pdslng/cio-icon/CioBook.svelte'
+  import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import {
     invalidateAgentPluginMarket,
     loadAgentPluginDetail,

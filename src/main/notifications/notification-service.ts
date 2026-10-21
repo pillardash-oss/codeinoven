@@ -1,3 +1,4 @@
+import { unarchivedThreadSql } from '../../lib/archives'
 import { app, BrowserWindow, Notification, shell } from 'electron'
 import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -155,7 +156,11 @@ export class NotificationService {
    */
   private inboxLoad: Promise<void> | undefined
 
-  constructor(storage: StorageEngine, db: Database, onThreadClicked: ThreadClickedHandler) {
+  constructor(
+    storage: StorageEngine,
+    private readonly db: Database,
+    onThreadClicked: ThreadClickedHandler
+  ) {
     this.storage = storage
     this.projectRepo = new ProjectRepo(db)
     this.threadRepo = new ThreadRepo(db)
@@ -179,7 +184,23 @@ export class NotificationService {
       // faster than the deferred start), so await it rather than answering from
       // an empty store and leaving the panel blank for the rest of the session.
       await this.inboxReady()
-      return { notifications: this.inbox.list(), dismissed: this.inbox.dismissedIds() }
+      const notifications = this.inbox.list()
+      const visibleIds = new Set<string>()
+      for (let offset = 0; offset < notifications.length; offset += 128) {
+        const ids = notifications.slice(offset, offset + 128).map((entry) => entry.threadId)
+        const result = await this.db.queryViaWorker(
+          `SELECT id FROM threads WHERE id IN (${ids.map(() => '?').join(',')}) AND ${unarchivedThreadSql()}`,
+          ids,
+          ids.length,
+          { allowPrimaryFallback: false }
+        )
+        if (!result.ok) throw new Error('Could not load notification archive visibility')
+        for (const row of result.rows) visibleIds.add(String(row.id))
+      }
+      return {
+        notifications: notifications.filter((entry) => visibleIds.has(entry.threadId)),
+        dismissed: this.inbox.dismissedIds()
+      }
     })
     // Every mutating channel awaits the restore first. `load` clears what it
     // holds before reading the file, so a dismissal that landed ahead of it

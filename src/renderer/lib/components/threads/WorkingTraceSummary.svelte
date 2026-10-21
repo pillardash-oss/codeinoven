@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
-  import { Cog } from '@lucide/svelte'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import { formatDurationMs } from '$lib/format/duration'
   import type { SubagentPart } from '$lib/working-trace-parts'
@@ -107,7 +107,7 @@
       {#if live}
         <ThinkingOrb size={20} label="Weaving" />
       {:else}
-        <Cog size={12} />
+        <CioTools size={12} />
       {/if}
     </span>
     Working Trace

@@ -1,18 +1,18 @@
 <script lang="ts">
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
-  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
-  import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioFilter from '@pdslng/cio-icon/CioFilter.svelte'
+  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
+  import CioLogIn from '@pdslng/cio-icon/CioLogIn.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
+  import CioUnplug from '@pdslng/cio-icon/CioUnplug.svelte'
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import { LogIn } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
@@ -873,7 +873,7 @@
             title={`Sign in to ${providerLabel(account)} again for ${account.label}`}
             onclick={() => startSignIn(account)}
           >
-            <LogIn size={13} aria-hidden="true" />
+            <CioLogIn size={13} aria-hidden="true" />
             Sign in again
           </button>
         {/if}

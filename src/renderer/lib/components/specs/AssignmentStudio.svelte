@@ -1,12 +1,12 @@
 <script lang="ts">
-  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioShell from './StudioShell.svelte'
   import type { StudioShellSection } from './StudioShell.svelte'
@@ -20,7 +20,11 @@
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
   import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
-  import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
+  import {
+    StudioAnnotationOverlay,
+    clampPendingPosition,
+    type PendingOverlayAnchor
+  } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {
     AssignmentAnnotation,
@@ -360,10 +364,17 @@
     })
   }
 
-  function captureDocumentSelection(): void {
-    if ((readOnly || !onAddAnnotation) && (!onExplainSelection || !onQuickChatSelection)) return
+  /**
+   * The passage a selection in the document names, as a pending annotation.
+   *
+   * Kept apart from `captureDocumentSelection` because it is also what follows
+   * the selection afterwards: the overlay re-runs it while the popover is open,
+   * so a selection extended with shift and the arrow keys keeps its quote, its
+   * offsets and its position in step with the highlighted text.
+   */
+  function pendingAnchorFromSelection(): PendingOverlayAnchor | null {
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
     const range = selection.getRangeAt(0)
     const commonNode =
       range.commonAncestorContainer instanceof Element
@@ -372,15 +383,22 @@
     const sectionElement = commonNode?.closest<HTMLElement>('[data-assignment-section]')
     const section = sectionElement?.dataset.assignmentSection
     const quote = selection.toString().trim()
-    if (!sectionElement || !section || !quote) return
+    if (!sectionElement || !section || !quote) return null
     const rect = range.getBoundingClientRect()
-    overlay.beginPending({
+    return {
       section,
       quote,
       ...offsetsForRange(sectionElement, range),
       ...clampPendingPosition(rect),
       sectionLevel: false
-    })
+    }
+  }
+
+  function captureDocumentSelection(): void {
+    if ((readOnly || !onAddAnnotation) && (!onExplainSelection || !onQuickChatSelection)) return
+    const anchor = pendingAnchorFromSelection()
+    if (!anchor) return
+    overlay.beginPending(anchor, pendingAnchorFromSelection)
     annotationBody = ''
   }
 
@@ -656,18 +674,22 @@
   {/snippet}
 
   {#snippet markers()}
-    {#each annotationMarkers as marker (marker.annotation.id)}
-      <button
-        class="absolute z-20 flex h-7 w-7 items-center justify-center border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
-        style:left={compactViewport.matches ? undefined : `${marker.x}px`}
-        style:top={`${marker.y}px`}
-        data-assignment-annotation-marker={marker.annotation.id}
+    {#each annotationMarkers as marker, index (marker.annotation.id)}
+      <AnnotationIndicator
+        id={marker.annotation.id}
+        surface={`assignment:${assignment.id}`}
+        left={compactViewport.matches ? 'auto' : `${marker.x}px`}
+        top={`${marker.y}px`}
+        number={index + 1}
+        hasComment={Boolean(marker.annotation.body)}
+        active={editingAnnotation?.id === marker.annotation.id}
         title="Open anchored comment"
-        aria-label="Open anchored comment"
-        onclick={() => void openAnnotation(marker.annotation)}
-      >
-        <CioMessage size={13} />
-      </button>
+        class="z-20 max-md:right-2"
+        attach={(node) => {
+          node.setAttribute('data-assignment-annotation-marker', marker.annotation.id)
+        }}
+        onOpen={() => void openAnnotation(marker.annotation)}
+      />
     {/each}
   {/snippet}
 

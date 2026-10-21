@@ -5,14 +5,14 @@
  * neither the badge classes nor the view list can live inside the reader.
  */
 
-import CioChat from '$lib/components/icons/cio/CioChat.svelte'
-import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
-import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
-import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
-import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+import CioChat from '@pdslng/cio-icon/CioChat.svelte'
+import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import type {
   PrListFilter,
   PrListSort,

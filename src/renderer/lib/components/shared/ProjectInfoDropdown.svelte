@@ -1,11 +1,13 @@
 <script lang="ts">
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioFork from '$lib/components/icons/cio/CioFork.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import { PinOff } from '@lucide/svelte'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import { archiveItem } from '$lib/archive-actions'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioFork from '@pdslng/cio-icon/CioFork.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
+  import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -106,7 +108,7 @@
           onclick={() => void togglePin()}
         >
           {#if pinned}
-            <PinOff size={14} />
+            <CioPinOff size={14} />
           {:else}
             <CioPin size={14} />
           {/if}
@@ -154,6 +156,13 @@
       >
         <CioPencil size={14} class="text-muted" />
         Edit Project
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+        onSelect={() => void archiveItem('project', project.id, project.name)}
+      >
+        <CioArchive size={14} class="text-muted" />
+        Archive Project
       </DropdownMenu.Item>
     </DropdownMenu.Content>
   </DropdownMenu.Portal>

@@ -1,6 +1,5 @@
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   let { expanded, title, onclick }: { expanded: boolean; title: string; onclick: () => void } =
     $props()
 </script>

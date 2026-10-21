@@ -2,9 +2,10 @@ import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { existsSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { basename, isAbsolute, relative, resolve } from 'path'
+import { basename, isAbsolute, join, relative, resolve } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
+import { prepareWindowsGitRuntime } from '../drivers/windows-git-runtime'
 import type { UpdateBlockerTerminal } from '../../lib/ipc-contract'
 import { Logger } from './logger'
 import { dailyLogRelativePath, PTY_EVENTS_LOG_FILE } from './log-paths'
@@ -175,8 +176,18 @@ function resolveStartingDirectory(baseCwd: string, directory: string): string {
   return real
 }
 
-/** Resolve the user's preferred shell: $SHELL → zsh → bash. */
+/** Prefer Git Bash on Windows, with native shells available offline. */
 function resolveShell(): string {
+  if (process.platform === 'win32') {
+    const bash = buildProcessEnvironment()['CLAUDE_CODE_GIT_BASH_PATH']
+    if (bash && existsSync(bash)) return bash
+    const systemRoot = process.env['SystemRoot'] || 'C:\\Windows'
+    const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    if (existsSync(powershell)) return powershell
+    return (
+      process.env['ComSpec'] || process.env['COMSPEC'] || join(systemRoot, 'System32', 'cmd.exe')
+    )
+  }
   const preferred = process.env['SHELL']
   if (preferred && existsSync(preferred)) return preferred
   if (existsSync('/bin/zsh')) return '/bin/zsh'
@@ -187,6 +198,13 @@ function resolveShell(): string {
 /** Match the login-shell behavior users expect from a desktop terminal. */
 function resolveShellArgs(shell: string): string[] {
   switch (basename(shell)) {
+    case 'bash.exe':
+      return ['-l']
+    case 'powershell.exe':
+    case 'pwsh.exe':
+      return ['-NoLogo', '-NoProfile']
+    case 'cmd.exe':
+      return ['/d']
     case 'bash':
     case 'dash':
     case 'fish':
@@ -197,6 +215,18 @@ function resolveShellArgs(shell: string): string[] {
     default:
       return []
   }
+}
+
+function resolveShellCommandArgs(shell: string, script: string): string[] {
+  if (process.platform !== 'win32' || basename(shell).toLowerCase() === 'bash.exe')
+    return ['-lc', script]
+  if (basename(shell).toLowerCase() === 'cmd.exe') return ['/d', '/s', '/c', script]
+  return [
+    ...resolveShellArgs(shell),
+    '-NonInteractive',
+    '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')
+  ]
 }
 
 /**
@@ -225,6 +255,15 @@ export class PtyService {
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
+  }
+
+  private async prepareWindowsShell(): Promise<void> {
+    if (process.platform !== 'win32') return
+    try {
+      await prepareWindowsGitRuntime()
+    } catch (error) {
+      Logger.info('Windows Git setup unavailable; continuing with a native terminal', error)
+    }
   }
 
   attach(sender: WebContents): void {
@@ -352,6 +391,7 @@ export class PtyService {
     }
     const cwd = directory === undefined ? baseCwd : resolveStartingDirectory(baseCwd, directory)
 
+    await this.prepareWindowsShell()
     const shell = resolveShell()
     const createdAt = Date.now()
 
@@ -716,9 +756,10 @@ export class PtyService {
       throw new Error(`Project directory is unavailable`)
     }
 
+    await this.prepareWindowsShell()
     const shell = resolveShell()
     const createdAt = Date.now()
-    const proc = pty.spawn(shell, ['-lc', script], {
+    const proc = pty.spawn(shell, resolveShellCommandArgs(shell, script), {
       name: 'xterm-256color',
       cols,
       rows,
@@ -842,6 +883,46 @@ export class PtyService {
   }
 
   /**
+   * Tell the renderer that these sessions are being ended on purpose, so it does
+   * not restart the shells it would otherwise treat as crashed.
+   *
+   * This is what makes a stop stick. The renderer respawns a shell that exits on
+   * its own, exactly like a desktop terminal, so a stop the app performs without
+   * this announcement comes straight back: the update gate then never sees its
+   * terminal count reach zero, and a task-manager kill looks as if it was
+   * ignored. Sent before the kill, so the renderer has already marked the session
+   * when its exit arrives.
+   */
+  private announceStoppedSessions(ids: readonly string[]): void {
+    if (ids.length === 0) return
+    sendToRenderer(this.sender, 'pty:sessionsClosed', [...ids])
+  }
+
+  /** Live session ids whose shell process is `pid`. */
+  private sessionIdsForPid(pid: number): string[] {
+    const ids: string[] = []
+    for (const session of this.sessions.values()) {
+      if (session.process.pid === pid) ids.push(session.id)
+    }
+    return ids
+  }
+
+  /**
+   * Announce the stop of the session whose shell process is `pid`, for a kill
+   * that happens outside this service (the task manager ending an app-owned
+   * pid). Returns whether any live session matched.
+   *
+   * Only the announcement happens here: the caller owns the kill, and this is
+   * purely what keeps the renderer from respawning the shell behind it.
+   */
+  announceStopForPid(pid: number): boolean {
+    const ids = this.sessionIdsForPid(pid)
+    if (ids.length === 0) return false
+    this.announceStoppedSessions(ids)
+    return true
+  }
+
+  /**
    * Kill every live shell and forget the sessions, leaving the renderer binding
    * and the idle watchdog alone.
    *
@@ -850,9 +931,15 @@ export class PtyService {
    * not have side effects beyond the shells the user was shown. Each shell is
    * killed exactly as a normal close kills it, so it still gets the chance to
    * exit cleanly on the hangup instead of being orphaned.
+   *
+   * Announced first, because a killed shell the renderer reads as a crash is
+   * respawned within milliseconds and the stop the caller asked for would never
+   * take effect.
    */
   closeAllSessions(): void {
-    for (const id of [...this.sessions.keys()]) {
+    const ids = [...this.sessions.keys()]
+    this.announceStoppedSessions(ids)
+    for (const id of ids) {
       this.destroy(id)
     }
   }

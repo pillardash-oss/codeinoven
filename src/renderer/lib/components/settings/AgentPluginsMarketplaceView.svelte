@@ -1,12 +1,13 @@
 <script lang="ts">
-  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioPackagePlus from '@pdslng/cio-icon/CioPackagePlus.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import {
     cachedAgentPluginIcon,
     cachedAgentPluginMarketplaces,
@@ -23,7 +24,6 @@
   import { invoke } from '$lib/ipc.svelte'
   import { pluginInitials } from '$lib/plugin-identity'
   import type { AgentPluginMarketEntry, AgentPluginMarketplace } from '$shared/types'
-  import { PackagePlus } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { onMount } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -346,7 +346,7 @@
                     {#if busyId === 'add-source'}<CioSpinner
                         size={12}
                         class="animate-spin"
-                      />{:else}<PackagePlus size={12} />{/if}
+                      />{:else}<CioPackagePlus size={12} />{/if}
                     Add source
                   </button>
                 </form>

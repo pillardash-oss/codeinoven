@@ -1,16 +1,17 @@
 <script lang="ts">
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+  import CioFilePen from '@pdslng/cio-icon/CioFilePen.svelte'
+  import CioFilePlus from '@pdslng/cio-icon/CioFilePlus.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
-  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
-  import { BookOpenText, FilePenLine, FilePlus2 } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -215,11 +216,11 @@
     {#if toolKind === 'code'}
       <CioCode size={12} class={kindIconClass} />
     {:else if toolKind === 'read'}
-      <BookOpenText size={12} class={kindIconClass} />
+      <CioCheckCircle size={12} class={kindIconClass} />
     {:else if toolKind === 'edit'}
-      <FilePenLine size={12} class={kindIconClass} />
+      <CioFilePen size={12} class={kindIconClass} />
     {:else if toolKind === 'write'}
-      <FilePlus2 size={12} class={kindIconClass} />
+      <CioFilePlus size={12} class={kindIconClass} />
     {:else if toolKind === 'search'}
       <CioSearch size={12} class={kindIconClass} />
     {:else if toolKind === 'web'}

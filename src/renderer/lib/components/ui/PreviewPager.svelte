@@ -1,7 +1,4 @@
 <script module lang="ts">
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-
   /**
    * Sibling navigation for a fullscreen preview opened over several files.
    *
@@ -18,6 +15,8 @@
 </script>
 
 <script lang="ts">
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   interface Props {
     pager: PreviewPagerState
     class?: string

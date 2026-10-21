@@ -1,37 +1,35 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioArrowUpDown from '@pdslng/cio-icon/CioArrowUpDown.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioFrame from '@pdslng/cio-icon/CioFrame.svelte'
+  import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
+  import CioImageOff from '@pdslng/cio-icon/CioImageOff.svelte'
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
+  import CioListClock from '@pdslng/cio-icon/CioListClock.svelte'
+  import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
+  import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioStore from '@pdslng/cio-icon/CioStore.svelte'
+  import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
-  import CioImageOff from '$lib/components/icons/cio/CioImageOff.svelte'
-  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
-  import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
+  import { LastKnown } from '$lib/last-known'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
-  import {
-    ArrowUpDown,
-    Film,
-    Frame,
-    Inspect,
-    ListClock,
-    PlayingCardsFan,
-    Presentation,
-    Store
-  } from '@lucide/svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -73,8 +71,7 @@
     DesignEntry,
     DesignScreenShot,
     ScreenCanvasState,
-    ThreadDesignState,
-    WorkRootState
+    ThreadDesignState
   } from '$shared/ipc-contract'
   import WorkDetailsDialog from './WorkDetailsDialog.svelte'
 
@@ -332,15 +329,14 @@
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
-  let WorkIcon = $derived(video ? Film : Frame)
+  let WorkIcon = $derived(video ? CioClapper : CioFrame)
 
   /** Project defaults are separate from the current design or video's own folder. */
   let kind = $derived<AuthoredWorkKind>(requestedKind)
-  let workRoots = $state<WorkRootState | null>(null)
   let detailsMode = $state<'this' | 'all' | 'rename' | null>(null)
 
-  /** The folder in use: main's answer once it has arrived, the board's until then. */
-  let workRoot = $derived(workRoots?.roots[kind] ?? designState?.root ?? '')
+  /** The folder this project writes new work of this kind into. */
+  let workRoot = $derived(projectWorkState.rootsFor(projectId)[kind] || designState?.root || '')
 
   /**
    * The tab's live audio state, read from the same store the tab strip reads.
@@ -501,6 +497,19 @@
     }
   })
   /**
+   * The tab the full screen surface shows, with the last one it showed as the
+   * floor of every read.
+   *
+   * This is the same rule the stage below follows: the browser panel that hosts
+   * the view reads its tab through a getter that re-reads its source until the
+   * panel is gone, and the tab turns null the moment the user minimizes the
+   * surface (or the composition stops being the one in front). A null read there
+   * would throw out of that panel's own cleanup and take the board's render with
+   * it. `fullscreenCompositionTab` still decides whether the surface exists.
+   */
+  const fullscreenTabs = new LastKnown<BrowserContextTab>()
+  let shownFullscreenTab = $derived(fullscreenTabs.get(fullscreenCompositionTab))
+  /**
    * Whether the folder in front has an entry page, which is what makes it playable.
    *
    * A composition folder with no `index.html` yet is a folder of assets rather than
@@ -632,23 +641,9 @@
     }
   }
 
-  /** Read the folders in use, and what the last change moved. */
-  async function loadWorkRoots(): Promise<WorkRootState | null> {
-    try {
-      const state = await invoke('design:workRootState', projectId)
-      workRoots = state
-      return state
-    } catch {
-      // A board that cannot read the setting still shows the work, so the folder
-      // line falls back to what the board's own state reported.
-      workRoots = null
-      return null
-    }
-  }
-
   async function detailsUpdated(directory: string, moved: number): Promise<void> {
     projectWorkState.selectDirectory(projectId, kind, selectionThreadId, directory)
-    await loadWorkRoots()
+    await projectWorkState.refreshRoots(projectId)
     await loadState()
     await projectWorkState.refresh(projectId)
     await loadGallery()
@@ -820,7 +815,7 @@
       // The stage is fed by `browser:state`, and that listener only exists once
       // the browser runtime is wired. Wiring it before the open is what makes the
       // board's own composition arrive: without it the open succeeds in main, the
-      // store never hears about the view, and the stage has nothing to mount.
+      // Store never hears about the view, and the stage has nothing to mount.
       await loadBrowser()
       const opened = await invoke(
         'design:open',
@@ -1254,7 +1249,7 @@
       await loadGallery()
       await loadCanvas()
     })
-    void loadWorkRoots()
+    void projectWorkState.refreshRoots(projectId)
     return () => {
       if (selectedItem)
         projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
@@ -1411,7 +1406,12 @@
         back: the stage places the view as it mounts, after the full screen surface
         has let it go.
       -->
-      <CompositionStage tab={liveTab} {active} covered={menuOpen} />
+      {#key liveTab.tabId}
+        <!-- The tab's identity is the stage's identity: a re-keyed tab builds a
+             new stage, so the frame this pane claims, the view it places and the
+             transport it draws all belong to the same tab. -->
+        <CompositionStage tab={liveTab} {active} covered={menuOpen} />
+      {/key}
     {:else if !playable}
       <div
         class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
@@ -1582,7 +1582,7 @@
   {/snippet}
 
   {#snippet entryCard(input: {
-    icon: typeof Presentation
+    icon: typeof CioDisplay
     name: string
     shot: DesignScreenShot | null
     label: string
@@ -1635,7 +1635,7 @@
   {/snippet}
 
   <header class="shrink-0 border-b border-border">
-    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+    <div class="flex items-center gap-1.5 py-1.5 pl-2.5">
       {#if items.length > 1}
         <!--
           One tab holds the design in front, and every other design of the project
@@ -1827,7 +1827,7 @@
               title={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
               aria-label={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
             >
-              <ArrowUpDown size={12} />
+              <CioArrowUpDown size={12} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content
@@ -1983,7 +1983,7 @@
                         disabled={canvasBusy !== '' || selected.directory === ''}
                         onSelect={() => void requestDesignAction('tweaks')}
                       >
-                        <Inspect size={13} class="shrink-0 text-muted" />
+                        <CioMarquee size={13} class="shrink-0 text-muted" />
                         Inspect Designs
                       </DropdownMenu.Item>
                     </DropdownMenu.SubContent>
@@ -1993,8 +1993,8 @@
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={openReferencePrompt}
-                  ><CioBrowser size={ICON_SIZE.inline} class="shrink-0 text-muted" />Extract brand
-                  from reference</DropdownMenu.Item
+                  ><CioThreadBrowser size={ICON_SIZE.inline} class="shrink-0 text-muted" />Extract
+                  brand from reference</DropdownMenu.Item
                 >
 
                 <DropdownMenu.Item
@@ -2005,7 +2005,7 @@
                       'https://github.com/nexu-io/open-design/tree/main/design-templates'
                     )}
                 >
-                  <Store size={13} class="shrink-0 text-muted" />
+                  <CioStore size={13} class="shrink-0 text-muted" />
                   Browse Open Design prompts</DropdownMenu.Item
                 >
               {/if}
@@ -2015,7 +2015,7 @@
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('create')}
                 >
-                  <Presentation size={13} class="shrink-0 text-muted" />
+                  <CioDisplay size={13} class="shrink-0 text-muted" />
                   Generate Screen Canvas
                 </DropdownMenu.Item>
               {/if}
@@ -2025,7 +2025,7 @@
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('live')}
                 >
-                  <PlayingCardsFan size={13} class="shrink-0 text-muted" />
+                  <CioLayers size={13} class="shrink-0 text-muted" />
                   Generate Live Preview
                 </DropdownMenu.Item>
               {/if}
@@ -2087,7 +2087,7 @@
     </div>
 
     {#if canvasNotice !== ''}
-      <p class="px-2.5 pb-1.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
+      <p class="pb-1.5 pl-2.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
     {/if}
   </header>
 
@@ -2110,7 +2110,7 @@
           {#if canvasBusy === 'update'}
             <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <ListClock size={12} />
+            <CioListClock size={12} />
           {/if}
           Sync
         </button>
@@ -2153,10 +2153,10 @@
         scrolling column with the controls would be drawn past the panel at the
         sizes where the column is taller than the panel.
       -->
-      <div class="flex min-h-0 flex-1 flex-col px-2.5 pt-2">
+      <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
         {@render videoStage()}
       </div>
-      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto px-2.5 py-2">
+      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto py-2 pl-2.5">
         {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
           <VideoTimeline {projectId} {threadId} directory={selected.directory} tabId={boardTabId} />
           {#if liveEditing}
@@ -2172,7 +2172,7 @@
         {/key}
       </div>
     {:else}
-      <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+      <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
         {#if video}
           <div
             class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
@@ -2202,7 +2202,7 @@
           <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
             {#if !video}
               {@render entryCard({
-                icon: Presentation,
+                icon: CioDisplay,
                 name: 'Screen Canvas',
                 shot: canvasShot,
                 label: 'Open the Screen Canvas in the in-app browser',
@@ -2212,7 +2212,7 @@
                 onOpen: () => void openCanvas()
               })}
               {@render entryCard({
-                icon: PlayingCardsFan,
+                icon: CioLayers,
                 name: 'Live preview',
                 shot: liveShot,
                 label: `Open the live preview of this ${noun} in the in-app browser`,
@@ -2372,7 +2372,7 @@
   </p>
 </ConfirmDialog>
 
-{#if fullscreenCompositionTab}
+{#if fullscreenCompositionTab && shownFullscreenTab}
   <!--
     The composition's own view, full screen.
 
@@ -2382,18 +2382,22 @@
     transport (`BrowserPanel` draws one for any tab showing a composition), so the
     film keeps playing and stays scrubbable. The dialog hosts the browser's native
     view, which is why the surface must not suppress it (see `hostsBrowserView`).
+
+    The surface is switched by the live tab (null once it is minimized) while the
+    panel inside reads the remembered one, so minimizing tears the panel down
+    cleanly instead of handing it a null to read on the way out.
   -->
   <FullscreenPanelDialog
-    tabs={[{ id: fullscreenCompositionTab.id, title: fullscreenCompositionTab.title }]}
-    activeTabId={fullscreenCompositionTab.id}
+    tabs={[{ id: shownFullscreenTab.id, title: shownFullscreenTab.title }]}
+    activeTabId={shownFullscreenTab.id}
     minimizeLabel="Minimize the composition"
     hostsBrowserView
     onSelect={() => {}}
     onMinimize={() => (compositionFullscreen = false)}
   >
     {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
-      {#key fullscreenCompositionTab.id}
-        <BrowserPanel tab={fullscreenCompositionTab} fullscreen />
+      {#key shownFullscreenTab.id}
+        <BrowserPanel tab={shownFullscreenTab} fullscreen />
       {/key}
     {/await}
   </FullscreenPanelDialog>

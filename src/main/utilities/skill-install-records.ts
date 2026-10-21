@@ -14,7 +14,6 @@ export interface SkillInstallRecordInput {
   scope: SkillInstallRecord['scope']
   projectId?: string
   harnessIds?: string[]
-  activation?: SkillInstallRecord['activation']
 }
 
 interface RecordsFile {
@@ -56,7 +55,6 @@ function parseRecord(value: unknown): SkillInstallRecord | null {
   }
   const projectId = record['projectId']
   const harnessIds = record['harnessIds']
-  const activation = record['activation']
   const lastCheckedAt = record['lastCheckedAt']
   const lastUpdatedAt = record['lastUpdatedAt']
   const upstreamHash = record['upstreamHash']
@@ -78,7 +76,6 @@ function parseRecord(value: unknown): SkillInstallRecord | null {
     ...(Array.isArray(harnessIds)
       ? { harnessIds: harnessIds.filter((value): value is string => typeof value === 'string') }
       : {}),
-    ...(activation === 'always' || activation === 'on_demand' ? { activation } : {}),
     upstreamHash: typeof upstreamHash === 'string' ? upstreamHash : null,
     skillPath: typeof skillPath === 'string' ? skillPath : null,
     installedAt,
@@ -135,7 +132,6 @@ export class SkillInstallRecordStore {
           scope: input.scope,
           ...(input.projectId ? { projectId: input.projectId } : {}),
           ...(input.harnessIds?.length ? { harnessIds: input.harnessIds } : {}),
-          ...(input.activation ? { activation: input.activation } : {}),
           upstreamHash: existing?.upstreamHash ?? null,
           skillPath: existing?.skillPath ?? null,
           installedAt: existing?.installedAt ?? now,

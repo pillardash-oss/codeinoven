@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { SquareDashedMousePointer } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
@@ -336,7 +336,7 @@
       showAtCurrentBounds().catch(() => {})
     })
     return () => {
-      void invoke('browser:hide', tabId).catch(() => {})
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
     }
   }
 
@@ -413,7 +413,7 @@
       // the attach lands. A redundant hide is a no-op in the main process when
       // this tab is not the one attached.
       if (!browserVisibility.isVisible(tabId, contentBounds())) {
-        void invoke('browser:hide', tabId).catch(() => {})
+        browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
       }
     } catch {
       // Tab may have been destroyed between the visibility check and the IPC.
@@ -561,7 +561,7 @@
         document.removeEventListener('focusout', onSidebarFocusOut)
         browserKeyboardFocus.setClaim('sidebar', null)
       }
-      void invoke('browser:hide', tabId).catch(() => {})
+      browserVisibility.detachReleasedTab(tabId)
     }
   })
 </script>
@@ -701,7 +701,7 @@
           : 'Pick an element in this design to comment on'}
         onclick={toggleInspect}
       >
-        <SquareDashedMousePointer size={13} />
+        <CioMarquee size={13} />
         {#if fullscreen}
           <span>Inspect</span>
         {/if}

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
+  import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { memoryScopeSummary, orderMemoryScopes } from '$shared/memory/memory-scopes'
   import type { MemoryScope } from '$shared/types'

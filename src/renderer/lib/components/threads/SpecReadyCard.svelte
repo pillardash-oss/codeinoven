@@ -1,7 +1,8 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import { ListChecks, Toolbox } from '@lucide/svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioListChecks from '@pdslng/cio-icon/CioListChecks.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -104,7 +105,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label={specless ? 'Assignment' : 'Specification ready'}>
     <CardHead
-      icon={specless ? ListChecks : Toolbox}
+      icon={specless ? CioListChecks : CioTools}
       title={specless ? 'Assignment' : 'Specification ready'}
       {chip}
       bind:folded

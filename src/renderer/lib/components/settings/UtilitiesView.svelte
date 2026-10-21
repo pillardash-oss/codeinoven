@@ -1,25 +1,25 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
-  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
-  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
-  import CioPackage from '$lib/components/icons/cio/CioPackage.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
-  import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
-  import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBook from '@pdslng/cio-icon/CioBook.svelte'
+  import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
+  import CioPackage from '@pdslng/cio-icon/CioPackage.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
+  import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
   import { onMount } from 'svelte'
-  import { Globe2 } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -402,7 +402,7 @@
     if (kind === 'skill') return CioBook
     if (kind === 'mcp') return CioServer
     if (kind === 'computer_use') return CioDisplay
-    return Globe2
+    return CioBrowser
   }
 
   /** An MCP server is a live connection, so its row offers a reachability test. */

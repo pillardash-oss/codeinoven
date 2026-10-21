@@ -2,7 +2,12 @@ import type { PromptReference } from '$shared/types'
 import type { MarkPoint } from '$lib/annotation-marks'
 import { rendererRecovery } from './renderer-recovery.svelte'
 
-const MAX_REFERENCES_PER_THREAD = 20
+/**
+ * How many threads may hold composer references at once. A cap on *threads*, not
+ * on a thread's references: one conversation carries as many as the user gives
+ * it, and trimming a thread's list would be the app deciding to drop a comment
+ * the user attached.
+ */
 const MAX_THREADS_WITH_REFERENCES = 200
 
 export interface ResponseReferenceAnchor extends PromptReference {
@@ -21,6 +26,12 @@ export interface ResponseReferenceAnchor extends PromptReference {
   /** Design references: the browser tab the element was picked from, so the
    *  panel knows which tab a reference's pin belongs to. */
   tabId?: string
+  /** Design references: the page's entry file inside that design folder, so a
+   *  comment whose page was closed can be reopened on the very screen the
+   *  element was picked from instead of the folder's default one. Absent on a
+   *  picker used on the folder listing, and on references written before it
+   *  existed. */
+  designEntry?: string
   /** Document annotations: the project-relative path of the document the
    *  passage was annotated in, so a document's preview pins only its own
    *  annotations and the path travels with the prompt. */
@@ -28,8 +39,10 @@ export interface ResponseReferenceAnchor extends PromptReference {
   /** Video notes: the second on the composition the note was written at, so the
    *  timeline can place its row and a jump can seek the preview back to it. */
   seconds?: number
-  /** Video notes: the project-relative composition folder the moment belongs
-   *  to, so a note names its file the way a document annotation names its path. */
+  /** Video notes and design references: the project-relative folder of the work
+   *  the reference belongs to, so a note names its file the way a document
+   *  annotation names its path, and a commented design element can be reopened
+   *  from the folder it was picked in. */
   directory?: string
   /** Media marks: the artifact part the stroke was drawn on, whether that part
    *  is a still picture or a video. The conversation pins the mark to that media
@@ -173,36 +186,28 @@ class ResponseReferencesState {
         const oldestKey = Object.keys(next)[0]
         if (oldestKey) delete next[oldestKey]
       }
-      stored = uniqueReferencesById(references)
-        // The cap keeps the newest references, not the oldest. A reference is
-        // created by the gesture the user just made (a pick, a mark, a
-        // selection), so trimming from the front is what keeps the thing the
-        // user is looking at commentable. Trimming the tail silently swallowed
-        // every new pick once a thread reached the cap, which reads as a
-        // surface where clicking an element does nothing at all.
-        .slice(-MAX_REFERENCES_PER_THREAD)
-        .map((reference, index) => ({
-          ...reference,
-          // A response selection is named by its position, and so is a picked
-          // design element: both are shown as a number by the popover, and the
-          // number has to agree with the surface that pins them (a highlight
-          // bubble, a page pin). A mark drawn on a picture is the same deal:
-          // still or a video frame, its number is drawn onto the composed
-          // picture the agent receives   so it must be the number the composer
-          // shows. A document annotation keeps the label
-          // it was created with instead: its path names it on the document pin
-          // and in the prompt, and it is what the model needs to find the
-          // passage.
-          label: isResponseSelection(reference)
-            ? `Selection ${index + 1}`
-            : reference.kind === 'file'
-              ? reference.label
-              : reference.kind === 'video'
-                ? `Video note ${index + 1}`
-                : reference.kind === 'image'
-                  ? `Mark ${index + 1}`
-                  : `Design element ${index + 1}`
-        }))
+      stored = uniqueReferencesById(references).map((reference, index) => ({
+        ...reference,
+        // A response selection is named by its position, and so is a picked
+        // design element: both are shown as a number by the popover, and the
+        // number has to agree with the surface that pins them (a highlight
+        // bubble, a page pin). A mark drawn on a picture is the same deal:
+        // still or a video frame, its number is drawn onto the composed
+        // picture the agent receives   so it must be the number the composer
+        // shows. A document annotation keeps the label
+        // it was created with instead: its path names it on the document pin
+        // and in the prompt, and it is what the model needs to find the
+        // passage.
+        label: isResponseSelection(reference)
+          ? `Selection ${index + 1}`
+          : reference.kind === 'file'
+            ? reference.label
+            : reference.kind === 'video'
+              ? `Video note ${index + 1}`
+              : reference.kind === 'image'
+                ? `Mark ${index + 1}`
+                : `Design element ${index + 1}`
+      }))
       next[key] = stored
     }
     this.references = next

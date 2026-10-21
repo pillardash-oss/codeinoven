@@ -651,6 +651,17 @@ export interface ModelPathValidationResult {
 
 export type SpeechResult<T> = { ok: true; value: T } | { ok: false; error: SpeechError }
 
+/**
+ * The host's answer to a microphone access request. It carries its own message
+ * so a denial can be shown as a recording failure instead of being re-derived
+ * from an error string.
+ */
+export interface SpeechMicrophoneAccess {
+  granted: boolean
+  /** Present only when access was refused, phrased for the user. */
+  message?: string
+}
+
 /** Audio bytes together with the media type they were captured or imported as. */
 export interface SpeechAudioBytes {
   bytes: Uint8Array<ArrayBuffer>

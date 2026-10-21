@@ -56,6 +56,17 @@ export interface AgentDefaultsConfig {
   seniorEngineer?: AgentModelSelection
   worker?: AgentModelSelection
   auditor?: AgentModelSelection
+  /**
+   * Model for pawn agents: background worker threads an agent spawns for itself
+   * with `cio_pawn_agent`. A pawn answers only to the agent that spawned it, the
+   * user never prompts it, and it is never tied to one harness or account: the
+   * user picks any available combination here.
+   *
+   * User-owned. Only the Agents settings page sets or clears it (the agent-facing
+   * `config:update` channel is stripped of this field), and an agent that finds no
+   * pawn default spawns one on its own model rather than writing this value.
+   */
+  pawn?: AgentModelSelection
   /** Vision model used to describe images for text-only models. */
   imageDescriptor?: AgentModelSelection
   /** Fallback vision model tried automatically when the primary image descriptor fails. */
@@ -66,6 +77,13 @@ export interface AgentDefaultsConfig {
 
 /** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
+  /** An explicitly opened behavior-editing session on an assistant's Getting started thread. */
+  assistantBehaviorSession?: {
+    startedAt: number
+    dismissals: number
+    /** A saved revision is ready for the session completion question. */
+    saved?: boolean
+  }
   /** Execution environment. Missing means this computer. */
   ovenId?: string
   /** Absolute workspace on the selected Oven, independent of the local project path. */
@@ -259,6 +277,18 @@ export interface ImageDescriptorErrorRequest {
   /** When the failure was surfaced. */
   createdAt: number
 }
+
+/**
+ * How many files one message may carry.
+ *
+ * A file is a payload the prompt ships whole, so its count is bounded on every
+ * surface that can put one on a message: the composer that takes the drop or
+ * pick, a draft restored from disk, a carry from another chat, and main's own
+ * validation before a turn starts. Annotations are deliberately not bounded this
+ * way: they are a passage the user marked and they carry their own content
+ * budget instead.
+ */
+export const MAX_PROMPT_ATTACHMENTS = 20
 
 /** A file attached to an outgoing prompt. */
 export interface PromptAttachment {

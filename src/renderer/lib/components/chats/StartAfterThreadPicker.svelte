@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioChat from '@pdslng/cio-icon/CioChat.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import type { Thread } from '$shared/types'
   import { isOrchestrationChildThread } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'

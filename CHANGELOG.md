@@ -183,6 +183,29 @@ All notable changes to CodeInOven are documented here. This project follows
   seconds hands it to the operating system's browser instead, with the code
   already on the clipboard and the reason stated in a toast.
 
+- **A harness switch keeps both branches, so switching back is warm.** A switch
+  used to mint a cold session on the target harness and delete the source
+  session, its native transcript and its provider prompt cache, so both
+  directions of every switch paid a full replay. The source session is now
+  parked instead: its record and native transcript stay on disk (one branch per
+  harness and thread, freshly replaced ones pruned), its live process is
+  stopped so nothing lingers in the background, and the next switch back adopts
+  that session and resumes it. Only the turns produced while the thread was on
+  the other harness are replayed, as a small delta instead of the whole
+  transcript, which keeps the parked prefix a cache read. pi replays that delta
+  on every turn because its history recap rides a context hook for one turn and
+  never reaches its transcript; drivers that fold the recap into the turn's own
+  prompt text already persist it and replay it once.
+
+- **An agent runs a checker once over a list of files, not once per file.** A
+  thread that validated 430 changed components made 2,283 separate `svelte-autofixer`
+  calls, one per file, each its own model round trip. The behavior contract now
+  states that the same inspect-only operation over many inputs belongs in one
+  code-mode script that loops with bounded concurrency, and the utility
+  instructions say the gateway's own batch operation covers the app's read-only
+  tools only, so a server-side utility or MCP operation is scripted rather than
+  batched.
+
 ### Changed
 
 - **A new assistant introduces itself, and the Getting started thread stops
@@ -287,7 +310,60 @@ All notable changes to CodeInOven are documented here. This project follows
   "why do you always" out of frustration, and the frustration itself, are no
   longer proposed for memory.
 
+- **The highlight toolbar is a real context menu, and a right-click opens the
+  same one.** Selecting a passage in an assistant response, an annotated
+  document or a studio document used to raise a single horizontal strip of
+  actions; the same actions now open as a top-to-bottom menu, once on the
+  highlight and once at the cursor on a right-click, with `Copy` as the last
+  item so the plain copy that used to live in the app's text menu is still one
+  click away. It opens beside the point the selection stopped at, so a passage
+  that runs down two lines raises it at the end of the drag rather than at the
+  top-left corner of the quote, and a selection made right to left raises it at
+  the left end it stopped on. A right-click that lands on a passage already
+  carrying a comment also reopens that comment's bubble, and its first item
+  edits that comment instead of attaching a second one to the same words. Links
+  and external address controls keep their own menu, and fields keep cut, paste
+  and select all.
+
 ### Fixed
+
+- **A comment written in a temporary chat now exists.** Selecting a passage
+  inside a side chat dropped the text into the composer and nothing else: the
+  comment editor never opened, because a side chat keeps its own references on
+  its tab instead of in the thread store the editor read. A side chat now keeps
+  the passage, the comment written on it and the range it was taken from
+  together, so the highlight is drawn, the comment editor opens on the passage,
+  the composer chip edits and removes it, and the comment travels to the harness
+  in the turn's `<selection>` block beside the quoted text.
+
+- **A selection keeps up with shift and the arrow keys.** Highlighting a passage
+  and then extending or trimming it with shift and an arrow key left the action
+  menu, the comment popover and the quote they carry on the text the pointer had
+  first selected. All three now follow the live selection: the menu moves and
+  renames itself with the highlighted text, and the studio and document
+  annotation popovers re-read their quote, offsets and position on every step,
+  so the comment is anchored to what is highlighted when it is submitted.
+
+- **The design and video board never renders blank again.** The panel showed a
+  design or a video composition, and at times its body came up empty and stayed
+  empty until a reload. Its props came from `{...coordinator.panel.props}`, where
+  the registration belongs to the thread on screen: that is null for the length of
+  a thread switch, while another top-level view is up, or the moment a session
+  stops coordinating. Svelte reads a child's props through getters that re-read
+  their source for as long as the child is mounted, including the frame it
+  unmounts on, so the board threw `Cannot read properties of null (reading
+'panel')` on the way out; the throw unwound through the rail's keyed swap, the
+  fallback empty state never painted, and the board's job poll kept running (the
+  app's own log shows it erroring every 1.5 seconds for over a minute). The
+  composition pane's stage read `tab.tabId` the same way, which is the second
+  throw in that log. The panel now belongs to the active tab's own coordinator
+  row and reads its props through the last answer that was not null, while the
+  live value still decides whether a board is shown at all; the stage keeps the
+  tab it was built for as the floor of every read. Measured on an isolated probe
+  against both revisions: the old code raised the throws and left the body empty
+  (re-publishing the row could not bring the board back), the fixed code raises
+  neither, restores the board when the row comes back, keeps it while the thread
+  selection is gone, and unmounts the stage cleanly.
 
 - **An assistant stops tagging its message with its own urgency.** The run
   contract told the assistant to "label the report with the bracket it actually

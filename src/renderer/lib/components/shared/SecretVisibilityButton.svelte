@@ -1,7 +1,6 @@
 <script lang="ts">
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import CioEyeOff from '$lib/components/icons/cio/CioEyeOff.svelte'
-
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
   let {
     revealed,
     title,

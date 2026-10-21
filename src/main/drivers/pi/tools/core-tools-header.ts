@@ -13,7 +13,8 @@ import {
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 
 export function piCoreToolsHeaderSource(): string {
-  return `import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
+  return `import { spawn } from 'node:child_process'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { open, readdir, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -23,6 +24,7 @@ import {
   createAgentSessionFromServices,
   createAgentSessionServices,
   createBashToolDefinition,
+  createPowerShellToolDefinition,
   createEditToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
@@ -51,6 +53,7 @@ const CIO_PI_BUILTIN_TOOLS = new Set([
   'find',
   'ls',
   'powershell',
+  'cmd',
   // Pi 0.99's script runner and deferred-tool discovery are bundled surfaces,
   // and CodeInOven itself activates the script runner for every session that
   // carries the utility gateway. The script host needs no card of its own:
@@ -418,9 +421,12 @@ function findContaminatedToolArg(input) {
 
 function evaluateGate(toolName, input, cwd) {
   if (typeof toolName !== 'string' || toolName.startsWith('cio_')) return null
-  if (toolName === 'bash') {
+  if (toolName === 'bash' || toolName === 'powershell' || toolName === 'cmd') {
     const command = typeof input['command'] === 'string' ? input['command'] : ''
     if (!command.trim()) return null
+    if (toolName !== 'bash' && /(?:^|[;|&\\n]\\s*)(?:Remove-Item|Clear-Content|rm|ri|del|erase|rd|rmdir)\\b/iu.test(command)) {
+      return gateHit('shell', 'a native Windows delete command', [], command)
+    }
     for (const rule of RECURSIVE_DELETE_RULES) {
       if (rule.pattern.test(command)) return gateHit('shell', rule.label, [], command)
     }

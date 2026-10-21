@@ -1,18 +1,18 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
-  import CioMilestone from '$lib/components/icons/cio/CioMilestone.svelte'
-  import CioPersonPlus from '$lib/components/icons/cio/CioPersonPlus.svelte'
-  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import CioTag from '$lib/components/icons/cio/CioTag.svelte'
-  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { ListChecks } from '@lucide/svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioListChecks from '@pdslng/cio-icon/CioListChecks.svelte'
+  import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
+  import CioMilestone from '@pdslng/cio-icon/CioMilestone.svelte'
+  import CioPersonPlus from '@pdslng/cio-icon/CioPersonPlus.svelte'
+  import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
+  import CioTag from '@pdslng/cio-icon/CioTag.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { PullRequestSummary } from '$shared/types'
@@ -232,7 +232,7 @@
 
       <ContextMenu.Separator class="my-1 h-px bg-border" />
       <ContextMenu.Item class={itemClass} onSelect={onSelectAll}>
-        <ListChecks size={13} class="shrink-0 text-muted" />
+        <CioListChecks size={13} class="shrink-0 text-muted" />
         Select every row
       </ContextMenu.Item>
       <ContextMenu.Item class={itemClass} onSelect={onClearSelection}>

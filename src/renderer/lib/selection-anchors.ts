@@ -317,3 +317,156 @@ export function releaseAnnotationHighlights(publisher: object, name: string): vo
   if (publishers.size === 0) highlightPublishers.delete(name)
   publishHighlights(name)
 }
+
+/**
+ * The rectangle shape a highlight hit test reads.
+ *
+ * A live `Range` satisfies it (its client rects are `DOMRect`s), and a test can
+ * stand in for one without a layout engine.
+ */
+export interface HighlightBox {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+/** A published range, as the hit test needs it. */
+export interface HighlightRange {
+  getClientRects(): ArrayLike<HighlightBox>
+}
+
+/** How far outside a highlight a click still counts as landing on it. */
+const HIGHLIGHT_HIT_PADDING_X = 4
+const HIGHLIGHT_HIT_PADDING_Y = 3
+
+/**
+ * The annotation whose highlight is under a viewport point, if any.
+ *
+ * A selection already on the chat is a highlight the reader cannot see the
+ * bounds of at a glance, so a right-click on one has to find it by geometry: the
+ * painted rects are the anchor, and a few pixels of slack around them cover the
+ * line box, which is taller than the glyphs and wider than the last word.
+ */
+export function annotationAtPoint(
+  ranges: ReadonlyMap<string, HighlightRange>,
+  x: number,
+  y: number
+): string | null {
+  for (const [id, range] of ranges) {
+    const rects = range.getClientRects()
+    for (let index = 0; index < rects.length; index += 1) {
+      const rect = rects[index]
+      if (x < rect.left - HIGHLIGHT_HIT_PADDING_X || x > rect.right + HIGHLIGHT_HIT_PADDING_X)
+        continue
+      if (y < rect.top - HIGHLIGHT_HIT_PADDING_Y || y > rect.bottom + HIGHLIGHT_HIT_PADDING_Y)
+        continue
+      return id
+    }
+  }
+  return null
+}
+
+/**
+ * Where a selection menu is asked to appear, before it is clamped on screen.
+ *
+ * The menu takes one of these from either trigger it serves: a selection, whose
+ * ending point it sits beside (see `selectionMenuAnchor`), or a right-click,
+ * which anchors it at the cursor like any other context menu.
+ */
+export interface SelectionMenuAnchor {
+  /** Viewport x the menu prefers. */
+  x: number
+  /** Viewport y the menu falls back to when it cannot sit above the selection. */
+  y: number
+  /**
+   * Top edge of the line the selection ended on. Present only for a selection:
+   * it is what lets the menu open above that line, so it sits beside the point
+   * the reader stopped at instead of covering it. A right-click leaves it out.
+   */
+  selectionTop?: number
+}
+
+/** The menu's measured size, or the estimate used on its first paint. */
+export interface SelectionMenuSize {
+  width: number
+  height: number
+}
+
+/** Gap between the menu and the selection it sits beside. */
+const SELECTION_MENU_GAP = 6
+/** Smallest distance the menu keeps from every viewport edge. */
+const SELECTION_MENU_MARGIN = 8
+
+/**
+ * Where the menu belongs beside a selection: at the point the selection ended.
+ *
+ * A selection is made from where it began towards where it stopped, and that
+ * end is where the reader's attention is. A drag that crosses two lines ends on
+ * the second, and the menu belongs there rather than at the top-left corner of
+ * the passage, which is what the selection's own bounding box reports (and how a
+ * menu ended up pointing at the beginning of a two-line quote). The focus is that
+ * end in whichever direction the selection was made, so a drag right-to-left
+ * anchors at its left end, which is exactly where that drag finished.
+ *
+ * The caret is a collapsed range at the focus, whose box is the line the
+ * selection stopped on. A selection whose focus cannot be measured falls back to
+ * the last box the selection paints, which is the same end for a forward one.
+ */
+export function selectionMenuAnchor(selection: Selection, range: Range): SelectionMenuAnchor {
+  const focusNode = selection.focusNode ?? range.endContainer
+  const focusOffset = selection.focusNode ? selection.focusOffset : range.endOffset
+  try {
+    const caret = document.createRange()
+    caret.setStart(focusNode, focusOffset)
+    caret.collapse(true)
+    const box = caret.getBoundingClientRect()
+    if (box.width > 0 || box.height > 0) {
+      return {
+        x: box.left,
+        y: box.bottom + SELECTION_MENU_GAP,
+        selectionTop: box.top
+      }
+    }
+  } catch {
+    // A focus the range cannot address; the painted boxes below still answer.
+  }
+  const boxes = range.getClientRects()
+  const last = boxes.length > 0 ? boxes[boxes.length - 1] : range.getBoundingClientRect()
+  return {
+    x: last.left,
+    y: last.bottom + SELECTION_MENU_GAP,
+    selectionTop: last.top
+  }
+}
+
+function clampToViewport(value: number, limit: number): number {
+  return Math.max(SELECTION_MENU_MARGIN, Math.min(value, Math.max(SELECTION_MENU_MARGIN, limit)))
+}
+
+/**
+ * Place the selection menu inside the viewport.
+ *
+ * A selection opens the menu above the line it ended on, falling back below it
+ * when the top of the screen is too close. Covering the passage is fine: the
+ * menu is transient and closes on the next click, and sitting on the point the
+ * reader stopped at is what makes it obvious which passage the actions belong
+ * to. A right-click point has no such preference and is simply clamped, which
+ * keeps a menu opened near an edge fully on screen instead of half outside it.
+ */
+export function placeSelectionMenu(
+  anchor: SelectionMenuAnchor,
+  size: SelectionMenuSize,
+  viewport: { width: number; height: number }
+): { left: number; top: number } {
+  const left = clampToViewport(anchor.x, viewport.width - size.width - SELECTION_MENU_MARGIN)
+  const above =
+    anchor.selectionTop === undefined
+      ? null
+      : anchor.selectionTop - size.height - SELECTION_MENU_GAP
+  const top =
+    above !== null && above >= SELECTION_MENU_MARGIN
+      ? above
+      : clampToViewport(anchor.y, viewport.height - size.height - SELECTION_MENU_MARGIN)
+  return { left, top }
+}

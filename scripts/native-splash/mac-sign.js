@@ -7,61 +7,48 @@ import { retry } from 'builder-util'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 /**
- * The app uses a custom native-splash launcher architecture:
- *   - `Contents/MacOS/CodeInOven` — the launcher and bundle main executable
- *   - `Contents/MacOS/CodeInOven-electron` — the renamed Electron runtime
+ * The bundle's main executable is the product itself: the Electron runtime that
+ * owns the windows, the menu bar item, the browser, capture permissions and the
+ * agent runs. Its name is what macOS shows (Dock, Applications, privacy dialogs,
+ * Activity Monitor) and, through Squirrel's installer, the folder it installs
+ * into, so it keeps the product name and is never swapped for a helper. The
+ * native splash is a flat helper under Contents/Helpers that the app spawns.
  *
- * The launcher `execv`s into `CodeInOven-electron`, so the RUNNING process is the
- * Electron binary. Squirrel.Mac captures the running process's designated
- * requirement (`identifier "CodeInOven-electron"`) and validates every update
- * bundle against it. Without a fix, that requirement can never be satisfied:
- * the update bundle's main executable is the launcher (identifier
- * `com.pillardash.codeinoven`), so every update fails with "code failed to
- * satisfy specified code requirement(s)".
+ * The identity rules that remain are about updates, not appearance:
  *
- * Existing installs run with the legacy `CodeInOven-electron` identifier, so
- * the top-level bundle must retain it for Squirrel.Mac update compatibility.
- * macOS UNNotification, however, rejects the running Electron process when its
- * signing identifier differs from CFBundleIdentifier. The runtime is therefore
- * signed with the canonical bundle identifier and a bridge designated
- * requirement that accepts both identities from the same Developer ID team.
- * Squirrel captures that bridge requirement from the running process, allowing
- * future update bundles to use either identifier without weakening the team or
- * Developer ID certificate constraints.
+ *   - the bundle keeps the legacy signing identifier `<product>-electron`,
+ *     because Squirrel.Mac validates every update against the running process's
+ *     designated requirement, and installs signed with that identifier must keep
+ *     accepting updates;
+ *   - the bundle also carries a bridge requirement that accepts either the
+ *     canonical bundle identifier or the legacy one, so a later move to the
+ *     canonical identifier cannot strand existing installs.
  *
- * Helpers and frameworks keep the identifiers osx-sign assigns by default.
- *
- * Implementation: both MacOS binaries are discovered by osx-sign's walk, which
- * signs all nested code before sealing the bundle with the final
- * `opts.app` sign. We never pre-sign or exclude anything ourselves — doing so
- * either desynchronizes hardened-runtime/timestamp flags or leaves the bundle
- * seal stale ("nested code is modified or invalid"). Instead we override the
- * identifier and designated requirement per file via `optionsForFile`, which
- * osx-sign applies to each codesign invocation it makes.
+ * `codesign` signs `Foo.app/Contents/MacOS/Foo` as the bundle itself, so a
+ * per-file identifier for the runtime never survives the bundle seal. The
+ * identifier users and notifications see is the bundle identifier from
+ * Info.plist (`com.pillardash.codeinoven`), which is unchanged.
  */
 export default async function macSign(configuration) {
   const appPath = configuration.app
   const infoPlistPath = join(appPath, 'Contents', 'Info.plist')
   let mainExecutable = 'CodeInOven'
-  try {
-    const plist = await readFile(infoPlistPath, 'utf8')
-    const match = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
-    if (match?.[1]) mainExecutable = match[1]
-  } catch {
-    // Fall back to the default above if the plist is not readable.
-  }
-  const electronBinaryIdentifier = `${mainExecutable}-electron`
   let bundleIdentifier = ''
   try {
     const plist = await readFile(infoPlistPath, 'utf8')
-    const match = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
-    bundleIdentifier = match?.[1] ?? ''
+    const executableMatch = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
+    if (executableMatch?.[1]) mainExecutable = executableMatch[1]
+    const identifierMatch = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
+    bundleIdentifier = identifierMatch?.[1] ?? ''
   } catch {
     // The signer will fail below with a precise identity error.
   }
   if (!/^[A-Za-z0-9.-]+$/.test(bundleIdentifier)) {
     throw new Error('Cannot sign the macOS Electron runtime without a valid CFBundleIdentifier')
   }
+
+  const runtimeExecutable = mainExecutable
+  const electronBinaryIdentifier = `${runtimeExecutable}-electron`
 
   const teamId = process.env['APPLE_TEAM_ID']?.trim() ?? ''
   const isAdHocSigning = configuration.identity === '-'
@@ -74,39 +61,24 @@ export default async function macSign(configuration) {
     ? undefined
     : `=designated => (identifier "${bundleIdentifier}" or identifier "${electronBinaryIdentifier}") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ${teamId}`
 
-  // Match the Electron runtime by path suffix — osx-sign may hand us
-  // normalized or relative forms of the discovered file path.
-  const isElectronBinary = (filePath) => {
+  // Match the runtime by path suffix — osx-sign may hand us normalized or
+  // relative forms of the discovered file path.
+  const isRuntimeExecutable = (filePath) => {
     const normalized = String(filePath).replace(/^\.\/+/, '')
-    return normalized.endsWith(`Contents/MacOS/${electronBinaryIdentifier}`)
+    return normalized.endsWith(`Contents/MacOS/${runtimeExecutable}`)
   }
 
   const originalOptionsForFile = configuration.optionsForFile
   configuration.optionsForFile = (filePath) => {
     const perFile = originalOptionsForFile ? originalOptionsForFile(filePath) : {}
-    if (filePath === appPath) {
-      // The top-level bundle sign must keep the legacy running-process
-      // identifier for Squirrel.Mac update compatibility.
-      return {
-        ...perFile,
-        additionalArguments: [
-          ...(perFile.additionalArguments ?? []),
-          '--identifier',
-          electronBinaryIdentifier
-        ]
-      }
-    }
-    if (isElectronBinary(filePath)) {
-      // The renamed Electron runtime keeps the canonical bundle identifier
-      // (required by macOS UNNotification) plus the bridge requirement so
-      // Squirrel.Mac accepts update bundles signed with either identifier.
+    if (filePath === appPath || isRuntimeExecutable(filePath)) {
       return {
         ...perFile,
         ...(bridgeRequirement !== undefined ? { requirements: bridgeRequirement } : {}),
         additionalArguments: [
           ...(perFile.additionalArguments ?? []),
           '--identifier',
-          bundleIdentifier
+          electronBinaryIdentifier
         ]
       }
     }

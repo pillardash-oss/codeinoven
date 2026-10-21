@@ -1,6 +1,7 @@
 <script lang="ts">
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import AssistantIcon from '../icons/cio/AssistantIcon.svelte'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import {
@@ -26,6 +27,10 @@
 
   const clock = new ElapsedTimer()
   const activity = $derived(part.activity)
+  // A pawn agent wears the assistant mark instead of the sub-agent mark: same
+  // card, same body, and the one glance that tells the two apart on the rail.
+  const isPawn = $derived(activity.pawn === true)
+  const mark = $derived(isPawn ? AssistantIcon : CioSubagent)
   const start = $derived(activity.time?.start)
   const end = $derived(activity.time?.end)
   const status = $derived(activity.status)
@@ -61,8 +66,8 @@
   })
 </script>
 
-<CardFrame placement="top" label="Sub-agent">
-  <CardHead {chip} icon={CioSubagent} title={taskLabel} divider={false}>
+<CardFrame placement="top" label={isPawn ? 'Pawn agent' : 'Sub-agent'}>
+  <CardHead {chip} icon={mark} title={taskLabel} divider={false}>
     {#snippet meta()}
       <SubagentStatusIcon {status} size={12} />
       <SubagentModeBadge background={activity.background} />
@@ -79,7 +84,7 @@
       {#if onOpen}
         <CardButton
           label="Open session"
-          title="Open the sub-agent session"
+          title={isPawn ? 'Open the pawn agent session' : 'Open the sub-agent session'}
           icon={CioExternalLink}
           size="xs"
           onclick={() => onOpen?.(part)}

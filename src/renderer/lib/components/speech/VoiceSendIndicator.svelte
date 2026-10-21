@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ClockFading, WavesHorizontal } from '@lucide/svelte'
+  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
+  import CioTimerOff from '@pdslng/cio-icon/CioTimerOff.svelte'
   import type { VoiceSendStage } from '$lib/speech/speech-controller.svelte'
 
   interface Props {
@@ -25,9 +26,9 @@
   title={decorative ? undefined : label}
 >
   {#if stage === 'steer'}
-    <ClockFading size={14} aria-hidden="true" />
+    <CioTimerOff size={14} aria-hidden="true" />
   {:else}
-    <WavesHorizontal size={14} aria-hidden="true" />
+    <CioAudioLines size={14} aria-hidden="true" />
   {/if}
 </span>
 

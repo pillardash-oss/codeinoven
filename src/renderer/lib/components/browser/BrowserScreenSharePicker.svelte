@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
-  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
+  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
 

@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioLock from '$lib/components/icons/cio/CioLock.svelte'
-  import CioLockOpen from '$lib/components/icons/cio/CioLockOpen.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioLock from '@pdslng/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pdslng/cio-icon/CioLockOpen.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { onDestroy } from 'svelte'
-  import { TextWrap } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import Modal from '../ui/Modal.svelte'
   import { attachTableColumnResize, type TableColumnResizeSession } from './table-column-resize'
@@ -103,7 +103,7 @@
     title={wrapLabel}
     onclick={() => (wrapped = !wrapped)}
   >
-    <TextWrap size={12} />
+    <CioWrapText size={12} />
   </button>
   {#if withResize}
     <button

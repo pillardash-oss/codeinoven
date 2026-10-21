@@ -1,13 +1,31 @@
 import { app } from 'electron'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { APP_NAME, APP_SLUG } from '../../lib/brand'
+
+/**
+ * The executable a packaged relaunch has to start.
+ *
+ * Windows and Linux launch the app through the tiny native supervisor, so
+ * relaunching the Electron runtime alone would skip the splash and leave the
+ * next launch unsupervised. macOS runs the app as the bundle's own main
+ * executable, so its current path is already the right target.
+ */
+function packagedRelaunchTarget(): string | null {
+  if (process.platform === 'darwin') return null
+  const publicName = process.platform === 'win32' ? `${APP_NAME}.exe` : APP_SLUG
+  const candidate = join(dirname(process.execPath), publicName)
+  return existsSync(candidate) ? candidate : null
+}
 
 /** Development owns a renderer server as well as Electron; restart both. */
 export function queueAppRelaunch(): void {
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
-  if (app.isPackaged || process.env['NODE_ENV'] === 'production' || !rendererUrl) {
-    app.relaunch()
+  if (isShippedBuild() || process.env['NODE_ENV'] === 'production' || !rendererUrl) {
+    const supervisor = packagedRelaunchTarget()
+    app.relaunch(supervisor === null ? undefined : { execPath: supervisor })
     return
   }
 

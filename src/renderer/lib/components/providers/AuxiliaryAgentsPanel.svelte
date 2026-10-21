@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'

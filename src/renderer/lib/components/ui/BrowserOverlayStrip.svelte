@@ -1,19 +1,19 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioLock from '$lib/components/icons/cio/CioLock.svelte'
-  import CioLockOpen from '$lib/components/icons/cio/CioLockOpen.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
-  import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
-  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
-  import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
-  import { Moon } from '@lucide/svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioLock from '@pdslng/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pdslng/cio-icon/CioLockOpen.svelte'
+  import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
+  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type {
     BrowserStripOverlayAction,
     BrowserStripOverlayRequest
@@ -227,7 +227,7 @@
             </span>
           {:else if tab.hibernated}
             <span class="shrink-0 text-dimmed" role="img" title="Hibernated to save memory">
-              <Moon size={12} />
+              <CioMoon size={12} />
             </span>
           {/if}
         </button>

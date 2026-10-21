@@ -1,3 +1,4 @@
+import { loadTerminalFontFamily } from '$lib/app-typography'
 import type { FitAddon, Ghostty, ITheme, Terminal } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
 import { TerminalCursorController } from './cursor-visibility'
@@ -8,8 +9,9 @@ import { attachMouseTracking } from './mouse-tracking'
 import { registerTerminalHost } from './host-registry'
 import { FileLinkProvider } from './path-links'
 import { loadGhosttyWeb } from './runtime'
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { composerOwnsKeyboardFocus } from '$lib/focus/composer-focus'
+import { appQuitState } from '$lib/stores/app-quit.svelte'
 
 /** Options for attaching a terminal session to a visible panel. */
 export interface TerminalAttachOptions {
@@ -65,6 +67,13 @@ export interface TerminalSession {
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
   kind: 'shell' | 'action'
+  /**
+   * The app ended this shell on purpose (an update install stopping work, or a
+   * kill from the task manager). Read at respawn time: a shell the app stopped, or
+   * one the user closed with `exit`, stays stopped, and only a new terminal brings
+   * a shell back here.
+   */
+  stoppedByApp: boolean
 }
 
 const MAX_RESPAWNS = 5
@@ -356,8 +365,7 @@ class TerminalSessionManager {
       cursorBlink: true,
       cursorStyle: 'bar',
       fontSize: 13,
-      fontFamily:
-        "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', 'Ubuntu Mono', monospace",
+      fontFamily: await loadTerminalFontFamily(),
       scrollback: 5000,
       smoothScrollDuration: 80,
       theme: terminalTheme()
@@ -403,7 +411,8 @@ class TerminalSessionManager {
       directory: null,
       ovenShellId: null,
       respawnCount: 0,
-      kind: 'shell'
+      kind: 'shell',
+      stoppedByApp: false
     }
     this.sessions.set(id, session)
 
@@ -449,13 +458,24 @@ class TerminalSessionManager {
       })
     )
 
-    // Restart the shell after it exits (Ctrl-D / `exit` / crash), like a
-    // desktop terminal. The live Ghostty buffer and this session are reused —
-    // only the PTY is respawned. A broken shell that exits immediately is
-    // backoff-guarded so we don't respawn forever.
+    // Reconnect a shell that died on its own (ssh dropped, the process crashed),
+    // so a dropped connection heals without the user reopening the surface. A
+    // shell the user ended with `exit` or Ctrl-D stays ended: reopening it under
+    // them is what made an exited Oven shell look like a restarted Oven. The live
+    // Ghostty buffer and this session are reused when a respawn does happen, so
+    // only the PTY is created again, and an immediately failing shell is
+    // backoff-guarded so it cannot reconnect forever.
     let respawnTimer: ReturnType<typeof setTimeout> | undefined
     const respawn = async (): Promise<void> => {
       if (!session.projectId && !session.ovenShellId) {
+        session.exited = true
+        return
+      }
+      // A shell the app stopped on purpose, or one that ended while the app is
+      // quitting, must not come back: respawning it here is what made an update
+      // install wait forever on a terminal it had already stopped. Guarded
+      // because a window can outlive its preload by one hot reload.
+      if (session.stoppedByApp || appQuitState.quitting) {
         session.exited = true
         return
       }
@@ -485,11 +505,23 @@ class TerminalSessionManager {
       }
     }
 
+    // The app's own stop, announced before the shell is killed. Marking the
+    // session here is what keeps the exit below from reading as a crash.
     subs.push(
-      subscribe(`pty:exit:${id}`, () => {
+      subscribeGuarded('pty:sessionsClosed', (ids) => {
+        if (!ids.includes(id)) return
+        session.stoppedByApp = true
+      })
+    )
+
+    subs.push(
+      subscribe(`pty:exit:${id}`, (exitCode: unknown) => {
         term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
         session.exited = true
-        if (session.kind === 'shell') void respawn()
+        // A clean exit is the user typing `exit` in a live shell, so it stays
+        // closed; anything else is the session failing and reconnects.
+        const clean = exitCode === 0
+        if (session.kind === 'shell' && !clean) void respawn()
       })
     )
     subs.push(() => {

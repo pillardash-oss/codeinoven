@@ -975,7 +975,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       options.settings,
       'Thread title',
       candidates,
-      buildTitlePrompt(options.message.slice(0, 2_000))
+      buildTitlePrompt(options.message)
     )
   }
 

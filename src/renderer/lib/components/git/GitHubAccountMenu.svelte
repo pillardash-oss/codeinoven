@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioFork from '$lib/components/icons/cio/CioFork.svelte'
-  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
-  import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import { LogOut } from '@lucide/svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioFork from '@pdslng/cio-icon/CioFork.svelte'
+  import CioLogOut from '@pdslng/cio-icon/CioLogOut.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -207,7 +207,7 @@
               onSignOut()
             }}
           >
-            <LogOut size={12} class="shrink-0" />
+            <CioLogOut size={12} class="shrink-0" />
             Sign out of {activeLogin ? `@${activeLogin}` : 'GitHub'}
           </DropdownMenu.Item>
         </div>

@@ -1,9 +1,25 @@
+<script module lang="ts">
+  /**
+   * The finder whose highlights are currently painted.
+   *
+   * The two highlight registries are named, not per instance, because `app.css`
+   * styles them by name. Several surfaces can have a find bar open at once (the
+   * conversation, a sticky note, a document being read), so ownership is what
+   * keeps closing one of them from deleting the highlights another one is still
+   * showing: only the painter clears.
+   */
+  let highlightOwner: object | null = null
+</script>
+
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
   import FindInBar from '../files/FindInBar.svelte'
 
   const MATCH_HIGHLIGHT = 'conversation-find-match'
   const ACTIVE_HIGHLIGHT = 'conversation-find-active'
+
+  /** This instance's identity in the highlight ownership check below. */
+  const identity = {}
 
   interface SurfaceMatch {
     range: Range
@@ -48,16 +64,22 @@
   let scanTimer: ReturnType<typeof setTimeout> | null = null
 
   function clearHighlights(): void {
+    if (highlightOwner !== identity) return
     CSS.highlights?.delete(MATCH_HIGHLIGHT)
     CSS.highlights?.delete(ACTIVE_HIGHLIGHT)
+    highlightOwner = null
   }
 
   function renderHighlights(): void {
-    clearHighlights()
-    if (!CSS.highlights || matches.length === 0) return
+    if (!CSS.highlights) return
+    if (matches.length === 0) {
+      clearHighlights()
+      return
+    }
     CSS.highlights.set(MATCH_HIGHLIGHT, new Highlight(...matches.map((match) => match.range)))
     const active = matches[activeIndex]
     if (active) CSS.highlights.set(ACTIVE_HIGHLIGHT, new Highlight(active.range))
+    highlightOwner = identity
   }
 
   function searchableRoots(): HTMLElement[] {

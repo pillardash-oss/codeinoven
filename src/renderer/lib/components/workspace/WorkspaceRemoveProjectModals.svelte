@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { APP_NAME } from '$shared/brand'
@@ -51,7 +51,7 @@
     </button>
     <button
       type="button"
-      class="inline-flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      class="inline-flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Remove this project and its threads from {APP_NAME}"
       disabled={dialogs.deletingProjectId !== null}
       onclick={() => void dialogs.confirmRemoveProject()}
@@ -88,7 +88,7 @@
     </button>
     <button
       type="button"
-      class="inline-flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      class="inline-flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Delete this project from {APP_NAME} and erase its folder from your device"
       disabled={dialogs.deletingProjectId !== null}
       onclick={() => void dialogs.confirmRemoveWithFolder()}

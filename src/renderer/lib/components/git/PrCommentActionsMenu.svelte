@@ -1,4 +1,15 @@
 <script lang="ts">
+  import CioBan from '@pdslng/cio-icon/CioBan.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioFlag from '@pdslng/cio-icon/CioFlag.svelte'
+  import CioLink from '@pdslng/cio-icon/CioLink.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   /**
    * Per-comment actions. Most match the set github.com offers on one of its own
    * comments; Explain, Quick chat and Assign to an agent are this app's own
@@ -17,17 +28,6 @@
    * have to happen; the rows stay here so the menu is complete and the user is
    * not left wondering where the action went.
    */
-  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioLink from '$lib/components/icons/cio/CioLink.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { Flag } from '@lucide/svelte'
   import { DropdownMenu as Menu } from 'bits-ui'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import type { PrMinimizeReason } from '$shared/types'
@@ -240,7 +240,7 @@
   onSelect={onReport}
   disabled={busy}
 >
-  <Flag size={12} class="shrink-0 text-dimmed" />
+  <CioFlag size={12} class="shrink-0 text-dimmed" />
   Report content
 </Menu.Item>
 {#if canBlock}

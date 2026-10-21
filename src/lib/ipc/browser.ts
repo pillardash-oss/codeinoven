@@ -275,6 +275,22 @@ export interface BrowserInspectorTarget {
   ancestors: string[]
   /** Viewport rectangle at pick time, in CSS pixels. */
   rect: BrowserInspectorRect
+  /**
+   * The page's own viewport at pick time, in CSS pixels.
+   *
+   * An element's rectangle says how big it was, not what it was laid out
+   * against: the same card is 360 wide on a phone and 1280 wide on a desktop,
+   * and a comment written against one of them is a comment about that layout.
+   * Carrying the viewport with the pick is what lets a model read "this looks
+   * cramped" as a phone-width problem instead of asking which size it was.
+   */
+  viewport: BrowserInspectorViewport
+}
+
+/** The page's viewport size in CSS pixels. */
+export interface BrowserInspectorViewport {
+  width: number
+  height: number
 }
 
 /** A viewport rectangle in CSS pixels. */

@@ -1,14 +1,15 @@
 <script lang="ts">
-  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
-  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
-  import { FolderGit2, GraduationCap, PanelLeft } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
+  import CioFolderPlus from '@pdslng/cio-icon/CioFolderPlus.svelte'
+  import CioLearn from '@pdslng/cio-icon/CioLearn.svelte'
+  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
+  import CioPanelLeft from '@pdslng/cio-icon/CioPanelLeft.svelte'
+  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import type { WorkspaceTourView } from '$lib/guide/guide-stops'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
-
   interface Props {
     /**
      * Which view's empty state this is. Projects and Threads share their body
@@ -83,7 +84,7 @@
 
   const tourAction = (view: WorkspaceTourView): ActionItem => ({
     id: 'tour',
-    icon: GraduationCap,
+    icon: CioLearn,
     title: 'Learn what CodeInOven can do',
     description: `Get a tour of the ${view} view`,
     run: () => onShowTour?.()
@@ -139,7 +140,7 @@
     if (sidebarHasContent && onToggleSidebar) {
       items.push({
         id: 'toggle-sidebar',
-        icon: PanelLeft,
+        icon: CioPanelLeft,
         title: 'Toggle chats sidebar',
         description: 'Choose an existing chat to continue the conversation',
         run: () => onToggleSidebar?.()
@@ -157,7 +158,7 @@
     if (sidebarHasContent && onToggleSidebar) {
       items.push({
         id: 'toggle-sidebar',
-        icon: PanelLeft,
+        icon: CioPanelLeft,
         title: variant === 'threads' ? 'Toggle threads sidebar' : 'Toggle project sidebar',
         description: 'Hover on a project to create a new thread',
         run: () => onToggleSidebar?.(),
@@ -176,7 +177,7 @@
     if (onCloneRepo) {
       items.push({
         id: 'clone-repo',
-        icon: FolderGit2,
+        icon: CioFolderGit,
         title: 'Clone repository',
         description: 'Add a project from a git URL',
         run: () => onCloneRepo?.()

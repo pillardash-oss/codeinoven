@@ -1,6 +1,7 @@
+import { createHash } from 'crypto'
 import { isAbsolute, relative, resolve } from 'path'
 import { toPosixPath } from '../../../lib/paths'
-import type { AgentPart } from '../../../lib/types'
+import type { AgentPart, FileChangeSource } from '../../../lib/types'
 
 export const MUTATING_FILE_TOOLS = new Set([
   'applydiff',
@@ -24,8 +25,10 @@ export const MUTATING_FILE_TOOLS = new Set([
   'write'
 ])
 
-/** Shell-like tools can mutate arbitrary paths, so their checkpoint diff cannot be path-filtered. */
+/** Shell-like tools need explicit write targets as well as a verified content diff. */
 export const UNBOUNDED_MUTATING_TOOLS = new Set([
+  'execcommand',
+  'writestdin',
   'bash',
   'commandexecution',
   'executecommand',
@@ -76,13 +79,43 @@ export function staticStringValue(value: string): string | null {
   return content.replaceAll(/\\([\\'"` ])/gu, '$1')
 }
 
+/** Mark code positions so printed examples and comments cannot become write evidence. */
+function scriptCodePositions(source: string): Uint8Array {
+  const code = new Uint8Array(source.length).fill(1)
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]
+    const start = i
+    if (char === '#' || source.startsWith('//', i)) {
+      while (i < source.length && source[i] !== '\n') i++
+    } else if (source.startsWith('/*', i)) {
+      const end = source.indexOf('*/', i + 2)
+      i = end < 0 ? source.length : end + 2
+    } else if (char === "'" || char === '"' || char === '`') {
+      const quote = source.startsWith(char.repeat(3), i) ? char.repeat(3) : char
+      i += quote.length
+      while (i < source.length) {
+        if (source[i] === '\\') i += 2
+        else if (source.startsWith(quote, i)) {
+          i += quote.length
+          break
+        } else i++
+      }
+    } else continue
+    code.fill(0, start, i)
+    i--
+  }
+  return code
+}
+
 export function shellVariableValues(command: string): Map<string, string> {
   const values = new Map<string, string>()
+  const code = scriptCodePositions(command)
   const assignments = new RegExp(
     String.raw`(?:^|[;\n"'])\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(${STATIC_PATH_EXPRESSION})`,
     'gmu'
   )
   for (const match of command.matchAll(assignments)) {
+    if (!code[match.index]) continue
     const name = match[1]
     const literal = match[2]
     if (!name || !literal) continue
@@ -125,11 +158,55 @@ export function shellWorkingDirectory(
 /** Extract conservatively identifiable write targets from shell source. The
  * completion snapshot validates every path, so a command that names a file but
  * leaves its content unchanged cannot create a file-card entry. */
-export function shellWritePaths(projectPath: string, input: Record<string, unknown>): string[] {
-  const command = SHELL_COMMAND_INPUT_KEYS.map((key) => input[key]).find(
-    (value): value is string => typeof value === 'string'
-  )
-  if (!command) return []
+interface ShellWord {
+  value: string
+  operator: boolean
+}
+
+/** Tokenize without executing expansions. Quoted operators stay inside their word. */
+function shellWords(command: string): ShellWord[] {
+  const words: ShellWord[] = []
+  let value = ''
+  let active = false
+  let quote = ''
+  const flush = (): void => {
+    if (active) words.push({ value, operator: false })
+    value = ''
+    active = false
+  }
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i] ?? ''
+    if (char === '\\' && quote !== "'") {
+      const next = command[++i]
+      if (next !== undefined && next !== '\n') {
+        value += next
+        active = true
+      }
+    } else if (quote) {
+      if (char === quote) quote = ''
+      else value += char
+    } else if (char === "'" || char === '"') {
+      quote = char
+      active = true
+    } else if (';|&<>\n'.includes(char)) {
+      flush()
+      const next = command[i + 1]
+      const operator = next === char && char !== '\n' ? char + command[++i] : char
+      words.push({ value: operator, operator: true })
+    } else if (/\s/u.test(char)) {
+      flush()
+    } else {
+      value += char
+      active = true
+    }
+  }
+  if (quote) return [] // Incomplete input is not write evidence.
+  flush()
+  return words
+}
+
+function scriptWritePaths(command: string): string[] {
+  const code = scriptCodePositions(command)
   const variables = shellVariableValues(command)
   const candidates: string[] = []
   const addExpression = (expression: string | undefined): void => {
@@ -154,40 +231,159 @@ export function shellWritePaths(projectPath: string, input: Record<string, unkno
     'gmu'
   )
   const pythonPathWriter = new RegExp(
-    String.raw`\bPath\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:touch|write_bytes|write_text)\s*\(`,
+    String.raw`\bPath\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:touch|unlink|write_bytes|write_text)\s*\(`,
     'gmu'
   )
   for (const pattern of [firstArgumentWriters, pythonOpenMode, pythonOpenWrite, pythonPathWriter]) {
-    for (const match of command.matchAll(pattern)) addExpression(match[1])
+    for (const match of command.matchAll(pattern)) {
+      if (code[match.index]) addExpression(match[1])
+    }
   }
-  for (const match of command.matchAll(
-    /(?:^|[\s;|&])(?:\d*)>>?\s*(?![&>])("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;|&]+)/gmu
-  )) {
-    addExpression(match[1])
+  // `p = Path('src/x.ts')` and later `p.write_text(...)` is how the Codex
+  // harness edits files from an inline script. The writer is a bare variable,
+  // so the literal has to be resolved from its assignment before the call
+  // reads as a write target; without that the whole heredoc yields no path, the
+  // turn claims no file, and completion drops the real edit from the card.
+  const pythonPathVariable = new RegExp(
+    String.raw`(?:^|[;\n])\s*([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(?:pathlib\s*\.\s*)?Path\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)`,
+    'gmu'
+  )
+  const pythonVariableWriter = new RegExp(
+    String.raw`\b([A-Za-z_][A-Za-z_0-9]*)\s*\.\s*(?:touch|unlink|write_bytes|write_text)\s*\(`,
+    'gmu'
+  )
+  // Read assignments and writers in source order: one script commonly reuses
+  // the same variable for several files, so a writer resolves against the value
+  // the variable holds at its own position, never the script's final one.
+  const pathEvents: Array<{ at: number; name: string; literal?: string }> = []
+  for (const match of command.matchAll(pythonPathVariable)) {
+    if (!code[match.index]) continue
+    const name = match[1]
+    const literal = staticStringValue(match[2] ?? '')
+    if (name && literal && match.index !== undefined) {
+      pathEvents.push({ at: match.index, name, literal })
+    }
   }
-  candidates.push(...patchPaths(command))
-  const workingDirectory = shellWorkingDirectory(projectPath, input, command)
-  return [
-    ...new Set(
-      candidates
-        .map((candidate) =>
-          projectRelativePath(
-            projectPath,
-            isAbsolute(candidate) ? candidate : resolve(workingDirectory, candidate)
-          )
-        )
-        .filter((candidate): candidate is string => candidate !== null)
+  for (const match of command.matchAll(pythonVariableWriter)) {
+    if (!code[match.index]) continue
+    const name = match[1]
+    if (name && match.index !== undefined) pathEvents.push({ at: match.index, name })
+  }
+  pathEvents.sort((left, right) => left.at - right.at)
+  const pathVariables = new Map<string, string>()
+  for (const event of pathEvents) {
+    if (event.literal) {
+      pathVariables.set(event.name, event.literal)
+      continue
+    }
+    const resolved = pathVariables.get(event.name)
+    if (resolved) candidates.push(resolved)
+  }
+  return candidates
+}
+
+/** Only actual command operands and interpreter code can supply write evidence.
+ * Read-command arguments and output are never scanned for write-like strings. */
+export function shellWritePaths(projectPath: string, input: Record<string, unknown>): string[] {
+  const command = SHELL_COMMAND_INPUT_KEYS.map((key) => input[key]).find(
+    (value): value is string => typeof value === 'string'
+  )
+  if (!command || command.length > 262_144) return []
+  let sourceCommand = command
+  let words = shellWords(sourceCommand)
+  // Codex exposes the launch wrapper as its command. Unwrap a literal shell -c argument.
+  const head = words[0]?.value.split('/').at(-1)
+  if (head && ['sh', 'bash', 'zsh', 'dash'].includes(head)) {
+    const commandIndex = words.findIndex(
+      (word) => !word.operator && /^-[a-z]*c[a-z]*$/u.test(word.value)
     )
-  ]
+    const source = words[commandIndex + 1]
+    if (commandIndex >= 0 && source && !source.operator) {
+      sourceCommand = source.value
+      words = shellWords(sourceCommand)
+    }
+  }
+  let workingDirectory = shellWorkingDirectory(projectPath, input, '')
+  const paths = new Set<string>()
+  const add = (candidate: string | undefined): void => {
+    // Runtime expansion, command substitution and globs cannot establish an exact target.
+    if (!candidate || /[$`*?{}]/u.test(candidate)) return
+    const path = projectRelativePath(projectPath, resolve(workingDirectory, candidate))
+    if (path) paths.add(path)
+  }
+  const segments: ShellWord[][] = [[]]
+  for (const word of words) {
+    if (word.operator && [';', '\n', '|', '||', '&&', '&'].includes(word.value)) segments.push([])
+    else segments.at(-1)?.push(word)
+  }
+  for (const segment of segments) {
+    const args: string[] = []
+    for (let i = 0; i < segment.length; i++) {
+      const word = segment[i]
+      if (!word) continue
+      if (word.operator) {
+        if (word.value === '>' || word.value === '>>') add(segment[i + 1]?.value)
+        i++ // The redirection operand is not a command argument.
+      } else args.push(word.value)
+    }
+    while (/^[A-Za-z_][A-Za-z_0-9]*=/u.test(args[0] ?? '')) args.shift()
+    const executable = args.shift()?.split('/').at(-1)
+    if (!executable) continue
+    const operands = args.filter((arg) => !arg.startsWith('-'))
+    if (executable === 'cd') {
+      const directory = operands[0]
+      if (directory && !/[$`*?]/u.test(directory))
+        workingDirectory = resolve(workingDirectory, directory)
+    } else if (['touch', 'rm', 'unlink', 'tee'].includes(executable)) {
+      for (const operand of operands) add(operand)
+    } else if (['cp', 'mv', 'install'].includes(executable)) {
+      add(operands.at(-1))
+      if (executable === 'mv') for (const operand of operands.slice(0, -1)) add(operand)
+    } else if (
+      executable === 'sed' &&
+      args.some((arg) => arg === '--in-place' || arg.startsWith('-i'))
+    ) {
+      add(operands.at(-1))
+    } else if (/^(?:python[\d.]*|node|bun|deno)$/u.test(executable)) {
+      const codeIndex = args.findIndex((arg) =>
+        ['-c', '-e', '--eval', '-p', '--print'].includes(arg)
+      )
+      const code = codeIndex >= 0 ? args[codeIndex + 1] : undefined
+      if (code) for (const path of scriptWritePaths(code)) add(path)
+    }
+  }
+  // Quoted heredocs carry code outside shell arguments. Limit inspection to a
+  // writer's own delimiter body, never arbitrary quoted strings or log output.
+  const heredoc =
+    /(?:^|[;\n])\s*(python[\d.]*|node|bun|deno|apply_patch)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z_0-9]*)['"]?[^\n]*\n([\s\S]*?)\n\2(?:\n|$)/gmu
+  for (const match of sourceCommand.matchAll(heredoc)) {
+    const code = match[3] ?? ''
+    for (const path of match[1] === 'apply_patch' ? patchPaths(code) : scriptWritePaths(code))
+      add(path)
+  }
+  return [...paths]
 }
 
 export function changedPathsFromTool(
   projectPath: string,
   part: Extract<AgentPart, { type: 'tool' }>
 ): string[] {
+  if (part.state.status !== 'completed' && part.state.status !== 'error') return []
+  return toolWriteTargets(projectPath, part)
+}
+
+/** Candidate operands for a pre-execution fingerprint. This alone never claims a change. */
+export function toolWriteTargets(
+  projectPath: string,
+  part: Extract<AgentPart, { type: 'tool' }>
+): string[] {
   const tool = normalizedToolName(part.tool)
   if (UNBOUNDED_MUTATING_TOOLS.has(tool)) {
-    return shellWritePaths(projectPath, part.state.input)
+    return shellWritePaths(projectPath, {
+      ...part.state.input,
+      // Older Codex transcripts carried the command only in the title.
+      ...(shellCommand(part) ? { command: shellCommand(part) } : {})
+    })
   }
   if (!MUTATING_FILE_TOOLS.has(tool)) return []
   const candidates: string[] = []
@@ -220,4 +416,38 @@ export function changedPathsFromTool(
     )
   ]
   return paths
+}
+
+/** Commands are evidence only when attached to the actual tool call, never inferred from prose. */
+export function shellCommand(part: Extract<AgentPart, { type: 'tool' }>): string | undefined {
+  const command = SHELL_COMMAND_INPUT_KEYS.map((key) => part.state.input[key]).find(
+    (value): value is string => typeof value === 'string'
+  )
+  return (
+    command ?? (normalizedToolName(part.tool) === 'commandexecution' ? part.state.title : undefined)
+  )
+}
+
+export function fileChangeSource(
+  part: Extract<AgentPart, { type: 'tool' }>
+): FileChangeSource | undefined {
+  if (part.state.status !== 'completed' && part.state.status !== 'error') return undefined
+  const command = UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))
+    ? shellCommand(part)
+    : undefined
+  return {
+    tool: part.tool,
+    toolPartId: part.id,
+    messageId: part.messageID,
+    callId: part.callID,
+    status: part.state.status,
+    ...(command
+      ? {
+          command: command.slice(0, 4096),
+          commandTruncated: command.length > 4096,
+          commandHash: createHash('sha256').update(command).digest('hex')
+        }
+      : {}),
+    verification: 'tool-target-and-content'
+  }
 }

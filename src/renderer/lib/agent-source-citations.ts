@@ -311,6 +311,56 @@ export function parseAbsoluteFileCitationTarget(
   }
 }
 
+/**
+ * Every path a markdown link target may name, most likely first.
+ *
+ * Agents that do not write this app's citation format spell a project file as
+ * a `file://` URL: `[app.html](file://apps/marketing/src/app.html)`. Read as a
+ * real URL that string carries `apps` as its host and `/marketing/src/app.html`
+ * as its path, so the path alone resolves to `/marketing/src/...`, which is not
+ * a project file, and the link never becomes a citation. The URL is therefore
+ * read both ways   `host + pathname` (the project-relative spelling these
+ * agents mean) and the pathname alone (a genuine filesystem URL such as
+ * `file:///Users/...`)   and the first candidate confirmed on disk wins.
+ *
+ * Every other target has exactly one reading, so the candidate list stays
+ * length one and nothing else changes behaviour.
+ */
+function fileLinkCitationCandidates(value: string, explicitLink: boolean): ParsedFileCitation[] {
+  const target = value.trim()
+  const literal = parseFileCitation(target, explicitLink)
+  if (!target.startsWith('file://')) return literal ? [literal] : []
+
+  const candidates: ParsedFileCitation[] = []
+  const add = (raw: string): void => {
+    const candidate = parseFileCitation(raw, explicitLink)
+    if (!candidate) return
+    if (candidates.some((existing) => existing.path === candidate.path)) return
+    candidates.push(candidate)
+  }
+
+  let host = ''
+  // A target the URL parser rejects (a stray character in the path) keeps the
+  // raw form: everything after the scheme is the path.
+  let pathname = target.replace(/^file:\/+/u, '/')
+  try {
+    const url = new URL(target)
+    host = url.host
+    // The hash carries `#L12` line locations, which the citation parser reads.
+    pathname = `${decodePath(url.pathname)}${url.hash}`
+  } catch {
+    // Keep the raw path computed above.
+  }
+  if (host) add(`${host}${pathname}`)
+  add(pathname)
+  // The plain reading last, because it is the only one that keeps a target the
+  // URL parser would reject, and it never duplicates a path already queued.
+  if (literal && !candidates.some((existing) => existing.path === literal.path)) {
+    candidates.push(literal)
+  }
+  return candidates
+}
+
 /** Normalize a spoken prose location into the `path:start-end` shape the
  *  parser already understands: `src/a/b.ts`, `40` and `63` become
  *  `src/a/b.ts:40-63`; a single-line location drops the range. */
@@ -354,7 +404,7 @@ export function extractCitations(text: string): SourceCitation[] {
   }
 
   for (const match of normalizedText.matchAll(MARKDOWN_LINK_PATTERN)) {
-    const parsed = parseFileCitation(match[2] ?? match[3] ?? '', true)
+    const parsed = fileLinkCitationCandidates(match[2] ?? match[3] ?? '', true)[0]
     if (!parsed) continue
     add({ kind: 'file', ...parsed, raw: match[0] })
   }
@@ -458,8 +508,10 @@ function linkifyLine(line: string, isClickable: (path: string) => boolean): stri
   const withLinks = line.replace(
     MARKDOWN_LINK_PATTERN,
     (match, label: string, angleTarget?: string, plainTarget?: string) => {
-      const parsed = parseFileCitation(angleTarget ?? plainTarget ?? '', true)
-      if (!parsed || !isClickable(parsed.path)) return match
+      const parsed = fileLinkCitationCandidates(angleTarget ?? plainTarget ?? '', true).find(
+        (candidate) => isClickable(candidate.path)
+      )
+      if (!parsed) return match
       return `[${label}](${citationHref(parsed)})`
     }
   )

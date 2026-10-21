@@ -141,7 +141,7 @@ static std::wstring electron_path() {
   DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
   std::wstring executable(path.data(), length);
   const size_t separator = executable.find_last_of(L"\\/");
-  return executable.substr(0, separator + 1) + L"CodeInOven-electron.exe";
+  return executable.substr(0, separator + 1) + CODEINOVEN_RUNTIME_EXECUTABLE_WIDE;
 }
 
 static Bitmap *load_icon() {

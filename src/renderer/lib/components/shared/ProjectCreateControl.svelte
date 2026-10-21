@@ -1,17 +1,18 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
-  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import { Files } from '@lucide/svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioDocuments from '@pdslng/cio-icon/CioDocuments.svelte'
+  import CioFolderInput from '@pdslng/cio-icon/CioFolderInput.svelte'
+  import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
   import GitCloneModal from './GitCloneModal.svelte'
   import OvenProjectModal from './OvenProjectModal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
   import { folderBaseName } from '$lib/project-location'
@@ -162,7 +163,7 @@
       class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
-      data-shortcut={keymapState.keysFor('nav-new-project').join(',')}
+      data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-project'))}
     >
       <CioProjects size={15} strokeWidth={1.8} />
     </DropdownMenu.Trigger>
@@ -291,7 +292,7 @@
         title="Track changes with {APP_NAME} file snapshots"
         onclick={() => void createProjectWithManualTracking()}
       >
-        <Files size={16} class="mt-0.5 shrink-0 text-muted" />
+        <CioDocuments size={16} class="mt-0.5 shrink-0 text-muted" />
         <span>
           <span class="block text-sm font-medium">Track Changes Manually</span>
           <span class="mt-0.5 block text-xs text-dimmed">Use {APP_NAME} file snapshots.</span>

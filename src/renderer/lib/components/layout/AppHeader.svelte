@@ -1,11 +1,21 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  const isWindows = window.api?.windowInfo.platform === 'win32'
+
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
+  import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { buildEnvironmentLabel } from '$shared/build-environment'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -22,12 +32,6 @@
   import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioNotes from '$lib/components/icons/cio/CioNotes.svelte'
-  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
 
   import { toast } from 'svelte-sonner'
@@ -50,6 +54,11 @@
   }
 
   let { activeView, goBack, goForward, navigation }: Props = $props()
+
+  /** A checkout and a probe run the same source, so the one thing that tells
+   *  them apart is where their data lives. The header says which this is, and a
+   *  shipped build says nothing at all. */
+  let buildLabel = $derived(buildEnvironmentLabel(window.api?.windowInfo.buildEnvironment) ?? null)
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -163,7 +172,7 @@
           scopeState.updateThread(updated)
         }
       } catch (error) {
-        reportError(error, 'Could not hide the knowledge thread')
+        reportError(error, 'Could not hide the assistant behavior thread')
       }
     }
   })
@@ -242,7 +251,10 @@
      bell stays on the dock's x axis on every platform. -->
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
-  style={trafficLightInsetStyle({ mirrorRightInset: false })}
+  data-guide="header"
+  style={isWindows
+    ? 'padding-right: max(0.25rem, calc(100vw - env(titlebar-area-width, 100vw)))'
+    : trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <button
@@ -253,8 +265,20 @@
       onclick={() => threadSwitcherRequest.requestOpen()}
     >
       <VendorIcon name="CodeInOven" size={20} />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"> cio </span>
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"
+        >{isWindows ? 'CodeInOven' : 'cio'}</span
+      >
     </button>
+
+    {#if buildLabel}
+      <StatusPill
+        tone="neutral"
+        dot
+        title="CodeInOven {buildLabel} build"
+        aria-label="CodeInOven build: {buildLabel}"
+        class="px-1 py-0">{buildLabel}</StatusPill
+      >
+    {/if}
 
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
@@ -322,7 +346,7 @@
         title="Open gateway dashboard   {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
-        <CioBrowser size={ICON_SIZE.control} />
+        <CioThreadBrowser size={ICON_SIZE.control} />
       </button>
     {/if}
 

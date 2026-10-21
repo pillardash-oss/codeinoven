@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import CioMic from '$lib/components/icons/cio/CioMic.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
-  import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
-  import { Moon } from '@lucide/svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioMic from '@pdslng/cio-icon/CioMic.svelte'
+  import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -494,7 +494,7 @@
         title="Hibernated to save memory. Open the tab to reload it."
         aria-label="Hibernated tab"
       >
-        <Moon size={12} />
+        <CioMoon size={12} />
       </span>
     {/if}
     <button

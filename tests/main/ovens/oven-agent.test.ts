@@ -178,6 +178,26 @@ describe('oven agent script generation', () => {
     expect(script.content).toContain('Move-Item -Force')
   })
 
+  it('classifies the Windows account by group membership, not by elevation', () => {
+    const script = buildOvenAgentScript({
+      platform: 'win32',
+      identity: true,
+      bootstrapNode: true,
+      service: BUNDLE,
+      serviceRevision: REVISION,
+      protocolVersion: 1
+    })
+    // An unelevated administrator shell still gets the machine-wide file, so the
+    // installer must ask group membership rather than the token.
+    expect(script.content).toContain('whoami /groups')
+    expect(script.content).toContain('S-1-5-32-544')
+    expect(script.content).not.toContain('WindowsBuiltInRole')
+    expect(script.content).toContain('$readFile')
+    expect(script.content).toContain('icacls $keyFile /inheritance:r')
+    expect(script.content).toContain('OpenSSH reads this account')
+    expect(script.content).toContain('Self-check')
+  })
+
   it('refuses a bundle that does not match its revision', () => {
     expect(() =>
       buildOvenAgentScript({

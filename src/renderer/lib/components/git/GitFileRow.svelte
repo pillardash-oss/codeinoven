@@ -1,11 +1,12 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
-  import CioMinus from '$lib/components/icons/cio/CioMinus.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioFileMinus from '@pdslng/cio-icon/CioFileMinus.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
+  import CioMinus from '@pdslng/cio-icon/CioMinus.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type {
     GitDiff,
     GitFileChange,
@@ -16,7 +17,6 @@
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/FileDiffView.svelte'
-  import { FileMinus } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
 
   interface Props {
@@ -331,7 +331,7 @@
                   class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
                   onSelect={() => onRemoveFromCommit?.(change.path)}
                 >
-                  <FileMinus size={12} class="shrink-0" />
+                  <CioFileMinus size={12} class="shrink-0" />
                   Remove from commit…
                 </ContextMenu.Item>
               {/if}

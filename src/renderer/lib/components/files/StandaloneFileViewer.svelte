@@ -1,7 +1,6 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import { Minimize2 } from '@lucide/svelte'
-
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import Modal from '../ui/Modal.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
@@ -60,7 +59,7 @@
       title="Dock"
       onclick={() => standaloneFiles.dock()}
     >
-      <Minimize2 size={14} />
+      <CioMinimize size={14} />
     </button>
     <button
       type="button"

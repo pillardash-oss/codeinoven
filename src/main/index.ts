@@ -22,6 +22,7 @@ import {
   lockDownProductionWindow
 } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
+import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry } from './system/startup-telemetry'
@@ -33,7 +34,11 @@ import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/t
 import { registerAppControlHandlers } from './app-control/app-control-ipc'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
-import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
+import {
+  hasNativeSplashHandoff,
+  signalNativeSplashReady,
+  startNativeSplashHelper
+} from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
 import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
@@ -46,11 +51,17 @@ import {
 } from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
 import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
+import { isShippedBuild } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
-import { computeAttention, hasUpcomingWork, residencyReason } from './system/background-work-state'
+import {
+  computeAttention,
+  countWorkingThreads,
+  hasUpcomingWork,
+  residencyReason
+} from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import { startStartupUpdater } from './bootstrap/startup-updater'
 import { getMainBundleDirectory } from './bootstrap/bundle-directory'
@@ -66,10 +77,18 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
 app.setName(APP_NAME)
-// Naming the app is not enough on its own: Chromium still advertises
-// `Electron/<version>` to every site, so the fallback every web contents
-// inherits is rewritten here, before the first window exists.
-app.userAgentFallback = brandUserAgent(app.userAgentFallback, __CODEINOVEN_APP_VERSION__)
+// The name above is also the OS keyring identity: `safeStorage` keeps its key under
+// `<app name> Safe Storage`, and every launch shares one config root and therefore
+// one credential vault (`getConfigRoot` in `src/lib/utils.ts`). Naming a development
+// launch `Electron` gave it a second key, so whichever build wrote a vault record the
+// other could not decrypt it, and a credential written by the installed app read as
+// signed out in `bun dev` (and the reverse). Development and packaged Chromium data
+// are already kept apart by `configureElectronDataRoot`, so the name no longer has to
+// differ for that; the brand name is what keeps the vault readable by every launch.
+// Use a standard Chrome user agent: app/runtime product tokens cause browser
+// compatibility checks to reject supported Chromium versions. Set the fallback
+// before the first window exists so every web contents inherits it.
+app.userAgentFallback = brandUserAgent(app.userAgentFallback, process.versions.chrome)
 
 configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
@@ -87,7 +106,7 @@ registerFilePreviewScheme()
 if (process.platform === 'win32' && !isWindowsStorePackage()) {
   app.setAppUserModelId(APP_ID)
 }
-if (app.isPackaged) {
+if (isShippedBuild()) {
   process.env['NODE_ENV'] = 'production'
 }
 
@@ -198,11 +217,15 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
 function markWorkspaceReadyIfInteractive(): void {
   if (!state.rendererReadyReported || !state.featuresReady) return
   startupTelemetry.mark('workspace:ready')
+  // The app is interactive: boot the embedding model behind the settled
+  // workspace so the first Cmd+K thread search ranks semantically instead of
+  // paying the model load inside its answer. No-op unless intent search is on.
+  state.searchService?.warm()
   void completeStartupIfReady()
 }
 
 async function completeStartupIfReady(): Promise<void> {
-  const output = app.isPackaged ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
+  const output = isShippedBuild() ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
   if (
     !startupTelemetry.hasMarked('workspace:ready') ||
     !startupTelemetry.hasMarked('renderer:documentLoaded') ||
@@ -253,6 +276,25 @@ ipcMain.handle('app:waitForFeatures', () =>
   state.featuresReady ? undefined : featuresReadyPromise
 )
 
+ipcMain.handle('app:setWindowControls', (event, symbolColor: unknown, headerHeight: unknown) => {
+  if (process.platform !== 'win32') return
+  const window = state.mainWindow
+  if (!window || window.isDestroyed() || window.webContents !== event.sender) return
+  if (typeof symbolColor !== 'string' || !/^#[\da-f]{6}$/i.test(symbolColor)) return
+  if (
+    typeof headerHeight !== 'number' ||
+    !Number.isFinite(headerHeight) ||
+    headerHeight < 24 ||
+    headerHeight > 160
+  )
+    return
+  window.setTitleBarOverlay({
+    color: '#00000000',
+    symbolColor,
+    height: Math.ceil(headerHeight * window.webContents.getZoomFactor())
+  })
+})
+
 /**
  * The renderer reports when its initial hydration is done (visible projects,
  * selected project, recent active threads). Timestamps the final startup
@@ -268,7 +310,7 @@ ipcMain.handle('app:rendererReady', async () => {
   await completeStartupIfReady()
 })
 
-const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+const isProduction = isShippedBuild() || process.env['NODE_ENV'] === 'production'
 
 /**
  * Window/session boundary validator. It guards external window creation,
@@ -311,6 +353,24 @@ function getTrayIconPath(attention: boolean, darkTaskbar = false): string {
   return !isProduction && is.dev
     ? join(app.getAppPath(), 'src/renderer/static/macos', name)
     : join(mainBundleDirectory, '../renderer/macos', name)
+}
+
+/**
+ * The menu bar working-figure strip: the plain resolution and its Retina pair.
+ *
+ * One file per resolution holds every figure as a cell (see
+ * `src/lib/tray-count-art.ts`), which is what keeps the repository from
+ * carrying a template per count. Only macOS reads it.
+ */
+function getTrayCountStripPaths(): { base: string; retina: string } {
+  const directory =
+    !isProduction && is.dev
+      ? join(app.getAppPath(), 'src/renderer/static/macos')
+      : join(mainBundleDirectory, '../renderer/macos')
+  return {
+    base: join(directory, 'trayCountTemplate.png'),
+    retina: join(directory, 'trayCountTemplate@2x.png')
+  }
 }
 
 /**
@@ -369,6 +429,7 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   // returns a reason (see `BackgroundLifecycleService.evaluateResidency`).
   residencyReason: () => residencyReason(state, database),
   computeAttention: () => computeAttention(database),
+  countWorkingThreads: () => countWorkingThreads(database),
   onBecameOwner: () => {
     // A survivor that inherited the schedule picks up the slots missed while
     // nobody owned the scheduler.
@@ -376,7 +437,8 @@ const backgroundLifecycle = new BackgroundLifecycleService({
       ?.runPendingMisses()
       .catch((error) => Logger.error('Take-over catch-up failed:', error))
   },
-  resolveTrayIcon: (attention, darkTaskbar) => getTrayIconPath(attention, darkTaskbar)
+  resolveTrayIcon: (attention, darkTaskbar) => getTrayIconPath(attention, darkTaskbar),
+  resolveTrayCountStrip: () => getTrayCountStripPaths()
 })
 state.backgroundLifecycle = backgroundLifecycle
 
@@ -435,7 +497,16 @@ function createWindow(): BrowserWindow {
     backgroundColor: getStartupBackground(),
     title: APP_NAME,
     icon: getAppIconPath(),
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
+    ...(process.platform === 'win32'
+      ? {
+          titleBarOverlay: {
+            color: '#00000000',
+            symbolColor: nativeTheme.shouldUseDarkColors ? '#f5f4f0' : '#081825',
+            height: 48
+          }
+        }
+      : {}),
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
@@ -454,7 +525,7 @@ function createWindow(): BrowserWindow {
       devTools: true,
       // The preload resolves the platform traffic-light layout from this flag
       // so the renderer never flashes a wrong inset on first paint.
-      additionalArguments: [getTrafficLightArg()],
+      additionalArguments: [getTrafficLightArg(), getBuildEnvironmentArg()],
       // Built-in Chromium PDF plugin (PDFium-backed viewer, annotations,
       // forms, search)   available in Electron 29+.
       plugins: true
@@ -750,6 +821,14 @@ void app
     // barrier, so low-end devices always get visual feedback first.
     let splashOutcome = 'skipped'
     if (!startHidden) {
+      // macOS starts this process as the bundle's main executable, so the native
+      // placeholder has to be spawned from here rather than wrapping the launch.
+      startNativeSplashHelper()
+      // The supervisor records this phase from the environment it hands over at
+      // process entry. macOS only knows once the helper is spawned, and a check
+      // taken before that spawn can never be true, so the phase is recorded here
+      // too; `mark` keeps it to a single record either way.
+      if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
       const { visualReady: splashVisualReady } = createSplashWindow(
         mainBundleDirectory,
         isProduction

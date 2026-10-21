@@ -1,9 +1,10 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
-  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
-  import CioZap from '$lib/components/icons/cio/CioZap.svelte'
-  import { Gauge, Snail } from '@lucide/svelte'
+  import CioActions from '@pdslng/cio-icon/CioActions.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioSnail from '@pdslng/cio-icon/CioSnail.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
+  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
+  import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import type { InferenceMode } from '$shared/types'
@@ -40,10 +41,10 @@
   }: Props = $props()
 
   const speeds = [
-    { id: 'normal', label: 'Standard', icon: Snail },
-    { id: 'fast', label: 'Fast', icon: Gauge },
+    { id: 'normal', label: 'Standard', icon: CioSnail },
+    { id: 'fast', label: 'Fast', icon: CioActions },
     { id: 'ultrafast', label: 'Ultrafast', icon: CioZap }
-  ] satisfies { id: InferenceMode; label: string; icon: typeof Snail }[]
+  ] satisfies { id: InferenceMode; label: string; icon: typeof CioSnail }[]
   let availableSpeeds = $derived(
     speeds.filter(
       (speed) => speed.id === 'normal' || (speed.id === 'fast' ? fastSupported : ultrafastSupported)

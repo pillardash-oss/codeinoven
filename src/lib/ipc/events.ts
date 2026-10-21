@@ -54,6 +54,13 @@ import type {
 import type { AppControlRequest } from '../app-control'
 
 export const IPC_EVENT_CONTRACT = {
+  'oven:hostTrust:request': [] as unknown as [request: { requestId: string; prompt: string }],
+  'oven:hostTrust:closed': [] as unknown as [requestId: string],
+  'archive:changed': [] as unknown as [
+    kind: import('../archives').ArchiveKind,
+    id: string,
+    archived: boolean
+  ],
   'customVendors:iconChanged': [] as unknown as [payload: { providerId: string; icon: string }],
   'design:historyChanged': [] as unknown as [projectId: string, directory: string],
   'design:relocated': [] as unknown as [
@@ -71,6 +78,13 @@ export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
+   * Terminal sessions the app is ending on purpose (an update install stopping
+   * work, or a kill from the task manager). Sent before the shell is killed so
+   * the renderer stops respawning that session: a shell that exited on its own
+   * is restarted like a desktop terminal, one the app stopped stays stopped.
+   */
+  'pty:sessionsClosed': [] as unknown as [ids: string[]],
+  /**
    * The one-time start-at-login offer, raised right after an assistant gets its
    * first knowledge: the app asks whether it should start at login so a scheduled
    * run can fire after a restart. Sent at most once in an install's life, and
@@ -81,6 +95,17 @@ export const IPC_EVENT_CONTRACT = {
   'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Live agent lifecycle/stream event broadcast to every window. */
   'agent:event': [] as unknown as [event: import('../types').AgentEvent],
+  /**
+   * A stream event another CodeInOven instance produced for a shared thread.
+   *
+   * The owning process forwards the observations of its run over the
+   * cross-instance bus, so a window here renders the same conversation the
+   * owning window renders instead of polling the shared durable log for it.
+   * Separate from `agent:event` on purpose: only the process that owns the
+   * harness process can act on a run, and every action wired to the local
+   * channel is therefore out of reach for this one.
+   */
+  'agent:remoteEvent': [] as unknown as [payload: import('../types').RemoteAgentEventPayload],
   'taskManager:processesChanged': [] as [],
   'agent:temporaryChatExpired': [] as unknown as [temporaryChatId: string],
   'thread:deleted': [] as unknown as [projectId: string, threadId: string],
@@ -405,6 +430,19 @@ export const IPC_EVENT_CONTRACT = {
    * mirrors this so a long download and a background reindex both report live.
    */
   'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
+  /**
+   * The semantic half of a spotlight thread search, delivered after its keyword
+   * rows so the panel replaces them instead of waiting on the local model. The
+   * `requestId` and `query` are the ones the invoke carried, and a panel that has
+   * moved on drops the payload.
+   */
+  'threads:searchIntent': [] as unknown as [
+    payload: {
+      query: string
+      requestId: number
+      results: import('../types').ThreadSearchResult[]
+    }
+  ],
   /**
    * The optional video pack's install state. The Design and video settings
    * block mirrors this so a long package install reports live progress.

@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import { Image as ImageIcon } from '@lucide/svelte'
+  import CioImage from '@pdslng/cio-icon/CioImage.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import type {
     ContextSection,
     OriginFilter,
@@ -154,7 +154,7 @@
       title="View generated image artifacts"
       onclick={() => (section = 'artifacts')}
     >
-      <ImageIcon size={12} />
+      <CioImage size={12} />
       Artifacts
       {#if artifactCount > 0}<span class="text-[0.625rem] tabular-nums">{artifactCount}</span>{/if}
     </button>

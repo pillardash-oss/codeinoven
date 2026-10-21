@@ -1,12 +1,66 @@
 import { spawnSync } from 'node:child_process'
 import { constants, existsSync } from 'node:fs'
 import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, posix } from 'node:path'
 import { homedir } from 'node:os'
 import { fingerprint } from '../../../src/main/ovens/oven-agent-descriptor'
 
 /** The comment OpenSSH records beside the provisioned key. */
 const KEY_COMMENT = 'codeinoven-oven-agent'
+
+/** Well-known SIDs, used instead of group names Windows localizes. */
+const ADMINISTRATORS_SID = 'S-1-5-32-544'
+const SYSTEM_SID = 'S-1-5-18'
+
+/**
+ * How OpenSSH classifies the account this machine runs as.
+ *
+ * Windows sshd authorizes an administrator account from the machine-wide file
+ * and ignores that account's own `authorized_keys`, so the class decides which
+ * file has to carry the key.
+ */
+export type OvenSshAccountKind = 'administrator' | 'standard'
+
+export interface AuthorizedKeyPlan {
+  kind: OvenSshAccountKind
+  /** Every file the key is authorized in, most authoritative first. */
+  files: string[]
+  /** The file sshd reads keys from for this account, so the one that must carry it. */
+  requiredFile: string
+  /** The machine-wide file, present only for an administrator account. */
+  adminFile: string | null
+}
+
+export interface AuthorizedKeyPlanInput {
+  platform: string
+  /** Whether the account belongs to Administrators, whether or not it is elevated. */
+  administrator: boolean
+  home: string
+  programData: string
+}
+
+/**
+ * Decide where the public half has to be authorized for SSH to accept the key.
+ *
+ * Windows sshd ships a `Match Group administrators` block that points those
+ * accounts at the machine-wide file. Writing only `~/.ssh/authorized_keys`
+ * there looks like a complete setup and then refuses every connection with
+ * `Permission denied`, so both the installer and this CLI ask this question
+ * first and report the answer.
+ */
+export function authorizedKeyPlan(input: AuthorizedKeyPlanInput): AuthorizedKeyPlan {
+  // These are paths on the target machine, rendered as strings that the
+  // installer and the Oven's sshd both read. Join them with POSIX separators
+  // regardless of the host computing the plan: `join()` would emit backslashes
+  // on a Windows checkout, so the same plan would name different files per
+  // host. Windows accepts mixed separators, so the POSIX form is correct there
+  // too.
+  const perUser = posix.join(input.home, '.ssh', 'authorized_keys')
+  if (input.platform !== 'win32' || !input.administrator)
+    return { kind: 'standard', files: [perUser], requiredFile: perUser, adminFile: null }
+  const adminFile = posix.join(input.programData, 'ssh', 'administrators_authorized_keys')
+  return { kind: 'administrator', files: [adminFile, perUser], requiredFile: adminFile, adminFile }
+}
 
 export interface IdentityResult {
   privateKey: string
@@ -14,10 +68,16 @@ export interface IdentityResult {
   fingerprint: string
   keyPath: string
   created: boolean
-  /** Files the public half was authorized in, in the order they were written. */
+  /** How OpenSSH classifies this account. */
+  account: OvenSshAccountKind
+  /** Files the public half was written to and read back from. */
   authorized: string[]
-  /** Set when the key could not be authorized everywhere the machine needs it. */
-  warning?: string
+  /** The file sshd reads keys from for this account. */
+  requiredFile: string
+  /** Whether the file sshd reads already carries the key. */
+  verified: boolean
+  /** Work the user has to finish by hand before a connection can succeed. */
+  warnings: string[]
 }
 
 /** Whether an executable is on PATH, honoring PATHEXT on Windows. */
@@ -48,25 +108,34 @@ async function isFile(path: string): Promise<boolean> {
 /**
  * Whether the current Windows account belongs to Administrators.
  *
- * OpenSSH on Windows reads `administrators_authorized_keys` instead of the
- * per-user file for those accounts, so the deciding fact is group membership,
- * not whether the shell happens to be elevated. The well-known group SID is the
- * one stable way to ask.
+ * Group membership is the deciding fact, not elevation: an administrator who
+ * runs an ordinary shell still gets the machine-wide treatment from sshd, and
+ * asking the token would answer "no" and authorize the wrong file. The
+ * well-known SID is the one form of the group that no locale renames.
  */
 function windowsAccountIsAdministrator(): boolean {
   if (process.platform !== 'win32') return false
   const result = spawnSync('whoami', ['/groups'], { encoding: 'utf8', windowsHide: true })
-  return (result.stdout ?? '').includes('S-1-5-32-544')
+  return (result.stdout ?? '').includes(ADMINISTRATORS_SID)
 }
 
-/** Where the public half has to be authorized for SSH to accept the key. */
-async function authorizedKeyFiles(): Promise<{ files: string[]; adminFile: string | null }> {
-  const files = [join(homedir(), '.ssh', 'authorized_keys')]
-  if (process.platform !== 'win32' || !windowsAccountIsAdministrator())
-    return { files, adminFile: null }
-  const programData = process.env['ProgramData'] ?? 'C:\\ProgramData'
-  const adminFile = join(programData, 'ssh', 'administrators_authorized_keys')
-  return { files: [...files, adminFile], adminFile }
+/** The plan that matches the machine this code is running on. */
+function currentAccountPlan(): AuthorizedKeyPlan {
+  return authorizedKeyPlan({
+    platform: process.platform,
+    administrator: windowsAccountIsAdministrator(),
+    home: homedir(),
+    programData: process.env['ProgramData'] ?? 'C:\\ProgramData'
+  })
+}
+
+async function hasLine(file: string, line: string): Promise<boolean> {
+  try {
+    const existing = await readFile(file, 'utf8')
+    return existing.split(/\r?\n/u).some((entry) => entry.trim() === line.trim())
+  } catch {
+    return false
+  }
 }
 
 async function appendLine(file: string, line: string): Promise<boolean> {
@@ -82,6 +151,43 @@ async function appendLine(file: string, line: string): Promise<boolean> {
   await writeFile(file, `${existing}${separator}${line}\n`, { mode: 0o600 })
   if (process.platform !== 'win32') await chmod(file, 0o600)
   return true
+}
+
+/**
+ * Narrow a key file to the accounts sshd allows to read it.
+ *
+ * sshd on Windows silently skips a key it finds in a file another account can
+ * read, and the machine-wide file shipped by the OpenSSH feature inherits an
+ * ACL that is not restricted to Administrators and SYSTEM. Returns the command
+ * the user has to run when this shell cannot apply it.
+ */
+function restrictKeyFileAccess(file: string, grant: string[]): string | undefined {
+  const result = spawnSync('icacls', [file, '/inheritance:r', '/grant:r', ...grant], {
+    encoding: 'utf8',
+    windowsHide: true
+  })
+  if (result.status === 0) return undefined
+  return (
+    `Could not restrict access to ${file}, and sshd ignores a key other accounts can read. ` +
+    `Run this in an elevated shell:\n    icacls "${file}" /inheritance:r /grant:r ${grant.join(' ')}`
+  )
+}
+
+/** The ACL sshd expects: the owning account plus SYSTEM and Administrators. */
+function keyFileGrants(file: string, plan: AuthorizedKeyPlan, userSid: string): string[] {
+  if (file === plan.adminFile) return [`*${SYSTEM_SID}:F`, `*${ADMINISTRATORS_SID}:F`]
+  return [`*${userSid}:F`, `*${SYSTEM_SID}:F`, `*${ADMINISTRATORS_SID}:F`]
+}
+
+/** The current account's SID, needed to keep it in the ACL it already had. */
+function currentUserSid(): string | undefined {
+  const result = spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], {
+    encoding: 'utf8',
+    windowsHide: true
+  })
+  if (result.status !== 0) return undefined
+  const sid = (result.stdout ?? '').trim().replace(/"/gu, '').split(',').pop()?.trim()
+  return sid && /^S-1-[\d-]+$/u.test(sid) ? sid : undefined
 }
 
 /**
@@ -113,29 +219,43 @@ export async function provisionIdentity(keyPath: string): Promise<IdentityResult
   await chmod(keyPath, 0o600).catch(() => undefined)
   const privateKey = await readFile(keyPath, 'utf8')
   const publicKey = (await readFile(`${keyPath}.pub`, 'utf8')).trim()
-  const { files, adminFile } = await authorizedKeyFiles()
+  const plan = currentAccountPlan()
+  const userSid = process.platform === 'win32' ? currentUserSid() : undefined
   const authorized: string[] = []
-  let warning: string | undefined
-  for (const file of files) {
+  const warnings: string[] = []
+  for (const file of plan.files) {
     try {
       await appendLine(file, publicKey)
-      authorized.push(file)
     } catch (error) {
-      if (file === adminFile) {
-        warning = `Could not authorize the key in ${file}. As an administrator, add this line there by hand:\n    ${publicKey}`
-      } else {
-        throw error
-      }
+      if (file !== plan.adminFile) throw error
+      warnings.push(
+        `Could not write ${file}. As an administrator, add this line there by hand:\n    ${publicKey}`
+      )
+      continue
     }
+    if (userSid) {
+      const aclWarning = restrictKeyFileAccess(file, keyFileGrants(file, plan, userSid))
+      if (aclWarning) warnings.push(aclWarning)
+    }
+    if (await hasLine(file, publicKey)) authorized.push(file)
+    else warnings.push(`The key could not be read back from ${file} after writing it.`)
   }
+  const verified = authorized.includes(plan.requiredFile)
+  if (!verified)
+    warnings.push(
+      `sshd reads this account's keys from ${plan.requiredFile}, which does not carry the key, so CodeInOven will be refused with "Permission denied".`
+    )
   return {
     privateKey,
     publicKey,
     fingerprint: fingerprint(publicKey),
     keyPath,
     created,
+    account: plan.kind,
     authorized,
-    ...(warning ? { warning } : {})
+    requiredFile: plan.requiredFile,
+    verified,
+    warnings
   }
 }
 
@@ -144,13 +264,23 @@ export async function readIdentity(keyPath: string): Promise<IdentityResult | nu
   if (!(await isFile(keyPath))) return null
   const privateKey = await readFile(keyPath, 'utf8')
   const publicKey = (await readFile(`${keyPath}.pub`, 'utf8')).trim()
+  const plan = currentAccountPlan()
+  const verified = await hasLine(plan.requiredFile, publicKey)
   return {
     privateKey,
     publicKey,
     fingerprint: fingerprint(publicKey),
     keyPath,
     created: false,
-    authorized: []
+    account: plan.kind,
+    authorized: verified ? [plan.requiredFile] : [],
+    requiredFile: plan.requiredFile,
+    verified,
+    warnings: verified
+      ? []
+      : [
+          `The key is missing from ${plan.requiredFile}, so CodeInOven will be refused with "Permission denied". Run start again to authorize it.`
+        ]
   }
 }
 

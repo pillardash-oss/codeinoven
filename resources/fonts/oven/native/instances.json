@@ -1,0 +1,28 @@
+{
+  "generator": "scripts/build-native-splash-fonts.py",
+  "sources": {
+    "Oven Box": {
+      "file": "oven-box.woff2",
+      "sha256": "8dd45bfc3c6e912b1b9030bc78e0b96c6d3723589d82012016d53e76743c0b7f"
+    },
+    "Oven Mono": {
+      "file": "oven-mono.woff2",
+      "sha256": "401cb4d80d7aadf6c0cfbaaac0ad8b163e8ae6771729b3e7835ef469af91a5fc"
+    }
+  },
+  "codepoints": "U+0020-U+007E, U+00A1-U+00FF",
+  "faces": [
+    {
+      "family": "Oven Box",
+      "file": "OvenBox-Regular.ttf",
+      "weight": 400,
+      "sha256": "7743f4d351dc24ee51611a49ea563655e9da40ee1858813b6ff5296b89fc4110"
+    },
+    {
+      "family": "Oven Mono",
+      "file": "OvenMono-ExtraBold.ttf",
+      "weight": 800,
+      "sha256": "1ec1d2931c948ef721e007336a4724ba133a3b7ae3b1cc6d63efbf517680185c"
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
 
   import { invoke, subscribe } from '$lib/ipc.svelte'

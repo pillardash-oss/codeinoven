@@ -4,7 +4,7 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { sanitizeWorkName } from '$shared/design/work-roots'
-  import type { AuthoredWorkKind } from '$shared/ipc/design'
+  import type { AuthoredWorkKind, WorkDetailsScope } from '$shared/ipc/design'
 
   let {
     projectId,
@@ -25,6 +25,14 @@
   } = $props()
   let rootDraft = $state('')
   let nameDraft = $state('')
+  /**
+   * Whether the change is about this design or video alone.
+   *
+   * On is a single move: the folder the dialog is open on goes where the user
+   * points it and the project's folder for new work is untouched. Off is the
+   * project's own change: every design or video of this project moves, and the
+   * folder new ones are written into becomes the one named here.
+   */
   let thisOnly = $state(true)
   let busy = $state(false)
   let error = $state('')
@@ -33,6 +41,13 @@
   const name = $derived(directory.split('/').at(-1) ?? '')
   const nameChanged = $derived(nameDraft !== name)
   const slug = $derived(nameChanged ? sanitizeWorkName(nameDraft) : name)
+  /**
+   * The scope the request carries, which is what main acts on.
+   *
+   * A rename changes one folder's name and nothing else, so it is a single-work
+   * change however the switch is left.
+   */
+  const scopeOfChange = $derived<WorkDetailsScope>(renaming || thisOnly ? 'work' : 'project')
   const target = $derived(
     renaming
       ? `${directory.split('/').slice(0, -1).join('/')}/${slug}`
@@ -53,7 +68,7 @@
       const result = await invoke('design:updateDetails', projectId, {
         kind,
         directory,
-        thisOnly,
+        scope: scopeOfChange,
         ...(!renaming ? { root: rootDraft.trim() } : {}),
         ...(nameChanged ? { name: nameDraft } : {})
       })
@@ -103,8 +118,8 @@
       />
       <p class="text-xs text-muted">
         {thisOnly
-          ? `Moves only this ${noun}. The default folder for new ${noun}s stays unchanged.`
-          : `Moves all ${noun}s in this project and sets the default folder for new ones.`}
+          ? `Moves only this ${noun}. The project's folder for new ${noun}s is left where it is.`
+          : `Sets this project's save folder for new ${noun}s and moves all ${noun}s in it there.`}
       </p>
     {/if}
     <p class="break-all font-mono text-xs text-muted">{target}</p>

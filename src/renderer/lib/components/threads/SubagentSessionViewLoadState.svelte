@@ -1,6 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   interface Props {
     loading: boolean
     /** True while the child session is still running. */

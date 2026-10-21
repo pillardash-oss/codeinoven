@@ -47,6 +47,33 @@ function projection(): NativeDockRequest {
   if (!call) throw new Error('Modal did not publish a native projection')
   return call[2] as NativeDockRequest
 }
+/** Every native frame the modal has published, in order. */
+function publishedFrames(): NativeDockRequest[] {
+  return bridge.invoke.mock.calls
+    .filter(([channel, , request]) => channel === 'browser:setDockOverlay' && request)
+    .map(([, , request]) => request as NativeDockRequest)
+}
+/** The identity the projection gave the one scroll host inside the modal. */
+function scrollHostId(nodes: Array<NativeDockNode | string>): string | undefined {
+  for (const node of nodes) {
+    if (typeof node === 'string') continue
+    const found = node.attributes['data-native-dock-scroll'] ?? scrollHostId(node.children)
+    if (found) return found
+  }
+  return undefined
+}
+/** The projected position of that host, which is what the overlay writes back. */
+function projectedScrollTop(frame: NativeDockRequest): string | undefined {
+  const walk = (nodes: Array<NativeDockNode | string>): string | undefined => {
+    for (const node of nodes) {
+      if (typeof node === 'string') continue
+      const found = node.attributes['data-native-dock-scroll-top'] ?? walk(node.children)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  return walk(frame.nodes)
+}
 beforeEach(() => {
   vi.useFakeTimers()
   bridge.invoke.mockClear()
@@ -223,6 +250,44 @@ describe('canonical native modal', () => {
     expect(message).toContain('fell back to the app window')
     expect(message).toContain('opens its own popup')
     expect(logger.logRendererError).not.toHaveBeenCalled()
+  })
+
+  it('mirrors a native scroll without publishing a frame for the echo', async () => {
+    const snippet = createRawSnippet(() => ({
+      render: () => '<div class="overflow-y-auto"><p>rows</p></div>'
+    }))
+    renderModalWith(snippet)
+    await vi.advanceTimersByTimeAsync(40)
+    const request = projection()
+    const host = document.querySelector<HTMLElement>('.overflow-y-auto')!
+    const hostId = scrollHostId(request.nodes)
+    expect(hostId).toBeDefined()
+    expect(projectedScrollTop(request)).toBe('0')
+    const afterOpen = publishedFrames().length
+
+    // The overlay owns the gesture and reports where it landed; the app mirrors
+    // it so its own rects stay true to what the user sees.
+    bridge.listeners.get('browser:overlay:dockEvent')?.({
+      id: request.id,
+      kind: 'scroll',
+      target: hostId,
+      top: 240
+    })
+    expect(host.scrollTop).toBe(240)
+    // What the browser fires for that assignment must not queue a frame: the
+    // position it would carry is the one the overlay already has, and dragging
+    // it back is what made a gesture shake instead of scroll.
+    host.dispatchEvent(new Event('scroll'))
+    await vi.advanceTimersByTimeAsync(40)
+    expect(publishedFrames().length).toBe(afterOpen)
+
+    // A scroll the app makes itself is a change the overlay has to hear.
+    host.scrollTop = 400
+    host.dispatchEvent(new Event('scroll'))
+    await vi.advanceTimersByTimeAsync(40)
+    const frames = publishedFrames()
+    expect(frames.length).toBe(afterOpen + 1)
+    expect(projectedScrollTop(frames.at(-1)!)).toBe('400')
   })
 
   it('carries an inert SVG theme style instead of refusing the modal for it', async () => {

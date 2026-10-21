@@ -1,4 +1,8 @@
-import { offsetsForRange } from '$lib/selection-anchors'
+import {
+  offsetsForRange,
+  selectionMenuAnchor,
+  type SelectionMenuAnchor
+} from '$lib/selection-anchors'
 import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
 
 /**
@@ -11,11 +15,6 @@ import type { ResponseReferenceAnchor } from '$lib/stores/response-references.sv
  * document's path in its label, which is what makes the agent read the right
  * file. Everything the panel needs from live DOM ranges is captured here.
  */
-
-/** Widest the selection action bubble may be before the viewport clamps it. */
-const SELECTION_BUBBLE_WIDTH = 430
-const SELECTION_BUBBLE_HEIGHT = 48
-const VIEWPORT_MARGIN = 12
 
 /** How much of an annotated document rides along as a side chat's context. The
  *  same bound the spec studios use; past it the document is cut and the cut is
@@ -30,9 +29,10 @@ export interface DocumentSelectionCandidate {
   range: Range
   startOffset: number
   endOffset: number
-  /** Where the action bubble goes, in viewport coordinates. */
-  x: number
-  y: number
+  /** Where the selection menu is asked to open, before it is placed on screen. */
+  anchor: SelectionMenuAnchor
+  /** The annotation this passage already belongs to, when one exists. */
+  referenceId?: string
 }
 
 /** The rendered Markdown a document's preview is showing, if it is mounted. */
@@ -44,9 +44,9 @@ function selectionRoot(node: Node | null, root: HTMLElement | null): HTMLElement
 /**
  * Turn the current document selection into an annotation candidate. Returns null
  * when nothing is selected, when the selection reaches outside the rendered
- * document, or when it cannot be measured. The bubble is anchored above the
- * selection so it does not collide with the native right-click menu, which opens
- * at the cursor below the selection, falling back below when there is no room.
+ * document, or when it cannot be measured. The menu is anchored to the point the
+ * selection ended at, so a passage that runs over two lines raises it on the
+ * second one.
  */
 export function captureDocumentSelection(
   root: HTMLElement | null
@@ -62,25 +62,12 @@ export function captureDocumentSelection(
   const range = selection.getRangeAt(0)
   const { startOffset, endOffset } = offsetsForRange(root, range)
   if (endOffset <= startOffset) return null
-  const rect = range.getBoundingClientRect()
-  const x = Math.max(
-    VIEWPORT_MARGIN,
-    Math.min(rect.left, window.innerWidth - SELECTION_BUBBLE_WIDTH - VIEWPORT_MARGIN)
-  )
-  const y =
-    rect.top - SELECTION_BUBBLE_HEIGHT >= VIEWPORT_MARGIN
-      ? rect.top - SELECTION_BUBBLE_HEIGHT
-      : Math.max(
-          VIEWPORT_MARGIN,
-          Math.min(rect.bottom + 8, window.innerHeight - SELECTION_BUBBLE_HEIGHT - 8)
-        )
   return {
     text,
     range: range.cloneRange(),
     startOffset,
     endOffset,
-    x,
-    y
+    anchor: selectionMenuAnchor(selection, range)
   }
 }
 

@@ -1,9 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
@@ -18,6 +17,7 @@
     auditEvidenceIssueDetail
   } from '$shared/audit/audit-evidence-status'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -30,7 +30,11 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
-  import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
+  import {
+    StudioAnnotationOverlay,
+    clampPendingPosition,
+    type PendingOverlayAnchor
+  } from './studio-annotation-overlay.svelte'
   import { offsetsForQuote as offsetsForQuoteIn, offsetsForRange } from '$lib/selection-anchors'
   import { onDestroy, onMount, tick } from 'svelte'
 
@@ -404,10 +408,17 @@
     return { startLine: sectionLine, endLine: sectionLine }
   }
 
-  function captureDocumentSelection(): void {
-    if (!workflowActionsVisible && (!onExplainSelection || !onQuickChatSelection)) return
+  /**
+   * The passage a selection in the document names, as a pending annotation.
+   *
+   * Kept apart from `captureDocumentSelection` because it is also what follows
+   * the selection afterwards: the overlay re-runs it while the popover is open,
+   * so a selection extended with shift and the arrow keys keeps its quote, its
+   * offsets and its position in step with the highlighted text.
+   */
+  function pendingAnchorFromSelection(): PendingOverlayAnchor | null {
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
     const range = selection.getRangeAt(0)
     const commonNode =
       range.commonAncestorContainer instanceof Element
@@ -416,17 +427,24 @@
     const sectionElement = commonNode?.closest<HTMLElement>('[data-audit-section]')
     const section = sectionElement?.dataset.auditSection as AuditSectionId | undefined
     const quote = selection.toString().trim()
-    if (!sectionElement || !section || !quote) return
+    if (!sectionElement || !section || !quote) return null
     const rect = range.getBoundingClientRect()
     selectedSection = section
-    overlay.beginPending({
+    return {
       section,
       quote,
       ...markdownLineForQuote(quote, section, selectionOccurrence(sectionElement, range, quote)),
       ...offsetsForRange(sectionElement, range),
       ...clampPendingPosition(rect),
       sectionLevel: false
-    })
+    }
+  }
+
+  function captureDocumentSelection(): void {
+    if (!workflowActionsVisible && (!onExplainSelection || !onQuickChatSelection)) return
+    const anchor = pendingAnchorFromSelection()
+    if (!anchor) return
+    overlay.beginPending(anchor, pendingAnchorFromSelection)
     annotationBody = ''
   }
 
@@ -745,20 +763,24 @@
   {/snippet}
 
   {#snippet markers()}
-    {#each annotationMarkers as marker (marker.annotation.id)}
-      <button
-        data-audit-annotation-marker={marker.annotation.id}
-        class="absolute z-10 grid h-7 w-7 place-items-center border bg-surface text-info shadow-sm hover:bg-elevated"
-        style:left={compactViewport.matches
-          ? undefined
+    {#each annotationMarkers as marker, index (marker.annotation.id)}
+      <AnnotationIndicator
+        id={marker.annotation.id}
+        surface={`audit:${draft.id}`}
+        left={compactViewport.matches
+          ? 'auto'
           : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
-        style:top={`${marker.y}px`}
+        top={`${marker.y}px`}
+        number={index + 1}
+        hasComment={Boolean(marker.annotation.body)}
+        active={editingAnnotation?.id === marker.annotation.id}
         title={`Open annotation: ${marker.annotation.body}`}
-        aria-label={`Open annotation: ${marker.annotation.body}`}
-        onclick={() => void openAnnotation(marker.annotation)}
-      >
-        <CioMessage size={13} />
-      </button>
+        class="z-10"
+        attach={(node) => {
+          node.setAttribute('data-audit-annotation-marker', marker.annotation.id)
+        }}
+        onOpen={() => void openAnnotation(marker.annotation)}
+      />
     {/each}
   {/snippet}
 

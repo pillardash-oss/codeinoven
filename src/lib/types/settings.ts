@@ -67,6 +67,28 @@ export interface EditorInfo {
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 
+/**
+ * How far the text and rule tokens are pushed away from their surfaces.
+ *
+ * `normal` is the shipped palette. The two stronger levels redraw the same
+ * tokens at roughly twice and three times their original contrast, so the
+ * interface stays readable on a washed-out or badly calibrated display without
+ * changing a single layout measure. Every level is a palette, never a filter:
+ * the hue of each token is kept, so `danger` still reads red and `accent` still
+ * reads gold.
+ */
+export type ContrastLevel = 'normal' | 'more' | 'intense'
+
+/** Every contrast level, in increasing order. */
+export const CONTRAST_LEVELS: readonly ContrastLevel[] = ['normal', 'more', 'intense']
+
+export const DEFAULT_CONTRAST_LEVEL: ContrastLevel = 'normal'
+
+/** Whether an untrusted value is a contrast level this build understands. */
+export function isContrastLevel(value: unknown): value is ContrastLevel {
+  return typeof value === 'string' && (CONTRAST_LEVELS as readonly string[]).includes(value)
+}
+
 export type SlashCommandMode = 'app' | 'passthrough'
 
 export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference' | 'models'
@@ -354,6 +376,8 @@ export interface AppConfig {
   appFontSize: number
   /** Base font weight for app text (Light 300 / Regular 400 / Medium 500). */
   fontWeight: number
+  /** How hard the palette pushes text and rules away from its surfaces. */
+  contrastLevel: ContrastLevel
   /** UI zoom level (Electron zoomFactor). 1 = 100%. */
   zoomLevel: number
   /** True after the user finishes or dismisses the first-run setup guide. */
@@ -361,6 +385,16 @@ export interface AppConfig {
   /** Explicit consent for anonymous installation usage statistics. */
   shareAnonymousUsage?: boolean
   threadLimit: number
+  /**
+   * The Ctrl+Tab thread switcher also lists each open terminal tab, so the tabs
+   * of a panel that keeps its own strip are reachable without a click. On by
+   * default; the tabs it adds are the ones open for the active project.
+   */
+  switcherTerminalTabs: boolean
+  /** The Ctrl+Tab thread switcher also lists each open project file tab. */
+  switcherFileTabs: boolean
+  /** The Ctrl+Tab thread switcher also lists each tab of the thread browser. */
+  switcherThreadBrowserTabs: boolean
   /** Time before a pending agent question automatically selects its recommendation. */
   questionTimeoutMs: number
   /** Maximum questions one structured agent question card can carry (cio_ask_user). */
@@ -384,14 +418,6 @@ export interface AppConfig {
   design: DesignConfig
   /** Named presets the user can apply from the model picker to shape a whole run. */
   modelProfiles: ModelProfile[]
-  /**
-   * Project-relative folders where authored work is written, app-wide.
-   *
-   * One value covers every project, and each project resolves it against its own
-   * root, so a user who wants designs committed sets it once. Changing it moves
-   * the work already written under the old folder into the new one.
-   */
-  workRoots: WorkRoots
   /** Backend that generates images, clips and sound for a design or a composition. */
   mediaGeneration: MediaGenerationConfig
   /** Model that judges ranking conversations, and whether it is pinned at all. */
@@ -523,8 +549,6 @@ export interface BehaviorLayer {
   defaultOpen: boolean
 }
 
-import type { WorkRoots } from '../design/work-roots'
-
 /** Renderer-editable settings. Internal config fields cannot be patched over IPC. */
 export type AppConfigPatch = Partial<
   Pick<
@@ -533,10 +557,14 @@ export type AppConfigPatch = Partial<
     | 'fontFamily'
     | 'appFontSize'
     | 'fontWeight'
+    | 'contrastLevel'
     | 'zoomLevel'
     | 'onboardingCompleted'
     | 'shareAnonymousUsage'
     | 'threadLimit'
+    | 'switcherTerminalTabs'
+    | 'switcherFileTabs'
+    | 'switcherThreadBrowserTabs'
     | 'questionTimeoutMs'
     | 'agentQuestionCap'
     | 'slashCommandMode'
@@ -547,7 +575,6 @@ export type AppConfigPatch = Partial<
     | 'design'
     | 'modelProfiles'
     | 'mediaGeneration'
-    | 'workRoots'
     | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'

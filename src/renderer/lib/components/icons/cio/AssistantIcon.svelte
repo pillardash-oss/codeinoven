@@ -13,9 +13,20 @@
     /** The inside mark that names the job. Defaults to the assistant itself. */
     mark?: AssistantIconMark
     size?: number | string
+    /**
+     * Draw at this weight in the 24-unit box rather than at the tier's own. The
+     * rail asks for one so the mark matches the marks beside it.
+     */
+    strokeWidth?: number | string
   }
 
-  let { mark = 'mark', size = 24, class: className = '', ...rest }: Props = $props()
+  let {
+    mark = 'mark',
+    size = 24,
+    strokeWidth: requestedStroke,
+    class: className = '',
+    ...rest
+  }: Props = $props()
 
   /**
    * The drawn tier. A tier is a different drawing rather than a scale, because
@@ -39,9 +50,6 @@
         : 'large'
   )
 
-  /** Full drawing keeps crisp thin strokes; the rail glyph needs a heavier one. */
-  let strokeWidth = $derived(tier === 'rail' ? 1.8 : tier === 'medium' ? 1.6 : 1.15)
-
   /**
    * Every tier is drawn inside a generous 24-unit box, so the plush body keeps
    * the airy margin it was drawn with. A Lucide glyph at the same rendered size
@@ -50,12 +58,27 @@
    * smaller than the icon next to it.
    *
    * Scaling the finished drawing about the box centre gives every tier that same
-   * footprint without redrawing any geometry, and the transform carries the
-   * stroke with it, so the tiers keep their 1.8 / 1.6 / 1.15 weights.
+   * footprint without redrawing any geometry. The group multiplies a stroke by
+   * its own scale, so a tier's own number is what it is drawn at in the local
+   * units and the rendered weight is 1.22 times that.
    */
   const OPTICAL_SCALE = 1.22
   const OPTICAL_OFFSET = Number((12 * (1 - OPTICAL_SCALE)).toFixed(4))
   const OPTICAL_TRANSFORM = `translate(${OPTICAL_OFFSET} ${OPTICAL_OFFSET}) scale(${OPTICAL_SCALE})`
+
+  /**
+   * The weight the drawing is stroked at. Its tier's own number starts it: the
+   * full drawing keeps crisp thin strokes and the rail glyph needs a heavier one.
+   * A caller that names a weight means the weight in the 24-unit box, so the
+   * optical scale is divided back out: the group multiplies a stroke by its own
+   * scale, and without that a rail mark would draw 22% heavier than the marks
+   * beside it and no rail could ask for its own weight at all.
+   */
+  let strokeWidth = $derived.by(() => {
+    const named = requestedStroke === undefined ? undefined : Number(requestedStroke)
+    if (named !== undefined && Number.isFinite(named)) return named / OPTICAL_SCALE
+    return tier === 'rail' ? 1.8 : tier === 'medium' ? 1.6 : 1.15
+  })
 </script>
 
 <svg

@@ -47,6 +47,7 @@ export function registerSearchSettingsIpc(
   })
 
   ipcMain.handle('search:getState', () => service.state())
+  ipcMain.handle('search:warm', () => service.warm())
   ipcMain.handle('search:downloadArtifact', (_event, rawId: unknown) =>
     service.downloadArtifact(requireArtifactId(rawId))
   )

@@ -14,26 +14,30 @@ import type { ProjectFileEntry } from '$shared/types'
 import { fileUrlToPath } from '$lib/mime'
 
 /**
- * The open conversation thread whose app-owned workspace directory contains an
- * absolute path, with that path below the directory.
+ * The open conversation thread whose app-owned workspace directory a cited path
+ * belongs to, with that path below the directory.
  *
  * A chat, an assistant task, and a browser tab each own an app-storage
  * directory mounted as their file tree (`chats-cwd/<threadId>`,
- * `assistant-cwd/<assistantId ?? threadId>`, `browser-cwd/<threadId>`), and a
- * path an agent cites from one of them is absolute. Only the conversation the
- * view is showing can own it - a tree mounts one directory at a time - so the
- * open thread decides which mount to strip.
+ * `assistant-cwd/<assistantId ?? threadId>`, `browser-cwd/<threadId>`). An agent
+ * citing from one of them writes either the absolute path or, more often, the
+ * path relative to the directory it is working in (`.cio/tmp/report.md`), and
+ * both name the same entry. Only the conversation the view is showing can own
+ * it - a tree mounts one directory at a time - so the open thread decides which
+ * mount to strip.
  */
 function conversationWorkspaceTarget(
   projectId: string,
-  absolutePath: string
+  citedPath: string
 ): { threadId: string; relativePath: string } | null {
   if (!usesThreadWorkspaceMount(projectId)) return null
   const thread = workspaceState.selectedThread
   if (!thread || thread.projectId !== projectId) return null
   const directory = conversationWorkspaceDirectory(projectId, thread.id, thread.assistantId)
   if (!directory) return null
-  const normalized = normalizeCitationPath(absolutePath)
+  const normalized = normalizeCitationPath(citedPath)
+  if (!normalized) return null
+  if (!isAbsoluteCitationPath(normalized)) return { threadId: thread.id, relativePath: normalized }
   const marker = `/${directory}/`
   const index = normalized.indexOf(marker)
   if (index < 0) return null

@@ -44,7 +44,6 @@ import { DesignHistoryService, type DesignHistoryTarget } from './design-history
 import { openDesignPreview } from './design-preview-session'
 import {
   currentWorkRoot,
-  currentWorkRootReports,
   currentWorkRoots,
   projectWorkRootPaths,
   forgetProjectWorkRoots
@@ -106,20 +105,6 @@ const SCREEN_LOAD_TIMEOUT_MS = 5_000
  * it, turning a picture into a failure.
  */
 const POSTER_SECONDS = 0
-
-/** The part of a served URL under its origin, decoded, or null when it names no file. */
-function entryWithinOrigin(url: string, origin: string): string | null {
-  const withoutQuery = url.slice(origin.length).split(/[?#]/u)[0] ?? ''
-  const path = withoutQuery.replace(/^\/+/u, '')
-  if (path.length === 0) return null
-  try {
-    return decodeURIComponent(path)
-  } catch {
-    // A URL the browser accepted can still hold a malformed escape; its raw form
-    // is still the file that was asked for.
-    return path
-  }
-}
 
 /** Identifier validation for the two ids every call carries. */
 function requireId(value: unknown, label: string): string {
@@ -236,8 +221,6 @@ export class DesignService {
   private readonly screenShots = new Map<string, DesignScreenShot>()
   /** The sweep in flight per thread, so starting another one supersedes the first. */
   private readonly screenSweeps = new Map<string, number>()
-  /** Threads whose tab a sweep is moving, and the newest sweep doing it there. */
-  private readonly sweepingThreads = new Map<string, number>()
 
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
@@ -337,15 +320,12 @@ export class DesignService {
         rawDirectory
       )
     )
-    // The folders authored work is written into, and what the last change moved.
-    // Read rather than pushed, because both surfaces that change a root (the
-    // Design settings card and the board's own save path) ask immediately after
-    // the save that caused the move.
-    ipcMain.handle('design:workRootState', async (_event, projectId?: string) => ({
-      roots: currentWorkRoots(projectId),
-      defaults: { ...DEFAULT_WORK_ROOTS },
-      reports: currentWorkRootReports()
-    }))
+    // The folder this project's designs and videos are written into. Read rather
+    // than pushed, because the board that changed one asks immediately after the
+    // save so it can name the folder the next design will land in.
+    ipcMain.handle('design:workRoots', async (_event, projectId?: string) =>
+      currentWorkRoots(projectId)
+    )
     ipcMain.handle('design:removeMissing', async (_event, rawProjectId, rawDirectory) => {
       const projectId = requireId(rawProjectId, 'project id')
       const directory = requirePath(rawDirectory)
@@ -586,7 +566,6 @@ export class DesignService {
     // Dropping the generation is what stops a sweep still in flight for this
     // thread: its next screen finds a generation that is no longer its own.
     this.screenSweeps.delete(threadId)
-    this.sweepingThreads.delete(threadId)
   }
 
   /**
@@ -616,29 +595,37 @@ export class DesignService {
 
   /**
    * What a tab is showing, recognised from the URL it is on rather than from who
-   * opened it, and recorded so the board follows.
+   * opened it.
    *
    * The browser calls this on every committed navigation. An authored-work folder
    * is served on its own loopback origin, so the URL is enough to answer the
-   * question the board asks: which folder is this thread working in. Recognising it
-   * this way covers the two cases a record of the last preview cannot: a tab the
-   * agent opened itself, and a tab the renderer restored after a restart.
+   * question the tab's marks ask: which folder is this page showing. Recognising it
+   * this way covers the cases a record of the last preview cannot: a tab the agent
+   * opened itself, a tab the renderer restored after a restart, and a page a
+   * navigation inside the folder moved to.
    *
    * The two marks differ by what they arm. A design folder arms the element
    * inspector, because picking an element out of it is how a change is described. A
    * composition arms the playback transport instead, and carries the timeline its
    * manifest declares, because a page that moves is watched rather than picked
-   * apart. Either way the folder is recorded for the board.
+   * apart.
+   *
+   * Nothing here is written to the thread. Which folder a page shows is a fact about
+   * the page, and a page can be showing a folder for reasons that are not this
+   * thread's work at all: the user opening a design from the file explorer, the
+   * preview server reloading a tab because the folder changed on disk, or a tab
+   * restored onto wherever it was left. Recording authorship from a look is what put
+   * a design or video marker on threads that never designed or composed anything, and
+   * it also made those threads keep the session's contract forever, because the row
+   * is what every later turn reads. Authorship is written where a session starts:
+   * the tag at turn start, the capability's own preview and checkpoint, and the
+   * board's own open of a thread's work.
    */
   async observeShownFolder(
     projectId: string,
     threadId: string,
-    url: string,
-    recordThread = true
+    url: string
   ): Promise<BrowserTabMark> {
-    // Capture this before asynchronous reads: a gallery navigation stays a
-    // capture even if its recognition finishes after the sweep has ended.
-    const remember = recordThread && !this.sweepingThreads.has(threadId)
     const origin = originOf(url)
     if (origin === null) return NO_TAB_MARK
     const root = this.options.previews.rootForOrigin(origin)
@@ -658,19 +645,6 @@ export class DesignService {
       null
     if (kind === null) return NO_TAB_MARK
     const directory = this.designs.resolveDirectory(projectId, observedDirectory)
-    // A screen sweep moves the tab through every screen of one design, which is
-    // the app taking pictures rather than the agent or the user choosing a folder.
-    // Both capture and restoration leave the row alone, so browsing the
-    // gallery cannot replace the thread's own folder.
-    if (remember) {
-      await this.rememberShownFolder({
-        projectId,
-        threadId,
-        directory,
-        entry: entryWithinOrigin(url, origin),
-        kind
-      })
-    }
     if (kind === 'design') return { design: { directory, origin }, composition: null }
     // A composition with no readable manifest has no timeline, so there is nothing
     // to play: it is shown as an ordinary page rather than driven by a guess.
@@ -927,14 +901,29 @@ export class DesignService {
     if (!browser || !tabId) {
       return { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
     }
-    await browser.waitForTabLoad(tabId)
-    const captured = await browser.captureThumbnail(
-      tabId,
-      Math.min(MAX_THUMBNAIL_WIDTH, Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width)))
-    )
-    return captured
-      ? { directory: result.directory, ...captured, tabId }
-      : { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
+    /**
+     * A picture that could not be taken is a missing picture, never a failed board.
+     *
+     * The capture comes from Chromium's compositor, and a view the app is not
+     * showing at that moment can answer with no frame at all (`UnknownVizError`)
+     * instead of a picture. That is a state of the same off-screen capture the
+     * screen sweep already degrades on, so this path answers the way the sweep
+     * does: no picture, which the board already draws as "No frame captured yet."
+     * rather than as an error the user cannot act on.
+     */
+    try {
+      await browser.waitForTabLoad(tabId)
+      const captured = await browser.captureThumbnail(
+        tabId,
+        Math.min(MAX_THUMBNAIL_WIDTH, Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width)))
+      )
+      return captured
+        ? { directory: result.directory, ...captured, tabId }
+        : { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
+    } catch (error) {
+      Logger.dev('A thumbnail could not be captured:', error)
+      return { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
+    }
   }
 
   /**
@@ -986,13 +975,18 @@ export class DesignService {
     const generation = (this.screenSweeps.get(threadId) ?? 0) + 1
     this.screenSweeps.set(threadId, generation)
     // Read before the first navigation: this is the folder and screen the tab was
-    // on, and the only honest place to put it back.
+    // on, and the only honest place to put it back. A thread with no work record has
+    // no folder to return to, so its tab's own page is read instead: the sweep must
+    // not leave a thread that never designed anything sitting on a screen of a
+    // design it only pictured.
     const before = await this.designs.forThreadViaWorker(threadId)
+    const browser = this.options.browser()
+    const tabBefore = browser?.agentTabFor(projectId, threadId) ?? null
+    const urlBefore = tabBefore === null ? null : (browser?.tabUrl(tabBefore) ?? null)
     const shots: DesignScreenShot[] = []
     const startedAt = Date.now()
     /** Whether this sweep navigated the thread's tab, so it must put it back. */
     let moved = false
-    this.sweepingThreads.set(threadId, generation)
     try {
       for (const screen of screens) {
         const cached = force
@@ -1030,21 +1024,14 @@ export class DesignService {
       }
       return shots
     } finally {
-      try {
-        if (this.screenSweeps.get(threadId) === generation && moved && before?.kind === 'design') {
-          await this.restoreTab({
-            projectId,
-            threadId,
-            projectPath: project.path,
-            folder: folder.display,
-            screens,
-            before
-          })
-        }
-      } finally {
-        if (this.sweepingThreads.get(threadId) === generation) {
-          this.sweepingThreads.delete(threadId)
-        }
+      if (this.screenSweeps.get(threadId) === generation && moved) {
+        await this.restoreTab({
+          projectId,
+          threadId,
+          projectPath: project.path,
+          before,
+          url: urlBefore
+        })
       }
     }
   }
@@ -1088,35 +1075,6 @@ export class DesignService {
 
   async listWorkFolders(projectPath: string, root: string): Promise<DesignEntry[]> {
     return listProjectWorkFolders(projectPath, root)
-  }
-
-  /**
-   * Record a folder recognised from a tab, so the board follows the tab.
-   *
-   * Guarded on the stored row because this runs on every navigation: a page the
-   * thread already has open must not write the row again, and a folder that changed
-   * must, because re-pointing the row is the whole point of having it. Writing
-   * unconditionally would also keep refreshing `updated_at`, the stamp the board
-   * reads as when the folder was last shown.
-   */
-  private async rememberShownFolder(input: {
-    projectId: string
-    threadId: string
-    directory: string
-    entry: string | null
-    kind: AuthoredWorkKind
-  }): Promise<void> {
-    const current = await this.designs.forThreadViaWorker(input.threadId)
-    if (
-      current &&
-      current.directory === input.directory &&
-      current.entry === input.entry &&
-      current.kind === input.kind
-    ) {
-      return
-    }
-    this.designs.upsert(input)
-    await this.rememberThreadKind(input.projectId, input.threadId, input.kind)
   }
 
   /**
@@ -1283,37 +1241,50 @@ export class DesignService {
   /**
    * Put the tab back where the sweep found it.
    *
-   * The thread's own record is the target, whatever kind of work it holds, because
-   * that record is what the tab was showing. A thread that has no record yet is
-   * left without a restoration request. Restoration stays inside the sweep's
-   * recording suppression, so browsing another folder cannot rewrite the link.
+   * A thread with a work record has the folder and the kind the tab was showing, so
+   * the record is the target and the tab is served that work again. A thread with no
+   * record has no work to return to, so the tab goes back to the page it was on when
+   * the sweep started: the sweep is the board picturing a project's design, and a
+   * thread that never designed anything must not be left sitting on one of its
+   * screens. A thread whose tab did not exist before the sweep is left alone, because
+   * there is nothing to put back.
    */
   private async restoreTab(input: {
     projectId: string
     threadId: string
     projectPath: string
-    folder: string
-    screens: DesignScreen[]
     before: ThreadDesignCurrent | null
+    /** The page the thread's tab was on before the sweep, or null with no tab. */
+    url: string | null
   }): Promise<void> {
-    const target =
-      input.before?.kind === 'design'
-        ? { directory: input.before.directory, entry: input.before.entry }
-        : { directory: input.folder, entry: input.screens[0]?.entry ?? null }
+    const browser = this.options.browser()
+    if (browser === null) return
     try {
+      if (!input.before) {
+        if (input.url === null) return
+        const shown = await browser.showThreadWorkTab({
+          projectId: input.projectId,
+          threadId: input.threadId,
+          url: input.url,
+          attention: 'background',
+          reveal: false
+        })
+        await browser.waitForTabLoad(shown.tabId, SCREEN_LOAD_TIMEOUT_MS)
+        return
+      }
       const restored = await this.serveWork({
-        kind: 'design',
+        kind: input.before.kind,
         projectPath: input.projectPath,
         projectId: input.projectId,
         threadId: input.threadId,
-        directory: target.directory,
-        entry: target.entry,
+        directory: input.before.directory,
+        entry: input.before.entry,
         attention: 'background',
         reveal: false,
         tab: 'thread'
       })
       if (restored.tabId) {
-        await this.options.browser()?.waitForTabLoad(restored.tabId, SCREEN_LOAD_TIMEOUT_MS)
+        await browser.waitForTabLoad(restored.tabId, SCREEN_LOAD_TIMEOUT_MS)
       }
     } catch (error) {
       Logger.dev('The tab could not be put back after picturing a design:', error)

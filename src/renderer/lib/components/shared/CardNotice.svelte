@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import type { Component, Snippet } from 'svelte'
   import { fly } from 'svelte/transition'
   import { rowArrive } from './card-motion'

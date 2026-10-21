@@ -1,19 +1,19 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDot from '$lib/components/icons/cio/CioDot.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { ThumbsUp } from '@lucide/svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBan from '@pdslng/cio-icon/CioBan.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioThumbsUp from '@pdslng/cio-icon/CioThumbsUp.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -21,6 +21,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { roomAbove } from '$lib/popover-room'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -439,20 +440,6 @@
   }
 
   /**
-   * The top of the box an upward-opening popover is clipped by: the nearest
-   * ancestor with a non-visible overflow, which in the dock is the sidebar's
-   * content region and in full screen is the surface itself.
-   */
-  function clipTop(element: HTMLElement): number {
-    let node = element.parentElement
-    while (node) {
-      if (getComputedStyle(node).overflowY !== 'visible') return node.getBoundingClientRect().top
-      node = node.parentElement
-    }
-    return 0
-  }
-
-  /**
    * Cap the popover to the room above the composer, so a long candidate list in a
    * short sidebar scrolls inside the panel instead of having its first rows cut
    * off by the panel's own clipping.
@@ -462,9 +449,10 @@
       mentionMaxHeight = mentionMenuMaxHeight(Number.POSITIVE_INFINITY)
       return
     }
-    const anchorTop = mentionAnchor.getBoundingClientRect().top
     // 8px keeps the popover off the edge it is clipped at.
-    mentionMaxHeight = mentionMenuMaxHeight(anchorTop - clipTop(mentionAnchor) - 8)
+    mentionMaxHeight = mentionMenuMaxHeight(
+      roomAbove(mentionAnchor, mentionAnchor.getBoundingClientRect().top, 8)
+    )
   }
 
   function closeMentions(): void {
@@ -1154,7 +1142,7 @@
           disabled={!open || reviewing}
           onclick={() => void submitReview('APPROVE')}
         >
-          <ThumbsUp size={12} class="shrink-0" />
+          <CioThumbsUp size={12} class="shrink-0" />
           <span class="min-w-0 truncate">Approve</span>
         </button>
         <button

@@ -1,12 +1,14 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-  import { ArrowRightLeft, CalendarClock, CalendarOff } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCalendarClock from '@pdslng/cio-icon/CioCalendarClock.svelte'
+  import CioCalendarOff from '@pdslng/cio-icon/CioCalendarOff.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSwap from '@pdslng/cio-icon/CioSwap.svelte'
+  import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import { Portal } from 'bits-ui'
   import { createSubscriber } from 'svelte/reactivity'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -142,7 +144,7 @@
       const line = working ? 'Running now' : runRowLine(task, Date.now())
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
-    if (knowledgeThread) return 'How-to conversation'
+    if (knowledgeThread) return 'Assistant behavior'
     subscribeMinute()
     return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now(), !scheduled)
   })
@@ -424,7 +426,7 @@
         {#if foreignTransfer?.pending}
           <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
         {:else}
-          <ArrowRightLeft size={13} aria-hidden="true" />
+          <CioSwap size={13} aria-hidden="true" />
         {/if}
       </button>
     {/if}
@@ -443,9 +445,9 @@
         onclick={() => onToggleScheduled?.(task)}
       >
         {#if scheduled}
-          <CalendarClock size={13} aria-hidden="true" />
+          <CioCalendarClock size={13} aria-hidden="true" />
         {:else}
-          <CalendarOff size={13} aria-hidden="true" />
+          <CioCalendarOff size={13} aria-hidden="true" />
         {/if}
       </button>
     {/if}

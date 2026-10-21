@@ -1,12 +1,12 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import { CircleStop } from '@lucide/svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserDownloadProgress from './BrowserDownloadProgress.svelte'
@@ -147,7 +147,7 @@
           title={`Cancel ${download.fileName}`}
           onclick={() => browserDownloads.cancel(download)}
         >
-          <CircleStop size={actionIcon} />
+          <CioStop size={actionIcon} />
         </button>
       {:else}
         {#if canResume}

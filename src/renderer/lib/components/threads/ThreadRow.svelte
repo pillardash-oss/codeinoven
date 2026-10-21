@@ -1,12 +1,12 @@
 <script lang="ts">
-  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import {
@@ -31,8 +31,16 @@
     type ThreadIndicator
   } from '$lib/components/threads/thread-indicator'
   import {
-    markDrawsRail,
+    LIVE_RAIL_DASH_MS,
+    liveRailDashCount,
+    liveRailPaint,
+    markDrawsGlyph,
+    markRailClimbs,
+    markRailStandsLit,
+    RAIL_TRACK_INK,
+    railPaint,
     THREAD_FOREIGN_MARK,
+    threadRailMark,
     threadSecondaryMark,
     threadStateMark,
     type ThreadRowSecondary
@@ -44,6 +52,7 @@
   import { longPress } from '$lib/long-press.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -171,6 +180,16 @@
   const DRAFT_GRACE_MS = 2000
 
   let effectivePinned = $derived(thread.pinned)
+
+  /** The row's last-activity stamp, measured against the shared clock rather
+   *  than the instant this row last happened to render. A quiet thread used to
+   *  keep claiming "Now" until something unrelated re-rendered the row. */
+  let lastActivityAge = $derived(formatCompactAge(thread.lastActivity, relativeTimeClock.now))
+
+  /** Keep the shared clock reading live while this row is on screen. It is one
+   *  timer for every row on the list, never one per thread, and it disarms as
+   *  soon as the last row unmounts. */
+  $effect(() => relativeTimeClock.hold())
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
 
@@ -644,22 +663,69 @@
     secondaryMark ? `${primaryMark.label} · ${secondaryMark.label}` : primaryMark.label
   )
 
-  /** Whether this row draws a rail under its glyph. The rail is the primary
-   *  status, so a settled thread draws none: with nothing left to do it should
-   *  attract no attention, and its glyph stands alone, vertically centred. */
-  let spineRailVisible = $derived(markDrawsRail(primaryMark))
+  /** The mark whose spine this row draws, or null when it draws no rail.
+   *
+   *  The thread's own state has first claim, and a settled thread has no rail of its
+   *  own. A draft waiting on a settled thread takes the rail over, so a done thread
+   *  the user is typing into shows the spine under its pen; a queued message or a
+   *  start-after draws no rail of its own, so those rows keep their quiet glyph
+   *  alone. `threadRailMark` owns that rule, in the vocabulary beside the marks. */
+  let railMark = $derived(threadRailMark(primaryMark, secondaryMark))
 
-  /** The rail's paint: the primary status's own colour, and its dash pattern,
-   *  which is the second carrier beside the hue. The rail is the same width as
-   *  the glyph above it, so the mark reads as one column. A secondary status
-   *  never repaints it: the rail is what the thread is doing, and the glyph above
-   *  is what is waiting on it. */
-  let spineRailPaint = $derived.by((): string => {
-    if (primaryMark.dash === 'solid') return primaryMark.colour
-    const stripe =
-      primaryMark.dash === 'dashed' ? ['0.25rem', '0.4375rem'] : ['0.125rem', '0.25rem']
-    return `repeating-linear-gradient(to bottom, ${primaryMark.colour} 0 ${stripe[0]}, transparent ${stripe[0]} ${stripe[1]})`
-  })
+  /** Whether this row draws a rail under its glyph at all. A settled thread with
+   *  nothing waiting on it does not: with nothing left to do it should attract no
+   *  attention, and its glyph stands alone, vertically centred. */
+  let spineRailVisible = $derived(railMark !== null)
+
+  /** Whether the state's glyph is drawn above the rail at all.
+   *
+   *  Live work drops it: a rail whose dashes come alight says "running" every
+   *  cycle, so the working mark spends no height on a pickaxe that would only
+   *  repeat it, and the rail takes the height the glyph held. A secondary status
+   *  keeps the slot, because what is waiting on the thread is not what the rail is
+   *  showing. */
+  let spineGlyphVisible = $derived(markDrawsGlyph(primaryMark, secondaryMark !== null))
+
+  /** Whether the rail's light climbs it: work this window is driving, lighting one
+   *  whole dash at a time from the bottom to the top. */
+  let spineRailClimbs = $derived(railMark !== null && markRailClimbs(railMark))
+
+  /** Whether the rail stands full instead: every dash lit, nothing moving. Work
+   *  another instance is driving, or a draft waiting on a settled thread. */
+  let spineRailStandsLit = $derived(railMark !== null && markRailStandsLit(railMark))
+
+  /** Whether this rail is drawn on the counted live grid rather than the mark's own
+   *  still shape: the climbing light, the standing full rail and a waiting draft are
+   *  the same spine seen different ways, so they share its dashes. */
+  let spineRailOnLiveGrid = $derived(spineRailClimbs || spineRailStandsLit)
+
+  /** The live rail's height as laid out, which is the only thing that decides how
+   *  many dashes it has room for. A rail that has not been measured yet reports
+   *  nothing here and the count answers with the fullest column, so the first frame
+   *  is drawn where the row is about to land. */
+  let spineRailHeight = $state(0)
+
+  /** How many dashes this rail's height has room for: the grid the row paints and
+   *  the steps the light climbs it in, from one decision. */
+  let spineDashCount = $derived(liveRailDashCount(spineRailHeight))
+
+  /** The rail's paint: the rail mark's own colour, in the shape its dash names,
+   *  which is the second carrier beside the hue. The rail is the same width as the
+   *  glyph above it, so the mark reads as one column. */
+  let spineRailPaint = $derived(railMark === null ? '' : railPaint(railMark))
+
+  /** The light on a live rail, or the full face of one that stands: whole dashes at
+   *  full strength, on the grid the reveal animation steps through, so a step lights
+   *  a dash and never leaves a stretched half dash behind it. Both wear the same
+   *  paint, which is what makes them read as one spine. */
+  let spineLivePaint = $derived(railMark === null ? '' : liveRailPaint(railMark, spineDashCount))
+
+  /** The track a live rail lights along: the same dashes on the same grid, in a
+   *  fraction of the state's colour, so the spine keeps its full height and its
+   *  shape between one lit dash and the next. */
+  let spineTrackPaint = $derived(
+    railMark === null ? '' : liveRailPaint(railMark, spineDashCount, RAIL_TRACK_INK)
+  )
 
   /** The row's own ground, when the state wants the user. A tint is the second
    *  carrier beside the rail, so approval and error are findable from across the
@@ -1098,9 +1164,7 @@
             />
           </span>
         {:else}
-          <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-            {formatCompactAge(thread.lastActivity)}
-          </span>
+          <span class="whitespace-nowrap text-[0.625rem] text-dimmed">{lastActivityAge}</span>
         {/if}
       {:else if currentModelProviderName}
         <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
@@ -1180,9 +1244,7 @@
             <ThreadIndicatorSlot indicator={live} />
           {/each}
           {#if activeIndicators.length === 0}
-            <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-              {formatCompactAge(thread.lastActivity)}
-            </span>
+            <span class="whitespace-nowrap text-[0.625rem] text-dimmed">{lastActivityAge}</span>
           {/if}
         </span>
       </span>
@@ -1241,6 +1303,11 @@
            and even.
            A settled thread draws no rail at all: with nothing left to do it
            should attract no attention, so its row shows the glyph alone.
+           While work is running the rail is live: its dashes light from the
+           bottom of the column to the top, one whole dash at a time, and the
+           working mark drops its own glyph for it, so the column is the pin and
+           then one tall column of dashes coming alight. The state reads as work
+           in progress rather than as a pictogram describing it.
            The pin is a real control at the top of the column, lit while the
            pointer is on the row or while the thread is pinned, so pinning is
            never hidden behind the context menu alone. -->
@@ -1282,21 +1349,67 @@
               aria-hidden="true"
             />{/if}
         </span>
-        <span
-          class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
-          style="color: {glyphMark.colour};"
-          role="img"
-          title={markLabel}
-          aria-label={markLabel}
-        >
-          <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
-        </span>
-        {#if spineRailVisible}
+        {#if spineGlyphVisible}
           <span
-            class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
-            style="background: {spineRailPaint};"
-            aria-hidden="true"
-          ></span>
+            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
+            style="color: {glyphMark.colour};"
+            role="img"
+            title={markLabel}
+            aria-label={markLabel}
+          >
+            <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+          </span>
+        {/if}
+        {#if spineRailVisible}
+          {#if spineRailOnLiveGrid}
+            <!-- The spine: short dashes, never more than four, on a grid that
+                 divides the rail's own box. `bind:clientHeight` is what hands the
+                 grid its count, and it is the measured height of the box, not a
+                 guess at it.
+                 Work this window drives climbs the dashes: the light is a clip
+                 stepped to the same grid, which is what keeps a step from stopping
+                 half way through a dash and stretching it. The box, the row and
+                 every row under it stay put, because only the light inside the box
+                 moves.
+                 Work another instance drives, and a draft waiting on a settled
+                 thread, stand the same dashes full: no track, no motion.
+                 The label sits on this box only when it is the row's whole mark. A
+                 row that also draws a glyph says its state there, and a second copy
+                 here would have the reader hear it twice. -->
+            <span
+              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              bind:clientHeight={spineRailHeight}
+              role={spineGlyphVisible ? undefined : 'img'}
+              title={spineGlyphVisible ? undefined : markLabel}
+              aria-label={spineGlyphVisible ? undefined : markLabel}
+            >
+              {#if spineRailClimbs}
+                <span
+                  class="absolute inset-0"
+                  style="background: {spineTrackPaint};"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  class="spine-lit absolute inset-0"
+                  style="background: {spineLivePaint}; --spine-steps: {spineDashCount}; --spine-beat: {LIVE_RAIL_DASH_MS /
+                    1000}s;"
+                  aria-hidden="true"
+                ></span>
+              {:else}
+                <span
+                  class="absolute inset-0"
+                  style="background: {spineLivePaint};"
+                  aria-hidden="true"
+                ></span>
+              {/if}
+            </span>
+          {:else}
+            <span
+              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              style="background: {spineRailPaint};"
+              aria-hidden="true"
+            ></span>
+          {/if}
         {/if}
       </span>
     {/if}
@@ -1355,10 +1468,8 @@
               class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                 ? 'opacity-0'
                 : 'opacity-100'}"
-              aria-hidden={hovered}
+              aria-hidden={hovered}>{lastActivityAge}</span
             >
-              {formatCompactAge(thread.lastActivity)}
-            </span>
           {/if}
         {:else}
           <!-- Current working / last worked model   provider icon alone -->
@@ -1449,10 +1560,8 @@
                 class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                   ? 'opacity-0'
                   : 'opacity-100'}"
-                aria-hidden={hovered}
+                aria-hidden={hovered}>{lastActivityAge}</span
               >
-                {formatCompactAge(thread.lastActivity)}
-              </span>
             {/if}
           </span>
         </span>
@@ -1551,8 +1660,7 @@
               ? 'opacity-0'
               : 'opacity-100'}"
             aria-hidden={hovered}
-            title={`Edited ${formatDateTime(thread.lastActivity)}`}
-            >{formatCompactAge(thread.lastActivity)}</span
+            title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span
           >
         {/if}
       </span>
@@ -1619,8 +1727,7 @@
             {@render authoredWorkMarker(authoredWorkKinds)}
             <span
               class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
-              title={`Edited ${formatDateTime(thread.lastActivity)}`}
-              >{formatCompactAge(thread.lastActivity)}</span
+              title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span
             >
           </span>
         </span>
@@ -1672,7 +1779,7 @@
 </div>
 
 {#if actionsMenu.renameError}
-  <div class="fixed bottom-4 right-4 z-60 bg-danger px-4 py-2 text-sm text-white shadow-lg">
+  <div class="fixed bottom-4 right-4 z-60 bg-danger px-4 py-2 text-sm text-on-danger shadow-lg">
     {actionsMenu.renameError}
   </div>
 {/if}
@@ -1735,3 +1842,46 @@
     currentBucketId={thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
   />
 {/if}
+
+<style>
+  /*
+   * Live work. The rail's dashes are drawn by the row; this is only the light that
+   * climbs them. The light spans the whole cycle: one whole dash at a time from the
+   * bottom to the top, and the top dash hands straight over to the bottom one. There
+   * is no beat at the top and no beat of dark holding the restart back, because both
+   * read as an invisible fifth dash waiting its turn: 1, 2, 3, 4, 1, 2, 3, 4.
+   *
+   * One dash per `LIVE_RAIL_DASH_MS`, whatever the count, so a two-dash rail keeps
+   * the same rhythm as a four-dash one. The count is measured off the rail's own
+   * height (`liveRailDashCount`) and handed to this rule by the markup, along with
+   * the beat. Steps, not a smooth sweep: a light that moved continuously would leave
+   * the dash it is passing half lit and half stretched.
+   *
+   * A clip animates no box, so nothing in the row or the list below it moves while
+   * the light climbs, and the browser only has to repaint this one small column when
+   * a step lands.
+   */
+  @keyframes cio-spine-light {
+    0% {
+      clip-path: inset(100% 0 0 0);
+    }
+    100% {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+
+  .spine-lit {
+    clip-path: inset(100% 0 0 0);
+    animation: cio-spine-light calc(var(--spine-steps, 4) * var(--spine-beat, 0.45s))
+      steps(var(--spine-steps, 4), start) infinite;
+  }
+
+  /* Reduced motion keeps the state and drops the loop: every dash stands lit, so
+     the rail is the whole dashed spine in the working colour, still. */
+  @media (prefers-reduced-motion: reduce) {
+    .spine-lit {
+      clip-path: none;
+      animation: none;
+    }
+  }
+</style>

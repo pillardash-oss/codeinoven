@@ -1,12 +1,13 @@
 <script lang="ts">
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-  import CioDot from '$lib/components/icons/cio/CioDot.svelte'
-  import CioMinus from '$lib/components/icons/cio/CioMinus.svelte'
-  import CioRocket from '$lib/components/icons/cio/CioRocket.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import { Clock3, PackageCheck } from '@lucide/svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+  import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+  import CioMinus from '@pdslng/cio-icon/CioMinus.svelte'
+  import CioPackageCheck from '@pdslng/cio-icon/CioPackageCheck.svelte'
+  import CioRocket from '@pdslng/cio-icon/CioRocket.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { onMount } from 'svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -271,7 +272,7 @@
                   onclick={() => (selectedRun = run)}
                 >
                   {#if run.status !== 'completed'}
-                    <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
+                    <CioClock size={13} class="mt-0.5 shrink-0 text-warning" />
                   {:else if run.conclusion === 'success'}
                     <CioCheckCircle size={13} class="mt-0.5 shrink-0 text-success" />
                   {:else if run.conclusion === 'skipped'}
@@ -312,7 +313,7 @@
 
         <section>
           <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-            <PackageCheck size={11} class="text-dimmed" />
+            <CioPackageCheck size={11} class="text-dimmed" />
             <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Environments
             </h3>

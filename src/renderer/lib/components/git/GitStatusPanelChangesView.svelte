@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type {
     GitCommitInfo,
     GitDiff,
@@ -47,6 +47,7 @@
     stagePathsAction: (paths: string[], staged: boolean) => void
     requestStashFor: (paths: string[]) => void
     openInEditor: (path: string) => void
+    openDirectory: (path: string) => void
     ignorePathsAction: (paths: string[]) => void
     requestDiscard: (paths: string[]) => void
     routeConflictResolution: (initial?: string) => void
@@ -86,6 +87,7 @@
     stagePathsAction,
     requestStashFor,
     openInEditor,
+    openDirectory,
     ignorePathsAction,
     requestDiscard,
     routeConflictResolution,
@@ -268,6 +270,7 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
                 onResolveConflict={(path) => routeConflictResolution(path)}
@@ -319,6 +322,7 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />
@@ -397,6 +401,7 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />

@@ -4,6 +4,7 @@ import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { ensureWindowsGitRuntime } from '../drivers/windows-git-runtime'
 import {
   isWindowsShell,
   powershellLiteral,
@@ -99,6 +100,10 @@ function remoteCommandIssue(stderr: string): string {
     return `The Oven runs Node.js ${nodeVersion[1]}, but version 22 or later is required. Install or select a newer Node.js on the Oven, then retry this step.`
   if (/Node\.js 22 or later is required on this Oven/u.test(stderr))
     return 'Node.js was not found on the Oven\u2019s non-interactive SSH PATH. Confirm Node.js 22 or later is installed and reachable there, then retry this step.'
+  // A Windows request runs through cmd.exe, which reports a missing runtime this
+  // way instead of with the POSIX shell's "command not found".
+  if (/is not recognized as an internal or external command/iu.test(stderr))
+    return 'Node.js was not found on the Oven\u2019s non-interactive SSH PATH. Confirm Node.js 22 or later is installed and reachable there, then retry this step.'
   if (isMissingService(stderr))
     return "The Oven's CodeInOven service file is missing, so no request can run. Reinstalling it repairs this Oven."
   if (/npm (?:ERR!|error).*EACCES/iu.test(stderr))
@@ -140,6 +145,8 @@ function remoteCommandIssue(stderr: string): string {
   return 'Check the package manager or command on the Oven, then retry this step.'
 }
 
+class OvenHostVerificationRequired extends Error {}
+
 export class OvenSsh {
   /**
    * One queue per Oven, so commands to the same machine stay serialized without
@@ -152,7 +159,10 @@ export class OvenSsh {
   private initialized: Promise<void> | undefined
   private multiplexReady: Promise<void> | undefined
 
-  constructor(private readonly registry: OvenSshRegistry) {}
+  constructor(
+    private readonly registry: OvenSshRegistry,
+    private readonly signal?: AbortSignal
+  ) {}
 
   /** Serialize transport work per Oven, so a reconnect never floods one device. */
   execute(
@@ -362,6 +372,9 @@ export class OvenSsh {
       throw new Error('Choose a valid development-server port.')
     this.initialized ??= this.cleanStaleCredentials()
     await this.initialized
+    // Verify before a streaming channel starts, when a trust prompt can still
+    // pause and retry without closing the browser socket.
+    await remoteShell(this, id)
     const sockets = new Set<Socket>()
     const server = createServer((socket) => {
       if (sockets.size >= 4) {
@@ -466,8 +479,27 @@ export class OvenSsh {
     const oven = await this.registry.require(id)
     const connection = oven.connection
     if (!connection) throw new Error('This Oven has no SSH connection.')
-    const env = buildProcessEnvironment()
-    const executable = resolveExecutablePath('ssh', env)
+    if (connection.authentication === 'password' && !oven.passwordRef)
+      throw new Error('Save the SSH account password for this Oven.')
+    const needsAskpass =
+      connection.authentication === 'password' ||
+      (connection.authentication === 'vault' && Boolean(oven.passphraseRef))
+    // MSYS OpenSSH can execute our shell askpass helper. Native Windows OpenSSH cannot.
+    let env = buildProcessEnvironment()
+    const nativeAgentSsh =
+      process.platform === 'win32' && !needsAskpass && !env['SSH_AUTH_SOCK']
+        ? resolveExecutablePath(
+            join(env['SystemRoot'] || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe'),
+            env
+          )
+        : undefined
+    const existingSsh = nativeAgentSsh ?? resolveExecutablePath('ssh', env)
+    const windowsGit =
+      process.platform === 'win32' && (needsAskpass || !existingSsh)
+        ? await ensureWindowsGitRuntime(env)
+        : null
+    if (windowsGit) env = buildProcessEnvironment()
+    const executable = windowsGit?.ssh ?? existingSsh
     if (!executable) throw new Error('Install OpenSSH on this computer to connect to Ovens.')
     const args = [
       tty ? '-tt' : '-T',
@@ -493,7 +525,7 @@ export class OvenSsh {
     // Share one SSH connection per Oven across every command in the app, so a
     // turn does not pay a full handshake on each poll. `ControlPersist` closes
     // it only once nothing is using it (see oven-ssh-multiplex.ts).
-    if (multiplexSupported()) {
+    if (multiplexSupported() && !this.signal) {
       this.multiplexReady ??= ensureMultiplexDirectory(this.registry.storage)
       await this.multiplexReady
       args.push(
@@ -510,10 +542,6 @@ export class OvenSsh {
     if (connection.user) args.push('-l', connection.user)
     let scratch: string | undefined
     const configureAskpass = async (directory: string, reference: string): Promise<void> => {
-      if (process.platform === 'win32')
-        throw new Error(
-          'Password and encrypted-key connections require an SSH askpass helper on Windows. Use SSH agent authentication on this device.'
-        )
       const helper = join(directory, 'askpass')
       await writeFile(helper, '#!/bin/sh\nprintf \'%s\\n\' "$CIO_OVEN_KEY_PASSPHRASE"\n', {
         mode: 0o700,
@@ -574,7 +602,7 @@ export class OvenSsh {
         connection.host,
         ...(command === undefined ? [] : [command])
       )
-      return {
+      const invocation: OvenSshInvocation = {
         executable,
         args,
         env,
@@ -583,6 +611,15 @@ export class OvenSsh {
           if (scratch) await rm(scratch, { recursive: true, force: true })
         }
       }
+      if (tty) {
+        const { verifyOvenHost } = await import('./oven-host-trust')
+        await verifyOvenHost(
+          invocation,
+          this.registry.storage.resolve('ovens/host-verification'),
+          this.signal
+        )
+      }
+      return invocation
     } catch (error) {
       delete env['CIO_OVEN_KEY_PASSPHRASE']
       if (scratch) await rm(scratch, { recursive: true, force: true })
@@ -598,9 +635,11 @@ export class OvenSsh {
     channel?: { socket: Socket; remotePort: number },
     onOutput?: (chunk: string) => void,
     forwardAgent = false,
-    maxOutputBytes = 2 * 1024 * 1024
+    maxOutputBytes = 2 * 1024 * 1024,
+    allowHostVerification = true
   ): Promise<string> {
     if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
+    this.signal?.throwIfAborted()
     const prepared = await this.prepare(
       id,
       channel ? undefined : command,
@@ -610,6 +649,7 @@ export class OvenSsh {
     )
     const { executable, args, env } = prepared
     try {
+      this.signal?.throwIfAborted()
       if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
       return await new Promise<string>((resolve, reject) => {
         const child = spawn(executable, args, {
@@ -617,11 +657,18 @@ export class OvenSsh {
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe']
         })
+        const abort = (): void => {
+          child.kill('SIGKILL')
+        }
+        this.signal?.addEventListener('abort', abort, { once: true })
+        if (this.signal?.aborted) abort()
         let output = ''
         let remoteStderr = ''
         let bytes = 0
         let failure: Error | undefined
         let timedOut = false
+        let unknownHost = false
+        let changedHost = false
         let sshIssue = 'Check authentication and trust this host with OpenSSH before reconnecting.'
         const timer =
           timeoutMs > 0
@@ -654,10 +701,12 @@ export class OvenSsh {
           const text = chunk.toString('utf8')
           remoteStderr = (remoteStderr + text).slice(-8192)
           onOutput?.(text)
-          if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(text)) {
+          if (/REMOTE HOST IDENTIFICATION HAS CHANGED|REVOKED HOST KEY/u.test(text)) {
+            changedHost = true
             sshIssue =
               'The host key changed. Verify the host identity before updating OpenSSH trust.'
           } else if (/Host key verification failed/u.test(text)) {
+            unknownHost = true
             sshIssue =
               'This host is not trusted by OpenSSH. Verify its fingerprint and connect with OpenSSH first.'
           } else if (/Permission denied/u.test(text)) {
@@ -682,11 +731,18 @@ export class OvenSsh {
         })
         child.stdin.on('error', () => undefined)
         child.on('close', (code) => {
+          unknownHost ||= /Host key verification failed/u.test(remoteStderr)
+          changedHost ||= /REMOTE HOST IDENTIFICATION HAS CHANGED|REVOKED HOST KEY/u.test(
+            remoteStderr
+          )
           clearTimeout(timer)
+          this.signal?.removeEventListener('abort', abort)
           delete env['CIO_OVEN_KEY_PASSPHRASE']
-          if (failure) reject(failure)
+          if (this.signal?.aborted) reject(this.signal.reason)
+          else if (failure) reject(failure)
           else if (timedOut)
             reject(new Error('The Oven did not respond before the connection timeout.'))
+          else if (unknownHost && !changedHost) reject(new OvenHostVerificationRequired(sshIssue))
           else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
           else if (code !== 0) {
@@ -700,6 +756,26 @@ export class OvenSsh {
         })
         if (!channel) child.stdin.end(input)
       })
+    } catch (error) {
+      if (!(error instanceof OvenHostVerificationRequired) || !allowHostVerification || channel)
+        throw error
+      const { verifyOvenHost } = await import('./oven-host-trust')
+      await verifyOvenHost(
+        prepared,
+        this.registry.storage.resolve('ovens/host-verification'),
+        this.signal
+      )
+      return await this.run(
+        id,
+        command,
+        input,
+        timeoutMs,
+        channel,
+        onOutput,
+        forwardAgent,
+        maxOutputBytes,
+        false
+      )
     } finally {
       await prepared.dispose()
     }

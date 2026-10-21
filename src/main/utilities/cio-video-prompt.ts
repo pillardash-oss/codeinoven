@@ -1,16 +1,22 @@
 import { CIO_VIDEO_TAG, isCioVideoRequest, type VideoSessionMode } from '../../lib/session-tags'
 
 /**
- * The explicit video-session tag.
+ * How a video session opens, and the contract a turn inside one carries.
  *
- * A video session is user-started, never discovered, exactly the way
- * `@cio-design` starts a design session and `@cio-utility` starts a setup turn:
- * the user types `@cio-video` (or picks `/cio-video`) and says what to make.
- * The tag promotes the app-owned video capability (`cio:video`) to an *active*
+ * A video session opens one of two ways, and it is the same session either way,
+ * exactly as a design session does. The user types `@cio-video` (or picks
+ * `/cio-video`) and says what to make; that is the fast path, because the tag
+ * promotes the app-owned video capability (`cio:video`) to an *active*
  * capability for the turn, so its playbook is already in context and its
  * `preview` and `capture` operations are callable without a search and an
- * activation round trip. A user who asked for a video should not watch the
- * agent hunt for the tool that makes one.
+ * activation round trip.
+ *
+ * The other way is the agent reaching for the tool: activating `cio:video` from
+ * the utility gateway opens the same session and hands back the same briefing,
+ * so a user who asked for a video in their own words never watches the session
+ * go missing. Either way the app records the session on the thread row, which is
+ * what the coordinator board reads to dock and what keeps the thread's later
+ * turns inside it.
  *
  * The session continues for the rest of the thread: later turns get the shorter
  * continuation contract and the capability stays active, because an edit is
@@ -26,20 +32,15 @@ export { CIO_VIDEO_TAG, isCioVideoRequest }
 export type { VideoSessionMode }
 
 /**
- * The first turn of a video session.
+ * How to run a video session.
  *
- * Short on purpose: the contract, the folder and both operations arrive with
- * the capability's own playbook, so this only has to say how to run the session
- * and what the user is watching.
+ * One copy, used by both ways a session opens, so the turn the user tagged and
+ * the turn an agent opened by activating the capability cannot describe the
+ * session differently. Short on purpose: the contract, the folder and both
+ * operations arrive with the capability's own playbook, so this only has to say
+ * how to run the session and what the user is watching.
  */
-export const CIO_VIDEO_TURN_PROMPT = `CodeInOven video session
-
-The user opened this turn with @cio-video, so this is a video session. The
-app-owned video capability is already active for it: its playbook is in your
-context and its preview and capture operations are callable now. Making this
-video is the work of this turn, not a preliminary to it.
-
-How to run the session:
+const VIDEO_SESSION_STEPS = `How to run the session:
 
 1. Establish the brief before writing a frame: what the video is for, who
    watches it, where it will be watched, how long it should run and in what
@@ -79,7 +80,39 @@ How to run the session:
 
 Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
 
-/** Every later turn of the same session. */
-export const CIO_VIDEO_CONTINUE_PROMPT = `This thread's video session continues: the user opened it with @cio-video, and the video capability stays active. Keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Report what changed and what a viewer now sees.
+/**
+ * The briefing that opens a video session.
+ *
+ * The design session's shape exactly: two turns can open it, the project's own
+ * record decides the folder, and the folder is stated here rather than left to the
+ * playbook because this is the message an agent reads at the moment it reaches for
+ * the tool, when files can already exist somewhere else.
+ */
+export function videoSessionBriefing(opened: 'tag' | 'activation', root: string): string {
+  const lead =
+    opened === 'tag'
+      ? 'The user opened this turn with @cio-video, so this is a video session.'
+      : 'You activated the app-owned video capability, and activating it opens a video session on this thread.'
+  return `CodeInOven video session
+
+${lead} The app-owned video capability is active: its playbook is in your context and its preview and capture operations are callable now. Making this video is the work of this turn, not a preliminary to it.
+
+Where the composition goes: \`${root}\`. Write it as \`${root}/<name>/\`, and if any of it already sits somewhere else (a scratch folder such as \`.cio/work\`, \`.cio/tmp\`, or the repository root), move it into \`${root}/<name>/\` now and continue there. The board lists the folders under \`${root}\` and nothing else, so a composition left in another folder is one the user never sees. This is the folder for the rest of the session: it is the project's live record, a save-path change moves it, and it outranks any path named in an older message.
+
+${VIDEO_SESSION_STEPS}`
+}
+
+/**
+ * Every later turn of the same session, however it was opened.
+ *
+ * Deliberately silent about who opened it: the row is the record, and a turn that
+ * was opened by an agent activating the capability is the same session as one the
+ * user tagged, so naming the tag here would state something untrue about half the
+ * threads that read it. The folder is named for the opposite reason: it is the
+ * project's live record, and a turn that reads it cannot move the work by accident.
+ */
+export function videoSessionContinuation(root: string): string {
+  return `This thread is in a video session, and the video capability stays active. The composition folder is \`${root}\`, and the work belongs there: move anything of this composition that sits elsewhere into it, then keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Report what changed and what a viewer now sees.
 
 Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
+}

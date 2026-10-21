@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
-  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { ElapsedTimer } from '$lib/elapsed.svelte'

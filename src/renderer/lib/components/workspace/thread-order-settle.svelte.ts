@@ -18,7 +18,7 @@ const MAX_DELAY_MS = 1500
 /** Book-keeping for one list. Plain fields: never read reactively. */
 interface SettledList {
   /** The list this pane was last handed, compared by row identity. */
-  desired: Thread[]
+  desired: readonly Thread[]
   /** Position-relevant field signature per row, to tell a moved row from a tick. */
   keys: Map<string, string>
   /** When the pending move was first held back, so the cap can be measured. */
@@ -80,7 +80,11 @@ export class ThreadOrderSettle {
    * Hand the settle the list a pane was just given, and decide whether it is
    * rendered now or held back.
    */
-  sync(key: string, desired: Thread[], draftThreadKeys?: ReadonlySet<string> | null): void {
+  sync(
+    key: string,
+    desired: readonly Thread[],
+    draftThreadKeys?: ReadonlySet<string> | null
+  ): void {
     let list = this.#lists.get(key)
     if (list === undefined) {
       list = {
@@ -124,11 +128,12 @@ export class ThreadOrderSettle {
    * A set that no longer matches the committed order (a row just appeared or
    * left) is shown as handed over, because the settle has no arrangement for it
    * yet, and dropping a row would be worse than one frame of the sort the `sync`
-   * that follows immediately commits.
+   * that follows immediately commits. The hand-over is copied, so the mutable
+   * array a caller renders can never alias a caller's own readonly list.
    */
-  view(key: string, desired: Thread[]): Thread[] {
+  view(key: string, desired: readonly Thread[]): Thread[] {
     const order = this.#orders.get(key)
-    if (order === undefined || order.length !== desired.length) return desired
+    if (order === undefined || order.length !== desired.length) return [...desired]
     // Same scratch-index reasoning as the sync side above.
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
     const byId = new Map<string, Thread>()
@@ -136,7 +141,7 @@ export class ThreadOrderSettle {
     const arranged: Thread[] = []
     for (const id of order) {
       const row = byId.get(id)
-      if (row === undefined) return desired
+      if (row === undefined) return [...desired]
       arranged.push(row)
     }
     return arranged
@@ -171,7 +176,7 @@ export class ThreadOrderSettle {
     }, delay)
   }
 
-  #commit(key: string, list: SettledList, desired: Thread[]): void {
+  #commit(key: string, list: SettledList, desired: readonly Thread[]): void {
     if (list.timer !== undefined) clearTimeout(list.timer)
     list.timer = undefined
     list.pendingSince = 0

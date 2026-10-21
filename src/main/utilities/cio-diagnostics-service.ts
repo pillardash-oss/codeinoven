@@ -83,6 +83,10 @@ export interface DiagnosticThreadSummary {
   harnessIds: string[]
   createdAt: number
   lastActivity: number
+  /** The matching passage, when the thread was found by its conversation. */
+  snippet?: string
+  /** How it matched: a title, a message, or meaning rather than words. */
+  matchedIn?: 'title' | 'message' | 'intent'
 }
 
 export interface DiagnosticMessage {
@@ -227,9 +231,11 @@ function formatQueryValue(value: unknown): string | number | null {
 function summarizeDiagnosticThread(
   thread: Thread,
   projectName: string,
-  harnessIds: string[]
+  harnessIds: string[],
+  matchedIn?: DiagnosticThreadSummary['matchedIn'],
+  snippet?: string
 ): DiagnosticThreadSummary {
-  return {
+  const summary: DiagnosticThreadSummary = {
     id: thread.id,
     projectId: thread.projectId,
     projectName: redactSensitiveText(projectName),
@@ -240,6 +246,9 @@ function summarizeDiagnosticThread(
     createdAt: thread.createdAt,
     lastActivity: thread.lastActivity
   }
+  if (matchedIn) summary.matchedIn = matchedIn
+  if (snippet) summary.snippet = redactSensitiveText(snippet).slice(0, MAX_MESSAGE_TEXT_LENGTH)
+  return summary
 }
 
 /** Parse a main.jsonl-style JSONL record into a bounded, redacted log entry. */
@@ -278,7 +287,15 @@ export class CioDiagnosticsService {
 
   constructor(
     private readonly db: Database,
-    private readonly projectNameById: () => Map<string, string>
+    private readonly projectNameById: () => Map<string, string>,
+    /**
+     * Hybrid thread search (keyword plus semantic), supplied by the turn's
+     * thread manager. Absent in a session without one, and the title search
+     * below is then the whole answer.
+     */
+    private readonly threadSearch?: (
+      query: string
+    ) => Promise<import('../../lib/types').ThreadSearchResult[]>
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.messageRepo = new AgentMessageRepo(db)
@@ -307,16 +324,41 @@ export class CioDiagnosticsService {
     return { matchedThread: candidates[0] ?? null, candidates }
   }
 
-  /** Search thread titles across every project for a case-insensitive substring. */
+  /**
+   * Find the threads a question is about, across every project.
+   *
+   * Hybrid search reads titles and conversation content, and ranks by meaning
+   * when the local embedding model answers, so an agent gathering context can
+   * find a conversation it shares no words with. Each hit carries its matching
+   * passage; `read_messages` then reads the thread itself. A session without a
+   * search provider, or a search that found nothing, falls back to matching
+   * titles, which is what this action answered before.
+   */
   async searchThreads(query: string): Promise<DiagnosticThreadSummary[]> {
-    const needle = query.trim().toLocaleLowerCase()
+    const needle = query.trim()
     if (!needle) return []
+    if (this.threadSearch) {
+      const results = await this.threadSearch(needle).catch(() => [])
+      if (results.length > 0) {
+        return results
+          .slice(0, MAX_THREAD_LIST_RESULTS)
+          .map((result) =>
+            this.summarize(
+              result.thread,
+              this.projectNameById().get(result.thread.projectId) ?? '',
+              result.kind === 'intent' ? 'intent' : result.kind,
+              result.snippet
+            )
+          )
+      }
+    }
+    const lowered = needle.toLocaleLowerCase()
     const all = await this.threadRepo.listAllForHydrationViaWorker({ limit: 500 })
     const names = this.projectNameById()
     return all
-      .filter((thread) => thread.title.toLocaleLowerCase().includes(needle))
+      .filter((thread) => thread.title.toLocaleLowerCase().includes(lowered))
       .slice(0, MAX_THREAD_LIST_RESULTS)
-      .map((thread) => this.summarize(thread, names.get(thread.projectId) ?? ''))
+      .map((thread) => this.summarize(thread, names.get(thread.projectId) ?? '', 'title'))
   }
 
   /**
@@ -505,12 +547,19 @@ export class CioDiagnosticsService {
     return this.prepareReadOnly(sql).statement.all()
   }
 
-  private summarize(thread: Thread, projectNameOverride?: string): DiagnosticThreadSummary {
+  private summarize(
+    thread: Thread,
+    projectNameOverride?: string,
+    matchedIn?: DiagnosticThreadSummary['matchedIn'],
+    snippet?: string
+  ): DiagnosticThreadSummary {
     const names = this.projectNameById()
     return summarizeDiagnosticThread(
       thread,
       projectNameOverride ?? names.get(thread.projectId) ?? '',
-      thread.usedHarnessIds ?? []
+      thread.usedHarnessIds ?? [],
+      matchedIn,
+      snippet
     )
   }
 

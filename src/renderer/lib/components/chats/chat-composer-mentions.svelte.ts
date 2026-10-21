@@ -5,6 +5,7 @@ import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
   composerMentionQuery,
   COMPOSER_BUILT_IN_TAGS,
+  type ComposerAssistantTag,
   type ComposerMentionEntry
 } from './composer-mentions'
 import {
@@ -22,6 +23,22 @@ const MAX_PROJECT_REFERENCES = 20
 export interface ComposerMentionSearchOptions {
   getAssignmentTasks: () => AssignmentTask[]
   getFileTagProjectId: () => string | undefined
+  /**
+   * Assistants and assistant threads this composer may tag. Assistant View
+   * supplies them; every other composer leaves them out, so tagging an
+   * assistant or its thread is offered only where the Assistant tab is open.
+   */
+  getAssistantTags?: () => readonly ComposerAssistantTag[]
+}
+
+/** Whether an assistant tag row answers this (already lower-cased) query. */
+function assistantTagMatches(tag: ComposerAssistantTag, query: string): boolean {
+  if (!query) return true
+  return (
+    tag.name.toLocaleLowerCase().includes(query) ||
+    tag.detail.toLocaleLowerCase().includes(query) ||
+    tag.keywords.some((keyword) => keyword.includes(query))
+  )
 }
 
 /**
@@ -62,9 +79,14 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
             .some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
         })
         .map((entry) => ({ type: 'task', entry }))
+      const assistantEntries: ComposerMentionEntry[] = (
+        options.getAssistantTags?.() ?? []
+      )
+        .filter((tag) => assistantTagMatches(tag, normalizedQuery))
+        .map((entry) => ({ type: 'assistant' as const, entry }))
       // Local tags must remain usable while the filesystem index warms or fails.
       query = nextQuery
-      entries = [...utilityEntries, ...taskEntries].slice(0, 40)
+      entries = [...utilityEntries, ...assistantEntries, ...taskEntries].slice(0, 40)
       index = 0
       open = true
       const fileTagProjectId = options.getFileTagProjectId()
@@ -81,6 +103,7 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
         : []
       const nextEntries: ComposerMentionEntry[] = [
         ...utilityEntries,
+        ...assistantEntries,
         ...taskEntries,
         ...files.map((entry) => ({ type: 'project' as const, entry }))
       ]

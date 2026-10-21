@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
-  import Modal from '../ui/Modal.svelte'
+  import { Popover } from 'bits-ui'
   import ColorPicker from './ColorPicker.svelte'
 
   interface Props {
@@ -85,35 +85,36 @@
       {/if}
     </button>
   {/each}
-  <button
-    type="button"
-    class="relative flex {swatchClass} items-center justify-center border-2 transition-transform hover:scale-110 {isCustomColor
-      ? 'border-foreground'
-      : 'border-dashed border-muted'}"
-    style={isCustomColor ? `background-color: ${value}; box-shadow: 0 0 0 1px ${value}` : ''}
-    title="Custom colour"
-    aria-label="Custom colour"
-    aria-pressed={isCustomColor}
-    onclick={() => (showPicker = true)}
-  >
-    <CioPalette
-      size={size === 'sm' ? 10 : 12}
-      class="text-muted {isCustomColor ? 'opacity-0' : ''}"
-    />
-  </button>
+  <Popover.Root bind:open={showPicker}>
+    <Popover.Trigger
+      class="relative flex {swatchClass} items-center justify-center border-2 transition-transform hover:scale-110 {isCustomColor
+        ? 'border-foreground'
+        : 'border-dashed border-muted'}"
+      style={isCustomColor ? `background-color: ${value}; box-shadow: 0 0 0 1px ${value}` : ''}
+      title="Custom colour"
+      aria-label="Custom colour"
+      aria-pressed={isCustomColor}
+    >
+      <CioPalette
+        size={size === 'sm' ? 10 : 12}
+        class="text-muted {isCustomColor ? 'opacity-0' : ''}"
+      />
+    </Popover.Trigger>
+    <Popover.Portal>
+      <Popover.Content
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        collisionPadding={12}
+        class="z-80 w-64 max-w-[calc(100vw-1.5rem)] border bg-surface p-4 text-foreground shadow-xl"
+        aria-label="Custom colour"
+      >
+        <ColorPicker
+          value={value ?? PROJECT_COLORS[0].value}
+          {oncolorchange}
+          onclose={() => (showPicker = false)}
+        />
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
 </div>
-
-<Modal
-  open={showPicker}
-  title="Custom colour"
-  onClose={() => (showPicker = false)}
-  chrome={false}
-  panelWidth="max-w-[260px]"
-  panelClass="p-4"
->
-  <ColorPicker
-    value={value ?? PROJECT_COLORS[0].value}
-    {oncolorchange}
-    onclose={() => (showPicker = false)}
-  />
-</Modal>

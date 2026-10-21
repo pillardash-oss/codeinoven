@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioChat from '@pdslng/cio-icon/CioChat.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   /**
    * The pull request conversation, as GitHub organises it.
    *
@@ -15,8 +17,6 @@
    * comment that quotes it. The reply box says which one it is doing.
    */
 
-  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
   import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { gitState } from '$lib/stores/git.svelte'

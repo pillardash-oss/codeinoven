@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import { Code } from '@lucide/svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import type { CustomIcon } from '$shared/types'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {
@@ -228,7 +228,7 @@
           if (showSvgInput && customSvg) pastedSvg = customSvg
         }}
       >
-        <Code size={12} />
+        <CioCode size={12} />
         {showSvgInput ? 'Hide SVG' : customSvg ? 'Edit SVG' : 'Add SVG'}
       </button>
     </div>

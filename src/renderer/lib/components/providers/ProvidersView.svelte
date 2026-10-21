@@ -1,18 +1,18 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
@@ -36,7 +36,6 @@
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
   } from '$shared/types'
-  import { Plug2 } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -884,7 +883,7 @@
                   disabled={!canAddProvider(provider)}
                   onclick={() => providerConnectFlow.open(provider.id)}
                 >
-                  <Plug2 size={13} /> Manage providers
+                  <CioPlug size={13} /> Manage providers
                 </button>
               {/if}
 

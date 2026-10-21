@@ -3,6 +3,10 @@
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
+  import SidebarListRow from '$lib/components/shared/SidebarListRow.svelte'
+  import { RowPageBudget, THREAD_LIST_PAGE_SIZE } from '$lib/components/shared/RowPageBudget.svelte'
+  import { ListRowReflow, rowArrangement } from '$lib/motion'
+  import { ThreadOrderSettle } from '$lib/components/workspace/thread-order-settle.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
   import { sortAssistants } from '$shared/assistant-order'
@@ -251,6 +255,72 @@
       .sort((a, b) => pinnedThreadSort(a, b))
   )
 
+  /**
+   * Holds activity-driven reordering of the task lists back, exactly as the
+   * thread sidebars do: the lists sort by last activity, and a live run ticks
+   * constantly, so without this an assistant's tasks re-sort under the reader on
+   * every tick. Runs sort by creation and never move, so only the task lists are
+   * settled.
+   */
+  const assistantOrderSettle = new ThreadOrderSettle()
+
+  /** One page of tasks per assistant is mounted; the rest is one click away. */
+  const assistantTaskBudget = new RowPageBudget(THREAD_LIST_PAGE_SIZE)
+
+  // The assistant list travels on the same pair of measurements as the thread
+  // lists: where every row was before the DOM updated, and where it is after. The
+  // rows live inside nested containers (an assistant, its task, its runs), so
+  // Svelte's per-list FLIP has nothing to measure; this pair has the whole tree's
+  // boxes. See `ListRowReflow`.
+  const assistantRowReflow = new ListRowReflow()
+  let assistantListElement = $state<HTMLElement | null>(null)
+  /** When the assistant list first painted; a row created after this is an
+   *  arrival and plays the fade, every other row appears at its final place. */
+  const assistantListAttachedAt = Date.now()
+
+  /**
+   * The rows the assistant list is about to draw, in render order: the pinned
+   * tasks, then each assistant's tasks and their runs, then the standalone tasks.
+   *
+   * It is built from the data lists rather than mirrored from every fold, so it
+   * only changes when rows really move. A fold animates its own height (`slide`)
+   * and needs no travel, and an over-inclusive entry costs at most one measurement
+   * in which no row moved, which the reflow skips.
+   */
+  const assistantRowArrangement = $derived(
+    rowArrangement([
+      { key: 'pinned', rowKeys: pinnedTasks.map((task) => task.id) },
+      ...orderedAssistants.map((assistant) => ({
+        key: `assistant:${assistant.id}`,
+        rowKeys: [
+          ...nestedAssistantTasks(assistant.id).map((task) => task.id),
+          ...runsOfAssistant(assistant.id).map((run) => run.id)
+        ]
+      })),
+      { key: 'standalone', rowKeys: standaloneTasks.map((task) => task.id) }
+    ])
+  )
+
+  $effect(() => {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const activeKeys = new Set<string>(['assistant:standalone'])
+    for (const assistant of orderedAssistants) {
+      const key = `assistant:${assistant.id}`
+      activeKeys.add(key)
+      assistantOrderSettle.sync(key, nestedTasksByAssistant.get(assistant.id) ?? EMPTY_TASKS)
+    }
+    assistantOrderSettle.sync('assistant:standalone', standaloneTasks)
+    assistantOrderSettle.prune(activeKeys)
+  })
+
+  $effect.pre(() => {
+    assistantRowReflow.capture(assistantListElement, scroller ?? null, assistantRowArrangement)
+  })
+
+  $effect(() => {
+    assistantRowReflow.play(assistantListElement, scroller ?? null, assistantRowArrangement)
+  })
+
   /** Open a pinned task, docking its assistant's knowledge panel like a nested row. */
   function openPinnedTask(task: Thread): void {
     onOpenTask(task)
@@ -408,7 +478,13 @@
 
   function filteredAssistantTasks(assistant: Assistant): readonly Thread[] {
     const query = (assistantSearchQueries.get(assistant.id) ?? '').trim().toLowerCase()
-    const list = nestedAssistantTasks(assistant.id)
+    // The settled order is what the reader sees, so both the open list and the
+    // search filter read from it; the query then narrows the rows, never reorders
+    // them.
+    const list = assistantOrderSettle.view(
+      `assistant:${assistant.id}`,
+      nestedAssistantTasks(assistant.id)
+    )
     if (!assistantSearchOpen.has(assistant.id) || query.length === 0) return list
     return list.filter((task) => task.title.toLowerCase().includes(query))
   }
@@ -447,24 +523,30 @@
     >
       {#each previewRuns(runs, expandedRuns.has(key)) as run (run.id)}
         {@const runForeignThread = foreignRuns.isForeign(run.projectId, run.id) ? run : null}
-        <AssistantTaskRow
-          task={run}
-          variant="run"
-          foreignThread={runForeignThread}
-          {color}
-          active={run.id === selectedThreadId}
-          missed={false}
-          nextRunAt={null}
-          contextLabel={runContextLabel(run, nested, assistantName)}
-          onSelect={onOpenTask}
-          onRename={onRenameTask}
-          onTogglePin={onTogglePinTask}
-          onDelete={onDeleteTask}
-          onFork={onForkTask}
-          onOpenNotes={onOpenTaskNotes}
-          onHandedOff={onHandedOffTask}
-          {onHideKnowledge}
-        />
+        <SidebarListRow
+          rowKey={run.id}
+          createdAt={run.createdAt}
+          attachedAt={assistantListAttachedAt}
+        >
+          <AssistantTaskRow
+            task={run}
+            variant="run"
+            foreignThread={runForeignThread}
+            {color}
+            active={run.id === selectedThreadId}
+            missed={false}
+            nextRunAt={null}
+            contextLabel={runContextLabel(run, nested, assistantName)}
+            onSelect={onOpenTask}
+            onRename={onRenameTask}
+            onTogglePin={onTogglePinTask}
+            onDelete={onDeleteTask}
+            onFork={onForkTask}
+            onOpenNotes={onOpenTaskNotes}
+            onHandedOff={onHandedOffTask}
+            {onHideKnowledge}
+          />
+        </SidebarListRow>
       {/each}
       {#if runs.length > TASK_RUN_PREVIEW}
         <button
@@ -486,27 +568,29 @@
   select: (task: Thread) => void,
   nestRuns: boolean
 )}
-  <AssistantTaskRow
-    {task}
-    foreignThread={assistantForeignThread(task, runsFor(task.id), (projectId, threadId) =>
-      foreignRuns.isForeign(projectId, threadId)
-    )}
-    {color}
-    active={task.id === selectedThreadId}
-    missed={missedThreadIds.has(task.id)}
-    nextRunAt={assistantStore.nextRunForTask(task)}
-    scheduled={assistantStore.taskScheduled(task)}
-    onToggleScheduled={(t) => void toggleTaskScheduled(t)}
-    runWorking={nestRuns && taskRunWorking(task.id)}
-    onSelect={select}
-    onRename={onRenameTask}
-    onTogglePin={onTogglePinTask}
-    onDelete={onDeleteTask}
-    onFork={onForkTask}
-    onOpenNotes={onOpenTaskNotes}
-    onHandedOff={onHandedOffTask}
-    {onHideKnowledge}
-  />
+  <SidebarListRow rowKey={task.id} createdAt={task.createdAt} attachedAt={assistantListAttachedAt}>
+    <AssistantTaskRow
+      {task}
+      foreignThread={assistantForeignThread(task, runsFor(task.id), (projectId, threadId) =>
+        foreignRuns.isForeign(projectId, threadId)
+      )}
+      {color}
+      active={task.id === selectedThreadId}
+      missed={missedThreadIds.has(task.id)}
+      nextRunAt={assistantStore.nextRunForTask(task)}
+      scheduled={assistantStore.taskScheduled(task)}
+      onToggleScheduled={(t) => void toggleTaskScheduled(t)}
+      runWorking={nestRuns && taskRunWorking(task.id)}
+      onSelect={select}
+      onRename={onRenameTask}
+      onTogglePin={onTogglePinTask}
+      onDelete={onDeleteTask}
+      onFork={onForkTask}
+      onOpenNotes={onOpenTaskNotes}
+      onHandedOff={onHandedOffTask}
+      {onHideKnowledge}
+    />
+  </SidebarListRow>
   {#if nestRuns}
     {@render runRows(runsFor(task.id), color, task.id, `Runs of ${task.title}`, true)}
   {/if}
@@ -515,6 +599,7 @@
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
   <div class="flex h-full min-h-0 flex-col">
     <div
+      bind:this={assistantListElement}
       class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5"
       role="list"
       aria-label="Assistants and tasks"
@@ -545,6 +630,12 @@
         {@const assistantTaskList = assistantTasks(assistant.id)}
         {@const assistantRunList = runsOfAssistant(assistant.id)}
         {@const visibleTasks = filteredAssistantTasks(assistant)}
+        {@const tasksShown = assistantTaskBudget.visibleRows(
+          `assistant:${assistant.id}`,
+          visibleTasks,
+          selectedThreadId
+        )}
+        {@const tasksHidden = assistantTaskBudget.hiddenCount(visibleTasks, tasksShown)}
         {@const searching = assistantSearchOpen.has(assistant.id)}
         {@const query = assistantSearchQueries.get(assistant.id) ?? ''}
         {@const siblingRunRows = siblingRuns(assistant)}
@@ -580,7 +671,7 @@
             {#if searching && query.trim().length > 0 && visibleTasks.length === 0}
               <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
             {:else}
-              {#each visibleTasks as task (task.id)}
+              {#each tasksShown as task (task.id)}
                 {@render taskWithRuns(
                   task,
                   assistant.color,
@@ -602,6 +693,24 @@
                   </p>
                 {/if}
               {/each}
+              {#if tasksHidden > 0}
+                <button
+                  type="button"
+                  class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  onclick={() =>
+                    assistantTaskBudget.showMore(`assistant:${assistant.id}`, visibleTasks.length)}
+                >
+                  Show {tasksHidden} more
+                </button>
+              {:else if assistantTaskBudget.visibleCount(`assistant:${assistant.id}`) > THREAD_LIST_PAGE_SIZE}
+                <button
+                  type="button"
+                  class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  onclick={() => assistantTaskBudget.showLess(`assistant:${assistant.id}`)}
+                >
+                  Show less
+                </button>
+              {/if}
             {/if}
             {@render runRows(
               siblingRunRows,
@@ -616,12 +725,21 @@
       {/each}
 
       {#if standaloneTasks.length > 0}
+        {@const standaloneShown = assistantTaskBudget.visibleRows(
+          'assistant:standalone',
+          standaloneTasks,
+          selectedThreadId
+        )}
+        {@const standaloneHidden = assistantTaskBudget.hiddenCount(
+          standaloneTasks,
+          standaloneShown
+        )}
         <div
           class="mt-2 mb-1 border-b border-border px-2 pb-1 text-[0.5625rem] font-semibold tracking-wide text-dimmed uppercase"
         >
           Tasks
         </div>
-        {#each standaloneTasks as task (task.id)}
+        {#each standaloneShown as task (task.id)}
           {@render taskWithRuns(
             task,
             undefined,
@@ -632,6 +750,24 @@
             true
           )}
         {/each}
+        {#if standaloneHidden > 0}
+          <button
+            type="button"
+            class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            onclick={() =>
+              assistantTaskBudget.showMore('assistant:standalone', standaloneTasks.length)}
+          >
+            Show {standaloneHidden} more
+          </button>
+        {:else if assistantTaskBudget.visibleCount('assistant:standalone') > THREAD_LIST_PAGE_SIZE}
+          <button
+            type="button"
+            class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            onclick={() => assistantTaskBudget.showLess('assistant:standalone')}
+          >
+            Show less
+          </button>
+        {/if}
       {/if}
     </div>
   </div>

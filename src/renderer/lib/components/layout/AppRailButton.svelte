@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { ICON_SIZE, RAIL_ICON_STROKE } from '$lib/components/icons/cio/scale'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import RailAudioBadge from './RailAudioBadge.svelte'
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type { Component, Snippet } from 'svelte'
 
   interface Props {
@@ -79,7 +80,7 @@
   aria-label={label}
   aria-current={active ? 'page' : undefined}
   title={label}
-  data-shortcut={shortcut.length > 0 ? shortcut.join(',') : undefined}
+  data-shortcut={encodeShortcutTokens(shortcut)}
   {disabled}
   onpointerenter={onHover}
   onclick={onSelect}
@@ -111,7 +112,11 @@
       </span>
     </span>
   {:else}
-    <Icon size={ICON_SIZE.rail} class={spin ? 'animate-spin' : undefined} />
+    <Icon
+      size={ICON_SIZE.rail}
+      strokeWidth={RAIL_ICON_STROKE}
+      class={spin ? 'animate-spin' : undefined}
+    />
   {/if}
   {#if playing}
     <!-- The speaker rides the opposite corner from the badge stack, so a view can

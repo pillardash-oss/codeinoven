@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
-  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { ProjectFileTab, ProjectFileView } from '$lib/stores/project-files.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
@@ -35,6 +35,10 @@
     readAloud: DocumentReadAloud | null
     deletedAtCheckpoint: boolean
     showUndoRedo: boolean
+    /** Whether the source editor behind this toolbar can still undo / redo, so
+     *  an action that would do nothing reads as unavailable. */
+    canUndo: boolean
+    canRedo: boolean
     reloadDisabled: boolean
     mutationDisabled: boolean
     showLineNumbers: boolean
@@ -49,6 +53,13 @@
     /** Sentence behind the save button, for its `title`. Defaults to `saveLabel`. */
     saveTitle?: string
     fullscreen: boolean
+    /** Whether the reader can search what it is showing. Media and sandboxed
+     *  frame previews cannot be read from this document at all. */
+    findDisabled: boolean
+    /** Replace needs a draft, which only the source editor has. */
+    replaceDisabled: boolean
+    onSearch: () => void
+    onSearchReplace: () => void
     onSetView: (view: ProjectFileView) => void
     onInfo: () => void
     /** File info is disabled for files that no longer exist on disk. */
@@ -76,6 +87,8 @@
     readAloud,
     deletedAtCheckpoint,
     showUndoRedo,
+    canUndo,
+    canRedo,
     reloadDisabled,
     mutationDisabled,
     showLineNumbers,
@@ -87,6 +100,10 @@
     saveLabel,
     saveTitle = undefined,
     fullscreen,
+    findDisabled,
+    replaceDisabled,
+    onSearch,
+    onSearchReplace,
     onSetView,
     onInfo,
     infoDisabled = false,
@@ -208,8 +225,14 @@
     {reloadDisabled}
     {mutationDisabled}
     {showUndoRedo}
+    {canUndo}
+    {canRedo}
     {beautifyLabel}
     {fullscreen}
+    {findDisabled}
+    {replaceDisabled}
+    {onSearch}
+    {onSearchReplace}
     {onInfo}
     {infoDisabled}
     {onUndo}

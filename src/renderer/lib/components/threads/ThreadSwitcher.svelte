@@ -15,6 +15,7 @@
   import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { browserTabLabel } from '$lib/stores/global-browser-types'
   import type { Project } from '$shared/types'
+  import type { Component } from 'svelte'
   import { threadSwitcherEntryKey, type ThreadSwitcherEntry } from './thread-switcher-entries'
 
   interface Props {
@@ -30,12 +31,17 @@
   let { entries, projects, projectIconUrls, selectedKey, onSelect }: Props = $props()
 
   function entryType(entry: ThreadSwitcherEntry): string {
-    return entry.kind === 'browser' ? 'browser' : contentThreadFamily(entry.thread)
+    if (entry.kind === 'browser') return 'browser'
+    if (entry.kind === 'panel') return `panel:${entry.tab.kind}`
+    return contentThreadFamily(entry.thread)
   }
 
   const showTypeBadges = $derived.by(() => {
     const firstEntry = entries[0]
-    return firstEntry !== undefined && entries.some((entry) => entryType(entry) !== entryType(firstEntry))
+    return (
+      firstEntry !== undefined &&
+      entries.some((entry) => entryType(entry) !== entryType(firstEntry))
+    )
   })
 
   let open = $state(false)
@@ -97,11 +103,28 @@
     return getProjectIcon(project, projectIconUrls.get(project.id))
   }
 
+  /** The owning project's icon for a panel entry, drawn beside the panel's own
+   *  icon so a terminal or file tab is identified with the project it belongs
+   *  to. */
+  function panelProjectIcon(entry: ThreadSwitcherEntry): string | null {
+    if (entry.kind !== 'panel') return null
+    const project = projectsById.get(entry.tab.projectId)
+    if (!project) return null
+    return getProjectIcon(project, projectIconUrls.get(project.id))
+  }
+
+  /** The container glyph for a panel tab whose project is a hidden container
+   *  (Chats, Assistant), which has no project icon of its own. */
+  function panelProjectGlyph(entry: ThreadSwitcherEntry): Component | null {
+    if (entry.kind !== 'panel') return null
+    return contentFamilyIcon({ projectId: entry.tab.projectId })
+  }
+
   /** The hover tooltip for one entry, phrased for the kind of surface it is. */
   function entryTitle(entry: ThreadSwitcherEntry): string {
-    return entry.kind === 'browser'
-      ? `Switch to ${browserTabLabel(entry.tab)}`
-      : `Open ${entry.thread.title}`
+    if (entry.kind === 'browser') return `Switch to ${browserTabLabel(entry.tab)}`
+    if (entry.kind === 'panel') return `Switch to ${entry.tab.title}`
+    return `Open ${entry.thread.title}`
   }
 
   /**
@@ -408,14 +431,14 @@
   <header class="border-b border-border px-4 py-3">
     <p class="text-sm font-semibold text-foreground">Switch to</p>
     <p class="mt-0.5 text-[0.6875rem] text-dimmed">
-      Release Control to open the highlighted thread or browser tab
+      Release Control to open the highlighted thread, browser tab or panel tab
     </p>
   </header>
 
   <div
     class="max-h-[calc(80vh-7rem)] min-h-0 overflow-y-auto overscroll-contain p-1.5"
     role="listbox"
-    aria-label="Recent threads and browser tabs"
+    aria-label="Recent threads, browser tabs and panel tabs"
   >
     {#each entries as entry, index (threadSwitcherEntryKey(entry))}
       {@const entryKey = threadSwitcherEntryKey(entry)}
@@ -445,6 +468,19 @@
               tab={entry.tab}
               selected={entryKey === highlightedKey}
               showBadge={showTypeBadges}
+            />
+          {/await}
+        {:else if entry.kind === 'panel'}
+          <!-- A panel row is a dynamic import for the same reason the browser row
+               is: the switcher mounts before any panel tab can, and the row only
+               ever appears in a list that already holds one. -->
+          {#await import('./SwitcherPanelRow.svelte') then { default: SwitcherPanelRow }}
+            <SwitcherPanelRow
+              tab={entry.tab}
+              selected={entryKey === highlightedKey}
+              showBadge={showTypeBadges}
+              projectIconUrl={panelProjectIcon(entry)}
+              projectGlyph={panelProjectGlyph(entry)}
             />
           {/await}
         {:else}

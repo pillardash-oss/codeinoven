@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
-  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { OfferedProvider, ProviderConnectionInfo } from '$shared/types'
   import type { AddTab, ConnectStep } from './add-provider-modal-helpers'
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import { onMount } from 'svelte'
 
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'

@@ -1,11 +1,16 @@
 <script lang="ts">
-  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { SvelteMap } from 'svelte/reactivity'
   import { ovenRootKey } from '$lib/oven-root-target'
   import { fly } from 'svelte/transition'
   import type { Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
   import { appPanelSlot } from '$lib/app-panel-portal'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
+  import { logRendererError } from '$lib/system/renderer-logger'
   // BrowserPanel is a dynamic import: terminal and browser panels are the dock's
   // two heaviest residents, and the browser one drags the browser's whole model
   // with it. A browser panel can only appear once a browser tab exists, which is
@@ -18,9 +23,14 @@
   import { assistants } from '$lib/stores/assistants.svelte'
   import {
     contextSidebarState,
+    type FilesContextTab,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
-  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import {
+    coordinatorDockState,
+    type CoordinatorDockRegistration
+  } from '$lib/stores/coordinator-dock.svelte'
+  import { LastKnown } from '$lib/last-known'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -45,7 +55,6 @@
     selectedThread?: Thread | null
     projectIcons: SvelteMap<string, string>
     browser: WorkspaceBrowserController
-    coordinator: ReturnType<typeof coordinatorDockState.forThread>
     /** Close the active coordinator tab, used when no coordinator is published
      *  for it so the panel can never trap the user on a blank body. */
     onDismissCoordinator: () => void
@@ -72,7 +81,6 @@
     selectedThread = null,
     projectIcons,
     browser,
-    coordinator,
     onDismissCoordinator,
     onContinueInThread,
     onOpenSubagent,
@@ -82,7 +90,52 @@
     onAdoptAssistantTask
   }: Props = $props()
 
-  let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
+  let activeContextTab = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    if (!tab) return null
+    // The context sidebar is scoped to the project it is docked on, so a tab is
+    // only ever rendered for that project. A mismatch means the sidebar has not
+    // followed the thread on screen yet (see `ensureDockedThread`), and drawing
+    // the older project's panel in the meantime is what put another project's
+    // coordinator board on screen. Refusing the tab drops it instead.
+    if (activeProject && 'projectId' in tab && tab.projectId !== activeProject.id) return null
+    return tab
+  })
+
+  /**
+   * The coordinator the active tab belongs to.
+   *
+   * Read from the tab's own row rather than from the on-screen thread's, because
+   * the panel body *is* that row's board: the thread selection is null while a
+   * switch or another top-level view keeps it that way, and reading through it
+   * dropped a board the user still had open. A row that stops coordinating still
+   * answers null here, which is what drops the board to its own empty state.
+   */
+  let tabCoordinator = $derived.by(() => {
+    const tab = activeContextTab
+    return tab?.kind === 'coordinator'
+      ? coordinatorDockState.forThread(tab.projectId, tab.threadId)
+      : null
+  })
+
+  /**
+   * The registration a coordinator panel reads its own props from: the live one,
+   * or the last one this panel rendered.
+   *
+   * A child's props are getters that re-read their source for as long as the child
+   * is mounted, including the frame it unmounts on, so the board must never find a
+   * null there. It did: the throw came out of the board's own cleanup and aborted
+   * the keyed swap below, which left the pane blank and the board's poll running.
+   * Whether a board is shown at all is still `tabCoordinator`'s answer.
+   */
+  const boardRegistrations = new LastKnown<CoordinatorDockRegistration>()
+  let boardRegistration = $derived.by(() => {
+    const known = boardRegistrations.get(tabCoordinator)
+    // A board belongs to the project it was published for, so it is refused when
+    // the workspace is showing another one.
+    if (known && activeProject && known.projectId !== activeProject.id) return null
+    return known
+  })
 
   /**
    * Identity of the surface the active sidebar tab mounts.
@@ -99,8 +152,12 @@
   let activePanelKey = $derived.by(() => {
     const tab = activeContextTab
     if (!tab) return ''
-    if (tab.kind === 'coordinator' && coordinator?.panel.component === 'design') {
-      const props = coordinator.panel.props
+    if (
+      tab.kind === 'coordinator' &&
+      tabCoordinator &&
+      boardRegistration?.panel.component === 'design'
+    ) {
+      const props = boardRegistration.panel.props
       return `work:${props.projectId}:${props.threadId}:${props.kind ?? 'session'}`
     }
     if (tab.kind !== 'files') return tab.id
@@ -117,6 +174,19 @@
   )
 
   /**
+   * Bumped by any panel's Retry so its `{#key}` rebuilds and the `{#await}`
+   * re-runs. The boot warm (`sidebar-panel-preload.ts`) already fetched the
+   * warmed chunks, so those panels normally render from an already-resolved
+   * promise and neither the loading nor the failure state is seen.
+   */
+  let panelReloadNonce = $state(0)
+
+  function retryPanel(key: string): void {
+    resetPanelModule(key)
+    panelReloadNonce += 1
+  }
+
+  /**
    * The browser panel is a native `WebContentsView` floating above the DOM, so it
    * cannot ride a translate: the box it reports as the view's bounds would move
    * with the transform. It fades instead, which leaves its geometry alone.
@@ -131,7 +201,38 @@
       : null
   )
 
+  const lastFilesTab = new LastKnown<FilesContextTab>()
+  let filesTab = $derived(
+    lastFilesTab.get(activeContextTab?.kind === 'files' ? activeContextTab : null)
+  )
+  /** The same key `activePanelKey` builds for a files tab, taken from the tab
+   *  this panel stays mounted on rather than the one in front: the file reader
+   *  outlives its own tab while its temporary chat is the active one. */
+  let filesPanelKey = $derived.by(() => {
+    if (!filesTab) return ''
+    const mount =
+      usesThreadWorkspaceMount(filesTab.projectId) ||
+      (selectedThread?.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+        ? `${filesTab.threadId}:${selectedThread?.settings?.ovenId}`
+        : 'project'
+    return `files:${filesTab.projectId}:${mount}`
+  })
+  let filesVisible = $derived(activeContextTab?.kind === 'files')
+  let keepFilesMounted = $derived(
+    filesVisible ||
+      Boolean(filesTab && projectFilesWorkspace.getState(filesTab.projectId).fullscreenActive)
+  )
+
   let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
+
+  function leavePanel(node: HTMLElement) {
+    // An outro keeps the outgoing browser mounted and its native-view claim
+    // alive. Switching back can revive that old block ahead of the newer claim,
+    // leaving the selected tab hidden behind the page it replaced. Release a
+    // browser synchronously; other tools can keep their ordinary cross-fade.
+    if (node.dataset.panelKind === 'browser') return { duration: 0 }
+    return fly(node, panelReveal(true))
+  }
 
   /** The thread whose own workspace the file tree mounts. Only a chat or an
    *  assistant task has one; a real project always reads the project root. */
@@ -183,9 +284,43 @@
   })
 </script>
 
+{#snippet panelLoading(label: string)}
+  <div
+    class="flex h-full items-center justify-center gap-2 text-xs text-dimmed"
+    role="status"
+    aria-label={`Loading ${label}`}
+  >
+    <CioSpinner size={14} class="animate-spin" aria-hidden="true" />
+    Loading {label}
+  </div>
+{/snippet}
+
+{#snippet panelLoadFailed(key: string, label: string, error: unknown)}
+  {logRendererError(`The ${label} panel could not be loaded`, error)}
+  <div class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+    <CioAlertCircle size={18} class="text-warning" aria-hidden="true" />
+    <p class="text-xs font-medium text-foreground">{label} could not load</p>
+    <p class="max-w-[34ch] text-[0.625rem] leading-relaxed text-muted">
+      Loading it was interrupted. Try again.
+    </p>
+    <button
+      class="mt-1 bg-primary px-2 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+      title={`Try loading the ${label} panel again`}
+      aria-label={`Try loading the ${label} panel again`}
+      onclick={() => retryPanel(key)}
+    >
+      Retry
+    </button>
+  </div>
+{/snippet}
+
 {#if gitPanelProjectId}
-  {#key gitPanelProjectId}
-    {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+  {#key `${gitPanelProjectId}:${panelReloadNonce}`}
+    {#await loadPanelModule(PANEL_KEYS.gitStatus, () => import('../git/GitStatusPanel.svelte'))}
+      <div class="h-full" style:display={gitPanelVisible ? 'block' : 'none'}>
+        {@render panelLoading('Git')}
+      </div>
+    {:then { default: GitStatusPanel }}
       <div class="h-full" style:display={gitPanelVisible ? 'block' : 'none'}>
         <GitStatusPanel
           projectId={gitPanelProjectId}
@@ -193,11 +328,36 @@
           scopeBucketId={ovenRootKey(gitPanelProjectId) ?? gitPanelScopeBucketId}
         />
       </div>
+    {:catch error}
+      <div class="h-full" style:display={gitPanelVisible ? 'block' : 'none'}>
+        {@render panelLoadFailed(PANEL_KEYS.gitStatus, 'Git', error)}
+      </div>
     {/await}
   {/key}
 {/if}
-{#if activeContextTab}
-  <!-- Cross-fades the panel body when the active tool changes. Both the
+{#if keepFilesMounted && filesTab}
+  <div class="h-full" style:display={filesVisible ? 'block' : 'none'}>
+    {#key `${filesPanelKey}:${panelReloadNonce}`}
+      {#await loadPanelModule(PANEL_KEYS.projectFiles, () => import('../files/ProjectFilesPanel.svelte'))}
+        {@render panelLoading('Files')}
+      {:then { default: ProjectFilesPanel }}
+        <ProjectFilesPanel
+          projectId={filesTab.projectId}
+          projectName={filesRootIdentity.name}
+          projectLabel={filesRootIdentity.label}
+          assistantRoot={filesRootIdentity.assistant}
+          projectIconUrl={filesRootIdentity.iconUrl}
+          projectAccentColor={filesRootIdentity.accentColor}
+        />
+      {:catch error}
+        {@render panelLoadFailed(PANEL_KEYS.projectFiles, 'Files', error)}
+      {/await}
+    {/key}
+  </div>
+{/if}
+{#if activeContextTab && !filesVisible}
+  <!-- Browser panels leave immediately to release their native-view claims.
+       Other tools cross-fade when the active tool changes. Both the
        out-going and the in-coming panel are absolutely placed in the same cell,
        so they overlap for the length of the switch instead of one blinking off
        before the other appears. Only the incoming panel rises: the outgoing one
@@ -206,33 +366,30 @@
        the new one, so a rising outgoing browser panel would slide the native
        `WebContentsView` it reports the bounds of. -->
   <div class="relative h-full">
-    {#key activePanelKey}
+    {#key `${activePanelKey}:${panelReloadNonce}`}
       <div
         class="absolute inset-0"
         data-panel-kind={activeContextTab.kind}
         in:fly={panelReveal(activePanelIsBrowser)}
-        out:fly={panelReveal(true)}
+        out:leavePanel
       >
         {#if activeContextTab.kind === 'oven'}
-          {#await import('../threads/OvenSidebarPanel.svelte') then { default: OvenSidebarPanel }}
+          {#await loadPanelModule(PANEL_KEYS.oven, () => import('../threads/OvenSidebarPanel.svelte'))}
+            {@render panelLoading('Oven')}
+          {:then { default: OvenSidebarPanel }}
             {#if remoteThread}<OvenSidebarPanel thread={remoteThread} />{/if}
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.oven, 'Oven', error)}
           {/await}
         {:else if remoteThread && activeContextTab.kind === 'diff'}
           <!-- Rendered by the persistent, keep-mounted Git panel above: an Oven
                thread has no local turn checkpoints to diff. -->
         {:else if activeContextTab.kind === 'files'}
-          {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
-            <ProjectFilesPanel
-              projectId={activeContextTab.projectId}
-              projectName={filesRootIdentity.name}
-              projectLabel={filesRootIdentity.label}
-              assistantRoot={filesRootIdentity.assistant}
-              projectIconUrl={filesRootIdentity.iconUrl}
-              projectAccentColor={filesRootIdentity.accentColor}
-            />
-          {/await}
+          <!-- The file reader stays mounted above while its chat is active. -->
         {:else if activeContextTab.kind === 'diff'}
-          {#await import('../files/DiffSidebarPanel.svelte') then { default: DiffSidebarPanel }}
+          {#await loadPanelModule(PANEL_KEYS.diffSidebar, () => import('../files/DiffSidebarPanel.svelte'))}
+            {@render panelLoading('Changes')}
+          {:then { default: DiffSidebarPanel }}
             <DiffSidebarPanel
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
@@ -240,6 +397,8 @@
               revealPath={activeContextTab.revealPath}
               revealNonce={activeContextTab.revealNonce}
             />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.diffSidebar, 'Changes', error)}
           {/await}
         {:else if activeContextTab.kind === 'terminal'}
           {#if terminalFullscreenTabId === activeContextTab.id}
@@ -256,12 +415,16 @@
             />
           {/if}
         {:else if activeContextTab.kind === 'actions'}
-          {#await import('../actions/ActionsPanel.svelte') then { default: ActionsPanel }}
+          {#await loadPanelModule(PANEL_KEYS.actions, () => import('../actions/ActionsPanel.svelte'))}
+            {@render panelLoading('Actions')}
+          {:then { default: ActionsPanel }}
             <ActionsPanel
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
               scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
             />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.actions, 'Actions', error)}
           {/await}
         {:else if activeContextTab.kind === 'browser'}
           {#if browserFullscreenTabId === activeContextTab.id}
@@ -271,34 +434,61 @@
           {:else if browser.clearDataConfirmOpen && browser.clearDataProjectId === activeContextTab.projectId}
             <div class="h-full bg-app" aria-hidden="true"></div>
           {:else}
-            {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
-              <BrowserPanel tab={activeContextTab} />
+            {#await loadPanelModule(PANEL_KEYS.browser, () => import('$lib/components/browser/BrowserPanel.svelte'))}
+              {@render panelLoading('Browser')}
+            {:then { default: BrowserPanel }}
+              <!-- BrowserPanel captures its tab identity at construction. Key
+                   the lazy panel directly to browser selection on every revisit. -->
+              {#key contextSidebarState.activeBrowserTabId}
+                {@const browserTab = contextSidebarState.sidebarActiveTab}
+                {#if browserTab?.kind === 'browser'}
+                  <BrowserPanel tab={browserTab} />
+                {/if}
+              {/key}
+            {:catch error}
+              {@render panelLoadFailed(PANEL_KEYS.browser, 'Browser', error)}
             {/await}
           {/if}
         {:else if activeContextTab.kind === 'debugger'}
-          {#await import('../debug/AgentDebugPanel.svelte') then { default: AgentDebugPanel }}
+          {#await loadPanelModule(PANEL_KEYS.debugger, () => import('../debug/AgentDebugPanel.svelte'))}
+            {@render panelLoading('Debugger')}
+          {:then { default: AgentDebugPanel }}
             <AgentDebugPanel />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.debugger, 'Debugger', error)}
           {/await}
         {:else if activeContextTab.kind === 'sources'}
-          {#await import('../threads/SourcesPanel.svelte') then { default: SourcesPanel }}
+          {#await loadPanelModule(PANEL_KEYS.sources, () => import('../threads/SourcesPanel.svelte'))}
+            {@render panelLoading('Sources')}
+          {:then { default: SourcesPanel }}
             <SourcesPanel
               sources={workspaceState.sources}
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
             />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.sources, 'Sources', error)}
           {/await}
         {:else if activeContextTab.kind === 'git'}
           <!-- Rendered by the persistent, keep-mounted block above. -->
         {:else if activeContextTab.kind === 'cloud-deployment'}
-          {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
+          {#await loadPanelModule(PANEL_KEYS.cloudDeployment, () => import('../cloud/CloudDeploymentPanel.svelte'))}
+            {@render panelLoading('Cloud deployment')}
+          {:then { default: CloudDeploymentPanel }}
             <CloudDeploymentPanel
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
             />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.cloudDeployment, 'Cloud deployment', error)}
           {/await}
         {:else if activeContextTab.kind === 'temporary-chat'}
-          {#await import('../chats/TemporaryChatView.svelte') then { default: TemporaryChatView }}
+          {#await loadPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
+            {@render panelLoading('Chat')}
+          {:then { default: TemporaryChatView }}
             <TemporaryChatView tabId={activeContextTab.id} {onContinueInThread} />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.temporaryChat, 'Chat', error)}
           {/await}
         {:else if activeContextTab.kind === 'notifications' || activeContextTab.kind === 'sticky-notes'}
           <!-- The app's global panels are mounted once by `AppPanelHost`; this
@@ -309,7 +499,9 @@
             <div class="h-full" {@attach appPanelSlot}></div>
           {/if}
         {:else if activeContextTab.kind === 'assistant-knowledge'}
-          {#await import('../assistant/AssistantPanel.svelte') then { default: KnowledgePanel }}
+          {#await loadPanelModule(PANEL_KEYS.assistantKnowledge, () => import('../assistant/AssistantPanel.svelte'))}
+            {@render panelLoading('Knowledge')}
+          {:then { default: KnowledgePanel }}
             <KnowledgePanel
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
@@ -320,30 +512,57 @@
               onSetupConnection={onSetupAssistantConnection}
               onAdoptTask={onAdoptAssistantTask}
             />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.assistantKnowledge, 'Knowledge', error)}
           {/await}
         {:else if activeContextTab.kind === 'coordinator'}
-          {#if coordinator}
-            {#if coordinator.panel.component === 'assignment'}
-              {#await import('../threads/AssignmentCoordinatorPanel.svelte') then { default: AssignmentCoordinatorPanel }}
-                <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+          <!--
+            The panel a coordinator row published.
+
+            Every branch reads its props from `boardRegistration`, which is this
+            row's live registration or the last one this panel rendered. The live
+            `tabCoordinator` is what decides whether there is a board at all, so a
+            row that stops coordinating still falls through to the empty state
+            below.
+          -->
+          {#if tabCoordinator && boardRegistration}
+            {#if boardRegistration.panel.component === 'assignment'}
+              {#await loadPanelModule(PANEL_KEYS.assignmentCoordinator, () => import('../threads/AssignmentCoordinatorPanel.svelte'))}
+                {@render panelLoading('Assignment')}
+              {:then { default: AssignmentCoordinatorPanel }}
+                <AssignmentCoordinatorPanel {...boardRegistration.panel.props} />
+              {:catch error}
+                {@render panelLoadFailed(PANEL_KEYS.assignmentCoordinator, 'Assignment', error)}
               {/await}
-            {:else if coordinator.panel.component === 'achievement'}
-              {#await import('../threads/AchievementCoordinatorPanel.svelte') then { default: AchievementCoordinatorPanel }}
-                <AchievementCoordinatorPanel {...coordinator.panel.props} />
+            {:else if boardRegistration.panel.component === 'achievement'}
+              {#await loadPanelModule(PANEL_KEYS.achievementCoordinator, () => import('../threads/AchievementCoordinatorPanel.svelte'))}
+                {@render panelLoading('Achievement')}
+              {:then { default: AchievementCoordinatorPanel }}
+                <AchievementCoordinatorPanel {...boardRegistration.panel.props} />
+              {:catch error}
+                {@render panelLoadFailed(PANEL_KEYS.achievementCoordinator, 'Achievement', error)}
               {/await}
-            {:else if coordinator.panel.component === 'design'}
-              {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
-                {#key `${coordinator.projectId}:${coordinator.panel.props.threadId}:${coordinator.panel.props.kind ?? 'session'}`}
+            {:else if boardRegistration.panel.component === 'design'}
+              {#await loadPanelModule(PANEL_KEYS.designCoordinator, () => import('../design/DesignCoordinatorPanel.svelte'))}
+                {@render panelLoading('Design')}
+              {:then { default: DesignCoordinatorPanel }}
+                {#key `${boardRegistration.projectId}:${boardRegistration.panel.props.threadId}:${boardRegistration.panel.props.kind ?? 'session'}`}
                   <DesignCoordinatorPanel
-                    {...coordinator.panel.props}
-                    viewingThreadId={selectedThread?.id ?? coordinator.threadId}
+                    {...boardRegistration.panel.props}
+                    viewingThreadId={selectedThread?.id ?? boardRegistration.threadId}
                     active={active && contextSidebarState.sidebarVisible}
                   />
                 {/key}
+              {:catch error}
+                {@render panelLoadFailed(PANEL_KEYS.designCoordinator, 'Design', error)}
               {/await}
             {:else}
-              {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
-                <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+              {#await loadPanelModule(PANEL_KEYS.independentAuditCoordinator, () => import('../threads/IndependentAuditCoordinatorPanel.svelte'))}
+                {@render panelLoading('Audit')}
+              {:then { default: IndependentAuditCoordinatorPanel }}
+                <IndependentAuditCoordinatorPanel {...boardRegistration.panel.props} />
+              {:catch error}
+                {@render panelLoadFailed(PANEL_KEYS.independentAuditCoordinator, 'Audit', error)}
               {/await}
             {/if}
           {:else}
@@ -364,7 +583,9 @@
             </EmptyState>
           {/if}
         {:else if activeContextTab.kind === 'memory'}
-          {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}
+          {#await loadPanelModule(PANEL_KEYS.memory, () => import('../memory/MemoryPanel.svelte'))}
+            {@render panelLoading('Memory')}
+          {:then { default: MemoryPanel }}
             <MemoryPanel
               variant="sidebar"
               projectId={activeContextTab.projectId}
@@ -372,17 +593,27 @@
               assistantId={activeContextTab.assistantId}
               bind:activeSection={activeContextTab.memorySection}
             />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.memory, 'Memory', error)}
           {/await}
         {:else if activeContextTab.kind === 'thread-note'}
-          {#await import('../threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
+          {#await loadPanelModule(PANEL_KEYS.threadNote, () => import('../threads/ThreadNotePanel.svelte'))}
+            {@render panelLoading('Note')}
+          {:then { default: ThreadNotePanel }}
             <ThreadNotePanel tab={activeContextTab} />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.threadNote, 'Note', error)}
           {/await}
         {:else if activeContextTab.kind === 'attention'}
-          {#await import('../notifications/AttentionPanel.svelte') then { default: AttentionPanel }}
+          {#await loadPanelModule(PANEL_KEYS.attention, () => import('../notifications/AttentionPanel.svelte'))}
+            {@render panelLoading('Attention')}
+          {:then { default: AttentionPanel }}
             <AttentionPanel
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
             />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.attention, 'Attention', error)}
           {/await}
         {:else if activeContextTab.kind === 'subagent'}
           <!-- The sub-agent transcript is the only tab kind left after the branches
@@ -390,8 +621,12 @@
             browser rail's downloads and popup-window tabs share the tab union but
             are never in this sidebar's tab list, and rendering them in
             SubagentSessionView would be wrong. -->
-          {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
+          {#await loadPanelModule(PANEL_KEYS.subagent, () => import('../threads/SubagentSessionView.svelte'))}
+            {@render panelLoading('Sub-agent')}
+          {:then { default: SubagentSessionView }}
             <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.subagent, 'Sub-agent', error)}
           {/await}
         {/if}
       </div>

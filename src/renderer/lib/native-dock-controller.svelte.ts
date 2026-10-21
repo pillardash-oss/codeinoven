@@ -119,6 +119,18 @@ export class NativeDockController {
   private focusables = new SvelteMap<string, HTMLElement>()
   private scrollTargets = new SvelteMap<string, HTMLElement>()
   private scrollIds = new WeakMap<Element, string>()
+  /**
+   * The position this controller last wrote onto a scroll host to mirror the
+   * overlay's own scrolling.
+   *
+   * The overlay owns the gesture   it holds the pointer and the keyboard   and
+   * the app only follows it so hit-testing rects stay true. That mirror is a
+   * scroll the overlay already made, so publishing it would re-project the whole
+   * panel to echo a position the overlay is at or past, and every frame of the
+   * echo dragged the live gesture backwards. Recognising the mirror keeps the
+   * scroll path one-way: a gesture drives the app, never a repaint.
+   */
+  private mirroredScrolls = new WeakMap<HTMLElement, number>()
   private actionCounter = 0
   private imageCounter = 0
   private imageSources = new SvelteMap<string, string>()
@@ -264,8 +276,10 @@ export class NativeDockController {
       }
       if (report.kind === 'scroll') {
         const target = this.scrollTargets.get(report.target)
-        if (target && root.contains(target) && target.scrollTop !== report.top)
+        if (target && root.contains(target) && target.scrollTop !== report.top) {
+          this.mirroredScrolls.set(target, report.top)
           target.scrollTop = report.top
+        }
         return
       }
       if (report.kind !== 'click' && report.kind !== 'context') {
@@ -310,7 +324,12 @@ export class NativeDockController {
       // to close it.
       this.modalOptions?.onDismiss()
     })
-    const scrolled = (): void => this.schedule()
+    const scrolled = (event: Event): void => {
+      const target = event.target
+      if (target instanceof HTMLElement && this.mirroredScrolls.get(target) === target.scrollTop)
+        return
+      this.schedule()
+    }
     root.addEventListener('scroll', scrolled, true)
     this.schedule()
     return () => {

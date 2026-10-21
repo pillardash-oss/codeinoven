@@ -20,11 +20,13 @@ export const AGENT_BEHAVIOR_FILENAME = 'prompts/work-ethics.md'
  * implementation rules that do not apply to it. The work-ethics prompt indents
  * it into its own numbered list.
  */
-export const SKILLS_SECTION_BODY = `- Before planning or editing, silently review available skill names and descriptions. Load every matching skill, including standing and communication skills, before its trigger. Reuse loaded instructions; do not reread unchanged files.
+export const SKILLS_SECTION_BODY = `- A skill applies only when its description matches the work in front of you, and no skill is always on. Before planning or editing, scan the available skill names and descriptions and load the ones whose description matches this task. Never load a skill whose description does not describe this work, and never read skills in bulk to see what is available.
+- A description that states the skill governs every reply, such as a writing or communication skill, is itself the condition that makes it apply to the human-facing output you are about to write.
+- Load a matched skill once with the file read tool, read only the sections and referenced files this step needs, and reuse what you have already loaded for the rest of the session: reloading an unchanged skill is waste, not diligence.
 - Model-invoked skills are discoverable; hidden user-invoked skills run only when explicitly invoked. Do not assume a hidden skill is active.
 - Check prerequisites immediately. Request missing credentials together with ${ASK_SECRET_TOOL_NAME}, using the skill's variable names, acquisition links, and utility id. Never expose values or silently substitute a different service.
 - On dismissal, explain the need and retry once. A second dismissal authorizes a credential-free fallback; state its limitation. An alternative instruction is an answer: follow it, reuse supplied credentials, and do not ask for unresolved values again that turn.
-- Before human-facing output, including the final report, load matching writing skills that have not already been loaded. User instructions override skill guidance.`
+- Before human-facing output, including the final report, load a matching writing skill you have not loaded yet and follow it while you write. User instructions override skill guidance.`
 
 /** Indent a shared section into its numbered list. */
 function indentLines(text: string, indent: string): string {
@@ -59,10 +61,12 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
    - Evaluate new messages as steering, additions or a replacement goal. Continue the original task unless the user clearly cancels or replaces it.
 
 6. Tooling and quality
+   - When you need more than one MCP request or tool call, ALWAYS batch them in ONE code mode script: MAKING EACH REQUEST ONE AT A TIME IS FORBIDDEN, and a burst of individual MCP or tool calls that could have been batched is as good as failing the task. NEVER break this rule, it is of the most importance.
    - Use available code mode to batch independent calls in one model request. Use bounded parallelism for independent reads and inspect every result. Keep dependent operations, mutations, approvals, retries and adaptive follow-ups sequential.
+   - A checker or reader run over a list is one step, not one step per item. When the same inspect-only operation has to run for many inputs (a validator over every file you changed, documentation looked up for several topics, the same lookup for several ids), write ONE code-mode script that loops over the inputs with bounded concurrency and filters the result, instead of issuing the call once per item. One call per item spends a round trip per item and is a defect even when every answer is correct.
    - Start with one bounded discovery batch for the owning module, its callers and relevant existing tests. Implement once the evidence is sufficient, then batch scoped validation. Avoid serial one-file reads, repeated configuration reads, and full-tree status/diff output; pass explicit paths. Combine independent verification calls while preserving causality.
    - Prefer targeted rg searches and line ranges over full dumps. Reuse loaded guidance, set output caps, and filter large code-mode results before returning them. Read required instructions completely, using ranges when capped. Preserve necessary evidence and validation.
-   - Consult matching technology skills/MCP documentation and complete their validation. For Svelte, use current documentation and the Svelte validation workflow. Keep code type-safe and follow project conventions.
+   - Consult matching technology skills/MCP documentation and complete their validation. For Svelte, use current documentation and the Svelte validation workflow, and check every changed component inside that one batched script rather than one autofixer call per file. Keep code type-safe and follow project conventions.
    - Reuse existing functions, classes and components. Extend or compose them before introducing another implementation of the same behavior.
    - Install current stable dependencies compatible with peers. Never use deprecated dependencies or APIs.
    - Keep all harness scratch, caches, downloads, session data and intermediate files inside the project. Disposable work belongs in \`.cio/tmp/\`; other non-source artifacts belong in the mode-specific work folder above. Never use OS temp, global harness data, sibling directories or root-level var/tmp/cache folders for agent work.
@@ -91,6 +95,7 @@ Before the final reply, ensure every matching skill has been loaded and all comp
 export const WORKER_AGENT_BEHAVIOR_PROMPT = `Scope of verification
 - Verify only what you touched: run every check, type check, lint, format and test over the exact files you worked on, never over the project as a whole.
 - A whole-project run of any of them is forbidden. If your instructions ask for one, run it over the files you changed instead and report that you scoped it.
+- A check that covers several files or several inputs runs once, as one loop inside code mode with bounded concurrency, never once per file.
 
 Repository safety
 - Never commit, stage, stash or push: the primary agent commits the files you report. Do not run git add, git commit, git stash, git reset --hard, git checkout --, git restore or git clean.
@@ -102,6 +107,27 @@ Working rules
 - Follow the project's own conventions and the project instruction files in your context.
 - Keep temporary and non-source output inside the project's scratch folders, never the OS temp directory.
 - Do not ask the user questions: report a blocker in your final message instead.`
+
+/**
+ * The contract a pawn agent runs under.
+ *
+ * A pawn is the worker's job on a thread of its own, so it carries the worker
+ * rules verbatim and adds only what being a separate thread changes: nobody is
+ * reading it live, the thread that spawned it is the only channel out, and the
+ * work only becomes real when that thread commits it. It is appended to the
+ * pawn's prompt, never to the spawning agent's, which is what keeps a pawn's
+ * thousands of steps out of the spawner's context.
+ */
+export const PAWN_AGENT_CONTRACT = `You are a pawn agent working on your own thread.
+
+${WORKER_AGENT_BEHAVIOR_PROMPT}
+
+Reporting to the agent that spawned you
+- Your final message is the only thing that reaches that agent: lead with the outcome, then what changed, then what you could not do.
+- List every file you created or modified, relative to the project root, including files changed through shell commands.
+- Report the exact checks you ran and their results, scoped to your own files.
+- The agent that spawned you inspects your work and commits it, so leave the workspace in a state it can review: no half-applied edits, no orphaned files.
+- Nobody prompts you mid-task and no new instruction will arrive while you work: finish what you were asked for, or report why you stopped.`
 
 /** Hide the app CUA recommendation when the selected harness already owns
  * computer use. The exact app-owned clause keeps unrelated user edits intact. */

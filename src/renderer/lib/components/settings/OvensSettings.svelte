@@ -1,21 +1,23 @@
 <script lang="ts">
-  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
-  import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
-  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
-  import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
-  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioActivity from '@pdslng/cio-icon/CioActivity.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioCable from '@pdslng/cio-icon/CioCable.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
+  import CioDisk from '@pdslng/cio-icon/CioDisk.svelte'
+  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
+  import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
+  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -43,7 +45,6 @@
     type SaveOvenInput
   } from '$shared/ovens'
   import type { CustomIcon } from '$shared/types'
-  import { Activity, Cable } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
@@ -72,6 +73,7 @@
   let connectionResult = $state<OvenConnectionStatus | null>(null)
   let setupComplete = $state<Record<string, boolean>>({})
   let busy = $state('')
+  let connectionTestId: string | undefined
   let error = $state('')
   let modalError = $state('')
   let editing = $state<Oven | null>(null)
@@ -195,7 +197,7 @@
     })
     items.push({
       label: 'Check Oven',
-      icon: Activity,
+      icon: CioActivity,
       disabled: Boolean(busy) || checkingFor(oven) || Boolean(timezoneBusy),
       onClick: () => void checkOven(oven)
     })
@@ -721,7 +723,13 @@
   }
 
   function closeEditor(): void {
-    if (busy) return
+    if (busy && busy !== 'test') return
+    const requestId = connectionTestId
+    connectionTestId = undefined
+    if (requestId) {
+      void invoke('oven:cancelConnectionTest', requestId).catch(() => undefined)
+      busy = ''
+    }
     editorOpen = false
     privateKey = ''
     passphrase = ''
@@ -753,21 +761,38 @@
   }
   async function testConnection(): Promise<void> {
     if (busy) return
+    let input: SaveOvenInput
+    try {
+      input = { ...draftInput(), name: name.trim() || 'Connection test' }
+    } catch (failure) {
+      modalError = message(failure)
+      return
+    }
+    const requestId = crypto.randomUUID()
+    connectionTestId = requestId
     busy = 'test'
     modalError = ''
     connectionResult = null
-    try {
-      if (authentication === 'identity')
-        identityFile = await invoke('oven:validateIdentity', identityFile)
-      connectionResult = await invoke('oven:testConnection', {
-        ...draftInput(),
-        name: name.trim() || 'Connection test'
-      })
-      if (editing) health = { ...health, [editing.id]: connectionResult }
-    } catch (failure) {
-      modalError = message(failure)
-    } finally {
+    const timeout = setTimeout(() => {
+      if (connectionTestId !== requestId) return
+      connectionTestId = undefined
       busy = ''
+      modalError = 'Connection timed out after 60 seconds. Check the address and try again.'
+      void invoke('oven:cancelConnectionTest', requestId).catch(() => undefined)
+    }, 60_000)
+    try {
+      const result = await invoke('oven:testConnection', input, requestId)
+      if (connectionTestId !== requestId) return
+      connectionResult = result
+      if (editing) health = { ...health, [editing.id]: result }
+    } catch (failure) {
+      if (connectionTestId === requestId) modalError = message(failure)
+    } finally {
+      clearTimeout(timeout)
+      if (connectionTestId === requestId) {
+        connectionTestId = undefined
+        busy = ''
+      }
     }
   }
 
@@ -1205,7 +1230,7 @@
                   <div>
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Cable size={14} />Connection Info
+                        <CioCable size={14} />Connection Info
                       </dt>
                       <dd class="flex flex-col gap-1.5">
                         <p class="mt-0.5 truncate text-xs text-muted">
@@ -1425,6 +1450,13 @@
   {#snippet footer()}
     <div class="flex w-full flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2">
+        <button
+          type="button"
+          data-modal-dismiss
+          class="border px-3 py-2 text-sm hover:bg-elevated"
+          disabled={Boolean(busy) && busy !== 'test'}
+          onclick={closeEditor}>Cancel</button
+        >
         {#if hasAppearance}
           <button
             type="button"
@@ -1438,20 +1470,14 @@
         {:else}<span></span>{/if}
         <button
           type="button"
-          class="border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
+          class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
           disabled={Boolean(busy)}
           onclick={() => void testConnection()}
-          >{#if busy === 'test'}<CioSpinner size={14} class="animate-spin" />{/if}Test connection</button
+          >{#if busy === 'test'}<CioSpinner size={14} class="shrink-0 animate-spin" />{/if}Test
+          connection</button
         >
       </div>
       <div class="flex items-center gap-2">
-        <button
-          type="button"
-          data-modal-dismiss
-          class="border px-3 py-2 text-sm hover:bg-elevated"
-          disabled={Boolean(busy)}
-          onclick={closeEditor}>Cancel</button
-        >
         <button
           type="submit"
           form="oven-editor"

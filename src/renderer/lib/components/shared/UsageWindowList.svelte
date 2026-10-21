@@ -24,9 +24,22 @@
     variant?: UsageWindowVariant
     /** Extra classes for the list wrapper. */
     class?: string
+    /**
+     * Animate each window in as it appears. The usage popover turns this off: its
+     * rows mount with the panel, so a slide would grow the panel from a fragment of
+     * its size under the pointer that just opened it, and the panel would read as
+     * still loading after it is already there.
+     */
+    animate?: boolean
   }
 
-  let { limits, preferAmount = false, variant = 'popover', class: className = '' }: Props = $props()
+  let {
+    limits,
+    preferAmount = false,
+    variant = 'popover',
+    class: className = '',
+    animate = true
+  }: Props = $props()
 
   const windows = $derived(sortRateLimitWindows(limits))
 
@@ -66,46 +79,56 @@
   }
 </script>
 
+{#snippet windowRow(limit: AgentRateLimitWindow)}
+  {@const percent = quotaPercent(limit)}
+  {@const overage = overageLabel(limit)}
+  {@const resetSummary = formatResetCountdown(limit.resetsAt)}
+  <div
+    class={[
+      'mb-1 flex',
+      variant === 'table'
+        ? 'min-w-0 flex-col items-start gap-0.5'
+        : 'items-center justify-between gap-3'
+    ]}
+  >
+    <span class="min-w-0 truncate font-medium text-muted {scale.label}" title={limit.label}>
+      {limit.label}
+    </span>
+    <span class={[variant === 'table' ? 'truncate' : 'shrink-0', 'tabular-nums', scale.detail]}
+      >{windowDetail(limit)}</span
+    >
+  </div>
+  {#if percent !== undefined}
+    <div
+      class="h-1.5 overflow-hidden bg-overlay"
+      role="progressbar"
+      aria-label={`${limit.label} usage`}
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow={Math.round(percent)}
+    >
+      <div
+        class="h-full bg-info transition-[width] duration-700 ease-out"
+        style={`width: ${percent}%`}
+      ></div>
+    </div>
+  {/if}
+  <p class="mt-1 truncate {scale.note}" title={resetSummary}>{resetSummary}</p>
+  {#if overage}
+    <p class="mt-0.5 {scale.note}">{overage}</p>
+  {/if}
+{/snippet}
+
 <div class="{scale.wrapper} {className}">
   {#each windows as limit (limit.id)}
-    {@const percent = quotaPercent(limit)}
-    {@const overage = overageLabel(limit)}
-    {@const resetSummary = formatResetCountdown(limit.resetsAt)}
-    <div transition:slide={{ duration: 300 }} class="min-w-0 overflow-hidden">
-      <div
-        class={[
-          'mb-1 flex',
-          variant === 'table'
-            ? 'min-w-0 flex-col items-start gap-0.5'
-            : 'items-center justify-between gap-3'
-        ]}
-      >
-        <span class="min-w-0 truncate font-medium text-muted {scale.label}" title={limit.label}>
-          {limit.label}
-        </span>
-        <span class={[variant === 'table' ? 'truncate' : 'shrink-0', 'tabular-nums', scale.detail]}
-          >{windowDetail(limit)}</span
-        >
+    {#if animate}
+      <div transition:slide={{ duration: 300 }} class="min-w-0 overflow-hidden">
+        {@render windowRow(limit)}
       </div>
-      {#if percent !== undefined}
-        <div
-          class="h-1.5 overflow-hidden bg-overlay"
-          role="progressbar"
-          aria-label={`${limit.label} usage`}
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow={Math.round(percent)}
-        >
-          <div
-            class="h-full bg-info transition-[width] duration-700 ease-out"
-            style={`width: ${percent}%`}
-          ></div>
-        </div>
-      {/if}
-      <p class="mt-1 truncate {scale.note}" title={resetSummary}>{resetSummary}</p>
-      {#if overage}
-        <p class="mt-0.5 {scale.note}">{overage}</p>
-      {/if}
-    </div>
+    {:else}
+      <div class="min-w-0 overflow-hidden">
+        {@render windowRow(limit)}
+      </div>
+    {/if}
   {/each}
 </div>

@@ -1,7 +1,6 @@
 import { BRAINSTORM_ALIGNMENT_UTILITY_ID } from '../../../lib/brainstorm/brainstorm-alignment'
 import { toPosixPath } from '../../../lib/paths'
 import type { HarnessCapabilities } from '../../drivers/driver.interface'
-import { IMAGE_DESCRIPTOR_PROMPT } from '../../providers/image-descriptor-provider'
 import { APP_NAME } from '../../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
 import {
@@ -306,7 +305,7 @@ export const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
  * tests, lints) but never modify the repository. The list therefore carries
  * only built-in tool names that exist in every harness: `read` for source
  * inspection, and `bash` for running verification commands, plus pi's
- * Windows-only `powershell` built-in (a harmless unused name elsewhere) so a
+ * Windows `powershell` and `cmd` tools (harmless unused names elsewhere) so a
  * Windows auditor is never gated behind permission cards when Git Bash is
  * absent. File-mutating tools (edit/write) are deliberately omitted. The app
  * utility gateway tools
@@ -314,7 +313,7 @@ export const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
  * tool gate never restricts, and other harnesses receive them through the
  * prepared gateway runtime, so they stay reachable without being listed.
  */
-export const AUDIT_ALLOWED_TOOLS = ['read', 'bash', 'powershell']
+export const AUDIT_ALLOWED_TOOLS = ['read', 'bash', 'powershell', 'cmd']
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 export const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
@@ -654,8 +653,6 @@ registerCioPromptDefault(
 
 registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
 
-registerCioPromptDefault('image-description', IMAGE_DESCRIPTOR_PROMPT)
-
 export function buildSpecRevisionSystemPrompt(
   specPath: string,
   annotations: ReadonlyArray<{ section: string; body: string; quote?: string; status: string }>
@@ -720,8 +717,7 @@ export function composeTurnSystemPrompt(input: {
   // Only the day-to-day conversations carry the executive budget: a previous
   // engineering lifecycle turn loses the technical detail the later stages need,
   // and an assistant already carries a stricter reply contract of its own.
-  const dayToDayConversation =
-    input.behaviorMode === 'implement' || input.behaviorMode === 'chat'
+  const dayToDayConversation = input.behaviorMode === 'implement' || input.behaviorMode === 'chat'
   return [
     input.chatPrompt,
     input.memoryInstruction,

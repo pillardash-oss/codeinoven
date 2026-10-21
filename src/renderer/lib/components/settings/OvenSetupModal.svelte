@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioMinus from '$lib/components/icons/cio/CioMinus.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMinus from '@pdslng/cio-icon/CioMinus.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
@@ -258,10 +258,24 @@
         <CioSpinner size={15} class="animate-spin" /> Checking the Oven without making changes
       </p>
     {:else if peek?.error}
-      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-        {peek.error}
-      </p>
-    {:else if preflight}
+      <div class="space-y-2 bg-danger/10 px-3 py-2">
+        <p class="text-xs text-danger" role="alert">{peek.error}</p>
+        <button
+          type="button"
+          class="border px-2.5 py-1.5 text-xs hover:bg-elevated"
+          onclick={() => void ovenPeeks.refresh(ovenId)}>Check the Oven again</button
+        >
+      </div>
+    {:else if !preflight}
+      <div class="space-y-2 border border-dashed p-3">
+        <p class="text-sm text-muted">This Oven has not answered a check yet.</p>
+        <button
+          type="button"
+          class="border px-2.5 py-1.5 text-xs hover:bg-elevated"
+          onclick={() => void ovenPeeks.refresh(ovenId)}>Check the Oven</button
+        >
+      </div>
+    {:else}
       <section class="space-y-2 border p-3" aria-label="Preflight results">
         <div class="flex items-center justify-between gap-3">
           <h3 class="text-sm font-medium">

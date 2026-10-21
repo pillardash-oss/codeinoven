@@ -1,3 +1,5 @@
+import { subscribeArchiveChanges } from '../database/archive-events'
+import { unarchivedThreadSql } from '../../lib/archives'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -35,6 +37,28 @@ export interface SweepResult {
   pending: number
 }
 
+/**
+ * How one thread's windows are embedded. Shared by the corpus sweep and the
+ * targeted pass a settled run triggers, so both describe a window identically.
+ */
+export interface ThreadIndexOptions {
+  modelSignature: string
+  /** Document prompt the model expects in front of its input. */
+  documentPrefix: string
+  windowChars: number
+  maxWindows: number
+  expectedDimensions: number
+  signal: AbortSignal
+  onOversized?: (thread: SearchSummaryThread) => void
+  onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
+}
+
+/** A corpus sweep adds whole-corpus progress and per-thread failure reporting. */
+export interface SweepOptions extends ThreadIndexOptions {
+  onProgress?: (result: SweepResult) => void
+  onError?: (thread: SearchSummaryThread, error: unknown) => void
+}
+
 /** Whether a record still owes windows for the revision it was read from. */
 function needsWindows(record: ThreadEmbeddingRecord): boolean {
   // `planned: 0` is a record written before windows existed (one head vector and
@@ -56,6 +80,8 @@ function needsWindows(record: ThreadEmbeddingRecord): boolean {
  */
 export class ThreadEmbeddingIndex {
   readonly candidates = new Map<string, CandidateThread>()
+  private readonly parkedIds = new Set<string>()
+  private readonly unsubscribeArchives: () => void
   private readonly pendingIds = new Set<string>()
   private removed = new Set<string>()
   private removalTimer: ReturnType<typeof setTimeout> | null = null
@@ -67,7 +93,9 @@ export class ThreadEmbeddingIndex {
     private readonly db: Database,
     private readonly indexPath: string,
     private readonly summaries: ThreadSearchSummaries
-  ) {}
+  ) {
+    this.unsubscribeArchives = subscribeArchiveChanges(() => this.refreshArchiveVisibility())
+  }
 
   get size(): number {
     return this.records.size
@@ -75,6 +103,10 @@ export class ThreadEmbeddingIndex {
 
   get lastIndexedAt(): number | null {
     return this.lastPersistedAt > 0 ? this.lastPersistedAt : null
+  }
+
+  isParked(threadId: string): boolean {
+    return this.parkedIds.has(threadId)
   }
 
   has(threadId: string): boolean {
@@ -100,6 +132,7 @@ export class ThreadEmbeddingIndex {
     for (const thread of await this.listCandidates()) {
       if (!this.removed.has(thread.id) && !this.candidates.has(thread.id)) this.updateThread(thread)
     }
+    await this.refreshArchiveVisibility()
     await this.pruneMissing(new Set(this.candidates.keys()))
     await this.persist()
   }
@@ -121,9 +154,40 @@ export class ThreadEmbeddingIndex {
     this.removed.delete(thread.id)
     this.candidates.set(thread.id, thread)
     const record = this.records.get(thread.id)
+    if (this.parkedIds.has(thread.id)) {
+      this.pendingIds.delete(thread.id)
+      return
+    }
     if (!record || record.updatedAt < thread.stamp || needsWindows(record))
       this.pendingIds.add(thread.id)
     else this.pendingIds.delete(thread.id)
+  }
+
+  /** Keep existing vectors while taking parked work off the indexing queue. */
+  async refreshArchiveVisibility(): Promise<void> {
+    const ids = [...this.candidates.keys()]
+    for (let offset = 0; offset < ids.length; offset += 128) {
+      const batch = ids.slice(offset, offset + 128)
+      const result = await this.db.queryViaWorker(
+        `SELECT id FROM threads WHERE id IN (${batch.map(() => '?').join(',')}) AND ${unarchivedThreadSql()}`,
+        batch,
+        batch.length,
+        { allowPrimaryFallback: false }
+      )
+      if (!result.ok) throw new Error('Could not read archive visibility for indexing')
+      const visible = new Set(result.rows.map((row) => String(row.id)))
+      for (const id of batch) {
+        if (visible.has(id)) {
+          this.parkedIds.delete(id)
+          const candidate = this.candidates.get(id)
+          if (candidate) this.updateThread(candidate)
+        } else {
+          this.parkedIds.add(id)
+          this.pendingIds.delete(id)
+        }
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
   }
 
   get pending(): number {
@@ -131,6 +195,7 @@ export class ThreadEmbeddingIndex {
   }
 
   async dispose(): Promise<void> {
+    this.unsubscribeArchives()
     if (this.removalTimer) clearTimeout(this.removalTimer)
     this.removalTimer = null
     await this.persist()
@@ -139,7 +204,7 @@ export class ThreadEmbeddingIndex {
   async reset(): Promise<void> {
     await this.persistence.catch(() => undefined)
     this.records.clear()
-    for (const id of this.candidates.keys()) this.pendingIds.add(id)
+    for (const id of this.candidates.keys()) if (!this.parkedIds.has(id)) this.pendingIds.add(id)
     this.lastPersistedAt = 0
     await rm(this.indexPath, { force: true }).catch(() => undefined)
   }
@@ -152,23 +217,14 @@ export class ThreadEmbeddingIndex {
    */
   async sweep(
     embed: (texts: readonly string[]) => Promise<Float32Array[]>,
-    options: {
-      modelSignature: string
-      documentPrefix: string
-      windowChars: number
-      maxWindows: number
-      expectedDimensions: number
-      signal: AbortSignal
-      onOversized?: (thread: SearchSummaryThread) => void
-      onProgress?: (result: SweepResult) => void
-      onError?: (thread: SearchSummaryThread, error: unknown) => void
-      onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
-    }
+    options: SweepOptions
   ): Promise<SweepResult> {
-    const candidates = [...this.candidates.values()]
+    const candidates = [...this.candidates.values()].filter(
+      (candidate) => !this.parkedIds.has(candidate.id)
+    )
     if (candidates.length === 0) {
-      await this.pruneMissing(new Set())
-      await this.summaries.prune([])
+      await this.pruneMissing(new Set(this.candidates.keys()))
+      await this.summaries.prune([...this.candidates.values()])
       await this.persist()
       return { total: 0, indexed: 0, pending: 0 }
     }
@@ -209,10 +265,39 @@ export class ThreadEmbeddingIndex {
         else await new Promise<void>((resolve) => setImmediate(resolve))
       }
       await this.pruneMissing(new Set(this.candidates.keys()))
-      await this.summaries.prune(candidates)
+      await this.summaries.prune([...this.candidates.values()])
       return { total, indexed, pending: pending - indexed }
     } finally {
       // Preserve completed threads even if a later provider request fails.
+      await this.persist()
+    }
+  }
+
+  /**
+   * Index one thread now, reusing every window whose text did not change, and
+   * persist the result.
+   *
+   * A run that just settled is the thread its user is most likely to search next,
+   * so it goes into the index ahead of the sweep rather than behind it: a first
+   * full pass over a large corpus can run for hours, and the periodic pass adds up
+   * to five more minutes on top. The targeted pass runs beside a sweep the way the
+   * runtime serializes its own embedding queue, so a fresh conversation is
+   * searchable as soon as its windows are embedded.
+   *
+   * Returns whether a record was written. A thread no longer in the corpus is
+   * `false` without doing any work.
+   */
+  async indexNow(
+    threadId: string,
+    embed: (texts: readonly string[]) => Promise<Float32Array[]>,
+    options: ThreadIndexOptions
+  ): Promise<boolean> {
+    const candidate = this.candidates.get(threadId)
+    if (!candidate || this.parkedIds.has(threadId)) return false
+    try {
+      await this.indexThread(candidate, embed, options)
+      return true
+    } finally {
       await this.persist()
     }
   }
@@ -221,6 +306,7 @@ export class ThreadEmbeddingIndex {
   search(queryVector: Float32Array, limit: number): IntentThreadMatch[] {
     const matches: IntentThreadMatch[] = []
     for (const record of this.records.values()) {
+      if (this.parkedIds.has(record.threadId)) continue
       if (record.dimensions !== queryVector.length) continue
       let best = 0
       for (const window of record.windows) {
@@ -246,6 +332,7 @@ export class ThreadEmbeddingIndex {
     summary: string,
     modelSignature: string
   ): Promise<boolean> {
+    if (this.parkedIds.has(thread.id)) return false
     const record = this.records.get(thread.id)
     if (!record || record.updatedAt !== thread.stamp || vector.length !== record.dimensions)
       return false
@@ -267,18 +354,31 @@ export class ThreadEmbeddingIndex {
   private async indexThread(
     candidate: CandidateThread,
     embed: (texts: readonly string[]) => Promise<Float32Array[]>,
-    options: {
-      modelSignature: string
-      documentPrefix: string
-      windowChars: number
-      maxWindows: number
-      expectedDimensions: number
-      signal: AbortSignal
-      onOversized?: (thread: SearchSummaryThread) => void
-      onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
-    }
+    options: ThreadIndexOptions
   ): Promise<boolean> {
+    const eligible = await this.db.queryViaWorker(
+      `SELECT id FROM threads WHERE id = ? AND ${unarchivedThreadSql()}`,
+      [candidate.id],
+      1,
+      { allowPrimaryFallback: false }
+    )
+    if (!eligible.ok) throw new Error('Could not read archive visibility for indexing')
+    if (eligible.rows.length === 0) {
+      this.parkedIds.add(candidate.id)
+      this.pendingIds.delete(candidate.id)
+      return false
+    }
     const plan = await this.summaries.plan(candidate, options.signal)
+    if (plan.total === 0) {
+      // Nothing to describe yet: a thread whose conversation has no indexed text
+      // is not searchable by meaning, and a vector of the empty document would
+      // only add noise to every result. Membership is re-established by the next
+      // corpus update, which is the moment the thread gains a message.
+      this.records.delete(candidate.id)
+      this.pendingIds.delete(candidate.id)
+      this.candidates.delete(candidate.id)
+      return false
+    }
     const count = threadWindowCount(plan.total, options.windowChars, options.maxWindows)
     const existing = this.records.get(candidate.id)
     const windows: (ThreadEmbeddingWindow | undefined)[] = new Array(count)
@@ -315,6 +415,7 @@ export class ThreadEmbeddingIndex {
       return pending.length > 0
     const complete = windows.filter((window): window is ThreadEmbeddingWindow => Boolean(window))
     if (complete.length === 0) return pending.length > 0
+    if (this.parkedIds.has(candidate.id)) return false
     this.records.set(candidate.id, {
       threadId: candidate.id,
       dimensions: complete[0].vector.length,
@@ -342,10 +443,15 @@ export class ThreadEmbeddingIndex {
     let cursor = ''
     while (true) {
       const result = await this.db.queryViaWorker(
-        `SELECT id, project_id, title,
-            MAX(COALESCE(last_activity, 0), COALESCE(updated_at, 0)) AS stamp
-          FROM threads WHERE drafting = 0 AND project_id != ? AND id > ?
-          ORDER BY id LIMIT ?`,
+        `SELECT t.id, t.project_id, t.title,
+            MAX(COALESCE(t.last_activity, 0), COALESCE(t.updated_at, 0)) AS stamp
+          FROM threads t WHERE t.project_id != ? AND t.id > ?
+            AND EXISTS (
+              SELECT 1 FROM agent_messages m
+               WHERE m.thread_id = t.id AND m.visibility = 'conversation'
+                 AND m.session_id IS NULL AND m.search_text != ''
+            )
+          ORDER BY t.id LIMIT ?`,
         [GLOBAL_BROWSER_PROJECT_ID, cursor, CATALOG_PAGE_SIZE],
         CATALOG_PAGE_SIZE
       )

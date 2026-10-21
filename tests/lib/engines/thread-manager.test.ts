@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 import { ProjectRepo } from '../../../src/main/database/repositories/project-repo'
+import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import type { Database } from '../../../src/main/database/database'
 import type { AgentMessage, ThreadSettings, ScopeBucket } from '../../../src/lib/types'
 import { AllThreadsProtectedError, ThreadManager } from '../../../src/lib/engines/thread-manager'
@@ -420,6 +421,71 @@ describe('ThreadManager', () => {
   })
 })
 
+describe('ThreadManager oven settings guard', () => {
+  const ovenSettings = (ovenId: string, ovenPath?: string): ThreadSettings => ({
+    harnessId: 'opencode',
+    providerId: 'anthropic',
+    modelId: 'claude-sonnet',
+    thinkingLevel: 'medium',
+    permissionLevel: 'auto_review',
+    ovenId,
+    ...(ovenPath ? { ovenPath } : {})
+  })
+
+  it('refuses a checkout change from the settings API while the thread is executing', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'anthropic',
+      title: 'Oven turn',
+      settings: ovenSettings('oven-remote', 'C:\\work\\old')
+    })
+    await manager.setStatus('project1', thread.id, 'executing')
+
+    await expect(
+      manager.updateSettings('project1', thread.id, ovenSettings('oven-remote', 'C:\\work\\new'))
+    ).rejects.toThrow('Stop or finish the active turn before changing Ovens.')
+  })
+
+  it('records the checkout a running turn resolved for its own thread', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'anthropic',
+      title: 'Oven turn',
+      settings: ovenSettings('oven-remote')
+    })
+    await manager.setStatus('project1', thread.id, 'executing')
+
+    const updated = await manager.bindOvenCheckout(
+      'project1',
+      thread.id,
+      ovenSettings('oven-remote', 'C:\\Users\\dev\\.cio\\work\\repo')
+    )
+
+    expect(updated.status).toBe('executing')
+    expect(updated.settings?.ovenPath).toBe('C:\\Users\\dev\\.cio\\work\\repo')
+    expect((await manager.getThread('project1', thread.id))?.settings?.ovenPath).toBe(
+      'C:\\Users\\dev\\.cio\\work\\repo'
+    )
+  })
+
+  it('still refuses a different Oven on a running turn even for a checkout bind', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'anthropic',
+      title: 'Oven turn',
+      settings: ovenSettings('oven-remote')
+    })
+    await manager.setStatus('project1', thread.id, 'executing')
+
+    await expect(
+      manager.bindOvenCheckout('project1', thread.id, ovenSettings('oven-other', 'C:\\work'))
+    ).rejects.toThrow('Stop or finish the active turn before changing Ovens.')
+  })
+})
+
 describe('ThreadManager scope-root propagation', () => {
   it('derives the compatibility working directory from the destination scope on create', async () => {
     const roots = new Map([['project1:scope-a', '/worktrees/feature-a']])
@@ -501,7 +567,10 @@ describe('ThreadManager scope-root propagation', () => {
 
 describe('ThreadManager per-scope thread buckets', () => {
   /** Persist a board with a pinned bucket and a worktree bucket alongside the default. */
-  async function persistBucketedBoard(db: Database, scopes: { id: string; pinned?: boolean; worktree?: boolean }[]) {
+  async function persistBucketedBoard(
+    db: Database,
+    scopes: { id: string; pinned?: boolean; worktree?: boolean }[]
+  ) {
     const buckets: ScopeBucket[] = scopes.map((s) => ({
       id: s.id,
       name: s.id,
@@ -604,19 +673,44 @@ describe('ThreadManager per-scope thread buckets', () => {
     ])
 
     const step = vi.setSystemTime
-    const pa = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'PA', scopeBucketId: 'pinned-a' })
+    const pa = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'PA',
+      scopeBucketId: 'pinned-a'
+    })
     step(new Date('2026-08-02T10:00:01.000Z'))
-    const pb = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'PB', scopeBucketId: 'pinned-a' })
+    const pb = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'PB',
+      scopeBucketId: 'pinned-a'
+    })
     step(new Date('2026-08-02T10:00:02.000Z'))
-    const sa = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'SA', scopeBucketId: 'scratch' })
+    const sa = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'SA',
+      scopeBucketId: 'scratch'
+    })
     step(new Date('2026-08-02T10:00:03.000Z'))
-    const sb = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'SB', scopeBucketId: 'scratch' })
+    const sb = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'SB',
+      scopeBucketId: 'scratch'
+    })
     expect(await manager.getThread('project1', pa.id)).not.toBeNull()
     expect(await manager.getThread('project1', sa.id)).not.toBeNull()
 
     // Each bucket is full at 2; the next create only ever evicts its own bucket's thread.
     step(new Date('2026-08-02T10:00:04.000Z'))
-    const pc = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'PC', scopeBucketId: 'pinned-a' })
+    const pc = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'PC',
+      scopeBucketId: 'pinned-a'
+    })
     // The worktree bucket is untouched: still both of its threads.
     expect(await manager.getThread('project1', sa.id)).not.toBeNull()
     expect(await manager.getThread('project1', sb.id)).not.toBeNull()
@@ -625,12 +719,140 @@ describe('ThreadManager per-scope thread buckets', () => {
     expect(await manager.getThread('project1', pc.id)).not.toBeNull()
 
     step(new Date('2026-08-02T10:00:05.000Z'))
-    const sc = await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'SC', scopeBucketId: 'scratch' })
+    const sc = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'SC',
+      scopeBucketId: 'scratch'
+    })
     // The pinned bucket is untouched by the worktree bucket's own eviction.
     expect(await manager.getThread('project1', pb.id)).not.toBeNull()
     expect(await manager.getThread('project1', pc.id)).not.toBeNull()
     expect(await manager.getThread('project1', sa.id)).toBeNull()
     expect(await manager.getThread('project1', sb.id)).not.toBeNull()
     expect(await manager.getThread('project1', sc.id)).not.toBeNull()
+  })
+})
+
+/** Write an archive the way `archive:set` does: through the database worker. */
+async function archiveThroughWorker(
+  db: Database,
+  kind: 'thread' | 'project' | 'assistant',
+  id: string
+): Promise<void> {
+  const statements = [
+    {
+      sql: 'INSERT INTO archives(kind, entity_id, archived_at) VALUES(?,?,?)',
+      params: [kind, id, Date.now()]
+    }
+  ]
+  if (kind === 'thread') {
+    statements.push({ sql: 'UPDATE threads SET archived = 1 WHERE id = ?', params: [id] })
+  }
+  const result = await db.transactionViaWorker(statements)
+  if (!result.ok) throw new Error('archive write failed')
+}
+
+describe('archived threads are invincible', () => {
+  it('never evicts an archived thread and frees its capacity slot', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-01T10:00:00.000Z'))
+    const { manager, db } = await createManager(2)
+    const archived = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Keep this'
+    })
+    vi.setSystemTime(new Date('2026-09-01T10:01:00.000Z'))
+    const live = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Live'
+    })
+    await archiveThroughWorker(db, 'thread', archived.id)
+
+    // The archived thread no longer occupies a slot, so this create frees nothing.
+    vi.setSystemTime(new Date('2026-09-01T10:02:00.000Z'))
+    const first = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'First live create'
+    })
+    expect(await manager.getThread('project1', archived.id)).not.toBeNull()
+    expect(await manager.getThread('project1', live.id)).not.toBeNull()
+    expect(await manager.getThread('project1', first.id)).not.toBeNull()
+
+    // The bucket is full with live threads now: the oldest live one makes room,
+    // and the archived thread is still never the one that goes.
+    vi.setSystemTime(new Date('2026-09-01T10:03:00.000Z'))
+    const second = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Second live create'
+    })
+    expect(await manager.getThread('project1', archived.id)).not.toBeNull()
+    expect(await manager.getThread('project1', live.id)).toBeNull()
+    expect(await manager.getThread('project1', first.id)).not.toBeNull()
+    expect(await manager.getThread('project1', second.id)).not.toBeNull()
+  })
+
+  it('keeps the threads of an archived project out of the capacity candidates', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-02T10:00:00.000Z'))
+    const { manager, db } = await createManager(2)
+    await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'One' })
+    await manager.createThread({ projectId: 'project1', providerId: 'openai', title: 'Two' })
+    await archiveThroughWorker(db, 'project', 'project1')
+
+    // An archived project holds no candidates at all, so nothing in it is
+    // evictable and its threads keep their conversations.
+    const candidates = await new ThreadRepo(db).listCapacityCandidatesViaWorker('project1')
+    expect(candidates).toHaveLength(0)
+  })
+
+  it('never sweeps an archived run with the task that owns it', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-03T10:00:00.000Z'))
+    const { manager, db } = await createManager(2)
+    const task = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Task',
+      assistantId: 'assistant-1'
+    })
+    const run = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Run',
+      assistantId: 'assistant-1',
+      assistantTaskId: task.id
+    })
+    await archiveThroughWorker(db, 'thread', run.id)
+
+    vi.setSystemTime(new Date('2026-09-03T10:01:00.000Z'))
+    const otherA = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Other A'
+    })
+    vi.setSystemTime(new Date('2026-09-03T10:02:00.000Z'))
+    const otherB = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Other B'
+    })
+    // The bucket is full and the task is the oldest candidate, but evicting it
+    // would take the archived run down with it, so a live thread makes room.
+    vi.setSystemTime(new Date('2026-09-03T10:03:00.000Z'))
+    const created = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Created'
+    })
+    expect(await manager.getThread('project1', run.id)).not.toBeNull()
+    expect(await manager.getThread('project1', task.id)).not.toBeNull()
+    expect(await manager.getThread('project1', otherA.id)).toBeNull()
+    expect(await manager.getThread('project1', otherB.id)).not.toBeNull()
+    expect(await manager.getThread('project1', created.id)).not.toBeNull()
   })
 })

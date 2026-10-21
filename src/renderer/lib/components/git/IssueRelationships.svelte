@@ -1,9 +1,10 @@
 <script lang="ts">
-  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioLink from '$lib/components/icons/cio/CioLink.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import { CornerDownRight, ListTree } from '@lucide/svelte'
+  import CioBan from '@pdslng/cio-icon/CioBan.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioEnter from '@pdslng/cio-icon/CioEnter.svelte'
+  import CioLink from '@pdslng/cio-icon/CioLink.svelte'
+  import CioListTree from '@pdslng/cio-icon/CioListTree.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { issueStateIcon } from './issue-view'
   import type {
     IssueRelationshipItem,
@@ -160,7 +161,7 @@
 
 <div class="mt-2 border border-border bg-surface/40 px-2.5 py-2">
   <div class="flex items-center gap-1.5">
-    <ListTree size={10} class="text-dimmed" />
+    <CioListTree size={10} class="text-dimmed" />
     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
       Relationships
     </span>
@@ -177,13 +178,13 @@
         so an empty parent is something to offer rather than something to list.
       -->
       {#if relationships.parent}
-        {@render group('Parent', [relationships.parent], CornerDownRight, '', 'parent')}
+        {@render group('Parent', [relationships.parent], CioEnter, '', 'parent')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <CornerDownRight size={9} />
+            <CioEnter size={9} />
             Parent
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">
@@ -199,7 +200,7 @@
         <span
           class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
         >
-          <ListTree size={9} />
+          <CioListTree size={9} />
           Sub-issues
         </span>
         <div class="flex min-w-0 flex-1 flex-col gap-1">

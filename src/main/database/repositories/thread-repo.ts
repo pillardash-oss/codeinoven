@@ -1,3 +1,4 @@
+import { unarchivedSubtreeSql, unarchivedThreadSql } from '../../../lib/archives'
 import { ledgerContextUsageSql } from '../thread-context-usage-sql'
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
@@ -402,7 +403,7 @@ function buildAlwaysVisibleClauses(scopedBucketIds: ReadonlySet<string>): {
     params.push(...bucketIds)
   }
   return {
-    where: `WHERE archived = 0 AND ${only.where} AND ${visibility}`,
+    where: `WHERE ${unarchivedThreadSql()} AND ${only.where} AND ${visibility}`,
     params
   }
 }
@@ -413,8 +414,8 @@ function buildListClauses(
   options: ThreadListOptions
 ): { where: string; params: unknown[]; limit: string } {
   const clauses = [...filters]
-  if (options.includeArchived === false) {
-    clauses.push('archived = 0')
+  if (options.includeArchived !== true) {
+    clauses.push(unarchivedThreadSql())
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
   const limitClause =
@@ -822,7 +823,7 @@ export class ThreadRepo {
   async listDraftingThreadsViaWorker(): Promise<Thread[]> {
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads
-       WHERE archived = 0
+       WHERE ${unarchivedThreadSql()}
          AND drafting = 1
          AND assignment_role IS NOT 'worker'
          AND achievement_role IS NOT 'auditor'
@@ -910,13 +911,18 @@ export class ThreadRepo {
   /**
    * Read only the fields needed to enforce per-project capacity on the worker.
    * Orchestration children do not count toward the user-visible thread bound.
+   *
+   * An archived thread is invincible: it is never a candidate, it never occupies
+   * one of the project's slots, and neither is a thread whose subtree holds one,
+   * because deleting that thread would take the archived conversation with it.
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
       `SELECT id, pinned, status, last_activity, scope_bucket_id, assignment_role, achievement_role
        FROM threads
        WHERE project_id = ?
-         AND archived = 0
+         AND ${unarchivedThreadSql()}
+         AND ${unarchivedSubtreeSql()}
          AND assignment_role IS NOT 'worker'
          AND achievement_role IS NOT 'auditor'
          AND coordinator_thread_id IS NULL
@@ -1099,7 +1105,7 @@ export class ThreadRepo {
     if (unique.length === 0) return []
     const placeholders = unique.map(() => '?').join(',')
     const result = await this.db.queryViaWorker(
-      `SELECT * FROM threads WHERE id IN (${placeholders})`,
+      `SELECT * FROM threads WHERE id IN (${placeholders}) AND ${unarchivedThreadSql()}`,
       unique,
       0
     )
@@ -1175,7 +1181,7 @@ export class ThreadRepo {
            ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC
          ) AS rn
          FROM threads
-         WHERE archived = 0
+         WHERE ${unarchivedThreadSql()}
            AND project_id != ?
            AND (
              pinned = 1
@@ -1210,7 +1216,7 @@ export class ThreadRepo {
   listActive(): Array<Thread & { status: 'planning' | 'executing' }> {
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads
-       WHERE archived = 0 AND status IN ('planning', 'executing')
+       WHERE ${unarchivedThreadSql()} AND status IN ('planning', 'executing')
        ORDER BY last_activity DESC, id ASC`
     )
     return rows
@@ -1227,10 +1233,33 @@ export class ThreadRepo {
       this.db.get<{ active: number }>(
         `SELECT 1 AS active
          FROM threads
-         WHERE archived = 0 AND status IN ('planning', 'executing')
+         WHERE ${unarchivedThreadSql()} AND status IN ('planning', 'executing')
          LIMIT 1`
       ) !== undefined
     )
+  }
+
+  /**
+   * How many non-archived threads hold active agent work right now, read on the
+   * database worker.
+   *
+   * The count the menu bar figure shows. It is the same set {@link hasActive}
+   * probes for, counted rather than probed, so the icon and the stay-alive
+   * decision can never disagree about what "working" means. It is read on the
+   * worker because it is refreshed from thread-update paths, which are
+   * interaction paths: a count holds the whole main process for as long as the
+   * OS takes to serve it (see `docs/APP-BIBLE.md`).
+   */
+  async countActiveViaWorker(): Promise<number> {
+    const result = await this.db.queryViaWorker(
+      `SELECT COUNT(*) AS active
+       FROM threads
+       WHERE ${unarchivedThreadSql()} AND status IN ('planning', 'executing')`,
+      [],
+      1
+    )
+    if (!result.ok) return 0
+    return Number(result.rows[0]?.['active'] ?? 0)
   }
 
   delete(id: string): void {
@@ -1288,11 +1317,18 @@ export class ThreadRepo {
     )
   }
 
-  setPinned(id: string, pinned: boolean, pinnedAt?: number): void {
+  /**
+   * A bookmark is a pin with a glyph, so the two flags always move together and
+   * `bookmarked` implies `pinned`: a surface that only knows about pins (the
+   * scope board's pin toggle) would otherwise leave a row claiming a bookmark
+   * while unpinned, which no view can draw honestly.
+   */
+  setPinned(id: string, pinned: boolean, pinnedAt?: number, bookmarked = false): void {
     this.db.run(
-      'UPDATE threads SET pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?',
+      'UPDATE threads SET pinned = ?, pinned_at = ?, bookmarked = ?, updated_at = ? WHERE id = ?',
       pinned ? 1 : 0,
       pinned ? (pinnedAt ?? Date.now()) : null,
+      pinned && bookmarked ? 1 : 0,
       Date.now(),
       id
     )
@@ -1458,8 +1494,8 @@ export function threadSearchMessageLimit(limit: number): number {
  * Build the title + FTS search SQL from free-form input.
  *
  * `useSearchMeta` selects the fast message query: it ranks and filters against
- * the narrow `agent_message_search_meta` mirror and touches `agent_messages`
- * only for the rows that return a snippet. Without it (the mirror is still
+ * the narrow `agent_message_search_meta` mirror and extracts matching excerpts
+ * through FTS. Without it (the mirror is still
  * being backfilled, or the database predates it) the legacy query joins
  * `agent_messages` directly, which is correct but reads the whole messages
  * table in FTS index order. See schema.ts for the mirror's rationale.
@@ -1467,7 +1503,8 @@ export function threadSearchMessageLimit(limit: number): number {
 export function buildThreadSearchSql(
   raw: string,
   options: ThreadSearchOptions = {},
-  useSearchMeta = false
+  useSearchMeta = false,
+  messageQuery?: string
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
   const trimmed = raw.trim()
@@ -1479,7 +1516,7 @@ export function buildThreadSearchSql(
       ORDER BY t.last_activity DESC`,
     params: [...titleScope.params, `%${escapeLike(trimmed)}%`, trimmed]
   }
-  const ftsQuery = toFtsQuery(trimmed)
+  const ftsQuery = messageQuery ?? toFtsQuery(trimmed)
   const messageLimit = threadSearchMessageLimit(limit)
   const metaScope = threadSearchScopeClause('st', options)
   const legacyScope = threadSearchScopeClause('t', options)
@@ -1487,11 +1524,12 @@ export function buildThreadSearchSql(
     ? useSearchMeta
       ? {
           sql: `SELECT t.*, meta.role AS match_role,
-              substr(am.search_text, 1, 2000) AS snippet_text,
+              meta.snippet_text AS snippet_text,
               meta.created_at AS snippet_timestamp, meta.fts_rank AS fts_rank
         FROM (
           SELECT m.rowid AS msg_rowid, m.thread_id AS msg_thread_id, m.role AS role,
-                 m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank
+                 m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank,
+                 snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text
           FROM agent_messages_fts
           JOIN agent_message_search_meta m ON m.rowid = agent_messages_fts.rowid
           JOIN threads st ON st.id = m.thread_id
@@ -1502,13 +1540,13 @@ export function buildThreadSearchSql(
           ORDER BY bm25(agent_messages_fts), m.created_at DESC
           LIMIT ?
         ) meta
-        JOIN agent_messages am ON am.rowid = meta.msg_rowid
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
           params: [ftsQuery, ...metaScope.params, messageLimit]
         }
       : {
-          sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
+          sql: `SELECT t.*, am.role AS match_role,
+              snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text,
               am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
         FROM agent_messages_fts
         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
@@ -1540,9 +1578,12 @@ function threadSearchScopeClause(
   const assistantId = options.assistantId ?? null
   switch (options.family) {
     case 'chats':
-      return { sql: `${alias}.project_id = ?`, params: [INBOX_PROJECT_ID] }
+      return {
+        sql: `${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`,
+        params: [INBOX_PROJECT_ID]
+      }
     case 'assistant': {
-      const clauses = [`${alias}.project_id = ?`]
+      const clauses = [`${alias}.project_id = ?`, unarchivedThreadSql(alias)]
       const params: unknown[] = [ASSISTANT_SPACE_ID]
       if (assistantId) {
         clauses.push(`${alias}.assistant_id = ?`)
@@ -1554,6 +1595,7 @@ function threadSearchScopeClause(
       // Every engineering project, never the hidden inbox/assistant/browser
       // containers that share the same table.
       const clauses = [
+        unarchivedThreadSql(alias),
         `${alias}.project_id != ?`,
         `${alias}.project_id != ?`,
         `${alias}.project_id != ?`
@@ -1568,7 +1610,7 @@ function threadSearchScopeClause(
     default: {
       // Unscoped/global: every family except the hidden browser-chat container,
       // optionally narrowed to one project.
-      const clauses = [`${alias}.project_id != ?`]
+      const clauses = [`${alias}.project_id != ?`, unarchivedThreadSql(alias)]
       const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID]
       if (projectId) {
         clauses.push(`${alias}.project_id = ?`)

@@ -1,9 +1,10 @@
 <script lang="ts">
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import { Repeat, Square } from '@lucide/svelte'
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     BrowserCompositionPlayback,
@@ -154,7 +155,7 @@
     title="Stop and return to the start"
     onclick={stop}
   >
-    <Square size={12} />
+    <CioSquare size={12} />
   </button>
   <button
     type="button"
@@ -203,7 +204,7 @@
     title={loop ? 'Looping: play again at the end' : 'Play once and hold the last frame'}
     onclick={toggleLoop}
   >
-    <Repeat size={13} />
+    <CioRefresh size={13} />
   </button>
 </div>
 {#if error}

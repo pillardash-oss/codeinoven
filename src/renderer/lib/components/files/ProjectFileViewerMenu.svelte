@@ -1,26 +1,33 @@
 <script lang="ts">
-  import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import CioBraces from '@pdslng/cio-icon/CioBraces.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+  import CioListOrdered from '@pdslng/cio-icon/CioListOrdered.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioRedo from '@pdslng/cio-icon/CioRedo.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioReplace from '@pdslng/cio-icon/CioReplace.svelte'
+  import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
+  import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { ListOrdered, WrapText } from '@lucide/svelte'
-
   interface Props {
     diffView: boolean
     lineNumbers: boolean
     wrap: boolean
     reloadDisabled: boolean
     mutationDisabled: boolean
-    /** Show undo/redo buttons ahead of the wrap button; only the file editor
+    /** Show undo/redo buttons ahead of the menu; only the file editor
      *  (editable source view) sets this. */
     showUndoRedo?: boolean
+    /** Whether the editor behind this menu still holds history in that
+     *  direction; a button whose action would do nothing is disabled. */
+    canUndo?: boolean
+    canRedo?: boolean
     /** Open the same File info dialog the file tree's context menu shows for
      *  the active file. Disabled (greyed out) while infoDisabled is set. */
     onInfo: () => void
@@ -29,10 +36,16 @@
     infoDisabled?: boolean
     /** Format label the active file can be beautified as ("JSON"), or null when
      *  the editor cannot reformat it. Drives the menu item and, in fullscreen,
-     *  the toolbar button beside the wrap button. */
+     *  the toolbar button beside the fullscreen controls. */
     beautifyLabel?: string | null
     /** The viewer already fills the window, so it no longer offers fullscreen. */
     fullscreen?: boolean
+    /** Whether the viewer can search what it is showing. */
+    findDisabled?: boolean
+    /** Replace needs a draft, so only the source editor offers it. */
+    replaceDisabled?: boolean
+    onSearch: () => void
+    onSearchReplace: () => void
     onUndo: () => void
     onRedo: () => void
     onReload: () => void
@@ -51,8 +64,14 @@
     reloadDisabled,
     mutationDisabled,
     showUndoRedo = false,
+    canUndo = false,
+    canRedo = false,
     beautifyLabel = null,
     fullscreen = false,
+    findDisabled = false,
+    replaceDisabled = false,
+    onSearch,
+    onSearchReplace,
     onInfo,
     infoDisabled = false,
     onUndo,
@@ -70,19 +89,18 @@
     'flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
   const btnClass =
-    'flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
+    'flex h-6 w-6 items-center justify-center text-dimmed transition-colors enabled:hover:bg-elevated enabled:hover:text-foreground disabled:opacity-30'
 
   let open = $state(false)
-
-  const wrapTitle = $derived(wrap ? 'Unwrap text' : 'Wrap text')
 </script>
 
 {#if showUndoRedo}
   <button
     type="button"
     class={btnClass}
-    aria-label="Undo (Cmd+Z)"
-    title="Undo (Cmd+Z)"
+    aria-label={`Undo (${keymapState.labelFor('editor-undo')})`}
+    title={`Undo (${keymapState.labelFor('editor-undo')})`}
+    disabled={!canUndo}
     onclick={onUndo}
   >
     <CioUndo size={13} />
@@ -90,23 +108,12 @@
   <button
     type="button"
     class={btnClass}
-    aria-label="Redo (Shift+Cmd+Z)"
-    title="Redo (Shift+Cmd+Z)"
+    aria-label={`Redo (${keymapState.labelFor('editor-redo')})`}
+    title={`Redo (${keymapState.labelFor('editor-redo')})`}
+    disabled={!canRedo}
     onclick={onRedo}
   >
     <CioRedo size={13} />
-  </button>
-{/if}
-{#if !diffView}
-  <button
-    type="button"
-    class={btnClass}
-    aria-label={wrapTitle}
-    title={wrapTitle}
-    aria-pressed={wrap}
-    onclick={onToggleWrap}
-  >
-    <WrapText size={13} class={wrap ? 'text-primary' : ''} />
   </button>
 {/if}
 {#if fullscreen && beautifyLabel}
@@ -131,70 +138,96 @@
     <CioMaximize size={13} />
   </button>
 {/if}
-{#if !diffView}
-  <DropdownMenu.Root bind:open>
-    <DropdownMenu.Trigger
-      class={btnClass}
-      aria-label="File viewer actions"
-      title="File viewer actions"
-      oncontextmenu={(e: MouseEvent) => {
-        e.preventDefault()
-        open = true
-      }}
+<!--
+  The menu is offered in every view, including a diff: the search commands are
+  the reason, since a rendered document or a diff is exactly what a reader wants
+  to search. The editor toggles below it are the ones a diff has no use for, so
+  they grey out instead of the menu disappearing.
+-->
+<DropdownMenu.Root bind:open>
+  <DropdownMenu.Trigger
+    class={btnClass}
+    aria-label="File viewer actions"
+    title="File viewer actions"
+    oncontextmenu={(e: MouseEvent) => {
+      e.preventDefault()
+      open = true
+    }}
+  >
+    <CioEllipsis size={13} />
+  </DropdownMenu.Trigger>
+  <DropdownMenu.Portal>
+    <DropdownMenu.Content
+      side="bottom"
+      align="end"
+      sideOffset={5}
+      avoidCollisions
+      collisionPadding={10}
+      class="z-90 min-w-52 border border-border bg-surface p-1 shadow-lg"
     >
-      <CioEllipsis size={13} />
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Portal>
-      <DropdownMenu.Content
-        side="bottom"
-        align="end"
-        sideOffset={5}
-        avoidCollisions
-        collisionPadding={10}
-        class="z-50 min-w-52 border border-border bg-surface p-1 shadow-lg"
+      <DropdownMenu.Item
+        class={itemClass}
+        disabled={findDisabled}
+        title={findDisabled
+          ? 'This surface cannot be searched from the reader'
+          : `Search ${keymapState.labelFor('nav-find')}`}
+        onSelect={onSearch}
       >
-        <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
-          <CioRefresh size={13} class="text-muted" />
-          Reload file
-        </DropdownMenu.Item>
-        <DropdownMenu.Item class={itemClass} onSelect={onToggleLineNumbers}>
-          <ListOrdered size={13} class="text-muted" />
-          <span class="flex-1">{lineNumbers ? 'Hide line numbers' : 'Show line numbers'}</span>
-          {#if lineNumbers}
-            <CioCheck size={12} class="text-primary" />
-          {/if}
-        </DropdownMenu.Item>
-        <DropdownMenu.Item class={itemClass} onSelect={onToggleWrap}>
-          <WrapText size={13} class="text-muted" />
-          <span class="flex-1">Wrap</span>
-          {#if wrap}
-            <CioCheck size={12} class="text-primary" />
-          {/if}
-        </DropdownMenu.Item>
-        {#if beautifyLabel}
-          <DropdownMenu.Item class={itemClass} onSelect={onBeautify}>
-            <CioBraces size={13} class="text-muted" />
-            Beautify {beautifyLabel}
-          </DropdownMenu.Item>
+        <CioFind size={13} class="text-muted" />
+        <span class="flex-1">Search</span>
+        <span class="text-[0.625rem] text-dimmed">{keymapState.labelFor('nav-find')}</span>
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class={itemClass}
+        disabled={replaceDisabled}
+        title={replaceDisabled ? 'Replace works in the source view' : undefined}
+        onSelect={onSearchReplace}
+      >
+        <CioReplace size={13} class="text-muted" />
+        Search and replace
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
+        <CioRefresh size={13} class="text-muted" />
+        Reload file
+      </DropdownMenu.Item>
+      <DropdownMenu.Item class={itemClass} disabled={diffView} onSelect={onToggleLineNumbers}>
+        <CioListOrdered size={13} class="text-muted" />
+        <span class="flex-1">{lineNumbers ? 'Hide line numbers' : 'Show line numbers'}</span>
+        {#if lineNumbers}
+          <CioCheck size={12} class="text-primary" />
         {/if}
-        <DropdownMenu.Item class={itemClass} disabled={infoDisabled} onSelect={onInfo}>
-          <CioTabInfo size={13} class="text-muted" />
-          File info
+      </DropdownMenu.Item>
+      <DropdownMenu.Item class={itemClass} disabled={diffView} onSelect={onToggleWrap}>
+        <CioWrapText size={13} class="text-muted" />
+        <span class="flex-1">Wrap</span>
+        {#if wrap}
+          <CioCheck size={12} class="text-primary" />
+        {/if}
+      </DropdownMenu.Item>
+      {#if beautifyLabel}
+        <DropdownMenu.Item class={itemClass} disabled={diffView} onSelect={onBeautify}>
+          <CioBraces size={13} class="text-muted" />
+          Beautify {beautifyLabel}
         </DropdownMenu.Item>
-        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-        <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
-          <CioPencil size={13} class="text-muted" />
-          Rename
-        </DropdownMenu.Item>
-        <DropdownMenu.Item
-          class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
-          disabled={mutationDisabled}
-          onSelect={onDelete}
-        >
-          <CioTrash size={13} />
-          Delete
-        </DropdownMenu.Item>
-      </DropdownMenu.Content>
-    </DropdownMenu.Portal>
-  </DropdownMenu.Root>
-{/if}
+      {/if}
+      <DropdownMenu.Item class={itemClass} disabled={infoDisabled} onSelect={onInfo}>
+        <CioTabInfo size={13} class="text-muted" />
+        File info
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
+        <CioPencil size={13} class="text-muted" />
+        Rename
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
+        disabled={mutationDisabled}
+        onSelect={onDelete}
+      >
+        <CioTrash size={13} />
+        Delete
+      </DropdownMenu.Item>
+    </DropdownMenu.Content>
+  </DropdownMenu.Portal>
+</DropdownMenu.Root>

@@ -1,10 +1,12 @@
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioChevronUp from '$lib/components/icons/cio/CioChevronUp.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioCaseSensitive from '@pdslng/cio-icon/CioCaseSensitive.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pdslng/cio-icon/CioChevronUp.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioReplace from '@pdslng/cio-icon/CioReplace.svelte'
+  import CioReplaceAll from '@pdslng/cio-icon/CioReplaceAll.svelte'
   import { onDestroy, tick } from 'svelte'
-  import { CaseSensitive, Replace, ReplaceAll } from '@lucide/svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
@@ -22,6 +24,9 @@
      *  can only offer when the search behind it understands case at all. */
     onToggleMatchCase?: () => void
     enableReplace?: boolean
+    /** Open with the replace row already expanded, which is how a "Search and
+     *  replace" command asks for it. Only meaningful with `enableReplace`. */
+    initialReplaceOpen?: boolean
     replaceValue?: string
     onQueryChange: (query: string) => void | Promise<void>
     onReplaceChange?: (value: string) => void
@@ -45,6 +50,7 @@
     matchCase = false,
     onToggleMatchCase = undefined,
     enableReplace = false,
+    initialReplaceOpen = false,
     replaceValue = '',
     onQueryChange,
     onReplaceChange = undefined,
@@ -63,7 +69,10 @@
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let handledFocusTrigger = -1
   let previousFocus: HTMLElement | null = null
-  let replaceOpen = $state(false)
+  // The replace row is asked to be open or closed once, when the bar opens: a
+  // "Search and replace" command expands it, and the user can collapse it again.
+  // svelte-ignore state_referenced_locally
+  let replaceOpen = $state(enableReplace && initialReplaceOpen)
   let replaceInputEl = $state<HTMLInputElement | null>(null)
 
   function clearDebounce(): void {
@@ -85,7 +94,13 @@
 
   async function handleKeydown(event: KeyboardEvent): Promise<void> {
     if (keymapState.matches('files-find-close', event)) {
+      // Claim Escape completely: the bar is the innermost thing on screen, and
+      // the shell around it (a modal reader, the workspace) closes on Escape at
+      // the document, so a bar that only prevented the default still let the
+      // surface behind it be dismissed. Stopping propagation is what keeps the
+      // dismissal to the bar itself.
       event.preventDefault()
+      event.stopPropagation()
       handleClose()
       return
     }
@@ -120,6 +135,7 @@
   function handleReplaceKeydown(event: KeyboardEvent): void {
     if (keymapState.matches('files-find-close', event)) {
       event.preventDefault()
+      event.stopPropagation()
       handleClose()
       return
     }
@@ -194,7 +210,7 @@
           : 'Ignoring case: click to match case'}
         onclick={onToggleMatchCase}
       >
-        <CaseSensitive size={13} aria-hidden="true" />
+        <CioCaseSensitive size={13} aria-hidden="true" />
       </button>
     {/if}
     {#if draft}
@@ -253,7 +269,7 @@
         disabled={matches === 0 || !onReplaceOne}
         onclick={() => onReplaceOne?.()}
       >
-        <Replace size={13} aria-hidden="true" />
+        <CioReplace size={13} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -263,7 +279,7 @@
         disabled={matches === 0 || !onReplaceAll}
         onclick={() => onReplaceAll?.()}
       >
-        <ReplaceAll size={13} aria-hidden="true" />
+        <CioReplaceAll size={13} aria-hidden="true" />
       </button>
     </div>
   {/if}

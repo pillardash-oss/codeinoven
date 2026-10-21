@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import { ovenMarkUrl } from '$lib/stores/ovens.svelte'

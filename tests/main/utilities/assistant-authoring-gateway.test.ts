@@ -7,9 +7,12 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
   ipcMain: { handle: () => undefined },
   safeStorage: {
-    isEncryptionAvailable: () => true,
-    encryptString: (value: string) => Buffer.from(`encrypted:${value}`),
-    decryptString: (value: Buffer) => value.toString().replace(/^encrypted:/, '')
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async (value: string) => Buffer.from(`encrypted:${value}`),
+    decryptStringAsync: async (value: Buffer) => ({
+      result: value.toString().replace(/^encrypted:/, ''),
+      shouldReEncrypt: false
+    })
   }
 }))
 

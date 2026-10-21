@@ -70,7 +70,7 @@ export function registerOvenRootIpc(dependencies: OvenRootDependencies): void {
       )
     const target = await resolveOvenThreadRoot(service, thread, projects)
     if (thread.settings && thread.settings.ovenPath !== target.root)
-      await threads.updateSettings(projectId, thread.id, {
+      await threads.bindOvenCheckout(projectId, thread.id, {
         ...thread.settings,
         ovenPath: target.root
       })

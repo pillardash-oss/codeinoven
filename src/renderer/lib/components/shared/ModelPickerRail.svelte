@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
-  import { LayoutGrid } from '@lucide/svelte'
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
+  import CioTabUtilities from '@pdslng/cio-icon/CioTabUtilities.svelte'
   import RailHighlight from '../layout/RailHighlight.svelte'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import type { PickerHarnessOption, PickerRailView } from './model-picker-helpers'
@@ -56,7 +56,7 @@
     aria-current={isActive('all') ? 'true' : undefined}
     onclick={() => onSelect({ kind: 'all' })}
   >
-    <LayoutGrid size={16} strokeWidth={1.8} />
+    <CioTabUtilities size={16} strokeWidth={1.8} />
   </button>
 
   {#if showFavorites}

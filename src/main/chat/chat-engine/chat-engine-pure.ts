@@ -54,6 +54,7 @@ import type {
   ModelRankingSnapshotRow
 } from '../../../lib/types'
 import { isWorkflowCoordinatorThread } from '../../../lib/types'
+import { instanceEventBus } from '../../system/instance-event-bus'
 import { APP_NAME } from '../../../lib/brand'
 import { truncateToTokenBudget } from '../../../lib/prompt-budget'
 import { UTILITY_SEARCH_TOOL_NAME } from '../../../lib/gateway-tools'
@@ -253,8 +254,13 @@ export function validatePromptReferences(
   references: PromptReference[] | undefined
 ): PromptReference[] {
   if (references === undefined) return []
-  if (!Array.isArray(references) || references.length > 20) {
-    throw new TypeError('Prompt references must be an array of at most 20 selections')
+  // A conversation carries as many references as the user attached: no count
+  // ceiling, because the user's own gestures decide that, and a carry between
+  // chats must never be refused for arriving at a number. The payload stays
+  // bounded where it matters instead: each reference's own text, its comment, and
+  // the total text the prompt can carry below.
+  if (!Array.isArray(references)) {
+    throw new TypeError('Prompt references must be an array of selections')
   }
   let totalTextLength = 0
   return references.map((reference, index) => {
@@ -1036,10 +1042,22 @@ export function recommendedQuestionAnswer(question: AgentQuestion): string {
 
 export { turnStreamPath } from '../turn-stream'
 
+/**
+ * Deliver one agent event to every window in this process, then announce it to
+ * sibling instances.
+ *
+ * This is the single funnel every renderer-bound agent event passes through, so
+ * it is also where the cross-instance announcement belongs: a window in another
+ * instance renders the same conversation off the same event stream instead of
+ * polling shared state for it. The bus itself decides what may cross the process
+ * boundary (render-only observations, never actionable requests), so this stays
+ * a fire-and-forget call that cannot fail the local delivery.
+ */
 export function deliverBroadcast(event: AgentEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'agent:event', event)
   }
+  instanceEventBus.publishAgentEvent(event)
 }
 
 export function broadcastToast(message: string, type: 'error' | 'info' = 'error'): void {

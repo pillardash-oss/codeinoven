@@ -1,8 +1,9 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import type { Snippet } from 'svelte'
+  import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -50,6 +51,9 @@
 
   let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal, annotate }: Props =
     $props()
+
+  let annotationToolbar = $state<HTMLDivElement>()
+  setAnnotationToolbarHost({ target: () => annotationToolbar })
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 
@@ -120,6 +124,17 @@
     <span class="min-w-0 flex-1 truncate text-xs font-semibold text-white/90">
       {filename}
     </span>
+    {#if annotate}
+      <div
+        class="titlebar-no-drag min-w-0"
+        {@attach (node) => {
+          annotationToolbar = node
+          return () => {
+            annotationToolbar = undefined
+          }
+        }}
+      ></div>
+    {/if}
     {#if revealable}
       <button
         type="button"
@@ -155,7 +170,8 @@
     class="relative flex min-h-0 flex-1 items-center justify-center"
     onclick={onClose}
     onkeydown={(e: KeyboardEvent) => {
-      if (keymapState.matches('ui-activate', e)) onClose()
+      // Keys from annotation editors and media controls belong to their target.
+      if (e.target === e.currentTarget && keymapState.matches('ui-activate', e)) onClose()
     }}
   >
     <div
@@ -211,7 +227,19 @@
       {/if}
     </div>
     {#if pager || (kind === 'image' && !annotate)}
-      <div class="absolute right-4 bottom-4 flex items-center gap-2">
+      <!-- The floating controls belong to the content, not to the backdrop behind
+           it: the lightbox dismisses on a press of its backdrop, so the cluster's
+           own box and the gap between its controls must not read as one, and an
+           activation key pressed on a focused control must not reach the
+           lightbox's activate handler either. -->
+      <div
+        class="absolute right-4 bottom-4 flex items-center gap-2"
+        role="presentation"
+        onclick={(event: MouseEvent) => event.stopPropagation()}
+        onkeydown={(event: KeyboardEvent) => {
+          if (keymapState.matches('ui-activate', event)) event.stopPropagation()
+        }}
+      >
         {#if pager}
           <PreviewPager {pager} />
         {/if}

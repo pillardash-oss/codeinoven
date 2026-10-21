@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   /**
    * One comment in a pull request conversation: who wrote it, when, what it says,
    * and everything that can be done to it.
@@ -9,10 +13,6 @@
    * frames its summary together with the threads that review wrote, so this row
    * draws no border of its own when it is embedded (`framed={false}`).
    */
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
 
   import { DropdownMenu } from 'bits-ui'

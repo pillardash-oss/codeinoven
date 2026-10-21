@@ -101,6 +101,14 @@ export interface BackgroundRun {
   errorSummary?: string
   /** How many gates the run answered automatically while the user was away. */
   autoAnswered: number
+  /**
+   * Epoch ms the user acknowledged this run on a notification surface, or absent
+   * while it is still unread.
+   *
+   * Acknowledging is not deletion: the run history surfaces keep the entry as
+   * evidence of what ran, and only the notification row goes away.
+   */
+  acknowledgedAt?: number
 }
 
 export const SCHEDULE_CADENCES: readonly ScheduleCadence[] = [

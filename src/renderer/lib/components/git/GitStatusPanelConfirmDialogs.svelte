@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitCommitInfo, GitConflictSide, GitStashEntry } from '$shared/types'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onDestroy, onMount } from 'svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'

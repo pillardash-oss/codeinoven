@@ -1,8 +1,7 @@
 <script lang="ts">
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   interface Props {
     /** True when this trace was rehydrated from persisted state instead of a live run. */
     rehydrated: boolean

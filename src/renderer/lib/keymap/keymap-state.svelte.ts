@@ -1,4 +1,5 @@
 import {
+  formatKeyCombo,
   isMacPlatform,
   keymapKeys,
   parseKeymapOverride,
@@ -39,6 +40,11 @@ class KeymapState {
    *  otherwise the registry default. Empty means the entry is unbound. */
   keysFor(id: string): readonly string[] {
     return this.overrides[id] ?? keymapKeys(id)
+  }
+
+  /** Platform-aware label for the effective binding, including user overrides. */
+  labelFor(id: string): string {
+    return formatKeyCombo(this.keysFor(id))
   }
 
   /** The effective, parsed trigger for an id. */

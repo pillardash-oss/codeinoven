@@ -36,6 +36,7 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:openInstanceOwner',
   'app:transferInstanceControl',
   'app:rendererReady',
+  'app:setWindowControls',
   'app:waitForFeatures',
   // Independently registered before navigation, even if optional engines fail.
   'updater:check',

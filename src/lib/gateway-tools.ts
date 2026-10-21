@@ -2,6 +2,7 @@ import { UTILITY_KIND_VALUES } from './types'
 import { ORCHESTRATION_TOOLS } from './orchestration-tools'
 import { APP_CONTROL_TOOLS } from './app-control-tools'
 import { ENGINEERING_TOOLS } from './engineering-tools'
+import { PAWN_TOOLS } from './pawn-tools'
 
 /** Stable app-owned gateway tool names. */
 export const UTILITY_SEARCH_TOOL_NAME = 'cio_util_find'
@@ -61,7 +62,7 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_app_catalog:
     'Read exact app IPC channels, argument order, UI actions and current context before cio_app_call. Filter by domain.',
   cio_app_call:
-    'Invoke one catalog-listed IPC channel or UI action. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
+    'Invoke one catalog-listed IPC channel or UI action, or pass capture:true to see the live app window as an image. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
   cio_create_brainstorm:
     'Create a durable Brainstorm draft from this conversation and optional constraints for review.',
   cio_create_prd: 'Create a PRD draft from the finalized Brainstorm or conversation for review.',
@@ -81,7 +82,7 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_util_manage:
     'Install or update a secret-free utility bundle only during explicit utility setup. Each entry wraps definition with kind inside it. Collect credentials afterward with cio_ask_secret.',
   cio_util_diagnose:
-    'Read-only app diagnostics: find threads, read bounded messages or redacted logs, inspect schema, or run bounded SELECT queries. Use for reported app problems. Never changes data.',
+    'Read-only app diagnostics: search every thread by keyword and by meaning for context, find threads, read bounded messages or redacted logs, inspect schema, or run bounded SELECT queries. Never changes data.',
   cio_util_suggest:
     'Offer a validated, secret-free capability bundle for user installation. Include real MCP transport configuration. Claim connection only after accepted; collect credentials afterward with cio_ask_secret. Handle declined, alternative, invalid and failed results honestly.'
 }
@@ -196,6 +197,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   ...ORCHESTRATION_TOOLS,
   ...APP_CONTROL_TOOLS,
   ...ENGINEERING_TOOLS,
+  ...PAWN_TOOLS,
   {
     name: UTILITY_SEARCH_TOOL_NAME,
     description:
@@ -342,7 +344,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.',
+      "Read-only CodeInOven app diagnostics: search every project's threads for context by keyword and by meaning (search_threads includes matching passages for content hits), look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -361,7 +363,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
         query: {
           type: 'string',
           description:
-            'For lookup_thread: thread id or exact thread title. For search_threads: title substring.'
+            'For lookup_thread: thread id or exact thread title. For search_threads: what the conversation was about, in words; it ranks titles and content, including by meaning.'
         },
         thread_id: { type: 'string', description: 'For read_messages: the thread id to inspect.' },
         limit: {

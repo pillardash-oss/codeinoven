@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
+  import CioBugOff from '@pdslng/cio-icon/CioBugOff.svelte'
+  import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
+  import CioEraser from '@pdslng/cio-icon/CioEraser.svelte'
   import { agentDebug } from '$lib/stores/agent-debug.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ExchangeCard from './ExchangeCard.svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { BugOff, Eraser } from '@lucide/svelte'
-
   const expandedIds = new SvelteSet<string>()
 
   function toggleExpand(id: string): void {
@@ -38,7 +38,7 @@
           onclick={() => agentDebug.toggle()}
         >
           {#if agentDebug.enabled}
-            <BugOff size={13} class="text-info" />
+            <CioBugOff size={13} class="text-info" />
           {:else}
             <CioDebugger size={13} />
           {/if}
@@ -53,7 +53,7 @@
             expandedIds.clear()
           }}
         >
-          <Eraser size={13} />
+          <CioEraser size={13} />
         </button>
       </div>
     </div>

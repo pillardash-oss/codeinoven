@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { PlugZap } from '@lucide/svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioPlugZap from '@pdslng/cio-icon/CioPlugZap.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { McpConnectionTestResult, McpProbeTarget } from '$shared/types'
 
@@ -70,7 +70,7 @@
     {#if running}
       <CioSpinner size={13} class="animate-spin" />
     {:else}
-      <PlugZap size={13} />
+      <CioPlugZap size={13} />
     {/if}
     {running ? 'Testing…' : 'Test connection'}
   </button>

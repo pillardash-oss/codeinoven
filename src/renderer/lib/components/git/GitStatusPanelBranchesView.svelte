@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import type { GitBranchInfo } from '$shared/types'
   import { gitState } from '$lib/stores/git.svelte'

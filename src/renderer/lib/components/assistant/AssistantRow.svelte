@@ -1,16 +1,19 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioSkipForward from '$lib/components/icons/cio/CioSkipForward.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { CalendarDays, PinOff } from '@lucide/svelte'
-  import { DropdownMenu, Portal } from 'bits-ui'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import { archiveItem } from '$lib/archive-actions'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCalendar from '@pdslng/cio-icon/CioCalendar.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSkipForward from '@pdslng/cio-icon/CioSkipForward.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import { DropdownMenu, Portal } from 'bits-ui'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
   import { type ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
@@ -390,14 +393,14 @@
           align="end"
           sideOffset={4}
           collisionPadding={8}
-          class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
+          class="z-50 w-56 overflow-hidden border bg-surface p-1 whitespace-nowrap shadow-lg"
         >
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onOpenKnowledge(assistant)}
           >
             <AssistantIcon mark="knowledge" size={14} class="text-muted" />
-            What it knows
+            Assistant behavior
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
@@ -420,7 +423,7 @@
                 class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                 onSelect={() => (skipConfirm = 'today')}
               >
-                <CalendarDays size={14} class="text-muted" />
+                <CioCalendar size={14} class="text-muted" />
                 Skip runs for today
               </DropdownMenu.Item>
             {/if}
@@ -430,12 +433,19 @@
             onSelect={() => onTogglePin(assistant)}
           >
             {#if assistant.pinned}
-              <PinOff size={14} class="text-muted" />
+              <CioPinOff size={14} class="text-muted" />
               Unpin Assistant
             {:else}
               <CioPin size={14} class="text-muted" />
               Pin Assistant
             {/if}
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+            onSelect={() => void archiveItem('assistant', assistant.id, assistant.name)}
+          >
+            <CioArchive size={14} class="text-muted" />
+            Archive Assistant
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
           <DropdownMenu.Item

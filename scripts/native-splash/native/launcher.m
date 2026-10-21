@@ -1,45 +1,19 @@
 #import <Cocoa/Cocoa.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <signal.h>
-#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include "embedded_icon.h"
 
-extern char **environ;
-
-// Supervisor state: the launcher stays alive as the bundle's main executable
-// and supervises the Electron child. execv() used to reuse this PID for
-// Electron, which broke macOS MenuBarAgent status-item registration
-// ("mismatched pid version") and hid the production menu bar icon.
-// A fresh Electron PID registered through posix_spawn() fixes the tray.
-static pid_t electron_child_pid = -1;
-static pid_t splash_helper_pid = -1;
-
-static void forward_signal_to_children(int signal_number) {
-  if (electron_child_pid > 0) kill(electron_child_pid, signal_number == SIGINT ? SIGINT : SIGTERM);
-  if (splash_helper_pid > 0) kill(splash_helper_pid, SIGTERM);
-}
-
-static void install_signal_forwarding(void) {
-  struct sigaction action = {0};
-  action.sa_handler = forward_signal_to_children;
-  sigemptyset(&action.sa_mask);
-  action.sa_flags = 0;
-  sigaction(SIGTERM, &action, NULL);
-  sigaction(SIGINT, &action, NULL);
-  // SIGHUP (terminal close) ends the app rather than orphaning Electron.
-  sigaction(SIGHUP, &action, NULL);
-}
-
+// On macOS the splash is a helper the app spawns, never the bundle's entry
+// point: the Electron runtime is the product (it owns the windows, the menu bar
+// item, capture permissions and the folder name macOS shows), so the splash
+// renders the placeholder window, hands the app its socket, and exits.
+static int handoff_socket = -1;
 static const char *HELPER_ARGUMENT = "--codeinoven-native-splash-helper";
 static NSWindow *placeholder_window = nil;
-static int handoff_socket = -1;
 static char handoff_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
 
 @interface PlaceholderView : NSView
@@ -187,101 +161,16 @@ static int run_helper(int endpoint_pipe) {
   return 0;
 }
 
-static const char *current_executable(void) {
-  return NSBundle.mainBundle.executablePath.fileSystemRepresentation;
-}
-
-static NSString *electron_path(void) {
-  return [[NSBundle.mainBundle.executablePath stringByDeletingLastPathComponent]
-      stringByAppendingPathComponent:@"CodeInOven-electron"];
-}
-
-static int launch_electron(int argc, const char *argv[]) {
-  int readyPipe[2] = {-1, -1};
-  if (pipe(readyPipe) != 0) return 72;
-  fcntl(readyPipe[0], F_SETFD, FD_CLOEXEC);
-
-  char pipeArgument[24] = {0};
-  snprintf(pipeArgument, sizeof(pipeArgument), "%d", readyPipe[1]);
-  char *helperArguments[] = {
-      (char *)current_executable(), (char *)HELPER_ARGUMENT, pipeArgument, NULL};
-  pid_t helperPid = -1;
-  const int spawnResult =
-      posix_spawn(&helperPid, current_executable(), NULL, NULL, helperArguments, environ);
-  close(readyPipe[1]);
-
-  char endpoint[sizeof(handoff_path)] = {0};
-  if (spawnResult == 0) {
-    struct pollfd descriptor = {.fd = readyPipe[0], .events = POLLIN, .revents = 0};
-    // The helper writes the endpoint only after the placeholder window is
-    // visible, so this wait bounds how long Electron's start is deferred. A
-    // short fixed timeout raced slow AppKit startup and silently dropped the
-    // native splash handoff. poll() also reports EOF the moment a helper dies
-    // without an endpoint, so a failed helper never delays the launch; the
-    // bound only guards against a wedged helper.
-    if (poll(&descriptor, 1, 10000) > 0) {
-      const ssize_t count = read(readyPipe[0], endpoint, sizeof(endpoint) - 1);
-      if (count > 0) endpoint[count] = '\0';
-    }
-  }
-  close(readyPipe[0]);
-  if (endpoint[0] != '\0') {
-    setenv("CODEINOVEN_NATIVE_SPLASH_ENDPOINT", endpoint, 1);
-  } else if (helperPid > 0) {
-    kill(helperPid, SIGTERM);
-  }
-
-  NSString *electronPath = electron_path();
-  char **electronArguments = calloc((size_t)argc + 1, sizeof(char *));
-  if (electronArguments == NULL) return 73;
-  electronArguments[0] = (char *)electronPath.fileSystemRepresentation;
-  for (int index = 1; index < argc; index += 1) electronArguments[index] = (char *)argv[index];
-
-  // Spawn Electron as a fresh process instead of execv() into it. The fresh
-  // PID lets macOS register the status item cleanly; the launcher supervises
-  // (like Windows already does), forwards termination, and exits with the
-  // child's status so launch tooling still sees Electron's exit code.
-  pid_t electronPid = -1;
-  const int electronSpawn = posix_spawn(&electronPid, electronArguments[0], NULL, NULL,
-                                        electronArguments, environ);
-  if (electronSpawn != 0) {
-    free(electronArguments);
-    if (helperPid > 0) kill(helperPid, SIGTERM);
-    return 74;
-  }
-  free(electronArguments);
-  electron_child_pid = electronPid;
-  splash_helper_pid = helperPid;
-  install_signal_forwarding();
-
-  int electronStatus = 0;
-  pid_t waited = -1;
-  do {
-    waited = waitpid(electronPid, &electronStatus, 0);
-  } while (waited < 0 && errno == EINTR);
-  electron_child_pid = -1;
-
-  // The splash helper quits on its own after the handoff (or after 15s), but
-  // never outlive the app: Electron's exit is the end of the launch.
-  if (helperPid > 0) {
-    kill(helperPid, SIGTERM);
-    // Reap a possibly already-exited helper without blocking Electron's exit.
-    int helperStatus = 0;
-    waitpid(helperPid, &helperStatus, WNOHANG);
-  }
-  splash_helper_pid = -1;
-
-  if (waited < 0) return 75;
-  if (WIFEXITED(electronStatus)) return WEXITSTATUS(electronStatus);
-  if (WIFSIGNALED(electronStatus)) return 128 + WTERMSIG(electronStatus);
-  return 75;
-}
-
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
-    if (argc == 3 && strcmp(argv[1], HELPER_ARGUMENT) == 0) {
-      return run_helper(atoi(argv[2]));
+    if (argc < 2 || strcmp(argv[1], HELPER_ARGUMENT) != 0) {
+      // The app owns the bundle; a bare invocation is a packaging mistake and
+      // must not silently start a second Electron instance.
+      fprintf(stderr, "usage: %s %s <endpoint-fd>\n", argv[0], HELPER_ARGUMENT);
+      return 64;
     }
-    return launch_electron(argc, argv);
+    // The subscribing app hands the endpoint pipe as a file descriptor and reads
+    // the socket path from it, so the handoff never depends on a shared path.
+    return run_helper(argc >= 3 ? atoi(argv[2]) : STDOUT_FILENO);
   }
 }

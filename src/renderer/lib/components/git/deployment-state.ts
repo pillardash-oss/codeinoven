@@ -1,8 +1,7 @@
-import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-import CioDot from '$lib/components/icons/cio/CioDot.svelte'
-import { Recycle } from '@lucide/svelte'
-
+import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
 /**
  * How a deployment or workflow run state reads at a glance.
  *
@@ -60,7 +59,7 @@ export function stateGlyph(state: string): typeof CioCheckCircle {
   if (tone === 'success') return CioCheckCircle
   if (tone === 'failure') return CioCrossCircle
   if (tone === 'idle') return CioDot
-  return Recycle
+  return CioRefresh
 }
 
 /** The glyph's colour, matching the tone the state pills use. */

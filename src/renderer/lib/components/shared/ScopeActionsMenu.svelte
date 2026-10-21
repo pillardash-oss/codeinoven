@@ -1,22 +1,24 @@
 <script lang="ts">
-  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioFolderInput from '@pdslng/cio-icon/CioFolderInput.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioGitCompare from '@pdslng/cio-icon/CioGitCompare.svelte'
+  import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
+  import CioPanelsLeftBottom from '@pdslng/cio-icon/CioPanelsLeftBottom.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
+  import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
   import { osFileManagerLabel } from '$lib/os-file-manager'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { isScopeWorktreeHealthRepairable } from '$shared/scope-worktree-health'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
-  import { ArchiveRestore, GitCompare, PanelsLeftBottom, PinOff } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component, Snippet } from 'svelte'
   import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -118,7 +120,7 @@
       if (!alreadyDocked) {
         list.push({
           label: 'Dock',
-          icon: PanelsLeftBottom,
+          icon: CioPanelsLeftBottom,
           run: () => actions.dock(bucket)
         })
       }
@@ -130,13 +132,13 @@
       if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: bucket.pinned ? 'Unpin scope' : 'Pin scope',
-          icon: bucket.pinned ? PinOff : CioPin,
+          icon: bucket.pinned ? CioPinOff : CioPin,
           run: () => void actions.togglePinned(bucket)
         })
         if (isArchived) {
           list.push({
             label: 'Restore',
-            icon: ArchiveRestore,
+            icon: CioArchive,
             run: () => void actions.setArchived(bucket, false)
           })
         } else {
@@ -184,7 +186,7 @@
         })
         list.push({
           label: 'Sync Worktree',
-          icon: GitCompare,
+          icon: CioGitCompare,
           run: () => actions.askSyncFrom(bucket)
         })
         if (setupFailed || setupStale) {

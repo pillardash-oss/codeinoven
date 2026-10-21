@@ -1,19 +1,16 @@
 #!/usr/bin/env bun
 /**
- * Verify that `.bun-version`, the single version every CI job installs, actually
- * satisfies the floor `package.json` declares in `engines.bun`.
+ * Verify that `.bun-version`, the single version every CI job installs, exactly
+ * matches the version declared in `package.json`.
  *
  * `.bun-version` is what `oven-sh/setup-bun` reads via `bun-version-file`, so it
  * is the only place a workflow can pin the toolchain. `engines.bun` is the
- * contract contributors and the app resolve against. Two files describing one
+ * contract contributors and the app resolve against. Three files describing one
  * fact is drift waiting to happen, so this makes the disagreement visible on the
  * run that has it instead of as a bug report weeks later.
  *
- * Policy:
- *   - pinned below the declared floor -> error. CI would be running a toolchain
- *     the repo itself refuses to support.
- *   - pinned above the floor -> notice. A newer Bun is deliberate, not a mistake.
- *   - no floor declared -> notice. `.bun-version` then stands alone.
+ * Policy: `engines.bun`, `packageManager`, and `.bun-version` must all name the
+ * same exact version. CI and local development then use the same toolchain.
  *
  * Run from the repository root (the composite `setup` action does).
  */
@@ -36,18 +33,6 @@ function write(line: string): void {
   process.stdout.write(`${line}\n`)
 }
 
-/** Compare two dotted numeric versions. Returns a negative, zero, or positive number. */
-function compare(left: string, right: string): number {
-  const leftParts = left.split('.').map((part) => Number.parseInt(part, 10) || 0)
-  const rightParts = right.split('.').map((part) => Number.parseInt(part, 10) || 0)
-  const length = Math.max(leftParts.length, rightParts.length)
-  for (let index = 0; index < length; index += 1) {
-    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
-    if (difference !== 0) return difference
-  }
-  return 0
-}
-
 const pinned = readTrimmed('.bun-version')
 
 if (!/^\d+\.\d+\.\d+$/.test(pinned)) {
@@ -60,35 +45,34 @@ const manifest = JSON.parse(readTrimmed('package.json')) as {
   packageManager?: string
 }
 
-const floorMatch = /^>=\s*(\d+\.\d+\.\d+)/.exec(manifest.engines?.bun ?? '')
+const engineVersion = manifest.engines?.bun ?? ''
+const exactEngineMatch = /^>=\s*(\d+\.\d+\.\d+)$/.exec(engineVersion)
 
-if (!floorMatch) {
-  write(
-    `::notice::package.json declares no engines.bun floor; .bun-version (${pinned}) stands alone.`
-  )
-  process.exit(0)
-}
-
-const floor = floorMatch[1]
-const comparison = compare(pinned, floor)
-
-if (comparison < 0) {
-  write(
-    `::error::.bun-version (${pinned}) is below the floor package.json declares in engines.bun (>= ${floor}). CI would install a toolchain the repository refuses to support. Bump .bun-version.`
-  )
+if (!exactEngineMatch) {
+  write(`::error::package.json engines.bun must declare the exact pinned version as >=${pinned}.`)
   process.exit(1)
 }
 
-if (comparison > 0) {
-  write(`::notice::.bun-version (${pinned}) is newer than the engines.bun floor (>= ${floor}).`)
-} else {
-  write(`check-bun-version: .bun-version matches the engines.bun floor (${pinned}).`)
+if (exactEngineMatch[1] !== pinned) {
+  write(
+    `::error::package.json engines.bun is "${engineVersion}" but .bun-version is ${pinned}. Set both to the same exact version.`
+  )
+  process.exit(1)
 }
 
 const packageManager = manifest.packageManager ?? ''
-if (packageManager && !packageManager.endsWith(`bun@${pinned}`)) {
+if (packageManager !== `bun@${pinned}`) {
   write(
-    `::error::package.json packageManager is "${packageManager}" but .bun-version is ${pinned}. Bump both together: .bun-version is what CI installs, packageManager is what Bun itself enforces.`
+    `::error::package.json packageManager is "${packageManager}" but .bun-version is ${pinned}. Set both to bun@${pinned}.`
   )
   process.exit(1)
 }
+
+if (Bun.version !== pinned) {
+  write(
+    `::error::Running Bun ${Bun.version} does not match the repository pin ${pinned}. Use the version in .bun-version.`
+  )
+  process.exit(1)
+}
+
+write(`check-bun-version: .bun-version, engines.bun, and packageManager match (${pinned}).`)

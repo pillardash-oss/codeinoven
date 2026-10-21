@@ -3,7 +3,6 @@ import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../../lib/cio-prompts'
 import { prototypeCdnPolicyFromConfig } from '../../../lib/prototypes/prototype-cdn'
-import { setWorkRootReports, setWorkRoots } from '../../design/work-roots-state'
 import { normalizeWorkerNames } from '../../../lib/assignment/worker-names'
 import type {
   ProjectAction,
@@ -365,10 +364,6 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     // The preview server resolves the header when the policy is applied, so this
     // keeps a settings change effective for the very next prototype request.
     options.prototypePreviewService?.setCdnPolicy(prototypeCdnPolicyFromConfig(config))
-    // Applied before the move below, so a design that previews while the folders
-    // are being relocated already resolves the folder it is going to, not the one
-    // being emptied underneath it.
-    if (patch.workRoots) setWorkRoots(config.workRoots)
     if (patch.zoomLevel !== undefined) {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
       if (win && !win.isDestroyed()) win.webContents.setZoomFactor(config.zoomLevel)
@@ -401,8 +396,6 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
         tts: patch.sound.ttsUnload
       } as Record<string, unknown>)
     }
-    // Global defaults never move project files. Explicit moves use design:updateDetails.
-    if (patch.workRoots) setWorkRootReports([])
     broadcastConfigChanged(config)
     return config
   })

@@ -1,5 +1,6 @@
 import type { Component } from 'svelte'
 import type { ThreadGroup } from '$lib/stores/thread-grouping.svelte'
+import CioHammer from '@pdslng/cio-icon/CioHammer.svelte'
 import { THREAD_GROUP_MARK } from './thread-state-marks'
 
 /**
@@ -11,16 +12,18 @@ import { THREAD_GROUP_MARK } from './thread-state-marks'
  */
 export const THREAD_GROUP_ICONS: Record<ThreadGroup, Component> = {
   Attention: THREAD_GROUP_MARK.Attention.icon,
+  Drafts: THREAD_GROUP_MARK.Drafts.icon,
   Unread: THREAD_GROUP_MARK.Unread.icon,
   Errors: THREAD_GROUP_MARK.Errors.icon,
   Spec: THREAD_GROUP_MARK.Spec.icon,
-  Working: THREAD_GROUP_MARK.Working.icon,
+  Working: CioHammer,
   Done: THREAD_GROUP_MARK.Done.icon
 }
 
 /** Header colour per status group: the same colour the rows paint with. */
 export const THREAD_GROUP_COLORS: Record<ThreadGroup, string> = {
   Attention: THREAD_GROUP_MARK.Attention.colour,
+  Drafts: THREAD_GROUP_MARK.Drafts.colour,
   Unread: THREAD_GROUP_MARK.Unread.colour,
   Errors: THREAD_GROUP_MARK.Errors.colour,
   Spec: THREAD_GROUP_MARK.Spec.colour,

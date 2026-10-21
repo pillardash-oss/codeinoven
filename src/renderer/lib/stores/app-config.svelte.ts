@@ -1,4 +1,7 @@
+import { syncWindowControls } from '$lib/window-controls'
+import { APP_FONT_OPTIONS } from '$shared/app-fonts'
 import {
+  DEFAULT_CONTRAST_LEVEL,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
   DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
@@ -7,13 +10,13 @@ import {
 import type {
   AppConfig,
   CioCleanupCategoryId,
+  ContrastLevel,
   GitPullPreference,
   InAppNotificationSoundSettings,
   MediaGenerationConfig,
   ModelProfile
 } from '$shared/types'
 import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
-import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 import { publishBrowserAllowSiteKeymapOverride } from '$lib/browser-keymap-context'
@@ -21,7 +24,8 @@ import {
   DEFAULT_APP_FONT_FAMILY,
   DEFAULT_APP_FONT_SIZE,
   DEFAULT_APP_FONT_WEIGHT,
-  applyAppTypography
+  applyAppTypography,
+  applyContrastLevel
 } from '$lib/app-typography'
 import { isBrowserLoaded } from '$lib/stores/browser-access.svelte'
 
@@ -31,6 +35,12 @@ const DEFAULT_ZOOM_LEVEL = 1
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let browserHibernationMinutes = $state(DEFAULT_BROWSER_HIBERNATION_MINUTES)
+/** Whether the Ctrl+Tab switcher lists terminal, file and thread-browser tabs.
+ *  Mirrored because the workspace builds the switcher's entries and holds no
+ *  copy of the config. */
+let switcherTerminalTabs = $state(true)
+let switcherFileTabs = $state(true)
+let switcherThreadBrowserTabs = $state(true)
 let browserHistoryLimit = $state(DEFAULT_BROWSER_HISTORY_LIMIT)
 /** Let a page keep a shortcut the app also binds; on until the config says
  *  otherwise. Main reads it to decide which chords it claims in a page. */
@@ -46,15 +56,10 @@ let defaultPullStrategy = $state<GitPullPreference>('ask')
 let fontFamily = $state(DEFAULT_APP_FONT_FAMILY)
 let appFontSize = $state(DEFAULT_APP_FONT_SIZE)
 let fontWeight = $state(DEFAULT_APP_FONT_WEIGHT)
+let contrastLevel = $state<ContrastLevel>(DEFAULT_CONTRAST_LEVEL)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 /** The generation backend choice, mirrored so deep components can read it. */
 let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
-/**
- * Where a design or video session writes, mirrored because the file tree reads it
- * to tell the user's authored work apart from scratch (CIO Cleanup never removes
- * the former), and the tree is too deep to receive the config as a prop.
- */
-let workRoots = $state<WorkRoots>({ ...DEFAULT_WORK_ROOTS })
 /**
  * The `.cio` folders CIO Cleanup must keep, mirrored because the file tree's
  * context menu reads it to say whether a row is protected, and the tree is too
@@ -83,7 +88,9 @@ let modelProfiles = $state<ModelProfile[]>([])
  *  window-level Electron zoomFactor owned by the main process. */
 function applyAppearance(): void {
   applyAppTypography(document.documentElement, { fontFamily, appFontSize, fontWeight })
+  applyContrastLevel(document.documentElement, contrastLevel)
   void zoomLevel // zoom is applied by the main process via setZoomFactor
+  syncWindowControls()
 }
 
 /**
@@ -97,6 +104,18 @@ export const appConfigState = {
   },
   get browserHibernationMinutes(): number {
     return browserHibernationMinutes
+  },
+  /** Whether the switcher also lists each open terminal tab. */
+  get switcherTerminalTabs(): boolean {
+    return switcherTerminalTabs
+  },
+  /** Whether the switcher also lists each open project file tab. */
+  get switcherFileTabs(): boolean {
+    return switcherFileTabs
+  },
+  /** Whether the switcher also lists each thread-browser tab. */
+  get switcherThreadBrowserTabs(): boolean {
+    return switcherThreadBrowserTabs
   },
   /** How many pages the browser's history keeps; the history store evicts older
    *  visits for newer ones past this. */
@@ -134,15 +153,15 @@ export const appConfigState = {
   get fontWeight(): number {
     return fontWeight
   },
+  /** How hard the palette pushes text and rules away from its surfaces. */
+  get contrastLevel(): ContrastLevel {
+    return contrastLevel
+  },
   get zoomLevel(): number {
     return zoomLevel
   },
   get mediaGeneration(): MediaGenerationConfig {
     return mediaGeneration
-  },
-  /** The project-relative roots authored work is written into. */
-  get workRoots(): WorkRoots {
-    return workRoots
   },
   /** The `.cio` folders the sweep leaves alone, by category. */
   get cioCleanupExcludedCategories(): CioCleanupCategoryId[] {
@@ -158,6 +177,9 @@ export const appConfigState = {
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
+    switcherTerminalTabs = config.switcherTerminalTabs !== false
+    switcherFileTabs = config.switcherFileTabs !== false
+    switcherThreadBrowserTabs = config.switcherThreadBrowserTabs !== false
     browserHistoryLimit = config.browserHistoryLimit
     browserAllowSiteKeymapOverride = config.browserAllowSiteKeymapOverride
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
@@ -186,9 +208,9 @@ export const appConfigState = {
     fontFamily = config.fontFamily
     appFontSize = config.appFontSize
     fontWeight = config.fontWeight
+    contrastLevel = config.contrastLevel
     zoomLevel = config.zoomLevel
     mediaGeneration = { providerId: config.mediaGeneration.providerId }
-    workRoots = config.workRoots ?? { ...DEFAULT_WORK_ROOTS }
     cioCleanupExcludedCategories = [
       ...(config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES)
     ]
@@ -202,15 +224,7 @@ export const appConfigState = {
 }
 
 /** Options for the Appearance font-family picker. */
-export const FONT_FAMILY_OPTIONS: Array<{ id: string; label: string }> = [
-  { id: 'jetbrains-mono', label: 'JetBrains Mono (default)' },
-  { id: 'satoshi', label: 'Satoshi' },
-  { id: 'system', label: 'System default' },
-  { id: 'sf-mono', label: 'SF Mono' },
-  { id: 'menlo', label: 'Menlo' },
-  { id: 'monaco', label: 'Monaco' },
-  { id: 'fira-code', label: 'Fira Code' }
-]
+export const FONT_FAMILY_OPTIONS = APP_FONT_OPTIONS
 
 /** Font weights offered in Appearance settings. */
 export const FONT_WEIGHT_OPTIONS: Array<{ id: number; label: string }> = [
@@ -218,6 +232,24 @@ export const FONT_WEIGHT_OPTIONS: Array<{ id: number; label: string }> = [
   { id: 300, label: 'Light' },
   { id: 400, label: 'Regular' },
   { id: 500, label: 'Medium' }
+]
+
+/**
+ * Contrast levels offered in Appearance settings, with the one line that says
+ * what each one does.
+ *
+ * The copy states the effect in terms of the reader's own screen ("on a dim or
+ * washed-out display") rather than in ratios, because the ratio is a number the
+ * user has no way to check and the situation is the thing they recognise.
+ */
+export const CONTRAST_LEVEL_OPTIONS: Array<{
+  id: ContrastLevel
+  label: string
+  hint: string
+}> = [
+  { id: 'normal', label: 'Normal', hint: 'The shipped palette' },
+  { id: 'more', label: 'More', hint: 'About twice the contrast' },
+  { id: 'intense', label: 'Intense', hint: 'About three times the contrast' }
 ]
 
 /** Zoom levels offered in Appearance settings, as percentages. */

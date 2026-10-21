@@ -1,7 +1,4 @@
 <script lang="ts" module>
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
   import type { ComposerProject, Assistant, Thread } from '$shared/types'
 
   /**
@@ -25,7 +22,8 @@
    * - `project`: a thread of a project, named by the project.
    * - `chat`: a plain conversation   a temporary chat, or the chats view   which
    *    has no project, no assistant and no page behind it, so it is named by what
-   *    it is.
+   *    it is. A temporary chat keeps its own mark, because it is the same object
+   *    as a chat with one thing missing: it writes nothing and expires.
    * - `assistant`: an assistant thread that belongs to an assistant, named by the
    *   assistant it belongs to.
    * - `task`: an assistant task that belongs to no assistant, named by itself.
@@ -46,7 +44,12 @@
         /** Reassigns the thread's project; only honoured before the first message. */
         onSwitchProject?: (projectId: string) => void
       }
-    | { kind: 'chat' }
+    | {
+        kind: 'chat'
+        /** The side chat a panel opens: a chat that reads this project's context
+         *  but writes nothing and expires on its own. */
+        temporary?: boolean
+      }
     | { kind: 'assistant'; assistant: Assistant }
     | {
         kind: 'task'
@@ -59,6 +62,10 @@
 
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
   import {
     ASSISTANT_ICON_FALLBACK_COLOR,
@@ -226,6 +233,20 @@
         >{pageLabel}</span
       >
     {/if}
+  </span>
+{:else if identity.temporary}
+  <!-- A temporary chat is named by the object it is, and it keeps the mark the
+       sidebar's temporary chat tabs carry, so the shoe and the tab read as one
+       thing. Unlike a plain chat it has a mark to show, so its word truncates
+       with the other labels instead of holding its width. -->
+  <span
+    class="composer-identity flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted"
+    title="A temporary chat: it reads this project's context, writes nothing, and expires"
+  >
+    <CioTemporaryChat size={13} class="shrink-0 text-dimmed" />
+    <span class="composer-identity-label min-w-0 truncate font-medium text-foreground"
+      >Temporary chat</span
+    >
   </span>
 {:else}
   <!-- A plain chat has nothing to name it by, so it is named by what it is. It

@@ -1,14 +1,14 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { onMount } from 'svelte'
-  import { Square } from '@lucide/svelte'
   import type { GatewayStatus } from '$shared/gateway-types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
@@ -304,7 +304,7 @@
               title="Stop the {gateway.adapterName} gateway"
               onclick={() => void stopGateway(gateway.pluginId)}
             >
-              <Square size={14} />
+              <CioSquare size={14} />
               Stop
             </button>
           {:else if gateway.enabled}

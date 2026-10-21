@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { BatteryCharging } from '@lucide/svelte'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import CioBatteryCharging from '@pdslng/cio-icon/CioBatteryCharging.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -18,10 +18,13 @@
     UsageEfficiencyKpis
   } from '$shared/types'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
+  import ShoePopover from './ShoePopover.svelte'
   import { compactCount, creditsLabel, formatExpiry, formatMoney } from '$lib/format/usage'
 
   interface Props {
     usage?: AgentContextUsage
+    /** Destination window selected in the composer, for a pre-send preview. */
+    previewContextWindow?: number
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
@@ -41,6 +44,7 @@
 
   let {
     usage,
+    previewContextWindow,
     efficiencyKpis,
     harnessUsage = [],
     canCompact = false,
@@ -63,10 +67,20 @@
   const RING_RADIUS = 10
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
 
+  const displayedContextWindow = $derived(previewContextWindow ?? usage?.contextWindow)
+  const displayedContextPercent = $derived(
+    usage?.contextUsed !== undefined &&
+      displayedContextWindow !== undefined &&
+      displayedContextWindow > 0
+      ? (usage.contextUsed / displayedContextWindow) * 100
+      : previewContextWindow === undefined
+        ? usage?.contextPercent
+        : undefined
+  )
   const boundedPercent = $derived(
-    usage?.contextPercent === undefined
+    displayedContextPercent === undefined
       ? undefined
-      : Math.max(0, Math.min(100, usage.contextPercent))
+      : Math.max(0, Math.min(100, displayedContextPercent))
   )
   /**
    * A zero total only goes unreported when something on the thread was never
@@ -146,7 +160,7 @@
 {#snippet bankedResetRow(resets: AgentBankedResets)}
   <div transition:slide={{ duration: 250 }} class="border border-border bg-app/40 p-2.5">
     <div class="flex items-center gap-2">
-      <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
+      <CioBatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
       <span class="text-base leading-none font-semibold tabular-nums text-foreground">
         {resets.availableCount}
       </span>
@@ -170,7 +184,7 @@
       disabled={!onActivateBankedReset}
       onclick={onActivateBankedReset}
     >
-      <BatteryCharging size={11} aria-hidden="true" />
+      <CioBatteryCharging size={11} aria-hidden="true" />
       Reset usage
     </button>
   </div>
@@ -254,7 +268,7 @@
           {@render modelRows(entry.models)}
         {/if}
         {#if entry.rateLimits.length > 0}
-          <UsageWindowList limits={entry.rateLimits} preferAmount />
+          <UsageWindowList limits={entry.rateLimits} preferAmount animate={false} />
         {:else if !creditsLabel(entry) && !entry.tokens && !entry.models?.length}
           <p class="text-[0.625rem] text-dimmed">No quota reported for this harness.</p>
         {/if}
@@ -343,7 +357,7 @@
       {#if harnessUsage[0]?.models?.length}
         {@render modelRows(harnessUsage[0].models)}
       {/if}
-      <UsageWindowList limits={harnessUsage[0].rateLimits} preferAmount />
+      <UsageWindowList limits={harnessUsage[0].rateLimits} preferAmount animate={false} />
       {#if harnessUsage[0]?.bankedResets?.availableCount}
         {@render bankedResetRow(harnessUsage[0].bankedResets)}
       {/if}
@@ -363,8 +377,8 @@
         {usage?.contextUsed !== undefined
           ? `${usage.contextEstimated ? '≈' : ''}${compactCount(usage.contextUsed)}`
           : 'Unavailable'}
-        {#if usage?.contextWindow}
-          / {compactCount(usage.contextWindow)}
+        {#if displayedContextWindow}
+          / {compactCount(displayedContextWindow)}
         {/if}
       </span>
     </div>
@@ -381,16 +395,19 @@
         style={`width: ${boundedPercent ?? 0}%`}
       ></div>
     </div>
-    {#if usage?.contextWindow && usage.contextUsed !== undefined}
+    {#if displayedContextWindow && usage?.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">
         <span>Used {compactCount(usage.contextUsed)}</span>
-        <span>Available {compactCount(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
-        <span>Window {compactCount(usage.contextWindow)}</span>
+        <span
+          >Available {compactCount(Math.max(0, displayedContextWindow - usage.contextUsed))}</span
+        >
+        <span>Window {compactCount(displayedContextWindow)}</span>
       </div>
     {/if}
     {#if usage?.contextEstimated}
       <p class="mt-1.5 text-[0.5625rem] text-dimmed">
-        Estimated from the composed request because this harness does not report context telemetry.
+        Approximate context usage. The selected harness may adjust it when preparing the next
+        request.
       </p>
     {/if}
     <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.5625rem] text-dimmed">
@@ -425,47 +442,32 @@
   </div>
 {/snippet}
 
-<div
-  class="group relative"
-  role="group"
-  aria-label="Context and provider usage"
-  onmouseleave={onHide}
->
-  <!-- Console usage control: a four-cell column and its number, the reading the
-       shoe carries. The cells keep the app's severity colours, so a nearly full
-       context still reads amber then red at a glance. -->
-  <button
-    type="button"
-    class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-    onmouseenter={onReveal}
-    aria-label={boundedPercent === undefined
-      ? 'Context usage unavailable'
-      : `Context ${Math.round(boundedPercent)}% used`}
-    title="Context and usage"
-  >
-    <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
-      {#each METER_CELLS as cell (cell)}
-        <span class="h-0.5 w-3 {cell < filledCells ? fillClass : 'bg-overlay'}"></span>
-      {/each}
-    </span>
-    <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
-  </button>
+<!-- The panel opens above the control, portal-positioned so no pane can clip it.
+     The shell takes a tap as well as a hover, so a touch reaches the same reading. -->
+<ShoePopover label="Context and provider usage" {onReveal} {onHide}>
+  {#snippet trigger({ props })}
+    <!-- Console usage control: a four-cell column and its number, the reading the
+         shoe carries. The cells keep the app's severity colours, so a nearly full
+         context still reads amber then red at a glance. -->
+    <button
+      {...props}
+      class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label={boundedPercent === undefined
+        ? 'Context usage unavailable'
+        : `Context ${Math.round(boundedPercent)}% used`}
+      title="Context and usage"
+    >
+      <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
+        {#each METER_CELLS as cell (cell)}
+          <span class="h-0.5 w-3 {cell < filledCells ? fillClass : 'bg-overlay'}"></span>
+        {/each}
+      </span>
+      <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
+    </button>
+  {/snippet}
 
-  <!-- The panel opens above the control with a gap, and that gap belongs to the
-       hover target: it is this box's own bottom padding, never a margin. A margin
-       there is a dead band the pointer crosses on its way up, and the panel closed
-       under the user's hand the moment they reached for it. Padding keeps the
-       visible offset and leaves nothing to cross outside the target. -->
-  <div
-    class="invisible absolute bottom-full right-0 z-40 w-72 pb-1.5 opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
-    role="dialog"
-    aria-label="Context and provider usage"
-  >
-    <div class="border border-border bg-surface p-3 shadow-lg">
-      {@render usageDetail()}
-    </div>
-  </div>
-</div>
+  {@render usageDetail()}
+</ShoePopover>
 
 <style>
   .usage-loading-bar {

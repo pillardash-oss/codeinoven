@@ -1,14 +1,14 @@
 <script lang="ts">
-  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
+  import CioBook from '@pdslng/cio-icon/CioBook.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioImage from '@pdslng/cio-icon/CioImage.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import { Image as ImageIcon } from '@lucide/svelte'
   import { isImageMime, fileUrlToPath } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type {
@@ -559,7 +559,7 @@
           title="No generated artifacts"
           description="Images produced during this conversation will appear here, even when the agent does not mention their saved path."
         >
-          {#snippet icon()}<ImageIcon size={18} />{/snippet}
+          {#snippet icon()}<CioImage size={18} />{/snippet}
         </SourcesPanelEmptyState>
       {:else}
         {#if artifactsError}

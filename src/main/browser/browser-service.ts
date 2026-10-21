@@ -1,6 +1,6 @@
 import { designMotionPageScript } from '../design/design-motion-page'
 import type { AuthoredMotion } from '../../lib/design/motion-policy'
-import { dialog } from '../system/file-dialogs'
+import { agentDialog, dialog } from '../system/file-dialogs'
 import {
   showBrowserNewTabMenu,
   validateBrowserNewTabMenuInput
@@ -470,6 +470,19 @@ function isWebContents(value: unknown): value is WebContents {
 }
 
 /**
+ * Copy text from a menu action.
+ *
+ * The clipboard module returns a promise for every write since Electron 44, and a
+ * menu action cannot await it, so the write is fired and a failure is logged instead
+ * of becoming an unhandled rejection that would take the main process down.
+ */
+function copyTextToClipboard(text: string): void {
+  clipboard.writeText(text).catch((error: unknown) => {
+    Logger.error('Browser context menu could not copy to the clipboard:', error)
+  })
+}
+
+/**
  * URL of the frame that logged a console message, or null when there is none to
  * name.
  *
@@ -734,6 +747,8 @@ export class BrowserService {
    *  window-server commit, and doing that sixty times a second for a frame that
    *  never moved is the difference between an instant switch and a hitch. */
   private displayedTab: { tabId: string; bounds: BrowserViewBounds } | null = null
+  /** Only the latest show may attach after asynchronous extension preparation. */
+  private pendingShow: { tabId: string } | null = null
   /**
    * Hides the renderer asked for, with the handle waiting out their grace window.
    *
@@ -1206,13 +1221,27 @@ export class BrowserService {
             ? ''
             : this.validateTabNavigationUrl(projectId, boxId, rawInitialUrl)
         const bounds = validateBounds(rawBounds)
+        const request = { tabId }
+        this.pendingShow = request
+        // Remove the outgoing page before waiting: native views cover the new
+        // tab's DOM, including its loading and blank states.
+        if (this.activeTabId && this.activeTabId !== tabId) {
+          this.parkTab(this.activeTabId)
+        }
         // The first document must not outrun extensions in its jar. If a page
         // navigates before Chromium has loaded an extension, its manifest content
         // scripts never get a receiver in that document, and later calls such as
         // Bitwarden's tabs.sendMessage fail until the page is reloaded. ensureTab
         // remains synchronous; this IPC path waits for the same single-flight load
         // before it creates and navigates a page.
-        await this.extensions.ensureJarLoaded(projectId, boxId)
+        // Existing pages already have their jar prepared. Frame/bounds reports
+        // must not reconcile extensions again on every animation frame.
+        if (!this.tabs.get(tabId)?.initialNavigationStarted) {
+          await this.extensions.ensureJarLoaded(projectId, boxId)
+        }
+        // A hide or a newer show may have arrived while the jar was loading.
+        // Never let that old continuation recreate or display a departed tab.
+        if (this.pendingShow !== request) throw new Error('Browser show was superseded')
         const tab = this.ensureTab(tabId, projectId, threadId, boxId)
 
         // A show that lands inside the grace window of a hide is a surface switch
@@ -1276,6 +1305,7 @@ export class BrowserService {
 
     replaceHandler('browser:hide', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
+      if (this.pendingShow?.tabId === tabId) this.pendingShow = null
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
       this.noteDepartedReveal(tabId)
@@ -1860,6 +1890,7 @@ export class BrowserService {
   }
 
   dispose(): void {
+    this.pendingShow = null
     this.popupWindows.closeAll('the browser was torn down')
     this.mountedPopupViews.clear()
     this.popupViewFrames.clear()
@@ -2038,10 +2069,12 @@ export class BrowserService {
       this.applyTabMark(tabId, tab, url, NO_TAB_MARK)
       return
     }
-    // Project board views and user-opened screen tabs browse work without
-    // changing the thread's durable authored-work association.
-    const recordThread = !tabId.startsWith('browser:screen:') && !tabId.startsWith('browser:board:')
-    void recogniser(tab.projectId, tab.threadId, url, recordThread)
+    // Recognition is a mark, never a write: the app is told which folder the page
+    // shows, and the thread's own authored-work record is left to the session that
+    // started the work. A user opening a design folder in a tab of their own, a
+    // reload, or a tab restored after a restart therefore marks the tab (the
+    // inspector and the transport still follow it) without claiming the thread.
+    void recogniser(tab.projectId, tab.threadId, url)
       .then((recognised) => {
         if (contents.isDestroyed() || contents.getURL() !== url) return
         this.applyTabMark(tabId, tab, url, recognised)
@@ -2401,7 +2434,7 @@ export class BrowserService {
       }
     } else {
       const filters = fileChooserFilters(accept)
-      const choice = await dialog.showOpenDialog(this.window, {
+      const choice = await agentDialog.showOpenDialog(this.window, {
         title: `Choose files for upload to ${safeOrigin(beforeUrl)}`,
         buttonLabel: 'Upload',
         properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
@@ -4324,6 +4357,23 @@ export class BrowserService {
   }
 
   /**
+   * Lift the app's floating chrome back over a page surface that just mounted.
+   *
+   * A child view lands on top of whatever the app window already holds, and the
+   * toast card and the floating tab strip are bounded `WebContentsView`s in that
+   * same window: they are the app's own chrome, drawn over whatever page happens
+   * to be on screen. A tab's page, a popup window's page and an extension side
+   * panel's document are all mounted the same way, so every one of them has to
+   * hand the top back. Without this an open side panel covered the part of a
+   * toast it overlapped, because the panel was mounted after the card was drawn
+   * and the raise the card had done for itself no longer held.
+   */
+  private raisePageChrome(): void {
+    this.nativeStrip.raise()
+    this.nativeToasts.raise()
+  }
+
+  /**
    * The view plumbing popup windows run on.
    *
    * The registry owns popup lifetimes; every native call a view needs stays here,
@@ -4346,6 +4396,7 @@ export class BrowserService {
           this.window.contentView.addChildView(view)
           this.mountedPopupViews.add(view)
           view.setBounds(bounds)
+          this.raisePageChrome()
         } catch (error: unknown) {
           Logger.error('Browser popup window could not be placed:', error)
         }
@@ -4408,6 +4459,7 @@ export class BrowserService {
           this.window.contentView.addChildView(view)
           this.mountedSidePanelViews.add(view)
           view.setBounds(bounds)
+          this.raisePageChrome()
         } catch (error: unknown) {
           Logger.error('Browser extension side panel could not be placed:', error)
         }
@@ -6200,7 +6252,7 @@ export class BrowserService {
       viewSource: () => this.openViewSourceInNewTab(page),
       copyPageAddress: () => {
         const current = live()
-        if (current) clipboard.writeText(current.getURL())
+        if (current) copyTextToClipboard(current.getURL())
       },
       inspectElement: (x, y) => live()?.inspectElement(x, y),
       selectAll: () => live()?.selectAll(),
@@ -6234,8 +6286,8 @@ export class BrowserService {
       openMediaInNewTab: openInNewTab,
       saveMediaAs: saveAs,
       copyImage: (x, y) => live()?.copyImageAt(x, y),
-      copyAddress: (url) => clipboard.writeText(url),
-      copyText: (text) => clipboard.writeText(text),
+      copyAddress: (url) => copyTextToClipboard(url),
+      copyText: (text) => copyTextToClipboard(text),
       searchFor: (text) => this.searchSelectionInNewTab(owner, text),
       undo: () => live()?.undo(),
       redo: () => live()?.redo(),
@@ -6795,7 +6847,17 @@ export class BrowserService {
     // to be re-parented, so this re-attaches rather than trusting `displayedTab`
     // alone; skipping here would leave it parked with nothing that ever recovers
     // it.
-    if (displayed !== null && displayed.tabId === tabId && !this.stage.isParked(tab.view)) {
+    if (
+      displayed !== null &&
+      displayed.tabId === tabId &&
+      !this.stage.isParked(tab.view) &&
+      // The window's child list is the authority on what is on screen, never the
+      // bookkeeping alone: a view that left the window without a park (a
+      // window-server teardown, a detach the record did not see) is invisible
+      // while `displayedTab` still names it, and skipping the attach here is what
+      // left the tab dark instead of re-parenting it.
+      this.window.contentView.children.includes(tab.view)
+    ) {
       // Already mounted: only a moved frame needs a native call, so the entry
       // loop's repeats cost one bounds comparison each instead of a re-parent.
       this.forgetParked(tabId)
@@ -6814,12 +6876,18 @@ export class BrowserService {
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
-    this.nativeStrip.raise()
-    this.nativeToasts.raise()
+    this.raisePageChrome()
     if (bounds !== null) {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)
     }
+    // A view that comes back from the stage window lands on a new surface, and
+    // Chromium can keep painting the frame it had in the window it left: the page
+    // reads as blank until something else changes the child list or the document
+    // paints again, which is why closing another tab or reloading brought such a
+    // page back. Asking for a repaint is what makes the returning page draw its
+    // own frame at once.
+    tab.view.webContents.invalidate()
     // A page that has just landed needs the pointer delivered again. Chromium
     // rebuilds hover and the cursor shape only from an input event, and the page
     // may have been told the pointer left while it was off screen: that is true
@@ -7138,6 +7206,7 @@ export class BrowserService {
   }
 
   private destroy(tabId: string, reason: BrowserTabDestroyReason): void {
+    if (this.pendingShow?.tabId === tabId) this.pendingShow = null
     // A hide that is still inside its grace window must not park a tab that is
     // about to be gone: the view would be handed to the stage window only to be
     // destroyed.

@@ -8,6 +8,7 @@ import type {
 import { uuidv7 } from '../../lib/id'
 import { CrossProcessMutex, GITHUB_CREDENTIAL_LOCK_NAME } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
+import { clearRepeatedFailure, reportRepeatedFailure } from '../system/repeated-failure-log'
 import type { SecretVault } from '../storage/secret-vault'
 
 declare global {
@@ -86,6 +87,17 @@ function sleep(ms: number): Promise<void> {
  * never applies to it.
  */
 const GITHUB_USER_CACHE_TTL_MS = 5 * 60 * 1000
+
+/**
+ * Labels the polling paths report under.
+ *
+ * A mounted Git sidebar re-reads this status continuously, so a condition that
+ * persists (offline, an unreachable GitHub, a credential that can no longer be
+ * renewed) is one incident here: reported once at error level, then at dev level,
+ * instead of rewriting `error.log` on every poll.
+ */
+const STATUS_FAILURE_LABEL = 'GitHub auth status failed'
+const REFRESH_FAILURE_LABEL = 'GitHub token refresh failed'
 
 /** Refuse to inline an avatar larger than this (guards the IPC payload). */
 const AVATAR_MAX_BYTES = 512 * 1024
@@ -244,16 +256,28 @@ export class GitHubAuthService {
       return { connected: false, configured: false, user: null, ...noAccounts() }
     }
     try {
-      const account = this.activeAccount(await this.readFile())
-      if (!account) return { connected: false, configured: true, user: null, ...noAccounts() }
-      // Reading the profile is what renews an expiring access token, so this is
-      // also where credentials that can no longer be renewed are dropped.
-      await this.refreshProfile(account)
-      return this.toStatus(await this.readFile())
+      const status = await this.readStatus()
+      clearRepeatedFailure(STATUS_FAILURE_LABEL)
+      return status
     } catch (failure) {
-      Logger.error('GitHub auth status failed', failure)
+      reportRepeatedFailure(STATUS_FAILURE_LABEL, failure)
       return { connected: false, configured: true, user: null, ...noAccounts() }
     }
+  }
+
+  /**
+   * Build the status the renderer reads.
+   *
+   * Kept apart from `status()` so a failing condition is reported as one incident
+   * rather than one per poll: a mounted Git panel calls this every few seconds.
+   */
+  private async readStatus(): Promise<GitHubAuthStatus> {
+    const account = this.activeAccount(await this.readFile())
+    if (!account) return { connected: false, configured: true, user: null, ...noAccounts() }
+    // Reading the profile is what renews an expiring access token, so this is
+    // also where credentials that can no longer be renewed are dropped.
+    await this.refreshProfile(account)
+    return this.toStatus(await this.readFile())
   }
 
   /**
@@ -503,7 +527,7 @@ export class GitHubAuthService {
           }
           // Transient (timeout, HTTP error, offline). Keep the credentials: the
           // refresh token is normally still valid, so a later call can succeed.
-          Logger.error('GitHub token refresh failed', failure)
+          reportRepeatedFailure(REFRESH_FAILURE_LABEL, failure)
           const current = await this.credentialRotatedBySibling(account.id, refreshToken)
           if (current) return current
           return this.isAccessTokenStillValid(stored) ? stored.accessToken : null
@@ -534,6 +558,7 @@ export class GitHubAuthService {
       )
     }
     await this.replaceCredentials(accountId, this.buildCredentials(record, refreshToken))
+    clearRepeatedFailure(REFRESH_FAILURE_LABEL)
     Logger.info('GitHub access token refreshed')
     return accessToken
   }
@@ -850,8 +875,10 @@ export class GitHubAuthService {
       return await this.vault.resolve(ref)
     } catch (failure) {
       // A vault read failure is not proof that the credential is invalid, so
-      // leave it in place and report signed out for this call only.
-      Logger.error('Stored GitHub credentials could not be read', failure)
+      // leave it in place and report signed out for this call only. The vault
+      // reports an unreadable ciphertext itself, once per incident and then at dev
+      // level, so this polled read must not add an error line of its own.
+      Logger.dev('Stored GitHub credentials could not be read', failure)
       return null
     }
   }

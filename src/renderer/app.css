@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import '@fontsource-variable/jetbrains-mono';
+@import '../../resources/fonts/oven/fonts.css';
 /* The toast cards. They are drawn by the app's toaster and, while a browser page
    covers the corner the toaster sits in, by the native toast overlay in a window
    of its own. The overlay loads this same stylesheet, so the cards are identical
@@ -102,17 +103,14 @@
   --color-terminal-bright-cyan: #87d7d7;
   --color-terminal-bright-white: #f5f4f0;
 
-  /* Font — the whole app renders in JetBrains Mono (bundled, Ghostty's
-     default family) for a uniform dev-workspace feel with unambiguous
-     code glyphs like backticks. --font-app is overridden at runtime by
-     the Appearance settings (app-config store). */
+  /* Bundled Oven Box is the default; Appearance overrides the active family. The icon
+     fonts after it are the reader's own Nerd Fonts: they answer the icons a terminal
+     prints, which no bundled face carries. src/lib/app-fonts.ts holds the same table. */
   --font-app:
-    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
-    Menlo, monospace;
+    'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
+    ui-monospace, monospace;
   --font-sans: var(--font-app);
-  --font-mono:
-    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
-    Menlo, Monaco, 'Cascadia Code', monospace;
+  --font-mono: var(--font-app);
 }
 
 /* ─── Dark Mode ──────────────────────────────────────────────────────────── */
@@ -144,6 +142,153 @@
   /* Missed run on dark: #fcd34d gives ~13.6:1 on #0b0b0d, clearly brighter
      and more yellow than the amber warning so the two read apart. */
   --color-missed: #fcd34d;
+}
+
+/* ─── Contrast levels ────────────────────────────────────────────────────── */
+/*
+ * A third appearance axis, after scheme and type: how far text and rules are
+ * pushed away from the surfaces they sit on.
+ *
+ * `normal` is the shipped palette above, so it needs no rules of its own. The two
+ * stronger levels redraw the same tokens at roughly twice and three times their
+ * original contrast, which is what makes the interface usable on a washed-out or
+ * badly calibrated panel rather than merely prettier.
+ *
+ * Three rules hold the levels together:
+ *
+ * 1. A level is a palette, never a filter. Each token keeps its hue, so `danger`
+ *    stays red, `info` stays blue and `accent` stays gold at every level. A CSS
+ *    filter would lighten the photography and icons along with the text, and
+ *    would push the surfaces too.
+ * 2. Ratios are capped per tier. A token already at 10:1 cannot triple without
+ *    turning white and losing the hue that carries its meaning, so each tier
+ *    stops where the colour would stop being that colour. Everything still
+ *    rises between `normal`, `more` and `intense`; nothing ever falls back.
+ * 3. The hierarchy survives. `muted` and `dimmed` are solved together so
+ *    `foreground` > `muted` > `dimmed` still reads as three steps at `intense`,
+ *    where a naive ramp collapses them into one tone. Rules likewise move away
+ *    from the surface (darker on light paper, lighter on dark) without ever
+ *    becoming as loud as the text they separate.
+ *
+ * Two consequences are handled rather than left to chance. A token that is also a
+ * fill (`danger` on a delete button, `accent` on a send button) is never made so
+ * pale that its own label fails: light-mode gold is darkened until white clears
+ * AA on it, and dark-mode `danger` flips to dark ink through `--color-on-danger`.
+ * And `primary`/`foreground` are left exactly as shipped, because they already
+ * sit at ~14.5:1, which is the ceiling this surface pair allows.
+ *
+ * Measured against the worst surface each token can land on (app, surface,
+ * elevated, overlay), not the friendliest one.
+ */
+
+:root:not(.dark)[data-contrast='more'] {
+  --color-muted: #313845;
+  --color-dimmed: #596373;
+  --color-border: #a4a091;
+  --color-border-strong: #918f85;
+  --color-info: #0e3896;
+  --color-success: #0e6b31;
+  --color-chat-success: #094642;
+  --color-warning: #8f4e04;
+  --color-danger: #881616;
+  --color-missed: #603b04;
+  --color-thread-spec: #4e0ce2;
+  --color-accent: #8e731e;
+  --color-thread-pinned: #a27c06;
+  --syntax-comment: #43494f;
+  --syntax-keyword: #7b141b;
+  --syntax-string: #0a3069;
+  --syntax-number: #033574;
+  --syntax-function: #4e1fa7;
+  --syntax-type: #612400;
+  --syntax-tag: #0b401b;
+  --syntax-attr: #033574;
+  --color-accent-hover: #7b641a;
+  --color-danger-hover: #611010;
+  --color-on-accent: #ffffff;
+}
+
+:root:not(.dark)[data-contrast='intense'] {
+  --color-muted: #1f232b;
+  --color-dimmed: #424954;
+  --color-border: #84806d;
+  --color-border-strong: #75736a;
+  --color-info: #0a2769;
+  --color-success: #0a4d23;
+  --color-chat-success: #06322f;
+  --color-warning: #693903;
+  --color-danger: #5a0f0f;
+  --color-missed: #402703;
+  --color-thread-spec: #35089a;
+  --color-accent: #725d19;
+  --color-thread-pinned: #7f6104;
+  --syntax-comment: #2b2e32;
+  --syntax-keyword: #4b0c11;
+  --syntax-string: #07234e;
+  --syntax-number: #02244e;
+  --syntax-function: #2e1263;
+  --syntax-type: #411900;
+  --syntax-tag: #072b12;
+  --syntax-attr: #02244e;
+  --color-accent-hover: #5f4e15;
+  --color-danger-hover: #330909;
+  --color-on-accent: #ffffff;
+}
+
+.dark[data-contrast='more'] {
+  --color-muted: #ccccd0;
+  --color-dimmed: #91919a;
+  --color-border: #55555f;
+  --color-border-strong: #5e5e69;
+  --color-info: #a7c2e2;
+  --color-success: #1edc64;
+  --color-chat-success: #44d7a1;
+  --color-warning: #fab059;
+  --color-danger: #ed8c8c;
+  --color-missed: #fcd34d;
+  --color-thread-spec: #c7b5fc;
+  --color-accent: #d4af37;
+  --color-thread-pinned: #eab308;
+  --syntax-comment: #c2c6cc;
+  --syntax-keyword: #ffb3ae;
+  --syntax-string: #a5d6ff;
+  --syntax-number: #91ccff;
+  --syntax-function: #dab8ff;
+  --syntax-type: #ffb777;
+  --syntax-tag: #7ee787;
+  --syntax-attr: #91ccff;
+  --color-accent-hover: #c9a42b;
+  --color-danger-hover: #e76565;
+  --color-on-danger: #0b0b0d;
+  --color-on-accent: #0b0b0d;
+}
+
+.dark[data-contrast='intense'] {
+  --color-muted: #e6e6e9;
+  --color-dimmed: #b3b3b9;
+  --color-border: #6f6f7d;
+  --color-border-strong: #757582;
+  --color-info: #c6d8ed;
+  --color-success: #77eda2;
+  --color-chat-success: #8fe7c6;
+  --color-warning: #fcce98;
+  --color-danger: #f5bfbf;
+  --color-missed: #fcd34d;
+  --color-thread-spec: #dbd0fd;
+  --color-accent: #d4af37;
+  --color-thread-pinned: #eab308;
+  --syntax-comment: #dcdfe2;
+  --syntax-keyword: #ffd5d2;
+  --syntax-string: #c1e3ff;
+  --syntax-number: #c2e3ff;
+  --syntax-function: #ead7ff;
+  --syntax-type: #ffd8b5;
+  --syntax-tag: #a9efaf;
+  --syntax-attr: #c2e3ff;
+  --color-accent-hover: #c9a42b;
+  --color-danger-hover: #ef9898;
+  --color-on-danger: #0b0b0d;
+  --color-on-accent: #0b0b0d;
 }
 
 /* ─── Base Styles ────────────────────────────────────────────────────────── */
@@ -951,6 +1096,21 @@ html body [data-sonner-toaster] {
 
      `ui/DockableModal.svelte` carries the same escape for its `layer="top"`
      panel; `lib/layer-above-modal.ts` owns the selector both sides share. */
+  pointer-events: auto;
+}
+
+html body [data-layer-above-modal] {
+  /* Any surface the app declares as drawn over its modals.
+
+     The shared text/terminal context menu is the one that declares it (see
+     `components/shared/TextSelectionContextMenu.svelte`): its menu must open on
+     a terminal the user right-clicked inside a full screen action, an Oven's own
+     shell or a provider sign-in, every one of which is a modal. Those lock the
+     page with `body { pointer-events: none }`, and pointer events inherit, so
+     the menu was painted above the panel yet dead to the mouse: the press fell
+     through to the modal's overlay and dismissed the modal the menu served.
+     `lib/layer-above-modal.ts` owns the selector `ui/Modal.svelte` shares to
+     treat a press here as a press on the menu rather than on the backdrop. */
   pointer-events: auto;
 }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import type { Snippet } from 'svelte'
 
   let {

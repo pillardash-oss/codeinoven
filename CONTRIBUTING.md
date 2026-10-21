@@ -114,8 +114,8 @@ Three rules keep that from drifting again:
 
 - **`.bun-version` is the only place the toolchain version lives.** Never pass a
   literal `bun-version` to `setup-bun`; `package.json`'s `engines.bun` and
-  `packageManager` declare the floor, and `scripts/check-bun-version.ts` fails
-  the run when the two disagree.
+  `packageManager` must match that exact version, and
+  `scripts/check-bun-version.ts` fails the run when they disagree.
 - **The installer formats a release publishes are owned by
   `scripts/release-artifacts.ts`.** Add a format there, not in a `find` filter.
 - **The promotion-skip rule lives in the `policy` job** of `quality.yml` and

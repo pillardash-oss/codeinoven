@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTag from '$lib/components/icons/cio/CioTag.svelte'
-  import { Flag } from '@lucide/svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioFlag from '@pdslng/cio-icon/CioFlag.svelte'
+  import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTag from '@pdslng/cio-icon/CioTag.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { gitState } from '$lib/stores/git.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -339,7 +339,7 @@
           title="Clear the milestone"
           onclick={() => chooseMilestone(null)}
         >
-          <Flag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioFlag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
           <span class="min-w-0 flex-1 text-[0.6875rem] text-foreground">No milestone</span>
           {#if draftMilestone === null}
             <CioCheck size={13} class="shrink-0 text-primary" />

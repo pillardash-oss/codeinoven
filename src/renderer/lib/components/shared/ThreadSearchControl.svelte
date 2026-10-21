@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { Popover } from 'bits-ui'
   import { isOrchestrationChildThread, type Thread, type ThreadSearchResult } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
@@ -11,6 +11,10 @@
   interface FtsScope {
     /** Scope the search to one project. Omit for a global search. */
     projectId?: string
+    /** Scope the search to one thread family: the project threads, the chats, or
+     *  one assistant's tasks. Omitted, a search spans every family except the
+     *  hidden browser-chat container. */
+    family?: 'projects' | 'chats' | 'assistant'
     /** Optional client-side filter applied to results (e.g. exclude the inbox). */
     filter?: (thread: Thread) => boolean
   }
@@ -95,6 +99,7 @@
     searchTimer = setTimeout(() => {
       void invoke('threads:search', safeQuery, {
         projectId: scope.projectId,
+        family: scope.family,
         limit: SEARCH_LIMIT
       })
         .then((results) => {
@@ -136,7 +141,7 @@
   }}
 >
   <Popover.Trigger
-    class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={title}
     {title}
   >
@@ -148,7 +153,7 @@
       sideOffset={8}
       collisionPadding={16}
       align="end"
-      class="z-50 w-80 overflow-hidden border bg-surface shadow-lg"
+      class="titlebar-no-drag z-50 w-80 overflow-hidden border bg-surface shadow-lg"
       aria-label="Search {contextLabel}"
       onCloseAutoFocus={(e) => e.preventDefault()}
     >

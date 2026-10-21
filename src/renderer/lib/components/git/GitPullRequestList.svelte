@@ -1,17 +1,18 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { GitPullRequestClosed, GitPullRequestDraft } from '@lucide/svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
+  import CioPullRequestClosed from '@pdslng/cio-icon/CioPullRequestClosed.svelte'
+  import CioPullRequestDraft from '@pdslng/cio-icon/CioPullRequestDraft.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -277,8 +278,8 @@
 
   function icon(pr: PullRequestSummary): typeof CioPullRequest {
     if (pr.state === 'merged') return CioMerge
-    if (pr.state === 'closed') return GitPullRequestClosed
-    return pr.draft ? GitPullRequestDraft : CioPullRequest
+    if (pr.state === 'closed') return CioPullRequestClosed
+    return pr.draft ? CioPullRequestDraft : CioPullRequest
   }
 
   function stateClass(pr: PullRequestSummary): string {
@@ -416,7 +417,7 @@
           </div>
         {:else if accessError}
           <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
-            <GitPullRequestClosed size={18} class="text-danger" />
+            <CioPullRequestClosed size={18} class="text-danger" />
             <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
             <button
               type="button"

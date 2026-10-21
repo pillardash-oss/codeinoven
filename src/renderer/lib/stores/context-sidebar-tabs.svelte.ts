@@ -5,6 +5,7 @@ import { agentRuns } from './agent-runs.svelte'
 import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
 import { temporaryChatUnread } from './temporary-chat-unread.svelte'
+import { recentVisits } from './recent-visits.svelte'
 import { gitState } from './git.svelte'
 import { subagentTaskLabel } from '$lib/subagent-presentation'
 import {
@@ -215,6 +216,9 @@ export class SidebarTabContexts {
     }
     const closedKind = tab.kind
     context.tabs = context.tabs.filter((candidate) => candidate.id !== id)
+    if (closedKind === 'terminal' || closedKind === 'files' || closedKind === 'browser') {
+      recentVisits.forgetPanelTab(id)
+    }
     const replacement = context.tabs.filter((candidate) => candidate.kind === closedKind).at(-1)
     context.activeTabIds[closedKind] = replacement?.id
     if ('terminalActiveTabId' in context && closedKind === 'terminal') {
@@ -786,7 +790,7 @@ export class SidebarTabContexts {
           threadMessages.messages(projectId, tab.temporaryChatId).length === 0
       )
       if (existing) {
-        existing.selections = [...existing.selections, selection]
+        existing.selections = [...existing.selections, { id: crypto.randomUUID(), text: selection }]
         if (sourceRequestId) existing.sourceRequestId = sourceRequestId
         this.focusInContext(context, existing.id)
         this.touchTemporaryChat(existing)
@@ -834,7 +838,7 @@ export class SidebarTabContexts {
       temporaryChatId,
       sessionId: null,
       mode,
-      selections: selectionAttached ? [selection] : [],
+      selections: selectionAttached ? [{ id: crypto.randomUUID(), text: selection }] : [],
       initialContext,
       settings: { ...settings, permissionLevel: 'auto_review' },
       selectionAttached,
@@ -1042,9 +1046,25 @@ export class SidebarTabContexts {
     context.tabs = [...context.tabs]
   }
 
+  /**
+   * Count a panel tab as visited, so the switcher can list it in recency order.
+   *
+   * Only the panels that keep their own tab strip count (terminal, files, thread
+   * browser). A `files` tab still showing the empty "Open file" browser is not a
+   * file the user opened, so it is left out.
+   */
+  private recordPanelVisit(tab: ContextSidebarTab): void {
+    if (tab.kind === 'terminal' || tab.kind === 'browser') {
+      recentVisits.recordPanelTab(tab.id)
+    } else if (tab.kind === 'files' && tab.fileTabId !== null) {
+      recentVisits.recordPanelTab(tab.id)
+    }
+  }
+
   private focusInContext(context: ThreadSidebarContext, id: string): void {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
+    this.recordPanelVisit(tab)
     this.host.hideBrowserForFocus()
     context.activeTabIds[tab.kind] = id
     const project = this.ensureProjectContext(context.projectId)
@@ -1072,6 +1092,7 @@ export class SidebarTabContexts {
   private focusInProjectContext(context: ProjectSidebarContext, id: string): void {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
+    this.recordPanelVisit(tab)
     this.host.hideBrowserForFocus()
     context.activeTabIds[tab.kind] = id
     this.host.clearNotifications()

@@ -7,6 +7,7 @@ import { reportError } from './app-errors.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
 import { browserHistory } from './browser-history.svelte'
+import { recentVisits } from './recent-visits.svelte'
 import { threadBrowserTabs } from './thread-browser-tabs.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
 import { MAX_REOPENED_BROWSER_TABS } from './global-browser-types'
@@ -560,6 +561,7 @@ export class SidebarBrowserTabs {
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = null
     }
+    for (const id of removedIds) recentVisits.forgetPanelTab(id)
     if (this.host.activeProjectId() === projectId) this.visible = false
     this.persist()
     return removedIds
@@ -579,6 +581,7 @@ export class SidebarBrowserTabs {
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = this.activeTabs.at(-1)?.id ?? null
     }
+    for (const id of removedIds) recentVisits.forgetPanelTab(id)
     if (this.activeTabs.length === 0) this.visible = false
     this.persist()
     return removedIds
@@ -596,6 +599,7 @@ export class SidebarBrowserTabs {
     if (options.recordForReopen !== false) this.rememberClosedTab(closing, browserIndex)
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
+    recentVisits.forgetPanelTab(id)
     this.pruneScopeBoxChoices()
     if (this.activeTabId === id) {
       this.activeTabId = this.activeTabs[Math.max(0, activeIndex - 1)]?.id ?? null
@@ -672,6 +676,9 @@ export class SidebarBrowserTabs {
     // Recency is what a Ctrl+Tab inside the full screen browser walks, so it is
     // recorded here, at the one place a tab becomes the one in use.
     threadBrowserTabs.record(id)
+    // The same focus also feeds the app-wide switcher's own recency order, so a
+    // thread-browser tab competes with threads and other panel tabs for an entry.
+    recentVisits.recordPanelTab(id)
     this.persist()
   }
 

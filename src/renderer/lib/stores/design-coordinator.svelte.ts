@@ -175,13 +175,8 @@ class DesignCoordinatorState {
       // the other's panel if they ever do.
       const existing = coordinatorDockState.forThread(projectId, threadId)
       const ownsRow = existing === null || existing.panel.component === 'design'
-      const inherited =
-        existing?.panel.component === 'design' && existing.panel.props.threadId !== threadId
-      const hasOwnWork =
-        state.current !== null || state.items.some((item) => item.creatorThreadId === threadId)
-      if (inherited && !hasOwnWork && !this.projectBoards.has(key)) return
       if (!state.active) {
-        if (ownsRow && existing !== null && !this.projectBoards.has(key) && !inherited) {
+        if (ownsRow && existing !== null && !this.projectBoards.has(key)) {
           coordinatorDockState.withdraw(projectId, threadId, ['design'])
         }
         return

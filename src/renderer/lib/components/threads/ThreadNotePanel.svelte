@@ -1,13 +1,17 @@
 <script lang="ts">
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioRedo from '@pdslng/cio-icon/CioRedo.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
+  import FindInSurface from '$lib/components/threads/FindInSurface.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { findNavState } from '$lib/stores/find-nav.svelte'
   import type { ThreadNoteContextTab } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
@@ -20,6 +24,10 @@
   let historyController = $state<{ undo: () => void; redo: () => void } | null>(null)
   let canUndo = $state(false)
   let canRedo = $state(false)
+  /** The finder searches whatever this element holds, so it must be the scroll
+   *  body rather than the editor or the reading view: one element survives the
+   *  mode switch, and a stale container would leave highlights on dead DOM. */
+  let noteBodyEl = $state<HTMLDivElement | null>(null)
 
   let hasContent = $derived(tab.draftBody.trim().length > 0)
   let dirty = $derived(tab.draftBody !== (tab.savedBody ?? ''))
@@ -69,7 +77,7 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-app">
+<div data-region="thread-notes" class="flex h-full min-h-0 flex-col bg-app">
   <div class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
     {#if tab.mode === 'read'}
       <button
@@ -93,6 +101,18 @@
         <CioTrash size={13} />
         Delete
       </button>
+      <span class="flex-1"></span>
+      {#if !tab.loading}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Find in this note"
+          title={`Find in this note (${keymapState.labelFor('nav-find')})`}
+          onclick={() => findNavState.openThreadNotesFind()}
+        >
+          <CioFind size={14} />
+        </button>
+      {/if}
     {:else}
       <button
         type="button"
@@ -105,6 +125,17 @@
         Cancel
       </button>
       <span class="flex-1"></span>
+      {#if !tab.loading}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Find in this note"
+          title={`Find in this note (${keymapState.labelFor('nav-find')})`}
+          onclick={() => findNavState.openThreadNotesFind()}
+        >
+          <CioFind size={14} />
+        </button>
+      {/if}
       <button
         type="button"
         class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
@@ -138,35 +169,49 @@
     {/if}
   </div>
 
-  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
-    {#if tab.loading}
-      <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
-    {:else if tab.mode === 'edit'}
-      {#key tab.focusRequest}
-        <RichMarkdownEditor
-          id="thread-note-body"
-          value={tab.draftBody}
-          onValueChange={(value) => (tab.draftBody = value)}
-          placeholder="Remind yourself what you intended to do here   Markdown supported…"
-          ariaLabel={feature('thread-note').name}
-          autofocus
-          containerClass="min-h-0 flex-1"
-          class="min-h-full w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
-          onHistoryControllerChange={(controller) => (historyController = controller)}
-          onHistoryStateChange={(state) => {
-            canUndo = state.canUndo
-            canRedo = state.canRedo
-          }}
-        />
-      {/key}
-    {:else if hasContent}
-      <MarkdownView text={tab.draftBody} class="w-full px-3.5 py-3 text-sm leading-5" />
-    {:else}
-      <p class="px-3.5 py-3 text-sm leading-5 text-dimmed">Nothing written yet.</p>
-    {/if}
+  <!-- `relative` anchors the find bar, and it sits outside the scrolling body so
+       the bar stays put while the note scrolls. -->
+  <div class="relative flex min-h-0 flex-1 flex-col">
+    <div bind:this={noteBodyEl} class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      {#if tab.loading}
+        <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
+      {:else if tab.mode === 'edit'}
+        {#key tab.focusRequest}
+          <RichMarkdownEditor
+            id="thread-note-body"
+            value={tab.draftBody}
+            onValueChange={(value) => (tab.draftBody = value)}
+            placeholder="Remind yourself what you intended to do here   Markdown supported…"
+            ariaLabel={feature('thread-note').name}
+            autofocus
+            containerClass="min-h-0 flex-1"
+            class="min-h-full w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
+            onHistoryControllerChange={(controller) => (historyController = controller)}
+            onHistoryStateChange={(state) => {
+              canUndo = state.canUndo
+              canRedo = state.canRedo
+            }}
+          />
+        {/key}
+      {:else if hasContent}
+        <MarkdownView text={tab.draftBody} class="w-full px-3.5 py-3 text-sm leading-5" />
+      {:else}
+        <p class="px-3.5 py-3 text-sm leading-5 text-dimmed">Nothing written yet.</p>
+      {/if}
 
-    {#if tab.error}
-      <p class="px-3.5 pb-3 text-sm text-danger">{tab.error}</p>
+      {#if tab.error}
+        <p class="px-3.5 pb-3 text-sm text-danger">{tab.error}</p>
+      {/if}
+    </div>
+
+    {#if findNavState.threadNotesFindOpen && !tab.loading}
+      <FindInSurface
+        container={noteBodyEl}
+        focusTrigger={findNavState.threadNotesFindFocusTrigger}
+        label="Find in this note"
+        placeholder="Find in this note…"
+        onClose={() => findNavState.closeThreadNotesFind()}
+      />
     {/if}
   </div>
 </div>
@@ -189,7 +234,7 @@
       </button>
       <button
         type="button"
-        class="bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
+        class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
         disabled={tab.saving}
         onclick={() => void confirmDelete()}
       >

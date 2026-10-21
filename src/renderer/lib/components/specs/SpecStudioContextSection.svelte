@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioPaperclip from '$lib/components/icons/cio/CioPaperclip.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioPaperclip from '@pdslng/cio-icon/CioPaperclip.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   import type {

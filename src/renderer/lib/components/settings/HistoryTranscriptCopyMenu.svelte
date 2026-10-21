@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   /**
    * Copy control for one recording-history attempt.
    *
@@ -10,10 +14,6 @@
    * rows that copy the same string.
    */
 
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { copyText } from '$lib/copy-text'
   import type { SpeechRecordingAttempt } from '../../../../lib/speech/types'

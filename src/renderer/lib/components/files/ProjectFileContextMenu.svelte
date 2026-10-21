@@ -1,17 +1,19 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
-  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioFilePlus from '@pdslng/cio-icon/CioFilePlus.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioFolderPlus from '@pdslng/cio-icon/CioFolderPlus.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioScissors from '@pdslng/cio-icon/CioScissors.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import CioShieldOff from '@pdslng/cio-icon/CioShieldOff.svelte'
+  import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import type { Snippet } from 'svelte'
   import { ContextMenu } from 'bits-ui'
-  import { FilePlus2, Scissors, ShieldOff } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
   import type { CioCleanupCategoryId } from '$shared/types/cio-cleanup'
   import type { WorkRoots } from '$shared/design/work-roots'
@@ -27,6 +29,14 @@
     entry: ProjectFileEntry | null
     selectedPaths: string[]
     canPaste: boolean
+    /**
+     * The folders this tree's project writes designed work into.
+     *
+     * A project's own record, passed in rather than read from a global setting:
+     * the protection below is about one project's work, and the app has no
+     * app-wide folder any more.
+     */
+    workRoots: WorkRoots
     children: Snippet
     onCreateFile: () => void
     onCreateFolder: () => void
@@ -55,6 +65,7 @@
     entry,
     selectedPaths,
     canPaste,
+    workRoots,
     children,
     onCreateFile,
     onCreateFolder,
@@ -112,11 +123,7 @@
     entry !== null && entry.path !== '.cio' && isCioScratchPath(entry.path)
   )
   let cioCleanupProtected = $derived(
-    isProtectedFromCioCleanup(
-      entry,
-      appConfigState.workRoots,
-      appConfigState.cioCleanupExcludedCategories
-    )
+    isProtectedFromCioCleanup(entry, workRoots, appConfigState.cioCleanupExcludedCategories)
   )
 
   const itemClass =
@@ -137,7 +144,7 @@
     >
       {#if !entry || entry.kind === 'directory'}
         <ContextMenu.Item class={itemClass} onSelect={onCreateFile}>
-          <FilePlus2 size={13} class="text-muted" />
+          <CioFilePlus size={13} class="text-muted" />
           New file
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCreateFolder}>
@@ -148,7 +155,7 @@
 
       {#if canOpenInBrowser}
         <ContextMenu.Item class={itemClass} onSelect={onOpenInBrowser}>
-          <CioBrowser size={13} class="text-muted" />
+          <CioThreadBrowser size={13} class="text-muted" />
           Open in browser
         </ContextMenu.Item>
       {/if}
@@ -168,7 +175,7 @@
           Copy{itemSuffix}
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCut}>
-          <Scissors size={13} class="text-muted" />
+          <CioScissors size={13} class="text-muted" />
           Move{itemSuffix}
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCopyPath}>
@@ -198,7 +205,7 @@
                 <CioShieldCheck size={13} class="text-muted" />
                 Include in CIO Cleanup
               {:else}
-                <ShieldOff size={13} class="text-muted" />
+                <CioShieldOff size={13} class="text-muted" />
                 Exclude from CIO Cleanup
               {/if}
             </ContextMenu.Item>

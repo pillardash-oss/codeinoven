@@ -1,24 +1,21 @@
-import CioChat from '$lib/components/icons/cio/CioChat.svelte'
-import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import CioChat from '@pdslng/cio-icon/CioChat.svelte'
+import { SvelteMap } from 'svelte/reactivity'
 
 import type { Component } from 'svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { invoke } from '$lib/ipc.svelte'
-import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+import { warmIntentSearch } from './app-search-warm'
 import { ovens } from '$lib/stores/ovens.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
 import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
-import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
-import { threadScopeBucket } from '$lib/threads/thread-scope'
+import { threadPaletteRow } from '$lib/threads/thread-palette-row'
 import {
   isOrchestrationChildThread,
   type Assistant,
   type Thread,
   type ThreadSearchResult
 } from '$shared/types'
-import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { actionId } from './app-palette-actions'
 
 /** The thread families the spotlight can search in their own screen. */
@@ -33,21 +30,6 @@ const MAX_RESULTS = 60
 const RESULT_LIMIT = 50
 /** Assistant-name matches surfaced above the task rows. */
 const MAX_ASSISTANT_RESULTS = 12
-
-function relativeThreadTime(timestamp: number): string {
-  const minutes = Math.floor((Date.now() - timestamp) / 60_000)
-  if (minutes < 1) return 'Now'
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d`
-  const weeks = Math.floor(days / 7)
-  if (weeks < 5) return `${weeks}w`
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months}mo`
-  return `${Math.floor(days / 365)}y`
-}
 
 export interface ThreadSearchPaletteDeps {
   openThread: (thread: Thread) => void
@@ -76,6 +58,14 @@ export class ThreadSearchPaletteController {
   /** Latest result set, kept so rows can be rebuilt (scope badges) without
    *  re-running the search. */
   private lastResults: readonly ThreadSearchResult[] = []
+  /**
+   * The request whose keyword rows are on screen; -1 until the first search
+   * answers. A semantic batch that arrives before its rows is held in
+   * `deferredIntents` instead of being dropped.
+   */
+  private renderedRequest = -1
+  /** Semantic batches that beat their own keyword rows, keyed by request. */
+  private readonly deferredIntents = new SvelteMap<number, ThreadSearchResult[][]>()
   private readonly targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   constructor(
@@ -95,13 +85,19 @@ export class ThreadSearchPaletteController {
     this.scopeIds = []
     this.lastResults = []
     this.lastQuery = ''
+    this.renderedRequest = -1
+    this.deferredIntents.clear()
   }
 
   openPalette(): void {
     this.reset()
     this.paletteOpen = true
+    // The model ranks by meaning and boots cold after its five-minute idle
+    // retire; start that boot while the user is still typing. Main no-ops it
+    // unless intent search is enabled.
+    warmIntentSearch()
     // The assistant screen's assistant picker and assistant rows read the assistants
-    // store, which may not have hydrated yet on a session that restored onto a
+    // Store, which may not have hydrated yet on a session that restored onto a
     // non-content view. Idempotent, so an already-initialised store is free.
     if (this.family === 'assistant') assistants.initialize()
     // Rows carry the thread's Oven next to its scope, so the registry has to be
@@ -124,6 +120,8 @@ export class ThreadSearchPaletteController {
       this.actions = []
       this.targets.clear()
       this.lastResults = []
+      this.renderedRequest = -1
+      this.deferredIntents.clear()
       return
     }
 
@@ -157,6 +155,11 @@ export class ThreadSearchPaletteController {
   }
 
   private async search(query: string, request: number): Promise<void> {
+    // A superseded request's held semantic batches belong to rows that will never
+    // land; only the request being searched now may keep its held batch.
+    for (const key of [...this.deferredIntents.keys()]) {
+      if (key !== request) this.deferredIntents.delete(key)
+    }
     let results: ThreadSearchResult[]
     try {
       // Scoped search: fan out per selected sub-container so the manager can use
@@ -169,13 +172,28 @@ export class ThreadSearchPaletteController {
     if (request !== this.request || !this.paletteOpen) return
 
     this.lastResults = results
+    this.renderedRequest = request
     this.renderRows()
     this.loading = false
+    // A semantic batch that beat these rows is folded in now. The local model
+    // answers in tens of milliseconds once warm, so on a fast machine the two
+    // IPC deliveries can invert; dropping the batch here would lose the
+    // meaning-based matches the screen was opened for.
+    const held = this.deferredIntents.get(request)
+    if (held) {
+      this.deferredIntents.delete(request)
+      for (const batch of held) this.applyIntent(request, batch)
+    }
     // A scope badge needs the thread's project scope board, which is only cached
     // for projects the user already opened. Warm the missing boards in the
     // background and repaint the rows once they land   the search itself never
     // waits on a board read. Only project threads carry scope badges.
     if (this.family === 'projects') void this.warmScopeBoards(request)
+  }
+
+  /** Whether this screen fans out into one search per selected sub-container. */
+  private get fannedOut(): boolean {
+    return this.scopeIds.length > 0 && (this.family === 'projects' || this.family === 'assistant')
   }
 
   private async runFanOut(query: string): Promise<ThreadSearchResult[]> {
@@ -186,7 +204,9 @@ export class ThreadSearchPaletteController {
             invoke('threads:search', query, {
               family: 'projects',
               projectId,
-              limit: RESULT_LIMIT
+              limit: RESULT_LIMIT,
+              semantic: true,
+              requestId: this.request
             }).catch((): ThreadSearchResult[] => [])
           )
         )
@@ -199,13 +219,58 @@ export class ThreadSearchPaletteController {
             invoke('threads:search', query, {
               family: 'assistant',
               assistantId,
-              limit: RESULT_LIMIT
+              limit: RESULT_LIMIT,
+              semantic: true,
+              requestId: this.request
             }).catch((): ThreadSearchResult[] => [])
           )
         )
       ).flat()
     }
-    return invoke('threads:search', query, { family: this.family, limit: RESULT_LIMIT })
+    return invoke('threads:search', query, {
+      family: this.family,
+      limit: RESULT_LIMIT,
+      semantic: true,
+      requestId: this.request
+    })
+  }
+
+  /**
+   * Take the semantic half of the search when it lands.
+   *
+   * The spotlight is the only surface that ranks by meaning, and it shows its
+   * keyword rows first so the panel never waits on the local model. This is the
+   * replacement: a batch for the current request and query either swaps the rows
+   * (one query) or folds into them (a per-scope fan-out), and anything stale is
+   * dropped. A batch that beats its own keyword rows is held until they land.
+   */
+  applyIntentResults(payload: {
+    query: string
+    requestId: number
+    results: ThreadSearchResult[]
+  }): void {
+    if (!this.paletteOpen) return
+    if (payload.requestId !== this.request) return
+    if (payload.query !== this.lastQuery.trim()) return
+    if (this.renderedRequest !== payload.requestId) {
+      this.deferredIntents.set(payload.requestId, [
+        ...(this.deferredIntents.get(payload.requestId) ?? []),
+        payload.results
+      ])
+      return
+    }
+    this.applyIntent(payload.requestId, payload.results)
+  }
+
+  /** Fold one semantic batch into the rows on screen. */
+  private applyIntent(request: number, incoming: readonly ThreadSearchResult[]): void {
+    if (request !== this.request) return
+    // A fan-out answers one query with several hybrid rankings; merging keeps the
+    // rows each of them already returned. A single query swaps wholesale, which
+    // is the ranking the merge produced (title matches, then meaning, then the
+    // rest).
+    this.lastResults = this.fannedOut ? mergeIntentResults(this.lastResults, incoming) : incoming
+    this.renderRows()
   }
 
   /** Rebuild the visible rows from the cached results. Scope badges read the
@@ -327,77 +392,44 @@ export class ThreadSearchPaletteController {
       const container = this.containerFor(thread)
       const id = actionId(`thread:${thread.projectId}:${thread.id}`)
       targets.set(id, { thread })
-      const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
-      const isLiveWorking = isThreadLiveWorking(thread)
-      const status = statusBadgeForThread(
-        thread,
-        isLiveWorking,
-        rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
+      actions.push(
+        threadPaletteRow({
+          id,
+          thread,
+          container,
+          ...(result.kind === 'message' && result.snippet ? { snippet: result.snippet } : {}),
+          // Only project threads carry a scope board.
+          withScope: this.family === 'projects'
+        })
       )
-      // Model/harness metadata for the result row: while the thread is working
-      // the current provider + model is shown, otherwise the thread's harnesses
-      // and provider appear as icons - mirroring the sidebar thread row.
-      const harnessIds = Array.from(
-        new SvelteSet([
-          ...(thread.usedHarnessIds ?? []),
-          ...(thread.settings?.harnessId ? [thread.settings.harnessId] : [])
-        ])
-      )
-      const providerId = thread.settings?.providerId ?? thread.providerId
-      const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
-      const providerName = providerId
-        ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
-        : null
-      // Thread rows always surface the thread's last-activity time, never its
-      // creation time, so freshly worked-on threads read as "1h" etc.
-      const activityLabel = relativeThreadTime(thread.lastActivity)
-      // The thread's scope, so the row says which scope it belongs to   the same
-      // signal the sidebar thread rows and the hover card already carry. Only
-      // project threads carry a scope board.
-      const scope = this.family === 'projects' ? threadScopeBucket(thread) : null
-      // Oven and branch, the two facts about where a thread actually runs.
-      const oven =
-        thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID
-          ? ovens.identity(thread.settings.ovenId)
-          : null
-      const branch = thread.branch?.trim() || null
-      actions.push({
-        id,
-        title: thread.title,
-        description: snippet
-          ? `${container.label} · ${activityLabel} · ${snippet}`
-          : `${container.label} · ${activityLabel}`,
-        category: 'thread',
-        source: {
-          id: `project:${thread.projectId}`,
-          label: container.label,
-          kind: 'app',
-          ...(container.color ? { color: container.color } : {})
-        },
-        showSourceBadge: false,
-        ...(container.iconUri
-          ? { iconUri: container.iconUri }
-          : { icon: container.icon ?? CioChat }),
-        ...(status ? { status } : {}),
-        ...(scope ? { scope } : {}),
-        threadMeta: {
-          working: isLiveWorking,
-          harnessIds,
-          providerName,
-          providerId,
-          modelId: thread.settings?.modelId ?? null,
-          ...(oven ? { oven: { name: oven.name, iconUrl: oven.iconUrl } } : {}),
-          ...(branch ? { branch } : {})
-        },
-        keywords: [
-          container.label,
-          thread.title,
-          ...(oven ? [oven.name] : []),
-          ...(branch ? [branch] : []),
-          ...(snippet ? [snippet] : [])
-        ]
-      })
     }
     return { actions: actions.slice(0, MAX_RESULTS), targets }
   }
+}
+
+/**
+ * Fold one semantic batch into the rows already on screen.
+ *
+ * Used by a per-scope fan-out, where several searches answer one query and each
+ * carries its own hybrid ranking: a row already shown keeps its place (with the
+ * batch's metadata when the batch re-ranks it), and a row the batch adds joins
+ * the end rather than resetting the list the reader is looking at.
+ */
+function mergeIntentResults(
+  current: readonly ThreadSearchResult[],
+  incoming: readonly ThreadSearchResult[]
+): ThreadSearchResult[] {
+  const positions = new SvelteMap<string, number>()
+  current.forEach((result, position) => positions.set(result.thread.id, position))
+  const merged = [...current]
+  for (const result of incoming) {
+    const position = positions.get(result.thread.id)
+    if (position === undefined) {
+      positions.set(result.thread.id, merged.length)
+      merged.push(result)
+    } else {
+      merged[position] = result
+    }
+  }
+  return merged
 }

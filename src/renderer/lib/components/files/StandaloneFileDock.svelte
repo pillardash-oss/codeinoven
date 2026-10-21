@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFileCode from '$lib/components/icons/cio/CioFileCode.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioFileCode from '@pdslng/cio-icon/CioFileCode.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import DockableModal from '../ui/DockableModal.svelte'

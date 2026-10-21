@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   /**
    * The reactions on one comment, as the chips a reader clicks.
    *
@@ -11,7 +12,6 @@
    * the conversation a line each for nothing.
    */
 
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { prReactionBusyKey } from '$lib/stores/git-store-helpers'
   import type { PrReactionContent, PrReactionGroup } from '$shared/types'

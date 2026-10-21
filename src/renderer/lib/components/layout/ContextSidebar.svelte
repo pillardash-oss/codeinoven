@@ -17,33 +17,35 @@
 </script>
 
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioActions from '@pdslng/cio-icon/CioActions.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
+  import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
+  import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioPanelBottom from '@pdslng/cio-icon/CioPanelBottom.svelte'
+  import CioPanelRight from '@pdslng/cio-icon/CioPanelRight.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
+  import CioTabFiles from '@pdslng/cio-icon/CioTabFiles.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
+  import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
-  import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
-  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
-  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
-  import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
-  import CioTabFiles from '$lib/components/icons/cio/CioTabFiles.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
-  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     browserTabIndicators,
@@ -58,7 +60,6 @@
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { PanelBottom, PanelRight } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
@@ -459,8 +460,14 @@
       <CioTabInfo size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'subagent'}
       <!-- The sub-agent mark is the one a sub-agent wears on every surface; a
-           hue would make it a second class of tab rather than one more tab. -->
-      <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
+           hue would make it a second class of tab rather than one more tab. A
+           pawn agent wears the assistant mark instead, so the rail tells the two
+           apart at a glance while the tab body stays the same. -->
+      {#if tab.activity.pawn}
+        <AssistantIcon mark="agent" size={ICON_SIZE.row} class="shrink-0" />
+      {:else}
+        <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'temporary-chat'}
       <!-- The dashed bubble is the whole signal: a side chat carries the same
            neutral mark as every other tab, never an indicator colour. -->
@@ -778,9 +785,9 @@
               onclick={() => onTerminalPlacementChange(placement === 'bottom' ? 'right' : 'bottom')}
             >
               {#if placement === 'bottom'}
-                <PanelRight size={13} />
+                <CioPanelRight size={13} />
               {:else}
-                <PanelBottom size={13} />
+                <CioPanelBottom size={13} />
               {/if}
             </button>
           {:else if activeTab}

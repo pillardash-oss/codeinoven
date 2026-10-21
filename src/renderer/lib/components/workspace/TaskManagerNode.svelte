@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
-  import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
+  import CioDisk from '@pdslng/cio-icon/CioDisk.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
 

@@ -9,14 +9,12 @@ import {
   type OvenAgentRegistrationInput,
   type OvenAgentScript,
   type OvenAgentScriptRequest,
-  type OvenEndpoint,
   type OvenConnectionStatus,
   type SaveOvenInput
 } from '../../lib/ovens'
 import type { OvenRegistry } from './oven-registry'
 import { testDraftConnection } from './oven-connection'
 import { buildOvenAgentScript, normalizeServiceBundle } from './oven-agent-script'
-import { firstReachableEndpoint } from './oven-agent-address'
 import { fingerprint } from './oven-agent-descriptor'
 import { serviceBundleRevision } from './oven-service-bundle'
 import { decodeOvenAgentDescriptor, descriptorHasIdentity } from './oven-agent-descriptor'
@@ -25,8 +23,6 @@ import { Logger } from '../system/logger'
 /** Default appearance for an Oven the app learned about from an agent. */
 const AGENT_ICON = 'server'
 const AGENT_COLOR = '#22c55e'
-/** The port SSH answers on unless the machine says otherwise. */
-const STANDARD_SSH_PORT = 22
 
 /**
  * Generate the standalone Oven agent installer and register machines that ran it.
@@ -61,20 +57,6 @@ export class OvenAgentService {
   }
 
   /**
-   * Name the endpoint from a code that this computer can actually reach.
-   *
-   * Registration codes carry every address the machine answers on and the port
-   * it believes its SSH server is on, because only the machine can enumerate
-   * them and only this computer can decide which one works. The reported port is
-   * tried first, then the standard one, so a wrong port is corrected instead of
-   * being saved as truth and timing out on every later connection.
-   */
-  async reachableEndpoint(code: string): Promise<OvenEndpoint | null> {
-    const descriptor = decodeOvenAgentDescriptor(code)
-    return firstReachableEndpoint(descriptor.addresses ?? [], [descriptor.port, STANDARD_SSH_PORT])
-  }
-
-  /**
    * Open a real SSH session to the machine a code describes and report its facts.
    *
    * A reachability probe only proves a socket is listening. This builds the exact
@@ -82,9 +64,12 @@ export class OvenAgentService {
    * read-only inspect the app uses everywhere else, so authentication, host trust,
    * and the remote shell are all exercised before anything is stored.
    */
-  async test(input: OvenAgentRegistrationInput): Promise<OvenConnectionStatus> {
+  async test(
+    input: OvenAgentRegistrationInput,
+    signal?: AbortSignal
+  ): Promise<OvenConnectionStatus> {
     const descriptor = decodeOvenAgentDescriptor(input.code)
-    return testDraftConnection(this.registry, this.saveInputFor(descriptor, input))
+    return testDraftConnection(this.registry, this.saveInputFor(descriptor, input), signal)
   }
 
   /** Validate a descriptor and save it as an Oven, storing any identity in the vault. */

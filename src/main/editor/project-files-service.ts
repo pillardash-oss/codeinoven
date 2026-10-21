@@ -3,7 +3,7 @@ import { mkdir, link, lstat, open, readdir, realpath, rename, rm, stat } from 'n
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { toPosixPath } from '../../lib/paths'
-import { INBOX_PROJECT_ID } from '../../lib/types'
+import { INBOX_PROJECT_ID, usesThreadWorkspaceMount } from '../../lib/types'
 import { ProjectFileIndexService } from './project-file-index-service'
 import type {
   ProjectDirectorySize,
@@ -224,14 +224,27 @@ export class ProjectFilesService {
   async resolveCitationPaths(
     projectId: string,
     candidates: string[],
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    threadId?: string
   ): Promise<Record<string, string | null>> {
     const project = await this.projects.getProject(projectId)
     if (!project) throw new Error(`Project not found: ${projectId}`)
-    if (project.source !== 'local' || !project.path.trim()) {
+    // A conversation container (a chat, an assistant task, a browser tab) cites
+    // paths relative to its own app-storage directory, which is the mount root
+    // of its file tree. Those projects carry no path of their own, so the
+    // project-path guard below must not decide whether the probe runs.
+    const threadMount = threadId !== undefined && usesThreadWorkspaceMount(projectId)
+    if (!threadMount && (project.source !== 'local' || !project.path.trim())) {
       return Object.fromEntries(candidates.map((candidate) => [candidate, null]))
     }
-    const root = await this.roots.projectRoot(projectId, scopeBucketId)
+    let root: string
+    try {
+      root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
+    } catch {
+      // A mount that cannot be resolved leaves every candidate unlinked rather
+      // than rejecting the batch.
+      return Object.fromEntries(candidates.map((candidate) => [candidate, null]))
+    }
     const results: Record<string, string | null> = {}
     for (const rawCandidate of candidates) {
       results[rawCandidate] = await resolveCitationPath(root, rawCandidate)

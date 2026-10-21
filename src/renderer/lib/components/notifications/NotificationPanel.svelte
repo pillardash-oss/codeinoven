@@ -1,14 +1,14 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
@@ -165,21 +165,16 @@
 
   let showingAppErrors = $derived(notificationPanelState.topTab === 'app-errors')
   let showingAssistants = $derived(notificationPanelState.topTab === 'assistants')
+  /** Whether the active tab shows any row at all, which is exactly when its
+   *  clear-all is offered. Every tab can clear everything it shows, including the
+   *  missed fires and unattended runs the Assistants tab renders straight from
+   *  the assistant store. */
   let hasVisibleItems = $derived(
     showingAppErrors
       ? appErrorState.count > 0
       : showingAssistants
-        ? assistants.missedRuns.length > 0 || assistants.backgroundRuns.length > 0
+        ? notificationPanelState.assistantCount(notificationPanelState.subFilter) > 0
         : notificationPanelState.visible.length > 0
-  )
-
-  // Missed-run and background-run records keep their own lifecycle (neither is
-  // a dismissable notice), so the assistants tab only offers a clear-all once
-  // at least one assistant notice sits in it.
-  let showDismissAll = $derived(
-    showingAppErrors || !showingAssistants
-      ? hasVisibleItems
-      : notificationPanelState.assistantNotifications.length > 0
   )
 
   // Missed runs are surfaced per assistant: one group per owning assistant, plus a
@@ -273,7 +268,7 @@
   const assistantHasActivity = $derived(
     notificationPanelState.assistantNotifications.length > 0 ||
       assistants.missedRuns.length > 0 ||
-      assistants.backgroundRuns.length > 0
+      assistants.recentBackgroundRuns.length > 0
   )
 
   /** Whether the active filters hide everything there is to show. */
@@ -426,9 +421,23 @@
       return
     }
     notificationPanelState.dismissTab(tab)
-    // The assistants tab still has missed-run records after its notices clear,
-    // so the panel stays open there.
-    if (tab !== 'assistants') contextSidebarState.hide()
+    // The Assistants tab is two stores: the notices the notification panel owns,
+    // and the missed fires and unattended runs the assistant store owns. Clearing
+    // only the notices left the run rows behind with no button left to clear
+    // them, so the tab is retired through both in one action.
+    if (tab === 'assistants') void dismissAssistantRuns()
+    else contextSidebarState.hide()
+  }
+
+  /** Retire the Assistants tab's run rows: missed fires and unattended runs. */
+  async function dismissAssistantRuns(): Promise<void> {
+    try {
+      await assistants.dismissRunActivity()
+    } catch {
+      // The scheduler pushes its fresh lists on the next change; a failure here
+      // simply leaves the rows on the tab instead of clearing a list that is
+      // still there.
+    }
   }
 
   async function copyError(e: AppErrorEntry): Promise<void> {
@@ -774,7 +783,7 @@
       </button>
     {/each}
     <div class="ml-auto pb-1.5">
-      {#if showDismissAll}
+      {#if hasVisibleItems}
         <button
           class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={showingAppErrors ? 'Dismiss all app errors' : 'Dismiss all notifications'}

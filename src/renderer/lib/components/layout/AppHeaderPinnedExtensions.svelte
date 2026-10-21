@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'

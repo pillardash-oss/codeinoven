@@ -1,8 +1,9 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+  import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import { onMount } from 'svelte'
-  import { FileSearch, Timeline } from '@lucide/svelte'
   import type {
     CommandPaletteProps,
     PaletteFooterFilter
@@ -22,10 +23,15 @@
   import { pageReveal } from '$lib/components/layout/page-reveal'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
+  import AppConfirmDialog from '$lib/components/ui/AppConfirmDialog.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
   import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
-  import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
+  import {
+    closeBlockingSurfaces,
+    closeTopVisibleDialog,
+    requestCloseTopOverlay
+  } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
@@ -91,8 +97,8 @@
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
@@ -105,6 +111,7 @@
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { warmSidebarPanels } from '$lib/sidebar-panel-preload'
+  import { warmAppPanels } from '$lib/app-panel-preload'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
@@ -126,7 +133,8 @@
     type Project,
     type Assistant,
     type ThemePreference,
-    type Thread
+    type Thread,
+    type ThreadSearchResult
   } from '$shared/types'
   import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
@@ -145,6 +153,7 @@
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
+  import { warmIntentSearch } from './app-search-warm'
   import { workspaceTourViewFor, type GuideActionKind } from '$lib/guide/guide-stops'
   import { guideState } from '$lib/guide/guide-state.svelte'
 
@@ -189,10 +198,8 @@
   }
 
   let newProjectSpotlightOpen = $state(false)
-  let onboardingOpen = $state(false)
-  let onboardingStep = $state(0)
-  let onboardingInitialized = false
-  let onboardingProjectPickerActive = false
+  /** Set once the first run has been checked, so the guide is offered exactly once. */
+  let firstRunChecked = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   let paletteContextActions = $derived(
@@ -338,7 +345,7 @@
           title: 'Search files across projects',
           placeholder: 'Type at least two characters…',
           emptyLabel: fileSearch.loading ? 'Searching project files…' : 'No matching files',
-          headerIcon: FileSearch,
+          headerIcon: CioFind,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,
@@ -357,7 +364,9 @@
           emptyLabel: threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
-          headerIcon: Timeline,
+          // The Threads view's own mark, so the screen wears the glyph the rail,
+          // the overview and the palette home row already use for this family.
+          headerIcon: CioThreads,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
           serverFiltered: true,
@@ -491,19 +500,23 @@
     )
   )
 
-  /** Welcome screen (and other surfaces) can request the getting-started tour. */
-  $effect(() => {
-    if (workspaceState.consumeOnboardingRequest()) {
-      onboardingStep = 0
-      onboardingOpen = true
-    }
-  })
-
   /** A view's empty state, or the palette, can request that view's own guide. */
   $effect(() => {
     const view = workspaceState.consumeViewTourRequest()
     if (!view) return
     guideState.start(view)
+  })
+
+  /**
+   * Walking the Projects guide to its end is what finishes the first run. There
+   * is no separate setup tour: the guide is the sequence, so a user who closes
+   * it half way is offered it again on the next launch, and one who walks it
+   * through is done for good.
+   */
+  $effect(() => {
+    if (!config.onboardingCompleted && guideState.hasSeen('projects')) {
+      void updateConfig({ onboardingCompleted: true })
+    }
   })
 
   /**
@@ -516,43 +529,90 @@
    * answers false, and the guide stays on it rather than walking on as if the
    * agent were connected.
    */
-  async function runGuideAction(action: GuideActionKind): Promise<boolean> {
-    if (action.kind === 'add-project') {
+  async function runGuideAction(run: GuideActionKind): Promise<boolean> {
+    if (run.kind === 'add-project') {
       openNewProjectSpotlight()
       return true
     }
-    if (action.kind === 'focus-composer') {
+    if (run.kind === 'focus-composer') {
       focusVisibleComposer()
       return true
     }
-    if (action.kind === 'connect-harness') {
-      const harness = providerStore.providers.find((entry) => entry.id === action.harnessId)
-      if (harness && harness.status === 'available' && harness.integration === 'ready') return true
-      if (!harness || harness.status !== 'available') {
-        // The agent is not on this machine yet: open its own install guide, the
-        // same page the setup tour offers, and leave the step standing.
-        try {
-          const info = await invoke('harnessInstall:getInfo', action.harnessId)
-          await openInBrowser(info.pageUrl)
-        } catch {
-          navigate(settingsViewForSection('harnesses'))
-        }
-        return false
+    if (run.kind === 'open-harness') {
+      const harness = providerStore.providers.find((entry) => entry.id === run.harnessId)
+      // Pi ships inside the app, so it can take credentials whether or not this
+      // machine has a copy of its own: every other harness has to be installed
+      // and driven before its provider list means anything.
+      const usable =
+        harness !== undefined && (run.harnessId === 'pi' || providerStore.canAddProvider(harness))
+      if (usable) {
+        // Installed and driven: the account it answers with is managed right
+        // here, over the view, by the same flow the settings page opens. Its
+        // accounts are re-read on connect, because the badge that says how many
+        // this harness has, and the gate below, both hang off that number.
+        providerConnectFlow.open(run.harnessId, {
+          onConnected: () => {
+            void providerStore.checkOne(run.harnessId)
+            void harnessAccountCache.list(run.harnessId, true).catch(() => [])
+          }
+        })
+        return true
       }
-      await providerStore.checkOne(action.harnessId)
-      return true
+      // Not on this machine yet: its own page in settings installs it. The guide
+      // holds its place while the user is away and comes back on this step, so
+      // the Next they were waiting for is still there when they return.
+      guideState.holdForUser()
+      navigate(settingsViewForSection('harnesses'))
+      return false
     }
-    navigate(settingsViewForSection(action.section))
-    return true
+    if (run.kind === 'restart-guide') {
+      const view = guideState.view
+      if (view) guideState.start(view)
+      return false
+    }
+    if (run.kind === 'open-view-guide') {
+      // The hand-off is the whole reason the stop that offers it exists: this
+      // guide is finished with the user, and the view they picked walks them
+      // through itself instead.
+      guideState.close()
+      navigate(run.view)
+      workspaceState.requestViewTour(run.view)
+      return false
+    }
+    if (run.kind === 'connect-github') {
+      githubSignIn.start()
+      return false
+    }
+    return false
   }
 
   /** The dock's own button asks for the step the stop is about. */
   $effect(() => {
-    const action = guideState.consumeActionRequest()
-    if (!action) return
-    void runGuideAction(action.run).then((done) => {
-      if (done) guideState.completeAction()
+    const request = guideState.consumeActionRequest()
+    if (!request) return
+    void runGuideAction(request.run).then((done) => {
+      // A control inside a stop does its work where the user already is, so it
+      // never moves the guide on: only the stop's own step button advances.
+      if (done && request.advance) guideState.completeAction()
     })
+  })
+
+  /**
+   * The agent step's gate: the guide walks on once this machine has an agent it
+   * can actually run, or once the user has an account connected to one. Both
+   * halves come from state the guide cannot fake: the harness probe the settings
+   * page reads, and the account registry the model picker reads. A harness that
+   * finishes installing, or an account connected mid-step, therefore opens the
+   * gate by itself, and a user who arrives with either is never held.
+   */
+  $effect(() => {
+    const installed = providerStore.providers.some(
+      (provider) => provider.status === 'available' && provider.integration === 'ready'
+    )
+    const connected = providerStore.providers.some(
+      (provider) => (harnessAccountCache.cached(provider.id)?.length ?? 0) > 0
+    )
+    guideState.setStepReady(installed || connected)
   })
 
   /**
@@ -570,15 +630,17 @@
       appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
-      if (!onboardingInitialized) {
-        onboardingOpen = !config.onboardingCompleted
-        onboardingInitialized = true
+      // The guide owns the first run: a user who has never walked the Projects
+      // guide gets it as soon as there is a config to read.
+      if (!firstRunChecked) {
+        firstRunChecked = true
+        if (!config.onboardingCompleted) workspaceState.requestViewTour('projects')
       }
     } catch {
       settingsError = 'Settings could not be loaded. Defaults are being used.'
-      if (!onboardingInitialized) {
-        onboardingOpen = true
-        onboardingInitialized = true
+      if (!firstRunChecked) {
+        firstRunChecked = true
+        workspaceState.requestViewTour('projects')
       }
     } finally {
       settingsReady = true
@@ -911,10 +973,6 @@
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
-      case 'app:getting-started':
-        onboardingStep = 0
-        onboardingOpen = true
-        return
       case 'app:tour-view': {
         const view = workspaceTourViewFor(activeView)
         if (view) workspaceState.requestViewTour(view)
@@ -1018,6 +1076,10 @@
     }
     capturePaletteFocus()
     commandPaletteOpen = true
+    // The spotlight is where the semantic ranking lives; its thread search is
+    // one hop away. Start the embedding model boot behind the keystroke (main
+    // no-ops it unless intent search is enabled).
+    warmIntentSearch()
   }
 
   /** Close the whole spotlight, whichever screen is on top. */
@@ -1062,6 +1124,22 @@
       assistant.id,
       assistant.name
     )
+  }
+
+  /**
+   * Hand the semantic half of a spotlight thread search to the screen that asked.
+   *
+   * Only one spotlight screen is on top at a time, so the open one owns the
+   * payload; its controller drops a request or query the user has moved past.
+   */
+  function applyThreadSearchIntent(payload: {
+    query: string
+    requestId: number
+    results: ThreadSearchResult[]
+  }): void {
+    if (threadSearch.paletteOpen) threadSearch.applyIntentResults(payload)
+    else if (chatSearch.paletteOpen) chatSearch.applyIntentResults(payload)
+    else if (assistantSearch.paletteOpen) assistantSearch.applyIntentResults(payload)
   }
 
   /** Focus a tab picked in browser search: land on the Browser view and switch
@@ -1139,11 +1217,6 @@
     newProjectSpotlightOpen = false
     navigate('projects')
     await handleProjectCreated(project)
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingStep = 7
-      onboardingOpen = true
-    }
   }
 
   /** Spotlight flow: a picked folder already exists as a project   focus it. */
@@ -1158,11 +1231,6 @@
     } else {
       workspaceState.clearThread()
       workspaceState.activeProject = project
-    }
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingStep = 7
-      onboardingOpen = true
     }
   }
 
@@ -1228,37 +1296,8 @@
     }
   }
 
-  function updateOnboardingStep(step: number): void {
-    // The first-run tour stays in Projects: the composer spotlight falls back
-    // to a centered callout there (its anchor only exists in Chats), and the
-    // Chats view owns its own tour when the user opens it for the first time.
-    // Adding a project therefore never yanks the user into the Chats view.
-    onboardingStep = step
-  }
-
-  function chooseOnboardingProject(): void {
-    onboardingOpen = false
-    onboardingProjectPickerActive = true
-    newProjectSpotlightOpen = true
-  }
-
   function closeNewProjectSpotlight(): void {
     newProjectSpotlightOpen = false
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingOpen = true
-    }
-  }
-
-  function finishOnboarding(): void {
-    onboardingOpen = false
-    onboardingProjectPickerActive = false
-    void updateConfig({ onboardingCompleted: true })
-  }
-
-  function browseHarnessesFromOnboarding(): void {
-    finishOnboarding()
-    navigate('settings-harnesses')
   }
 
   /**
@@ -1278,6 +1317,11 @@
     project: Project | null,
     temporaryChatId?: string
   ): Promise<void> {
+    // The click is a decision to go somewhere, so whatever owns the window steps
+    // aside first. Without this a full screen reader (or a confirm sheet) stayed
+    // up over the workspace and the thread opened behind it, which read as a
+    // button that navigated to nothing.
+    closeBlockingSurfaces()
     const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
@@ -1522,6 +1566,20 @@
     contextSidebarState.openNewTerminal(thread.projectId, thread.id)
   }
 
+  /**
+   * Find in the file reader, on the surface actually on screen. The editor
+   * region names the surface it is showing: the source editor counts and
+   * replaces its own matches, while every rendered view (annotate, document
+   * preview, diff) is plain DOM text that only a document search can read.
+   */
+  function openFilesFind(region: Element): void {
+    if (region.getAttribute('data-find-surface') === 'document') {
+      findNavState.openFileDocumentFind()
+      return
+    }
+    findNavState.openEditorFind()
+  }
+
   function handleFind(): void {
     const browserTabId = browserKeyboardFocus.tabId
     if (browserTabId) {
@@ -1539,8 +1597,17 @@
       findNavState.focusFileTreeFilter++
       return
     }
-    if (active?.closest('[data-region="editor"]')) {
-      findNavState.openEditorFind()
+    if (active?.closest('[data-region="sticky-notes"]')) {
+      findNavState.openStickyNotesFind()
+      return
+    }
+    if (active?.closest('[data-region="thread-notes"]')) {
+      findNavState.openThreadNotesFind()
+      return
+    }
+    const activeEditor = active?.closest('[data-region="editor"]')
+    if (activeEditor) {
+      openFilesFind(activeEditor)
       return
     }
     // The sidebar keeps GitStatusPanel mounted but display:none for every
@@ -1566,8 +1633,9 @@
     }
 
     // Toolbar focus still belongs to the visible regular/fullscreen file surface.
-    if (document.querySelector('[data-region="editor"][data-find-active="true"]')) {
-      findNavState.openEditorFind()
+    const visibleEditor = document.querySelector('[data-region="editor"][data-find-active="true"]')
+    if (visibleEditor) {
+      openFilesFind(visibleEditor)
       return
     }
     if (document.querySelector('[data-region="spec-studio"]')) {
@@ -1861,7 +1929,8 @@
       handleNewTerminalShortcut,
       goBack: () => handleMouseHistoryNavigation('back'),
       goForward: () => handleMouseHistoryNavigation('forward'),
-      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
+      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps),
+      applyThreadSearchIntent
     })
     // Hydrate the instance role: the push fires before this renderer mounts, so
     // this read is what shows the "running in another instance" notice on load.
@@ -1913,6 +1982,12 @@
     // open of the Git, files, diff or terminal panel instant instead of a cold
     // chunk fetch on the click.
     scheduleDeferredWork('sidebar:panels', warmSidebarPanels)
+    // The global panels (notifications, sticky notes) are dynamic imports in
+    // `AppPanelHost`, reached only from the rail's tab strip with no hover in
+    // front of the click. Warming their chunks here is what keeps the first
+    // open of the notification panel from painting blank while its module is
+    // fetched.
+    scheduleDeferredWork('app:panels', warmAppPanels)
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 
@@ -1979,7 +2054,6 @@
           mode={lastContentView}
           active={showsContentView}
           scopeViewActive={activeView === 'scope'}
-          setupTourOpen={onboardingOpen}
           {navigate}
           lastProjectViewLanding={() => navigation.projectFamilyLanding()}
           {config}
@@ -2097,19 +2171,6 @@
       />
     {/await}
   {/if}
-  {#if onboardingOpen}
-    {#key onboardingStep}
-      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
-        <OnboardingTour
-          step={onboardingStep}
-          onStepChange={updateOnboardingStep}
-          onChooseProject={chooseOnboardingProject}
-          onBrowseHarnesses={browseHarnessesFromOnboarding}
-          onFinish={finishOnboarding}
-        />
-      {/await}
-    {/key}
-  {/if}
   {#if startAtLoginOfferOpen}
     <!-- The one-time start-at-login offer. Raised right after an assistant is given
          its first knowledge, so the question is about the runs the user has just
@@ -2120,6 +2181,9 @@
     {/await}
   {/if}
   <Toaster />
+  <!-- Raised by menus that close as soon as one of their items is chosen, so the
+       question outlives the surface that asked it. -->
+  <AppConfirmDialog />
   <TextSelectionContextMenu />
   <TooltipHost />
   {#if scopeConfirmations.current}

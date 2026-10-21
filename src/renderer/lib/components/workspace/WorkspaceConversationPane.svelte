@@ -11,6 +11,7 @@
   import { assistants } from '$lib/stores/assistants.svelte'
   import { assistantKnowledgeComplete, type Project, type Thread } from '$shared/types'
   import type { AppConfig, AppConfigPatch, PromptAttachment } from '$shared/types'
+  import { ASSISTANT_SPACE_ID } from '$shared/types'
 
   interface Props {
     mode: 'projects' | 'chats' | 'threads' | 'assistant'
@@ -35,6 +36,8 @@
     onContinueInProject: (forked: Thread) => void
     onProjectCreated: (project: Project) => Promise<void>
     onOpenScopeView: (thread: Thread) => void
+    /** Opens another Assistant tab thread from a tagged thread in the conversation. */
+    onOpenAssistantThread: (thread: Thread) => void
     onSendChat: (msg: string, files: PromptAttachment[]) => Promise<void>
     /** Hand the welcome composer's unsent draft to a real inbox thread so it
      *  shows in the Chats sidebar as a draft. */
@@ -56,6 +59,7 @@
     onContinueInProject,
     onProjectCreated,
     onOpenScopeView,
+    onOpenAssistantThread,
     onRequestAddProject
   }: Props = $props()
 
@@ -66,6 +70,16 @@
     assistantId
       ? (assistants.assistants.find((assistant) => assistant.id === assistantId) ?? null)
       : null
+  )
+  /**
+   * The Assistant tab's threads, when one of them is open: what the composer's
+   * `@` menu can tag, and what names a tagged thread in the conversation. No
+   * other view has an assistant space to point at.
+   */
+  let assistantSpaceThreads = $derived(
+    mode === 'assistant'
+      ? (threadsByProject.get(ASSISTANT_SPACE_ID) ?? []).filter((thread) => !thread.archived)
+      : undefined
   )
 
   function handleConversationRenderError(error: unknown): void {
@@ -105,6 +119,8 @@
             assistantName={assistant?.name ?? null}
             assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
             {assistantForeignRunThreadId}
+            {assistantSpaceThreads}
+            {onOpenAssistantThread}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
                 ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||

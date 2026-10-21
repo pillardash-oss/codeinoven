@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { BrowserExtensionProgress } from '$shared/ipc-contract'
   import type { BrowserExtensionInstall } from '$lib/stores/browser-extensions.svelte'
 

@@ -1,12 +1,12 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioGrip from '$lib/components/icons/cio/CioGrip.svelte'
-  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
   import { tick } from 'svelte'
   import { on } from 'svelte/events'
   import { SvelteSet } from 'svelte/reactivity'
@@ -334,6 +334,19 @@
     return current
   })
   const isProfilesView = $derived(effectiveView.kind === 'profiles')
+  /**
+   * Recently used models the list may show for the active rail section.
+   *
+   * The `all` section shows the whole history; a single harness section narrows
+   * it to that harness's models, so selecting Pi still leads with the Pi models
+   * you used last instead of dropping the section and starting straight at the
+   * providers. Favorites and profiles keep their own sections only.
+   */
+  const railRecentModelsList = $derived.by(() => {
+    const view = effectiveView
+    if (view.kind !== 'harness') return recentModelsList
+    return recentModelsList.filter((entry) => entry.provider.harnessId === view.harnessId)
+  })
   const pickerLayout = $derived(
     buildPickerLayout({
       favoriteModelsList:
@@ -342,7 +355,10 @@
           : effectiveView.kind === 'all'
             ? favoriteModelsList
             : [],
-      recentModelsList: effectiveView.kind === 'all' ? recentModelsList : [],
+      recentModelsList:
+        effectiveView.kind === 'all' || effectiveView.kind === 'harness'
+          ? railRecentModelsList
+          : [],
       unavailableFavoriteModels:
         effectiveView.kind === 'favorites' || effectiveView.kind === 'all'
           ? unavailableFavoriteModels
@@ -739,7 +755,7 @@
               Connect your AI account
             </button>
           </div>
-        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
+        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && railRecentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
           <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
             {#if effectiveView.kind === 'favorites'}
               {search ? `No favorite models match “${search}”` : 'No favorite models yet'}

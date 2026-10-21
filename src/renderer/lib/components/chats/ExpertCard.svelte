@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
-  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
-  import CioDesign from '$lib/components/icons/cio/CioDesign.svelte'
+  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
+  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+  import CioDesign from '@pdslng/cio-icon/CioDesign.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
+  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
   import type { Component } from 'svelte'
-  import { AudioLines, Users } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import { slide } from 'svelte/transition'
   import CardHead from '../shared/CardHead.svelte'
@@ -65,7 +65,7 @@
     text: CioDesign,
     image: CioPalette,
     video: CioClapper,
-    audio: AudioLines
+    audio: CioAudioLines
   }
 
   const owners = $derived(expertState.experts.length)
@@ -91,7 +91,7 @@ are the shared card shape. -->
   aria-label="Your experts can do this work"
 >
   <CardHead
-    icon={Users}
+    icon={CioDesign}
     title="Your experts can do this work"
     chip={{ text: 'Live' }}
     bind:folded
@@ -175,7 +175,7 @@ are the shared card shape. -->
               variant="primary"
               label="Let experts delegate"
               title="Let this session delegate its craft work to every expert you staffed"
-              icon={Users}
+              icon={CioDesign}
               onclick={onUse}
             />
           </span>
@@ -222,7 +222,7 @@ are the shared card shape. -->
           variant="primary"
           label="Let experts delegate"
           title="Let this session delegate its craft work to every expert you staffed"
-          icon={Users}
+          icon={CioDesign}
           onclick={() => {
             fullscreen = false
             onUse()

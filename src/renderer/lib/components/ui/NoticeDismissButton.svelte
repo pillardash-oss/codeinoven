@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
 
   /**

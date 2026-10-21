@@ -1,14 +1,14 @@
 <script lang="ts">
-  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
-  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
   import { onDestroy, tick } from 'svelte'
   import { exportEngineeringSpecMarkdown } from '$shared/spec/spec-markdown'
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
@@ -469,10 +469,17 @@
     void selectAndScroll(sections[nextIndex].id)
   }
 
-  function captureDocumentSelection(): void {
-    if (!canDecide && (!onExplainSelection || !onQuickChatSelection)) return
+  /**
+   * The passage a selection in the document names, as a pending annotation.
+   *
+   * Kept apart from `captureDocumentSelection` because it is also what follows
+   * the selection afterwards: the overlay re-runs it while the popover is open,
+   * so a selection extended with shift and the arrow keys keeps its quote, its
+   * offsets and its position in step with the highlighted text.
+   */
+  function pendingAnchorFromSelection(): PendingAnnotation | null {
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
     const range = selection.getRangeAt(0)
     const commonNode =
       range.commonAncestorContainer instanceof Element
@@ -481,7 +488,7 @@
     const sectionElement = commonNode?.closest<HTMLElement>('[data-spec-section]')
     const sectionId = sectionElement?.dataset.specSection as SpecSectionId | undefined
     const quote = selection.toString().trim()
-    if (!sectionElement || !sectionId || !quote) return
+    if (!sectionElement || !sectionId || !quote) return null
     const rect = range.getBoundingClientRect()
     const lines = markdownLineForQuote(
       draft,
@@ -490,7 +497,7 @@
       selectionOccurrence(sectionElement, range, quote)
     )
     selectedSection = sectionId
-    const anchor: PendingAnnotation = {
+    return {
       section: sectionId,
       quote,
       ...lines,
@@ -499,7 +506,13 @@
       sectionLevel: false,
       selectionActions: true
     }
-    overlay.beginPending(anchor)
+  }
+
+  function captureDocumentSelection(): void {
+    if (!canDecide && (!onExplainSelection || !onQuickChatSelection)) return
+    const anchor = pendingAnchorFromSelection()
+    if (!anchor) return
+    overlay.beginPending(anchor, pendingAnchorFromSelection)
     annotationBody = ''
   }
 
@@ -1008,18 +1021,22 @@
   {/snippet}
 
   {#snippet markers()}
-    {#each annotationMarkers as marker (marker.annotation.id)}
-      <button
-        class="absolute z-20 flex h-7 w-7 items-center justify-center border border-primary/30 bg-surface text-primary shadow-md max-md:right-2 hover:bg-elevated"
-        style:left={compactViewport.matches ? undefined : `${marker.x}px`}
-        style:top={`${marker.y}px`}
-        data-spec-annotation-marker={marker.annotation.id}
+    {#each annotationMarkers as marker, index (marker.annotation.id)}
+      <AnnotationIndicator
+        id={marker.annotation.id}
+        surface={`spec:${draft.id}`}
+        left={compactViewport.matches ? 'auto' : `${marker.x}px`}
+        top={`${marker.y}px`}
+        number={index + 1}
+        hasComment={Boolean(marker.annotation.body)}
+        active={editingAnnotation?.id === marker.annotation.id}
         title="Open anchored comment"
-        aria-label="Open anchored comment"
-        onclick={() => void openAnnotation(marker.annotation)}
-      >
-        <CioMessage size={13} />
-      </button>
+        class="z-20 max-md:right-2"
+        attach={(node) => {
+          node.setAttribute('data-spec-annotation-marker', marker.annotation.id)
+        }}
+        onOpen={() => void openAnnotation(marker.annotation)}
+      />
     {/each}
   {/snippet}
 

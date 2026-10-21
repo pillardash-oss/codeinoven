@@ -1,7 +1,7 @@
-import { app } from 'electron'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, rm, stat } from 'node:fs/promises'
 import { getCanonicalConfigRoot, getConfigRoot } from '../../lib/utils'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from './logger'
 
@@ -46,7 +46,7 @@ export class UsageAnalytics {
     this.storage = storage
     this.version = version
     this.available =
-      app.isPackaged &&
+      isShippedBuild() &&
       getConfigRoot() === getCanonicalConfigRoot() &&
       typeof __CODEINOVEN_POSTHOG_TOKEN__ === 'string' &&
       __CODEINOVEN_POSTHOG_TOKEN__.length > 0

@@ -33,7 +33,11 @@ beforeEach(async () => {
   await db.init()
 })
 afterEach(async () => {
-  db?.close()
+  // The close is async: it awaits the maintenance worker's clean exit and only
+  // then closes the primary connection. Awaiting it is what releases every
+  // handle on test.db   Windows refuses to unlink a file that still has an open
+  // handle, so an unawaited close fails this teardown with EBUSY (Quality #863).
+  await db?.close()
   if (root) await rm(root, { recursive: true, force: true })
 })
 function seed(id = 'judge'): Assistant {
@@ -68,7 +72,8 @@ describe('assistant reporting persistence', () => {
       { delivery: { channel: 'email', target: 'reports@example.com' } },
       4
     )
-    db.close()
+    // Reopening the same file needs the previous worker fully stopped first.
+    await db.close()
     db = new Database(
       join(root, 'test.db'),
       (options) => new Worker(join(root, 'worker.mjs'), options)

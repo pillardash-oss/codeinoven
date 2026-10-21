@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import type { Snippet } from 'svelte'
 
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'

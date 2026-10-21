@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
 
   import { invoke } from '$lib/ipc.svelte'
@@ -169,6 +169,16 @@
   /** An app-owned skill may be switched off, so its editor keeps the switch. */
   let canToggleAvailability = $derived(
     editingRegistry !== null && canToggleUtilityEnabled(editingRegistry)
+  )
+  /**
+   * App-owned entries the app supplies the wiring for have no configuration a
+   * user may change, so the editor shows theirs read-only. Two exceptions stay
+   * writable: the image descriptor, whose whole purpose is choosing the vision
+   * model, and a built-in skill's commands, which the banner invites rewriting
+   * and which move with the switch that can retire the skill.
+   */
+  let configLocked = $derived(
+    isAppOwned && !canToggleAvailability && draft.kind !== 'image_descriptor'
   )
 
   /** Installed, supported harnesses the editor may bind a capability to.
@@ -831,7 +841,9 @@
           <p class="border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary">
             {canToggleAvailability
               ? 'This is a built-in skill: its commands are yours to rewrite, and you can switch it off when you already have your own.'
-              : 'This is a built-in utility: only the vision model can be changed. Everything else is managed by the app.'}
+              : draft.kind === 'image_descriptor'
+                ? 'This is a built-in utility: only the vision model can be picked. Everything else is managed by the app.'
+                : 'This is a built-in utility. The app manages it, so this view is read-only.'}
           </p>
         {/if}
 
@@ -881,11 +893,13 @@
 
         <!-- Scope decides where a capability is installed and which turns can
              reach it, so every credential-free kind chooses it. An MCP server
-             always loads on demand behind the gateway, so its activation is
-             fixed rather than chosen. -->
+             and a skill both load on demand behind the gateway, so neither has
+             an activation to choose. -->
         {#if !isNative && !isAppOwned}
-          <div class="grid gap-3 {draft.kind === 'mcp' ? '' : 'grid-cols-2'}">
-            {#if draft.kind !== 'mcp'}
+          <div
+            class="grid gap-3 {draft.kind === 'mcp' || draft.kind === 'skill' ? '' : 'grid-cols-2'}"
+          >
+            {#if draft.kind !== 'mcp' && draft.kind !== 'skill'}
               <label class="space-y-1 text-xs font-medium">
                 <span>Activation</span>
                 <select
@@ -915,6 +929,11 @@
             <p class="text-xs text-muted">
               MCP servers always load on demand and run behind the CodeInOven utility gateway, so
               nothing is written into your harness or project config.
+            </p>
+          {:else if draft.kind === 'skill'}
+            <p class="text-xs text-muted">
+              Skills always load on demand: the agent matches a skill's description against the work
+              at hand and reads only the ones that apply, so no skill sits in every turn of context.
             </p>
           {/if}
           {#if draft.scopeLevel !== 'global'}
@@ -956,7 +975,13 @@
           {/if}
         {/if}
 
-        <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} />
+        <UtilityEditorModalConfigFields
+          bind:draft
+          {isNative}
+          {allowSse}
+          locked={configLocked}
+          providers={providerCatalog.allCached()}
+        />
 
         {#if !isNative && draft.kind === 'mcp' && draft.transport !== 'stdio'}
           <UtilityEditorModalMcpAuth utility={savedUtility} onChanged={handleMcpAuthChanged} />
@@ -997,6 +1022,7 @@
         {isNative}
         hasDraftId={draft.id !== null}
         {isAppOwned}
+        readOnly={configLocked}
         {saving}
         canImportPlugin={pluginManifest.trim() !== ''}
         onBack={resetSetup}

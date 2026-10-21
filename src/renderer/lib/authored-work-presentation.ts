@@ -1,5 +1,5 @@
-import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
-import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
+import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
 import type { Component } from 'svelte'
 import type { AuthoredWorkKind } from '$shared/ipc-contract'
 

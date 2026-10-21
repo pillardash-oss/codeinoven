@@ -1,7 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
-  import { CheckCheck, CornerDownRight } from '@lucide/svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioCheckCheck from '@pdslng/cio-icon/CioCheckCheck.svelte'
+  import CioEnter from '@pdslng/cio-icon/CioEnter.svelte'
+  import CioShieldAlert from '@pdslng/cio-icon/CioShieldAlert.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -35,6 +36,9 @@
 
   let metadataEntries = $derived(Object.entries(request.metadata))
   let canSubmitAlternative = $derived(alternative.trim().length > 0 && !working)
+  // The main process refuses a permanent grant for a critical permission, so the
+  // card must not offer one: leaving it clickable only fails after the click.
+  let permanentGrantBlocked = $derived(request.policy?.risk === 'critical')
 
   function alternativeSpeechTarget() {
     return alternativeEditor?.speechEditorTarget(alternativeSpeechTargetId) ?? null
@@ -251,7 +255,7 @@
             <CardButton
               label="Send alternative"
               title="Reject the request and steer the run with this instruction"
-              icon={CornerDownRight}
+              icon={CioEnter}
               variant="primary"
               disabled={!canSubmitAlternative}
               onclick={() => void submitAlternative()}
@@ -266,10 +270,12 @@
             />
             <CardButton
               label="Allow always"
-              title="Allow this kind of request always"
-              icon={CheckCheck}
+              title={permanentGrantBlocked
+                ? 'Critical permissions cannot be allowed permanently; allow this one once'
+                : 'Allow this kind of request always'}
+              icon={CioCheckCheck}
               variant="secondary"
-              disabled={working}
+              disabled={working || permanentGrantBlocked}
               onclick={() => void allowAlways()}
             />
             <CardButton
