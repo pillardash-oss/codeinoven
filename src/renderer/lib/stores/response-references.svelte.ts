@@ -67,8 +67,8 @@ export interface ResponseReferenceAnchor extends PromptReference {
    *  pixels. The composed picture is usually a different size, so this is the
    *  ratio that keeps the stroke as heavy as the user drew it. */
   markSurfaceEdge?: number
-  /** SVG element picks: a stable key for the artifact card the element was
-   *  picked in, so the card that drew the element is the one that pins it. */
+  /** Artifact element picks: a stable key for the artifact card the element
+   *  was picked in, so the card that drew the element is the one that pins it. */
   artifactKey?: string
 }
 
@@ -106,7 +106,8 @@ export function referenceHasEditableSurface(
     reference.kind === 'file' ||
     reference.kind === 'design' ||
     reference.kind === 'video' ||
-    reference.kind === 'svg'
+    reference.kind === 'svg' ||
+    reference.kind === 'html'
   )
 }
 

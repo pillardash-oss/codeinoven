@@ -3356,14 +3356,14 @@
    * scrolled to.
    */
   /**
-   * Bring a commented SVG element back in front of the reader.
+   * Bring a commented artifact element back in front of the reader.
    *
    * The pin and the comment editor are drawn by the artifact card that renders
-   * the SVG, so the edit action scrolls that card into view and hands it the
+   * the artifact, so the edit action scrolls that card into view and hands it the
    * pick. The key an artifact carries is derived from its own source and is
    * always `[a-z0-9-]`, so it needs no selector escaping.
    */
-  function editSvgElement(reference: ResponseReferenceAnchor): void {
+  function editArtifactElement(reference: ResponseReferenceAnchor): void {
     const key = reference.artifactKey
     if (!key) return
     const card = document.querySelector(`[data-artifact-key="${key}"]`)
@@ -3402,11 +3402,11 @@
       await editMediaMark(reference)
       return
     }
-    // An element picked inside an inline SVG is pinned by the artifact card that
-    // draws it, so its edit action brings that card up and lets it open the
+    // An element picked inside an inline artifact is pinned by the artifact card
+    // that draws it, so its edit action brings that card up and lets it open the
     // comment.
-    if (reference.kind === 'svg') {
-      editSvgElement(reference)
+    if (reference.kind === 'svg' || reference.kind === 'html') {
+      editArtifactElement(reference)
       return
     }
     if (!isResponseSelection(reference)) return
@@ -3524,11 +3524,11 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, may have annotated passages of a project document in the file panel, may have noted moments on a video composition timeline in the video board, and may have drawn numbered marks on a picture you rendered in the conversation. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. An image reference names a picture you rendered, describes the area the user marked on it, and is attached as the same picture with every mark drawn on it as its number, so read that attachment and change the picture where each numbered mark points rather than treating the mark as a separate request. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser or from an HTML or SVG artifact you rendered in this conversation, may have annotated passages of a project document in the file panel, may have noted moments on a video composition timeline in the video board, and may have drawn numbered marks on a picture you rendered in the conversation. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. An artifact element reference names the artifact it was picked in, the CSS path of the element inside it and the text of the element, so change the markup of that artifact at that element rather than a different render that happens to look alike. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. An image reference names a picture you rendered, describes the area the user marked on it, and is attached as the same picture with every mark drawn on it as its number, so read that attachment and change the picture where each numbered mark points rather than treating the mark as a separate request. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         const tag =
-          reference.kind === 'design' || reference.kind === 'svg'
+          reference.kind === 'design' || reference.kind === 'svg' || reference.kind === 'html'
             ? 'element'
             : reference.kind === 'file'
               ? 'file'

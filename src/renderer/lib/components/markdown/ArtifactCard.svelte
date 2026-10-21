@@ -8,7 +8,7 @@
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { onDestroy } from 'svelte'
   import { artifactThemeStyles } from './artifact-theme'
-  import { artifactKeyFor } from '$lib/artifact-element-reference'
+  import { artifactKeyFor, artifactReferenceKind } from '$lib/artifact-element-reference'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import ArtifactInspector from './ArtifactInspector.svelte'
@@ -31,10 +31,10 @@
     /**
      * The conversation this artifact is drawn in.
      *
-     * An SVG artifact can be inspected for an element when this is present: a
-     * pick has to be stored against a conversation, so an artifact rendered
-     * somewhere without one (a document preview, a spec studio) stays a plain
-     * preview with no pick affordance.
+     * An artifact can be inspected for an element when this is present: a pick
+     * has to be stored against a conversation, so an artifact rendered somewhere
+     * without one (a document preview, a spec studio) stays a plain preview with
+     * no pick affordance.
      */
     annotationScope?: { projectId: string; threadId: string }
   }
@@ -64,15 +64,19 @@
   )
   const wrapped = $derived(wrapTextState.wrapped)
   const artifactKey = $derived(artifactKeyFor(kind, code))
-  /** Inspection is an SVG-only affair: an HTML artifact has no element contract
-   *  to send, and audio/video artifacts have nothing to point at. */
-  const canInspect = $derived(kind === 'svg' && annotationScope !== undefined)
+  /** Inspection is offered on both kinds: an element of a picture or of a
+   *  document is the same decision, and both send a CSS path to that element. */
+  const canInspect = $derived(annotationScope !== undefined)
 
   const picks = $derived(
     annotationScope
       ? responseReferencesState
           .forThread(annotationScope.projectId, annotationScope.threadId)
-          .filter((reference) => reference.kind === 'svg' && reference.artifactKey === artifactKey)
+          .filter(
+            (reference) =>
+              reference.kind === artifactReferenceKind(kind) &&
+              reference.artifactKey === artifactKey
+          )
       : []
   )
 
@@ -109,9 +113,10 @@
    */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
-  // Keep the SVG in one document across mode changes. Its gestures reach the
-  // viewer directly; sandboxed iframe previews need a gesture overlay instead.
-  const viewerUsesSvgSurface = $derived(canInspect)
+  // The inspection surface is one document across mode changes. Its gestures
+  // reach the viewer directly; a sandboxed iframe preview needs a gesture overlay
+  // instead, which is why only the inline surface gets the artifact's own drags.
+  const inlineSurface = $derived(canInspect && (kind === 'svg' || inspecting))
 
   /**
    * The expanded viewer's zoom.
@@ -175,10 +180,11 @@
     <div class="[&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
-  {:else if canInspect && annotationScope && fullscreen}
+  {:else if annotationScope && fullscreen && inlineSurface}
     <div class="h-full min-h-0">
       <ArtifactInspector
         {code}
+        {kind}
         enabled={inspecting}
         {artifactKey}
         projectId={annotationScope.projectId}
@@ -239,7 +245,7 @@
     ondblclick={() => panZoom.reset()}
   >
     {@render artifactBody(true)}
-    {#if !viewerUsesSvgSurface}
+    {#if !inlineSurface}
       <!-- The preview frame is a document of its own: a gesture inside it never
            reaches this surface, so a pan over it is taken here instead. -->
       <div class="absolute inset-0" role="presentation"></div>
@@ -328,7 +334,7 @@
         : 'text-muted hover:bg-elevated hover:text-foreground'
     ]}
     aria-pressed={inspecting}
-    title={inspecting ? 'Stop inspecting this SVG' : 'Inspect: pick an element to comment on'}
+    title={inspecting ? 'Stop inspecting this artifact' : 'Inspect: pick an element to comment on'}
     onclick={toggleInspect}
   >
     <CioMarquee size={14} />

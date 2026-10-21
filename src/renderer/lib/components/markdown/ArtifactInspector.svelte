@@ -4,14 +4,15 @@
   import type { Attachment } from 'svelte/attachments'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import { artifactThemeStyles } from './artifact-theme'
-  import { sanitizedSvgArtifact } from './artifact'
+  import { sanitizedHtmlArtifactDocument, sanitizedSvgArtifact } from './artifact'
+  import { ARTIFACT_STAGE_CLASS, ARTIFACT_STAGE_ID, type ArtifactKind } from './artifact'
   import {
     responseReferencesState,
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
   import {
+    artifactElementReference,
     clipElementText,
-    svgElementReference,
     type ArtifactInspectorTarget
   } from '$lib/artifact-element-reference'
   import { referenceLabelNumber } from '$lib/reference-labels'
@@ -19,15 +20,22 @@
   import type { PanZoom } from '$lib/pan-zoom.svelte'
 
   /**
-   * The element inspector for one inline SVG artifact.
+   * The element inspector for one inline artifact, HTML or SVG.
    *
    * A prototype in the app browser already lets a user pick an element and
-   * describe it by its CSS path; an SVG artifact is the same kind of surface
-   * rendered in the conversation, so it gets the same inspection. The picture is
-   * re-rendered here as a shadow-root document   the artifact's own styles must
-   * not escape into the app, and the app's layout must not leak back in   and a
-   * hover box plus a pick turns the element under the pointer into a composer
-   * reference carrying the same kind of descriptor the browser inspector sends.
+   * describe it by its CSS path; an inline artifact is the same kind of surface
+   * rendered in the conversation, so it gets the same inspection. The artifact is
+   * re-rendered here as a shadow-root document   its own styles must not escape
+   * into the app, and the app's layout must not leak back in   and a hover box
+   * plus a pick turns the element under the pointer into a composer reference
+   * carrying the same kind of descriptor the browser inspector sends.
+   *
+   * A picture and a document mount differently for the same reason. A picture
+   * has its own root (`<svg>`) and is centred in a frame, so its selector path
+   * starts there. A document is a body of markup with no root of its own, so it
+   * is mounted in the stage box and its path starts at that box; the document's
+   * own `html`/`body`/`:root` rules are rewritten to the stage, so a page that
+   * styles its own canvas still styles the box it is drawn in.
    *
    * Only the picture is isolated. The hover box, the numbered pins, the hint and
    * the comment box are the app's own DOM placed in the viewer's own pixels, so
@@ -35,6 +43,8 @@
    */
   interface Props {
     code: string
+    /** The artifact kind, which decides how its source is mounted to be picked. */
+    kind: ArtifactKind
     /** Picking is armed only by the viewer's explicit inspect mode. */
     enabled: boolean
     artifactKey: string
@@ -55,6 +65,7 @@
 
   let {
     code,
+    kind,
     enabled,
     artifactKey,
     projectId,
@@ -65,6 +76,9 @@
     onExit,
     panZoom
   }: Props = $props()
+
+  /** How this surface names its artifact to the user. */
+  const surface = $derived(kind === 'svg' ? 'SVG' : 'HTML')
 
   /**
    * The surface and its isolated document.
@@ -132,7 +146,8 @@
    *
    * Every pick stores a CSS path, and the pin is placed from the element that
    * path resolves to right now rather than from the rectangle it had when it was
-   * picked: an SVG that re-renders (a resized pane, a new theme, a data update)
+   * picked: an artifact that re-renders (a resized pane, a new theme, a data
+   * update)
    * moves its elements, and a pin left at the old coordinates would point at
    * nothing. The viewer's own untransformed box is subtracted from the element's
    * (already zoomed) rectangle, so a pin lands on its element at any zoom while
@@ -153,7 +168,9 @@
           id: pick.id,
           number: referenceLabelNumber(pick.label, index),
           hasComment: Boolean(pick.comment),
-          label: pick.text.split('\n')[0]?.replace(/^SVG artifact element:\s*/u, '') ?? pick.label,
+          label:
+            pick.text.split('\n')[0]?.replace(/^(?:SVG|HTML) artifact element:\s*/u, '') ??
+            pick.label,
           x: rect.left - box.left + rect.width / 2,
           y: rect.top - box.top + rect.height / 2
         }
@@ -187,23 +204,53 @@
     return attachment
   }
 
+  /** The document's stage box, which is the root an HTML artifact is picked in. */
+  function stageRoot(): Element | null {
+    return shadowRoot?.querySelector(`.${ARTIFACT_STAGE_CLASS}`) ?? null
+  }
+
   /**
-   * The artifact's root `<svg>`, reached from the element the pointer is on.
+   * The root the artifact's own element lives in.
    *
    * Read from the gesture rather than searched for separately: a root lookup that
    * came back empty used to end the pick before it was stored, so an element the
    * user could hover was an element they could not comment on.
    */
-  function pickRoot(element: SVGElement): Element {
+  function pickRoot(element: Element): Element {
+    if (kind === 'html') return stageRoot() ?? element
     return element.closest('svg') ?? element
   }
 
-  function resolvePick(root: ShadowRoot, pick: ResponseReferenceAnchor): SVGElement | null {
+  /** The artifact's own root, which a pick that landed on nothing still takes. */
+  function fallbackTarget(): Element | null {
+    const root = shadowRoot
+    if (!root) return null
+    return kind === 'svg'
+      ? root.querySelector('svg')
+      : root.querySelector(`.${ARTIFACT_STAGE_CLASS}`)
+  }
+
+  /** The deepest element of the artifact under the pointer, if any. */
+  function targetUnderPointer(event: Event): Element | null {
+    // The stage is the document's own box rather than an element of the
+    // artifact, so a pointer in its padding is pointing at the artifact itself
+    // and the pick falls back to the stage.
+    const stage = kind === 'html' ? stageRoot() : null
+    for (const node of event.composedPath()) {
+      if (node === host) return null
+      if (node instanceof Element) return node === stage ? null : node
+    }
+    return null
+  }
+
+  /** The element under the pointer, which a keyboard pick would take. */
+  let hoveredElement = $state<Element | null>(null)
+
+  function resolvePick(root: ShadowRoot, pick: ResponseReferenceAnchor): Element | null {
     const selector = pick.selector
     if (!selector) return null
     try {
-      const found = root.querySelector(selector)
-      return found instanceof SVGElement ? found : null
+      return root.querySelector(selector)
     } catch {
       // A path can stop matching after an artifact changes; a pick without a
       // resolvable element simply has no pin.
@@ -220,7 +267,7 @@
     return name
   }
 
-  /** A CSS path from the artifact's SVG root down to the picked element. */
+  /** A CSS path from the artifact's root down to the picked element. */
   function cssPath(element: Element, root: Element): string {
     const segments: string[] = []
     let current: Element | null = element
@@ -255,7 +302,7 @@
     return names
   }
 
-  function describeTarget(element: SVGElement, root: Element): ArtifactInspectorTarget {
+  function describeTarget(element: Element, root: Element): ArtifactInspectorTarget {
     const rect = element.getBoundingClientRect()
     return {
       selector: cssPath(element, root),
@@ -267,18 +314,6 @@
       rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
     }
   }
-
-  /** The deepest element of the artifact under the pointer, if any. */
-  function targetUnderPointer(event: Event): SVGElement | null {
-    for (const node of event.composedPath()) {
-      if (node === host) return null
-      if (node instanceof SVGElement) return node
-    }
-    return null
-  }
-
-  /** The element under the pointer, which a keyboard pick would take. */
-  let hoveredElement = $state<SVGElement | null>(null)
 
   /**
    * The hover box, in the viewer's pixels.
@@ -337,7 +372,7 @@
     const target = pickTarget(event)
     if (!target) return
     // The release is an inspection, not a click on the artifact: nothing inside
-    // the SVG should react to it.
+    // the artifact should react to it.
     event.preventDefault()
     void addPick(describeTarget(target, pickRoot(target)))
   }
@@ -349,8 +384,8 @@
    * gap between its shapes) still means the artifact, so the root stands in
    * rather than the gesture doing nothing at all.
    */
-  function pickTarget(event: Event): SVGElement | null {
-    return targetUnderPointer(event) ?? shadowRoot?.querySelector<SVGSVGElement>('svg') ?? null
+  function pickTarget(event: Event): Element | null {
+    return targetUnderPointer(event) ?? fallbackTarget()
   }
 
   /**
@@ -363,7 +398,7 @@
    */
   function handleSurfaceKeydown(event: KeyboardEvent): void {
     if (!enabled || (event.key !== 'Enter' && event.key !== ' ')) return
-    const target = hoveredElement ?? shadowRoot?.querySelector<SVGSVGElement>('svg') ?? null
+    const target = hoveredElement ?? fallbackTarget()
     if (!target) return
     event.preventDefault()
     void addPick(describeTarget(target, pickRoot(target)))
@@ -374,7 +409,7 @@
     const current = responseReferencesState.forThread(projectId, threadId)
     responseReferencesState.setForThread(projectId, threadId, [
       ...current,
-      svgElementReference(id, target, artifactKey)
+      artifactElementReference(id, target, artifactKey, kind)
     ])
     // The store caps how many references a thread holds, so a pick beyond the
     // cap never opens an editor for a reference that was not kept.
@@ -441,17 +476,35 @@
   /**
    * Build the isolated document the artifact is inspected in.
    *
-   * The SVG is sanitized exactly as the preview sanitizes it, then placed inline
-   * rather than wrapped in an `<img>` data URL, because an element can only be
-   * picked in the DOM. It lives in a shadow root so the artifact's own `<style>`
-   * cannot restyle the app and the app's CSS cannot restyle the artifact.
+   * The source is sanitized exactly as the preview sanitizes it, then placed
+   * inline rather than wrapped in an `<img>` data URL or mounted in a sandboxed
+   * frame, because an element can only be picked in the DOM. It lives in a shadow
+   * root so the artifact's own `<style>` cannot restyle the app and the app's CSS
+   * cannot restyle the artifact.
    */
-  const shadowSheet = $derived(`:host { display: block; height: 100%; }
-.cio-stage { position: relative; box-sizing: border-box; display: flex; height: 100%; align-items: center; justify-content: center; padding: 1.25rem; background: var(--color-app); }
-.cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }
-:host([data-inspecting]) .cio-stage, :host([data-inspecting]) svg, :host([data-inspecting]) svg * { cursor: pointer !important; }`)
+  /**
+   * The rules the isolated document always carries.
+   *
+   * The stage is the box the artifact is drawn in, and it stands in for the
+   * document a page would otherwise own: the app's surface, the app's type, and
+   * the pointer cursor that says an element can be picked. An artifact's own
+   * rules are placed after this sheet, so a page that styles its own canvas still
+   * wins, exactly as it does in the sandboxed preview.
+   */
+  const stageSheet = `:host { display: block; height: 100%; }
+.${ARTIFACT_STAGE_CLASS} { position: relative; box-sizing: border-box; height: 100%; background: var(--color-app); font-family: var(--font-app); color: var(--color-foreground); }
+.${ARTIFACT_STAGE_CLASS} img, .${ARTIFACT_STAGE_CLASS} video { max-width: 100%; height: auto; }
+:host([data-inspecting]) .${ARTIFACT_STAGE_CLASS}, :host([data-inspecting]) .${ARTIFACT_STAGE_CLASS} * { cursor: pointer !important; }`
 
-  function artifactMarkup(): string {
+  /** A picture is centred and contained; a document is laid out and scrolls. */
+  const kindSheet = $derived(
+    kind === 'svg'
+      ? `.${ARTIFACT_STAGE_CLASS} { display: flex; align-items: center; justify-content: center; padding: 1.25rem; }
+.${ARTIFACT_STAGE_CLASS} > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; fill: currentColor; }`
+      : `.${ARTIFACT_STAGE_CLASS} { overflow: auto; padding: 1.25rem; line-height: 1.55; }`
+  )
+
+  function svgStageMarkup(): string {
     const template = document.createElement('template')
     template.innerHTML = sanitizedSvgArtifact(code)
     // An SVG image has its own :root. Inside a shadow tree those declarations
@@ -459,7 +512,21 @@
     for (const style of template.content.querySelectorAll('style')) {
       style.textContent = (style.textContent ?? '').replace(/:root\b/gu, ':host')
     }
-    return `<div class="cio-stage">${template.innerHTML}</div>`
+    return `<div class="${ARTIFACT_STAGE_CLASS}" id="${ARTIFACT_STAGE_ID}">${template.innerHTML}</div>`
+  }
+
+  /**
+   * The isolated document, rebuilt from the source and the theme.
+   *
+   * A document keeps its own `<style>` rules, which are emitted after the stage
+   * sheet so the artifact's canvas overrides it, and are already rewritten for
+   * the stage box because a shadow tree is what they now style.
+   */
+  function shadowDocument(theme: string): string {
+    if (kind === 'svg') return `<style>${theme}${stageSheet}${kindSheet}</style>${svgStageMarkup()}`
+    const artifact = sanitizedHtmlArtifactDocument(code)
+    const stage = `<div class="${ARTIFACT_STAGE_CLASS}" id="${ARTIFACT_STAGE_ID}">${artifact.markup}</div>`
+    return `<style>${theme}${stageSheet}${kindSheet}${artifact.styles}</style>${stage}`
   }
 
   function mountInspector(node: HTMLDivElement): void {
@@ -480,10 +547,9 @@
   // once at mount.
   $effect(() => {
     const root = shadowRoot
-    const sheet = shadowSheet
     const theme = artifactThemeStyles().replace(/:root\b/gu, ':host')
     if (!root) return
-    root.innerHTML = `<style>${theme}${sheet}</style>${artifactMarkup()}`
+    root.innerHTML = shadowDocument(theme)
   })
 
   // A zoom or a pan moves every element the pins, the hover box and the open
@@ -529,7 +595,7 @@
       role={enabled ? 'application' : 'img'}
       aria-label={enabled
         ? 'Artifact element inspector: hover an element and click, or press Enter, to comment on it'
-        : 'SVG artifact preview'}
+        : `${surface} artifact preview`}
       tabindex={enabled ? 0 : undefined}
       {@attach mountInspector}
       onpointerdown={handlePointerDown}
@@ -589,12 +655,12 @@
   <ResponseAnnotationComment
     x={editorAnchor.x}
     y={editorAnchor.y}
-    title="Comment on SVG element"
+    title="Comment on {surface} element"
     dragHandleTitle="Move element comment"
     closeLabel="Close element comment"
     removeTitle="Remove this element and its comment"
     initialComment={editingPick.comment ?? ''}
-    targetId={`svg-element-comment-${threadId}-${editingPick.id}`}
+    targetId={`${kind}-element-comment-${threadId}-${editingPick.id}`}
     scope={{ kind: 'project', projectId }}
     onDraftChange={(comment) => draftComment(editingPick.id, comment)}
     onDone={(comment) => saveComment(editingPick.id, comment)}

@@ -318,7 +318,8 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
     value.kind !== 'file' &&
     value.kind !== 'video' &&
     value.kind !== 'image' &&
-    value.kind !== 'svg'
+    value.kind !== 'svg' &&
+    value.kind !== 'html'
   )
     return false
   if (value.messageId !== undefined && typeof value.messageId !== 'string') return false
