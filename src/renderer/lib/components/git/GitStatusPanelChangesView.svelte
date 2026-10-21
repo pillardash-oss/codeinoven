@@ -270,12 +270,6 @@
         first card 4px under the header while the other three sides had 8.
       -->
       <div class="flex flex-col gap-1 p-1">
-        <span class="px-2 py-1 text-[0.625rem] tabular-nums text-muted" title={summaryTitle}>
-          {breakdownState.summary?.breakdown?.totalFiles ?? changes.length}
-          {(breakdownState.summary?.breakdown?.totalFiles ?? changes.length) === 1
-            ? 'file'
-            : 'files'} changed
-        </span>
         {#if conflictSections.length > 0}
           <div class={paneClass}>
             {#if changesView === 'tree'}
