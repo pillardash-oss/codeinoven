@@ -25,6 +25,13 @@ const LEGACY_LAUNCHER_FILE = 'service-start.cmd'
 export interface WindowsLauncherInput {
   /** Absolute path to `node.exe`. */
   nodePath: string
+  /**
+   * The runtime path the launcher actually starts, when it differs from `nodePath`.
+   *
+   * A Windows Oven links the runtime under this app's name so its process is
+   * recognisable in Task Manager; see `prepareOvenExecutable`.
+   */
+  executablePath?: string
   /** Absolute path to the deployed `service.mjs`. */
   servicePath: string
   /** Data root the daemon reads and writes. */
@@ -57,7 +64,7 @@ export function windowsLauncherScript(input: WindowsLauncherInput): string {
       ? [`shell.Environment("PROCESS")("CODEINOVEN_OVEN_REVISION") = ${vbs(input.revision)}`]
       : []),
     `shell.Environment("PROCESS")("PATH") = ${vbs(`${nodeDirectory};`)} & shell.Environment("PROCESS")("PATH")`,
-    `shell.Run ${vbs(`"${input.nodePath}" "${input.servicePath}" daemon`)}, 0, False`
+    `shell.Run ${vbs(`"${input.executablePath ?? input.nodePath}" "${input.servicePath}" daemon`)}, 0, False`
   ]
   return `${lines.join('\r\n')}\r\n`
 }

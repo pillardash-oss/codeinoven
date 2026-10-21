@@ -47,6 +47,7 @@ import {
   windowsLauncherScript,
   windowsTaskAction
 } from './oven-windows-task'
+import { prepareOvenExecutable } from './oven-windows-executable'
 import {
   installTermuxSupervision,
   startSystemdSupervision,
@@ -1057,11 +1058,17 @@ async function startDaemon(): Promise<void> {
     return
   }
   const revision = process.env['CODEINOVEN_OVEN_REVISION']
+  // A daemon that appears as `node` in Task Manager cannot be told apart from every
+  // other Node program on the machine, and this Oven is a scheduled task rather
+  // than a Windows service, so the Services list never shows it either. The runtime
+  // is started through this app's own name instead.
+  const executable = await prepareOvenExecutable(process.execPath, root)
   const launcher = join(root, WINDOWS_LAUNCHER_FILE)
   await writeFile(
     launcher,
     windowsLauncherScript({
       nodePath: process.execPath,
+      executablePath: executable,
       servicePath: process.argv[1],
       dataRoot: root,
       ...(revision ? { revision } : {})
