@@ -382,6 +382,7 @@ import {
 import { BrowserLoadWaits } from './browser-service/browser-load-wait'
 import {
   COMPOSITION_TRANSPORT_GLOBAL,
+  compositionRenderReadyScript,
   compositionTransportCommandScript,
   compositionTransportScript,
   compositionTransportStateScript,
@@ -557,6 +558,10 @@ export type BrowserAgentActionApprover = (
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
+  private readonly compositionArming = new WeakMap<
+    BrowserTab,
+    { generation: number; promise: Promise<void> }
+  >()
   private readonly agentTabIds = new Map<string, string>()
   /**
    * The browser tab each assistant conversation answers about, by thread id.
@@ -3056,6 +3061,19 @@ export class BrowserService {
    * is the answer there, not playback.
    */
   private async armCompositionTransport(tabId: string, tab: BrowserTab): Promise<void> {
+    const generation = tab.navigationGeneration
+    const pending = this.compositionArming.get(tab)
+    if (pending?.generation === generation) return pending.promise
+    const promise = this.installCompositionTransport(tabId, tab)
+    this.compositionArming.set(tab, { generation, promise })
+    try {
+      await promise
+    } finally {
+      if (this.compositionArming.get(tab)?.promise === promise) this.compositionArming.delete(tab)
+    }
+  }
+
+  private async installCompositionTransport(tabId: string, tab: BrowserTab): Promise<void> {
     const composition = tab.composition
     const contents = tab.view.webContents
     if (!composition || contents.isDestroyed()) return
@@ -3072,7 +3090,6 @@ export class BrowserService {
     if (
       armed !== null &&
       armed.generation === generation &&
-      armed.url === url &&
       armed.duration === composition.duration &&
       armed.fps === composition.fps
     ) {
@@ -3081,7 +3098,23 @@ export class BrowserService {
     }
     // A re-arm of the document that is on screen right now keeps where the user is
     // rather than the position saved for a document that has been replaced.
-    const live = armed !== null && armed.url === url ? await this.readPlayhead(tabId) : null
+    const live = armed?.generation === generation ? await this.readPlayhead(tabId) : null
+    this.applyTransportAudio(tabId, tab, false)
+    // Load events do not wait for an async film's images, fonts or runtime bind.
+    // Wait in the page, with one bounded startup timer and no main-process poll.
+    const ready: unknown = await contents.executeJavaScript(compositionRenderReadyScript())
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== generation ||
+      tab.composition?.directory !== composition.directory ||
+      tab.composition.duration !== composition.duration ||
+      tab.composition.fps !== composition.fps
+    )
+      return
+    if (ready !== true) {
+      Logger.dev('Composition playback is waiting for cioRenderFrame:', { tabId })
+      return
+    }
     const result: unknown = await contents.executeJavaScript(
       compositionTransportScript({
         duration: composition.duration,
@@ -3145,7 +3178,13 @@ export class BrowserService {
     if (!tab.composition) {
       throw new TypeError('Playback is available on a composition preview only')
     }
-    return this.sendTransport(tabId, command, value)
+    // A user action can recover a document that completed startup after the
+    // bounded initial wait, without keeping a failed preview polling forever.
+    const recovering = !tab.transport
+    if (recovering) await this.armCompositionTransport(tabId, tab)
+    // An unavailable controller is shown as paused. Its first Play click must
+    // still play if startup has just armed the document with autoplay enabled.
+    return this.sendTransport(tabId, recovering && command === 'toggle' ? 'play' : command, value)
   }
 
   /**

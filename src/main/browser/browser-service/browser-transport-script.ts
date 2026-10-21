@@ -43,6 +43,9 @@
 /** The global the transport is reachable at, for the app's own commands. */
 export const COMPOSITION_TRANSPORT_GLOBAL = '__cioTransport'
 
+/** Keep the runtime's audio-aware draw even if authored code replaces the public hook. */
+const COMPOSITION_RENDER_GLOBAL = '__cioCompositionRender'
+
 /** Ceiling on one tick, so a backgrounded or stalled tab resumes instead of jumping. */
 export const TRANSPORT_MAX_TICK_SECONDS = 1
 
@@ -59,6 +62,54 @@ export const TRANSPORT_MEDIA_RESYNC_SECONDS = 0.25
  * capture proceed.
  */
 export const TRANSPORT_SETTLE_TIMEOUT_MS = 250
+
+/** Wait only during composition startup. Assets and fonts may settle after load. */
+export function compositionRenderReadyScript(): string {
+  return `new Promise((resolve) => {
+    const key = ${JSON.stringify(COMPOSITION_RENDER_GLOBAL)};
+    if (typeof globalThis[key] === 'function') return resolve(true);
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'cioRenderFrame');
+    let value = globalThis.cioRenderFrame;
+    let timer;
+    let intercepted = false;
+    function restore() {
+      if (!intercepted || Object.getOwnPropertyDescriptor(globalThis, 'cioRenderFrame')?.set !== assigned) return;
+      Object.defineProperty(globalThis, 'cioRenderFrame', {
+        configurable: true, enumerable: descriptor?.enumerable ?? true,
+        writable: true, value
+      });
+    }
+    function assigned(next) {
+      value = next;
+      if (typeof next !== 'function') return;
+      // bind(draw) publishes its audio wrapper before it awaits media loading.
+      // Save it synchronously: the author can replace the public hook in the
+      // same microtask, before an IPC round trip or a polling tick could see it.
+      globalThis[key] = next;
+      clearTimeout(timer);
+      restore();
+      resolve(true);
+    }
+    if (typeof value === 'function') return assigned(value);
+    if (!descriptor || (descriptor.configurable && 'value' in descriptor)) {
+      intercepted = true;
+      Object.defineProperty(globalThis, 'cioRenderFrame', {
+        configurable: true, enumerable: descriptor?.enumerable ?? true,
+        get: () => value, set: assigned
+      });
+      timer = setTimeout(() => { restore(); resolve(false); }, 10000);
+      return;
+    }
+    // An authored accessor cannot be replaced safely. Only that case polls.
+    const deadline = performance.now() + 10000;
+    function check() {
+      if (typeof globalThis.cioRenderFrame === 'function') return assigned(globalThis.cioRenderFrame);
+      if (performance.now() >= deadline) return resolve(false);
+      setTimeout(check, 50);
+    }
+    check();
+  })`
+}
 
 export interface CompositionTransportOptions {
   /** Seconds the composition runs, from `composition.json`. */
@@ -107,7 +158,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   const SETTLE_TIMEOUT = ${JSON.stringify(TRANSPORT_SETTLE_TIMEOUT_MS)};
   const previous = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
   if (previous && typeof previous.dispose === 'function') previous.dispose();
-  const render = globalThis.cioRenderFrame;
+  const render = globalThis.${COMPOSITION_RENDER_GLOBAL} || globalThis.cioRenderFrame;
   if (typeof render !== 'function') {
     return { installed: false, reason: 'the page defines no cioRenderFrame function' };
   }
@@ -389,6 +440,14 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   }
 
   function play() {
+    // A poster/capture becomes a viewing when the user presses Play. The runtime
+    // reads this flag on every draw, so leaving it set keeps its soundtrack silent.
+    const url = new URL(location.href);
+    if (url.searchParams.has('cio-capture')) {
+      url.searchParams.delete('cio-capture');
+      url.searchParams.delete('cio-time');
+      history.replaceState(history.state, '', url.href);
+    }
     if (transport.time >= DURATION) transport.time = 0;
     if (transport.playing) return state();
     transport.playing = true;
