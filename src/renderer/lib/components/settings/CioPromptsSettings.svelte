@@ -36,7 +36,7 @@
     { id: 'assignment', label: 'Assignment' },
     { id: 'achievement', label: 'Achievement' },
     { id: 'audit', label: 'Audit' },
-    { id: 'review', label: 'Review' }
+    { id: 'review', label: 'PR Review' }
   ]
 
   let prompts = $state<CioPromptSetting[]>([])
