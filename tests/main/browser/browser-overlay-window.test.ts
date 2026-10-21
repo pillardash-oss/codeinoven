@@ -80,13 +80,43 @@ function setup() {
   hosts.push(host)
   return { parent, host, changed }
 }
+/**
+ * Pin the platform a test reads instead of inheriting the host's.
+ *
+ * `afterEach` unstubs the global; the prototype keeps every other member of
+ * `process` reachable.
+ */
+function stubPlatform(platform: NodeJS.Platform): void {
+  vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }))
+}
 afterEach(() => {
   hosts.splice(0).forEach((host) => host.dispose())
   windows.length = 0
   vi.clearAllMocks()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 describe('native browser overlay window', () => {
+  it('accepts a tooltip projection on Linux: the document decides where it draws', () => {
+    stubPlatform('linux')
+    const { host } = setup()
+    expect(
+      host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', modal: false, passive: true })
+    ).toBe(true)
+    expect(windows).toHaveLength(2)
+    expect(host.applyDock('app-tooltip', null)).toBe(true)
+    expect(host.applyDock(request.id, request)).toBe(true)
+  })
+
+  it('still accepts native tooltips on macOS', () => {
+    stubPlatform('darwin')
+    const { host } = setup()
+    expect(
+      host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', modal: false, passive: true })
+    ).toBe(true)
+    expect(windows).toHaveLength(2)
+  })
+
   it('loads a secure native child and reveals it without hiding or focusing the browser', () => {
     const { parent, host } = setup()
     expect(host.applyDock(request.id, request)).toBe(true)
