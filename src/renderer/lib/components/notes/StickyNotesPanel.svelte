@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioFind from '@pdslng/cio-icon/CioFind.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
@@ -23,6 +24,7 @@
 
   import { tick } from 'svelte'
   import { cubicOut } from 'svelte/easing'
+  import { DropdownMenu } from 'bits-ui'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorTarget } from '../../speech/editor-target'
@@ -148,32 +150,78 @@
     if (note.iconType) return getIconSvgDataUrl(note.iconType, note.color)
     return null
   }
+
+  /** One shape for every item in the strip's menu, so the reading, finding and
+   *  full screen entries line up with the file viewer's overflow menu. */
+  const menuItemClass =
+    'flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 </script>
 
-{#snippet noteActions()}
-  {#if activeNote && activeIsEditing}
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="View sticky note"
-      aria-label="View sticky note"
-      aria-pressed={!activeIsEditing}
-      onclick={() => stopEditing(activeNote.id)}
-    >
-      <CioEye size={14} />
-    </button>
-  {:else if activeNote}
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Edit sticky note"
-      aria-label="Edit sticky note"
-      aria-pressed={activeIsEditing}
-      onclick={() => startEditing(activeNote.id)}
-    >
-      <CioPencil size={14} />
-    </button>
+{#snippet stripMenuItems()}
+  <DropdownMenu.Item
+    class={menuItemClass}
+    disabled={!activeNote?.loaded}
+    onSelect={() => {
+      if (!activeNote) return
+      if (activeIsEditing) stopEditing(activeNote.id)
+      else startEditing(activeNote.id)
+    }}
+  >
+    {#if activeIsEditing}
+      <CioEye size={13} class="text-muted" />
+      View note
+    {:else}
+      <CioPencil size={13} class="text-muted" />
+      Edit note
+    {/if}
+  </DropdownMenu.Item>
+  <DropdownMenu.Item
+    class={menuItemClass}
+    disabled={!activeNote?.loaded}
+    title={`Find in this note (${keymapState.labelFor('nav-find')})`}
+    onSelect={() => findNavState.openStickyNotesFind()}
+  >
+    <CioFind size={13} class="text-muted" />
+    <span class="flex-1">Find in this note</span>
+    <span class="text-[0.625rem] text-dimmed">{keymapState.labelFor('nav-find')}</span>
+  </DropdownMenu.Item>
+  {#if !fullscreen}
+    <DropdownMenu.Separator class="my-1 h-px bg-border" />
+    <DropdownMenu.Item class={menuItemClass} onSelect={() => toggleFullscreen(true)}>
+      <CioMaximize size={13} class="text-muted" />
+      Fullscreen
+    </DropdownMenu.Item>
   {/if}
+{/snippet}
+
+<!--
+  Reading, finding and filling the window are all things a reader reaches for
+  occasionally, so they live behind one ellipsis instead of holding three slots
+  in the strip. Editing stays the default state of the note, so the menu offers
+  it as a whole item rather than a pressed toggle.
+-->
+{#snippet stripMenu()}
+  <DropdownMenu.Root>
+    <DropdownMenu.Trigger
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors data-[state=open]:bg-elevated data-[state=open]:text-foreground hover:bg-elevated hover:text-foreground"
+      aria-label="Sticky note actions"
+      title="Sticky note actions"
+    >
+      <CioEllipsis size={14} />
+    </DropdownMenu.Trigger>
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
+        side="bottom"
+        align="end"
+        sideOffset={5}
+        avoidCollisions
+        collisionPadding={10}
+        class="z-90 min-w-52 border border-border bg-surface p-1 shadow-lg"
+      >
+        {@render stripMenuItems()}
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
 {/snippet}
 
 {#snippet tabIcon(tab: { id: string; title: string })}
@@ -222,18 +270,6 @@
     disabled={speechDisabled}
     class="h-7 w-7 text-dimmed"
   />
-  {@render noteActions()}
-  {#if activeNote?.loaded}
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title={`Find in this note (${keymapState.labelFor('nav-find')})`}
-      aria-label="Find in this note"
-      onclick={() => findNavState.openStickyNotesFind()}
-    >
-      <CioFind size={14} />
-    </button>
-  {/if}
 {/snippet}
 
 {#snippet noteBody(note: StickyNoteEntry)}
@@ -358,8 +394,7 @@
         {tabs}
         activeTabId={stickyNotes.activeNoteId}
         newLabel="New sticky note"
-        trailingLabel="Fullscreen"
-        onTrailingAction={() => toggleFullscreen(true)}
+        trailing={stripMenu}
         onSelect={selectNote}
         onNew={() => void createNote()}
         onCloseTab={requestDelete}
@@ -373,9 +408,6 @@
         {tabIcon}
       >
         {#snippet actions()}{@render stripActions()}{/snippet}
-        {#snippet trailingIcon()}
-          <CioMaximize size={13} />
-        {/snippet}
       </PanelTabStrip>
 
       {#if activeNote}
@@ -394,6 +426,7 @@
     activeTabId={stickyNotes.activeNoteId}
     newLabel="New sticky note"
     minimizeLabel="Exit fullscreen"
+    trailing={stripMenu}
     onNew={() => void createNote()}
     onMinimize={() => toggleFullscreen(false)}
     onSelect={selectNote}
