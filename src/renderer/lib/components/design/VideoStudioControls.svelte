@@ -1,11 +1,21 @@
 <script lang="ts">
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioSkipBack from '@pdslng/cio-icon/CioSkipBack.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import type { VideoJob, VideoStudioDocument, VideoValue } from '$shared/video/studio'
+  import { videoTimecode } from '$shared/video/timeline'
+  import type {
+    VideoAudioTrack,
+    VideoJob,
+    VideoStudioDocument,
+    VideoValue
+  } from '$shared/video/studio'
 
   /** The three editor sections, as the timeline's tab strip names them. */
   type EditorSection = 'timeline' | 'audio' | 'exports'
@@ -69,6 +79,23 @@
   let dirty = $state(false)
   let cancelledJob = $state<VideoJob | null>(null)
   let captionPage = $state(0)
+  /** Which track boxes are folded open, by index. The first opens by default. */
+  let openTracks = $state<Record<number, boolean>>({})
+  /** Which job records are folded open, by id. A running job opens by itself. */
+  let openJobs = $state<Record<string, boolean>>({})
+  /**
+   * The track being auditioned, and where the file is playing.
+   *
+   * One element for the whole list rather than one per track: two tracks playing
+   * at once is never what a user means by pressing play on a row, and the browser
+   * refuses the second play anyway. The index says which row owns the sound.
+   */
+  let audio = $state<HTMLAudioElement | null>(null)
+  let auditionIndex = $state<number | null>(null)
+  let auditionSeconds = $state(0)
+  let auditionPlaying = $state(false)
+  /** The trim window of the track in the element, so playback stops at its end. */
+  let auditionWindow = { start: 0, end: 0 }
   let visibleCaptions = $derived(
     studio?.captions.slice(captionPage * 25, captionPage * 25 + 25) ?? []
   )
@@ -173,6 +200,89 @@
     if (!cancelledJob) return
     onCancelJob(cancelledJob.id)
     cancelledJob = null
+  }
+
+  /**
+   * Where a track's audio is served from.
+   *
+   * A track names a file relative to the composition folder, and that folder lives
+   * inside the project, so the app's own `appfile://` reader resolves it with the
+   * Range support a media element needs to seek. Nothing is copied and no second
+   * player is invented: the browser plays the same bytes the export will mix.
+   */
+  function trackUrl(source: string): string {
+    const relative = `${directory}/${source}`
+      .split('/')
+      .filter(Boolean)
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+    return `appfile://project/${projectId}/${relative}`
+  }
+
+  /** The end of a track's used window, which is where auditioning stops. */
+  function trackEnd(track: VideoAudioTrack): number {
+    return track.trim + Math.max(track.duration, 0.01)
+  }
+
+  /** Play or pause one track in place, from the place it was left at. */
+  function auditionTrack(index: number, track: VideoAudioTrack): void {
+    const element = audio
+    if (!element) return
+    if (auditionIndex === index && auditionPlaying) {
+      element.pause()
+      return
+    }
+    const url = trackUrl(track.source)
+    if (element.src !== url) element.src = url
+    if (auditionIndex !== index) {
+      auditionIndex = index
+      auditionWindow = { start: track.trim, end: trackEnd(track) }
+      auditionSeconds = track.trim
+      element.currentTime = track.trim
+    }
+    element.volume = Math.min(1, Math.max(0, track.gain))
+    void element.play().catch(() => {
+      auditionPlaying = false
+    })
+  }
+
+  /** Move the audition to a second inside a track's window, loading it if needed. */
+  function seekTrack(index: number, track: VideoAudioTrack, seconds: number): void {
+    const element = audio
+    if (!element) return
+    const url = trackUrl(track.source)
+    if (element.src !== url) element.src = url
+    if (auditionIndex !== index) {
+      auditionIndex = index
+      auditionWindow = { start: track.trim, end: trackEnd(track) }
+    }
+    const target = Math.min(Math.max(seconds, auditionWindow.start), auditionWindow.end)
+    element.currentTime = target
+    auditionSeconds = target
+  }
+
+  /** Follow the element, and stop at the end of the track's own window. */
+  function auditionTimeUpdate(): void {
+    const element = audio
+    if (!element) return
+    if (element.currentTime >= auditionWindow.end) {
+      element.pause()
+      element.currentTime = auditionWindow.start
+      auditionSeconds = auditionWindow.start
+      return
+    }
+    auditionSeconds = element.currentTime
+  }
+
+  /** Fold a track, silencing it if it is the one playing. */
+  function toggleTrack(index: number, open: boolean): void {
+    openTracks = { ...openTracks, [index]: !open }
+    if (!open && auditionIndex === index) audio?.pause()
+  }
+
+  /** A job whose record is worth reading: it has files or an error to show. */
+  function jobMessages(job: VideoJob): string {
+    return [...job.files, job.error ?? ''].filter((line) => line !== '').join('\n')
   }
 </script>
 
@@ -374,32 +484,116 @@
               This composition declares no audio tracks to place.
             </p>
           {:else}
-            <div class="space-y-3 pt-1">
+            <!--
+              One box per track, and each box folds. A track is a thing the user
+              works on whole: its placement, its trim and how loud it sits. The
+              header is where it is named and where it is played, because
+              auditioning a file is how a placement is decided, and the two
+              belong on one line rather than in a player somewhere else.
+            -->
+            <div class="space-y-1.5 pt-1">
               {#each studio.audioTracks as track, index (index)}
-                <div class="space-y-1.5">
-                  <p class="truncate font-mono text-[0.625rem] text-muted" title={track.source}>
-                    {track.source}
-                  </p>
-                  <div class="grid grid-cols-2 gap-1.5">
-                    {#each ['start', 'trim', 'duration', 'gain'] as field (field)}
-                      {@const key = field as 'start' | 'trim' | 'duration' | 'gain'}
-                      <label
-                        class="flex items-center justify-between gap-1 text-[0.6875rem] text-muted"
-                      >
-                        {field}
-                        <input
-                          type="number"
-                          class="h-7 w-16 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                          min="0"
-                          step="0.01"
-                          bind:value={track[key]}
-                          onchange={() => {
-                            dirty = true
-                          }}
-                        />
-                      </label>
-                    {/each}
+                {@const open = openTracks[index] ?? index === 0}
+                {@const playing = auditionIndex === index && auditionPlaying}
+                {@const at = auditionIndex === index ? auditionSeconds : track.trim}
+                <div class="border border-border">
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                      aria-expanded={open}
+                      title={`${open ? 'Fold' : 'Open'} ${track.source}, ${videoTimecode(track.start)} for ${track.duration.toFixed(2)}s at gain ${track.gain}`}
+                      onclick={() => toggleTrack(index, open)}
+                    >
+                      <CioChevronDown
+                        size={12}
+                        aria-hidden="true"
+                        class="shrink-0 text-muted {open ? 'rotate-180' : ''} transition-transform"
+                      />
+                      <span class="min-w-0 flex-1 truncate text-xs text-foreground">
+                        {track.source.split('/').pop() ?? track.source}
+                      </span>
+                      <span class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">
+                        {videoTimecode(track.start)} · {track.duration.toFixed(2)}s
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title={playing
+                        ? `Pause ${track.source} here`
+                        : `Play ${track.source} from ${videoTimecode(at)}`}
+                      aria-label={playing
+                        ? `Pause ${track.source} here`
+                        : `Play ${track.source} from ${videoTimecode(at)}`}
+                      onclick={() => auditionTrack(index, track)}
+                    >
+                      {#if playing}
+                        <CioPause size={12} />
+                      {:else}
+                        <CioPlay size={12} />
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      title="Seek this track back to its trim start"
+                      aria-label="Seek this track back to its trim start"
+                      disabled={at <= track.trim}
+                      onclick={() => seekTrack(index, track, track.trim)}
+                    >
+                      <CioSkipBack size={12} />
+                    </button>
                   </div>
+                  {#if open}
+                    <div class="flex items-center gap-2 px-2 pt-0.5 pb-2">
+                      <input
+                        class="min-w-0 flex-1 cursor-pointer accent-primary"
+                        type="range"
+                        min={track.trim}
+                        max={trackEnd(track)}
+                        step="0.05"
+                        value={at}
+                        aria-label={`Seek ${track.source}`}
+                        title={`Seek ${track.source}`}
+                        oninput={(event) =>
+                          seekTrack(index, track, Number(event.currentTarget.value))}
+                      />
+                      <span class="shrink-0 text-[0.625rem] text-muted tabular-nums">
+                        {videoTimecode(at)}<span class="text-dimmed">
+                          / {videoTimecode(trackEnd(track))}</span
+                        >
+                      </span>
+                    </div>
+                    <div class="space-y-1.5 px-2 pb-2">
+                      <div class="grid grid-cols-2 gap-1.5">
+                        {#each ['start', 'trim', 'duration', 'gain'] as field (field)}
+                          {@const key = field as 'start' | 'trim' | 'duration' | 'gain'}
+                          <label
+                            class="flex items-center justify-between gap-1 text-[0.6875rem] text-muted"
+                          >
+                            {field}
+                            <input
+                              type="number"
+                              class="h-7 w-16 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                              min="0"
+                              step="0.01"
+                              bind:value={track[key]}
+                              onchange={() => {
+                                dirty = true
+                              }}
+                            />
+                          </label>
+                        {/each}
+                      </div>
+                      <p
+                        class="truncate font-mono text-[0.625rem] text-dimmed"
+                        title={track.source}
+                      >
+                        {track.source}
+                      </p>
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -427,18 +621,50 @@
   {/if}
 
   {#if section === 'exports'}
-    <div class="mt-2 space-y-2">
+    <!--
+      The jobs, one folded box each. A job's record is a list of paths and the
+      reason it failed, which is reading matter rather than a row: it lives in a
+      code block under the fold so a finished render reads as one line and the
+      panel does not turn into a log. A running job keeps its progress in sight.
+    -->
+    <div class="mt-2 space-y-1.5">
       {#each jobs as job (job.id)}
-        <div class="space-y-1">
-          <div class="flex items-center justify-between gap-2 text-xs">
-            <span class="min-w-0 truncate">
-              {labels[job.operation] ?? 'Video processing'}
-              <span class="text-muted">· {job.stage}</span>
-            </span>
+        {@const messages = jobMessages(job)}
+        {@const open = openJobs[job.id] ?? job.state === 'running'}
+        <div class="border border-border">
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated disabled:cursor-default disabled:hover:bg-transparent"
+              aria-expanded={open}
+              disabled={messages === '' && job.state !== 'running'}
+              title={`${open ? 'Fold' : 'Open'} ${labels[job.operation] ?? 'video processing'}, ${job.state}`}
+              onclick={() => (openJobs = { ...openJobs, [job.id]: !open })}
+            >
+              <CioChevronDown
+                size={12}
+                aria-hidden="true"
+                class="shrink-0 text-muted {open ? 'rotate-180' : ''} transition-transform"
+              />
+              <span class="min-w-0 flex-1 truncate text-xs text-foreground">
+                {labels[job.operation] ?? 'Video processing'}
+                <span class="text-muted">· {job.stage}</span>
+              </span>
+              <span
+                class="shrink-0 text-[0.625rem] tabular-nums {job.state === 'failed'
+                  ? 'text-danger'
+                  : job.state === 'running'
+                    ? 'text-muted'
+                    : 'text-dimmed'}"
+              >
+                {job.state === 'running' ? `${Math.round(job.progress * 100)}%` : job.state}
+              </span>
+            </button>
             {#if job.state === 'running'}
               <button
                 type="button"
-                class="shrink-0 text-[0.6875rem] text-danger transition-colors hover:underline"
+                class="shrink-0 px-2 text-[0.6875rem] text-danger transition-colors hover:underline"
+                title="Cancel this render"
                 onclick={() => {
                   cancelledJob = job
                 }}
@@ -449,18 +675,18 @@
           </div>
           {#if job.state === 'running'}
             <progress
-              class="h-1 w-full accent-primary"
+              class="h-0.5 w-full accent-primary"
               value={job.progress}
               max="1"
-              aria-label={`${job.operation} progress`}
+              aria-label={`${labels[job.operation] ?? job.operation} progress`}
             ></progress>
           {/if}
-          {#if job.error}
-            <p class="text-[0.6875rem] text-danger">{job.error}</p>
+          {#if open && messages !== ''}
+            <pre
+              class="overflow-x-auto bg-app px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed whitespace-pre-wrap text-muted"><code
+                >{messages}</code
+              ></pre>
           {/if}
-          {#each job.files as file (file)}
-            <p class="truncate font-mono text-[0.625rem] text-muted" title={file}>{file}</p>
-          {/each}
         </div>
       {/each}
       {#if jobs.length === 0}
@@ -469,6 +695,30 @@
     </div>
   {/if}
 </div>
+
+<!--
+  The one player for the audio section.
+
+  It has no controls of its own: the track headers are the controls, so this is
+  the element they drive rather than a second surface the user would have to
+  match a row against. It stays mounted so a paused audition resumes where the
+  user left it, and folds away with nothing to show.
+-->
+<audio
+  {@attach (node) => {
+    audio = node
+    return () => {
+      node.pause()
+      audio = null
+    }
+  }}
+  hidden
+  preload="metadata"
+  onplay={() => (auditionPlaying = true)}
+  onpause={() => (auditionPlaying = false)}
+  onended={() => (auditionPlaying = false)}
+  ontimeupdate={auditionTimeUpdate}
+></audio>
 
 <ConfirmDialog
   open={cancelledJob !== null}
