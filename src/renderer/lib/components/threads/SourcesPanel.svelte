@@ -18,7 +18,7 @@
     SectionAgentSource
   } from '$lib/agent-sources'
   import MediaPreview from '../chats/MediaPreview.svelte'
-  import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
+  import { revealSourceFilePath, revealCitationFile } from '$lib/reveal-file'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
@@ -322,7 +322,7 @@
   }
 
   function revealArtifact(artifact: AgentArtifact): void {
-    void invoke('shell:revealPath', artifact.path)
+    void revealSourceFilePath(projectId, artifact.path)
   }
 
   function openActiveFacts(): void {
@@ -413,9 +413,9 @@
       return
     }
     const project = workspaceState.activeProject
-    if (!project?.id || !project.path) return
+    if (!project?.id) return
     const absPath = source.url.startsWith('file://') ? fileUrlToPath(source.url) : source.url
-    void revealFileInAppTree(project.id, absPath)
+    void revealSourceFilePath(project.id, absPath)
   }
 
   function openWebUrl(url: string): void {
