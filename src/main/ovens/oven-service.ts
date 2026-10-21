@@ -124,6 +124,7 @@ export class OvenService {
   private bundle: Promise<{ source: string; revision: string }> | undefined
   /** Per-Oven guard, so a service that keeps failing cannot be reinstalled in a loop. */
   private readonly serviceRepairs = new Map<string, number>()
+  private readonly repairingServices = new Map<string, Promise<boolean>>()
 
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
@@ -427,11 +428,13 @@ export class OvenService {
       if (!first.ok) throw first.error
       return first.value
     }
-    // The answer came from a service this app did not install, and this app owns
-    // that file on the Oven. Replace it once, then send the same request again.
+    // A stopped daemon can answer through the SSH process as { ok: false } too.
+    // Recover before decode() throws that payload outside this repair boundary.
     if (!(await this.refreshService(id, fault.message)))
       throw new Error(
-        'This Oven runs an older service than this app. Finish its active runs, then install the service again from its settings.',
+        serviceNotRunning(fault.message)
+          ? 'The Oven service is not running and automatic recovery could not start it. Check its service settings.'
+          : 'This Oven runs an older service than this app. Finish its active runs, then install the service again from its settings.',
         { cause: fault }
       )
     const second = await attempt(run)
@@ -439,12 +442,11 @@ export class OvenService {
     return second.value
   }
 
-  /** The failure that proves a request met an outdated service, if any. */
+  /** A stopped or outdated service, from either a thrown error or a JSON answer. */
   private serviceFaultOf(result: Attempt<string>): Error | null {
-    if (!result.ok)
-      return isStaleServiceFault(messageOf(result.error)) ? toError(result.error) : null
-    const answer = failedAnswerError(result.value)
-    return answer && isStaleServiceFault(answer) ? new Error(answer) : null
+    const message = result.ok ? failedAnswerError(result.value) : messageOf(result.error)
+    if (!message || (!isStaleServiceFault(message) && !serviceNotRunning(message))) return null
+    return result.ok ? new Error(message) : toError(result.error)
   }
 
   /**
@@ -454,20 +456,30 @@ export class OvenService {
    * already has instead of an install failure the user did not ask for.
    */
   private async refreshService(id: string, reason: string): Promise<boolean> {
+    const pending = this.repairingServices.get(id)
+    if (pending) return pending
     const last = this.serviceRepairs.get(id) ?? 0
     if (Date.now() - last < SERVICE_REPAIR_COOLDOWN_MS) return false
     this.serviceRepairs.set(id, Date.now())
-    Logger.info('Installing the current Oven service', { ovenId: id, reason })
-    try {
-      await this.install(id)
-      return true
-    } catch (error) {
-      Logger.error('The Oven service could not be installed', {
-        ovenId: id,
-        error: messageOf(error)
-      })
-      return false
-    }
+    const repair = (async () => {
+      Logger.info('Installing the current Oven service', { ovenId: id, reason })
+      try {
+        await this.install(id)
+        return true
+      } catch (error) {
+        Logger.error('The Oven service could not be installed', {
+          ovenId: id,
+          error: messageOf(error)
+        })
+        return false
+      } finally {
+        // install() re-arms manual recovery. Automatic repair retains its floor.
+        this.serviceRepairs.set(id, Date.now())
+        this.repairingServices.delete(id)
+      }
+    })()
+    this.repairingServices.set(id, repair)
+    return repair
   }
 
   /** This app's own bundle, read and hashed exactly once per process. */
