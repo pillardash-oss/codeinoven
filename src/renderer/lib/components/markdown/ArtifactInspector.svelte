@@ -349,6 +349,18 @@
   }
 
   /**
+   * Keep the artifact's own links from leaving the app.
+   *
+   * An inline artifact has no sandbox around it, so an anchor it carries would
+   * navigate this window if its default action were left alone. An artifact is a
+   * preview of the conversation's own content, not a place to follow links from:
+   * a click on it means a pick, and the navigation is cancelled either way.
+   */
+  function handleArtifactClick(event: MouseEvent): void {
+    event.preventDefault()
+  }
+
+  /**
    * The gesture that takes a pick.
    *
    * The pick is taken on release, exactly as the annotation pen takes a mark on
@@ -501,7 +513,7 @@
     kind === 'svg'
       ? `.${ARTIFACT_STAGE_CLASS} { display: flex; align-items: center; justify-content: center; padding: 1.25rem; }
 .${ARTIFACT_STAGE_CLASS} > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; fill: currentColor; }`
-      : `.${ARTIFACT_STAGE_CLASS} { overflow: auto; padding: 1.25rem; line-height: 1.55; }`
+      : `.${ARTIFACT_STAGE_CLASS} { overflow: auto; }`
   )
 
   function svgStageMarkup(): string {
@@ -592,11 +604,12 @@
       class="h-full w-full overflow-hidden"
       data-artifact-inspector
       data-inspecting={enabled ? '' : undefined}
-      role={enabled ? 'application' : 'img'}
+      role={enabled ? 'application' : kind === 'svg' ? 'img' : 'document'}
       aria-label={enabled
         ? 'Artifact element inspector: hover an element and click, or press Enter, to comment on it'
         : `${surface} artifact preview`}
       tabindex={enabled ? 0 : undefined}
+      onclick={handleArtifactClick}
       {@attach mountInspector}
       onpointerdown={handlePointerDown}
       onpointerup={handlePointerUp}

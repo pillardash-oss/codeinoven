@@ -113,10 +113,17 @@
    */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
-  // The inspection surface is one document across mode changes. Its gestures
-  // reach the viewer directly; a sandboxed iframe preview needs a gesture overlay
-  // instead, which is why only the inline surface gets the artifact's own drags.
-  const inlineSurface = $derived(canInspect && (kind === 'svg' || inspecting))
+  /**
+   * Whether the viewer draws the artifact inline, in its own shadow document.
+   *
+   * It does whenever a pick can be made on it, which is every artifact in a
+   * conversation. That inline document is also what makes a document artifact
+   * behave like one: it is the scroll container, so the wheel scrolls it, and it
+   * reaches this viewer's own handlers, so a deliberate gesture can still zoom.
+   * A sandboxed iframe preview keeps the gesture overlay instead, because a wheel
+   * inside it never reaches this surface.
+   */
+  const inlineSurface = $derived(canInspect)
 
   /**
    * The expanded viewer's zoom.
@@ -124,8 +131,16 @@
    * One instance for the whole viewer, so the preview the user zoomed into is
    * the surface they pick in. The threshold is what lets both work: a press that
    * does not move is a pick on the artifact, and a press that moves is a pan.
+   *
+   * A document artifact keeps the wheel for scrolling and zooms only on a
+   * deliberate gesture (the zoom modifier held, or a toolbar button), while a
+   * picture has nothing to scroll and keeps plain wheel zoom. The mode is read
+   * through a getter, so the card follows the artifact it is drawing.
    */
-  const panZoom = new PanZoom({ dragThreshold: 4 })
+  const panZoom = new PanZoom({
+    dragThreshold: 4,
+    wheel: () => (kind === 'html' ? 'scroll' : 'zoom')
+  })
   let viewerViewport = $state<HTMLElement | undefined>(undefined)
   const viewerViewportAttachment = (node: HTMLElement): (() => void) => {
     viewerViewport = node
@@ -245,9 +260,11 @@
     ondblclick={() => panZoom.reset()}
   >
     {@render artifactBody(true)}
-    {#if !inlineSurface}
+    {#if !inlineSurface && panZoom.zoom !== 1}
       <!-- The preview frame is a document of its own: a gesture inside it never
-           reaches this surface, so a pan over it is taken here instead. -->
+           reaches this surface, so a pan over it is taken here instead. Only
+           while zoomed, though: at its own size the frame is left alone, so a
+           document in it keeps its own scrolling. -->
       <div class="absolute inset-0" role="presentation"></div>
     {/if}
   </div>

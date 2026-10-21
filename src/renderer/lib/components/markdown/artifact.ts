@@ -136,15 +136,18 @@ export interface HtmlArtifactDocument {
  * The preview draws an HTML artifact in a sandboxed `iframe`, where no element
  * can be picked. The inspector re-renders the same source inline instead, so the
  * policy is the preview's one (no scripts, no `<base>`/`<link>`/`<meta>`, no form
- * actions) and only the mounting changes: the document's own `<style>` rules are
- * lifted to the shadow tree, because a shadow tree rather than a document is
- * what they now style, and they are rewritten so a rule aimed at `html`, `body`
- * or `:root` still reaches the stage box the artifact is mounted in.
+ * actions) with one addition the inline mount cannot borrow from a sandbox: a
+ * form is dropped, because nothing here stops a submission from navigating the
+ * app's own window. Only the mounting otherwise changes: the document's own
+ * `<style>` rules are lifted to the shadow tree, because a shadow tree rather
+ * than a document is what they now style, and they are rewritten so a rule aimed
+ * at `html`, `body` or `:root` still reaches the stage box the artifact is
+ * mounted in.
  */
 export function sanitizedHtmlArtifactDocument(code: string): HtmlArtifactDocument {
   const sanitized = DOMPurify.sanitize(code, {
     FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
-    FORBID_TAGS: ['base', 'link', 'meta', 'script'],
+    FORBID_TAGS: ['base', 'link', 'meta', 'script', 'form'],
     WHOLE_DOCUMENT: true
   })
   // Parsing a whole document into a template drops the `html`/`head`/`body`
