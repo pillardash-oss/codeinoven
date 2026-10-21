@@ -1,11 +1,7 @@
 <script lang="ts">
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
   import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
-  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
-  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
-  import CioSkipBack from '@pdslng/cio-icon/CioSkipBack.svelte'
-  import CioSkipForward from '@pdslng/cio-icon/CioSkipForward.svelte'
-  import { onMount } from 'svelte'
+  import { onMount, tick, type Snippet } from 'svelte'
   import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
@@ -21,7 +17,16 @@
   } from '$shared/video/timeline'
   import type { VideoStudioDocument } from '$shared/video/studio'
   import type { VideoProjectManifest } from '$shared/video/project'
-  import type { BrowserCompositionPlayback, BrowserTransportCommand } from '$shared/ipc-contract'
+  import type { BrowserCompositionPlayback } from '$shared/ipc-contract'
+
+  /** The three things a composition editor shows, as the board's one tab strip. */
+  type EditorSection = 'timeline' | 'audio' | 'exports'
+
+  const SECTIONS: { id: EditorSection; label: string; title: string }[] = [
+    { id: 'timeline', label: 'Timeline', title: 'Read the composition as a timeline' },
+    { id: 'audio', label: 'Audio', title: 'Manage the audio this composition plays' },
+    { id: 'exports', label: 'Exports', title: 'Render the composition and follow its jobs' }
+  ]
 
   interface Props {
     projectId: string
@@ -37,15 +42,43 @@
      * playing anything, and the timeline then falls back to the thread's tab.
      */
     tabId?: string
+    /**
+     * Bumped when the editor saves the composition.
+     *
+     * The timeline draws the bands from its own read of the same file, so a save
+     * made in the controls has to be answered here: without it the lanes would keep
+     * the placement the file had before the user moved a track.
+     */
+    revision?: number
+    /** The section body, owned by the controls so every tab stands on one read. */
+    controls?: Snippet<[EditorSection]>
   }
 
-  let { projectId, threadId, directory, tabId = '' }: Props = $props()
+  let { projectId, threadId, directory, tabId = '', revision = 0, controls }: Props = $props()
 
   /** How often the playhead catches up with the page that owns the clock. */
   const POLL_MS = 200
   /** Lanes ask for a waveform each; past this many the rest are plain bands. */
   const WAVEFORM_LANE_LIMIT = 12
   const LANE_HEIGHT = '2.5rem'
+  /**
+   * How far one wheel notch or one pinch step moves the zoom.
+   *
+   * A trackpad pinch and Cmd/Ctrl plus a wheel both arrive as a run of small
+   * deltas, so the step is per event rather than per notch: a mouse wheel is
+   * clamped to a single step below, and a pinch accumulates into a smooth one.
+   */
+  const ZOOM_STEP = 0.005
+  /** One event may never more than halve or double what it found. */
+  const ZOOM_LIMIT = 1.5
+
+  let section = $state<EditorSection>('timeline')
+  /** How many viewports wide the track is, so `1` is the whole composition. */
+  let zoom = $state(1)
+  /** Where the scrolled window starts, as a fraction of the composition. */
+  let scrollFraction = $state(0)
+  let viewportWidth = $state(600)
+  let viewport = $state<HTMLDivElement | undefined>()
 
   let studio = $state<VideoStudioDocument | null>(null)
   let manifest = $state<VideoProjectManifest | null>(null)
@@ -55,7 +88,15 @@
   let scrubbing = $state(false)
   let scrubSeconds = $state(0)
   let error = $state('')
-  let mounted = false
+  /**
+   * Whether this timeline is still on the page.
+   *
+   * True from the moment it is built, because the document it draws is loaded by
+   * the revision effect below rather than by `onMount`: a read that answered after
+   * the panel was torn down would write state nobody is reading, and that is the
+   * only thing this flag prevents.
+   */
+  let mounted = true
   let reading = false
   let bandArea = $state<HTMLElement | null>(null)
   /** The root element, watched so the poll stops while the timeline is off screen. */
@@ -78,12 +119,26 @@
     Math.max(manifest?.duration ?? tab?.duration ?? playback?.duration ?? 0, 0.001)
   )
   const fps = $derived(manifest?.fps ?? tab?.fps ?? 30)
-  const frameStep = $derived(1 / Math.max(fps, 1))
   const time = $derived(playback?.time ?? 0)
-  const playing = $derived(playback?.playing ?? false)
   const shown = $derived(Math.min(Math.max(scrubbing ? scrubSeconds : time, 0), duration))
   const playhead = $derived(`${(shown / duration) * 100}%`)
-  const ticks = $derived(videoTimelineTicks(duration))
+  const frame = $derived(Math.round(shown * fps))
+  /**
+   * The most the track may be stretched.
+   *
+   * Twelve pixels is enough to place one frame by eye, so the ceiling is the
+   * composition's own frame count against the width it is drawn at. Pinching past
+   * it would only make the ruler coarser than the frames it addresses.
+   */
+  const maxZoom = $derived(Math.max(1, (duration * fps * 12) / Math.max(viewportWidth, 1)))
+  const scale = $derived(Math.min(zoom, maxZoom))
+  const ticks = $derived(
+    videoTimelineTicks(duration, Math.max(2, viewportWidth / 96), {
+      start: scrollFraction * duration,
+      end: Math.min(duration, (scrollFraction + 1 / scale) * duration),
+      fps
+    })
+  )
   const captions = $derived(videoCaptionBands(studio))
   const lanes = $derived(videoAudioLanes(studio, manifest))
   /**
@@ -167,29 +222,23 @@
     }
   }
 
-  async function command(name: BrowserTransportCommand, seconds?: number): Promise<void> {
-    const current = tab
-    if (!current) return
-    const next =
-      seconds === undefined
-        ? await videoTimelineState.command(current.tabId, name, 0)
-        : await videoTimelineState.seek(current.tabId, seconds)
-    if (mounted && next) playback = next
-  }
-
   function clamp(seconds: number): number {
     if (!Number.isFinite(seconds)) return 0
     return Math.min(Math.max(seconds, 0), duration)
   }
 
-  /** Go to a second, pinning it, and show the frame the page draws there. */
-  function goTo(seconds: number): void {
-    const target = clamp(seconds)
-    void command('seek', target)
-  }
-
-  function step(direction: 1 | -1): void {
-    goTo(time + direction * frameStep)
+  /**
+   * Go to a second, pinning it, and show the frame the page draws there.
+   *
+   * The stage above the timeline owns the play button, so this surface only ever
+   * seeks: a note, a scrub and a jump from the composer all name a moment rather
+   * than a transport action.
+   */
+  async function goTo(seconds: number): Promise<void> {
+    const current = tab
+    if (!current) return
+    const next = await videoTimelineState.seek(current.tabId, clamp(seconds))
+    if (mounted && next) playback = next
   }
 
   /** The second a pointer at one x position is pointing at. */
@@ -198,7 +247,53 @@
     if (!element) return 0
     const rect = element.getBoundingClientRect()
     if (rect.width <= 0) return 0
-    return clamp(((clientX - rect.left) / rect.width) * duration)
+    return clamp(Math.round(((clientX - rect.left) / rect.width) * duration * fps) / fps)
+  }
+
+  /**
+   * Stretch or shrink the track around the point the gesture is on.
+   *
+   * The second under the pointer is the one that stays under it, which is what
+   * makes a pinch feel like it is pulling the timeline rather than scrolling it.
+   * The scroll offset is written after the track is re-laid out, because until
+   * then the element still has the width it had before the zoom.
+   */
+  async function zoomBy(factor: number, clientX: number): Promise<void> {
+    const element = viewport
+    if (!element) return
+    const next = Math.min(maxZoom, Math.max(1, scale * factor))
+    if (Math.abs(next - scale) < 1e-4) return
+    const rect = element.getBoundingClientRect()
+    const pointer = Math.min(Math.max(clientX - rect.left, 0), rect.width)
+    const anchor = element.scrollLeft + pointer
+    const ratio = next / scale
+    zoom = next
+    await tick()
+    element.scrollLeft = Math.max(0, anchor * ratio - pointer)
+    if (element.scrollLeft === 0) scrollFraction = 0
+  }
+
+  /**
+   * Zoom on a pinch or Cmd/Ctrl plus the wheel.
+   *
+   * A trackpad pinch reaches the page as a wheel event carrying `ctrlKey`, and a
+   * mouse reports the same gesture the same way, so one handler covers both. Only
+   * those gestures are taken: a plain scroll is left to the scroller, because the
+   * timeline is one band among several and must not swallow the panel's own scroll.
+   */
+  function zoomOnWheel(event: WheelEvent): void {
+    if (!event.ctrlKey && !event.metaKey) return
+    const element = viewport
+    if (!element) return
+    event.preventDefault()
+    const delta =
+      event.deltaMode === 1
+        ? event.deltaY * 16
+        : event.deltaMode === 2
+          ? event.deltaY * element.clientHeight
+          : event.deltaY
+    const factor = Math.min(ZOOM_LIMIT, Math.max(1 / ZOOM_LIMIT, 1 - delta * ZOOM_STEP))
+    void zoomBy(factor, event.clientX)
   }
 
   function beginScrub(event: PointerEvent): void {
@@ -217,7 +312,9 @@
     if (!scrubbing) return
     scrubbing = false
     bandArea?.releasePointerCapture(event.pointerId)
-    goTo(secondsAt(event.clientX))
+    const target = secondsAt(event.clientX)
+    scrubSeconds = target
+    void goTo(target)
   }
 
   /**
@@ -252,20 +349,38 @@
   /** Where a bubble anchored to a second sits, in viewport coordinates. */
   function anchorAt(seconds: number): { x: number; y: number } | null {
     const element = bandArea
-    if (!element) return null
-    const rect = element.getBoundingClientRect()
-    if (rect.width <= 0) return null
-    return { x: rect.left + (clamp(seconds) / duration) * rect.width, y: rect.top }
+    const rect = element?.getBoundingClientRect()
+    const bounds = root?.getBoundingClientRect()
+    if (!bounds) return null
+    return {
+      x: Math.min(
+        bounds.right - 16,
+        Math.max(
+          bounds.left + 16,
+          rect ? rect.left + (clamp(seconds) / duration) * rect.width : bounds.right - 16
+        )
+      ),
+      y:
+        section === 'timeline' && rect
+          ? Math.min(bounds.bottom, Math.max(bounds.top + 40, rect.top))
+          : bounds.top + 40
+    }
   }
 
   /** Open the comment bubble for a note, seeking the composition to its second. */
   function openNote(id: string, seconds: number): void {
-    goTo(seconds)
+    void goTo(seconds)
     anchor = anchorAt(seconds)
     editing = { id, seconds }
   }
 
-  /** Comment on the moment the playhead is on: write the note, then open its bubble. */
+  /**
+   * Comment on the moment the playhead is on.
+   *
+   * This is the only way into a note from here, and it sits beside the timecode
+   * for that reason: the note names the second the strip is showing, so the model
+   * reads a timecode, a frame and the caption under it rather than a picture.
+   */
   function startNote(): void {
     const seconds = shown
     const id = newVideoNoteId()
@@ -310,14 +425,11 @@
 
   function noteMarkerClass(active: boolean): string {
     return active
-      ? 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 border border-primary bg-primary/15 px-1.5 text-[0.5625rem] text-foreground tabular-nums transition-colors'
-      : 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 border border-border bg-elevated px-1.5 text-[0.5625rem] text-muted tabular-nums transition-colors hover:text-foreground'
+      ? 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 bg-primary px-1.5 text-[0.5625rem] text-on-primary tabular-nums transition-colors'
+      : 'absolute top-1 flex h-5 -translate-x-1/2 items-center gap-1 bg-elevated px-1.5 text-[0.5625rem] text-muted tabular-nums transition-colors hover:text-foreground'
   }
 
   onMount(() => {
-    mounted = true
-    void load()
-
     // A hidden panel neither polls the page nor has anyone to show the playhead
     // to, so the timeline stops while it is off screen or the window is hidden.
     // Its twin in BrowserCompositionTransport.svelte already gates on `active`.
@@ -356,6 +468,16 @@
     return () => clearInterval(timer)
   })
 
+  // The bands are read from the composition itself, on mount and again whenever
+  // the editor saves it. The revision is the trigger and nothing else is read in
+  // here, so a read cannot re-run on the document it just wrote.
+  let readRevision = $state<number | null>(null)
+  $effect(() => {
+    if (readRevision === revision) return
+    readRevision = revision
+    void load()
+  })
+
   // A jump from the composer names the note it wants; this board is what takes it
   // once it is showing that composition.
   $effect(() => {
@@ -364,59 +486,56 @@
     const match = notes.find((entry) => entry.reference.id === request.referenceId)
     videoNoteFocusState.consume(request.token)
     if (match) openNote(match.reference.id, match.reference.seconds ?? request.seconds)
-    else goTo(request.seconds)
+    else void goTo(request.seconds)
   })
 </script>
 
 <div
   bind:this={root}
-  class="border border-border bg-surface p-3"
+  class="flex min-h-0 flex-1 flex-col overflow-hidden"
   role="group"
   aria-label="Composition timeline"
 >
-  <div class="flex items-center justify-between gap-2">
-    <div class="flex items-center gap-1.5">
-      <CioClapper size={13} class="text-accent" aria-hidden="true" />
-      <span class="text-xs font-semibold text-foreground">Timeline</span>
-      <span class="text-[0.6875rem] text-muted tabular-nums">
-        {videoTimecode(shown)} / {videoTimecode(duration)}
+  <!--
+    One row of chrome. The tabs say which half of the editor is open, and the
+    strip on the right says where the playhead is and offers the one action the
+    timeline has that the stage above does not: commenting on this moment. The
+    transport is deliberately absent, because the stage above already carries a
+    play button, a stop and a frame step for the same composition.
+  -->
+  <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 pb-1.5">
+    {#if controls}
+      <div
+        class="flex w-max items-center gap-0.5 border border-border bg-elevated p-0.5"
+        role="tablist"
+        aria-label="Video editor sections"
+      >
+        {#each SECTIONS as entry (entry.id)}
+          <button
+            type="button"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {section ===
+            entry.id
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            role="tab"
+            aria-selected={section === entry.id}
+            title={entry.title}
+            onclick={() => (section = entry.id)}
+          >
+            {entry.label}
+          </button>
+        {/each}
+      </div>
+    {:else}
+      <span></span>
+    {/if}
+    <div class="ml-auto flex shrink-0 items-center gap-2">
+      <span class="text-[0.6875rem] whitespace-nowrap text-foreground tabular-nums">
+        {videoTimecode(shown)}<span class="text-dimmed"> / {videoTimecode(duration)}</span>
       </span>
-    </div>
-    <div class="flex items-center gap-0.5">
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-        title="Step back one frame"
-        aria-label="Step back one frame"
-        disabled={!tab}
-        onclick={() => step(-1)}
-      >
-        <CioSkipBack size={13} />
-      </button>
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-        title={playing ? 'Pause the composition' : 'Play the composition'}
-        aria-label={playing ? 'Pause the composition' : 'Play the composition'}
-        disabled={!tab}
-        onclick={() => void command('toggle')}
-      >
-        {#if playing}
-          <CioPause size={13} />
-        {:else}
-          <CioPlay size={13} />
-        {/if}
-      </button>
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-        title="Step forward one frame"
-        aria-label="Step forward one frame"
-        disabled={!tab}
-        onclick={() => step(1)}
-      >
-        <CioSkipForward size={13} />
-      </button>
+      <span class="text-[0.6875rem] whitespace-nowrap text-dimmed tabular-nums">
+        Frame {frame} · {fps} fps
+      </span>
       <button
         type="button"
         class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
@@ -431,146 +550,174 @@
   </div>
 
   {#if error}
-    <p class="mt-2 text-xs text-danger">{error}</p>
+    <p class="shrink-0 bg-danger/10 px-2 py-1 text-xs text-danger" role="alert">{error}</p>
   {:else if !manifest}
-    <p class="mt-2 text-xs text-dimmed">
+    <p class="shrink-0 text-xs text-dimmed">
       This folder has no readable composition.json, so there is no timeline to draw.
     </p>
   {:else}
-    {#if !tab}
-      <p class="mt-2 text-xs text-dimmed">
-        Waiting for the composition to load. The timeline still shows what it declares.
-      </p>
-    {/if}
-
-    <div class="mt-2 select-none">
-      <div class="relative h-4">
-        {#each ticks as tick (tick.seconds)}
-          <span
-            class="absolute top-0 -translate-x-1/2 text-[0.625rem] text-dimmed tabular-nums"
-            style={`left: ${tick.fraction * 100}%`}>{tick.label}</span
-          >
-        {/each}
-      </div>
-
-      <div
-        bind:this={bandArea}
-        class="relative mt-1 border border-border bg-app"
-        role="group"
-        aria-label="Playhead"
-        onpointerdown={beginScrub}
-        onpointermove={moveScrub}
-        onpointerup={endScrub}
-        onpointercancel={endScrub}
-      >
-        <div class="relative h-6 border-b border-border">
-          {#each captions as band (band.key)}
-            {@const geometry = videoBandGeometry(band.start, band.end, duration)}
-            <span
-              class="absolute top-1 h-4 overflow-hidden bg-accent/25 px-1 text-[0.5625rem] leading-4 whitespace-nowrap text-foreground"
-              style={`left: ${geometry.left}; width: ${geometry.width};`}
-              title={`${videoTimecode(band.start)} ${band.text}`}>{band.text}</span
-            >
-          {/each}
-          {#if captions.length === 0}
-            <span class="absolute top-1 left-2 text-[0.625rem] text-dimmed">No captions</span>
-          {/if}
-        </div>
-
-        {#each lanes as lane, index (lane.key)}
-          {@const geometry = videoBandGeometry(lane.start, lane.start + lane.duration, duration)}
-          <div
-            class="relative border-b border-border last:border-b-0"
-            style={`height: ${LANE_HEIGHT}`}
-          >
-            <span
-              class="absolute top-0.5 left-1 z-10 max-w-[45%] truncate text-[0.5625rem] text-muted"
-              title={`${lane.source} (gain ${lane.gain})`}>{lane.label}</span
-            >
-            <span
-              class="absolute top-0 bottom-0 overflow-hidden border border-accent/40 bg-accent/10"
-              style={`left: ${geometry.left}; width: ${geometry.width};`}
-            >
-              {#if waveforms[lane.key]}
-                <img
-                  src={waveforms[lane.key]}
-                  alt=""
-                  aria-hidden="true"
-                  class="h-full w-full object-fill opacity-70"
-                />
-              {:else}
-                <span class="flex h-full items-center justify-center text-[0.5625rem] text-dimmed">
-                  {index >= WAVEFORM_LANE_LIMIT
-                    ? 'lane beyond the waveform limit'
-                    : lane.key in waveforms
-                      ? 'no waveform'
-                      : 'waveform loading'}
-                </span>
-              {/if}
-            </span>
-          </div>
-        {/each}
-        {#if lanes.length === 0}
-          <div class="flex h-8 items-center px-2 text-[0.625rem] text-dimmed">
-            This composition declares no audio.
-          </div>
+    <div class="min-h-0 flex-1 overflow-y-auto pb-2">
+      {#if section === 'timeline'}
+        {#if !tab}
+          <p class="pb-1 text-[0.6875rem] text-dimmed">
+            Waiting for the composition to load. The timeline still shows what it declares.
+          </p>
         {/if}
+        <div class="select-none">
+          <div
+            bind:this={viewport}
+            class="overflow-x-auto pb-1"
+            onwheel={zoomOnWheel}
+            onscroll={(event) => {
+              scrollFraction = event.currentTarget.scrollLeft / (viewportWidth * scale)
+            }}
+            {@attach (node) => {
+              const observer = new ResizeObserver(([entry]) => {
+                viewportWidth = entry.contentRect.width
+              })
+              observer.observe(node)
+              return () => observer.disconnect()
+            }}
+          >
+            <div style:width={`${scale * 100}%`}>
+              <div class="relative h-4">
+                {#each ticks as tick (tick.seconds)}
+                  <span
+                    class="absolute top-0 text-[0.625rem] whitespace-nowrap text-dimmed tabular-nums"
+                    style={`left: ${tick.fraction * 100}%; transform: translateX(${tick.seconds === 0 ? 0 : tick.seconds === duration ? -100 : -50}%)`}
+                    >{tick.label}</span
+                  >
+                {/each}
+              </div>
 
-        <div class="relative h-7 border-t border-border">
-          {#each notes as note (note.reference.id)}
-            {@const seconds = note.reference.seconds ?? 0}
-            <button
-              type="button"
-              class={noteMarkerClass(note.reference.id === editing?.id)}
-              style={`left: ${(Math.min(seconds, duration) / duration) * 100}%`}
-              title={`${videoTimecode(seconds)} ${note.reference.comment ?? ''}`}
-              aria-label={`Edit video note ${note.number}`}
-              onclick={() => openNote(note.reference.id, seconds)}
-            >
-              <CioClapper size={9} aria-hidden="true" />
-              {note.number}
-            </button>
-          {/each}
+              <!--
+                The tracks, without a rule between them. A caption strip, a lane
+                per track and the notes all sit on the one raised band, and the
+                clip rectangles are what the eye separates them by: a line per
+                lane would draw three borders around a surface the panel already
+                frames.
+              -->
+              <div
+                bind:this={bandArea}
+                class="relative mt-1 bg-app"
+                role="group"
+                aria-label="Playhead"
+                onpointerdown={beginScrub}
+                onpointermove={moveScrub}
+                onpointerup={endScrub}
+                onpointercancel={endScrub}
+              >
+                <div class="relative h-6">
+                  {#each captions as band (band.key)}
+                    {@const geometry = videoBandGeometry(band.start, band.end, duration)}
+                    <span
+                      class="absolute top-1 h-4 overflow-hidden bg-accent/25 px-1 text-[0.5625rem] leading-4 whitespace-nowrap text-foreground"
+                      style={`left: ${geometry.left}; width: ${geometry.width};`}
+                      title={`${videoTimecode(band.start)} ${band.text}`}>{band.text}</span
+                    >
+                  {/each}
+                  {#if captions.length === 0}
+                    <span class="absolute top-1 left-2 text-[0.625rem] text-dimmed"
+                      >No captions</span
+                    >
+                  {/if}
+                </div>
+
+                {#each lanes as lane, index (lane.key)}
+                  {@const geometry = videoBandGeometry(
+                    lane.start,
+                    lane.start + lane.duration,
+                    duration
+                  )}
+                  <div class="relative" style={`height: ${LANE_HEIGHT}`}>
+                    <span
+                      class="absolute top-0.5 left-1 z-10 max-w-[45%] truncate text-[0.5625rem] text-muted"
+                      title={`${lane.source} (gain ${lane.gain})`}>{lane.label}</span
+                    >
+                    <span
+                      class="absolute top-0 bottom-0 overflow-hidden bg-accent/15"
+                      style={`left: ${geometry.left}; width: ${geometry.width};`}
+                    >
+                      {#if waveforms[lane.key]}
+                        <img
+                          src={waveforms[lane.key]}
+                          alt=""
+                          aria-hidden="true"
+                          class="h-full w-full object-fill opacity-70"
+                        />
+                      {:else}
+                        <span
+                          class="flex h-full items-center justify-center text-[0.5625rem] text-dimmed"
+                        >
+                          {index >= WAVEFORM_LANE_LIMIT
+                            ? 'lane beyond the waveform limit'
+                            : lane.key in waveforms
+                              ? 'no waveform'
+                              : 'waveform loading'}
+                        </span>
+                      {/if}
+                    </span>
+                  </div>
+                {/each}
+                {#if lanes.length === 0}
+                  <div class="flex h-8 items-center px-2 text-[0.625rem] text-dimmed">
+                    This composition declares no audio.
+                  </div>
+                {/if}
+
+                <div class="relative h-7">
+                  {#each notes as note (note.reference.id)}
+                    {@const seconds = note.reference.seconds ?? 0}
+                    <button
+                      type="button"
+                      class={noteMarkerClass(note.reference.id === editing?.id)}
+                      style={`left: ${(Math.min(seconds, duration) / duration) * 100}%`}
+                      title={`${videoTimecode(seconds)} ${note.reference.comment ?? ''}`}
+                      aria-label={`Edit video note ${note.number}`}
+                      onclick={() => openNote(note.reference.id, seconds)}
+                    >
+                      <CioClapper size={9} aria-hidden="true" />
+                      {note.number}
+                    </button>
+                  {/each}
+                </div>
+
+                <span
+                  class="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-primary"
+                  style={`left: ${playhead}`}
+                  aria-hidden="true"
+                ></span>
+              </div>
+            </div>
+          </div>
         </div>
-
-        <span
-          class="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-primary"
-          style={`left: ${playhead}`}
-          aria-hidden="true"
-        ></span>
-      </div>
-
-      <p class="mt-2 flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
-        <CioMessagePlus size={11} aria-hidden="true" />
-        {notes.length === 0
-          ? 'No comments on this composition yet.'
-          : `${notes.length} comment${notes.length === 1 ? '' : 's'} on this composition`}
-      </p>
-
-      {#if editing && anchor}
-        <!--
-          A moment is commented on the way every other annotation is: the one
-          comment bubble the app draws, anchored to the second it belongs to.
-          The bubble is a fixed-position overlay, so it takes no space in the
-          timeline and the editor below stays a timeline.
-        -->
-        <ResponseAnnotationComment
-          x={anchor.x}
-          y={anchor.y}
-          title="Comment on this moment"
-          dragHandleTitle="Move moment comment"
-          closeLabel="Close moment comment"
-          removeTitle="Remove this note and its comment"
-          initialComment={notes.find((entry) => entry.reference.id === editing?.id)?.reference
-            .comment ?? ''}
-          targetId={`video-note-comment-${threadId}-${editing.id}`}
-          scope={{ kind: 'project', projectId }}
-          onDraftChange={(comment) => draftComment(editing?.id ?? '', comment)}
-          onDone={(comment) => saveComment(editing?.id ?? '', comment)}
-          onRemove={() => removeNote(editing?.id ?? '')}
-          onClose={closeEditor}
-        />
       {/if}
+      {#if controls}{@render controls(section)}{/if}
     </div>
   {/if}
 </div>
+
+{#if editing && anchor}
+  <!--
+    A moment is commented on the way every other annotation is: the one comment
+    bubble the app draws, anchored to the second it belongs to. The bubble is a
+    fixed-position overlay, so it takes no space in the timeline and the editor
+    below stays a timeline.
+  -->
+  <ResponseAnnotationComment
+    x={anchor.x}
+    y={anchor.y}
+    title="Comment on this moment"
+    dragHandleTitle="Move moment comment"
+    closeLabel="Close moment comment"
+    removeTitle="Remove this note and its comment"
+    initialComment={notes.find((entry) => entry.reference.id === editing?.id)?.reference.comment ??
+      ''}
+    targetId={`video-note-comment-${threadId}-${editing.id}`}
+    scope={{ kind: 'project', projectId }}
+    onDraftChange={(comment) => draftComment(editing?.id ?? '', comment)}
+    onDone={(comment) => saveComment(editing?.id ?? '', comment)}
+    onRemove={() => removeNote(editing?.id ?? '')}
+    onClose={closeEditor}
+  />
+{/if}
