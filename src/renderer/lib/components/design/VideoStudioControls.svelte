@@ -6,6 +6,7 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -547,17 +548,15 @@
                   </div>
                   {#if open}
                     <div class="flex items-center gap-2 px-2 pt-0.5 pb-2">
-                      <input
-                        class="min-w-0 flex-1 cursor-pointer accent-primary"
-                        type="range"
+                      <SeekBar
+                        class="min-w-0 flex-1"
+                        value={at}
                         min={track.trim}
                         max={trackEnd(track)}
-                        step="0.05"
-                        value={at}
-                        aria-label={`Seek ${track.source}`}
+                        step={0.05}
+                        label={`Seek ${track.source}`}
                         title={`Seek ${track.source}`}
-                        oninput={(event) =>
-                          seekTrack(index, track, Number(event.currentTarget.value))}
+                        onInput={(seconds) => seekTrack(index, track, seconds)}
                       />
                       <span class="shrink-0 text-[0.625rem] text-muted tabular-nums">
                         {videoTimecode(at)}<span class="text-dimmed">

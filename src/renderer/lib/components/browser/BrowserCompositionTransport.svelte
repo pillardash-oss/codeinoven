@@ -8,14 +8,24 @@
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import CompositionFrameNote from './CompositionFrameNote.svelte'
-  import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
+  import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
+  import SeekBar from '$lib/components/ui/SeekBar.svelte'
+  import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { invoke } from '$lib/ipc.svelte'
-  import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import {
+    compositionFrameFocusState,
+    type CompositionFrameFocusRequest
+  } from '$lib/stores/composition-frame-focus.svelte'
+  import {
+    responseReferencesState,
+    type ResponseReferenceAnchor
+  } from '$lib/stores/response-references.svelte'
   import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
   import type { VideoStudioDocument } from '$shared/video/studio'
   import type {
     BrowserCompositionPlayback,
     BrowserCompositionTab,
+    BrowserInspectorRect,
     BrowserTransportCommand,
     CompositionFrameSnapshot
   } from '$shared/ipc-contract'
@@ -59,14 +69,21 @@
   let scrubbing = $state(false)
   let scrubValue = $state(0)
   /** The frame the user asked to write about, once it has been captured. */
-  let frameNote = $state<{ snapshot: CompositionFrameSnapshot; armed: boolean } | null>(null)
+  let frameNote = $state<{
+    snapshot: CompositionFrameSnapshot
+    armed: boolean
+    /** The mark the surface was opened on, when a composer jump opened it. */
+    editingId?: string | null
+    /** The marks to draw on this capture, when they were drawn on an earlier one. */
+    marks?: ResponseReferenceAnchor[]
+  } | null>(null)
   /** True while a frame is being drawn and kept, so a click cannot start two. */
   let capturing = $state(false)
   /** Why the last frame capture did not produce a picture. */
   let captureError = $state<string | null>(null)
   /** The moment note whose comment bubble is open, and where it is anchored. */
   let editing = $state<{ id: string; seconds: number } | null>(null)
-  let anchor = $state<{ x: number; y: number } | null>(null)
+  let anchor = $state<BrowserInspectorRect | null>(null)
   /** The composition's saved edits, read once per note so its descriptor can
    *  quote the caption and name the controls the moment falls inside. */
   let studio = $state<VideoStudioDocument | null>(null)
@@ -82,8 +99,6 @@
   const shown = $derived(Math.min(scrubbing ? scrubValue : time, duration))
   /** A note needs a picture and a conversation, and a composition declares both. */
   const canNote = $derived(Boolean(projectId && threadId))
-  /** How much of the track is behind the playhead, for the filled scrubber. */
-  const fill = $derived(`${(shown / duration) * 100}%`)
 
   /** One answer from the page, applied only when it carries a playhead. A null
    *  means the tab is no longer armed, which the next state report settles. */
@@ -111,6 +126,22 @@
       // The tab can be closed between the click and the command.
     }
   }
+
+  /**
+   * Take a request that names a mark to reopen.
+   *
+   * The request arrives before this surface exists, because the click that makes
+   * it also opens the board that draws this composition. Reading it here, rather
+   * than through the board's props, is what lets whichever transport mounts next
+   * act on it.
+   */
+  $effect(() => {
+    if (!projectId || !threadId) return
+    const request = compositionFrameFocusState.pending(projectId, threadId, composition.directory)
+    if (!request) return
+    compositionFrameFocusState.consume(request.token)
+    void reopenFrame(request)
+  })
 
   function togglePlay(): void {
     void send('toggle')
@@ -219,9 +250,61 @@
     }
     const id = newVideoNoteId()
     writeNote(project, thread, id, seconds, '', studio)
-    const rect = button.getBoundingClientRect()
-    anchor = { x: rect.left + rect.width / 2, y: rect.bottom }
+    anchor = button.getBoundingClientRect()
     editing = { id, seconds }
+  }
+
+  /**
+   * The marks drawn on one moment of this composition.
+   *
+   * A capture writes a new picture at a new path each time it is opened, so a
+   * mark cannot be found by its URL alone: the moment and the folder are what
+   * say which frame it was drawn on, and the layer then draws it on whichever
+   * capture of that second is in front of the reader.
+   */
+  function marksAt(seconds: number): ResponseReferenceAnchor[] {
+    if (!projectId || !threadId) return []
+    return responseReferencesState
+      .forThread(projectId, threadId)
+      .filter(
+        (entry) =>
+          entry.kind === 'image' &&
+          entry.directory === composition.directory &&
+          entry.markSeconds !== undefined &&
+          Math.abs(entry.markSeconds - seconds) <= MARK_FRAME_TOLERANCE_SECONDS
+      )
+  }
+
+  /**
+   * Reopen the frame a mark was drawn on and open that mark's comment.
+   *
+   * The composer lists a mark with an edit action, and the mark is drawn on a
+   * captured picture rather than on a part of the conversation, so the jump has
+   * to produce that picture again: the playhead stops on the mark's second, main
+   * draws and keeps it, and the surface opens with the comment already editing.
+   */
+  async function reopenFrame(request: CompositionFrameFocusRequest): Promise<void> {
+    if (!canNote || capturing) return
+    capturing = true
+    captureError = null
+    try {
+      const snapshot = await invoke('browser:captureCompositionFrame', tabId, request.seconds)
+      if (!snapshot) {
+        captureError = 'That frame could not be captured. Try again.'
+        return
+      }
+      frameNote = {
+        snapshot,
+        armed: true,
+        editingId: request.referenceId,
+        marks: marksAt(request.seconds)
+      }
+    } catch {
+      // The tab can be closed between the click and the capture.
+      captureError = 'That frame could not be captured. Try again.'
+    } finally {
+      capturing = false
+    }
   }
 
   /** Close the bubble, dropping a note the user left without a comment. */
@@ -341,21 +424,19 @@
     <CioForward size={14} />
   </button>
   <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed">{format(shown)}</span>
-  <input
-    class="composition-seek min-w-0 flex-1 cursor-pointer"
-    style="--fill:{fill}"
-    type="range"
-    min="0"
+  <SeekBar
+    class="min-w-0 flex-1"
+    value={shown}
+    min={0}
     max={duration}
     step={frameStep}
-    value={shown}
-    aria-label="Seek the composition"
+    label="Seek the composition"
     title="Seek the composition"
-    oninput={(event) => {
+    onInput={(seconds) => {
       scrubbing = true
-      scrubValue = Number(event.currentTarget.value)
+      scrubValue = seconds
     }}
-    onchange={commitScrub}
+    onCommit={() => commitScrub()}
   />
   <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed">{format(duration)}</span>
   <button
@@ -402,28 +483,39 @@
     threadId={threadId ?? ''}
     snapshot={frameNote.snapshot}
     armed={frameNote.armed}
+    editingId={frameNote.editingId ?? null}
+    marks={frameNote.marks}
+    onEditClosed={() => {
+      // The jump named one mark; once its editor is closed the request is spent,
+      // and reopening the surface from the composer must open it again.
+      if (frameNote) frameNote = { ...frameNote, editingId: null }
+    }}
     onClose={() => (frameNote = null)}
   />
 {/if}
-{#if editing && anchor && projectId && threadId}
+{#if projectId && threadId}
   <!--
-    A moment is commented on the way every other annotation is: the one comment
-    bubble the app draws, anchored to the control the user pressed. It is a fixed
-    overlay, so it takes no space in the bar and the transport stays one row.
+    The bubble a moment is commented on is the app's one comment field, and it
+    sits over the composition page: a native `WebContentsView` the compositor
+    paints above every DOM node, so a bubble drawn here would be hidden behind
+    the picture. The shared native host adopts it instead, which is the same
+    route a comment on a design element takes.
   -->
-  <ResponseAnnotationComment
-    x={anchor.x}
-    y={anchor.y}
-    title="Comment on this moment"
-    dragHandleTitle="Move moment comment"
-    closeLabel="Close moment comment"
-    removeTitle="Remove this note and its comment"
-    initialComment={momentComment}
-    targetId={`video-note-comment-${threadId}-${editing.id}`}
+  <DesignElementCommentPopover
+    hostId={`composition-moment-${tabId}`}
+    comment={editing && anchor
+      ? {
+          referenceId: editing.id,
+          anchor,
+          elementName: 'this moment',
+          comment: momentComment
+        }
+      : null}
+    targetId={`video-note-comment-${threadId}-${editing?.id ?? ''}`}
     scope={{ kind: 'project', projectId }}
-    onDraftChange={(comment) => draftComment(editing?.id ?? '', comment)}
-    onDone={(comment) => saveComment(editing?.id ?? '', comment)}
-    onRemove={() => removeNote(editing?.id ?? '')}
+    onDraftChange={(id, comment) => draftComment(id, comment)}
+    onDone={(id, comment) => saveComment(id, comment)}
+    onRemove={(id) => removeNote(id)}
     onClose={closeEditor}
   />
 {/if}
@@ -443,42 +535,3 @@
     A frame stopped playback: {error}
   </p>
 {/if}
-
-<style>
-  /* The scrubber is the same two-tone track the spoken-audio bar uses, so a
-     playhead looks the same wherever the app draws one. */
-  .composition-seek {
-    appearance: none;
-    -webkit-appearance: none;
-    height: 4px;
-    background: linear-gradient(
-      to right,
-      var(--color-primary) 0%,
-      var(--color-primary) var(--fill, 0%),
-      var(--color-border) var(--fill, 0%),
-      var(--color-border) 100%
-    );
-    outline-offset: 3px;
-  }
-  .composition-seek:focus-visible {
-    outline: 2px solid var(--color-info);
-  }
-  .composition-seek::-webkit-slider-thumb {
-    appearance: none;
-    -webkit-appearance: none;
-    height: 10px;
-    width: 10px;
-    background: var(--color-primary);
-    border: none;
-    box-shadow: 0 0 0 1px var(--color-app);
-    cursor: pointer;
-  }
-  .composition-seek::-moz-range-thumb {
-    height: 10px;
-    width: 10px;
-    background: var(--color-primary);
-    border: none;
-    box-shadow: 0 0 0 1px var(--color-app);
-    cursor: pointer;
-  }
-</style>
