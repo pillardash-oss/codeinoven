@@ -11,6 +11,7 @@
   import GitCloneModal from './GitCloneModal.svelte'
   import OvenProjectModal from './OvenProjectModal.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import { APP_NAME } from '$shared/brand'
@@ -18,7 +19,6 @@
   import { folderBaseName } from '$lib/project-location'
 
   interface Props {
-    projects: Project[]
     onProjectCreated: (project: Project) => void | Promise<void>
     onExisting?: (project: Project) => void | Promise<void>
     title?: string
@@ -33,7 +33,6 @@
   }
 
   let {
-    projects,
     onProjectCreated,
     onExisting,
     title = 'Add project',
@@ -72,7 +71,12 @@
     const folder = await invoke('dialog:pickFolder')
     if (!folder) return
 
-    const existing = projects.find((project) => project.path === folder)
+    // The main process is the authority on whether this folder is already a
+    // project. A project deleted in this session stays in the renderer's list
+    // until a refresh, and trusting that list turned re-adding the same folder
+    // into a silent no-op: the add flow reported "existing", created nothing,
+    // and the project never appeared.
+    const existing = await invoke('project:findByPath', folder).catch(() => null)
     if (existing) {
       await onExisting?.(existing)
       return
@@ -80,7 +84,11 @@
 
     const preflight = await invoke('repository:preflight', folder)
     if (preflight.status === 'git') {
-      await createLocalProject(folder, 'git')
+      try {
+        await createLocalProject(folder, 'git')
+      } catch (error) {
+        reportError(error, 'The project could not be added.')
+      }
       return
     }
 

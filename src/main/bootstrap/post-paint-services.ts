@@ -818,6 +818,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     projectManager,
     projectFilesService,
     browser: () => state.browserService,
+    designService: () => state.designService,
     vault,
     githubAuthService,
     skillUpdates: skillUpdateService,

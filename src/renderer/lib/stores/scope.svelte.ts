@@ -595,6 +595,40 @@ class ScopeState {
     this.threads.removeThread(threadId)
   }
 
+  /**
+   * Forget a project that no longer exists (deletion). The workspace drops the
+   * project from its own list, and the shared scope state is what the spotlight,
+   * the project switcher and the board read, so it has to let go of the id too:
+   * a ghost project there re-adds the folder as "already a project" and opens
+   * threads whose rows are gone.
+   */
+  removeProject(projectId: string): void {
+    this.projectRecords = this.projectRecords.filter((project) => project.id !== projectId)
+    this.projects = this.projects.filter((project) => project.id !== projectId)
+    this.boards.delete(projectId)
+    this.lastBucketByProject.delete(projectId)
+    this.threads.forgetProject(projectId)
+    if (this.sidebarContext?.projectId === projectId) {
+      this.sidebarContext = null
+      this.stashedSidebarContext = null
+      this.stashedProjectThreadId = null
+    }
+    if (this.activeProjectId !== projectId) {
+      persistScopeSnapshot({
+        activeProjectId: this.activeProjectId,
+        sidebarContext: this.sidebarContext
+      })
+      return
+    }
+    this.activeProjectId = this.projects[0]?.id ?? null
+    this.board = cloneBoard(EMPTY_BOARD)
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+    if (this.activeProjectId) void this.ensureBoardLoaded(this.activeProjectId)
+  }
+
   // ─── Managed worktree lifecycle ─────────────────────────────────────────
 
   /** Create a managed worktree for an existing scope bucket. */

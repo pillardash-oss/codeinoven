@@ -2167,7 +2167,6 @@
         mode="spotlight"
         open={newProjectSpotlightOpen}
         onClose={closeNewProjectSpotlight}
-        projects={scopeState.projectRecords}
         onProjectCreated={handleSpotlightProjectCreated}
         onExisting={handleSpotlightExistingProject}
       />

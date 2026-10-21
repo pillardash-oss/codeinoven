@@ -324,6 +324,14 @@ export class ScopeManager {
     }
   }
 
+  /**
+   * Drop a project's persisted scope board. Project deletion owns this: a board
+   * left behind keeps the deleted project id alive in every board scan.
+   */
+  forgetProject(projectId: string): void {
+    this.db.run('DELETE FROM scope_boards WHERE project_id=?', projectId)
+  }
+
   private persist(projectId: string, board: ScopeBoard): void {
     this.db.run(
       'INSERT OR REPLACE INTO scope_boards(project_id, data, updated_at) VALUES(?,?,?)',

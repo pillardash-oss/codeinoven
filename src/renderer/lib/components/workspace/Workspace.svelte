@@ -2703,7 +2703,6 @@
           id: 'new-project',
           component: ProjectCreateControl as unknown as ViewActionItem['component'],
           props: {
-            projects,
             onProjectCreated: handleProjectCreated,
             onExisting: (project: Project) => void scopeState.activateProject(project.id),
             triggerAddProject: projectCreateTrigger,
@@ -2869,7 +2868,6 @@
           id: 'new-project',
           component: ProjectCreateControl as unknown as ViewActionItem['component'],
           props: {
-            projects,
             onProjectCreated: handleProjectCreated,
             onExisting: handleExistingProject,
             triggerAddProject: projectCreateTrigger,
@@ -3694,6 +3692,12 @@
     projects = projects.filter((p) => p.id !== projectId)
     allThreads = allThreads.filter((t) => t.projectId !== projectId)
     projectIcons.delete(projectId)
+    // The shared scope state feeds the spotlight, the project switcher and the
+    // scope board. Leaving the deleted project there keeps offering a project
+    // and threads that no longer exist, and makes re-adding the same folder
+    // look like a duplicate.
+    scopeState.removeProject(projectId)
+    sidebar.expandedFolders.delete(projectId)
     if (selectedThread?.projectId === projectId) workspaceState.clearThread()
     // Best-effort teardown of the project's browser sessions. The project is
     // already gone backend-side, so a failure here must not roll the UI back.

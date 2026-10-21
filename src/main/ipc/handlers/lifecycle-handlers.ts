@@ -2,6 +2,7 @@ import type { EngineeringLifecycleSelectionInput } from '../../../lib/types'
 import { isOrchestrationChildThread } from '../../../lib/types'
 import {
   validateEngineeringLifecycleDecision,
+  validateEntityId,
   validateEngineeringLifecycleResumeToken,
   validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage
@@ -10,7 +11,14 @@ import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { IpcHandlerContext } from './context'
 
 export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): void {
-  const { chatEngine, storage, threadManager, engineeringLifecycleEngine, waitForThreadReady } = ctx
+  const {
+    chatEngine,
+    storage,
+    threadCreation,
+    threadManager,
+    engineeringLifecycleEngine,
+    waitForThreadReady
+  } = ctx
 
   /**
    * Attach the senior-engineer/auditor defaults the moment a thread first
@@ -54,8 +62,16 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
   }
 
   ipcMain.handle('engineeringLifecycle:get', async (_, projectId: unknown, threadId: unknown) => {
-    const ids = await waitForThreadReady(projectId, threadId)
-    return engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    // A read never fails on a thread that no longer exists. A thread whose
+    // project was deleted (or whose create never persisted) is gone, and the
+    // renderer can only render an IPC rejection as a broken view; "no
+    // lifecycle" is the honest answer for a thread that is not there.
+    await threadCreation.awaitReady(safeThreadId)
+    const thread = await threadManager.getThread(safeProjectId, safeThreadId)
+    if (!thread) return null
+    return engineeringLifecycleEngine.get(safeProjectId, safeThreadId)
   })
   ipcMain.handle(
     'engineeringLifecycle:select',

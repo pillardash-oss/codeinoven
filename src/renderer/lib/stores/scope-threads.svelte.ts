@@ -458,4 +458,15 @@ export class ScopeThreads {
     )
     this.allScopeThreads = this.allScopeThreads.filter((thread) => !removedIds.has(thread.id))
   }
+
+  /**
+   * Forget a deleted project: its threads leave memory and its hydration mark
+   * goes with them, so a project id that no longer exists can never come back
+   * through a later board read.
+   */
+  forgetProject(projectId: string): void {
+    this.fullyHydratedProjects.delete(projectId)
+    this.hydratingProjects.delete(projectId)
+    this.allScopeThreads = this.allScopeThreads.filter((thread) => thread.projectId !== projectId)
+  }
 }
