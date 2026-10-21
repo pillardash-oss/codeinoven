@@ -10,14 +10,18 @@ import {
  * The app header and every fullscreen dialog double as a draggable title bar;
  * all of them must reserve the same horizontal space for the window controls
  * so headings and buttons never sit underneath them. macOS draws its traffic
- * lights on the left, while Windows and Linux use native frames whose controls
- * do not overlap renderer content. The layout is resolved in the main process
- * at startup and handed over through the preload bridge.
+ * lights on the left. Windows overlays native caption buttons on the right,
+ * whose live dimensions come from the Window Controls Overlay CSS variables.
+ * Linux native-frame controls do not overlap renderer content. The fixed
+ * layout is handed over through the preload bridge.
  *
- * Only the left edge ever needs reserving for real controls; the mirrored right
- * inset exists for surfaces that centre their own chrome and is opt-out.
+ * Reserve whichever edge owns in-content controls; optional trailing padding
+ * preserves each header's own spacing outside the native controls.
  */
 class TrafficLightState {
+  /** Windows caption overlay dimensions are supplied by Chromium, not preload. */
+  readonly usesCaptionOverlay: boolean
+
   /** Horizontal padding to reserve for the window controls, in px. */
   offset = $state(0)
   /** Which edge the controls sit on; null when none are present. */
@@ -31,6 +35,7 @@ class TrafficLightState {
     const bridge = (typeof window !== 'undefined' ? window : null) as {
       api?: { windowInfo?: { platform?: string; trafficLight?: TrafficLightInfo } }
     } | null
+    this.usesCaptionOverlay = bridge?.api?.windowInfo?.platform === 'win32'
     const info = bridge?.api?.windowInfo?.trafficLight ?? null
     const hasDesktopBridge = bridge?.api?.windowInfo !== undefined
     const onMac = bridge?.api?.windowInfo?.platform === 'darwin'
@@ -64,11 +69,21 @@ export interface TrafficLightInsetOptions {
    * overwritten here on macOS only.
    */
   mirrorRightInset?: boolean
+  /** Minimum right gutter when reserving the Windows caption overlay. */
+  rightPadding?: string
+  /** Only reserve controls on this edge, for an edge-aligned panel. */
+  controlSide?: Exclude<TrafficLightSide, null>
 }
 
 /** CSS padding that reserves the traffic-light inset on the correct edge. */
 export function trafficLightInsetStyle(options: TrafficLightInsetOptions = {}): string {
+  if (trafficLightState.usesCaptionOverlay) {
+    if (options.controlSide === 'left') return ''
+    const gutter = options.rightPadding ?? '1.25rem'
+    return `padding-right: max(${gutter}, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)))`
+  }
   if (!trafficLightState.present || trafficLightState.side === null) return ''
+  if (options.controlSide && options.controlSide !== trafficLightState.side) return ''
   if (trafficLightState.side !== 'left') {
     return `padding-right: ${trafficLightState.offset}px`
   }
