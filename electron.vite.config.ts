@@ -206,7 +206,14 @@ const __dirname = import.meta.dirname;
 const require = __cioCreateRequire(import.meta.url);`
 
 export function rendererPlugins(): PluginOption[] {
-  return [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()]
+  // Each factory returns its own plugin array, so spread them into one flat
+  // list. The assertion is exact rather than a widening: these are plugins, and
+  // Vite's recursive PluginOption (a Thenable union that nests itself) pushes
+  // TypeScript's structural comparison past its stack depth on the newer types.
+  return [
+    ...svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
+    ...tailwindcss()
+  ] as PluginOption[]
 }
 
 export default defineConfig(({ mode }) => {
