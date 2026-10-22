@@ -1,5 +1,6 @@
 import {
   TRAFFIC_LIGHT_OFFSET,
+  hasCaptionOverlay,
   type TrafficLightInfo,
   type TrafficLightSide
 } from '$shared/traffic-light'
@@ -10,16 +11,15 @@ import {
  * The app header and every fullscreen dialog double as a draggable title bar;
  * all of them must reserve the same horizontal space for the window controls
  * so headings and buttons never sit underneath them. macOS draws its traffic
- * lights on the left. Windows overlays native caption buttons on the right,
- * whose live dimensions come from the Window Controls Overlay CSS variables.
- * Linux native-frame controls do not overlap renderer content. The fixed
- * layout is handed over through the preload bridge.
+ * lights on the left. Windows and Linux both overlay native caption buttons on
+ * the right, whose live dimensions come from the Window Controls Overlay CSS
+ * variables. The fixed layout is handed over through the preload bridge.
  *
  * Reserve whichever edge owns in-content controls; optional trailing padding
  * preserves each header's own spacing outside the native controls.
  */
 class TrafficLightState {
-  /** Windows caption overlay dimensions are supplied by Chromium, not preload. */
+  /** Caption overlay dimensions are supplied by Chromium, not preload. */
   readonly usesCaptionOverlay: boolean
 
   /** Horizontal padding to reserve for the window controls, in px. */
@@ -35,7 +35,7 @@ class TrafficLightState {
     const bridge = (typeof window !== 'undefined' ? window : null) as {
       api?: { windowInfo?: { platform?: string; trafficLight?: TrafficLightInfo } }
     } | null
-    this.usesCaptionOverlay = bridge?.api?.windowInfo?.platform === 'win32'
+    this.usesCaptionOverlay = hasCaptionOverlay(bridge?.api?.windowInfo?.platform)
     const info = bridge?.api?.windowInfo?.trafficLight ?? null
     const hasDesktopBridge = bridge?.api?.windowInfo !== undefined
     const onMac = bridge?.api?.windowInfo?.platform === 'darwin'
