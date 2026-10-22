@@ -23,9 +23,10 @@
  *
  * Usage (from the repository root):
  *   bun run msix:check                     validate without building
- *   bun run msix:build                     validate, then build the package
+ *   bun run msix:build                     validate, build, then verify what was built
  *   bun scripts/msix.ts --out dist --arch x64
  *   bun scripts/msix.ts --prepackaged dist/win-unpacked   package an app dir CI already built
+ *   bun scripts/msix.ts --verify-only dist/codeinoven-1.5.65-x64.msix   inspect an existing package
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -182,24 +183,66 @@ export function checkPublisher(value: string): Check {
 }
 
 /**
+ * Offset added to the app's major version to form the Store package version.
+ *
+ * A constant offset, rather than substituting 1 for a pre-1.0 major, is what
+ * keeps the mapping increasing across the 1.0 boundary; see `toPackageVersion`.
+ */
+const STORE_MAJOR_OFFSET = 1
+
+/**
  * Turn the app's own version into the four-part numeric `Identity/Version`.
  *
- * The fourth part is reserved for the Store and must be 0 in the package we
- * build, so it is always 0 here.
+ * The Store reserves the fourth section for itself and requires it to be 0 in
+ * the package we build, and it does not allow the first section to be 0 either:
+ * "the other sections must be set to an integer between 0 and 65535 (except for
+ * the first section, which cannot be 0)"
+ * (learn.microsoft.com/windows/apps/publish/publish-your-app/msix/app-package-requirements).
+ * Our app is pre-1.0, so its own version cannot be used verbatim: `0.5.65`
+ * would become `0.5.65.0` and be rejected.
+ *
+ * So the major section is the app's major plus one: `0.5.65` publishes as
+ * `1.5.65.0` and `1.0.0` publishes as `2.0.0.0`. Adding a constant, instead of
+ * mapping a 0 major to 1 and leaving the rest alone, is deliberate. The Store
+ * hands each device the highest applicable version, so a mapping that dropped
+ * at 1.0 (from `1.5.x` back to `1.0.x`) would stop updating everyone who
+ * installed the app before 1.0.
  */
 export function toPackageVersion(appVersion: string): string {
-  const parts = appVersion.split('.')
-  const numbers = parts.map((part) => Number.parseInt(part, 10))
+  // Prerelease and build metadata are not part of a package version.
+  const [numeric = ''] = appVersion.split(/[-+]/)
+  const parts = numeric.split('.').slice(0, 3)
+  const numbers = parts.map((part) => (/^\d+$/.test(part) ? Number.parseInt(part, 10) : Number.NaN))
   if (numbers.length === 0 || numbers.some((value) => Number.isNaN(value))) {
     fail(`Cannot read a numeric package version from the app version \`${appVersion}\``)
   }
   while (numbers.length < 3) numbers.push(0)
-  for (const value of numbers) {
-    if (value < 0 || value > 65535) {
-      fail(`Package version component ${value} is outside the Store's allowed range of 0 to 65535`)
+  const [appMajor = 0, minor = 0, patch = 0] = numbers
+  const major = appMajor + STORE_MAJOR_OFFSET
+  for (const [label, value] of [
+    ['major', major],
+    ['minor', minor],
+    ['patch', patch]
+  ] as const) {
+    if (value > 65535) {
+      fail(
+        `Package version ${label} ${value} is outside the Store's allowed range of 0 to 65535 ` +
+          `(derived from the app version \`${appVersion}\`)`
+      )
     }
   }
-  return `${numbers[0]}.${numbers[1]}.${numbers[2]}.0`
+  return `${major}.${minor}.${patch}.0`
+}
+
+/**
+ * The manifest version without the Store-reserved fourth section.
+ *
+ * electron-builder takes `version` from package metadata and appends the
+ * fourth section itself, and it validates metadata versions as semver, which
+ * `1.5.65.0` is not. So the package version is injected in this form.
+ */
+function toMetadataVersion(packageVersion: string): string {
+  return packageVersion.split('.').slice(0, 3).join('.')
 }
 
 function parseFlags(argv: string[]): Map<string, string> {
@@ -227,6 +270,124 @@ function requireAssets(): void {
         'Regenerate them with `bun scripts/build-app-icons.ts`.'
     )
   }
+}
+
+/**
+ * Run a command and return its standard output.
+ *
+ * An MSIX is a zip container, so the package is read with whatever archive tool
+ * the host has rather than with a library: `unzip` on macOS and Linux, and
+ * `tar` (bsdtar, which reads zip) on Windows, where `unzip` is not installed on
+ * a default runner.
+ */
+function capture(command: string, args: string[]): string {
+  const result = spawnSync(command, args, { encoding: 'utf8' })
+  if (result.status !== 0) {
+    fail(
+      `\`${command} ${args.join(' ')}\` failed with status ${result.status ?? 'unknown'}: ` +
+        `${(result.stderr ?? '').trim()}`
+    )
+  }
+  return result.stdout
+}
+
+/** The manifest file's contents, read straight out of the package. */
+function readPackageManifest(msixPath: string): string {
+  return process.platform === 'win32'
+    ? capture('tar', ['-xOf', msixPath, 'AppxManifest.xml'])
+    : capture('unzip', ['-p', msixPath, 'AppxManifest.xml'])
+}
+
+/** Every entry name inside the package, with `/` separators. */
+function readPackageEntries(msixPath: string): string[] {
+  const listing =
+    process.platform === 'win32'
+      ? capture('tar', ['-tf', msixPath])
+      : capture('unzip', ['-Z1', msixPath])
+  return listing
+    .split('\n')
+    .map((line) => line.trim().replace(/\\/g, '/'))
+    .filter((line) => line.length > 0)
+}
+
+/** One attribute of the manifest's `<Identity>` element. */
+function readIdentityAttribute(manifest: string, attribute: string): string {
+  const element = /<Identity\b[^>]*>/.exec(manifest)?.[0]
+  if (element === undefined) fail('The package manifest has no <Identity> element')
+  const value = new RegExp(`\\b${attribute}\\s*=\\s*("|')(.*?)\\1`).exec(element)?.[2]
+  if (value === undefined || value.length === 0) {
+    fail(`The package manifest's <Identity> element has no \`${attribute}\` attribute`)
+  }
+  return value
+}
+
+/**
+ * Inspect a built package and assert the things certification checks first.
+ *
+ * The appx target only runs on Windows and shells out to `makeappx.exe`, so the
+ * first build of every change happens in CI; this reads the artifact back from
+ * the outside instead of trusting that the manifest came out right. It asserts
+ * the identity the Store matches byte for byte, the version rules the Store
+ * enforces, and that the executable and tile assets the manifest names are
+ * actually in the package.
+ */
+function verifyPackage(
+  msixPath: string,
+  identity: AppxIdentity,
+  packageVersion: string,
+  arch: string
+): void {
+  if (!existsSync(msixPath)) fail(`No package at ${msixPath}`)
+  const manifest = readPackageManifest(msixPath)
+  const entries = readPackageEntries(msixPath)
+
+  const checks: ReadonlyArray<readonly [string, string, string]> = [
+    ['Identity Name', readIdentityAttribute(manifest, 'Name'), identity.identityName],
+    ['Identity Publisher', readIdentityAttribute(manifest, 'Publisher'), identity.publisher],
+    ['Identity Version', readIdentityAttribute(manifest, 'Version'), packageVersion],
+    [
+      'Identity ProcessorArchitecture',
+      readIdentityAttribute(manifest, 'ProcessorArchitecture'),
+      arch
+    ]
+  ]
+  for (const [label, actual, expected] of checks) {
+    if (actual !== expected) {
+      fail(`${label} is \`${actual}\` in the package but \`${expected}\` is expected`)
+    }
+    write(`  ${label} = ${actual}`)
+  }
+
+  const executable = /<Application\b[^>]*\bExecutable\s*=\s*("|')(.*?)\1/.exec(manifest)?.[2]
+  if (executable === undefined) fail('The package manifest has no <Application> executable')
+  const required = [
+    executable.replace(/\\/g, '/'),
+    ...REQUIRED_ASSETS.map((name) => `assets/${name}`)
+  ]
+  const present = new Set(entries.map((entry) => entry.toLowerCase()))
+  const missing = required.filter((entry) => !present.has(entry.toLowerCase()))
+  if (missing.length > 0) {
+    fail(`The package manifest names files that are not in the package: ${missing.join(', ')}`)
+  }
+  write(`  executable = ${executable} (present)`)
+  write(`  tile assets = ${REQUIRED_ASSETS.length} present`)
+  write(`  files = ${entries.length}`)
+  write(`Package verified: ${msixPath}`)
+}
+
+/** The package this run would have produced, for verification. */
+function expectedArtifactPath(outDir: string, packageVersion: string, arch: string): string {
+  return join(outDir, `${APP_SLUG}-${toMetadataVersion(packageVersion)}-${arch}.msix`)
+}
+
+function writePackageVerification(
+  msixPath: string,
+  identity: AppxIdentity,
+  packageVersion: string,
+  arch: string
+): void {
+  write(`\nVerifying ${msixPath}`)
+  verifyPackage(msixPath, identity, packageVersion, arch)
 }
 
 function main(): void {
@@ -258,16 +419,12 @@ function main(): void {
   write(`displayName       = ${identity.displayName}`)
   write(`languages         = ${identity.languages.join(', ')}`)
 
-  if (packageVersion.startsWith('0.')) {
-    // The Store reserves the fourth section of the version for itself and
-    // requires the first section not to be 0, so a pre-1.0 app cannot use its
-    // own version verbatim. The build is allowed to continue because the
-    // package is still worth producing, but this has to be seen.
-    write(
-      '::warning title=MSIX version::Package version starts with 0, and the Microsoft Store does not ' +
-        'allow the first version section to be 0. If certification rejects this package, the Store ' +
-        'version has to be supplied explicitly through `appx.customManifestPath`.'
-    )
+  const verifyOnly = flags.get('verify-only')
+  if (verifyOnly !== undefined) {
+    const target =
+      verifyOnly === 'true' ? expectedArtifactPath(outDir, packageVersion, arch) : verifyOnly
+    writePackageVerification(target, identity, packageVersion, arch)
+    return
   }
 
   if (checkOnly) {
@@ -288,6 +445,11 @@ function main(): void {
       // wanted, and forcing one would fail the build.
       '-c.forceCodeSigning=false',
       '-c.directories.output=' + outDir,
+      // The Store's version rules are not the app's version rules while the app
+      // is pre-1.0 (see `toPackageVersion`), so the package version is injected
+      // as metadata for this build only. The app's own package.json keeps the
+      // real version; a prepackaged run rewrites nothing on disk.
+      `-c.extraMetadata.version=${toMetadataVersion(packageVersion)}`,
       // CI builds the MSIX from the app directory the ordinary Windows package
       // step already produced. electron-builder skips packaging entirely for a
       // prepackaged run, so the launcher, the fuses and the extra resources are
@@ -300,7 +462,16 @@ function main(): void {
     fail(`electron-builder exited with status ${result.status ?? 'unknown'}`)
   }
 
-  write(`\n${APP_NAME} MSIX: look for ${APP_SLUG}-${appVersion}-${arch}.msix in ${outDir}`)
+  write(`\n${APP_NAME} MSIX: ${expectedArtifactPath(outDir, packageVersion, arch)}`)
+
+  if (flags.get('no-verify') === undefined) {
+    writePackageVerification(
+      expectedArtifactPath(outDir, packageVersion, arch),
+      identity,
+      packageVersion,
+      arch
+    )
+  }
 }
 
 if (import.meta.main) {

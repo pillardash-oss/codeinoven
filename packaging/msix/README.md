@@ -41,20 +41,46 @@ certification rejects the package.
 ## Building
 
 ```sh
-bun run msix:check     # validate the identity, build nothing
-bun run msix:build     # validate, then build dist/codeinoven-<version>-x64.msix
+bun run msix:check     # validate the identity and print the package version
+bun run msix:build     # validate, build dist/codeinoven-<package-version>-x64.msix, then verify it
 ```
+
+Every build is verified before it is reported as built. An MSIX is a zip
+container, so `scripts/msix.ts` reads `AppxManifest.xml` straight out of the
+package it just produced and asserts the identity the Store matches byte for
+byte, the version rules below, and that the executable and the tile assets the
+manifest names are actually inside the package. That check is not ceremony: the
+appx target is the one build step that cannot run on a developer machine, so
+the manifest is the part most likely to be wrong, and reading the artifact back
+is the only way to see it. `bun scripts/msix.ts --verify-only <file.msix>`
+re-runs the same check on a package built elsewhere, including one downloaded
+from CI.
 
 The build only runs on Windows: the appx target shells out to `makeappx.exe` and
 `makepri.exe`. Both come from the Windows SDK, and electron-builder fetches a
 Windows Kits bundle for them when no local SDK is pointed at by
 `ELECTRON_BUILDER_WINDOWS_KITS_PATH`.
 
-In CI the package is built on the Windows leg of a stable release, opt-in through
-the repository variable `CODEINOVEN_MSIX_BUILD` (`true` to enable; unset is off).
-It is built with `--prepackaged dist/win-unpacked`, so the native launcher, the
-fuses and the extra resources are not built a second time. The result is uploaded
-as the `codeinoven-msix` workflow artifact.
+## Where the package is built
+
+Two paths produce it, both on Windows:
+
+- **On demand**, for a submission: run the **Microsoft Store package** workflow
+  (`.github/workflows/msix.yml`) from the Actions tab, or
+  `gh workflow run msix.yml`. It builds the Windows app unsigned, builds and
+  verifies the MSIX, and uploads it as the `codeinoven-msix` artifact. This is
+  the path to use for a first submission and for every re-submission after a
+  certification failure, because it needs no public release.
+- **On a stable release**: the Windows leg of the release workflow builds the
+  same package when the repository variable `CODEINOVEN_MSIX_BUILD` is `true`,
+  from the app directory the ordinary packaging step already produced
+  (`--prepackaged dist/win-unpacked`), so the native launcher, the fuses and the
+  extra resources are not built a second time. That is how a release and its
+  Store package stay the same code.
+
+Neither path signs anything: the Store re-signs the package with a Microsoft
+certificate during certification, so the Authenticode certificate the NSIS
+installer needs is irrelevant here (see `.cio/work/windows-signing/SIGNING-RUNBOOK.md`).
 
 The MSIX is deliberately **not** attached to the GitHub release and **not**
 mirrored to `dl.codeinoven.com`. It is a Store submission rather than a
@@ -64,16 +90,29 @@ mirror's verification path.
 ## Version numbering
 
 The manifest carries a four-part numeric version. The Store reserves the fourth
-part and requires it to be 0 in the package you build, so `scripts/msix.ts`
-derives `major.minor.patch.0` from `package.json`.
+part and requires it to be 0 in the package we build, and it does not allow the
+first part to be 0 either: "the other sections must be set to an integer between
+0 and 65535 (except for the first section, which cannot be 0)"
+([app package requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements)).
 
-One rule does not fit a pre-1.0 app. Microsoft requires the other sections to be
-"an integer between 0 and 65535 (except for the first section, which cannot be
-0)". At version `0.5.61` that produces `0.5.61.0`, whose first section is 0, so
-the build prints a warning. If Partner Center rejects the package, the Store
-version has to be supplied explicitly, which means overriding
-`appx.customManifestPath` with our own manifest instead of using
-electron-builder's template.
+This app is pre-1.0, so its own version cannot be used verbatim: `0.5.65` would
+become `0.5.65.0` and be rejected. `scripts/msix.ts` therefore maps the app
+version by adding one to the major part, and injects the result as
+`-c.extraMetadata.version` for this build only, so `package.json` keeps the real
+version:
+
+| App version (`package.json`) | Store package version |
+| ---------------------------- | --------------------- |
+| `0.5.65`                     | `1.5.65.0`            |
+| `0.6.0`                      | `1.6.0.0`             |
+| `1.0.0`                      | `2.0.0.0`             |
+
+The constant offset is deliberate. The Store hands each device the highest
+applicable version, so a mapping that mapped a 0 major to 1 and left the rest
+alone would drop from `1.5.x` to `1.0.x` at the 1.0 release and stop updating
+everyone who installed the app before 1.0. With the offset, a higher app version
+is always a higher package version, and no submission ever has to be renumbered
+by hand.
 
 ## Runtime behaviour under package identity
 
@@ -116,16 +155,40 @@ and the launcher continues without it.
 ## Submitting
 
 1. Reserve the app name in Partner Center and paste the two identity values into
-   `electron-builder.yml`.
-2. Set the repository variable `CODEINOVEN_MSIX_BUILD` to `true`.
-3. Cut a stable release. Download the `codeinoven-msix` artifact from the
-   workflow run.
-4. Start a new submission in Partner Center, upload the `.msix`, and complete the
-   restricted-capability justification, the age rating, the pricing and
-   availability and the Store listing.
-5. Submit for certification. Partner Center re-validates the package and re-signs
-   it with a Microsoft certificate.
+   `electron-builder.yml`. `bun run msix:check` prints the package version the
+   build will carry, and fails while either value is still a placeholder.
+2. Build the package: `gh workflow run msix.yml`, or set the repository variable
+   `CODEINOVEN_MSIX_BUILD` to `true` and cut a stable release. Download the
+   `codeinoven-msix` artifact, and run `bun scripts/msix.ts --verify-only` on it
+   if it was built somewhere other than this machine.
+3. Start a new submission in Partner Center, upload the `.msix`, and fill the
+   remaining sections from `packaging/msix/store-listing.md`, which is the
+   field-by-field sheet: category, pricing, description, features, keywords,
+   support and legal URLs, age rating answers and the `runFullTrust`
+   justification. The screenshots are in `packaging/msix/store-assets/`.
+4. Publish `packaging/msix/privacy-policy.md` at the URL the submission declares
+   and set that URL in `store-listing.md` first. A submission cannot pass
+   certification with a privacy policy URL that does not resolve.
+5. Submit for certification. Partner Center re-validates the package and
+   re-signs it with a Microsoft certificate.
 
 If Partner Center insists on a `.msixupload` rather than a `.msix`, note that
 `MakeAppx.exe` cannot produce one; it is a zip container that Visual Studio
 normally writes. Report it here and that packaging step gets added.
+
+## Store listing assets
+
+The package's own tiles are in `build/appx` and are rendered by
+`scripts/build-app-icons.ts`. The listing screenshots are separate and live in
+`packaging/msix/store-assets/`:
+
+| File                         | Shows                                              |
+| ---------------------------- | -------------------------------------------------- |
+| `screenshot-1-workspace.png` | the thread list, the composer and a project canvas |
+
+Each is 1920x1080, which is the size the Store asks for. They are frames of this
+app running as a desktop build, cropped from the launch-video assets in the
+website repository to remove the macOS window chrome and letterboxing, so they
+show the application rather than the host OS. Recapture them for the platform
+being submitted if Windows-specific chrome matters, and add up to ten: the Store
+requires at least one and the listing is stronger with three or four.
