@@ -596,11 +596,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
     unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
   })
-  await state.searchService.initialize()
-  state.unregisterSearchIpc = registerSearchSettingsIpc(
-    state.searchService,
-    () => state.mainWindow?.webContents ?? null
-  )
+  // A runtime that will not start disables semantic search and nothing else:
+  // this used to abort the whole feature boot, which left every feature channel
+  // registered only because readiness was announced too early to notice. It is
+  // an optional engine, so it degrades like speech does.
+  try {
+    await state.searchService.initialize()
+    state.unregisterSearchIpc = registerSearchSettingsIpc(
+      state.searchService,
+      () => state.mainWindow?.webContents ?? null
+    )
+  } catch (error) {
+    Logger.error('Semantic search unavailable; intent ranking stays disabled', error)
+  }
   state.prototypePreviewService = new PrototypePreviewService()
   try {
     const startupConfig = await storage.getConfig()
@@ -1043,7 +1051,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     context.onFeaturesReady()
     state.resolveFeaturesReady?.()
     state.resolveFeaturesReady = null
-    state.rejectFeaturesReady = null
     if (
       state.mainWindow &&
       !state.mainWindow.isDestroyed() &&

@@ -205,12 +205,27 @@ ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
 })
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */
-const featuresReadyPromise = new Promise<void>((resolve, reject) => {
+const featuresReadyPromise = new Promise<void>((resolve) => {
   state.resolveFeaturesReady = resolve
-  state.rejectFeaturesReady = reject
 })
-// A startup failure may precede the first renderer waiter.
-void featuresReadyPromise.catch(() => undefined)
+
+/**
+ * Release a renderer waiting on the feature graph after a boot that died before
+ * it could announce readiness.
+ *
+ * Leaving the promise pending is what made a failed boot look like an app that
+ * never finished loading, with nothing to read anywhere. Releasing it is honest
+ * in the other direction too: the window, the database and every hydration
+ * channel are already alive, so the app stays usable and each channel that never
+ * registered reports its own precise failure. The startup smoke gate stays
+ * unfulfilled, so this can never pass a release check as a healthy launch.
+ */
+function releaseFeaturesAfterBootFailure(): void {
+  if (state.featuresReady) return
+  state.featuresReady = true
+  state.resolveFeaturesReady?.()
+  state.resolveFeaturesReady = null
+}
 
 /**
  * A packaged smoke pass proves more than script execution: the document must
@@ -220,6 +235,9 @@ void featuresReadyPromise.catch(() => undefined)
  */
 function markWorkspaceReadyIfInteractive(): void {
   if (!state.rendererReadyReported || !state.featuresReady) return
+  // A degraded boot released the renderer but never completed the feature
+  // graph, so it must not satisfy the packaged smoke gate.
+  if (state.startupServicesFailed) return
   startupTelemetry.mark('workspace:ready')
   // The app is interactive: boot the embedding model behind the settled
   // workspace so the first Cmd+K thread search ranks semantically instead of
@@ -958,13 +976,7 @@ void app
       // window is opened, from the menu bar or a notification click.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
-        if (!state.featuresReady) {
-          state.rejectFeaturesReady?.(
-            new Error('Application services failed to initialize', { cause: error })
-          )
-          state.rejectFeaturesReady = null
-          state.resolveFeaturesReady = null
-        }
+        releaseFeaturesAfterBootFailure()
         Logger.error('Headless service boot failed; background work is degraded', error)
       })
       app.on('activate', () => {
@@ -998,13 +1010,7 @@ void app
       // the whole app on the user's behalf.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
-        if (!state.featuresReady) {
-          state.rejectFeaturesReady?.(
-            new Error('Application services failed to initialize', { cause: error })
-          )
-          state.rejectFeaturesReady = null
-          state.resolveFeaturesReady = null
-        }
+        releaseFeaturesAfterBootFailure()
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }

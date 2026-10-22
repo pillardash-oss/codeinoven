@@ -82,15 +82,15 @@ let featureReadyPromise: Promise<void> | null = null
  * The post-paint feature graph, resolved once and cached for the process
  * lifetime.
  *
- * A service boot that fails before it registers the feature channels rejects
- * this promise instead of leaving it pending forever. That rejection is what
- * turns a permanent "still loading" surface into a reported failure: the first
- * caller records why, and the app keeps every surface the pre-navigation
- * hydration channels already answer.
+ * A boot that dies before the graph exists releases this wait instead of leaving
+ * it pending forever, so this promise is what keeps every feature channel on one
+ * gate: the app either has the graph or is running degraded, never stuck on a
+ * spinner that nothing explains. A rejected wait means the channel itself is
+ * unavailable, and that is recorded once here.
  */
 export function waitForFeatures(): Promise<void> {
   featureReadyPromise ??= window.api.invoke('app:waitForFeatures').catch((error: unknown) => {
-    logRendererError('Application features failed to start', error)
+    logRendererError('Feature readiness could not be read', error)
     throw error
   })
   return featureReadyPromise
