@@ -38,7 +38,7 @@ export class UsageAnalytics {
   private nextActivityCheck = 0
   private nextFlush = 0
   private failures = 0
-  private timer: ReturnType<typeof setInterval> | null = null
+  private timer: ReturnType<typeof setTimeout> | null = null
   private request: AbortController | null = null
   private work: Promise<void> = Promise.resolve()
 
@@ -51,14 +51,12 @@ export class UsageAnalytics {
       typeof __CODEINOVEN_POSTHOG_TOKEN__ === 'string' &&
       __CODEINOVEN_POSTHOG_TOKEN__.length > 0
     if (!this.available) return
+    this.stopping = false
     this.schedule(async () => {
       const config = await storage.getConfig()
       this.enabled = config.shareAnonymousUsage === true
+      if (this.enabled) await this.withState((state) => this.flush(state))
     })
-    this.timer = setInterval(() => {
-      if (this.enabled) this.schedule(() => this.withState((state) => this.flush(state)))
-    }, RETRY_MS)
-    this.timer.unref()
   }
 
   async setConsent(consent: boolean): Promise<void> {
@@ -66,7 +64,10 @@ export class UsageAnalytics {
     if (!this.available) return
     this.enabled = consent
     this.nextActivityCheck = 0
-    if (!consent) this.request?.abort()
+    if (!consent) {
+      this.request?.abort()
+      this.armRetry(false)
+    }
     const pending = this.schedule(() =>
       this.withState(async (state) => {
         if (!this.enabled) state.queue = []
@@ -102,7 +103,7 @@ export class UsageAnalytics {
 
   stop(): void {
     this.stopping = true
-    if (this.timer) clearInterval(this.timer)
+    this.armRetry(false)
     this.request?.abort()
     // Queue writes are atomic; shutdown never waits for a network request.
   }
@@ -145,6 +146,7 @@ export class UsageAnalytics {
       // out after five seconds, well below this stale-lock threshold.
       const info = await stat(lock)
       if (Date.now() - info.mtimeMs > 30_000) await rm(lock, { recursive: true, force: true })
+      this.armRetry(true)
       return
     }
     try {
@@ -171,9 +173,24 @@ export class UsageAnalytics {
       if (!this.enabled) state.queue = []
       await operation(state)
       await this.storage.write(STATE_PATH, state)
+      this.armRetry(state.queue.length > 0)
     } finally {
       await rm(lock, { recursive: true, force: true })
     }
+  }
+
+  private armRetry(pending: boolean): void {
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+    if (!pending || !this.enabled || this.stopping) return
+    this.timer = setTimeout(
+      () => {
+        this.timer = null
+        this.schedule(() => this.withState((state) => this.flush(state)))
+      },
+      Math.max(RETRY_MS, this.nextFlush - Date.now())
+    )
+    this.timer.unref()
   }
 
   private deferRetry(): void {

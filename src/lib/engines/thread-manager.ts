@@ -377,7 +377,9 @@ export class ThreadManager {
       if (!project) {
         throw new Error(`Project not found: ${input.projectId}`)
       }
-      const scopedBuckets = scopedBucketIdsFromBoard(this.scopeManager.getBoard(input.projectId))
+      const scopedBuckets = scopedBucketIdsFromBoard(
+        await this.scopeManager.getBoardSnapshot(input.projectId)
+      )
       // The new thread lands in its own bucket: either its pinned-like scope's
       // bucket or the shared regular bucket. Capacity is enforced per bucket,
       // so eviction only ever displaces threads from the same bucket.

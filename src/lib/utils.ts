@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import { lstatSync, realpathSync, existsSync } from 'fs'
-import { writeFile, rename, mkdir, readFile, readdir, rm, open } from 'fs/promises'
+import { writeFile, rename, mkdir, readFile, readdir, rm, open, access } from 'fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'path'
 import { randomBytes } from 'crypto'
 import { APP_SLUG, ORG_SLUG } from './brand'
@@ -196,6 +196,16 @@ export async function writeJson(filePath: string, data: unknown): Promise<void> 
 /** Ensure a directory exists (recursive) */
 export async function ensureDir(dirPath: string): Promise<void> {
   await mkdir(dirPath, { recursive: true })
+}
+
+/** Async equivalent of existsSync for interactive filesystem probes. */
+export async function pathIsAccessible(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** List directory entries, returning empty array if dir doesn't exist */

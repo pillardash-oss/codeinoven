@@ -1,7 +1,7 @@
 import { subscribeArchiveChanges } from '../database/archive-events'
 import { unarchivedThreadSql } from '../../lib/archives'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Database } from '../database/database'
 import type {
@@ -9,8 +9,10 @@ import type {
   ThreadEmbeddingRecord,
   ThreadEmbeddingWindow
 } from '../../lib/search/types'
-import { cosineSimilarity, decodeThreadIndex, encodeThreadIndex } from '../../lib/search/vector'
+import { encodeThreadIndex } from '../../lib/search/vector'
 import { Logger } from '../system/logger'
+import { backgroundIo } from '../system/background-io'
+import { embeddingBatches } from './thread-index-work'
 import { paceIndexing } from './indexing-pacing'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/types/project'
 import {
@@ -24,8 +26,6 @@ import {
 const INDEX_BATCH_SIZE = 1
 /** Page metadata without loading conversations or blocking the main process. */
 const CATALOG_PAGE_SIZE = 256
-/** Cosine floor below which a semantic hit is treated as noise. */
-const MIN_INTENT_SCORE = 0.2
 /** Persist the on-disk index every this many embedded threads. */
 const PERSIST_EVERY = 8
 
@@ -87,7 +87,8 @@ export class ThreadEmbeddingIndex {
   private removalTimer: ReturnType<typeof setTimeout> | null = null
   private readonly records = new Map<string, ThreadEmbeddingRecord>()
   private lastPersistedAt = 0
-  private persistence: Promise<void> = Promise.resolve()
+  private persistence: Promise<void> | null = null
+  private persistenceDirty = false
 
   constructor(
     private readonly db: Database,
@@ -115,16 +116,21 @@ export class ThreadEmbeddingIndex {
 
   async load(): Promise<void> {
     try {
-      const buffer = await readFile(this.indexPath)
-      const decoded = decodeThreadIndex(new Uint8Array(buffer))
-      if (!decoded) {
-        Logger.dev('Thread embedding index was unreadable; it will be rebuilt.')
-        return
-      }
-      for (const record of decoded) this.records.set(record.threadId, record)
-      this.lastPersistedAt = (await stat(this.indexPath)).mtimeMs
+      let snapshot: string | undefined
+      do {
+        const page = await backgroundIo<{
+          records: ThreadEmbeddingRecord[]
+          snapshot: string | null
+          modifiedAt: number
+        }>({ kind: 'index-read', path: this.indexPath, snapshot })
+        for (const record of page.records) this.records.set(record.threadId, record)
+        this.lastPersistedAt = page.modifiedAt
+        snapshot = page.snapshot ?? undefined
+      } while (snapshot)
     } catch {
-      // No index yet, or it was removed. Nothing to restore.
+      this.records.clear()
+      this.lastPersistedAt = 0
+      // A missing, oversized or interrupted cache is rebuilt from conversations.
     }
   }
 
@@ -202,7 +208,7 @@ export class ThreadEmbeddingIndex {
   }
 
   async reset(): Promise<void> {
-    await this.persistence.catch(() => undefined)
+    await this.persistence?.catch(() => undefined)
     this.records.clear()
     for (const id of this.candidates.keys()) if (!this.parkedIds.has(id)) this.pendingIds.add(id)
     this.lastPersistedAt = 0
@@ -303,22 +309,23 @@ export class ThreadEmbeddingIndex {
   }
 
   /** Rank indexed threads by the best cosine similarity across their windows. */
-  search(queryVector: Float32Array, limit: number): IntentThreadMatch[] {
-    const matches: IntentThreadMatch[] = []
-    for (const record of this.records.values()) {
-      if (this.parkedIds.has(record.threadId)) continue
-      if (record.dimensions !== queryVector.length) continue
-      let best = 0
-      for (const window of record.windows) {
-        if (window.vector.length !== queryVector.length) continue
-        const score = cosineSimilarity(queryVector, window.vector)
-        if (score > best) best = score
-      }
-      if (best < MIN_INTENT_SCORE) continue
-      matches.push({ threadId: record.threadId, score: best })
+  async search(queryVector: Float32Array, limit: number): Promise<IntentThreadMatch[]> {
+    let matches: IntentThreadMatch[] = []
+    for (const records of embeddingBatches(this.records.values())) {
+      const visible = records.filter((record) => !this.parkedIds.has(record.threadId))
+      const ranked = await backgroundIo<IntentThreadMatch[]>({
+        kind: 'index-rank',
+        records: visible,
+        query: queryVector,
+        limit
+      })
+      matches.push(...ranked)
+      matches.sort((left, right) => right.score - left.score)
+      matches = matches.slice(0, limit)
     }
-    matches.sort((left, right) => right.score - left.score)
-    return matches.slice(0, limit)
+    return matches.filter(
+      (match) => !this.parkedIds.has(match.threadId) && this.records.has(match.threadId)
+    )
   }
 
   /**
@@ -476,17 +483,40 @@ export class ThreadEmbeddingIndex {
   }
 
   private persist(): Promise<void> {
-    this.persistence = this.persistence.catch(() => undefined).then(() => this.writeSnapshot())
+    this.persistenceDirty = true
+    this.persistence ??= (async () => {
+      try {
+        while (this.persistenceDirty) {
+          this.persistenceDirty = false
+          await this.writeSnapshot()
+        }
+      } finally {
+        this.persistence = null
+      }
+    })()
     return this.persistence
   }
 
   private async writeSnapshot(): Promise<void> {
     const records = [...this.records.values()]
-    const encoded = encodeThreadIndex(records)
+    const header = encodeThreadIndex([])
+    new DataView(header.buffer).setUint32(8, records.length, false)
     const temporary = `${this.indexPath}.${randomUUID()}.tmp`
     try {
       await mkdir(dirname(this.indexPath), { recursive: true })
-      await writeFile(temporary, encoded, { mode: 0o600 })
+      const file = await open(temporary, 'w', 0o600)
+      try {
+        await file.writeFile(header)
+        let bytes = header.length
+        for (const batch of embeddingBatches(records)) {
+          const encoded = await backgroundIo<Uint8Array>({ kind: 'index-encode', records: batch })
+          bytes += encoded.byteLength
+          if (bytes > 64 * 1024 * 1024) throw new Error('Search index cache exceeds 64 MiB')
+          await file.writeFile(encoded)
+        }
+      } finally {
+        await file.close()
+      }
       await rename(temporary, this.indexPath)
       this.lastPersistedAt = Date.now()
     } catch (error) {

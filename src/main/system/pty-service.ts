@@ -1,7 +1,8 @@
+import { pathIsAccessible } from '../../lib/utils'
 import { PtyOutputBuffer } from './pty-output-buffer'
 import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { existsSync, realpathSync, statSync } from 'fs'
+import { realpath, stat } from 'fs/promises'
 import { homedir } from 'os'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import * as pty from 'node-pty'
@@ -150,26 +151,26 @@ async function buildShellEnv(): Promise<Record<string, string>> {
  * inside `baseCwd`, so a crafted path can never spawn a shell outside the
  * project or the active scope's checkout.
  */
-function resolveStartingDirectory(baseCwd: string, directory: string): string {
+async function resolveStartingDirectory(baseCwd: string, directory: string): Promise<string> {
   if (directory.includes('\0')) {
     throw new Error('Terminal directory is invalid')
   }
   let real: string
   try {
-    real = realpathSync(resolve(baseCwd, directory))
+    real = await realpath(resolve(baseCwd, directory))
   } catch {
     throw new Error('Terminal directory is unavailable')
   }
   let isDirectory: boolean
   try {
-    isDirectory = statSync(real).isDirectory()
+    isDirectory = (await stat(real)).isDirectory()
   } catch {
     isDirectory = false
   }
   if (!isDirectory) {
     throw new Error('Terminal path is not a directory')
   }
-  const root = realpathSync(baseCwd)
+  const root = await realpath(baseCwd)
   const contained = relative(root, real)
   if (contained.startsWith('..') || isAbsolute(contained)) {
     throw new Error('Terminal directory is outside the project')
@@ -181,18 +182,18 @@ function resolveStartingDirectory(baseCwd: string, directory: string): string {
 async function resolveShell(): Promise<string> {
   if (process.platform === 'win32') {
     const bash = (await buildProcessEnvironmentAsync())['CLAUDE_CODE_GIT_BASH_PATH']
-    if (bash && existsSync(bash)) return bash
+    if (bash && (await pathIsAccessible(bash))) return bash
     const systemRoot = process.env['SystemRoot'] || 'C:\\Windows'
     const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-    if (existsSync(powershell)) return powershell
+    if (await pathIsAccessible(powershell)) return powershell
     return (
       process.env['ComSpec'] || process.env['COMSPEC'] || join(systemRoot, 'System32', 'cmd.exe')
     )
   }
   const preferred = process.env['SHELL']
-  if (preferred && existsSync(preferred)) return preferred
-  if (existsSync('/bin/zsh')) return '/bin/zsh'
-  if (existsSync('/bin/bash')) return '/bin/bash'
+  if (preferred && (await pathIsAccessible(preferred))) return preferred
+  if (await pathIsAccessible('/bin/zsh')) return '/bin/zsh'
+  if (await pathIsAccessible('/bin/bash')) return '/bin/bash'
   return '/bin/sh'
 }
 
@@ -393,10 +394,11 @@ export class PtyService {
       scopeBucketId && this.scopeRoots
         ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
         : project.path
-    if (!baseCwd || !existsSync(baseCwd)) {
+    if (!baseCwd || !(await pathIsAccessible(baseCwd))) {
       throw new Error(`Project directory is unavailable`)
     }
-    const cwd = directory === undefined ? baseCwd : resolveStartingDirectory(baseCwd, directory)
+    const cwd =
+      directory === undefined ? baseCwd : await resolveStartingDirectory(baseCwd, directory)
 
     await this.prepareWindowsShell()
     const shell = await resolveShell()
@@ -766,7 +768,7 @@ export class PtyService {
       scopeBucketId && this.scopeRoots
         ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
         : project.path
-    if (!cwd || !existsSync(cwd)) {
+    if (!cwd || !(await pathIsAccessible(cwd))) {
       throw new Error(`Project directory is unavailable`)
     }
 

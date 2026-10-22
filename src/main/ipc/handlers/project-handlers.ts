@@ -424,7 +424,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     })
     ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
     ipcMain.handle('scope:get', (_, projectId: unknown) =>
-      scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
+      scopeManager.getBoardViaWorker(validateEntityId(projectId, 'Project ID'))
     )
   }
   ipcMain.handle('scope:updateLayout', (_, projectId: unknown, orderedIds: unknown) =>

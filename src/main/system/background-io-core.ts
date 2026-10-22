@@ -46,7 +46,7 @@ async function listDirectory(
 }
 
 async function credentials(
-  request: Exclude<BackgroundIoRequest, { kind: 'list-directory' }>
+  request: Extract<BackgroundIoRequest, { kind: 'credential-read' | 'credential-delete' }>
 ): Promise<unknown> {
   const fallback = request.kind === 'credential-read' ? [] : 0
   let database: import('better-sqlite3').Database | undefined
@@ -98,7 +98,50 @@ async function credentials(
 
 /** Disposable remote Oven processes also use this implementation directly. */
 export async function backgroundIo<T>(request: BackgroundIoRequest): Promise<T> {
-  return (
-    request.kind === 'list-directory' ? await listDirectory(request) : await credentials(request)
-  ) as T
+  let result: unknown
+  switch (request.kind) {
+    case 'index-read': {
+      const { readIndexPage } = await import('../search/thread-index-work')
+      result = await readIndexPage(request.path, request.snapshot)
+      break
+    }
+    case 'index-encode': {
+      const { encodeIndexPage } = await import('../search/thread-index-work')
+      result = encodeIndexPage(request.records)
+      break
+    }
+    case 'index-rank': {
+      const { rankIndexPage } = await import('../search/thread-index-work')
+      result = rankIndexPage(request.records, request.query, request.limit)
+      break
+    }
+    case 'dangling-references': {
+      const { scanDanglingReferences } = await import('../git/git/git-service-references-core')
+      result = await scanDanglingReferences(request.root, request.deletedPaths, request.files)
+      break
+    }
+    case 'project-icon': {
+      const { ProjectIconDiscovery } = await import('../../lib/project-icon-discovery')
+      result = await new ProjectIconDiscovery().detectIcon(request.projectPath)
+      break
+    }
+    case 'prepare-icon': {
+      const { prepareIcon } = await import('../../lib/prepare-icon')
+      result = await prepareIcon(request.sourcePath)
+      break
+    }
+    case 'document': {
+      const documents = await import('../drivers/document-attachment-core')
+      result = await (request.preview
+        ? documents.readDocumentPreviewHtml(request.attachment)
+        : documents.readDocumentText(request.attachment))
+      break
+    }
+    case 'list-directory':
+      result = await listDirectory(request)
+      break
+    default:
+      result = await credentials(request)
+  }
+  return result as T
 }

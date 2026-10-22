@@ -66,8 +66,10 @@ export class OvenHarnessService {
     string,
     { checkedAt: number; result: Awaited<ReturnType<typeof latestHarnessVersion>> }
   >()
-  private autoUpdateTimer: ReturnType<typeof setInterval> | undefined
-  private autoUpdateInitial: ReturnType<typeof setTimeout> | undefined
+  private autoUpdateTimer: ReturnType<typeof setTimeout> | undefined
+  private autoUpdatesStarted = false
+  private autoUpdateRevision = 0
+  private readonly autoUpdateSubscriptions: Array<() => void> = []
   private autoUpdateRunning = false
 
   constructor(
@@ -75,23 +77,52 @@ export class OvenHarnessService {
     private readonly storage: StorageEngine
   ) {}
 
-  /** Apply the shared per-harness auto-update preferences to every remote oven. */
+  /** Arm remote updates only while an opted-in harness has a remote Oven. */
   startAutoUpdates(): void {
-    if (this.autoUpdateTimer) return
-    this.autoUpdateInitial = setTimeout(() => {
-      this.autoUpdateInitial = undefined
-      void this.runAutoUpdates()
-    }, 10_000)
-    this.autoUpdateInitial.unref?.()
-    this.autoUpdateTimer = setInterval(() => void this.runAutoUpdates(), 15 * 60_000)
-    this.autoUpdateTimer.unref?.()
+    if (this.autoUpdatesStarted) return
+    this.autoUpdatesStarted = true
+    for (const path of ['harness-auto-update.json', 'ovens/registry.json']) {
+      this.autoUpdateSubscriptions.push(
+        this.storage.onWrite(path, () => {
+          void this.refreshAutoUpdates().catch((error: unknown) =>
+            Logger.dev('Remote update scheduling failed', error)
+          )
+        })
+      )
+    }
+    void this.refreshAutoUpdates().catch((error: unknown) =>
+      Logger.dev('Remote update scheduling failed', error)
+    )
   }
 
   stopAutoUpdates(): void {
-    if (this.autoUpdateInitial) clearTimeout(this.autoUpdateInitial)
-    this.autoUpdateInitial = undefined
-    if (this.autoUpdateTimer) clearInterval(this.autoUpdateTimer)
+    this.autoUpdatesStarted = false
+    this.autoUpdateRevision += 1
+    if (this.autoUpdateTimer) clearTimeout(this.autoUpdateTimer)
     this.autoUpdateTimer = undefined
+    for (const unsubscribe of this.autoUpdateSubscriptions.splice(0)) unsubscribe()
+  }
+
+  private async refreshAutoUpdates(delay = 10_000): Promise<void> {
+    const revision = ++this.autoUpdateRevision
+    if (this.autoUpdateTimer) clearTimeout(this.autoUpdateTimer)
+    this.autoUpdateTimer = undefined
+    if (!this.autoUpdatesStarted) return
+    const preferences = await this.storage.read<Record<string, boolean>>('harness-auto-update.json')
+    if (!preferences || !Object.values(preferences).some(Boolean)) return
+    // Read just the scheduling precondition, without hydrating every icon and vault entry.
+    const registry = await this.storage.read<{ ovens?: Array<{ kind?: string }> }>(
+      'ovens/registry.json'
+    )
+    if (!registry?.ovens?.some((oven) => oven.kind === 'ssh')) return
+    if (!this.autoUpdatesStarted || revision !== this.autoUpdateRevision) return
+    this.autoUpdateTimer = setTimeout(() => {
+      this.autoUpdateTimer = undefined
+      void this.runAutoUpdates()
+        .finally(() => this.refreshAutoUpdates(15 * 60_000))
+        .catch((error: unknown) => Logger.dev('Remote update scheduling failed', error))
+    }, delay)
+    this.autoUpdateTimer.unref()
   }
 
   private async runAutoUpdates(): Promise<void> {
