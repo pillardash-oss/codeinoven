@@ -291,47 +291,147 @@ function requireAssets(): void {
 type PackageEntry = {
   name: string
   method: number
+  uncompressedSize: number
   compressedSize: number
   localHeaderOffset: number
 }
 
 const ZIP_END_OF_DIRECTORY = 0x06054b50
+const ZIP64_END_OF_DIRECTORY = 0x06064b50
+const ZIP64_LOCATOR = 0x07064b50
 const ZIP_DIRECTORY_ENTRY = 0x02014b50
 const ZIP_LOCAL_HEADER = 0x04034b50
-const ZIP_LARGEST_COMMENT = 65535
+const ZIP64_EXTRA_FIELD = 0x0001
+const ZIP_LARGEST_COMMENT = 65_535
+/** The value a 32-bit field carries when the real one lives in a ZIP64 record. */
+const ZIP_32BIT_LIMIT = 0xffff_ffff
 
+/**
+ * One file inside the package, located from its central directory record.
+ *
+ * An MSIX is a zip container, and the package is read here rather than with the
+ * host's archive tool. The first Windows run of this verification failed with
+ * `tar: This does not look like a tar archive`: `tar` on a Windows runner is
+ * Git's GNU tar, which does not read zip, and `unzip` is not installed there at
+ * all. Reading the container in-process removes the dependency on which tools a
+ * machine happens to have.
+ *
+ * This handles ZIP64, which the first real package needed: `makeappx` writes a
+ * ZIP64 end-of-directory record for a package this size, and reading the 32-bit
+ * fields alone yields offsets of 0xFFFFFFFF. Per-entry sizes and offsets are
+ * read from the ZIP64 extra field when they carry the same sentinel.
+ */
 function readPackageDirectory(bytes: Uint8Array): PackageEntry[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  let end = -1
-  const earliest = Math.max(0, bytes.length - ZIP_LARGEST_COMMENT - 22)
-  for (let offset = bytes.length - 22; offset >= earliest; offset -= 1) {
-    if (view.getUint32(offset, true) === ZIP_END_OF_DIRECTORY) {
-      end = offset
-      break
+  const end = findEndOfDirectory(view, bytes.length)
+  if (end === null) fail('The package is not a readable zip container')
+
+  let count = view.getUint16(end + 10, true)
+  let directoryOffset = view.getUint32(end + 16, true)
+  if (count === 0xffff || directoryOffset === ZIP_32BIT_LIMIT) {
+    const locator = end - 20
+    if (locator < 0 || view.getUint32(locator, true) !== ZIP64_LOCATOR) {
+      fail('The package needs a ZIP64 record and has no readable locator')
     }
+    const record = Number(view.getBigUint64(locator + 8, true))
+    if (record < 0 || record + 56 > bytes.length) {
+      fail('The package ZIP64 record is outside the file')
+    }
+    if (view.getUint32(record, true) !== ZIP64_END_OF_DIRECTORY) {
+      fail('The package ZIP64 record is unreadable')
+    }
+    count = Number(view.getBigUint64(record + 32, true))
+    directoryOffset = Number(view.getBigUint64(record + 48, true))
   }
-  if (end === -1) fail('The package is not a readable zip container')
-  const count = view.getUint16(end + 10, true)
-  const directoryOffset = view.getUint32(end + 16, true)
+
   const decoder = new TextDecoder()
   const entries: PackageEntry[] = []
   let cursor = directoryOffset
   for (let index = 0; index < count; index += 1) {
-    if (view.getUint32(cursor, true) !== ZIP_DIRECTORY_ENTRY) {
-      fail('The package central directory is unreadable')
+    if (cursor + 46 > bytes.length || view.getUint32(cursor, true) !== ZIP_DIRECTORY_ENTRY) {
+      fail(`The package central directory is unreadable at entry ${index} of ${count}`)
     }
     const nameLength = view.getUint16(cursor + 28, true)
     const extraLength = view.getUint16(cursor + 30, true)
     const commentLength = view.getUint16(cursor + 32, true)
+    const extraStart = cursor + 46 + nameLength
+    const extra = readZip64Extra(
+      view,
+      extraStart,
+      extraLength,
+      view.getUint32(cursor + 24, true),
+      view.getUint32(cursor + 20, true),
+      view.getUint32(cursor + 42, true)
+    )
     entries.push({
-      name: decoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength)),
+      name: decoder.decode(bytes.subarray(cursor + 46, extraStart)),
       method: view.getUint16(cursor + 10, true),
-      compressedSize: view.getUint32(cursor + 20, true),
-      localHeaderOffset: view.getUint32(cursor + 42, true)
+      uncompressedSize: extra.uncompressedSize,
+      compressedSize: extra.compressedSize,
+      localHeaderOffset: extra.localHeaderOffset
     })
-    cursor += 46 + nameLength + extraLength + commentLength
+    cursor = extraStart + extraLength + commentLength
   }
   return entries
+}
+
+/**
+ * The last valid end-of-directory record.
+ *
+ * A candidate has to end where the file ends, comment length included, so a
+ * stray signature inside compressed data cannot be mistaken for it.
+ */
+function findEndOfDirectory(view: DataView, length: number): number | null {
+  const earliest = Math.max(0, length - ZIP_LARGEST_COMMENT - 22)
+  for (let offset = length - 22; offset >= earliest; offset -= 1) {
+    if (view.getUint32(offset, true) !== ZIP_END_OF_DIRECTORY) continue
+    const commentLength = view.getUint16(offset + 20, true)
+    if (offset + 22 + commentLength === length) return offset
+  }
+  return null
+}
+
+/** The 32-bit sizes and offset, replaced by their ZIP64 extra-field values when set. */
+function readZip64Extra(
+  view: DataView,
+  start: number,
+  length: number,
+  uncompressedSize: number,
+  compressedSize: number,
+  localHeaderOffset: number
+): { uncompressedSize: number; compressedSize: number; localHeaderOffset: number } {
+  const result = { uncompressedSize, compressedSize, localHeaderOffset }
+  if (
+    uncompressedSize !== ZIP_32BIT_LIMIT &&
+    compressedSize !== ZIP_32BIT_LIMIT &&
+    localHeaderOffset !== ZIP_32BIT_LIMIT
+  ) {
+    return result
+  }
+  let cursor = start
+  const limit = start + length
+  while (cursor + 4 <= limit) {
+    const id = view.getUint16(cursor, true)
+    const fieldLength = view.getUint16(cursor + 2, true)
+    if (id === ZIP64_EXTRA_FIELD) {
+      let field = cursor + 4
+      const fieldEnd = field + fieldLength
+      if (uncompressedSize === ZIP_32BIT_LIMIT && field + 8 <= fieldEnd) {
+        result.uncompressedSize = Number(view.getBigUint64(field, true))
+        field += 8
+      }
+      if (compressedSize === ZIP_32BIT_LIMIT && field + 8 <= fieldEnd) {
+        result.compressedSize = Number(view.getBigUint64(field, true))
+        field += 8
+      }
+      if (localHeaderOffset === ZIP_32BIT_LIMIT && field + 8 <= fieldEnd) {
+        result.localHeaderOffset = Number(view.getBigUint64(field, true))
+      }
+      return result
+    }
+    cursor += 4 + fieldLength
+  }
+  return result
 }
 
 async function readPackageEntry(bytes: Uint8Array, entry: PackageEntry): Promise<Uint8Array> {

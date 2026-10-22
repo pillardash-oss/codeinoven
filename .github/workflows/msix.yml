@@ -84,3 +84,15 @@ jobs:
           name: codeinoven-msix
           path: dist/*.msix
           if-no-files-found: error
+
+      # A package that fails verification is still the evidence for why, and the
+      # appx target cannot be run anywhere but a Windows runner, so the artifact
+      # is kept under a different name for inspection instead of being thrown
+      # away with the job.
+      - name: Upload the package when verification fails
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: codeinoven-msix-unverified
+          path: dist/*.msix
+          if-no-files-found: ignore
