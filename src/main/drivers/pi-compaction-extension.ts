@@ -769,9 +769,12 @@ export default function (pi: ExtensionAPI): void {
       const firstKeptEntryId = current.entries[0].id
       const firstEntry = current.entries[0]
       const firstKeptCreatedAt = entryCreatedAt(firstEntry)
-      const maxTokens = Math.max(256, Math.min(3072, Math.floor(model.contextWindow * 0.04), model.maxTokens))
+      // Reasoning shares the output budget with the checkpoint text. Use the
+      // model limit for generation while keeping the saved checkpoint bounded.
+      const maxTokens = model.maxTokens
+      const summaryTokens = Math.max(256, Math.min(3072, Math.floor(model.contextWindow * 0.04), model.maxTokens))
       const inputCharacters = Math.max(2048, Math.min(32000, Math.floor(model.contextWindow * 0.25)))
-      const maxSummaryCharacters = maxTokens * 3
+      const maxSummaryCharacters = summaryTokens * 3
       let summary = ''
       const pageIndex: Array<{ firstEntryId: string; lastEntryId: string; userEntryIds: string[] }> = []
       let related = true
