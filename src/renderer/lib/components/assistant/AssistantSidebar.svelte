@@ -31,6 +31,7 @@
     TASK_RUN_PREVIEW,
     assistantForeignThread,
     assistantSubjectName,
+    assistantThreadCount,
     previewRuns,
     assistantSiblingRuns
   } from './assistant-view'
@@ -339,11 +340,18 @@
     return runsByTask.get(taskId) ?? EMPTY_RUNS
   }
 
-  /** One assistant's runs, newest first (empty while it has never run). The row
-   *  reports executions, so this is what its count reads: an assistant's Getting
-   *  started host is an authoring thread, never an execution. */
+  /** One assistant's runs, newest first (empty while it has never run). */
   function runsOfAssistant(assistantId: string): readonly Thread[] {
     return runsByAssistant.get(assistantId) ?? EMPTY_RUNS
+  }
+
+  /**
+   * The threads an assistant row states: its tasks and their runs, so an
+   * assistant that has never fired still reports the threads the user can open
+   * below it instead of `0 runs`.
+   */
+  function threadsOfAssistant(assistantId: string): number {
+    return assistantThreadCount(assistantTasks(assistantId), runsOfAssistant(assistantId))
   }
 
   /** True while any of a task's runs is actually working. */
@@ -628,7 +636,6 @@
 
       {#each orderedAssistants as assistant (assistant.id)}
         {@const assistantTaskList = assistantTasks(assistant.id)}
-        {@const assistantRunList = runsOfAssistant(assistant.id)}
         {@const visibleTasks = filteredAssistantTasks(assistant)}
         {@const tasksShown = assistantTaskBudget.visibleRows(
           `assistant:${assistant.id}`,
@@ -646,7 +653,7 @@
           stateCounts={assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
           attention={attentionAssistantIds.has(assistant.id)}
           missed={missedAssistantIds.has(assistant.id)}
-          runCount={assistantRunList.length}
+          threadCount={threadsOfAssistant(assistant.id)}
           iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
           nextRunAt={assistantNextRun(assistant.id)}
           searchOpen={searching}
