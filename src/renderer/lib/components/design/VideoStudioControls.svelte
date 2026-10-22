@@ -54,6 +54,15 @@
      */
     onExport: () => void
     /**
+     * Put the composition's playhead somewhere.
+     *
+     * A caption and a track are both things placed in time, so opening one is
+     * only useful if the picture goes there too. The timeline owns the playhead,
+     * so it hands the request down rather than these controls driving the page
+     * themselves.
+     */
+    onSeek?: (seconds: number) => void
+    /**
      * Whether these controls hold unsaved edits.
      *
      * The board's Refresh reloads them, so it must know when that would throw work
@@ -70,6 +79,7 @@
     jobs,
     onCancelJob,
     onExport,
+    onSeek,
     onDirtyChange,
     onSaved
   }: Props = $props()
@@ -82,6 +92,8 @@
   let captionPage = $state(0)
   /** Which track boxes are folded open, by index. The first opens by default. */
   let openTracks = $state<Record<number, boolean>>({})
+  /** Which caption boxes are folded open, by place in the list. */
+  let openCaptions = $state<Record<number, boolean>>({})
   /** Which job records are folded open, by id. A running job opens by itself. */
   let openJobs = $state<Record<string, boolean>>({})
   /**
@@ -288,6 +300,58 @@
 </script>
 
 <svelte:window onkeydown={primaryAction} />
+{#snippet compositionValues()}
+  {#if studio !== null && studio.controls.length > 0}
+    <div class="space-y-1.5 pt-1">
+      {#each studio.controls as control (control.key)}
+        <div class="flex items-center justify-between gap-2">
+          <label for={`video-${control.key}`} class="min-w-0 truncate text-xs text-muted">
+            {control.label}
+          </label>
+          {#if control.kind === 'switch'}
+            <Switch
+              checked={control.value === true}
+              label={control.label}
+              title={control.label}
+              aria-label={control.label}
+              onchange={(value) => setControl(control.key, value)}
+            />
+          {:else if control.kind === 'color'}
+            <input
+              id={`video-${control.key}`}
+              class="h-7 w-12 shrink-0 cursor-pointer border border-border bg-elevated p-0.5"
+              type="color"
+              value={String(control.value)}
+              title={control.label}
+              aria-label={control.label}
+              oninput={(event) => setControl(control.key, event.currentTarget.value)}
+            />
+          {:else}
+            <input
+              id={`video-${control.key}`}
+              class="h-7 w-28 shrink-0 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+              type={control.kind === 'number' ? 'number' : 'text'}
+              value={String(control.value)}
+              min={control.min}
+              max={control.max}
+              step="any"
+              oninput={(event) =>
+                setControl(
+                  control.key,
+                  control.kind === 'number'
+                    ? Number(event.currentTarget.value)
+                    : event.currentTarget.value
+                )}
+            />
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {:else}
+    <p class="pt-1 text-[0.6875rem] text-dimmed">This composition declares no values to edit.</p>
+  {/if}
+{/snippet}
+
 <div
   {@attach (node) => {
     panel = node
@@ -295,7 +359,7 @@
       panel = null
     }
   }}
-  class="min-w-0"
+  class="min-w-0 pr-2.5"
   role="group"
   aria-label="Composition editor"
 >
@@ -326,62 +390,11 @@
         {/if}
 
         {#if section === 'timeline'}
-          {#if studio.controls.length > 0}
-            <div class="space-y-1.5 pt-1">
-              {#each studio.controls as control (control.key)}
-                <div class="flex items-center justify-between gap-2">
-                  <label for={`video-${control.key}`} class="min-w-0 truncate text-xs text-muted">
-                    {control.label}
-                  </label>
-                  {#if control.kind === 'switch'}
-                    <Switch
-                      checked={control.value === true}
-                      label={control.label}
-                      title={control.label}
-                      aria-label={control.label}
-                      onchange={(value) => setControl(control.key, value)}
-                    />
-                  {:else if control.kind === 'color'}
-                    <input
-                      id={`video-${control.key}`}
-                      class="h-7 w-12 shrink-0 cursor-pointer border border-border bg-elevated p-0.5"
-                      type="color"
-                      value={String(control.value)}
-                      title={control.label}
-                      aria-label={control.label}
-                      oninput={(event) => setControl(control.key, event.currentTarget.value)}
-                    />
-                  {:else}
-                    <input
-                      id={`video-${control.key}`}
-                      class="h-7 w-28 shrink-0 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                      type={control.kind === 'number' ? 'number' : 'text'}
-                      value={String(control.value)}
-                      min={control.min}
-                      max={control.max}
-                      step="any"
-                      oninput={(event) =>
-                        setControl(
-                          control.key,
-                          control.kind === 'number'
-                            ? Number(event.currentTarget.value)
-                            : event.currentTarget.value
-                        )}
-                    />
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          {#if studio.controls.length === 0}
-            <p class="pt-1 text-[0.6875rem] text-dimmed">
-              This composition declares no values to edit.
-            </p>
-          {/if}
+          {#if studio.captions.length === 0}{@render compositionValues()}{/if}
         {:else if section === 'captions'}
+          {@render compositionValues()}
           {#if studio.captions.length > 0}
-            <div class="space-y-2 pt-1">
+            <div class="mt-3 space-y-2">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-[0.6875rem] font-medium text-muted">
                   Captions
@@ -402,51 +415,92 @@
                   }}
                 />
               </div>
-              {#each visibleCaptions as caption, index (index)}
-                <div class="space-y-1">
-                  <label class="block text-xs text-muted">
-                    Caption at {caption.start.toFixed(2)}s
-                    <textarea
-                      class="mt-1 w-full border border-border bg-elevated p-1.5 text-xs text-foreground outline-none focus:border-primary"
-                      rows="2"
-                      bind:value={caption.text}
-                      oninput={() => {
-                        caption.words = undefined
-                        dirty = true
-                      }}></textarea>
-                  </label>
-                  <div class="flex gap-2">
-                    <label class="flex items-center gap-1 text-xs text-muted">
-                      Start
-                      <input
-                        type="number"
-                        class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                        min="0"
-                        step="0.01"
-                        bind:value={caption.start}
-                        onchange={() => {
-                          caption.words = undefined
-                          dirty = true
+              <!--
+                One box per caption, folded, exactly like a track in the audio
+                section. The header is the caption as the reader looks for it: its
+                opening words and when it is on screen. Opening it also puts the
+                playhead where the words start, because a caption is a moment
+                before it is a piece of text, and editing one without seeing the
+                frame it lands on is editing blind.
+              -->
+              <div class="space-y-1.5">
+                {#each visibleCaptions as caption, index (index)}
+                  {@const position = captionPage * 25 + index}
+                  {@const open = openCaptions[position] ?? false}
+                  <div class="border border-border">
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        class="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                        aria-expanded={open}
+                        title={`${open ? 'Fold' : 'Open'} this caption and put the playhead at ${videoTimecode(caption.start)}`}
+                        onclick={() => {
+                          openCaptions[position] = !open
+                          onSeek?.(caption.start)
                         }}
-                      />
-                    </label>
-                    <label class="flex items-center gap-1 text-xs text-muted">
-                      End
-                      <input
-                        type="number"
-                        class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                        min="0"
-                        step="0.01"
-                        bind:value={caption.end}
-                        onchange={() => {
-                          caption.words = undefined
-                          dirty = true
-                        }}
-                      />
-                    </label>
+                      >
+                        <CioChevronDown
+                          size={12}
+                          aria-hidden="true"
+                          class="shrink-0 text-muted {open
+                            ? 'rotate-180'
+                            : ''} transition-transform"
+                        />
+                        <span class="min-w-0 flex-1 truncate text-xs text-foreground">
+                          {caption.text.trim() === '' ? 'Empty caption' : caption.text}
+                        </span>
+                        <span class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">
+                          {videoTimecode(caption.start)} ·
+                          {(caption.end - caption.start).toFixed(2)}s
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        title={`Put the playhead at ${videoTimecode(caption.start)}`}
+                        aria-label={`Put the playhead where this caption starts, ${videoTimecode(caption.start)}`}
+                        onclick={() => onSeek?.(caption.start)}
+                      >
+                        <CioSkipBack size={12} />
+                      </button>
+                    </div>
+                    {#if open}
+                      <div class="space-y-1.5 px-2 pt-0.5 pb-2">
+                        <textarea
+                          class="w-full border border-border bg-elevated p-1.5 text-xs leading-snug text-foreground outline-none focus:border-primary"
+                          rows="2"
+                          aria-label={`Text of the caption at ${videoTimecode(caption.start)}`}
+                          bind:value={caption.text}
+                          oninput={() => {
+                            caption.words = undefined
+                            dirty = true
+                          }}></textarea>
+                        <div class="grid grid-cols-2 gap-1.5">
+                          {#each ['start', 'end'] as field (field)}
+                            {@const key = field as 'start' | 'end'}
+                            <label
+                              class="flex items-center justify-between gap-1 text-[0.6875rem] text-muted"
+                            >
+                              {field}
+                              <input
+                                type="number"
+                                class="h-7 w-16 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                                min="0"
+                                step="0.01"
+                                bind:value={caption[key]}
+                                onchange={() => {
+                                  caption.words = undefined
+                                  dirty = true
+                                }}
+                              />
+                            </label>
+                          {/each}
+                        </div>
+                      </div>
+                    {/if}
                   </div>
-                </div>
-              {/each}
+                {/each}
+              </div>
               {#if studio.captions.length > 25}
                 <div class="flex items-center justify-between gap-2 pt-1">
                   <button
@@ -508,7 +562,10 @@
                       class="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                       aria-expanded={open}
                       title={`${open ? 'Fold' : 'Open'} ${track.source}, ${videoTimecode(track.start)} for ${track.duration.toFixed(2)}s at gain ${track.gain}`}
-                      onclick={() => toggleTrack(index, open)}
+                      onclick={() => {
+                        toggleTrack(index, open)
+                        onSeek?.(track.start)
+                      }}
                     >
                       <CioChevronDown
                         size={12}

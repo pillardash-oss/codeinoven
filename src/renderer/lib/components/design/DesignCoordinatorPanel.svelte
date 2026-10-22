@@ -2290,7 +2290,7 @@
               tabId={boardTabId}
               revision={studioRevision}
             >
-              {#snippet controls(section)}
+              {#snippet controls(section, seek)}
                 {#if liveEditing}
                   <VideoStudioControls
                     {projectId}
@@ -2299,6 +2299,7 @@
                     jobs={videoJobs}
                     onCancelJob={cancelVideoJob}
                     onExport={exportVideo}
+                    onSeek={seek}
                     onDirtyChange={setStudioDirty}
                     onSaved={setStudioSaved}
                   />

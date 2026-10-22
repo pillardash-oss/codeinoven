@@ -82,8 +82,14 @@
      * the placement the file had before the user moved a track.
      */
     revision?: number
-    /** The section body, owned by the controls so every tab stands on one read. */
-    controls?: Snippet<[EditorSection]>
+    /**
+     * The section body, owned by the controls so every tab stands on one read.
+     *
+     * It is handed the open section and the way to move the playhead: a caption
+     * and a track are both things placed in time, so opening one has to put the
+     * picture there, and this surface is the one that owns the clock.
+     */
+    controls?: Snippet<[EditorSection, (seconds: number) => void]>
   }
 
   let { projectId, threadId, directory, tabId = '', revision = 0, controls }: Props = $props()
@@ -943,7 +949,7 @@
           </div>
         </div>
       {/if}
-      {#if controls}{@render controls(openSection)}{/if}
+      {#if controls}{@render controls(openSection, (seconds) => void goTo(seconds))}{/if}
     </div>
   {/if}
 </div>
