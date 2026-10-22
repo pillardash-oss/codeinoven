@@ -258,21 +258,40 @@ export function assistantSubjectName(
   return task.title.trim() || assistant || fallback
 }
 
-/** How many runs an assistant row states exactly before it collapses to a chip. */
-export const ASSISTANT_RUN_COUNT_CAP = 10
+/** How many threads an assistant row states exactly before it collapses to a chip. */
+export const ASSISTANT_THREAD_COUNT_CAP = 10
 
 /**
- * An assistant row's run count. A count above the cap collapses to a fixed `+9`
- * chip, so an assistant that has fired for months cannot widen its row; the exact
- * total stays on the row's hover card.
+ * An assistant row's thread count. A count above the cap collapses to a fixed
+ * `10+ threads` chip, so an assistant holding months of runs cannot widen its row;
+ * the exact total stays on the row's hover card.
  */
-export function assistantRunCountLabel(count: number): string {
-  if (count > ASSISTANT_RUN_COUNT_CAP) return '+9'
-  return count === 1 ? '1 run' : `${count} runs`
+export function assistantThreadCountLabel(count: number): string {
+  if (count > ASSISTANT_THREAD_COUNT_CAP) return `${ASSISTANT_THREAD_COUNT_CAP}+ threads`
+  return count === 1 ? '1 thread' : `${count} threads`
 }
 
 /**
- * The next fire an assistant row states beside its run count, or null when the
+ * How many threads an assistant holds: every task and every run under it.
+ *
+ * Counting executions alone read `0 runs` for an assistant that had never fired,
+ * even while its task threads sat right below the row, so the row states what is
+ * inside the assistant instead. The Getting started host is the assistant's
+ * behavior, not a thread the user works in, so it is never counted.
+ */
+export function assistantThreadCount<T extends Pick<Thread, 'assistantGettingStarted'>>(
+  tasks: readonly T[],
+  runs: readonly unknown[]
+): number {
+  let count = runs.length
+  for (const task of tasks) {
+    if (!isAssistantSetupThread(task)) count += 1
+  }
+  return count
+}
+
+/**
+ * The next fire an assistant row states beside its thread count, or null when the
  * scheduler will not fire this assistant at all. A paused assistant and an assistant
  * with no saved knowledge are both skipped before any slot is evaluated, so the row
  * must not advertise a time for either.

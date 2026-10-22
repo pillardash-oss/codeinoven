@@ -5,16 +5,17 @@
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import CioLink from '@pdslng/cio-icon/CioLink.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
-  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
+  import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import { describeSchedule, assistantIsScheduled, type Assistant } from '$shared/types'
   import { assistantGap } from './assistant-view'
 
   interface Props {
     assistant: Assistant
-    /** How many times this assistant has run. The Getting started host is an
-     *  authoring thread, not an execution, so it is never counted. */
-    runCount: number
+    /** How many threads this assistant holds: its tasks and their runs. The
+     *  Getting started host is the assistant's behavior, not a thread, so it is
+     *  never counted. */
+    threadCount: number
     /** True while any task in this assistant is running. */
     working: boolean
     /** At least one task or run waits on the user or has failed. */
@@ -25,7 +26,7 @@
     nextRunAt: number | null
   }
 
-  let { assistant, runCount, working, missed, nextRunAt, attention = false }: Props = $props()
+  let { assistant, threadCount, working, missed, nextRunAt, attention = false }: Props = $props()
 
   const incomplete = $derived(assistantGap(assistant) !== null)
   const gapLabel = $derived(assistantGap(assistant) ?? '')
@@ -110,10 +111,10 @@
     </div>
   {/if}
   <div class="flex gap-2">
-    <dt class="w-16 shrink-0 text-dimmed">Runs</dt>
+    <dt class="w-16 shrink-0 text-dimmed">Threads</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
-      <CioUndo size={12} class="shrink-0" />
-      <span>{runCount === 1 ? '1 run' : `${runCount} runs`}</span>
+      <CioThreads size={12} class="shrink-0" />
+      <span>{threadCount === 1 ? '1 thread' : `${threadCount} threads`}</span>
     </dd>
   </div>
   <div class="flex gap-2">
