@@ -13,6 +13,7 @@
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { invoke } from '$lib/ipc.svelte'
   import { VideoFrameSeeker } from '$lib/video-frame-seeker'
+  import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
   import { snapVideoFrame } from '$shared/video/frame-grid'
   import { videoTimecode } from '$shared/video/timeline'
   import {
@@ -73,6 +74,10 @@
   let scrubValue = $state(0)
   let pendingFrame = $state<number | null>(null)
   let seekRevision = 0
+  /** True while the remembered looping preference is being handed to the page. */
+  let loopSyncing = false
+  /** The looping answer the page gave last, so one arming is reconciled once. */
+  let observedLoop: boolean | null = null
   /** The frame the user asked to write about, once it has been captured. */
   let frameNote = $state<{
     snapshot: CompositionFrameSnapshot
@@ -99,7 +104,14 @@
   const frameStep = $derived(1 / Math.max(composition.fps, 1))
   const time = $derived(playback?.time ?? 0)
   const playing = $derived(playback?.playing ?? false)
-  const loop = $derived(playback?.loop ?? true)
+  /**
+   * Whether this composition repeats at the end.
+   *
+   * The page answers while it is armed, and the user's own preference stands in
+   * until it does: a new tab starts from what the reader chose on the last video
+   * rather than from the default the page boots with.
+   */
+  const loop = $derived(playback?.loop ?? compositionPlaybackPrefs.loop)
   const error = $derived(playback?.error ?? null)
   const shown = $derived(Math.min(scrubbing ? scrubValue : (pendingFrame ?? time), duration))
   const seeker = new VideoFrameSeeker(
@@ -128,9 +140,36 @@
       const revision = seekRevision
       const next = await invoke('browser:transportState', tabId)
       if (revision === seekRevision && !scrubbing && pendingFrame === null) apply(next)
+      syncLoop(next)
     } catch {
       // The tab can be closed while a poll is in flight.
     }
+  }
+
+  /**
+   * Bring a freshly armed page onto the user's looping preference.
+   *
+   * A reload, or a preview switched to another composition, installs a new
+   * transport that starts with its own default. The poll is what notices, so the
+   * preference is restored where the state is read, before the end of a film the
+   * user asked to play once. The handover happens once per answer the page gives,
+   * because a page that keeps reporting the default must not be re-commanded on
+   * every tick.
+   */
+  function syncLoop(next: BrowserCompositionPlayback | null): void {
+    if (!next) return
+    if (next.loop === observedLoop) return
+    observedLoop = next.loop
+    const wanted = compositionPlaybackPrefs.loop
+    if (loopSyncing || next.loop === wanted) return
+    loopSyncing = true
+    void invoke('browser:transport', tabId, 'loop', wanted)
+      .catch(() => {
+        // The tab can be closed before the preference lands.
+      })
+      .finally(() => {
+        loopSyncing = false
+      })
   }
 
   async function send(
@@ -176,7 +215,9 @@
   }
 
   function toggleLoop(): void {
-    void send('loop', !loop)
+    const next = !loop
+    compositionPlaybackPrefs.setLoop(next)
+    void send('loop', next)
   }
 
   /**
