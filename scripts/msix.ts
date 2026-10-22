@@ -84,9 +84,14 @@ function fail(message: string): never {
  * are plain scalars whose spelling we control. Scoping the scan to the `appx`
  * block, and demanding exactly one match per key, keeps this honest: anything
  * unexpected is a hard failure rather than a silently wrong identity.
+ *
+ * Line endings are normalised on read. A Windows checkout of this repository has
+ * CRLF endings (Git for Windows defaults to `core.autocrlf=true`), and the first
+ * Windows run of this script failed on it: `readLanguages` expects a bare LF
+ * after `languages:`, so the list looked missing on CI while passing locally.
  */
 function readAppxBlock(configPath: string): string {
-  const lines = readFileSync(configPath, 'utf8').split('\n')
+  const lines = readFileSync(configPath, 'utf8').replaceAll('\r\n', '\n').split('\n')
   const start = lines.findIndex((line) => /^appx:\s*$/.test(line))
   if (start === -1) fail(`No top-level \`appx:\` block in ${configPath}`)
   const rest = lines.slice(start + 1)
