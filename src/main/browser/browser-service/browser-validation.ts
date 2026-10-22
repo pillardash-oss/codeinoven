@@ -646,7 +646,10 @@ export function validateConversationScopeId(value: unknown): string {
  *
  * Every field is bounded and the address is held to http(s), because main mounts
  * this page when it has no live view for the tab: an unrestricted address here
- * would be a navigation the renderer could hand main unchecked.
+ * would be a navigation the renderer could hand main unchecked. An address that is
+ * not http(s) is kept as empty rather than refused, because the binding's job is
+ * the tab reference: a page on a local file is still readable while it is live,
+ * and only remounting it after the view is gone needs the address.
  */
 export function validateThreadBrowserPage(value: unknown): BrowserThreadBrowserPage {
   if (typeof value !== 'object' || value === null) {
@@ -658,7 +661,16 @@ export function validateThreadBrowserPage(value: unknown): BrowserThreadBrowserP
     projectId: validateProjectId(record['projectId']),
     threadId: validateThreadId(record['threadId']),
     boxId: validateOptionalBoxId(record['boxId']),
-    url: validateOptionalBrowserUrl(record['url'])
+    url: remountableBrowserUrl(record['url'])
+  }
+}
+
+/** An address a page can be mounted from, or the empty string for anything else. */
+function remountableBrowserUrl(value: unknown): string {
+  try {
+    return validateOptionalBrowserUrl(value)
+  } catch {
+    return ''
   }
 }
 
