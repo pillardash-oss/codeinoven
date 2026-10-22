@@ -10,9 +10,10 @@ import {
  * Resolve where the window controls live for the current OS.
  *
  * macOS: traffic lights always sit inset on the left.
- * Windows/Linux: the native frame owns its own controls   nothing to reserve.
- * GTK's decoration layout describes controls in that native frame, not controls
- * drawn over the renderer, so it must never become renderer padding.
+ * Windows/Linux: the caption buttons are drawn over the renderer on the right
+ * edge (see `hasCaptionOverlay`), so nothing is reserved on the left. GTK's
+ * decoration layout describes buttons in a native frame this app no longer
+ * shows, so it must never become renderer padding.
  */
 export async function resolveTrafficLightInfo(): Promise<TrafficLightInfo> {
   if (process.platform === 'darwin') {

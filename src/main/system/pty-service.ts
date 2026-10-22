@@ -260,6 +260,128 @@ export class PtyService {
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
   }
 
+  private readonly pendingStarts = new Map<
+    string,
+    { cancelled: boolean; promise: Promise<{ id: string; pid: number }> }
+  >()
+  private stopped = false
+
+  private start(
+    id: string,
+    work: (ensureActive: () => void) => Promise<{ id: string; pid: number }>
+  ): Promise<{ id: string; pid: number }> {
+    if (this.stopped) return Promise.reject(new Error('Terminal service has stopped'))
+    const existing = this.pendingStarts.get(id)
+    if (existing) return existing.promise
+    const pending = { cancelled: false, promise: Promise.resolve({ id, pid: 0 }) }
+    const ensureActive = (): void => {
+      if (pending.cancelled || this.stopped) throw new Error('Terminal creation was cancelled')
+    }
+    pending.promise = Promise.resolve()
+      .then(() => {
+        ensureActive()
+        return work(ensureActive).then((result) => {
+          ensureActive()
+          return result
+        })
+      })
+      .finally(() => {
+        if (this.pendingStarts.get(id) === pending) this.pendingStarts.delete(id)
+      })
+    this.pendingStarts.set(id, pending)
+    return pending.promise
+  }
+
+  /**
+   * Publish a spawned session, unless its creation was cancelled in the interval
+   * between the spawn and this call.
+   *
+   * The renderer destroys a terminal the moment it closes one, and that destroy
+   * can land inside a creation that is still awaiting its environment or its
+   * remote handoff. Registering the session unconditionally in that window left a
+   * shell running with no session on the books: nothing tracked it, nothing could
+   * stop it, and its output went to a renderer that had already dropped the
+   * terminal. A cancelled start kills the process it created instead, and reports
+   * the cancellation to its caller.
+   */
+  private commitSession(
+    id: string,
+    session: PtySession,
+    ensureActive: () => void
+  ): { id: string; pid: number } {
+    try {
+      ensureActive()
+    } catch (error) {
+      try {
+        session.process.kill()
+      } catch {
+        // The process may already be gone.
+      }
+      throw error
+    }
+    this.sessions.set(id, session)
+    return { id, pid: session.process.pid }
+  }
+
+  private create(
+    id: string,
+    projectId: string,
+    threadId: string,
+    cols: number,
+    rows: number,
+    scopeBucketId?: string,
+    directory?: string
+  ): Promise<{ id: string; pid: number }> {
+    return this.start(id, (check) =>
+      this.createSession(id, projectId, threadId, cols, rows, scopeBucketId, directory, check)
+    )
+  }
+  private createOven(
+    id: string,
+    ovenId: string,
+    cols: number,
+    rows: number
+  ): Promise<{ id: string; pid: number }> {
+    return this.start(id, (check) => this.createOvenSession(id, ovenId, cols, rows, check))
+  }
+  private createCommand(
+    id: string,
+    command: string,
+    args: string[],
+    cols: number,
+    rows: number,
+    idleTimeoutMs?: number,
+    environment?: Record<string, string>
+  ): Promise<{ id: string; pid: number }> {
+    return this.start(id, (check) =>
+      this.createCommandSession(id, command, args, cols, rows, idleTimeoutMs, environment, check)
+    )
+  }
+  private createAction(
+    id: string,
+    projectId: string,
+    threadId: string,
+    script: string,
+    variables: Record<string, string>,
+    cols: number,
+    rows: number,
+    scopeBucketId?: string
+  ): Promise<{ id: string; pid: number }> {
+    return this.start(id, (check) =>
+      this.createActionSession(
+        id,
+        projectId,
+        threadId,
+        script,
+        variables,
+        cols,
+        rows,
+        scopeBucketId,
+        check
+      )
+    )
+  }
+
   private async prepareWindowsShell(): Promise<void> {
     if (process.platform !== 'win32') return
     try {
@@ -366,19 +488,29 @@ export class PtyService {
     return this.reuseLiveSession(id)
   }
 
-  private async create(
+  private async createSession(
     id: string,
     projectId: string,
     threadId: string,
     cols: number,
     rows: number,
     scopeBucketId?: string,
-    directory?: string
+    directory?: string,
+    ensureActive: () => void = () => undefined
   ): Promise<{ id: string; pid: number }> {
     const remote = await this.remoteLaunch?.(projectId, threadId, directory)
+    try {
+      ensureActive()
+    } catch (error) {
+      await remote?.dispose()
+      throw error
+    }
     const reused = await this.reuseOvenSession(id, remote)
-    if (reused) return reused
-    if (remote) return this.createRemote(id, projectId, threadId, cols, rows, remote)
+    if (reused) {
+      ensureActive()
+      return reused
+    }
+    if (remote) return this.createRemote(id, projectId, threadId, cols, rows, remote, ensureActive)
 
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
@@ -404,12 +536,14 @@ export class PtyService {
     const shell = await resolveShell()
     const createdAt = Date.now()
 
+    const env = await buildShellEnv()
+    ensureActive()
     const proc = pty.spawn(shell, resolveShellArgs(shell), {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: await buildShellEnv()
+      env
     })
     this.trackProcess?.({
       scopeId: `pty:${id}`,
@@ -421,10 +555,12 @@ export class PtyService {
     })
 
     proc.onData((data) => {
+      if (this.sessions.get(id)?.process !== proc) return
       sendToRenderer(this.sender, `pty:data:${id}`, data)
     })
 
     proc.onExit(({ exitCode }) => {
+      if (this.sessions.get(id)?.process !== proc) return
       this.sessions.delete(id)
       sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
@@ -439,16 +575,20 @@ export class PtyService {
       })
     })
 
-    this.sessions.set(id, {
+    this.commitSession(
       id,
-      process: proc,
-      projectId,
-      cwd,
-      shell,
-      createdAt,
-      lastActivityAt: createdAt
-    })
-    await this.recordEvent({
+      {
+        id,
+        process: proc,
+        projectId,
+        cwd,
+        shell,
+        createdAt,
+        lastActivityAt: createdAt
+      },
+      ensureActive
+    )
+    void this.recordEvent({
       type: 'create',
       terminalId: id,
       projectId,
@@ -469,17 +609,27 @@ export class PtyService {
    * the Oven's home directory. A live session under the same id is reattached
    * rather than respawned, exactly like a thread terminal.
    */
-  private async createOven(
+  private async createOvenSession(
     id: string,
     ovenId: string,
     cols: number,
-    rows: number
+    rows: number,
+    ensureActive: () => void = () => undefined
   ): Promise<{ id: string; pid: number }> {
     if (!this.ovenShellLaunch) throw new Error(`This build cannot open an ${APP_NAME} Oven shell.`)
     const launch = await this.ovenShellLaunch(ovenId)
+    try {
+      ensureActive()
+    } catch (error) {
+      await launch.dispose()
+      throw error
+    }
     const reused = await this.reuseOvenSession(id, launch)
-    if (reused) return reused
-    return this.createRemote(id, '', '', cols, rows, launch)
+    if (reused) {
+      ensureActive()
+      return reused
+    }
+    return this.createRemote(id, '', '', cols, rows, launch, ensureActive)
   }
 
   private async createRemote(
@@ -488,10 +638,12 @@ export class PtyService {
     threadId: string,
     cols: number,
     rows: number,
-    launch: PtyRemoteLaunch
+    launch: PtyRemoteLaunch,
+    ensureActive: () => void
   ): Promise<{ id: string; pid: number }> {
     let proc: pty.IPty
     try {
+      ensureActive()
       proc = pty.spawn(launch.executable, launch.args, {
         name: 'xterm-256color',
         cols,
@@ -513,14 +665,16 @@ export class PtyService {
       cwd: launch.remoteCwd
     })
     proc.onData((data) => {
+      if (this.sessions.get(id)?.process !== proc) return
       const session = this.sessions.get(id)
       if (session) session.lastActivityAt = Date.now()
       sendToRenderer(this.sender, `pty:data:${id}`, data)
     })
     proc.onExit(({ exitCode }) => {
+      void launch.dispose().catch(() => Logger.dev('Oven terminal credential cleanup failed'))
+      if (this.sessions.get(id)?.process !== proc) return
       this.sessions.delete(id)
       sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
-      void launch.dispose().catch(() => Logger.dev('Oven terminal credential cleanup failed'))
       void this.recordEvent({
         type: 'exit',
         terminalId: id,
@@ -532,18 +686,29 @@ export class PtyService {
         timestamp: Date.now()
       })
     })
-    this.sessions.set(id, {
-      id,
-      projectId,
-      process: proc,
-      cwd: launch.remoteCwd,
-      shell: 'ssh',
-      remote: true,
-      ovenId: launch.ovenId,
-      createdAt,
-      lastActivityAt: createdAt
-    })
-    await this.recordEvent({
+    try {
+      this.commitSession(
+        id,
+        {
+          id,
+          projectId,
+          process: proc,
+          cwd: launch.remoteCwd,
+          shell: 'ssh',
+          remote: true,
+          ovenId: launch.ovenId,
+          createdAt,
+          lastActivityAt: createdAt
+        },
+        ensureActive
+      )
+    } catch (error) {
+      // The handoff's own credentials must not outlive a launch the caller
+      // cancelled; its local ssh process is already killed by the commit.
+      await launch.dispose()
+      throw error
+    }
+    void this.recordEvent({
       type: 'create',
       terminalId: id,
       projectId,
@@ -574,31 +739,37 @@ export class PtyService {
    * handoffs (`npm uninstall -g …`). Only known harness binaries and the
    * package managers/tools used by handoffs are accepted.
    */
-  private async createCommand(
+  private async createCommandSession(
     id: string,
     command: string,
     args: string[],
     cols: number,
     rows: number,
     idleTimeoutMs?: number,
-    environment?: Record<string, string>
+    environment?: Record<string, string>,
+    ensureActive: () => void = () => undefined
   ): Promise<{ id: string; pid: number }> {
     if (!ALLOWED_COMMANDS.has(normalizedCommandName(command))) {
       throw new Error(`Refusing to start unknown harness command: ${command}`)
     }
 
     const reused = this.reuseLiveSession(id)
-    if (reused) return reused
+    if (reused) {
+      ensureActive()
+      return reused
+    }
 
     const cwd = homedir()
     const createdAt = Date.now()
 
+    const env = { ...(await buildShellEnv()), ...safeCommandEnvironment(environment) }
+    ensureActive()
     const proc = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: { ...(await buildShellEnv()), ...safeCommandEnvironment(environment) }
+      env
     })
     this.trackProcess?.({
       pid: proc.pid,
@@ -609,18 +780,22 @@ export class PtyService {
     const output = new PtyOutputBuffer(proc, (data) =>
       sendToRenderer(this.sender, `pty:data:${id}`, data)
     )
+    this.commandOutput.get(id)?.dispose()
     this.commandOutput.set(id, output)
     proc.onData((data) => {
+      if (this.sessions.get(id)?.process !== proc) return
       const session = this.sessions.get(id)
       if (session) session.lastActivityAt = Date.now()
       output.push(data)
     })
 
     proc.onExit(({ exitCode }) => {
+      if (this.sessions.get(id)?.process !== proc) return
       exitCode = this.sessions.get(id)?.exitCodeOverride ?? exitCode
       this.sessions.delete(id)
       output.end(() => {
-        if (this.commandOutput.get(id) === output) this.commandOutput.delete(id)
+        if (this.commandOutput.get(id) !== output) return
+        this.commandOutput.delete(id)
         sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       })
       void this.recordEvent({
@@ -634,19 +809,31 @@ export class PtyService {
       })
     })
 
-    this.sessions.set(id, {
-      id,
-      process: proc,
-      projectId: '',
-      cwd,
-      shell: command,
-      createdAt,
-      idleTimeoutMs: idleTimeoutMs && idleTimeoutMs > 0 ? idleTimeoutMs : undefined,
-      lastActivityAt: createdAt
-    })
+    try {
+      this.commitSession(
+        id,
+        {
+          id,
+          process: proc,
+          projectId: '',
+          cwd,
+          shell: command,
+          createdAt,
+          idleTimeoutMs: idleTimeoutMs && idleTimeoutMs > 0 ? idleTimeoutMs : undefined,
+          lastActivityAt: createdAt
+        },
+        ensureActive
+      )
+    } catch (error) {
+      // A cancelled command keeps no paced buffer: its pump is disposed here so
+      // the killed process's remaining output cannot outlive the session.
+      if (this.commandOutput.get(id) === output) this.commandOutput.delete(id)
+      output.dispose()
+      throw error
+    }
     // The one kind of session the watchdog exists for is now on the books.
     this.syncIdleWatchdog()
-    await this.recordEvent({
+    void this.recordEvent({
       type: 'create',
       terminalId: id,
       cwd,
@@ -735,7 +922,7 @@ export class PtyService {
     }
   }
 
-  private async createAction(
+  private async createActionSession(
     id: string,
     projectId: string,
     threadId: string,
@@ -743,12 +930,22 @@ export class PtyService {
     variables: Record<string, string>,
     cols: number,
     rows: number,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    ensureActive: () => void = () => undefined
   ): Promise<{ id: string; pid: number }> {
     const remote = await this.remoteLaunch?.(projectId, threadId, undefined, script, variables)
+    try {
+      ensureActive()
+    } catch (error) {
+      await remote?.dispose()
+      throw error
+    }
     const reused = await this.reuseOvenSession(id, remote)
-    if (reused) return reused
-    if (remote) return this.createRemote(id, projectId, threadId, cols, rows, remote)
+    if (reused) {
+      ensureActive()
+      return reused
+    }
+    if (remote) return this.createRemote(id, projectId, threadId, cols, rows, remote, ensureActive)
 
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
@@ -775,12 +972,14 @@ export class PtyService {
     await this.prepareWindowsShell()
     const shell = await resolveShell()
     const createdAt = Date.now()
+    const env = { ...(await buildShellEnv()), ...safeVariables }
+    ensureActive()
     const proc = pty.spawn(shell, resolveShellCommandArgs(shell, script), {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: { ...(await buildShellEnv()), ...safeVariables }
+      env
     })
     this.trackProcess?.({
       scopeId: `pty:${id}`,
@@ -790,8 +989,12 @@ export class PtyService {
       command: script,
       cwd
     })
-    proc.onData((data) => sendToRenderer(this.sender, `pty:data:${id}`, data))
+    proc.onData((data) => {
+      if (this.sessions.get(id)?.process === proc)
+        sendToRenderer(this.sender, `pty:data:${id}`, data)
+    })
     proc.onExit(({ exitCode }) => {
+      if (this.sessions.get(id)?.process !== proc) return
       this.sessions.delete(id)
       sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
@@ -805,16 +1008,20 @@ export class PtyService {
         timestamp: Date.now()
       })
     })
-    this.sessions.set(id, {
+    this.commitSession(
       id,
-      process: proc,
-      projectId,
-      cwd,
-      shell,
-      createdAt,
-      lastActivityAt: createdAt
-    })
-    await this.recordEvent({
+      {
+        id,
+        process: proc,
+        projectId,
+        cwd,
+        shell,
+        createdAt,
+        lastActivityAt: createdAt
+      },
+      ensureActive
+    )
+    void this.recordEvent({
       type: 'create',
       terminalId: id,
       projectId,
@@ -856,6 +1063,9 @@ export class PtyService {
   }
 
   private destroy(id: string): void {
+    const pending = this.pendingStarts.get(id)
+    if (pending) pending.cancelled = true
+    this.pendingStarts.delete(id)
     this.commandOutput.get(id)?.dispose()
     this.commandOutput.delete(id)
     const session = this.sessions.get(id)
@@ -870,6 +1080,9 @@ export class PtyService {
   }
 
   destroyAll(): void {
+    this.stopped = true
+    for (const pending of this.pendingStarts.values()) pending.cancelled = true
+    this.pendingStarts.clear()
     for (const output of this.commandOutput.values()) output.dispose()
     this.commandOutput.clear()
     this.sender = null
@@ -957,7 +1170,7 @@ export class PtyService {
    * take effect.
    */
   closeAllSessions(): void {
-    const ids = [...this.sessions.keys()]
+    const ids = [...new Set([...this.sessions.keys(), ...this.pendingStarts.keys()])]
     this.announceStoppedSessions(ids)
     for (const id of ids) {
       this.destroy(id)

@@ -17,6 +17,7 @@ import type { OvenSshInvocation } from './oven-ssh'
 import { syncOvenAccount } from './oven-accounts'
 import { detectRemoteShell } from './oven-remote-shell'
 import { remoteTerminalCommand } from './oven-remote-command'
+import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 
 /**
  * Prepare one SSH PTY launch into an Oven.
@@ -59,13 +60,25 @@ async function prepareOvenLaunch(
 export function ovenTerminalLaunch(
   storage: StorageEngine,
   vault: SecretVault,
-  database: Database
+  database: Database,
+  /**
+   * The optimistic-thread lane the terminal has to respect.
+   *
+   * `thread:create` answers the renderer before the row is durable, so a terminal
+   * opened straight after a new chat arrives here while that write is still
+   * settling. Reading the thread without waiting turned a perfectly valid
+   * terminal into "This terminal thread is unavailable."; waiting on the same
+   * creation lane the send path waits on closes that window without making
+   * creation itself slower.
+   */
+  threadCreation?: Pick<ThreadCreationCoordinator, 'awaitReady'>
 ): PtyRemoteLaunchHook {
   const threads = new ThreadRepo(database)
   const projects = new ProjectRepo(database)
   const service = new OvenService(new OvenRegistry(storage, vault))
   const accounts = new HarnessAccountRegistry(storage)
   return async (projectId, threadId, directory, script, variables) => {
+    await threadCreation?.awaitReady(threadId)
     const thread = await threads.getViaWorker(threadId)
     if (!thread || thread.projectId !== projectId)
       throw new Error('This terminal thread is unavailable.')

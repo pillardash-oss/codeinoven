@@ -78,12 +78,29 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
 
 let featureReadyPromise: Promise<void> | null = null
 
+/**
+ * The post-paint feature graph, resolved once and cached for the process
+ * lifetime.
+ *
+ * A service boot that fails before it registers the feature channels rejects
+ * this promise instead of leaving it pending forever. That rejection is what
+ * turns a permanent "still loading" surface into a reported failure: the first
+ * caller records why, and the app keeps every surface the pre-navigation
+ * hydration channels already answer.
+ */
+export function waitForFeatures(): Promise<void> {
+  featureReadyPromise ??= window.api.invoke('app:waitForFeatures').catch((error: unknown) => {
+    logRendererError('Application features failed to start', error)
+    throw error
+  })
+  return featureReadyPromise
+}
+
 async function waitForFeatureHandlers(channel: InvokeChannel): Promise<void> {
   // Hydration channels are registered before navigation, so they are always
   // answerable; every other feature channel waits for the post-paint graph.
   if (HYDRATION_CHANNELS.has(channel)) return
-  featureReadyPromise ??= window.api.invoke('app:waitForFeatures')
-  await featureReadyPromise
+  await waitForFeatures()
 }
 
 /**

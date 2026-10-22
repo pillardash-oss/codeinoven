@@ -59,6 +59,14 @@ export interface ParkBrowserTabOptions {
   size?: BrowserViewport
   /** Keep the tab the active one, because it is coming straight back. */
   keepActive?: boolean
+  /**
+   * Stop the tab's composition before it leaves the window.
+   *
+   * Set for a park that is a real departure   another page is being put on
+   * screen   and never for one where the surface merely stepped aside for an
+   * overlay it will be back in front of.
+   */
+  pausePlayback?: boolean
 }
 
 export interface BrowserTab {

@@ -20,7 +20,7 @@
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { feature } from '$lib/feature-registry'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribe, waitForFeatures } from '$lib/ipc.svelte'
   import { guideState } from '$lib/guide/guide-state.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
@@ -3186,15 +3186,19 @@
       // The workspace is the single owner of initial hydration. Keep provider
       // catalog work after the first data pass and after a frame so startup
       // thread rendering is not competing with model discovery.
-      void invoke('app:waitForFeatures').then(() => {
-        window.requestAnimationFrame(() => {
-          const targets = scopeState.activeProjectId
-            ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
-            : [INBOX_PROJECT_ID]
-          void providerCatalog.init(targets, { refresh: true })
-          void providerStore.init()
+      void waitForFeatures()
+        .then(() => {
+          window.requestAnimationFrame(() => {
+            const targets = scopeState.activeProjectId
+              ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
+              : [INBOX_PROJECT_ID]
+            void providerCatalog.init(targets, { refresh: true })
+            void providerStore.init()
+          })
         })
-      })
+        // A feature graph that never started is reported by `waitForFeatures`, so
+        // the workspace never turns that into an unhandled rejection.
+        .catch(() => undefined)
 
       // Never auto-create a chat, thread, or project on startup   the user
       // (or the onboarding tour) initiates that. When no thread was restored

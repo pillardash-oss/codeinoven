@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
+  import CioCaptions from '@pdslng/cio-icon/CioCaptions.svelte'
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
@@ -24,8 +25,8 @@
   import type { VideoProjectManifest } from '$shared/video/project'
   import type { BrowserCompositionPlayback } from '$shared/ipc-contract'
 
-  /** The three things a composition editor shows, as the board's one tab strip. */
-  type EditorSection = 'timeline' | 'audio' | 'exports'
+  /** The things a composition editor shows, as the board's one tab strip. */
+  type EditorSection = 'timeline' | 'captions' | 'audio' | 'exports'
 
   const SECTIONS: {
     id: EditorSection
@@ -38,6 +39,12 @@
       label: 'Timeline',
       title: 'Read the composition as a timeline',
       icon: CioClapper
+    },
+    {
+      id: 'captions',
+      label: 'Captions',
+      title: 'Edit the words drawn over the composition',
+      icon: CioCaptions
     },
     {
       id: 'audio',
@@ -75,8 +82,14 @@
      * the placement the file had before the user moved a track.
      */
     revision?: number
-    /** The section body, owned by the controls so every tab stands on one read. */
-    controls?: Snippet<[EditorSection]>
+    /**
+     * The section body, owned by the controls so every tab stands on one read.
+     *
+     * It is handed the open section and the way to move the playhead: a caption
+     * and a track are both things placed in time, so opening one has to put the
+     * picture there, and this surface is the one that owns the clock.
+     */
+    controls?: Snippet<[EditorSection, (seconds: number) => void]>
   }
 
   let { projectId, threadId, directory, tabId = '', revision = 0, controls }: Props = $props()
@@ -198,6 +211,20 @@
     })
   )
   const captions = $derived(videoCaptionBands(studio))
+  /**
+   * The tabs this composition actually has.
+   *
+   * Captions are their own section because editing words is not reading a
+   * timeline, and a composition that declares none has nothing to put in one, so
+   * the tab is absent rather than offering an empty panel.
+   */
+  const sections = $derived(
+    SECTIONS.filter((entry) => entry.id !== 'captions' || captions.length > 0)
+  )
+  /** The section on screen, which falls back when the tab it named is gone. */
+  const openSection = $derived(
+    section === 'captions' && captions.length === 0 ? 'timeline' : section
+  )
   const lanes = $derived(videoAudioLanes(studio, manifest))
   /**
    * This composition's notes.
@@ -499,7 +526,7 @@
         )
       ),
       y:
-        section === 'timeline' && rect
+        openSection === 'timeline' && rect
           ? Math.min(bounds.bottom, Math.max(bounds.top + 40, rect.top))
           : bounds.top + 40
     }
@@ -641,29 +668,29 @@
         role="tablist"
         aria-label="Video editor sections"
       >
-        {#each SECTIONS as entry (entry.id)}
+        {#each sections as entry (entry.id)}
           {@const Icon = entry.icon}
           <!--
             The open tab names itself and its neighbours do not. The strip shares
-            one row with the timeline tools, and a row of words for the
-            three tabs pushes those off the panel at its default width. An icon
-            still says which half of the editor is closed, and its title says the
-            word when the pointer rests on it.
+            one row with the timeline tools, and a row of words for the tabs
+            pushes those off the panel at its default width. An icon still says
+            which half of the editor is closed, and its title says the word when
+            the pointer rests on it.
           -->
           <button
             type="button"
-            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {section ===
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {openSection ===
             entry.id
               ? 'bg-surface text-foreground'
               : 'text-muted hover:text-foreground'}"
             role="tab"
-            aria-selected={section === entry.id}
+            aria-selected={openSection === entry.id}
             aria-label={entry.label}
             title={entry.title}
             onclick={() => (section = entry.id)}
           >
             <Icon size={12} aria-hidden="true" class="shrink-0" />
-            {#if section === entry.id}
+            {#if openSection === entry.id}
               <span class="whitespace-nowrap">{entry.label}</span>
             {/if}
           </button>
@@ -672,7 +699,7 @@
     {:else}
       <span></span>
     {/if}
-    {#if section === 'timeline'}
+    {#if openSection === 'timeline'}
       <div
         class="ml-auto flex shrink-0 items-center gap-1"
         role="group"
@@ -741,7 +768,7 @@
     </p>
   {:else}
     <div class="min-h-0 flex-1 overflow-y-auto pb-2">
-      {#if section === 'timeline'}
+      {#if openSection === 'timeline'}
         {#if !tab}
           <p class="pb-1 text-[0.6875rem] text-dimmed">
             Waiting for the composition to load. The timeline still shows what it declares.
@@ -831,21 +858,18 @@
                     </button>
                   {/each}
                 </div>
-                <div class="relative h-6">
-                  {#each captions as band (band.key)}
-                    {@const geometry = videoBandGeometry(band.start, band.end, duration)}
-                    <span
-                      class="absolute top-1 h-4 overflow-hidden bg-accent/25 px-1 text-[0.5625rem] leading-4 whitespace-nowrap text-foreground"
-                      style={`left: ${geometry.left}; width: ${geometry.width};`}
-                      title={`${videoTimecode(band.start)} ${band.text}`}>{band.text}</span
-                    >
-                  {/each}
-                  {#if captions.length === 0}
-                    <span class="absolute top-1 left-2 text-[0.625rem] text-dimmed"
-                      >No captions</span
-                    >
-                  {/if}
-                </div>
+                {#if captions.length > 0}
+                  <div class="relative h-6">
+                    {#each captions as band (band.key)}
+                      {@const geometry = videoBandGeometry(band.start, band.end, duration)}
+                      <span
+                        class="absolute top-1 h-4 overflow-hidden bg-accent/25 px-1 text-[0.5625rem] leading-4 whitespace-nowrap text-foreground"
+                        style={`left: ${geometry.left}; width: ${geometry.width};`}
+                        title={`${videoTimecode(band.start)} ${band.text}`}>{band.text}</span
+                      >
+                    {/each}
+                  </div>
+                {/if}
 
                 {#each lanes as lane, index (lane.key)}
                   {@const geometry = videoBandGeometry(
@@ -925,7 +949,7 @@
           </div>
         </div>
       {/if}
-      {#if controls}{@render controls(section)}{/if}
+      {#if controls}{@render controls(openSection, (seconds) => void goTo(seconds))}{/if}
     </div>
   {/if}
 </div>

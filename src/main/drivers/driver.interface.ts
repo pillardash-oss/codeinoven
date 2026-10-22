@@ -190,6 +190,13 @@ export interface UtilityRuntimeOverlay {
   args?: string[]
   configFiles?: UtilityRuntimeConfigFile[]
   allowedTools?: string[]
+  /**
+   * A harness-specific paragraph appended to the turn's utility instructions.
+   * A transport that does not expose MCP tools under their own names (Antigravity
+   * routes every MCP tool through its `call_mcp_tool` meta-tool) has to say so,
+   * or the agent is told to call a tool that is not in its list.
+   */
+  instructions?: string
 }
 
 /** Materialized launch overlay owned by CodeInOven for one runtime activation. */

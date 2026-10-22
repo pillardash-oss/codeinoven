@@ -89,6 +89,8 @@ export class ThreadEmbeddingIndex {
   private lastPersistedAt = 0
   private persistence: Promise<void> | null = null
   private persistenceDirty = false
+  private generation = 0
+  private loading: Promise<void> | null = null
 
   constructor(
     private readonly db: Database,
@@ -114,7 +116,17 @@ export class ThreadEmbeddingIndex {
     return this.records.has(threadId)
   }
 
-  async load(): Promise<void> {
+  load(): Promise<void> {
+    if (this.loading) return this.loading
+    const generation = this.generation
+    const request = this.loadSnapshot(generation).finally(() => {
+      if (this.loading === request) this.loading = null
+    })
+    this.loading = request
+    return request
+  }
+
+  private async loadSnapshot(generation: number): Promise<void> {
     try {
       let snapshot: string | undefined
       do {
@@ -123,11 +135,13 @@ export class ThreadEmbeddingIndex {
           snapshot: string | null
           modifiedAt: number
         }>({ kind: 'index-read', path: this.indexPath, snapshot })
+        if (generation !== this.generation) return
         for (const record of page.records) this.records.set(record.threadId, record)
         this.lastPersistedAt = page.modifiedAt
         snapshot = page.snapshot ?? undefined
       } while (snapshot)
     } catch {
+      if (generation !== this.generation) return
       this.records.clear()
       this.lastPersistedAt = 0
       // A missing, oversized or interrupted cache is rebuilt from conversations.
@@ -201,6 +215,8 @@ export class ThreadEmbeddingIndex {
   }
 
   async dispose(): Promise<void> {
+    this.generation += 1
+    this.loading = null
     this.unsubscribeArchives()
     if (this.removalTimer) clearTimeout(this.removalTimer)
     this.removalTimer = null
@@ -208,6 +224,8 @@ export class ThreadEmbeddingIndex {
   }
 
   async reset(): Promise<void> {
+    this.generation += 1
+    this.loading = null
     await this.persistence?.catch(() => undefined)
     this.records.clear()
     for (const id of this.candidates.keys()) if (!this.parkedIds.has(id)) this.pendingIds.add(id)
@@ -310,6 +328,7 @@ export class ThreadEmbeddingIndex {
 
   /** Rank indexed threads by the best cosine similarity across their windows. */
   async search(queryVector: Float32Array, limit: number): Promise<IntentThreadMatch[]> {
+    const generation = this.generation
     let matches: IntentThreadMatch[] = []
     for (const records of embeddingBatches(this.records.values())) {
       const visible = records.filter((record) => !this.parkedIds.has(record.threadId))
@@ -319,6 +338,7 @@ export class ThreadEmbeddingIndex {
         query: queryVector,
         limit
       })
+      if (generation !== this.generation) return []
       matches.push(...ranked)
       matches.sort((left, right) => right.score - left.score)
       matches = matches.slice(0, limit)

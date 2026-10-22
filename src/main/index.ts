@@ -5,6 +5,7 @@ import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
+import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
 import { installForceRestartMenu } from './system/force-restart'
 import { usageAnalytics } from './system/usage-analytics'
@@ -204,9 +205,12 @@ ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
 })
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */
-const featuresReadyPromise = new Promise<void>((resolve) => {
+const featuresReadyPromise = new Promise<void>((resolve, reject) => {
   state.resolveFeaturesReady = resolve
+  state.rejectFeaturesReady = reject
 })
+// A startup failure may precede the first renderer waiter.
+void featuresReadyPromise.catch(() => undefined)
 
 /**
  * A packaged smoke pass proves more than script execution: the document must
@@ -277,7 +281,7 @@ ipcMain.handle('app:waitForFeatures', () =>
 )
 
 ipcMain.handle('app:setWindowControls', (event, symbolColor: unknown, headerHeight: unknown) => {
-  if (process.platform !== 'win32') return
+  if (!hasCaptionOverlay(process.platform)) return
   const window = state.mainWindow
   if (!window || window.isDestroyed() || window.webContents !== event.sender) return
   if (typeof symbolColor !== 'string' || !/^#[\da-f]{6}$/i.test(symbolColor)) return
@@ -489,6 +493,11 @@ function getStartupBackground(): string {
 }
 
 function createWindow(): BrowserWindow {
+  // Windows and Linux both hide the native title bar and hand the whole top row
+  // to the renderer, which draws the app header there; the OS caption buttons
+  // come back as a Window Controls Overlay on the header's right edge. On Linux
+  // that is the only way to avoid a second, title-only GTK row above the header.
+  const captionOverlay = hasCaptionOverlay(process.platform)
   const window = new BrowserWindow({
     ...windowStateService.getWindowOptions(),
     minWidth: 1024,
@@ -497,8 +506,12 @@ function createWindow(): BrowserWindow {
     backgroundColor: getStartupBackground(),
     title: APP_NAME,
     icon: getAppIconPath(),
-    titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
-    ...(process.platform === 'win32'
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    // With the title bar gone, an application menu would claim a row of its own
+    // above the header on Linux. Alt still reveals it, which is the platform's
+    // own convention for a hidden menu bar.
+    ...(process.platform === 'linux' ? { autoHideMenuBar: true } : {}),
+    ...(captionOverlay
       ? {
           titleBarOverlay: {
             color: '#00000000',
@@ -507,7 +520,7 @@ function createWindow(): BrowserWindow {
           }
         }
       : {}),
-    trafficLightPosition: { x: 16, y: 16 },
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 16, y: 16 } } : {}),
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
       // Chromium throttles a hidden or occluded window by default, and that is
@@ -945,6 +958,13 @@ void app
       // window is opened, from the menu bar or a notification click.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
+        if (!state.featuresReady) {
+          state.rejectFeaturesReady?.(
+            new Error('Application services failed to initialize', { cause: error })
+          )
+          state.rejectFeaturesReady = null
+          state.resolveFeaturesReady = null
+        }
         Logger.error('Headless service boot failed; background work is degraded', error)
       })
       app.on('activate', () => {
@@ -978,6 +998,13 @@ void app
       // the whole app on the user's behalf.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
+        if (!state.featuresReady) {
+          state.rejectFeaturesReady?.(
+            new Error('Application services failed to initialize', { cause: error })
+          )
+          state.rejectFeaturesReady = null
+          state.resolveFeaturesReady = null
+        }
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }

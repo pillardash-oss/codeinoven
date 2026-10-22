@@ -28,6 +28,7 @@ export class ProjectFileIndexService {
   private worker?: Worker
   private sequence = 0
   private readonly keys = new Set<string>()
+  private readonly generations = new Map<string, object>()
   private readonly pending = new Map<
     number,
     {
@@ -45,11 +46,13 @@ export class ProjectFileIndexService {
     projectName?: string
   ): Promise<ProjectFileEntry[]> {
     this.keys.add(projectId)
+    if (!this.generations.has(projectId)) this.generations.set(projectId, {})
     return this.request({ kind: 'search', projectId, root, query, category, projectName })
   }
 
   async prewarm(projectId: string, root: string): Promise<void> {
     this.keys.add(projectId)
+    if (!this.generations.has(projectId)) this.generations.set(projectId, {})
     await this.request({ kind: 'prewarm', projectId, root }).catch(() => undefined)
   }
 
@@ -63,6 +66,7 @@ export class ProjectFileIndexService {
 
   dispose(projectId: string): void {
     this.keys.delete(projectId)
+    this.generations.delete(projectId)
     if (!this.worker) return
     if (this.keys.size === 0) this.stop(this.worker, new Error('Project file index disposed'))
     else void this.request({ kind: 'dispose', projectId }).catch(() => undefined)
@@ -82,9 +86,11 @@ export class ProjectFileIndexService {
   private request(request: IndexRequest): Promise<ProjectFileEntry[]> {
     // Control messages must still invalidate an index while a build is awaiting I/O.
     if (request.kind === 'invalidate' || request.kind === 'dispose') return this.dispatch(request)
+    const generation = this.generations.get(request.projectId)
     return this.runIndexWork(() => {
       if (
         this.keys.size === 0 ||
+        this.generations.get(request.projectId) !== generation ||
         ((request.kind === 'search' || request.kind === 'prewarm') &&
           !this.keys.has(request.projectId))
       )
