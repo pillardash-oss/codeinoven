@@ -4281,6 +4281,21 @@ export class ChatEngine {
     // gateway) returns before any runtime is materialized, so its shared server
     // is never restarted on its behalf.
     if (skipRuntime) return ''
+    // Capture both transports up front: control-flow analysis widens `driver` to
+    // `HarnessDriver | IsolatedSessionDriver` further down, and the union hides
+    // these optional methods.
+    const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
+    const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
+    // A harness carries the app gateway through exactly one of those transports:
+    // a direct endpoint (Pi, codex) or a prepared runtime its own launch folds in
+    // (Claude Code, Cline, codex, OpenCode). A harness with neither (Antigravity,
+    // Muse Code) cannot call a gateway tool at all, so it is offered no utility
+    // prose either: advertising cio_util_* in a prompt whose tool list cannot
+    // hold them sends the agent hunting for tools that do not exist, and it would
+    // write the thread's secret files for a turn that can never read them.
+    const carriesGateway =
+      Boolean(publishUtilityEndpoint) || typeof driver.prepareUtilityRuntime === 'function'
+    if (!applyRuntime || !carriesGateway) return ''
     // Re-expose this thread's stored secrets for the turn that is starting: the
     // hook lands before the transport split so a direct-gateway harness (Pi,
     // codex) interpolates exactly the same file paths as a runtime harness, and
@@ -4292,12 +4307,6 @@ export class ChatEngine {
       .filter(([, supported]) => supported === true)
       .map(([name]) => name)
     nativeCapabilities.push(...(driver.capabilities?.nativeUtilities ?? []))
-    const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
-    if (!applyRuntime) return ''
-    // Capture before the instanceof check below: control-flow analysis widens
-    // `driver` to `HarnessDriver | IsolatedSessionDriver` afterwards, and the
-    // union hides this optional method.
-    const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     // A native bridge owns credentials internally. Other harnesses use their
     // existing MCP runtime; prompt prose is never a transport fallback.
     const useDirectGateway = Boolean(publishUtilityEndpoint)
