@@ -261,6 +261,7 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
   if (
     !target ||
     /^(?:https?:|mailto:|data:|#(?!L\d))/iu.test(target) ||
+    target.startsWith('cio-cite:') ||
     target.startsWith('opencode-source:') ||
     // Reject `:name{...}` directive tokens (e.g. backticked codex citations)
     //   they are markup, not file paths.
@@ -384,7 +385,7 @@ function citationHref(citation: ParsedFileCitation): string {
   const params = new URLSearchParams({ path: citation.path })
   if (citation.line) params.set('line', String(citation.line))
   if (citation.lineEnd) params.set('lineEnd', String(citation.lineEnd))
-  return `#opencode-source:file?${params.toString()}`
+  return `#cio-cite:file?${params.toString()}`
 }
 
 function normalizeEscapedSlashes(value: string): string {
@@ -506,7 +507,7 @@ export function linkifyFileCitations(
   // Every remaining pass runs line by line and never reaches inside fenced code
   // or an inline-code span. Rewriting a fragment of a span injects backticks
   // into it, the span breaks, and the citation link it was supposed to become
-  // shows up as literal text in the thread, `#opencode-source:` target and all.
+  // shows up as literal text in the thread, `#cio-cite:` target and all.
   const out: string[] = []
   scanMarkdownLines(result, (line, inFence) => {
     out.push(inFence ? line : linkifyLine(line, isClickable))
@@ -533,7 +534,7 @@ function linkifyLine(line: string, isClickable: (path: string) => boolean): stri
   // protect a markdown link label, desynchronizes the pairing as soon as a line
   // holds a backticked label such as `[\`path\`](url)`. Every later span is then
   // read from the wrong backtick: the text between two labels looked like a path
-  // and prose slashes became `[/](#opencode-source:file?path=%2F)` links. A
+  // and prose slashes became `[/](#cio-cite:file?path=%2F)` links. A
   // split cannot drift, and a label span is recognized from its neighbors.
   const segments = withLinks.split('`')
 

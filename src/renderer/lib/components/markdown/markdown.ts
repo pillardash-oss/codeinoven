@@ -48,16 +48,25 @@ import { githubEmojiExtension } from './github-emoji'
 
 // A fragment URL survives DOMPurify's default URI policy while remaining
 // entirely inside the renderer. MarkdownView intercepts it before navigation.
-export const OPENCODE_SOURCE_PREFIX = '#opencode-source:'
+export const CITATION_LINK_PREFIX = '#cio-cite:'
+
+/** The fragment transcripts were rendered and exported with before the scheme
+ *  was renamed. It is only ever read, so a link copied out of an older thread
+ *  still resolves to the file it names. */
+const LEGACY_CITATION_LINK_PREFIX = '#opencode-source:'
 
 export interface MarkdownFileCitationTarget {
   path: string
   line?: number
 }
 
-/** Read the current citation href format. */
+/** Read the citation href format, current or legacy. */
 export function fileCitationTarget(href: string): MarkdownFileCitationTarget | null {
-  const prefix = href.startsWith(OPENCODE_SOURCE_PREFIX) ? OPENCODE_SOURCE_PREFIX : null
+  const prefix = href.startsWith(CITATION_LINK_PREFIX)
+    ? CITATION_LINK_PREFIX
+    : href.startsWith(LEGACY_CITATION_LINK_PREFIX)
+      ? LEGACY_CITATION_LINK_PREFIX
+      : null
   if (!prefix) return parseAbsoluteFileCitationTarget(href)
 
   try {
