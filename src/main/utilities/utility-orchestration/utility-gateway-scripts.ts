@@ -121,7 +121,13 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           enum: ['phone', 'phone-large', 'tablet', 'laptop', 'desktop']
         },
         width: { type: 'number' },
-        height: { type: 'number' }
+        height: { type: 'number' },
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+        }
       },
       additionalProperties: false
     }
@@ -129,25 +135,55 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the current page title, URL, visible text, and interactive elements. In a browser assistant conversation this reads the user tab until you open one of your own. You may navigate and interact with that tab to carry out the user request. Auto Review allows recognized browsing actions and asks before consequential or unknown actions. Do not ask conversational permission again for assistant steps within the user request; call the operation and let the app enforce approval.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+      'Read the current page title, URL, visible text, and interactive elements. The page this conversation\u2019s thread browser is on is readable: it is the page the user is on, in whatever box they put it, and you may navigate and interact with it to carry out the user request. Pass page "user" to read it even when you have opened a page of your own; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown actions. Do not ask conversational permission again for assistant steps within the user request; call the operation and let the app enforce approval.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+        }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: 'click',
-    description: 'Click the first page element matching a CSS selector.',
+    description:
+      'Click the first page element matching a CSS selector. On the thread browser\u2019s page (page "user") the click is reviewed before it happens.',
     inputSchema: {
       type: 'object',
-      properties: { selector: { type: 'string' } },
+      properties: {
+        selector: { type: 'string' },
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+        }
+      },
       required: ['selector'],
       additionalProperties: false
     }
   },
   {
     name: 'type',
-    description: 'Replace an input, textarea, or editable element value and emit input/change.',
+    description:
+      'Replace an input, textarea, or editable element value and emit input/change. On the thread browser\u2019s page (page "user") the typing is reviewed before it happens.',
     inputSchema: {
       type: 'object',
-      properties: { selector: { type: 'string' }, text: { type: 'string' } },
+      properties: {
+        selector: { type: 'string' },
+        text: { type: 'string' },
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+        }
+      },
       required: ['selector', 'text'],
       additionalProperties: false
     }
@@ -171,6 +207,12 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           maxItems: 10,
           description:
             'Absolute local file paths, used only in Full Access. Auto Review always asks the user to choose files in the native file chooser.'
+        },
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
         }
       },
       additionalProperties: false
@@ -178,10 +220,19 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   },
   {
     name: 'navigate',
-    description: 'Navigate the current in-app browser tab to an http(s) URL.',
+    description:
+      'Navigate the current in-app browser tab to an http(s) URL. Navigating the thread browser\u2019s page (page "user") is reviewed first: it moves the page the user is reading, not the tab they have in front of them.',
     inputSchema: {
       type: 'object',
-      properties: { url: { type: 'string' } },
+      properties: {
+        url: { type: 'string' },
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+        }
+      },
       required: ['url'],
       additionalProperties: false
     }
@@ -189,13 +240,19 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'screenshot',
     description:
-      'Capture the current page at its viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. In a browser tab\u2019s own assistant conversation the page the user is looking at is attached for reading, so this captures that page. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
+      'Capture a page at its viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. The page this conversation\u2019s thread browser is on is capturable with page "user"; the default captures your own page. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
     inputSchema: {
       type: 'object',
       properties: {
         force: {
           type: 'boolean',
           description: 'Capture even when the page is unchanged since the previous screenshot.'
+        },
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
         }
       },
       additionalProperties: false
@@ -204,13 +261,35 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'reload',
     description: 'Reload the current page.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+        }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: 'console',
     description:
-      'Read console messages and browser runtime errors from the page this conversation is attached to: in a browser tab\u2019s own assistant conversation that is the page the user is looking at, until you open one of your own.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+      'Read console messages and browser runtime errors from the page being worked on. The thread browser\u2019s own page is readable with page "user", which is the page the user is looking at.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+          enum: ['user', 'agent'],
+          description:
+            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+        }
+      },
+      additionalProperties: false
+    }
   }
 ]
 

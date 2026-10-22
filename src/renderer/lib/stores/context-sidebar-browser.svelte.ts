@@ -1,7 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { isConversationContainer } from '$shared/types'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import type { BrowserPageState } from '$shared/ipc-contract'
+import type { BrowserPageState, BrowserThreadBrowserPage } from '$shared/ipc-contract'
 import { isStorableBrowserFavicon } from '$shared/browser/global-browser-tabs'
 import { reportError } from './app-errors.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
@@ -214,6 +214,32 @@ export class SidebarBrowserTabs {
     return this.activeTabId && this.activeTabs.some((tab) => tab.id === this.activeTabId)
       ? this.activeTabId
       : (this.activeTabs.at(-1)?.id ?? null)
+  }
+
+  /**
+   * The page this conversation's thread browser is in use on, in the shape main
+   * needs to reach it.
+   *
+   * A thread browser is the browser a conversation shares with its agent, so the
+   * workspace reports this page to main (`browser:bindThreadBrowserPage`): without
+   * it the agent could only ever answer about a page it opened itself, and the page
+   * the user is reading stayed invisible to it. It follows the strip's remembered
+   * tab rather than only what is on screen, and it carries the tab's box and
+   * address because the box a tab runs in is the user's choice and a page main has
+   * no view for yet has to be mounted again from its address.
+   */
+  get activePage(): BrowserThreadBrowserPage | null {
+    const tabId = this.activeTabIdOrLast()
+    if (!tabId) return null
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab) return null
+    return {
+      tabId: tab.id,
+      projectId: tab.projectId,
+      threadId: tab.threadId,
+      boxId: tab.boxId,
+      url: tab.url
+    }
   }
 
   setVisible(value: boolean): void {

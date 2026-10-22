@@ -18,6 +18,7 @@ import type {
   BrowserSwitcherBindings,
   BrowserSiteDataScope,
   BrowserTabDestroyReason,
+  BrowserThreadBrowserPage,
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
@@ -602,6 +603,75 @@ export function validateThreadId(value: unknown): string {
 
 export function browserContextKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
+}
+
+/**
+ * Which page one browser utility call works on.
+ *
+ * `user` is the page this conversation's thread browser is in use on, the one the
+ * user is reading; `agent` is a page the agent opened itself. Absent means the
+ * agent's own page when it has one, and the thread browser's page otherwise.
+ */
+export type BrowserUtilityPage = 'user' | 'agent'
+
+/**
+ * Validate the page one browser utility call asked for.
+ *
+ * The set is closed: an unknown value is a caller that meant something this
+ * capability cannot address, and guessing would answer about the wrong page.
+ */
+export function validateUtilityPage(value: unknown): BrowserUtilityPage | null {
+  if (value === undefined || value === null) return null
+  if (value === 'user' || value === 'agent') return value
+  throw new TypeError('Browser page must be "user" or "agent"')
+}
+
+/**
+ * Validate the conversation scope a thread browser's page binding is filed
+ * under.
+ *
+ * A scope is a project id, or the thread id an inbox chat owns, or the assistant
+ * id an assistant's tasks share (see `conversationScopeId`), so it is validated
+ * as the same bounded identifier the strip groups its tabs by.
+ */
+export function validateConversationScopeId(value: unknown): string {
+  if (typeof value !== 'string' || !PROJECT_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser conversation scope is invalid')
+  }
+  return value
+}
+
+/**
+ * Validate the page a conversation's thread browser reports being on.
+ *
+ * Every field is bounded and the address is held to http(s), because main mounts
+ * this page when it has no live view for the tab: an unrestricted address here
+ * would be a navigation the renderer could hand main unchecked. An address that is
+ * not http(s) is kept as empty rather than refused, because the binding's job is
+ * the tab reference: a page on a local file is still readable while it is live,
+ * and only remounting it after the view is gone needs the address.
+ */
+export function validateThreadBrowserPage(value: unknown): BrowserThreadBrowserPage {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Browser thread browser page is invalid')
+  }
+  const record: Record<string, unknown> = { ...value }
+  return {
+    tabId: validateTabId(record['tabId']),
+    projectId: validateProjectId(record['projectId']),
+    threadId: validateThreadId(record['threadId']),
+    boxId: validateOptionalBoxId(record['boxId']),
+    url: remountableBrowserUrl(record['url'])
+  }
+}
+
+/** An address a page can be mounted from, or the empty string for anything else. */
+function remountableBrowserUrl(value: unknown): string {
+  try {
+    return validateOptionalBrowserUrl(value)
+  } catch {
+    return ''
+  }
 }
 
 /**

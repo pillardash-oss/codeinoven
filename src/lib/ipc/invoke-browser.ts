@@ -30,6 +30,7 @@ import type {
   BrowserSiteDataScope,
   BrowserScrollbarTheme,
   BrowserTabDestroyReason,
+  BrowserThreadBrowserPage,
   BrowserTransportCommand,
   BrowserSitePermissionState,
   BrowserViewBounds
@@ -135,6 +136,23 @@ export const invokeBrowserContract = {
   'browser:bindAssistantPage': {} as Contract<[assistantThreadId: string, tabId: string], void>,
   /** Drop that binding, for a conversation that is being closed. */
   'browser:unbindAssistantPage': {} as Contract<[assistantThreadId: string], void>,
+  /**
+   * Tell main which page a conversation's thread browser is in use on.
+   *
+   * A thread browser is the browser a conversation shares with its agent, so
+   * this is what lets the agent's browser capability reach the page the user is
+   * reading rather than only a page it opened itself. The binding is keyed by the
+   * conversation scope the strip already groups its tabs by, and it is idempotent
+   * and survives a navigate, because it is a reference to a tab rather than to
+   * one address. Only the app reports it: no agent operation moves the thread
+   * browser to another tab or another box.
+   */
+  'browser:bindThreadBrowserPage': {} as Contract<
+    [scopeId: string, page: BrowserThreadBrowserPage],
+    void
+  >,
+  /** Drop that binding, for a conversation whose thread browser holds no page. */
+  'browser:unbindThreadBrowserPage': {} as Contract<[scopeId: string], void>,
   'browser:hide': {} as Contract<[tabId: string], void>,
   /**
    * Show an extension's own side panel in the rail.
