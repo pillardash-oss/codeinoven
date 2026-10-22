@@ -280,13 +280,6 @@ function requireAssets(): void {
 /**
 /**
  * One file inside the package, located from its central directory record.
- *
- * An MSIX is a zip container, and the package is read here rather than with the
- * host's archive tool. The first Windows run of this verification failed with
- * `tar: This does not look like a tar archive`: `tar` on a Windows runner is
- * Git's GNU tar, not the bsdtar that reads zip, and `unzip` is not installed at
- * all. Reading the container directly removes the dependency on which tools a
- * machine happens to have.
  */
 type PackageEntry = {
   name: string
@@ -316,10 +309,14 @@ const ZIP_32BIT_LIMIT = 0xffff_ffff
  * all. Reading the container in-process removes the dependency on which tools a
  * machine happens to have.
  *
- * This handles ZIP64, which the first real package needed: `makeappx` writes a
- * ZIP64 end-of-directory record for a package this size, and reading the 32-bit
- * fields alone yields offsets of 0xFFFFFFFF. Per-entry sizes and offsets are
- * read from the ZIP64 extra field when they carry the same sentinel.
+ * Two things about the real package are handled here rather than assumed. The
+ * backward scan for the end-of-directory record used to take the first signature
+ * it met without checking that the record ended where the file ends, which read
+ * a wrong record out of the first real package and ran off the end of the file
+ * with `RangeError: Out of bounds access`; a candidate now has to account for
+ * the whole tail. And a package is allowed to use ZIP64, which replaces the
+ * 32-bit fields with 0xFFFFFFFF sentinels, so the locator, the record and the
+ * per-entry extra field are all read.
  */
 function readPackageDirectory(bytes: Uint8Array): PackageEntry[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
