@@ -4288,8 +4288,8 @@ export class ChatEngine {
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     // A harness carries the app gateway through exactly one of those transports:
     // a direct endpoint (Pi, codex) or a prepared runtime its own launch folds in
-    // (Claude Code, Cline, codex, OpenCode). A harness with neither (Antigravity,
-    // Muse Code) cannot call a gateway tool at all, so it is offered no utility
+    // (Claude Code, Cline, codex, OpenCode, Antigravity). A harness with neither
+    // (Muse Code) cannot call a gateway tool at all, so it is offered no utility
     // prose either: advertising cio_util_* in a prompt whose tool list cannot
     // hold them sends the agent hunting for tools that do not exist, and it would
     // write the thread's secret files for a turn that can never read them.
@@ -4489,6 +4489,7 @@ export class ChatEngine {
       })
       return [
         gateway.instructions,
+        ...(overlay.instructions ? [overlay.instructions] : []),
         utilityContract,
         designContract,
         videoContract,
