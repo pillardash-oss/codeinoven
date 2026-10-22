@@ -9,7 +9,7 @@
   import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
-  import { tick, onDestroy, onMount } from 'svelte'
+  import { flushSync, tick, onDestroy, onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
   import { scale } from 'svelte/transition'
@@ -1553,6 +1553,14 @@
     speechController.observeSent(composerEditorId, msg)
     value = ''
     onValueChange?.('')
+    // The words the user just sent live in the editor's own DOM, and the editor
+    // empties that DOM from its value sync, which Svelte otherwise runs a
+    // microtask later. Flush it here, at the instant the draft is handed away, so
+    // nothing the browser already has in flight   an input event from a
+    // composition or a repeat, a re-render that reads the editor back   can
+    // serialize the old words out of the DOM and refill the composer with the
+    // message the agent is already answering.
+    flushSync()
     const files = [...attachments]
     const taggedPaths = [...projectReferences]
     const taggedTasks = [...taskReferences]

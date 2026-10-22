@@ -17,8 +17,30 @@ import {
 
 /** Shorthand-allowed keys per mode (object-shaped bash/edit are scoped separately). */
 const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
-  'inbox-chat': ['webfetch', 'websearch', 'question'],
-  'file-system-chat': ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
+  'inbox-chat': [
+    'read',
+    'edit',
+    'glob',
+    'grep',
+    'list',
+    'bash',
+    'skill',
+    'webfetch',
+    'websearch',
+    'question'
+  ],
+  'file-system-chat': [
+    'read',
+    'edit',
+    'glob',
+    'grep',
+    'list',
+    'bash',
+    'skill',
+    'webfetch',
+    'websearch',
+    'question'
+  ],
   assistant: [
     'read',
     'edit',
@@ -119,7 +141,7 @@ describe('lean agent definitions', () => {
         const mapping = configured as Record<string, 'allow' | 'deny'>
         expect(mapping['*']).toBe('deny')
         expect(mapping['curl *']).toBe('allow')
-      } else if (mode === 'assistant') {
+      } else if (mode === 'assistant' || mode === 'inbox-chat' || mode === 'file-system-chat') {
         // An assistant run owns its whole job, so it keeps a shell inside its own
         // workspace; the app's permission policy governs the risk of any call.
         expect(agent.permission['bash']).toBe('allow')

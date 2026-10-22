@@ -32,7 +32,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { QuestionRequestGoneError } from './driver.interface'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironmentAsync } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
 import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -327,7 +327,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   async ensureReady(projectPath: string): Promise<void> {
     await runHarnessCommand(this.command, ['--version'], {
       cwd: projectPath,
-      env: this.buildEnv(),
+      env: await this.buildEnv(),
       timeoutMs: 5_000
     })
   }
@@ -811,7 +811,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
     if (connected !== null && connected.size === 0) return []
     const { stdout } = await runHarnessCommand(this.command, ['models', '--verbose'], {
       cwd: projectPath,
-      env: this.buildEnv(),
+      env: await this.buildEnv(),
       timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
       maxOutputBytes: 16 * 1024 * 1024
     })
@@ -890,7 +890,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
    * catalog unfiltered rather than hiding every provider.
    */
   private async authCredentialIds(): Promise<Set<string> | null> {
-    const environment = this.buildEnv()
+    const environment = await this.buildEnv()
     for (const path of openCodeAuthPaths(environment, { scopedToDataHome: true })) {
       let raw: string
       try {
@@ -975,7 +975,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   ): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
     void _projectPath
     if (this.accountUsageRequest) return this.accountUsageRequest
-    const request = readOpenCodeAccountUsage(this.buildEnv(), 'v1')
+    const request = this.buildEnv().then((env) => readOpenCodeAccountUsage(env, 'v1'))
     this.accountUsageRequest = request
     try {
       return await request
@@ -1315,8 +1315,8 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       ...(runtime?.args ?? overlay?.args ?? [])
     ]
     const env = runtime
-      ? this.buildEnv(runtime)
-      : buildProcessEnvironment({
+      ? await this.buildEnv(runtime)
+      : await buildProcessEnvironmentAsync({
           ...process.env,
           ...this.accountEnvironment,
           ...(overlay?.env ?? {})
@@ -1399,7 +1399,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
     const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
     const prepared = await prepareHarnessInvocation(this.command, args, {
       cwd: projectPath,
-      env: buildProcessEnvironment({
+      env: await buildProcessEnvironmentAsync({
         ...process.env,
         ...this.accountEnvironment,
         ...(providerOverlay.env ?? {})
@@ -1478,9 +1478,9 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
   }
 
   /** GUI apps don't inherit the shell PATH   augment with common install locations. */
-  private buildEnv(runtime?: PreparedUtilityRuntime): NodeJS.ProcessEnv {
+  private async buildEnv(runtime?: PreparedUtilityRuntime): Promise<NodeJS.ProcessEnv> {
     if (!runtime) {
-      return buildProcessEnvironment({ ...process.env, ...this.accountEnvironment })
+      return buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })
     }
 
     const configPath =
@@ -1491,7 +1491,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       runtime.configPaths['OPENCODE_CONFIG_DIR'] ??
       runtime.configPaths['opencode-skills'] ??
       runtime.configPaths['skills']
-    return buildProcessEnvironment({
+    return buildProcessEnvironmentAsync({
       ...process.env,
       ...this.accountEnvironment,
       ...(configPath ? { OPENCODE_CONFIG: configPath } : {}),

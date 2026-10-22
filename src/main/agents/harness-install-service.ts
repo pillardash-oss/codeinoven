@@ -14,7 +14,7 @@ import {
   prepareTerminalCommandHandoff,
   prepareWslTerminalHandoff
 } from '../drivers/harness-runtime'
-import { resolveExecutablePath } from '../drivers/cli-environment'
+import { resolveExecutablePathAsync } from '../drivers/cli-environment'
 import { powershellLiteral, windowsEncodedCommand } from '../ovens/oven-remote-shell'
 
 type Platform = NodeJS.Platform
@@ -456,15 +456,22 @@ export class HarnessInstallService {
     }
     const method = channel.method
     let resolved = { command: channel.command, args: channel.args, method }
-    if (method === 'npm' && !wslTarget && resolveExecutablePath('node') === undefined) {
-      resolved = this.withNodeBootstrap(definition.name, resolved, platform)
+    if (
+      method === 'npm' &&
+      !wslTarget &&
+      (await resolveExecutablePathAsync('node')) === undefined
+    ) {
+      resolved = await this.withNodeBootstrap(definition.name, resolved, platform)
     }
 
     if (wslTarget) {
       const script = [resolved.command, ...resolved.args]
         .map((value) => wslShellArgument(value))
         .join(' ')
-      const prepared = prepareWslTerminalHandoff(wslTarget.distribution, 'sh', ['-lc', script])
+      const prepared = await prepareWslTerminalHandoff(wslTarget.distribution, 'sh', [
+        '-lc',
+        script
+      ])
       return {
         kind: 'terminal',
         command: prepared.command,
@@ -474,7 +481,7 @@ export class HarnessInstallService {
       }
     }
 
-    const prepared = prepareTerminalCommandHandoff(resolved.command, resolved.args)
+    const prepared = await prepareTerminalCommandHandoff(resolved.command, resolved.args)
     return {
       kind: 'terminal',
       command: prepared.command,
@@ -489,16 +496,16 @@ export class HarnessInstallService {
    * Node runtime was found   Windows via winget, macOS via Homebrew. On Linux,
    * or when no bootstrap channel exists, explain what the user needs instead.
    */
-  private withNodeBootstrap(
+  private async withNodeBootstrap(
     harnessName: string,
     command: { command: string; args: string[]; method: HarnessInstallMethod },
     platform: Platform
-  ): { command: string; args: string[]; method: HarnessInstallMethod } {
+  ): Promise<{ command: string; args: string[]; method: HarnessInstallMethod }> {
     const npmPackage = command.args[command.args.length - 1]
     if (!npmPackage) {
       throw new Error(`No npm package is configured for ${harnessName}.`)
     }
-    if (platform === 'win32' && resolveExecutablePath('winget')) {
+    if (platform === 'win32' && (await resolveExecutablePathAsync('winget'))) {
       // A running shell keeps its old PATH after the Node installer updates
       // Windows. Reload the persisted paths before resolving npm.cmd, and use
       // an encoded script so cmd/PTY argument quoting cannot alter the chain.
@@ -527,7 +534,7 @@ export class HarnessInstallService {
         args
       }
     }
-    if (platform === 'darwin' && resolveExecutablePath('brew')) {
+    if (platform === 'darwin' && (await resolveExecutablePathAsync('brew'))) {
       return {
         method: command.method,
         command: 'sh',
@@ -576,10 +583,11 @@ export class HarnessInstallService {
       const script = [command.command, ...command.args]
         .map((value) => wslShellArgument(value))
         .join(' ')
-      const prepared = prepareWslTerminalHandoff(provider.executionTarget.distribution, 'sh', [
-        '-lc',
-        script
-      ])
+      const prepared = await prepareWslTerminalHandoff(
+        provider.executionTarget.distribution,
+        'sh',
+        ['-lc', script]
+      )
       return {
         kind: 'terminal',
         command: prepared.command,
@@ -589,7 +597,7 @@ export class HarnessInstallService {
       }
     }
 
-    const prepared = prepareTerminalCommandHandoff(command.command, expandHome(command.args))
+    const prepared = await prepareTerminalCommandHandoff(command.command, expandHome(command.args))
     return {
       kind: 'terminal',
       command: prepared.command,

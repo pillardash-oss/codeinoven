@@ -490,20 +490,29 @@
               {#if chrome}
                 <!-- A fullscreen panel is the window, so its canonical header doubles
                      as the title bar. It reserves the OS window-control inset so the
-                     title never sits underneath the macOS traffic lights, and it is a
+                     title and actions never sit underneath OS window controls, and it is a
                      fixed `h-12` like the app header and the fullscreen file editor, so
                      the title centres on the same band the traffic lights sit in.
-                     Every other placement draws a panel inset from the window edge,
-                     where the controls are outside it: it keeps the intrinsic `py-4`
-                     that matches the header of every centred dialog. -->
+                     A right-side panel also reserves right-hand controls. Other panels
+                     are inset from the window edge and keep the intrinsic `py-4`
+                     that matches the header of every centred dialog. Windows keeps
+                     its caption buttons on the right, which would leave the heading
+                     hugging the left window edge, so these headers reserve a left gutter
+                     as well. -->
                 <div
                   class={[
                     'flex shrink-0 items-center justify-between border-b px-6',
                     placement === 'fullscreen' ? 'h-12' : 'py-4'
                   ]}
                   style={placement === 'fullscreen'
-                    ? trafficLightInsetStyle({ mirrorRightInset: false })
-                    : undefined}
+                    ? trafficLightInsetStyle({ mirrorRightInset: false, leftPadding: '2.5rem' })
+                    : placement === 'right'
+                      ? trafficLightInsetStyle({
+                          controlSide: 'right',
+                          rightPadding: '1.5rem',
+                          leftPadding: '2rem'
+                        })
+                      : undefined}
                 >
                   <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
                   {#if description}

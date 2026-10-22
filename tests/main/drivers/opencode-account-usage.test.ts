@@ -25,6 +25,18 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => sandbox.home }
 })
 
+/**
+ * The reader hands every SQLite read to the background I/O worker lane, whose
+ * worker factory only exists after electron-vite rewrites the `?nodeWorker`
+ * import (see `src/main/system/background-io.ts`). Vitest does not run that
+ * transform, so the lane is replaced by the in-process implementation the same
+ * worker thread runs: this suite covers credential reading, not the transport.
+ */
+vi.mock('../../../src/main/system/background-io', async () => {
+  const core = await import('../../../src/main/system/background-io-core')
+  return { backgroundIo: core.backgroundIo }
+})
+
 afterAll(async () => {
   await rm(sandbox.home, { recursive: true, force: true })
 })

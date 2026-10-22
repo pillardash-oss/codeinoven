@@ -1,3 +1,4 @@
+import { createWorkQueue } from '../../lib/bounded-work'
 import type { Thread } from '../../lib/types'
 import { Logger } from '../system/logger'
 
@@ -15,6 +16,23 @@ export interface ThreadBranchDeps {
   resolver: BranchResolver
   store: BranchStore
   onSettled(thread: Thread): void
+}
+
+const branchWork = createWorkQueue(2, 64)
+const resolving = new WeakMap<BranchResolver, Map<string, Promise<string | null>>>()
+
+function resolveBranch(resolver: BranchResolver, directory: string): Promise<string | null> {
+  let directories = resolving.get(resolver)
+  if (!directories) {
+    directories = new Map()
+    resolving.set(resolver, directories)
+  }
+  const existing = directories.get(directory)
+  if (existing) return existing
+  const current = branchWork(() => resolver.getCurrentBranch(directory))
+  directories.set(directory, current)
+  void current.finally(() => directories.delete(directory)).catch(() => undefined)
+  return current
 }
 
 const pending = new Set<string>()
@@ -39,7 +57,7 @@ export function settleThreadBranch(
   if (pending.has(key)) return
   pending.add(key)
   void (async () => {
-    const branch = await deps.resolver.getCurrentBranch(workingDirectory)
+    const branch = await resolveBranch(deps.resolver, workingDirectory)
     if (!branch) return
     const updated = await deps.store.setBranch(thread.projectId, thread.id, branch)
     deps.onSettled(updated)

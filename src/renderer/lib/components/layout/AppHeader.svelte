@@ -236,9 +236,7 @@
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
   data-guide="header"
-  style={isWindows
-    ? 'padding-right: max(0.25rem, calc(100vw - env(titlebar-area-width, 100vw)))'
-    : trafficLightInsetStyle({ mirrorRightInset: false })}
+  style={trafficLightInsetStyle({ mirrorRightInset: false, rightPadding: '0.25rem' })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <button

@@ -29,7 +29,7 @@ import type {
 import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
 import { QuestionRequestGoneError, SteerDeliveryFailedError } from './driver.interface'
 import { Logger } from '../system/logger'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironmentAsync } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
 import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { runHarnessCommand } from './harness-runtime'
@@ -249,7 +249,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   async ensureReady(projectPath: string): Promise<void> {
     await runHarnessCommand(this.command, ['--version'], {
       cwd: projectPath,
-      env: this.buildEnv(),
+      env: await this.buildEnv(),
       timeoutMs: 10_000
     })
   }
@@ -838,7 +838,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     const catalogs = await discoverOpenCodeV2ProviderCatalogs({
       command: this.command,
       cwd: projectPath,
-      env: this.buildEnv()
+      env: await this.buildEnv()
     })
     if (!this.baseUrlProviders) return catalogs
     const custom = await this.baseUrlProviders.listEnabled(this.id)
@@ -880,7 +880,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   ): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
     void _projectPath
     if (this.accountUsageRequest) return this.accountUsageRequest
-    const request = readOpenCodeAccountUsage(this.buildEnv(), 'v2')
+    const request = this.buildEnv().then((env) => readOpenCodeAccountUsage(env, 'v2'))
     this.accountUsageRequest = request
     try {
       return await request
@@ -1322,8 +1322,8 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       ? runtime.env['OPENCODE_CONFIG_CONTENT']
       : overlay?.env?.['OPENCODE_CONFIG_CONTENT']
     const env = runtime
-      ? this.buildEnv(runtime)
-      : buildProcessEnvironment({
+      ? await this.buildEnv(runtime)
+      : await buildProcessEnvironmentAsync({
           ...process.env,
           ...this.accountEnvironment,
           ...(overlay?.env ?? {})
@@ -1356,7 +1356,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     const spawned = await startOpenCodeV2Server({
       command: this.command,
       cwd: projectPath,
-      env: buildProcessEnvironment({
+      env: await buildProcessEnvironmentAsync({
         ...process.env,
         ...this.accountEnvironment,
         ...(overlay.env ?? {})
@@ -1408,11 +1408,11 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   }
 
   /** GUI apps do not inherit the shell PATH: augment with common locations. */
-  private buildEnv(runtime?: PreparedUtilityRuntime): NodeJS.ProcessEnv {
+  private async buildEnv(runtime?: PreparedUtilityRuntime): Promise<NodeJS.ProcessEnv> {
     if (!runtime) {
-      return buildProcessEnvironment({ ...process.env, ...this.accountEnvironment })
+      return buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })
     }
-    return buildProcessEnvironment({
+    return buildProcessEnvironmentAsync({
       ...process.env,
       ...this.accountEnvironment,
       ...runtime.env

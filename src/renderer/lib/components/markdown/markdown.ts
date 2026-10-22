@@ -7,7 +7,7 @@
  * ``` fence is lexed as a code block, which means code streams live into a
  * highlighted block instead of flashing as plain text first.
  */
-import { Marked, walkTokens, type Token, type Tokens } from 'marked'
+import { Marked, Renderer, walkTokens, type Token, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import {
   collectSectionKeys,
@@ -101,6 +101,27 @@ const FOOTNOTE_DEF_SOURCE = /^\[\^([^\]\n]+)\]:(?:[ \t]+|$)(.*(?:\n(?![ \t]*(?:\
  */
 function createMarked(allowHtml: boolean, repository: GithubRepoContext | null): Marked {
   const instance = new Marked({ gfm: true, breaks: true })
+  let renderingLink = false
+
+  instance.use({
+    renderer: {
+      link(token: Tokens.Link) {
+        renderingLink = true
+        try {
+          return Renderer.prototype.link.call(this, token)
+        } finally {
+          renderingLink = false
+        }
+      },
+      codespan({ text }: Tokens.Codespan) {
+        // Agents often put credential acquisition URLs in backticks.
+        // Keep code styling while giving standalone web URLs normal link behavior.
+        if (renderingLink || !/^https?:\/\/[^\s<>]+$/i.test(text)) return false
+        const href = escapeHtmlAttribute(text)
+        return `<a href="${href}"><code>${escapeHtml(text)}</code></a>`
+      }
+    }
+  })
 
   if (!allowHtml) {
     instance.use({

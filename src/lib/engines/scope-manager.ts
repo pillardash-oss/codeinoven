@@ -225,6 +225,57 @@ export class ScopeManager {
     return board
   }
 
+  /** UI reads repair stranded scopes on the database worker, guarded against concurrent edits. */
+  async getBoardViaWorker(projectId: string): Promise<ScopeBoard> {
+    const result = await this.db.queryViaWorker(
+      'SELECT data FROM scope_boards WHERE project_id=?',
+      [projectId],
+      1
+    )
+    if (!result.ok) throw new ScopeManagerError('Could not read scope board')
+    const raw = result.rows[0]?.['data']
+    const board = typeof raw === 'string' ? this.parsePersisted(raw) : defaultBoard()
+    this.assertInvariants(board)
+    const data = JSON.stringify(board)
+    const now = Date.now()
+    const known = board.buckets.map((bucket) => bucket.id)
+    const statements = [
+      typeof raw === 'string'
+        ? {
+            sql: 'UPDATE scope_boards SET data=?, updated_at=? WHERE project_id=? AND data=? AND data<>?',
+            params: [data, now, projectId, raw, data]
+          }
+        : {
+            sql: 'INSERT OR IGNORE INTO scope_boards(project_id, data, updated_at) VALUES(?,?,?)',
+            params: [projectId, data, now]
+          },
+      {
+        sql: `UPDATE threads SET scope_bucket_id=?, scope_sort_order=NULL, last_activity=?, updated_at=?
+        WHERE project_id=? AND scope_bucket_id IS NOT NULL
+          AND scope_bucket_id NOT IN (${known.map(() => '?').join(',')})
+          AND EXISTS (SELECT 1 FROM scope_boards WHERE project_id=? AND data=?)`,
+        params: [DEFAULT_SCOPE_BUCKET_ID, now, now, projectId, ...known, projectId, data]
+      }
+    ]
+    const repaired = await this.db.transactionViaWorker(statements)
+    if (!repaired.ok) throw new ScopeManagerError('Could not restore scope board')
+    return board
+  }
+
+  /** Read capacity metadata without the board UI's repair scan and writes. */
+  async getBoardSnapshot(projectId: string): Promise<ScopeBoard> {
+    const result = await this.db.queryViaWorker(
+      'SELECT data FROM scope_boards WHERE project_id=?',
+      [projectId],
+      1
+    )
+    if (!result.ok) throw new ScopeManagerError('Could not read scope board')
+    const data = result.rows[0]?.['data']
+    const board = typeof data === 'string' ? this.parsePersisted(data) : defaultBoard()
+    this.assertInvariants(board)
+    return board
+  }
+
   /**
    * Every scope bucket across every project that gets its own thread bucket: a
    * pinned scope or a managed worktree root. Read on the database worker so the

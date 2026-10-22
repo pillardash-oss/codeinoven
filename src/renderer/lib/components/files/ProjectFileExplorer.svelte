@@ -31,10 +31,7 @@
   import ProjectFileExplorerHeader from './ProjectFileExplorerHeader.svelte'
   import ProjectFileExplorerTreeRow from './ProjectFileExplorerTreeRow.svelte'
   import {
-    buildEntryIndexFromEntries,
-    buildEntryRowIndex,
-    buildRowIndexByKey,
-    buildTreeRows,
+    buildTreeModel,
     collectAncestorDirectories,
     collectSearchResultDirectories,
     computeFilterMatchesByDirectory,
@@ -226,23 +223,16 @@
     collapsedOverrides
   })
   let filterMatchesByDirectory = $derived(computeFilterMatchesByDirectory(treeFilterInput))
-  let treeRows = $derived(buildTreeRows(treeFilterInput, filterMatchesByDirectory))
+  let treeModel = $derived(buildTreeModel(treeFilterInput, filterMatchesByDirectory))
+  let treeRows = $derived(treeModel.rows)
   let topLevelVisibleEntries = $derived(
     visibleEntries('', treeFilterInput, filterMatchesByDirectory)
   )
 
-  /** Entry-only view preserves the existing keyboard and range-selection model. */
-  let visibleRows = $derived.by((): ProjectFileEntry[] => {
-    const entries: ProjectFileEntry[] = []
-    for (const row of treeRows) {
-      if (row.kind === 'entry') entries.push(row.entry)
-    }
-    return entries
-  })
-
-  let rowIndexByPath = $derived(buildEntryIndexFromEntries(visibleRows))
-  let treeRowIndexByPath = $derived(buildEntryRowIndex(treeRows))
-  let treeRowIndexByKey = $derived(buildRowIndexByKey(treeRows))
+  let visibleRows = $derived(treeModel.entries)
+  let rowIndexByPath = $derived(treeModel.entryIndex)
+  let treeRowIndexByPath = $derived(treeModel.rowIndex)
+  let treeRowIndexByKey = $derived(treeModel.keyIndex)
 
   let virtualTree = $derived(computeVirtualTree(treeRows, treeScrollTop, treeViewportHeight))
 

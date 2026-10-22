@@ -1,4 +1,3 @@
-import { existsSync } from 'fs'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   isManagedScopeRoot,
@@ -8,7 +7,7 @@ import {
   type ScopeTarget,
   type ScopeWorktreeHealth
 } from '../../lib/types'
-import { getScopeRootPath } from '../../lib/utils'
+import { getScopeRootPath, pathIsAccessible } from '../../lib/utils'
 import { scopeWorktreeUnavailableMessage } from '../../lib/scope-worktree-health'
 
 /** One registration reported by `git worktree list --porcelain`. */
@@ -55,6 +54,7 @@ interface ProjectLookup {
 }
 
 interface ScopeBoardLookup {
+  getBoardSnapshot?(projectId: string): Promise<import('../../lib/types').ScopeBoard>
   getBoard(projectId: string): import('../../lib/types').ScopeBoard
 }
 
@@ -74,7 +74,9 @@ export class ScopeRootResolver {
   ) {}
 
   async resolve(target: ScopeTarget): Promise<ScopeResolution> {
-    const board = this.scopes.getBoard(target.projectId)
+    const board = this.scopes.getBoardSnapshot
+      ? await this.scopes.getBoardSnapshot(target.projectId)
+      : this.scopes.getBoard(target.projectId)
     const bucket = board.buckets.find((candidate) => candidate.id === target.scopeBucketId)
     if (!bucket) {
       // Resolution itself stays fail-closed: only the thread adapter
@@ -133,7 +135,7 @@ export class ScopeRootResolver {
       })
     }
 
-    if (!existsSync(expectedPath)) {
+    if (!(await pathIsAccessible(expectedPath))) {
       return fail({
         category: 'missing',
         detail: `The managed checkout directory is missing`

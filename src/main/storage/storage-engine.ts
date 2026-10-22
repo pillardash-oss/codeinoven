@@ -166,6 +166,22 @@ export interface RawFileChunk {
 }
 
 export class StorageEngine {
+  private readonly writeListeners = new Map<string, Set<() => void>>()
+
+  /** Subscribe to successful writes without an idle filesystem poll. */
+  onWrite(relativePath: string, listener: () => void): () => void {
+    let listeners = this.writeListeners.get(relativePath)
+    if (!listeners) {
+      listeners = new Set()
+      this.writeListeners.set(relativePath, listeners)
+    }
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0) this.writeListeners.delete(relativePath)
+    }
+  }
+
   private root: string
   private readonly allowOrphanProjectArtifacts: boolean
   /**
@@ -596,6 +612,13 @@ export class StorageEngine {
     const fullPath = this.resolve(relativePath)
     await ensureDir(join(fullPath, '..'))
     await writeJson(fullPath, data)
+    for (const listener of this.writeListeners.get(relativePath) ?? []) {
+      try {
+        listener()
+      } catch (error) {
+        Logger.dev('Storage write listener failed', error)
+      }
+    }
   }
 
   private async readWorkerNameFile(relativePath: string): Promise<string[] | null> {

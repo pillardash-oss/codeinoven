@@ -21,7 +21,7 @@ import {
 } from './driver.interface'
 import { PermissionPolicy } from '../permissions/permission-policy'
 import { Logger } from '../system/logger'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironmentAsync } from './cli-environment'
 import { attachmentReferences, attachmentTarget } from './attachment-reference'
 import { runHarnessCommand } from './harness-runtime'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -116,7 +116,7 @@ export class ClineDriver extends PersistentCliDriver {
   protected async ensureCliReady(projectPath: string): Promise<void> {
     await runHarnessCommand('cline', ['--version'], {
       cwd: projectPath,
-      env: buildProcessEnvironment(),
+      env: await buildProcessEnvironmentAsync(),
       timeoutMs: 10_000
     })
   }
@@ -338,7 +338,7 @@ export class ClineDriver extends PersistentCliDriver {
     const prompt = /\s/u.test(promptBody) ? promptBody : `${promptBody}\n`
     args.push(prompt)
 
-    const env = buildProcessEnvironment()
+    const env = await buildProcessEnvironmentAsync()
     if (customProvider) {
       await this.seedCustomProvider(customProvider, modelId, session, env)
     }

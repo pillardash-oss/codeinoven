@@ -174,6 +174,10 @@ function standaloneOvenService(): Plugin {
         resolve: {
           alias: [
             {
+              find: /^.*\/background-io(?:\.ts)?$/u,
+              replacement: resolve(__dirname, 'src/main/system/background-io-core.ts')
+            },
+            {
               find: /^.*\/project-file-index-service(?:\.ts)?$/u,
               replacement: resolve(__dirname, 'src/main/editor/project-file-index-core.ts')
             }

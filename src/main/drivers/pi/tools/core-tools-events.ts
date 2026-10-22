@@ -310,20 +310,21 @@ export function piCoreToolsEventsSource(): string {
     // (whose allowlist already names read/find/grep/ls) falls through to the
     // outside-the-project gate and blocks on a card just to load a skill.
     if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
-    // File-System-OFF chat threads publish a tool allowlist; any pi built-in
-    // the allowlist does not name requires an explicit permission card. The
-    // app's policy auto-approves reads of files the user attached and asks
-    // for everything else, so attachment access keeps working while the
-    // broader file system stays gated.
+    // Chat exposes local tools for its own workspace. Route every local call
+    // through the app policy even when listed, so external paths stay gated.
+    // Other restricted sessions retain their ordinary tool allowlist.
     if (
       !hit &&
       allowedTools.length > 0 &&
       !isCioOwnToolName(event.toolName) &&
-      !allowedTools.includes(event.toolName)
+      (!allowedTools.includes(event.toolName) ||
+        (allowedTools.includes('webfetch') &&
+          allowedTools.includes('write') &&
+          ['read', 'write', 'edit', 'grep', 'find', 'ls', 'bash', 'powershell', 'cmd'].includes(event.toolName)))
     ) {
       if (isSafeNetworkCurl(event.toolName, input)) return undefined
       const command = typeof input['command'] === 'string' ? input['command'] : undefined
-      const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
+      const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename']) ?? ctx.cwd
       const payload = {
         permission: command === undefined ? event.toolName : 'shell',
         patterns: command === undefined && path !== undefined ? [path] : [],
@@ -332,16 +333,14 @@ export function piCoreToolsEventsSource(): string {
         ...(CIO_PI_BUILTIN_TOOLS.has(event.toolName) ? {} : { surface: event.toolName })
       }
       const approved = await ctx.ui.confirm(
-        'Permission needed: this chat has no file-system access   using ' + event.toolName + ' requires your approval',
+        'Permission check: ' + event.toolName + ' must stay inside this chat workspace or use an authorized external path',
         CIO_PERMISSION_MARKER + JSON.stringify(payload)
       )
       if (approved) return undefined
       return {
         block: true,
         reason:
-          'The user denied this action: this chat has no file-system access, so ' +
-          event.toolName +
-          ' is not available. Do not retry it as-is; work from the files the user attached, or ask the user to enable File System for this chat.'
+          'This action was denied by the chat file-access policy. Keep work inside this chat workspace and use only authorized external inputs. Do not retry the denied action unchanged.'
       }
     }
     if (!hit) return undefined

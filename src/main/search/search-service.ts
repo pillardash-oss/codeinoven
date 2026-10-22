@@ -552,7 +552,8 @@ export class SearchService {
       const vector = await this.embedOne(runtime, document, controller.signal)
       // A rebuild, disable, or model change may have started during embedding.
       if (!this.settings.enabled || this.settings.activeModelId !== model.id) return []
-      return this.index.search(vector, Math.max(1, limit))
+      const matches = await this.index.search(vector, Math.max(1, limit))
+      return this.settings.enabled && this.settings.activeModelId === model.id ? matches : []
     } catch (error) {
       Logger.dev('Intent search failed; falling back to keyword results.', error)
       return []

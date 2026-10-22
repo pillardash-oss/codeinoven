@@ -34,20 +34,20 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // record during its first hydration pass, so ensuring it here keeps that pass
   // off the post-paint feature graph instead of serializing the whole first
   // usable frame behind it. Idempotent: it upserts only when the row is absent.
-  void projectManager.ensureAssistantSpace()
+  const assistantSpaceReady = projectManager.ensureAssistantSpace()
   // The renderer warms the provider catalog for the inbox as soon as the first
   // paint settles, which is before any New chat resolves `project:ensureInbox`.
   // On a cold data root that pass used to discover against a project row that
   // did not exist yet, so the row is created here, ahead of every renderer read.
-  void projectManager.ensureInboxProject()
+  const inboxReady = projectManager.ensureInboxProject()
   const threadManager = new ThreadManager(database)
   // The global browser's per-tab agent sidebar is a side chat whose scope
   // resolves against this reserved hidden project and its single thread, so
   // both must exist before the browser view can discover capabilities for a
   // tab. Idempotent, and the thread is created only after its project row.
-  void projectManager
-    .ensureGlobalBrowserSpace()
-    .then(() => threadManager.ensureGlobalBrowserThread())
+  const browserSpaceReady = projectManager.ensureGlobalBrowserSpace()
+  void browserSpaceReady.then(() => threadManager.ensureGlobalBrowserThread())
+  const projectsReady = Promise.all([assistantSpaceReady, inboxReady, browserSpaceReady])
   const noteRepo = new NoteRepo(database)
   const branchDeps: ThreadBranchDeps = {
     resolver: new RepositoryService(),
@@ -57,7 +57,10 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
 
   ipcMain.handle('config:get', () => storage.getConfig())
   ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
-  ipcMain.handle('project:list', () => projectManager.listProjects())
+  ipcMain.handle('project:list', async () => {
+    await projectsReady
+    return projectManager.listProjects()
+  })
   ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
   // Same channel `registerAssistantHandlers` would register after first paint;
   // registering it on the hydration surface lets the renderer resolve it without
@@ -67,7 +70,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     projectManager.getIconDataUrl(projectId)
   )
   ipcMain.handle('scope:get', (_, projectId: unknown) =>
-    scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
+    scopeManager.getBoardViaWorker(validateEntityId(projectId, 'Project ID'))
   )
   ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
     const visible = await database.queryViaWorker(

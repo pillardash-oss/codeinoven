@@ -1,3 +1,4 @@
+import { backgroundIo } from '../system/background-io'
 import { randomUUID } from 'crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { homedir } from 'os'
@@ -20,7 +21,7 @@ import type {
   HarnessLoginHandoff,
   HarnessLoginOptions
 } from '../drivers/driver.interface'
-import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { buildProcessEnvironmentAsync } from '../drivers/cli-environment'
 import {
   readOpenCodeV2ActiveCredentialIds,
   readOpenCodeV2StoredCredentials,
@@ -472,7 +473,7 @@ async function readAntigravityStatus(
   let result: { succeeded: boolean; stdout: string; stderr: string }
   try {
     const output = await runHarnessCommand('agy', ['models'], {
-      env: buildProcessEnvironment({ ...process.env, ...environment }),
+      env: await buildProcessEnvironmentAsync({ ...process.env, ...environment }),
       timeoutMs: STATUS_TIMEOUT_MS,
       maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
     })
@@ -1040,41 +1041,6 @@ function removeMatchingAuthKeys(
   return { content: JSON.stringify(record, null, 2), keys: matched }
 }
 
-/** Open a credential database for writing, or undefined when unavailable. */
-async function openCredentialStoreWritable(
-  databasePath: string
-): Promise<
-  | {
-      prepare(sql: string): { all(...params: unknown[]): unknown; run(...params: unknown[]): unknown }
-      close(): void
-    }
-  | undefined
-> {
-  let constructor: new (
-    path: string,
-    options?: { readonly?: boolean; fileMustExist?: boolean }
-  ) => {
-    prepare(sql: string): { all(...params: unknown[]): unknown; run(...params: unknown[]): unknown }
-    close(): void
-  }
-  try {
-    const module = (await import('better-sqlite3')) as unknown
-    const candidate =
-      module !== null && typeof module === 'object' && 'default' in module
-        ? (module as { default: unknown }).default
-        : module
-    if (typeof candidate !== 'function') return undefined
-    constructor = candidate as typeof constructor
-  } catch {
-    return undefined
-  }
-  try {
-    return new constructor(databasePath, { fileMustExist: true })
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * Delete V2 credential rows whose integration matches a stale logout target.
  * Scoped to the account container when the environment isolates one, so a
@@ -1096,29 +1062,13 @@ async function deleteOpenCodeV2CredentialsFor(
   )
   let deleted = 0
   for (const databasePath of databasePaths) {
-    const database = await openCredentialStoreWritable(databasePath)
-    if (!database) continue
-    try {
-      // better-sqlite3 is synchronous; candidate sets are tiny (rename aliases).
-      const placeholders = [...candidates].map(() => 'LOWER(integration_id) = LOWER(?)').join(' OR ')
-      if (!placeholders) continue
-      // Count first so the caller can report; the delete is the same predicate.
-      let matching = 0
-      try {
-        const rows = database.prepare(`SELECT id FROM credential WHERE ${placeholders}`).all(...[...candidates])
-        matching = Array.isArray(rows) ? rows.length : 0
-      } catch {
-        continue
-      }
-      if (matching === 0) continue
-      database.prepare(`DELETE FROM credential WHERE ${placeholders}`).run(...[...candidates])
-      deleted += matching
-    } catch {
-      // A store written by a different schema is not a reason to fail logout.
-    } finally {
-      database.close()
-    }
+    deleted += await backgroundIo<number>({
+      kind: 'credential-delete',
+      databasePath,
+      candidates: [...candidates]
+    })
   }
+
   return deleted
 }
 
@@ -1763,8 +1713,7 @@ export class ProviderAccountOrchestrator {
     // whose provider id went stale still switches the credential it holds.
     const resolved =
       (await definition.resolveStoredIntegration?.(providerId, environment)) ?? providerId
-    const target =
-      harnessId === 'opencode' ? canonicalOpenCodeIntegrationId(resolved) : resolved
+    const target = harnessId === 'opencode' ? canonicalOpenCodeIntegrationId(resolved) : resolved
     const result = await this.run(
       definition.command,
       definition.activateArgs(target, credentialId),
@@ -1974,7 +1923,7 @@ export class ProviderAccountOrchestrator {
     try {
       const result = await runHarnessCommand(command, args, {
         ...(cwd ? { cwd } : {}),
-        env: buildProcessEnvironment({ ...process.env, ...environment }),
+        env: await buildProcessEnvironmentAsync({ ...process.env, ...environment }),
         timeoutMs: STATUS_TIMEOUT_MS,
         maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
       })

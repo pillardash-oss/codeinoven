@@ -107,14 +107,6 @@
     if (kinds.size === 1 && kinds.has('update')) return 'Updates'
     return 'Tasks'
   }
-
-  function footerNote(): string {
-    // A docked panel has no keyboard way back on purpose, so the note points at
-    // the dock chip, the one control that restores it.
-    return store.finishedCount === store.runs.length
-      ? 'Tasks keep running while you work   click the dock to bring them back.'
-      : 'Tasks keep running while you work   click the dock to bring them back, and close once all of them finish.'
-  }
 </script>
 
 <DockableModal
@@ -270,7 +262,6 @@
           </div>
         </div>
       {/each}
-      <p class="text-[0.6875rem] text-dimmed">{footerNote()}</p>
     </div>
   {/if}
 </DockableModal>

@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { pathIsAccessible } from '../../lib/utils'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { bundledPiVendorDir } from '../drivers/harness-runtime'
@@ -36,14 +36,14 @@ export async function importPiAiProvidersRegistry(scope: string): Promise<unknow
     const entry = import.meta.resolve('@earendil-works/pi-ai')
     const packageRoot = dirname(dirname(fileURLToPath(entry)))
     const registry = join(packageRoot, 'dist/providers/all.js')
-    if (existsSync(registry)) candidates.push(registry)
+    if (await pathIsAccessible(registry)) candidates.push(registry)
   } catch {
     // pi-ai is not installed in this checkout   fall through to the vendor.
   }
   const vendor = bundledPiVendorDir()
   if (vendor) {
     const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
-    if (existsSync(vendored)) candidates.push(vendored)
+    if (await pathIsAccessible(vendored)) candidates.push(vendored)
   }
   const resolved = candidates[0]
   if (!resolved) {

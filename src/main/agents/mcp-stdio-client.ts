@@ -1,9 +1,9 @@
 /// <reference types="node" />
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { mkdirSync } from 'fs'
+import { mkdir } from 'fs/promises'
 import { basename, join } from 'path'
-import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { buildProcessEnvironmentAsync } from '../drivers/cli-environment'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { getConfigRoot } from '../../lib/utils'
 
@@ -98,10 +98,10 @@ export function parseMcpServerInfo(result: unknown): McpServerInfo {
  * inside CodeInOven's own checkout). A neutral directory keeps the server's
  * install independent of whichever project the app happens to be sitting in.
  */
-function mcpWorkingDirectory(): string | undefined {
+async function mcpWorkingDirectory(): Promise<string | undefined> {
   const directory = join(getConfigRoot(), 'runtime', 'mcp-servers')
   try {
-    mkdirSync(directory, { recursive: true })
+    await mkdir(directory, { recursive: true })
     return directory
   } catch {
     // A cwd is an optimization, never a reason an MCP server cannot start.
@@ -168,8 +168,8 @@ export class StdioMcpClient implements McpClient {
   ): Promise<StdioMcpClient> {
     const client = new StdioMcpClient(
       spawn(command, args, {
-        env: { ...buildProcessEnvironment(), ...environment },
-        cwd: mcpWorkingDirectory(),
+        env: { ...(await buildProcessEnvironmentAsync()), ...environment },
+        cwd: await mcpWorkingDirectory(),
         stdio: ['pipe', 'pipe', 'pipe']
       }),
       command

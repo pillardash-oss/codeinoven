@@ -18,7 +18,7 @@ vi.mock('../../../src/main/drivers/harness-runtime', () => ({
 // file drives, independent of what the host has installed.
 vi.mock('../../../src/main/drivers/cli-environment', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/main/drivers/cli-environment')>()
-  return { ...actual, resolveExecutablePaths: () => [] }
+  return { ...actual, resolveExecutablePathsAsync: async () => [] }
 })
 
 import {

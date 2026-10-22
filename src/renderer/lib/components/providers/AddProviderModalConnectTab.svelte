@@ -48,6 +48,7 @@
     togglingHide: boolean
     oauth: ProviderSignInController
     accountForConnected: (connected: ProviderAccountAuthEntry) => HarnessAccount | undefined
+    onOpenPicker: () => void
     onCheckAuth: () => void
     onSaveAuthenticatedAccount: () => void
     onBackToList: () => void
@@ -83,6 +84,7 @@
     togglingHide,
     oauth,
     accountForConnected,
+    onOpenPicker,
     onCheckAuth,
     onSaveAuthenticatedAccount,
     onBackToList,
@@ -398,8 +400,23 @@
       {/if}
     </div>
   {:else}
-    <div class="border border-dashed px-3 py-2.5">
-      {#if apiKeyEntry}
+    <div
+      class={apiKeyEntry && !authStatus?.accounts.some((account) => account.active !== false)
+        ? 'flex min-h-56 flex-col items-center justify-center gap-4 px-4 py-8 text-center'
+        : 'border border-dashed px-3 py-2.5'}
+    >
+      {#if apiKeyEntry && !authStatus?.accounts.some((account) => account.active !== false)}
+        <p class="text-sm text-muted">Connect your first provider to {harness.name}.</p>
+        <button
+          type="button"
+          class="flex min-h-12 items-center justify-center gap-2 bg-primary px-6 py-3 text-sm font-medium text-on-primary hover:bg-primary-hover focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary"
+          title="Search the {harness.name} provider catalog"
+          data-modal-primary
+          onclick={onOpenPicker}
+        >
+          <CioSearch size={20} /> Search providers
+        </button>
+      {:else if apiKeyEntry}
         <p class="text-[0.6875rem] text-muted">
           Click <strong class="font-medium text-foreground">Search providers</strong> below to
           browse

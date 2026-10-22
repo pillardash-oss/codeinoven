@@ -9,8 +9,8 @@ import { broadcastAppToast } from '../../ipc/app-toast'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { listHarnesses } from '../../agents/harness-registry'
-import { buildProcessEnvironment } from '../../drivers/cli-environment'
-import { isHarnessCommandAvailable } from '../../drivers/harness-runtime'
+import { buildProcessEnvironmentAsync } from '../../drivers/cli-environment'
+import { isHarnessCommandAvailableAsync } from '../../drivers/harness-runtime'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath } from '../../../lib/native-skill-paths'
@@ -148,13 +148,14 @@ export function providerCatalogPath(): string {
   return 'provider-catalog/catalog.json'
 }
 
-export function filterInstalledProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
-  const env = buildProcessEnvironment()
-  const installed = new Set(
-    listHarnesses()
-      .filter((harness) => isHarnessCommandAvailable(harness.command, env))
-      .map((harness) => harness.id)
-  )
+export async function filterInstalledProviderCatalogs(
+  catalogs: ProviderCatalog[]
+): Promise<ProviderCatalog[]> {
+  const env = await buildProcessEnvironmentAsync()
+  const installed = new Set<string>()
+  for (const harness of listHarnesses()) {
+    if (await isHarnessCommandAvailableAsync(harness.command, env)) installed.add(harness.id)
+  }
   return catalogs.filter((catalog) => installed.has(catalog.harnessId))
 }
 

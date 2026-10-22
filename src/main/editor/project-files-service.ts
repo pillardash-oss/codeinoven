@@ -1,5 +1,6 @@
+import { backgroundIo } from '../system/background-io'
 import { constants } from 'node:fs'
-import { mkdir, link, lstat, open, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, link, lstat, open, realpath, rename, rm, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { toPosixPath } from '../../lib/paths'
@@ -15,10 +16,8 @@ import type {
   PromptProjectReference
 } from '../../lib/types'
 import {
-  MAX_DIRECTORY_ENTRIES,
   MAX_TEXT_FILE_BYTES,
   decodeText,
-  isSymlinkedDirectoryInsideRoot,
   isWithinRoot,
   revisionOf,
   scopedKey
@@ -84,64 +83,12 @@ export class ProjectFilesService {
   ): Promise<ProjectFileEntry[]> {
     const root = await this.roots.projectRoot(projectId, scopeBucketId, threadId)
     const directory = await this.roots.resolveExistingPath(root, relativeDirectory, true)
-    const entries = await readdir(directory, { withFileTypes: true })
-    // Symlinked entries are followed so linked files and directories appear in
-    // the tree. A symlinked directory is only kept when its target stays inside
-    // the project root after resolving symlinks, so links escaping the project
-    // or cycling back up the tree are never listed.
-    const visible: Array<{ name: string; isDirectory: boolean }> = []
-    for (const entry of entries) {
-      if (entry.isFile()) {
-        visible.push({ name: entry.name, isDirectory: false })
-        continue
-      }
-      if (entry.isDirectory()) {
-        visible.push({ name: entry.name, isDirectory: true })
-        continue
-      }
-      if (!entry.isSymbolicLink()) continue
-      const linkPath = join(directory, entry.name)
-      let target: import('node:fs').Stats
-      try {
-        target = await stat(linkPath)
-      } catch {
-        // Broken symlink: no target to list.
-        continue
-      }
-      if (target.isFile()) {
-        visible.push({ name: entry.name, isDirectory: false })
-        continue
-      }
-      if (target.isDirectory() && (await isSymlinkedDirectoryInsideRoot(root, linkPath))) {
-        visible.push({ name: entry.name, isDirectory: true })
-      }
-    }
-    visible.sort((left, right) => {
-      if (left.isDirectory !== right.isDirectory) {
-        return left.isDirectory ? -1 : 1
-      }
-      return left.name.localeCompare(right.name, undefined, {
-        numeric: true,
-        sensitivity: 'base'
-      })
+    return backgroundIo<ProjectFileEntry[]>({
+      kind: 'list-directory',
+      root,
+      directory,
+      relativeDirectory
     })
-
-    if (visible.length > MAX_DIRECTORY_ENTRIES) {
-      throw new Error(
-        `Directory contains more than ${MAX_DIRECTORY_ENTRIES.toLocaleString()} visible entries`
-      )
-    }
-
-    const results: ProjectFileEntry[] = []
-    for (const entry of visible) {
-      const entryPath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
-      results.push({
-        name: entry.name,
-        path: entryPath,
-        kind: entry.isDirectory ? 'directory' : 'file'
-      })
-    }
-    return results
   }
 
   async searchFiles(
