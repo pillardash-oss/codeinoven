@@ -278,41 +278,80 @@ function requireAssets(): void {
 }
 
 /**
- * Run a command and return its standard output.
+/**
+ * One file inside the package, located from its central directory record.
  *
- * An MSIX is a zip container, so the package is read with whatever archive tool
- * the host has rather than with a library: `unzip` on macOS and Linux, and
- * `tar` (bsdtar, which reads zip) on Windows, where `unzip` is not installed on
- * a default runner.
+ * An MSIX is a zip container, and the package is read here rather than with the
+ * host's archive tool. The first Windows run of this verification failed with
+ * `tar: This does not look like a tar archive`: `tar` on a Windows runner is
+ * Git's GNU tar, not the bsdtar that reads zip, and `unzip` is not installed at
+ * all. Reading the container directly removes the dependency on which tools a
+ * machine happens to have.
  */
-function capture(command: string, args: string[]): string {
-  const result = spawnSync(command, args, { encoding: 'utf8' })
-  if (result.status !== 0) {
-    fail(
-      `\`${command} ${args.join(' ')}\` failed with status ${result.status ?? 'unknown'}: ` +
-        `${(result.stderr ?? '').trim()}`
-    )
+type PackageEntry = {
+  name: string
+  method: number
+  compressedSize: number
+  localHeaderOffset: number
+}
+
+const ZIP_END_OF_DIRECTORY = 0x06054b50
+const ZIP_DIRECTORY_ENTRY = 0x02014b50
+const ZIP_LOCAL_HEADER = 0x04034b50
+const ZIP_LARGEST_COMMENT = 65535
+
+function readPackageDirectory(bytes: Uint8Array): PackageEntry[] {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  let end = -1
+  const earliest = Math.max(0, bytes.length - ZIP_LARGEST_COMMENT - 22)
+  for (let offset = bytes.length - 22; offset >= earliest; offset -= 1) {
+    if (view.getUint32(offset, true) === ZIP_END_OF_DIRECTORY) {
+      end = offset
+      break
+    }
   }
-  return result.stdout
+  if (end === -1) fail('The package is not a readable zip container')
+  const count = view.getUint16(end + 10, true)
+  const directoryOffset = view.getUint32(end + 16, true)
+  const decoder = new TextDecoder()
+  const entries: PackageEntry[] = []
+  let cursor = directoryOffset
+  for (let index = 0; index < count; index += 1) {
+    if (view.getUint32(cursor, true) !== ZIP_DIRECTORY_ENTRY) {
+      fail('The package central directory is unreadable')
+    }
+    const nameLength = view.getUint16(cursor + 28, true)
+    const extraLength = view.getUint16(cursor + 30, true)
+    const commentLength = view.getUint16(cursor + 32, true)
+    entries.push({
+      name: decoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength)),
+      method: view.getUint16(cursor + 10, true),
+      compressedSize: view.getUint32(cursor + 20, true),
+      localHeaderOffset: view.getUint32(cursor + 42, true)
+    })
+    cursor += 46 + nameLength + extraLength + commentLength
+  }
+  return entries
 }
 
-/** The manifest file's contents, read straight out of the package. */
-function readPackageManifest(msixPath: string): string {
-  return process.platform === 'win32'
-    ? capture('tar', ['-xOf', msixPath, 'AppxManifest.xml'])
-    : capture('unzip', ['-p', msixPath, 'AppxManifest.xml'])
-}
-
-/** Every entry name inside the package, with `/` separators. */
-function readPackageEntries(msixPath: string): string[] {
-  const listing =
-    process.platform === 'win32'
-      ? capture('tar', ['-tf', msixPath])
-      : capture('unzip', ['-Z1', msixPath])
-  return listing
-    .split('\n')
-    .map((line) => line.trim().replace(/\\/g, '/'))
-    .filter((line) => line.length > 0)
+async function readPackageEntry(bytes: Uint8Array, entry: PackageEntry): Promise<Uint8Array> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (view.getUint32(entry.localHeaderOffset, true) !== ZIP_LOCAL_HEADER) {
+    fail(`The package entry \`${entry.name}\` has no readable local header`)
+  }
+  const nameLength = view.getUint16(entry.localHeaderOffset + 26, true)
+  const extraLength = view.getUint16(entry.localHeaderOffset + 28, true)
+  const start = entry.localHeaderOffset + 30 + nameLength + extraLength
+  // Copied into its own buffer: the view type of a subarray is not a `BlobPart`
+  // under this project's TypeScript settings.
+  const compressed = new Uint8Array(entry.compressedSize)
+  compressed.set(bytes.subarray(start, start + entry.compressedSize))
+  // 0 is stored, 8 is deflate, which is what `makeappx` writes unless the build
+  // asks for store compression.
+  if (entry.method === 0) return compressed
+  if (entry.method !== 8) fail(`Unsupported compression method ${entry.method} in the package`)
+  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
 }
 
 /** One attribute of the manifest's `<Identity>` element. */
@@ -336,15 +375,19 @@ function readIdentityAttribute(manifest: string, attribute: string): string {
  * enforces, and that the executable and tile assets the manifest names are
  * actually in the package.
  */
-function verifyPackage(
+async function verifyPackage(
   msixPath: string,
   identity: AppxIdentity,
   packageVersion: string,
   arch: string
-): void {
+): Promise<void> {
   if (!existsSync(msixPath)) fail(`No package at ${msixPath}`)
-  const manifest = readPackageManifest(msixPath)
-  const entries = readPackageEntries(msixPath)
+  const bytes = new Uint8Array(await Bun.file(msixPath).arrayBuffer())
+  const directory = readPackageDirectory(bytes)
+  const manifestEntry = directory.find((entry) => entry.name.toLowerCase() === 'appxmanifest.xml')
+  if (manifestEntry === undefined) fail(`The package at ${msixPath} has no AppxManifest.xml`)
+  const manifest = new TextDecoder().decode(await readPackageEntry(bytes, manifestEntry))
+  const entries = directory.map((entry) => entry.name.replace(/\\/g, '/'))
 
   const checks: ReadonlyArray<readonly [string, string, string]> = [
     ['Identity Name', readIdentityAttribute(manifest, 'Name'), identity.identityName],
@@ -385,17 +428,17 @@ function expectedArtifactPath(outDir: string, packageVersion: string, arch: stri
   return join(outDir, `${APP_SLUG}-${toMetadataVersion(packageVersion)}-${arch}.msix`)
 }
 
-function writePackageVerification(
+async function writePackageVerification(
   msixPath: string,
   identity: AppxIdentity,
   packageVersion: string,
   arch: string
-): void {
+): Promise<void> {
   write(`\nVerifying ${msixPath}`)
-  verifyPackage(msixPath, identity, packageVersion, arch)
+  await verifyPackage(msixPath, identity, packageVersion, arch)
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const flags = parseFlags(Bun.argv.slice(2))
   const configPath = flags.get('config') ?? 'electron-builder.yml'
   const outDir = flags.get('out') ?? 'dist'
@@ -428,7 +471,7 @@ function main(): void {
   if (verifyOnly !== undefined) {
     const target =
       verifyOnly === 'true' ? expectedArtifactPath(outDir, packageVersion, arch) : verifyOnly
-    writePackageVerification(target, identity, packageVersion, arch)
+    await writePackageVerification(target, identity, packageVersion, arch)
     return
   }
 
@@ -470,7 +513,7 @@ function main(): void {
   write(`\n${APP_NAME} MSIX: ${expectedArtifactPath(outDir, packageVersion, arch)}`)
 
   if (flags.get('no-verify') === undefined) {
-    writePackageVerification(
+    await writePackageVerification(
       expectedArtifactPath(outDir, packageVersion, arch),
       identity,
       packageVersion,
@@ -480,5 +523,5 @@ function main(): void {
 }
 
 if (import.meta.main) {
-  main()
+  await main()
 }
