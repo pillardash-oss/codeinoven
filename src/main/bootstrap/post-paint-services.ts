@@ -872,6 +872,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   })
   state.threadTransfer.registerIpc()
   state.threadTransfer.start()
+  // Custom vendor artwork is read by every `VendorIcon` the first frame mounts,
+  // and the renderer only invokes feature channels once `app:featuresReady` has
+  // fired. Register it ahead of that signal so the gate is truthful: registering
+  // it from the deferred provider block below announced readiness too early and
+  // the renderer reported `No handler registered for 'customVendors:listIcons'`.
+  {
+    const { registerCustomVendorIpc } = await import('../providers/custom-vendor-ipc')
+    registerCustomVendorIpc(storage)
+  }
   state.featuresReady = true
   startupTelemetry.mark('features:ready')
   // The lean-agent merge is maintenance, not first interaction: it shells out

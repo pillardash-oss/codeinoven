@@ -66,8 +66,9 @@ export function registerBaseUrlProviderIpc(
   providers = new BaseUrlProviderService(storage),
   vault = new SecretVault(storage)
 ): void {
-  // Custom vendor artwork is registered on the pre-navigation hydration surface
-  // (see `custom-vendor-ipc.ts`), because the first frame's vendor icons read it.
+  // Custom vendor artwork lives in `custom-vendor-ipc.ts`: the first frame's
+  // vendor icons read it, so it is registered before `app:featuresReady` rather
+  // than from this deferred provider block.
   const usageClient = new CustomProviderUsageClient()
   ipcMain.handle('baseUrlProviders:list', () => providers.listProviders())
 

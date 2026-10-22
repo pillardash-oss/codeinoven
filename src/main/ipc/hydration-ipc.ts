@@ -1,7 +1,6 @@
 import { unarchivedThreadSql } from '../../lib/archives'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { registerRendererLogIpcHandler } from './renderer-log-ipc'
-import { registerCustomVendorIpc } from '../providers/custom-vendor-ipc'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { ProjectManager } from '../../lib/engines/project-manager'
@@ -28,10 +27,6 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // Renderer error capture runs from the first renderer statement, so the
   // durable logging bridge must exist before BrowserWindow navigation.
   registerRendererLogIpcHandler()
-  // Vendor marks are read by every icon the first frame mounts, so saved custom
-  // artwork must be answerable before navigation rather than after the feature
-  // boot reaches its deferred provider block.
-  registerCustomVendorIpc(storage)
   const projectManager = new ProjectManager(database)
   const scopeManager = new ScopeManager(database)
   // Create the hidden assistant container before the renderer's first

@@ -6,15 +6,13 @@ import { CustomVendorService } from './custom-vendor-service'
 import type { StorageEngine } from '../storage/storage-engine'
 
 /**
- * Custom vendor artwork is read by every `VendorIcon` the first frame mounts, so
- * these channels belong to the pre-navigation surface rather than the post-paint
- * feature graph: a handler registered only once the feature boot reaches its
- * deferred provider block loses that race, and the renderer reports
- * `No handler registered for 'customVendors:listIcons'`.
+ * Register the saved custom vendor artwork channels.
  *
- * Only the provider-existence check for a save needs the base-URL provider
- * store, so it is imported on demand instead of dragging that module into
- * startup.
+ * Both channels are feature channels: the renderer's `invoke` helper holds every
+ * non-hydration call until main announces `app:featuresReady`, so this must be
+ * registered *before* that signal, not from a deferred provider block after it.
+ * Registration itself costs nothing; the artwork directory is only read when a
+ * mounted vendor icon actually asks for it, so readiness never delays startup.
  */
 export function registerCustomVendorIpc(storage: StorageEngine): void {
   const icons = new CustomVendorService(storage)
