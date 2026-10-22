@@ -1,4 +1,5 @@
 import { ipcErrorMessage } from '$lib/ipc-errors'
+import { isWorkflowRunFilter, type WorkflowRunFilter } from '$shared/types'
 
 /** Local alias so the many call sites keep their concise name. */
 export const errorMessage = ipcErrorMessage
@@ -252,6 +253,28 @@ export function workflowRunPageKey(
   page: number
 ): string {
   return `${owner}/${repo}#runs:${filter}:${page}`
+}
+
+/**
+ * Read a workflow run page key back into the filter and page it was built from.
+ *
+ * The refresh path re-reads the pages the store already holds and only has their
+ * keys, so a key has to be parsed rather than assumed: the filter and the page are
+ * the two fields after the prefix, and a key whose filter is not one of the three is
+ * skipped here instead of being sent to the main process as an invalid filter.
+ */
+export function parseWorkflowRunPageKey(
+  key: string,
+  owner: string,
+  repo: string
+): { filter: WorkflowRunFilter; page: number } | null {
+  const prefix = `${owner}/${repo}#runs:`
+  if (!key.startsWith(prefix)) return null
+  const [filter, page] = key.slice(prefix.length).split(':')
+  if (!isWorkflowRunFilter(filter)) return null
+  const parsedPage = Number(page)
+  if (!Number.isSafeInteger(parsedPage) || parsedPage < 1) return null
+  return { filter, page: parsedPage }
 }
 
 /** Cache key for one page of a repository's deployments. */

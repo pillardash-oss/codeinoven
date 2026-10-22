@@ -1188,6 +1188,24 @@ export interface GitHubDeployment {
 export type WorkflowRunFilter = 'all' | 'failed' | 'succeeded'
 
 /**
+ * Every workflow run filter as a runtime value.
+ *
+ * The IPC boundary and the renderer's page cache both have to recognise one, and a
+ * list restated in either place is a list that can disagree with the type: the
+ * cache-key refresh once read a page number back as a filter and had it rejected.
+ */
+export const WORKFLOW_RUN_FILTER_VALUES: readonly WorkflowRunFilter[] = [
+  'all',
+  'failed',
+  'succeeded'
+]
+
+/** Narrow an unknown value (a parsed cache key, say) to a workflow run filter. */
+export function isWorkflowRunFilter(value: unknown): value is WorkflowRunFilter {
+  return WORKFLOW_RUN_FILTER_VALUES.some((filter) => filter === value)
+}
+
+/**
  * One page of a repository's workflow runs.
  *
  * The Deployments view reads runs as their own paged listing, exactly as the pull
