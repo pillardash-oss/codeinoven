@@ -84,6 +84,20 @@ material way, and the difference is deliberate.
   always asks the user to choose the files in a native file chooser; Full Access accepts
   explicit absolute paths. Upload only fills the file input and never submits the page's
   form.
+- **A conversation's thread browser page is reachable by its agent, in whatever box it
+  runs.** The thread browser is the browser a conversation shares with its agent, so
+  the workspace reports the tab it is in use on (`browser:bindThreadBrowserPage`),
+  keyed by the conversation scope the strip already groups its tabs by, and carrying
+  the tab's owner, box and address. `cio:browser` answers about it with `page: "user"`
+  and falls back to it whenever the agent owns no page of its own; a run that does own
+  one is told the thread browser's page in the result of every call, so the page the
+  user is signed in on is never invisible to it. Reads are free and mutations go
+  through the same attached-page review as a browser conversation's page. The report
+  is one-directional on purpose: no agent operation moves the thread browser to
+  another tab or another box, and the box is the user's choice, so a page stays
+  reachable after they switch it. A bound page this process holds no view for yet (a
+  tab restored from a previous launch, or one the hibernation sweep released) is
+  mounted offscreen and put back on its address when an agent reaches for it.
 - **Extensions are installed from the global browser, but a box's set follows the
   box.** An extension record names the global browser's own jar (the empty jar id)
   and its boxes, and a box's set is loaded while any context uses that box

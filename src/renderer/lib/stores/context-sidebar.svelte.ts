@@ -2,7 +2,7 @@ import { invoke } from '$lib/ipc.svelte'
 import { coordinatorDockState } from './coordinator-dock.svelte'
 import { SidebarBrowserTabs } from './context-sidebar-browser.svelte'
 import type { BrowserTabRuntime } from './browser-tab-status'
-import type { BrowserPageState } from '$shared/ipc-contract'
+import type { BrowserPageState, BrowserThreadBrowserPage } from '$shared/ipc-contract'
 import { loadTerminalPlacement, saveTerminalPlacement } from './context-sidebar-persistence'
 import { SidebarTabContexts } from './context-sidebar-tabs.svelte'
 import {
@@ -255,6 +255,18 @@ class ContextSidebarState {
    */
   get activeBrowserTabId(): string | null {
     return this.browser.activeTabIdOrLast()
+  }
+
+  /**
+   * The page the conversation on screen has in its thread browser, in the shape
+   * main needs to reach it.
+   *
+   * The workspace reports this to main so an agent's browser capability can read
+   * the page the user is on rather than only a page it opened itself (see
+   * `SidebarBrowserTabs.activePage`).
+   */
+  get activeBrowserPage(): BrowserThreadBrowserPage | null {
+    return this.browser.activePage
   }
 
   /**

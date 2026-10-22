@@ -2547,6 +2547,62 @@
     })
   })
 
+  /**
+   * The page the conversation's thread browser is on, as last reported to main.
+   *
+   * Plain, not reactive: this is what the reporting effect compares against to
+   * decide whether anything has to be sent, and making it reactive would have the
+   * effect re-run on its own write.
+   */
+  let reportedThreadBrowserPage: {
+    scope: string
+    tabId: string
+    boxId: string | null
+    url: string
+  } | null = null
+
+  /**
+   * Tell main which page a conversation's thread browser is on.
+   *
+   * A thread browser is the browser a conversation shares with its agent, so this
+   * is what lets the agent's browser capability reach the page the user is
+   * reading, in whatever box the user put it, instead of only pages it opened
+   * itself. It is reported for the conversation on screen, which is the one whose
+   * strip is in use, and the report never moves that strip: only the app writes
+   * this, so no agent operation can switch the tab or the box under the user.
+   */
+  $effect(() => {
+    const projectId = contextSidebarState.dockedProjectId
+    const threadId = projectId ? contextSidebarState.threadIdForProject(projectId) : null
+    const page = contextSidebarState.activeBrowserPage
+    if (!projectId || !threadId) return
+    const scope = contextSidebarState.browserScopeIdFor(projectId, threadId)
+    const reported = reportedThreadBrowserPage
+    if (!page || contextSidebarState.browserScopeIdFor(page.projectId, page.threadId) !== scope) {
+      // The strip on screen holds no page for this conversation, so the page main
+      // remembers for it is one nothing shows any more.
+      if (reported?.scope !== scope) return
+      reportedThreadBrowserPage = null
+      void invoke('browser:unbindThreadBrowserPage', scope).catch(() => {})
+      return
+    }
+    if (
+      reported?.scope === scope &&
+      reported.tabId === page.tabId &&
+      reported.boxId === page.boxId &&
+      reported.url === page.url
+    ) {
+      return
+    }
+    reportedThreadBrowserPage = {
+      scope,
+      tabId: page.tabId,
+      boxId: page.boxId,
+      url: page.url
+    }
+    void invoke('browser:bindThreadBrowserPage', scope, page).catch(() => {})
+  })
+
   $effect(() => {
     return subscribe('browser:openRequested', (url, context) => {
       // A tab opened by the global browser belongs to the global strip, which
