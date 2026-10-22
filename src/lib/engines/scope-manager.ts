@@ -259,7 +259,7 @@ export class ScopeManager {
     ]
     const repaired = await this.db.transactionViaWorker(statements)
     if (!repaired.ok) throw new ScopeManagerError('Could not restore scope board')
-    return board
+    return this.getBoardSnapshot(projectId)
   }
 
   /** Read capacity metadata without the board UI's repair scan and writes. */

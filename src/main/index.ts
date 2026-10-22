@@ -205,9 +205,12 @@ ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
 })
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */
-const featuresReadyPromise = new Promise<void>((resolve) => {
+const featuresReadyPromise = new Promise<void>((resolve, reject) => {
   state.resolveFeaturesReady = resolve
+  state.rejectFeaturesReady = reject
 })
+// A startup failure may precede the first renderer waiter.
+void featuresReadyPromise.catch(() => undefined)
 
 /**
  * A packaged smoke pass proves more than script execution: the document must
@@ -955,6 +958,13 @@ void app
       // window is opened, from the menu bar or a notification click.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
+        if (!state.featuresReady) {
+          state.rejectFeaturesReady?.(
+            new Error('Application services failed to initialize', { cause: error })
+          )
+          state.rejectFeaturesReady = null
+          state.resolveFeaturesReady = null
+        }
         Logger.error('Headless service boot failed; background work is degraded', error)
       })
       app.on('activate', () => {
@@ -988,6 +998,13 @@ void app
       // the whole app on the user's behalf.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
+        if (!state.featuresReady) {
+          state.rejectFeaturesReady?.(
+            new Error('Application services failed to initialize', { cause: error })
+          )
+          state.rejectFeaturesReady = null
+          state.resolveFeaturesReady = null
+        }
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }

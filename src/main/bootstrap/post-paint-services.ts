@@ -881,35 +881,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerCustomVendorIpc } = await import('../providers/custom-vendor-ipc')
     registerCustomVendorIpc(storage)
   }
-  state.featuresReady = true
-  startupTelemetry.mark('features:ready')
-  // The lean-agent merge is maintenance, not first interaction: it shells out
-  // for the installed version and rewrites the machine-wide opencode config, so
-  // it is deferred past `features:ready` instead of holding the feature boot.
-  setTimeout(() => {
-    void import('../opencode/opencode-agent-service')
-      .then(({ syncOpenCodeLeanAgents }) => syncOpenCodeLeanAgents())
-      .catch((error) => Logger.dev('opencode lean-agent sync failed (non-fatal):', error))
-  }, 0)
-  // Every scoped utility gets its install folder back once the app is up, so a
-  // registry entry written before this pass existed, or one whose project moved
-  // while the app was closed, never stays an entry with nothing on disk.
-  void (async () => {
-    const { UtilityRegistryService } = await import('../utilities/utility-registry-service')
-    await utilityFootprint.reconcile(await new UtilityRegistryService(storage).list())
-  })().catch((error) => Logger.dev('Utility install folders could not be reconciled:', error))
-  context.onFeaturesReady()
-  state.resolveFeaturesReady?.()
-  state.resolveFeaturesReady = null
-  if (
-    state.mainWindow &&
-    !state.mainWindow.isDestroyed() &&
-    !state.mainWindow.webContents.isDestroyed()
-  ) {
-    sendToRenderer(state.mainWindow.webContents, 'app:featuresReady')
-  }
-
-  void (async () => {
+  await (async () => {
     const [
       { PtyService },
       { ProviderConnectionService },
@@ -929,6 +901,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     ])
 
     const { ovenTerminalLaunch, ovenShellLaunch } = await import('../ovens/oven-terminal')
+    if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
     state.ptyService = new PtyService(
       storage,
       database,
@@ -948,7 +921,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // their shell-driven edits are excluded from concurrent agent turns.
         state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
       },
-      ovenTerminalLaunch(storage, vault, database),
+      ovenTerminalLaunch(storage, vault, database, context.threadCreation),
       ovenShellLaunch(storage, vault)
     )
     // A probe that changes a harness's install state (new install, version
@@ -1047,6 +1020,36 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // Wire PTY to the window now that it exists.
     if (state.mainWindow && !state.mainWindow.isDestroyed()) {
       state.ptyService.attach(state.mainWindow.webContents)
+    }
+
+    if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
+    state.featuresReady = true
+    startupTelemetry.mark('features:ready')
+    // The lean-agent merge is maintenance, not first interaction: it shells out
+    // for the installed version and rewrites the machine-wide opencode config, so
+    // it is deferred past `features:ready` instead of holding the feature boot.
+    setTimeout(() => {
+      void import('../opencode/opencode-agent-service')
+        .then(({ syncOpenCodeLeanAgents }) => syncOpenCodeLeanAgents())
+        .catch((error) => Logger.dev('opencode lean-agent sync failed (non-fatal):', error))
+    }, 0)
+    // Every scoped utility gets its install folder back once the app is up, so a
+    // registry entry written before this pass existed, or one whose project moved
+    // while the app was closed, never stays an entry with nothing on disk.
+    void (async () => {
+      const { UtilityRegistryService } = await import('../utilities/utility-registry-service')
+      await utilityFootprint.reconcile(await new UtilityRegistryService(storage).list())
+    })().catch((error) => Logger.dev('Utility install folders could not be reconciled:', error))
+    context.onFeaturesReady()
+    state.resolveFeaturesReady?.()
+    state.resolveFeaturesReady = null
+    state.rejectFeaturesReady = null
+    if (
+      state.mainWindow &&
+      !state.mainWindow.isDestroyed() &&
+      !state.mainWindow.webContents.isDestroyed()
+    ) {
+      sendToRenderer(state.mainWindow.webContents, 'app:featuresReady')
     }
 
     try {
