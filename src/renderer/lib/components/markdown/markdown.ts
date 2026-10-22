@@ -285,7 +285,17 @@ const SANITIZE_CONFIG = {
     'option',
     'textarea'
   ],
-  FORBID_ATTR: ['style', 'srcdoc', 'formaction', 'ping']
+  FORBID_ATTR: ['style', 'srcdoc', 'formaction', 'ping'],
+  // DOMPurify's default URI policy drops every scheme it does not list, and
+  // `file:` is not on that list. An agent that links a local path writes
+  // `[launch video](file:///.cio/videos/launch/index.html)`, so a link whose
+  // target never resolved to a confirmed citation lost its `href` on the way
+  // through sanitization and rendered as dead text: no pointer cursor, no
+  // click, no tooltip, no explanation. The scheme is added back to the default
+  // policy, and MarkdownView intercepts every `file:` click itself, so the
+  // anchor only ever reports what happened to the path.
+  ALLOWED_URI_REGEXP:
+    /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.-]+(?:[^-a-z+.:]|$))/i
 }
 
 // Preserve citation metadata before DOMPurify removes the custom scheme
@@ -309,7 +319,10 @@ DOMPurify.addHook('beforeSanitizeAttributes', (node) => {
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName !== 'A') return
   const href = node.getAttribute('href')
-  if (node.getAttribute('data-citation-path') || (href && href.startsWith('#'))) {
+  if (
+    node.getAttribute('data-citation-path') ||
+    (href && (href.startsWith('#') || href.startsWith('file:')))
+  ) {
     node.removeAttribute('target')
     node.removeAttribute('rel')
   } else {
