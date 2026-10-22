@@ -298,17 +298,24 @@
       intersection.disconnect()
       window.removeEventListener('resize', place)
       if (host === element) host = undefined
-      browserVisibility.detachUnlessAnotherSurfaceDisplays(placedTab.tabId, surface)
+      // The tab this stage was built for, not the one the board is showing now:
+      // the pane is re-keyed per tab, so by the time this runs the live prop can
+      // already name its successor, and detaching that one would take the new
+      // page off screen while leaving this stage's own page behind.
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(mountedTab.tabId, surface)
     }
   }
 
   onMount(() => {
     // Claim the native view for this tab while the stage is mounted. The claim is
     // released with the component, so a torn-down board can never keep the view.
-    const releaseClaim = browserVisibility.claimTab(placedTab.tabId, surface)
+    // Both ends name the tab this stage was built for: a release read from the
+    // live prop would let go of the board's next tab and hold on to this one.
+    const tabId = mountedTab.tabId
+    const releaseClaim = browserVisibility.claimTab(tabId, surface)
     return () => {
       releaseClaim()
-      browserVisibility.detachReleasedTab(placedTab.tabId)
+      browserVisibility.detachReleasedTab(tabId)
     }
   })
 </script>

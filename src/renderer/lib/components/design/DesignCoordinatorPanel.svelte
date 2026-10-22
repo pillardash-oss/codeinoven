@@ -1387,7 +1387,16 @@
   // native view), and a teardown pause would freeze the film every time.
   $effect(() => {
     const live = liveTab
-    if (live !== null) drivenTabId = live.tabId
+    const previous = drivenTabId
+    if (live !== null && live.tabId !== previous) {
+      drivenTabId = live.tabId
+      // Moving to another composition leaves the one that was playing behind in a
+      // parked page that keeps running offscreen, where nothing the user can see
+      // ever stops it: the sound of the film they left would follow them into the
+      // next one. Switching is a departure, so the film they left is stopped
+      // before the new one is ever shown.
+      if (previous !== '') void invoke('browser:transport', previous, 'pause', 0).catch(() => {})
+    }
     if (active || drivenTabId === '') return
     void invoke('browser:transport', drivenTabId, 'pause', 0).catch(() => {})
   })

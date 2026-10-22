@@ -1261,7 +1261,7 @@ export class BrowserService {
         // Remove the outgoing page before waiting: native views cover the new
         // tab's DOM, including its loading and blank states.
         if (this.activeTabId && this.activeTabId !== tabId) {
-          this.parkTab(this.activeTabId)
+          this.parkTab(this.activeTabId, { pausePlayback: true })
         }
         // The first document must not outrun extensions in its jar. If a page
         // navigates before Chromium has loaded an extension, its manifest content
@@ -1288,7 +1288,7 @@ export class BrowserService {
         // invisible stage window instead of going dead behind the app window.
         const previousActiveTabId = this.activeTabId
         if (this.activeTabId && this.activeTabId !== tabId) {
-          this.parkTab(this.activeTabId)
+          this.parkTab(this.activeTabId, { pausePlayback: true })
         }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
@@ -6928,6 +6928,16 @@ export class BrowserService {
       this.pendingPageFocusTabId = null
     }
     const viewport = options.size ?? this.parkedViewportFor(tab)
+    // A composition the user has moved away from must not keep playing. Parking
+    // leaves the page running at a real viewport in the stage window, so a
+    // transport left playing carries on with its sound from a surface nobody can
+    // see, and the film is found mid-way through when the tab comes back. Only a
+    // departure pauses: a surface that stepped aside for an overlay it will be
+    // back in front of has not left its page, and stopping the film under a menu
+    // would be the panel dying while the user reaches for its own controls.
+    if (options.pausePlayback === true && tab.composition !== null && tab.transport !== null) {
+      void this.sendTransport(tabId, 'pause', 0).catch(() => null)
+    }
     this.window.contentView.removeChildView(tab.view)
     // The view is leaving the window, so whatever frame it was displayed at no
     // longer describes where it is.
