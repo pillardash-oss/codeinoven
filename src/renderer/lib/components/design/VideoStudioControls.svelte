@@ -18,8 +18,8 @@
     VideoValue
   } from '$shared/video/studio'
 
-  /** The three editor sections, as the timeline's tab strip names them. */
-  type EditorSection = 'timeline' | 'audio' | 'exports'
+  /** The editor sections, as the timeline's tab strip names them. */
+  type EditorSection = 'timeline' | 'captions' | 'audio' | 'exports'
 
   /**
    * The editable half of a composition: its values, its captions, its audio, its jobs.
@@ -374,8 +374,14 @@
             </div>
           {/if}
 
+          {#if studio.controls.length === 0}
+            <p class="pt-1 text-[0.6875rem] text-dimmed">
+              This composition declares no values to edit.
+            </p>
+          {/if}
+        {:else if section === 'captions'}
           {#if studio.captions.length > 0}
-            <div class="mt-3 space-y-2">
+            <div class="space-y-2 pt-1">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-[0.6875rem] font-medium text-muted">
                   Captions
@@ -472,11 +478,9 @@
                 </div>
               {/if}
             </div>
-          {/if}
-
-          {#if studio.controls.length === 0 && studio.captions.length === 0}
+          {:else}
             <p class="pt-1 text-[0.6875rem] text-dimmed">
-              This composition declares no values to edit and no captions.
+              This composition declares no captions. They arrive with the composition's transcript.
             </p>
           {/if}
         {:else if section === 'audio'}
