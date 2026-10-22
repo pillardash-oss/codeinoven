@@ -14,6 +14,9 @@ export interface ComposerSlashActionsOptions {
   /** The scope shoe's picker is live (project mode, new thread). */
   getScopePickerVisible: () => boolean
   getOvenPickerVisible: () => boolean
+  /** The shoe is rendered, so its context battery and generation reading exist
+   *  for `/status` and `/tps` to open. */
+  getReadingsVisible: () => boolean
   getThinkingPresets: () => ThinkingPreset[]
   getActions: () => readonly ActionDefinition[]
 }
@@ -120,6 +123,26 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
             }
           ]
         : []),
+      ...(options.getReadingsVisible()
+        ? ([
+            {
+              id: 'reading:status',
+              title: '/status',
+              description: 'Open the context battery: context used, quota and cost',
+              category: 'command',
+              source: composerActionSource,
+              keywords: ['status', 'context', 'battery', 'usage', 'quota', 'cost', 'window']
+            },
+            {
+              id: 'reading:tps',
+              title: '/tps',
+              description: 'Open the generation rate: tokens per second for this thread',
+              category: 'command',
+              source: composerActionSource,
+              keywords: ['tps', 'tokens', 'second', 'speed', 'rate', 'generation', 'throughput']
+            }
+          ] satisfies ActionDefinition[])
+        : []),
       ...(options.getShowChatModes()
         ? ([
             {
@@ -150,6 +173,21 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
       return available
     }
   }
+}
+
+/** The readings a composer command opens: the shoe's context battery and its
+ *  generation rate. Both are drawn by the shoe, take no arguments, and are asked
+ *  for by command because a pointer to hover is not always the way in. */
+export type ComposerReadingSurface = 'context' | 'rate'
+
+const readingSurfaces: Readonly<Record<string, ComposerReadingSurface>> = {
+  'reading:status': 'context',
+  'reading:tps': 'rate'
+}
+
+/** The reading a composer action opens, when it opens one. */
+export function composerReadingSurface(actionId: string): ComposerReadingSurface | undefined {
+  return readingSurfaces[actionId]
 }
 
 /** Actions whose selection inserts `/title ` into the composer and whose

@@ -119,6 +119,13 @@ export interface RegisterIpcHandlersOptions {
    */
   browser?: () => BrowserService | null
   /**
+   * The design/video service, or null before it exists. It is created after
+   * first paint while the IPC handlers register earlier, so project deletion
+   * reads it through this getter to purge a deleted project's authored work
+   * (design rows, revisions, history heads, work folders).
+   */
+  designService?: () => { forgetProject: (projectId: string) => void } | null
+  /**
    * Background skill updater, owned by the composition root because it rides
    * the app-update check cycle rather than a scheduler of its own.
    */

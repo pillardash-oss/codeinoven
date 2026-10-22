@@ -72,7 +72,9 @@ export type GitOperation =
   | 'issue-relationship'
   /** The relationship picker's search, which is not a write but must show progress. */
   | 'issue-candidates'
-  | 'deployments'
+  | 'deployment-runs'
+  | 'deployment-environments'
+  | 'deployment-activity'
   | 'deployment-detail'
   | 'deployment-run-detail'
   | 'deployment-log'
@@ -104,7 +106,7 @@ export const REPO_CATALOG_TTL_MS = 5 * 60_000
  */
 export const MENTION_USERS_RETRY_MS = 60_000
 
-/** How long a cached deployment overview/detail is served without refetching. */
+/** How long a cached deployment page or detail is served without refetching. */
 export const DEPLOYMENT_CACHE_TTL_MS = 60_000
 
 /** Job logs change rarely and are heavy - hold them a little longer. */
@@ -237,9 +239,24 @@ export function issueBundleKey(owner: string, repo: string, issueNumber: number)
   return `${owner}/${repo}#issue/${issueNumber}`
 }
 
-/** Cache key for one repository's deployment overview. */
+/** Cache key for one repository's deployment activity probe. */
 export function deploymentKey(owner: string, repo: string): string {
   return `${owner}/${repo}`
+}
+
+/** Cache key for one page of a repository's workflow runs, under its filter. */
+export function workflowRunPageKey(
+  owner: string,
+  repo: string,
+  filter: string,
+  page: number
+): string {
+  return `${owner}/${repo}#runs:${filter}:${page}`
+}
+
+/** Cache key for one page of a repository's deployments. */
+export function deploymentPageKey(owner: string, repo: string, page: number): string {
+  return `${owner}/${repo}#deployments:${page}`
 }
 
 /** Cache key for one deployment's rich detail. */

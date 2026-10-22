@@ -61,12 +61,13 @@ export function registerOvenIpc(
     harnessService,
     storage,
     (id) => collectPreflight(service.ssh, id),
-    (id, probe) => {
+    (id, probe, sshProtection) => {
       if (probe.specs)
         void registry
           .recordConnectionHealth(id, {
             state: 'connected',
             checkedAt: Date.now(),
+            sshProtection,
             specs: probe.specs
           })
           .catch(() => undefined)
@@ -161,7 +162,14 @@ export function registerOvenIpc(
     const input = validateSaveOven(raw)
     if (input.connection.authentication === 'identity')
       input.connection.identityFile = await validateIdentityPath(input.connection.identityFile)
-    return registry.save(input)
+    const previous = input.id ? await registry.require(input.id) : undefined
+    const saved = await registry.save(input)
+    if (JSON.stringify(previous?.connection) !== JSON.stringify(input.connection)) {
+      // A channel authenticated under the previous policy must not carry new work.
+      service.disposeChannel(saved.id)
+      peekService.invalidate(saved.id)
+    }
+    return saved
   })
   ipcMain.handle('oven:remove', async (_event, raw: unknown) => {
     const id = ovenId(raw)

@@ -1,6 +1,7 @@
 export interface DiffLine {
   kind: 'context' | 'added' | 'deleted'
   text: string
+  segments?: { text: string; changed: boolean }[]
   beforeLine?: number
   afterLine?: number
 }
@@ -295,7 +296,7 @@ export function diffDetails(
   beforeStartLine = 1,
   afterStartLine = 1
 ): DiffDetails {
-  const lines = computeDiffLines(before, after, beforeStartLine, afterStartLine)
+  const lines = highlightDiffLines(computeDiffLines(before, after, beforeStartLine, afterStartLine))
   return {
     lines,
     hunks: diffHunks(lines),
@@ -304,23 +305,90 @@ export function diffDetails(
   }
 }
 
-/** Pair deleted lines with the added lines that follow them so the split
- *  (horizontal) view can render before and after side by side. */
+/** Pair replacements in source order, regardless of the diff algorithm's edit ordering. */
 export function splitRows(hunkLines: DiffLine[]): SplitRow[] {
   const rows: SplitRow[] = []
-  for (const line of hunkLines) {
+  let index = 0
+  while (index < hunkLines.length) {
+    const line = hunkLines[index]
     if (line.kind === 'context') {
       rows.push({ before: line, after: line })
-    } else if (line.kind === 'deleted') {
-      rows.push({ before: line, after: null })
-    } else {
-      const previous = rows.at(-1)
-      if (previous && previous.before && !previous.after && previous.before.kind === 'deleted') {
-        previous.after = line
-      } else {
-        rows.push({ before: null, after: line })
-      }
+      index += 1
+      continue
+    }
+    const before: DiffLine[] = []
+    const after: DiffLine[] = []
+    while (index < hunkLines.length && hunkLines[index].kind !== 'context') {
+      const changed = hunkLines[index++]
+      ;(changed.kind === 'deleted' ? before : after).push(changed)
+    }
+    for (let offset = 0; offset < Math.max(before.length, after.length); offset += 1) {
+      rows.push({ before: before[offset] ?? null, after: after[offset] ?? null })
     }
   }
   return rows
+}
+
+/**
+ * Worker-prepared ranges are reused by the renderer. Parsed tool patches use the
+ * same bounded fallback: at most 100k DP cells and 64 short replacement pairs
+ * per block. Large rewrites retain the ordinary line tint.
+ */
+export function highlightDiffLines(lines: DiffLine[]): DiffLine[] {
+  const highlighted = new Map<DiffLine, DiffLine>()
+  let cellsLeft = 100_000
+  let pairsLeft = 64
+  for (const { before, after } of splitRows(lines)) {
+    if (!before || !after || before.kind !== 'deleted' || after.kind !== 'added') continue
+    if (before.segments || after.segments) continue
+    if (--pairsLeft < 0) break
+    if (before.text.length > 2048 || after.text.length > 2048) continue
+    // Code points keep surrogate pairs intact, including emoji in source text.
+    const a = Array.from(before.text)
+    const b = Array.from(after.text)
+    const cells = (a.length + 1) * (b.length + 1)
+    if (cells > cellsLeft) continue
+    cellsLeft -= cells
+    const width = b.length + 1
+    const lengths = new Uint16Array(cells)
+    for (let i = a.length - 1; i >= 0; i -= 1) {
+      for (let j = b.length - 1; j >= 0; j -= 1) {
+        lengths[i * width + j] =
+          a[i] === b[j]
+            ? lengths[(i + 1) * width + j + 1] + 1
+            : Math.max(lengths[(i + 1) * width + j], lengths[i * width + j + 1])
+      }
+    }
+    // Unrelated lines already have a full-line tint and need no extra emphasis.
+    if (lengths[0] === 0) continue
+    const oldSegments: NonNullable<DiffLine['segments']> = []
+    const newSegments: NonNullable<DiffLine['segments']> = []
+    const append = (
+      segments: NonNullable<DiffLine['segments']>,
+      text: string,
+      changed: boolean
+    ): void => {
+      const previous = segments.at(-1)
+      if (previous?.changed === changed) previous.text += text
+      else segments.push({ text, changed })
+    }
+    let i = 0
+    let j = 0
+    while (i < a.length || j < b.length) {
+      if (i < a.length && j < b.length && a[i] === b[j]) {
+        append(oldSegments, a[i++], false)
+        append(newSegments, b[j++], false)
+      } else if (
+        j < b.length &&
+        (i === a.length || lengths[i * width + j + 1] >= lengths[(i + 1) * width + j])
+      ) {
+        append(newSegments, b[j++], true)
+      } else {
+        append(oldSegments, a[i++], true)
+      }
+    }
+    highlighted.set(before, { ...before, segments: oldSegments })
+    highlighted.set(after, { ...after, segments: newSegments })
+  }
+  return highlighted.size ? lines.map((line) => highlighted.get(line) ?? line) : lines
 }

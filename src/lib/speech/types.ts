@@ -63,12 +63,7 @@ export type SpeechRuntimeResolutionResult =
   { ok: true; value: SpeechRuntimeResolution } | { ok: false; error: SpeechCompatibilityError }
 
 export type SpeechModelFamilyId =
-  | 'whisper'
-  | 'parakeet'
-  | 'kokoro'
-  | 'qwen-cleanup'
-  | 's1-cleanup'
-  | 'sherpa-punctuation'
+  'whisper' | 'parakeet' | 'kokoro' | 'qwen-cleanup' | 's1-cleanup' | 'sherpa-punctuation'
 export type SpeechArtifactStatus = 'candidate' | 'qualified' | 'retired'
 
 export interface SpeechArtifactFile {
@@ -139,14 +134,38 @@ export interface SpeechModelCatalog {
   artifacts: SpeechModelArtifact[]
 }
 
+/**
+ * What a download request does with the bytes an earlier attempt left on disk.
+ * `resume` continues from them (the default), `restart` throws them away and
+ * fetches the model again from zero.
+ */
+export type SpeechDownloadMode = 'resume' | 'restart'
+
 export type SpeechDownloadState =
   | { state: 'idle' }
   | { state: 'queued'; position: number }
-  | { state: 'downloading'; bytesReceived: number; totalBytes: number }
+  | {
+      state: 'downloading'
+      bytesReceived: number
+      totalBytes: number
+      /** Bytes kept from an earlier attempt that this download continues from. */
+      resumedFromBytes?: number
+    }
   | { state: 'verifying'; bytesReceived: number; totalBytes: number }
   | { state: 'installed'; installedAt: number }
-  | { state: 'cancelled'; cancelledAt: number }
-  | { state: 'failed'; failedAt: number; error: SpeechError }
+  /**
+   * A download the user stopped. `bytesReceived` is what stays on disk for a
+   * resume, so the row can offer resuming or starting over rather than leaving
+   * the model stuck behind a state only an app restart clears.
+   */
+  | { state: 'cancelled'; cancelledAt: number; bytesReceived: number; totalBytes: number }
+  | {
+      state: 'failed'
+      failedAt: number
+      error: SpeechError
+      bytesReceived: number
+      totalBytes: number
+    }
 
 export interface SpeechInstalledArtifact {
   artifactId: string
@@ -241,7 +260,12 @@ export interface SpeechTranscriptionJob {
 export type SpeechCleanupMode =
   | { kind: 'disabled' }
   | { kind: 'local'; artifactId?: string; flags?: SpeechRefinementFlags }
-  | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string; flags?: SpeechRefinementFlags }
+  | {
+      kind: 'remote'
+      selection: 'fixed' | 'conversation'
+      modelId?: string
+      flags?: SpeechRefinementFlags
+    }
 
 export interface SpeechCleanupRequest {
   attemptId: string
@@ -345,12 +369,7 @@ export interface SpeechExtractedLesson {
   examples: SpeechLessonExample[]
 }
 
-export type SpeechLlamaRuntimeSource =
-  | 'environment'
-  | 'managed'
-  | 'canonical'
-  | 'homebrew'
-  | 'path'
+export type SpeechLlamaRuntimeSource = 'environment' | 'managed' | 'canonical' | 'homebrew' | 'path'
 
 export interface SpeechLlamaRuntimeInstallation {
   path: string
@@ -510,7 +529,12 @@ export function normalizeVoiceRecordingShortcut(value: unknown): VoiceRecordingS
       doubleTap: true
     }
   }
-  if (!candidate.ctrl && !candidate.meta && !candidate.alt && !MODIFIER_KEY_CODES.has(candidate.code)) {
+  if (
+    !candidate.ctrl &&
+    !candidate.meta &&
+    !candidate.alt &&
+    !MODIFIER_KEY_CODES.has(candidate.code)
+  ) {
     // Guard against re-binding a printable key alone (letters/digits), which
     // would make ordinary typing trigger recordings.
     return null

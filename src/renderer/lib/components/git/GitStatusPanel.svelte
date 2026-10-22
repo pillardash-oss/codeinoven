@@ -120,6 +120,7 @@
   import PrMetadataDialog from './PrMetadataDialog.svelte'
   import { prSummaryChatContext, prSummaryExplainPrompt } from './git-status-panel-prompts'
   import PrViewSwitcher from './PrViewSwitcher.svelte'
+  import PrReviewMenu from './PrReviewMenu.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import {
     PR_DETAIL_VIEWS,
@@ -129,6 +130,7 @@
     type PrMetadataMode
   } from './pr-view'
   import GitViewMenu from './GitViewMenu.svelte'
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import PrIdentityRow from './PrIdentityRow.svelte'
   import PrListOptionsMenu from './PrListOptionsMenu.svelte'
   import PrStateFilter from './PrStateFilter.svelte'
@@ -566,7 +568,9 @@
       return
     }
     if (activeTab === 'deployments') {
-      await gitState.ensureDeploymentOverview(projectId, identity.owner, identity.repo, true)
+      // The view's page and filter live in the view, so the store re-reads the
+      // pages it holds for this repository instead: one per view in practice.
+      await gitState.refreshDeploymentPages(projectId, identity.owner, identity.repo)
     }
   }
 
@@ -782,22 +786,22 @@
   /**
    * Discover whether the repo has GitHub deployment activity so the Deployments
    * tab can appear on its own. Only meaningful while signed in with a GitHub
-   * origin remote. Routes through the store so the probe also warms the overview
-   * cache the Deployments tab reads   first visit renders instantly.
+   * origin remote, and only the fact is asked for: the view reads its own pages
+   * when it opens, so the probe must not pay for a listing it will not show.
    */
   async function detectDeployments(): Promise<void> {
     const identity = githubIdentity
     if (!githubConnected || !identity || detectingDeployments) return
     detectingDeployments = true
     try {
-      const overview = await gitState.ensureDeploymentOverview(
+      const hasActivity = await gitState.ensureDeploymentActivity(
         projectId,
         identity.owner,
         identity.repo
       )
-      if (overview) {
-        hasDeployments = overview.hasDeployments
-        cacheHasDeployments(projectId, overview.hasDeployments)
+      if (hasActivity !== null) {
+        hasDeployments = hasActivity
+        cacheHasDeployments(projectId, hasActivity)
       }
     } catch {
       // Sign-in or network failure   keep the current flag and try again later.
@@ -1813,6 +1817,10 @@
    * notifications alone. The thread's repository need not be the one the panel is
    * standing in, which is why the readers are handed their own identity.
    */
+  let notificationStackSelection = $state<{
+    notificationId: string
+    pr: PullRequestSummary
+  } | null>(null)
   const openNotification = $derived(githubNotifications.openNotification)
   const notificationTarget = $derived(
     openNotification ? notificationTargetFor(openNotification) : null
@@ -1822,7 +1830,9 @@
   )
   const notificationPullRequest = $derived(
     openNotification && notificationTarget?.kind === 'pull-request'
-      ? notificationPullRequestSummary(openNotification, notificationTarget)
+      ? notificationStackSelection?.notificationId === openNotification.id
+        ? notificationStackSelection.pr
+        : notificationPullRequestSummary(openNotification, notificationTarget)
       : null
   )
   const notificationIssue = $derived(
@@ -1860,7 +1870,9 @@
     bundle: PullRequestBundle | undefined,
     summary: PullRequestSummary | null
   ) {
-    return PR_DETAIL_VIEWS.map((view) => ({
+    return PR_DETAIL_VIEWS.filter(
+      (view) => view.id !== 'stacks' || (bundle?.stack?.length ?? 0) > 1
+    ).map((view) => ({
       ...view,
       count: prViewCount(
         view.id,
@@ -2912,8 +2924,13 @@
   >
     <CioRefresh
       size={12}
-      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments']) ||
-      githubNotifications.loading
+      class={gitState.isBusy([
+        'refresh',
+        'pr-list',
+        'pr-detail',
+        'deployment-runs',
+        'deployment-environments'
+      ]) || githubNotifications.loading
         ? 'animate-spin'
         : ''}
     />
@@ -3570,11 +3587,27 @@
         it: a pull request's conversation, changes, checks and commits are the
         reason to read one, and none of them is reachable without this.
       -->
+      {#if (notificationBundle?.stack?.length ?? 0) > 1}
+        <button
+          type="button"
+          class="ml-auto flex shrink-0 cursor-pointer items-center gap-1 p-1 text-muted hover:bg-elevated hover:text-foreground"
+          title="View stacked pull requests"
+          aria-label="View stacked pull requests"
+          onclick={() => (prDetailTab = 'stacks')}
+        >
+          <CioLayers size={13} /><span class="text-[0.5625rem] tabular-nums"
+            >{notificationBundle?.stack?.length}</span
+          >
+        </button>
+      {/if}
       <PrViewSwitcher
         views={notificationPrDetailViews}
         active={prDetailTab}
         onSelect={(id) => (prDetailTab = id)}
       />
+      {#if primaryRemote && isPanelRepository(notificationIdentity)}
+        <PrReviewMenu {projectId} pr={notificationPullRequest} remote={primaryRemote.name} />
+      {/if}
     {/if}
   {:else if activeTab === 'pulls'}
     {#if selectedPullRequest && githubIdentity}
@@ -3584,6 +3617,8 @@
         checks={pullRequestBundle?.checks ?? null}
         onBack={() => (selectedPullRequest = null)}
         onOpenChecks={() => (prDetailTab = 'checks')}
+        stackCount={pullRequestBundle?.stack?.length ?? 0}
+        onOpenStacks={() => (prDetailTab = 'stacks')}
       />
       <!--
         Which part of the pull request you are reading, immediately ahead of the
@@ -3595,6 +3630,9 @@
         active={prDetailTab}
         onSelect={(id) => (prDetailTab = id)}
       />
+      {#if primaryRemote}
+        <PrReviewMenu {projectId} pr={selectedPullRequest} remote={primaryRemote.name} />
+      {/if}
     {:else}
       <PrStateFilter state={prListState} onSelect={selectPrListState} />
       <PrListOptionsMenu
@@ -3713,7 +3751,8 @@
   readerIdentity: { owner: string; repo: string },
   summary: PullRequestSummary,
   onBack: () => void,
-  fullscreen: (() => void) | undefined
+  fullscreen: (() => void) | undefined,
+  onOpen: (pr: PullRequestSummary) => void
 )}
   <GitPullRequestDetail
     {projectId}
@@ -3723,6 +3762,7 @@
     bind:tab={prDetailTab}
     {onBack}
     onFullscreen={fullscreen}
+    onOpenPullRequest={onOpen}
     onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}
     onOpenThread={(id) => void openAgentThread(id)}
     onOpenWorkflowRun={(runId) => openWorkflowRunFor(readerIdentity, runId)}
@@ -4172,7 +4212,11 @@
                 githubIdentity,
                 selectedPullRequest,
                 () => (selectedPullRequest = null),
-                () => openPullRequestFullscreen(selectedPullRequest)
+                () => openPullRequestFullscreen(selectedPullRequest),
+                (pr) => {
+                  selectedPullRequest = pr
+                  prDetailTab = 'conversation'
+                }
               )}
             {:else}
               <!--
@@ -4220,8 +4264,15 @@
               {@render pullRequestReader(
                 notificationIdentity,
                 notificationPullRequest,
-                () => githubNotifications.closeNotification(),
-                undefined
+                () => {
+                  notificationStackSelection = null
+                  githubNotifications.closeNotification()
+                },
+                undefined,
+                (pr) => {
+                  if (openNotification)
+                    notificationStackSelection = { notificationId: openNotification.id, pr }
+                }
               )}
             {:else if openNotification && notificationIssue && notificationIdentity}
               <GitIssueReader
@@ -4481,6 +4532,8 @@
           {threadId}
           identity={githubIdentity}
           summary={fullscreenActivePullRequest}
+          reviewRemote={primaryRemote?.name}
+          onOpenPullRequest={openPullRequestFullscreen}
           variant="fullscreen"
           onBack={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
           onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}

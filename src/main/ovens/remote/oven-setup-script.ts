@@ -17,6 +17,8 @@ import {
 } from '../../agents/harness-install-service'
 import { stepRequiresElevation } from '../oven-setup-capabilities'
 import { OVEN_SETUP_SCRIPT_VERSION, planNodeInstall } from '../oven-setup-bootstrap'
+import { windowsTimeZoneFor } from '../windows-timezones'
+import { windowsSshdStepDetail } from './oven-windows-sshd'
 
 /**
  * One external command, kept as structured argv so it is quoted once at the SSH
@@ -374,7 +376,12 @@ function timezoneStep(assessment: OvenPreflightAssessment, deviceZone: string | 
       detail: 'The Oven reports no supported way to change its clock zone.',
       skippedReason: 'The Oven reports no supported way to change its clock zone.'
     }
-  const zoneMatches = assessment.platform !== 'win32' && assessment.timezone.current === deviceZone
+  // Windows reports its own name for the same zone, so the comparison is made on
+  // that name. A zone Windows has no name for is always offered for correction.
+  const zoneMatches =
+    assessment.platform === 'win32'
+      ? windowsTimeZoneFor(deviceZone) === assessment.timezone.current
+      : assessment.timezone.current === deviceZone
   return {
     ...base,
     timezoneZone: deviceZone,
@@ -577,6 +584,21 @@ export function buildSetupPlan(
       : 'Git identity setup is off for this setup.',
     ...(configuration.git.enabled ? {} : { skippedReason: 'Disabled for this setup.' })
   })
+
+  /* Phase: finalize. A Windows Oven whose SSH server only starts by hand is
+     unreachable after the next restart, so setup repairs that before it reports
+     the Oven finished. It is a step of its own because a machine that refuses
+     the change must still be reported as set up, with that one fact named. */
+  if (platform === 'win32' && assessment.sshStartsAtBoot === false)
+    steps.push({
+      id: 'sshd-autostart',
+      name: 'Start the SSH server with Windows',
+      phase: 'finalize',
+      requiresElevation: false,
+      commands: [],
+      handledByApp: true,
+      detail: windowsSshdStepDetail()
+    })
 
   /* Phase: finalize. Refresh the service, then read the result back. */
   steps.push({

@@ -8,7 +8,10 @@ export const invokeSearchContract = {
    * loadable model.
    */
   'search:warm': {} as Contract<[], void>,
-  'search:downloadArtifact': {} as Contract<[artifactId: string], void>,
+  'search:downloadArtifact': {} as Contract<
+    [artifactId: string, mode?: import('../search/types').SearchDownloadMode],
+    void
+  >,
   'search:cancelDownload': {} as Contract<[artifactId: string], boolean>,
   'search:deleteModel': {} as Contract<[modelId: string], void>,
   /** Opens a native file picker for a local embedding model; null when cancelled. */

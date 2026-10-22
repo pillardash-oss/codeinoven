@@ -245,13 +245,48 @@ export interface BrowserCompositionPlayback {
 }
 
 /**
+ * One exact frame of a composition, kept as a picture the user can draw on.
+ *
+ * A composition is a page rather than a video file, so its frame exists on
+ * screen for one repaint and nowhere on disk. Answering a note on one therefore
+ * needs the frame itself: the second it was drawn at, written out as a still the
+ * annotation surface can show and the send path can read back.
+ *
+ * The second is the frame's identity, so it travels with the picture rather than
+ * being re-derived from a playhead that has since moved. It is reported to the
+ * millisecond, which is the resolution a frame boundary is decided at.
+ */
+export interface CompositionFrameSnapshot {
+  /** Project-relative path of the written PNG, e.g. `.cio/work/video-frames/hero/…` */
+  path: string
+  /** Serve URL for the same file, which is what the renderer displays. */
+  url: string
+  /** The exact second the frame was drawn at. */
+  seconds: number
+  /** That second as `M:SS.mmm`, the form a descriptor and a label show. */
+  timecode: string
+  /** The frame index the second falls on, so a reader can name it exactly. */
+  frame: number
+  /** Frames per second the composition declares. */
+  fps: number
+  /** How long the composition runs, in seconds. */
+  duration: number
+  /** The composition folder the frame belongs to, project-relative. */
+  directory: string
+  /** Pixels the picture was captured at. */
+  width: number
+  height: number
+}
+
+/**
  * One playback action on a composition tab.
  *
  * `seek` and `loop` carry a value; the rest take none. The set is closed and a
  * command names a function the transport defines, so no part of a caller's input
  * is ever evaluated as code.
  */
-export type BrowserTransportCommand = 'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'loop'
+export type BrowserTransportCommand =
+  'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'freeze' | 'loop'
 
 /**
  * One element the user picked from a design, reported by the injected inspector.
@@ -475,12 +510,7 @@ export interface BrowserPageKey {
  * or reopening a tab, and the design screen history.
  */
 export type BrowserPanelShortcutAction =
-  | 'design-undo'
-  | 'design-redo'
-  | 'focus-address'
-  | 'close-tab'
-  | 'new-tab'
-  | 'reopen-tab'
+  'design-undo' | 'design-redo' | 'focus-address' | 'close-tab' | 'new-tab' | 'reopen-tab'
 
 /**
  * One find request for a tab's page.

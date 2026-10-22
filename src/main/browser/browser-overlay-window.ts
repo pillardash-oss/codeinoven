@@ -1,4 +1,5 @@
 import {
+  NATIVE_TOOLTIP_DOCK_ID,
   nativeDockImageIds,
   validateNativeDockImages,
   withoutNativeDockImages,
@@ -364,12 +365,14 @@ export class BrowserOverlayWindow {
         const timer = setTimeout(() => {
           this.leavingDocks.delete(id)
           this.settle()
-          if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.retire()
+          if (!this.hasContent() && id !== NATIVE_TOOLTIP_DOCK_ID && id !== 'thread-switcher')
+            this.retire()
         }, 160)
         this.leavingDocks.set(id, { modal: true, timer })
       }
       this.settle()
-      if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.retire()
+      if (!this.hasContent() && id !== NATIVE_TOOLTIP_DOCK_ID && id !== 'thread-switcher')
+        this.retire()
       return true
     }
     if (!this.docks.has(id) && this.docks.size >= 32) return false

@@ -7,14 +7,14 @@ import type { PromptReference } from '$shared/types'
  * assistant response, an element picked from a design in the in-app browser, a
  * passage annotated in a project document, a moment noted on a video
  * composition's timeline, a freehand mark drawn on a picture the agent rendered
- * (a still, or one frame of a video), and an element picked inside an inline SVG
- * artifact. The strip and its popover both show a count, so the count's noun has
- * to agree with what is actually attached rather than always saying
- * "selections".
+ * (a still, or one frame of a video), and an element picked inside an inline
+ * artifact (HTML or SVG). The strip and its popover both show a count, so the
+ * count's noun has to agree with what is actually attached rather than always
+ * saying "selections".
  */
 export interface ComposerReferenceSummary {
   total: number
-  /** How many references are picked elements, from a design or an inline SVG. */
+  /** How many references are picked elements, from a design or an inline artifact. */
   elements: number
   /** How many references are passages annotated in a project document. */
   annotations: number
@@ -37,7 +37,8 @@ export function summarizeComposerReferences(
   references: readonly PromptReference[]
 ): ComposerReferenceSummary {
   const elements = references.filter(
-    (reference) => reference.kind === 'design' || reference.kind === 'svg'
+    (reference) =>
+      reference.kind === 'design' || reference.kind === 'svg' || reference.kind === 'html'
   ).length
   const annotations = references.filter((reference) => reference.kind === 'file').length
   const notes = references.filter((reference) => reference.kind === 'video').length

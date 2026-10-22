@@ -1,6 +1,18 @@
-import type { TurnCheckpointSummary } from '$shared/types'
+import type { ChangeBreakdown } from '$shared/change-breakdown'
+
+export interface ChangeCardSource {
+  changes: readonly {
+    path: string
+    additions?: number
+    deletions?: number
+    sources?: readonly unknown[]
+    lineCountsTruncated?: boolean
+  }[]
+  rolledBackPaths?: string[]
+}
 
 export interface ChangeCardSummary {
+  breakdown?: ChangeBreakdown
   additions: number
   deletions: number
   edited: boolean
@@ -16,15 +28,25 @@ export interface ChangeCardItem {
   partial: boolean
 }
 export type ChangeCardMessage =
-  | { totalChanges: number }
+  | { totalChanges: number; classify?: boolean }
   | { restored: string[] }
   | { changes: ChangeCardItem[] }
   | { finish: true }
 
 const BATCH_SIZE = 512
+/**
+ * Area groupings already computed for a change set, keyed by the array that holds
+ * it. The Git panel mounts the same change set from several surfaces (the changes
+ * header, the pull request header, the files tab), and a status refresh hands back
+ * the same array, so a mounted surface reuses the worker pass instead of paying for
+ * the same paths again. The cache is a WeakMap, so an unreferenced change set never
+ * keeps its grouping alive.
+ */
+const breakdownCache = new WeakMap<readonly unknown[], ChangeBreakdown>()
 interface SummaryJob {
-  checkpoint: TurnCheckpointSummary
+  checkpoint: ChangeCardSource
   signal: AbortSignal
+  classify: boolean
   resolve: (summary: ChangeCardSummary) => void
   reject: (reason: unknown) => void
   cancel: () => void
@@ -34,10 +56,22 @@ let running = false
 
 /** Serialize scans, transferring only a small chunk of metadata per acknowledgement. */
 export function summarizeChanges(
-  checkpoint: TurnCheckpointSummary,
-  signal: AbortSignal
+  checkpoint: ChangeCardSource,
+  signal: AbortSignal,
+  classify = false
 ): Promise<ChangeCardSummary> {
   if (signal.aborted) return Promise.reject(new DOMException('Cancelled', 'AbortError'))
+  if (checkpoint.changes.length === 0) {
+    return Promise.resolve({
+      additions: 0,
+      deletions: 0,
+      edited: true,
+      partial: false,
+      remaining: false,
+      restored: new Uint8Array(),
+      ...(classify ? { breakdown: { totalFiles: 0, additions: 0, deletions: 0, areas: [], kinds: [] } } : {})
+    })
+  }
   if (pending.length >= 128)
     return Promise.reject(new Error('Change summary is busy. Reopen the card to retry.'))
   return new Promise((resolve, reject) => {
@@ -48,7 +82,7 @@ export function summarizeChanges(
       signal.removeEventListener('abort', cancel)
       reject(new DOMException('Cancelled', 'AbortError'))
     }
-    const job: SummaryJob = { checkpoint, signal, resolve, reject, cancel }
+    const job: SummaryJob = { checkpoint, signal, classify, resolve, reject, cancel }
     pending.push(job)
     signal.addEventListener('abort', cancel, { once: true })
     pump()
@@ -65,7 +99,7 @@ function pump(): void {
   void Promise.resolve()
     .then(() => {
       job.signal.throwIfAborted()
-      return scan(job.checkpoint, job.signal)
+      return scan(job.checkpoint, job.signal, job.classify)
     })
     .then(job.resolve, job.reject)
     .finally(() => {
@@ -74,7 +108,13 @@ function pump(): void {
     })
 }
 
-function scan(checkpoint: TurnCheckpointSummary, signal: AbortSignal): Promise<ChangeCardSummary> {
+function scan(
+  checkpoint: ChangeCardSource,
+  signal: AbortSignal,
+  classify: boolean
+): Promise<ChangeCardSummary> {
+  const cached = classify ? breakdownCache.get(checkpoint.changes) : undefined
+  const classifyNow = classify && !cached
   return new Promise((resolve, reject) => {
     let worker: Worker | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -90,7 +130,12 @@ function scan(checkpoint: TurnCheckpointSummary, signal: AbortSignal): Promise<C
       signal.removeEventListener('abort', abort)
       worker?.terminate()
       if (error) reject(error)
-      else if (summary) resolve(summary)
+      else if (summary) {
+        if (cached) summary.breakdown = cached
+        else if (classify && summary.breakdown)
+          breakdownCache.set(checkpoint.changes, summary.breakdown)
+        resolve(summary)
+      }
     }
     const abort = (): void => finish(new DOMException('Cancelled', 'AbortError'))
     const send = (): void => {
@@ -98,7 +143,7 @@ function scan(checkpoint: TurnCheckpointSummary, signal: AbortSignal): Promise<C
       try {
         let message: ChangeCardMessage
         if (!initialized) {
-          message = { totalChanges: checkpoint.changes.length }
+          message = { totalChanges: checkpoint.changes.length, classify: classifyNow }
           initialized = true
         } else if (restoredIndex < restored.length) {
           message = { restored: restored.slice(restoredIndex, restoredIndex + BATCH_SIZE) }

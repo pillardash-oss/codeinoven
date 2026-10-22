@@ -76,20 +76,25 @@
     onToggle
   }: Props = $props()
 
-  const stepLabel = $derived(`${count} ${count === 1 ? 'step' : 'steps'}`)
+  // A trace that produced no thinking or tool steps states its duration alone:
+  // "0 steps" beside a 14 minute span reads as a broken counter.
+  const stepLabel = $derived(count > 0 ? `${count} ${count === 1 ? 'step' : 'steps'}` : null)
   const durationLabel = $derived(
     durationSeconds === null ? null : formatDurationMs(durationSeconds * 1000)
+  )
+  const measureLabel = $derived(
+    [stepLabel, durationLabel].filter((part): part is string => part !== null).join(' · ')
   )
 </script>
 
 <div
-  class="group/trace relative flex flex-wrap items-center gap-x-2 gap-y-1 py-1 text-left text-[0.75rem] font-medium text-muted"
+  class="group/trace relative flex items-center gap-x-2 py-1 text-left text-[0.6875rem] font-medium text-muted"
 >
-  <!-- The whole line is one click target, but the rule belongs to the content:
-       it spans only what is on screen, from the title to the last badge, and the
-       trailing metadata repeats that on the right so the two read as a pair. The
-       target is an overlay so the sub-agent dropdown stays a real sibling
-       instead of a button nested inside a button. -->
+  <!-- Each cluster keeps its own rule, on one line: the title's rule closes the
+       summary and the attribution's rule closes the metadata, both stretched to
+       the row's height so the pair lines up. The target is an overlay so the
+       sub-agent dropdown stays a real sibling instead of a button nested inside
+       a button. -->
   <button
     type="button"
     class="absolute inset-0 cursor-pointer"
@@ -99,7 +104,7 @@
     onclick={onToggle}
   ></button>
   <div
-    class="pointer-events-none relative inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong group-hover/trace:text-foreground"
+    class="pointer-events-none relative inline-flex flex-none items-center gap-x-1.5 self-stretch border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong group-hover/trace:text-foreground"
   >
     <!-- The icon keeps the left gutter shared with every step below, so the orb
          and the cog sit on the same edge as the thinking and tool marks. -->
@@ -110,10 +115,14 @@
         <CioTools size={12} />
       {/if}
     </span>
-    Working Trace
-    <span class="tabular-nums text-dimmed transition-colors group-hover/trace:text-foreground"
-      >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span
-    >
+    <span class="whitespace-nowrap">Working Trace</span>
+    {#if measureLabel}
+      <span
+        class="whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed transition-colors group-hover/trace:text-foreground"
+      >
+        {measureLabel}
+      </span>
+    {/if}
     {#if hasCompaction || subagentCount > 0}
       <!-- Only the sub-agent dropdown takes the click; the plain badges let it
            fall through to the line's own toggle. -->
@@ -148,7 +157,7 @@
   </div>
   {#if modelLabel}
     <div
-      class="pointer-events-none relative ml-auto inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong"
+      class="pointer-events-none relative ml-auto inline-flex min-w-0 items-center self-stretch border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong"
     >
       <WorkingTraceMetadata
         {modelLabel}

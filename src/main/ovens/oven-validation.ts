@@ -95,6 +95,11 @@ export function validateSaveOven(value: unknown): SaveOvenInput {
   }
   const authentication = raw.authentication as OvenConnection['authentication']
   const connection: OvenConnection = { host, ...(user ? { user } : {}), port, authentication }
+  if (raw.allowClassicalKeyExchange !== undefined) {
+    if (typeof raw.allowClassicalKeyExchange !== 'boolean')
+      throw new TypeError('The classical SSH compatibility choice must be a boolean.')
+    connection.allowClassicalKeyExchange = raw.allowClassicalKeyExchange
+  }
   if (authentication === 'identity') {
     const identityFile = text(raw.identityFile, 'Identity file', 4096)
     if (

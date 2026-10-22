@@ -10,10 +10,12 @@ import {
   deploymentDetailKey,
   deploymentKey,
   deploymentLogKey,
+  deploymentPageKey,
   errorMessage,
   prBundleKey,
   prPageKey,
   workflowRunKey,
+  workflowRunPageKey,
   type GitOperation
 } from './git-store-helpers'
 import { GitDeploymentCache } from './git-store-deployments.svelte'
@@ -40,9 +42,10 @@ import type {
   GitHubAuthStatus,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
-  GitHubDeploymentOverviewResult,
+  GitHubDeploymentPage,
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
+  GitHubWorkflowRunPage,
   IssueBundle,
   IssuePage,
   IssueReference,
@@ -62,7 +65,8 @@ import type {
   PullRequestPage,
   PullRequestSummary,
   RepositoryMentionUser,
-  WorkflowRerunMode
+  WorkflowRerunMode,
+  WorkflowRunFilter
 } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -194,6 +198,29 @@ export class GitState {
    * prevents the second A activation from reusing or accepting A's old work.
    */
   private activationGeneration = 0
+  private readonly scopeNotices = new SvelteMap<
+    string,
+    {
+      error: string | null
+      permission: GitHubPermissionRequired | null
+    }
+  >()
+
+  private rememberScopeNotices(): void {
+    if (!this.activeProjectId) return
+    const key = JSON.stringify([this.activeProjectId, this.activeScopeBucketId])
+    if (this.error || this.githubPermission) {
+      this.scopeNotices.set(key, { error: this.error, permission: this.githubPermission })
+    } else this.scopeNotices.delete(key)
+  }
+
+  private restoreScopeNotices(): void {
+    const notice = this.scopeNotices.get(
+      JSON.stringify([this.activeProjectId, this.activeScopeBucketId])
+    )
+    this.error = notice?.error ?? null
+    this.githubPermission = notice?.permission ?? null
+  }
 
   // Not reactive rendered data - a plain dedup registry for agent-event
   // subscriptions, so SvelteSet is the wrong tool here.
@@ -440,14 +467,12 @@ export class GitState {
     this.local.prResolveSession = value
   }
 
-  /**
-   * What a project's remote last answered when a round trip did not finish, or
-   * null when the last one finished. Keyed by project rather than held for the
-   * active one, so a fetch that failed while the user was looking elsewhere is
-   * still there when they come back and open the panel.
-   */
-  remoteIssueFor(projectId: string): GitRemoteIssue | null {
-    return this.local.remoteIssueFor(projectId)
+  /** The remote verdict belongs to the scope whose checkout made the request. */
+  remoteIssueFor(projectId: string, scopeBucketId?: string): GitRemoteIssue | null {
+    return this.local.remoteIssueFor(
+      projectId,
+      ovenRootKey(projectId) ?? scopeBucketId ?? this.scopeFor(projectId)
+    )
   }
 
   get prPages(): Record<string, { page: PullRequestPage; fetchedAt: number }> {
@@ -496,11 +521,12 @@ export class GitState {
     return this.prs.mentionUsers
   }
 
-  get deploymentOverviews(): Record<
-    string,
-    { overview: GitHubDeploymentOverviewResult; fetchedAt: number }
-  > {
-    return this.deployments.overviews
+  get deploymentRunPages(): Record<string, { page: GitHubWorkflowRunPage; fetchedAt: number }> {
+    return this.deployments.runPages
+  }
+
+  get deploymentPages(): Record<string, { page: GitHubDeploymentPage; fetchedAt: number }> {
+    return this.deployments.deploymentPages
   }
 
   get deploymentDetails(): Record<string, { detail: GitHubDeploymentDetail; fetchedAt: number }> {
@@ -549,10 +575,12 @@ export class GitState {
   activate(projectId: string, scopeBucketId?: string): void {
     const nextScopeBucketId = ovenRootKey(projectId) ?? scopeBucketId ?? null
     if (this.activeProjectId === projectId && this.activeScopeBucketId === nextScopeBucketId) return
+    this.rememberScopeNotices()
     this.activationGeneration += 1
     this.activeProjectId = projectId
     this.activeScopeBucketId = nextScopeBucketId
     this.clearProjectState()
+    this.restoreScopeNotices()
     this.hydrateFromCache(nextScopeBucketId)
   }
 
@@ -598,10 +626,12 @@ export class GitState {
    * sibling worktrees never display each other's state.
    */
   notifyScopeChanged(projectId: string, scopeBucketId: string): void {
+    this.rememberScopeNotices()
     this.activationGeneration += 1
     this.activeProjectId = projectId
     this.activeScopeBucketId = scopeBucketId
     this.clearProjectState()
+    this.restoreScopeNotices()
     this.hydrateFromCache(scopeBucketId)
     this.scheduleRefresh(projectId)
   }
@@ -640,6 +670,7 @@ export class GitState {
 
   /** Clear Git state when the active thread has no Git-capable project. */
   deactivate(): void {
+    this.rememberScopeNotices()
     if (this.activeProjectId === null) return
     this.activationGeneration += 1
     this.activeProjectId = null
@@ -911,6 +942,9 @@ export class GitState {
     subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as { type: string; projectId?: string } | undefined
       if (event?.type === 'checkpoint.updated' && event.projectId === projectId) {
+        for (const target of this.prs.invalidateProject(projectId)) {
+          this.issues.timelines.invalidate(target.owner, target.repo, target.number)
+        }
         void this.refresh(projectId).catch(() => {})
       }
     })
@@ -951,7 +985,6 @@ export class GitState {
       projectId === this.activeProjectId
     /** Whether this round has already published working tree state. */
     let publishedStatus = false
-    this.error = null
     this.statusError = null
     try {
       // The chrome reads are started first so they overlap the status read, but
@@ -1868,13 +1901,57 @@ export class GitState {
     return this.prs.ensureAgentAssignments(projectId, numbers)
   }
 
-  ensureDeploymentOverview(
+  ensureDeploymentActivity(
     projectId: string,
     owner: string,
     repo: string,
     force = false
-  ): Promise<GitHubDeploymentOverviewResult | null> {
-    return this.deployments.ensureDeploymentOverview(projectId, owner, repo, force)
+  ): Promise<boolean | null> {
+    return this.deployments.ensureDeploymentActivity(projectId, owner, repo, force)
+  }
+
+  ensureWorkflowRunPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    filter: WorkflowRunFilter,
+    page: number,
+    force = false
+  ): Promise<void> {
+    return this.deployments.ensureWorkflowRunPage(projectId, owner, repo, filter, page, force)
+  }
+
+  ensureDeploymentPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    page: number,
+    force = false
+  ): Promise<void> {
+    return this.deployments.ensureDeploymentPage(projectId, owner, repo, page, force)
+  }
+
+  preloadWorkflowRunPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    filter: WorkflowRunFilter,
+    page: number
+  ): Promise<void> {
+    return this.deployments.preloadWorkflowRunPage(projectId, owner, repo, filter, page)
+  }
+
+  preloadDeploymentPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    page: number
+  ): Promise<void> {
+    return this.deployments.preloadDeploymentPage(projectId, owner, repo, page)
+  }
+
+  refreshDeploymentPages(projectId: string, owner: string, repo: string): Promise<void> {
+    return this.deployments.refreshDeploymentPages(projectId, owner, repo)
   }
 
   ensureDeploymentDetail(
@@ -2112,6 +2189,21 @@ export class GitState {
 
   static deploymentKey(owner: string, repo: string): string {
     return deploymentKey(owner, repo)
+  }
+
+  /** Cache key for one page of workflow runs, under the filter that produced it. */
+  static workflowRunPageKey(
+    owner: string,
+    repo: string,
+    filter: WorkflowRunFilter,
+    page: number
+  ): string {
+    return workflowRunPageKey(owner, repo, filter, page)
+  }
+
+  /** Cache key for one page of deployments, mirroring `workflowRunPageKey`. */
+  static deploymentPageKey(owner: string, repo: string, page: number): string {
+    return deploymentPageKey(owner, repo, page)
   }
 
   static deploymentDetailKey(owner: string, repo: string, deploymentId: number): string {

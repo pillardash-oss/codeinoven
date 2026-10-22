@@ -144,6 +144,7 @@
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
+  import { formatChangeSummary } from '$shared/change-breakdown'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import { fullscreenFileChatHost } from '$lib/fullscreen-file-chat-portal'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -1243,13 +1244,7 @@
       // The stored label doubles as the rail's tooltip, so it carries the same
       // summary the hover flyout draws when a change set exists.
       const changeLabel = hasRecordedChanges
-        ? [
-            'Changes',
-            changeTotals ? `+${changeTotals.additions} −${changeTotals.deletions}` : null,
-            `${changeFileCount} ${changeFileCount === 1 ? 'file' : 'files'}`
-          ]
-            .filter((part): part is string => part !== null)
-            .join(' · ')
+        ? `Changes · ${formatChangeSummary(threadChangesState.current?.breakdown, changeTotals, changeFileCount)}`
         : 'Changes'
       // While the turn runs, the icon itself carries the running insertions and
       // deletions as plain, colour-coded text on one line ("+128/-24"), so the
@@ -2708,7 +2703,6 @@
           id: 'new-project',
           component: ProjectCreateControl as unknown as ViewActionItem['component'],
           props: {
-            projects,
             onProjectCreated: handleProjectCreated,
             onExisting: (project: Project) => void scopeState.activateProject(project.id),
             triggerAddProject: projectCreateTrigger,
@@ -2874,7 +2868,6 @@
           id: 'new-project',
           component: ProjectCreateControl as unknown as ViewActionItem['component'],
           props: {
-            projects,
             onProjectCreated: handleProjectCreated,
             onExisting: handleExistingProject,
             triggerAddProject: projectCreateTrigger,
@@ -3699,6 +3692,12 @@
     projects = projects.filter((p) => p.id !== projectId)
     allThreads = allThreads.filter((t) => t.projectId !== projectId)
     projectIcons.delete(projectId)
+    // The shared scope state feeds the spotlight, the project switcher and the
+    // scope board. Leaving the deleted project there keeps offering a project
+    // and threads that no longer exist, and makes re-adding the same folder
+    // look like a duplicate.
+    scopeState.removeProject(projectId)
+    sidebar.expandedFolders.delete(projectId)
     if (selectedThread?.projectId === projectId) workspaceState.clearThread()
     // Best-effort teardown of the project's browser sessions. The project is
     // already gone backend-side, so a failure here must not roll the UI back.

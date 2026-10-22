@@ -94,6 +94,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     scopeWorktreeService,
     projectFilesService,
     threadManager,
+    rankingSnapshotRepo,
     editorService,
     repositoryService,
     privilegedIpc,
@@ -417,18 +418,13 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
     ipcMain.handle('project:list', async () => {
       const projects = await projectManager.listProjects()
-      // Index every local project's files in the background so the first
-      // search is instant instead of building the whole index on demand.
-      for (const project of projects) {
-        if (project.source === 'local' && project.path.trim()) {
-          void projectFilesService.prewarmProject(project.id)
-        }
-      }
+      // Search builds its index on demand. Listing projects must not scan
+      // every checkout or start watchers on memory-constrained machines.
       return projects
     })
     ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
     ipcMain.handle('scope:get', (_, projectId: unknown) =>
-      scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
+      scopeManager.getBoardViaWorker(validateEntityId(projectId, 'Project ID'))
     )
   }
   ipcMain.handle('scope:updateLayout', (_, projectId: unknown, orderedIds: unknown) =>
@@ -618,8 +614,6 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       }
       const project = await projectManager.updateProject(projectId, validatedInput)
       projectFilesService.invalidateProject(projectId)
-      // The root may have changed; warm the index and re-point the watcher.
-      void projectFilesService.prewarmProject(projectId)
       return project
     }
   )
@@ -684,6 +678,21 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       // project deletion can never fall behind that logic or leave orphans.
       await threadManager.deleteAllThreadsInProject(projectId)
       await projectManager.deleteProject(projectId)
+      // Project-scoped rows that no foreign key covers go with the project.
+      // Left behind, they keep the deleted project id alive in board scans,
+      // design history, work-folder lists and grading queues, which is how a
+      // deleted project resurfaces in the UI and gets written to again.
+      scopeManager.forgetProject(projectId)
+      options.designService?.()?.forgetProject(projectId)
+      void rankingSnapshotRepo.clearProjectViaWorker(projectId).then((purged) => {
+        if (!purged.ok) {
+          Logger.dev('Project ranking snapshots were not fully purged', {
+            projectId,
+            deleted: purged.deleted,
+            error: purged.error ?? ''
+          })
+        }
+      })
       projectFilesService.disposeProject(projectId)
       // Remove app-owned scratch data keyed by this project id (spec-context
       // attachments, any leftover per-thread directories) that isn't tied to
@@ -746,9 +755,6 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     ) => {
       const validatedProjectId = validateEntityId(projectId, 'Project ID')
       const directory = requireString(relativeDirectory, 'Project directory', true)
-      if (directory === '') {
-        void projectFilesService.prewarmProject(validatedProjectId, threadIdArg(threadId))
-      }
       return projectFilesService.listDirectory(
         validatedProjectId,
         directory,

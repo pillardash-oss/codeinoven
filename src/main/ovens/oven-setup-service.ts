@@ -29,6 +29,12 @@ import { OvenInstallProgress } from './oven-install-progress'
 import { withOvenHarnessMutation } from './oven-operation-lock'
 import { isWindowsShell, shellForPlatform } from './oven-remote-shell'
 import { remoteArgvCommand } from './oven-remote-command'
+import {
+  WINDOWS_SSHD_STARTUP_COMMAND,
+  sshdStartsAutomatically,
+  windowsSshdStartupScript,
+  windowsSshdStepDetail
+} from './remote/oven-windows-sshd'
 
 const OPERATION_PATH = 'ovens/setup'
 /** Bounded so a long setup cannot grow the journal without limit. */
@@ -503,6 +509,36 @@ export class OvenSetupService {
         if (step) step.detail = outcome.message
         if (outcome.status === 'unsupported') return { skippedReason: outcome.message }
         return
+      }
+      case 'sshd-autostart': {
+        // An OpenSSH session to an administrator account carries the rights this
+        // needs on Windows, so the attempt costs one round trip. A refusal is not
+        // a failed setup: the Oven is set up, it just will not come back by
+        // itself, and that is exactly what the step has to say.
+        const shell = shellForPlatform(this.reports.get(ovenId)?.platform)
+        const line = remoteArgvCommand(shell, [
+          'powershell',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          windowsSshdStartupScript()
+        ])
+        if (step) step.detail = windowsSshdStepDetail()
+        let output: string
+        try {
+          output = await this.ports.ssh.execute(ovenId, line, '', VERIFY_TIMEOUT_MS)
+        } catch (error) {
+          const reason = `The Oven did not let CodeInOven change its SSH service: ${messageOf(error)} Start it with Windows yourself, once, in an elevated PowerShell on the Oven: ${WINDOWS_SSHD_STARTUP_COMMAND}`
+          if (step) step.detail = reason
+          return { skippedReason: reason }
+        }
+        if (sshdStartsAutomatically(output)) {
+          if (step) step.detail = 'The Oven\u2019s SSH server now starts with Windows.'
+          return
+        }
+        const reason = `The Oven still starts its SSH server by hand, so it will stop answering after a restart. Run this once in an elevated PowerShell on the Oven: ${WINDOWS_SSHD_STARTUP_COMMAND}`
+        if (step) step.detail = reason
+        return { skippedReason: reason }
       }
       case 'service':
         await this.ports.installService(ovenId)

@@ -67,6 +67,9 @@ export type NativeDockInteraction =
   | { id: string; kind: 'drag'; dx: number; dy: number; done: boolean }
   | { id: string; kind: 'edge'; key: string }
 
+/** The tooltip's identity, shared by the document that draws it and its host. */
+export const NATIVE_TOOLTIP_DOCK_ID = 'app-tooltip'
+
 export const NATIVE_DOCK_TAGS = new Set([
   'div',
   'aside',

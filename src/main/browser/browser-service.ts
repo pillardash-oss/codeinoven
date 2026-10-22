@@ -37,6 +37,7 @@ import {
 } from 'electron'
 import type { Database } from '../database/database'
 import { createHash } from 'node:crypto'
+import { videoTimecode } from '../../lib/video/timeline'
 import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
@@ -51,6 +52,7 @@ import {
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
   BrowserCompositionPlayback,
+  CompositionFrameSnapshot,
   BrowserConsoleEntry,
   BrowserConsoleLevel,
   BrowserDesignTab,
@@ -382,6 +384,7 @@ import {
 import { BrowserLoadWaits } from './browser-service/browser-load-wait'
 import {
   COMPOSITION_TRANSPORT_GLOBAL,
+  compositionRenderReadyScript,
   compositionTransportCommandScript,
   compositionTransportScript,
   compositionTransportStateScript,
@@ -554,9 +557,41 @@ export type BrowserAgentActionApprover = (
   request: BrowserAgentActionApproval
 ) => Promise<BrowserAgentActionDecision | boolean>
 
+/**
+ * How many times a frame is asked for before a capture gives up on it.
+ *
+ * A page defines its render function while it parses, so a capture that lands on
+ * the first paint asks a composition that is not ready yet. The retries are
+ * bounded because a page that never defines it must answer rather than hang the
+ * click that asked.
+ */
+const FRAME_CAPTURE_ATTEMPTS = 4
+/** Gap between frame requests, so a page still parsing gets time to define one. */
+const FRAME_CAPTURE_RETRY_MS = 150
+
+/**
+ * A readable, stable folder for one composition's captured frames.
+ *
+ * The leaf name is what a person recognises and the short hash is what keeps two
+ * compositions called `hero` in different folders apart, which one flat scratch
+ * folder would otherwise overwrite.
+ */
+function frameFolderName(directory: string): string {
+  const leaf = basename(directory.replace(/[\\/]+$/u, ''))
+    .replace(/[^A-Za-z0-9._-]+/gu, '-')
+    .replace(/^[.-]+/u, '')
+    .slice(0, 60)
+  const hash = createHash('sha1').update(directory).digest('hex').slice(0, 8)
+  return leaf ? `${leaf}-${hash}` : hash
+}
+
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
+  private readonly compositionArming = new WeakMap<
+    BrowserTab,
+    { generation: number; promise: Promise<void> }
+  >()
   private readonly agentTabIds = new Map<string, string>()
   /**
    * The browser tab each assistant conversation answers about, by thread id.
@@ -1517,6 +1552,12 @@ export class BrowserService {
     replaceHandler('browser:transportState', (_event, rawTabId) =>
       this.transportState(validateTabId(rawTabId))
     )
+    replaceHandler('browser:captureCompositionFrame', (_event, rawTabId, rawSeconds) => {
+      if (typeof rawSeconds !== 'number' || !Number.isFinite(rawSeconds)) {
+        throw new TypeError('A composition frame needs a second to capture')
+      }
+      return this.captureCompositionFrame(validateTabId(rawTabId), rawSeconds)
+    })
     replaceHandler('browser:reloadIgnoringCache', (_event, rawTabId) => {
       this.liveTab(validateTabId(rawTabId))?.view.webContents.reloadIgnoringCache()
     })
@@ -3030,6 +3071,76 @@ export class BrowserService {
   }
 
   /**
+   * Keep one exact frame of a composition as a still the user can draw on.
+   *
+   * A composition's frame lives on screen for one repaint and nowhere on disk,
+   * so a note about a moment cannot name that moment alone: the picture has to be
+   * captured while it is up. The playhead is stopped first, because a frame drawn
+   * while it is moving can be replaced before the capture lands and the picture
+   * would then show a moment the note does not name.
+   *
+   * The picture is written into the project's own scratch rather than kept in
+   * memory, because it outlives the click that produced it: the annotation
+   * surface shows it, the composer keeps the note across a restart, and the send
+   * burns the marks onto it. That is also why the second travels back with it:
+   * the note names the moment, and the picture is only the evidence for it.
+   */
+  async captureCompositionFrame(
+    tabId: string,
+    seconds: number
+  ): Promise<CompositionFrameSnapshot | null> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || !tab.composition || tab.view.webContents.isDestroyed()) return null
+    const composition = tab.composition
+    const at = Math.min(
+      Math.max(Number.isFinite(seconds) ? seconds : 0, 0),
+      composition.duration > 0 ? composition.duration : 0
+    )
+    // A user action can recover a document that startup left unarmed, which is
+    // the same path a Play click takes.
+    if (!tab.transport) await this.armCompositionTransport(tabId, tab)
+    await this.sendTransport(tabId, 'pause', 0).catch(() => null)
+    let rendered = false
+    for (let attempt = 0; attempt < FRAME_CAPTURE_ATTEMPTS && !rendered; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FRAME_CAPTURE_RETRY_MS))
+      rendered = (await this.renderTabFrame(tabId, at).catch(() => ({ rendered: false }))).rendered
+    }
+    if (!rendered) return null
+    const image = await tab.view.webContents.capturePage()
+    const size = image.getSize()
+    if (size.width < 1 || size.height < 1) return null
+    const project = this.projects.get(tab.projectId)
+    const root = project?.source === 'local' ? project.path : null
+    if (!root) return null
+    const folder = `video-frames/${frameFolderName(composition.directory)}`
+    const relative = `.cio/work/${folder}/frame-${Math.round(at * 1000)}.png`
+    const absolute = join(root, relative)
+    try {
+      await mkdir(dirname(absolute), { recursive: true })
+      await writeFile(absolute, image.toPNG())
+    } catch (error) {
+      Logger.error('A composition frame could not be written:', error)
+      return null
+    }
+    const served = relative
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+    return {
+      path: relative,
+      url: `appfile://project/${tab.projectId}/${served}`,
+      seconds: at,
+      timecode: videoTimecode(at),
+      frame: Math.round(at * (composition.fps > 0 ? composition.fps : 30)),
+      fps: composition.fps,
+      duration: composition.duration,
+      directory: composition.directory,
+      width: size.width,
+      height: size.height
+    }
+  }
+
+  /**
    * Install the playback transport in a composition tab.
    *
    * This is the handover that turns a composition from a page that plays itself
@@ -3056,6 +3167,19 @@ export class BrowserService {
    * is the answer there, not playback.
    */
   private async armCompositionTransport(tabId: string, tab: BrowserTab): Promise<void> {
+    const generation = tab.navigationGeneration
+    const pending = this.compositionArming.get(tab)
+    if (pending?.generation === generation) return pending.promise
+    const promise = this.installCompositionTransport(tabId, tab)
+    this.compositionArming.set(tab, { generation, promise })
+    try {
+      await promise
+    } finally {
+      if (this.compositionArming.get(tab)?.promise === promise) this.compositionArming.delete(tab)
+    }
+  }
+
+  private async installCompositionTransport(tabId: string, tab: BrowserTab): Promise<void> {
     const composition = tab.composition
     const contents = tab.view.webContents
     if (!composition || contents.isDestroyed()) return
@@ -3072,7 +3196,6 @@ export class BrowserService {
     if (
       armed !== null &&
       armed.generation === generation &&
-      armed.url === url &&
       armed.duration === composition.duration &&
       armed.fps === composition.fps
     ) {
@@ -3081,7 +3204,23 @@ export class BrowserService {
     }
     // A re-arm of the document that is on screen right now keeps where the user is
     // rather than the position saved for a document that has been replaced.
-    const live = armed !== null && armed.url === url ? await this.readPlayhead(tabId) : null
+    const live = armed?.generation === generation ? await this.readPlayhead(tabId) : null
+    this.applyTransportAudio(tabId, tab, false)
+    // Load events do not wait for an async film's images, fonts or runtime bind.
+    // Wait in the page, with one bounded startup timer and no main-process poll.
+    const ready: unknown = await contents.executeJavaScript(compositionRenderReadyScript())
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== generation ||
+      tab.composition?.directory !== composition.directory ||
+      tab.composition.duration !== composition.duration ||
+      tab.composition.fps !== composition.fps
+    )
+      return
+    if (ready !== true) {
+      Logger.dev('Composition playback is waiting for cioRenderFrame:', { tabId })
+      return
+    }
     const result: unknown = await contents.executeJavaScript(
       compositionTransportScript({
         duration: composition.duration,
@@ -3145,7 +3284,13 @@ export class BrowserService {
     if (!tab.composition) {
       throw new TypeError('Playback is available on a composition preview only')
     }
-    return this.sendTransport(tabId, command, value)
+    // A user action can recover a document that completed startup after the
+    // bounded initial wait, without keeping a failed preview polling forever.
+    const recovering = !tab.transport
+    if (recovering) await this.armCompositionTransport(tabId, tab)
+    // An unavailable controller is shown as paused. Its first Play click must
+    // still play if startup has just armed the document with autoplay enabled.
+    return this.sendTransport(tabId, recovering && command === 'toggle' ? 'play' : command, value)
   }
 
   /**

@@ -87,7 +87,11 @@ export class OvenRegistry {
     await this.mutate(async (registry) => {
       const oven = registry.ovens.find((item) => item.id === id)
       if (!oven || (oven.connectionStatus?.checkedAt ?? 0) > status.checkedAt) return
-      oven.connectionStatus = { ...status, specs: status.specs ?? oven.connectionStatus?.specs }
+      oven.connectionStatus = {
+        ...status,
+        specs: status.specs ?? oven.connectionStatus?.specs,
+        sshProtection: status.sshProtection ?? oven.connectionStatus?.sshProtection
+      }
       await this.storage.write(REGISTRY_PATH, registry)
     })
   }
@@ -117,6 +121,9 @@ export class OvenRegistry {
         customSvg: input.customSvg,
         color: input.color,
         connection: input.connection,
+        ...(JSON.stringify(existing?.connection) !== JSON.stringify(input.connection)
+          ? { connectionStatus: undefined }
+          : {}),
         order: existing?.order ?? nextOrder(registry),
         createdAt: existing?.createdAt ?? Date.now(),
         updatedAt: Date.now()

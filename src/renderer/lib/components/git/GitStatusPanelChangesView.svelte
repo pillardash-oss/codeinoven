@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatChangeSummary } from '$shared/change-breakdown'
+  import { RunChangesState } from '../threads/run-changes-state.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
@@ -96,6 +98,20 @@
     toggleCommitDir,
     requestRemoveCommitChanges
   }: Props = $props()
+
+  // The existing summary worker batches path metadata. Rendering never waits on it.
+  const breakdownState = new RunChangesState(
+    () => ({ changes: selectedCommit ? commitDiffChanges : changes }),
+    true
+  )
+  const summaryTitle = $derived(
+    formatChangeSummary(
+      breakdownState.summary?.breakdown,
+      null,
+      breakdownState.summary?.breakdown?.totalFiles ??
+        (selectedCommit ? commitDiffChanges.length : changes.length)
+    )
+  )
 
   /**
    * Whether every file of the open commit is selected. The commit's own header
@@ -195,7 +211,7 @@
           <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
             Changed files
           </span>
-          <span class="text-[0.5rem] tabular-nums text-dimmed">
+          <span class="text-[0.5rem] tabular-nums text-dimmed" title={summaryTitle}>
             {commitDiffChanges.length}
           </span>
         </div>

@@ -12,7 +12,10 @@ import {
   windowsEncodedCommand
 } from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
+import { unreachableHostIssue } from './oven-network-hint'
+import { plainPowerShellStderr } from './oven-powershell-output'
 import { validateIdentityPath } from './oven-validation'
+import { inspectSshProtection, postQuantumKeyExchangeOptions } from './oven-ssh-protection'
 import {
   ensureMultiplexDirectory,
   multiplexControlPath,
@@ -92,7 +95,10 @@ function remoteFailureDetail(stderr: string): string {
 }
 
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
-function remoteCommandIssue(stderr: string): string {
+function remoteCommandIssue(rawStderr: string): string {
+  // A Windows PowerShell failure arrives as CLIXML, where the reason is one record
+  // inside an envelope of progress noise.
+  const stderr = plainPowerShellStderr(rawStderr)
   const nodeVersion = /Node\.js 22 or later is required on this Oven \(found (v[\d.]+)\)/u.exec(
     stderr
   )
@@ -437,6 +443,17 @@ export class OvenSsh {
     }
   }
 
+  /** A bounded, fresh handshake only when connection health is requested. */
+  async inspectProtection(id: string) {
+    const launch = await this.prepare(id, 'exit')
+    try {
+      return await inspectSshProtection(launch, this.signal)
+    } finally {
+      delete launch.env['CIO_OVEN_KEY_PASSPHRASE']
+      await launch.dispose()
+    }
+  }
+
   /** Reclaim private identity files left by a crash without touching a live connection. */
   private async cleanStaleCredentials(): Promise<void> {
     const root = this.registry.storage.resolve('ovens/credentials')
@@ -501,7 +518,13 @@ export class OvenSsh {
     if (windowsGit) env = buildProcessEnvironment()
     const executable = windowsGit?.ssh ?? existingSsh
     if (!executable) throw new Error('Install OpenSSH on this computer to connect to Ovens.')
+    const protectionOptions = await postQuantumKeyExchangeOptions(
+      executable,
+      env,
+      connection.allowClassicalKeyExchange === true
+    )
     const args = [
+      ...protectionOptions,
       tty ? '-tt' : '-T',
       '-p',
       String(connection.port),
@@ -534,7 +557,8 @@ export class OvenSsh {
             id,
             host: connection.host,
             port: connection.port,
-            ...(connection.user ? { user: connection.user } : {})
+            ...(connection.user ? { user: connection.user } : {}),
+            allowClassicalKeyExchange: connection.allowClassicalKeyExchange === true
           })
         )
       )
@@ -709,6 +733,9 @@ export class OvenSsh {
             unknownHost = true
             sshIssue =
               'This host is not trusted by OpenSSH. Verify its fingerprint and connect with OpenSSH first.'
+          } else if (/no matching key exchange method found/iu.test(remoteStderr)) {
+            sshIssue =
+              'This Oven’s SSH server cannot negotiate post-quantum key exchange. Upgrade its OpenSSH server and check KexAlgorithms, then retry. If an upgrade is unavailable, explicitly allow classical key exchange in this Oven’s connection settings.'
           } else if (/Permission denied/u.test(text)) {
             sshIssue = args.includes('PreferredAuthentications=password')
               ? 'The host rejected password login. Check the SSH username and saved password, and that this server allows password authentication.'
@@ -717,7 +744,10 @@ export class OvenSsh {
             sshIssue =
               'The host refused the connection. Check that SSH is running on the selected port.'
           } else if (/No route to host|Network is unreachable/u.test(text)) {
-            sshIssue = 'This host is unreachable from this computer.'
+            sshIssue = unreachableHostIssue(
+              process.platform,
+              prepared.args[prepared.args.indexOf('--') + 1] ?? ''
+            )
           } else if (/Could not resolve hostname/u.test(text)) {
             sshIssue = 'The SSH hostname or config alias could not be resolved.'
           } else if (/Operation timed out|Connection timed out/u.test(text)) {

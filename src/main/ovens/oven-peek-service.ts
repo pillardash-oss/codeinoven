@@ -7,7 +7,8 @@ import type {
   OvenHarnessInventoryItem,
   OvenPeek,
   OvenPreflightReport,
-  OvenProbe
+  OvenProbe,
+  OvenSshProtection
 } from '../../lib/ovens'
 
 /** A live answer is reused for a moment, so surfaces opening together share one read. */
@@ -69,7 +70,11 @@ export class OvenPeekService {
     /** Read-only observation of one Oven, shared with the setup contract. */
     private readonly preflight: (ovenId: string) => Promise<OvenPreflightReport>,
     /** Record a successful probe on the Oven entry, so a later `oven:state` agrees. */
-    private readonly onProbe?: (ovenId: string, probe: OvenProbe) => void
+    private readonly onProbe?: (
+      ovenId: string,
+      probe: OvenProbe,
+      protection: OvenSshProtection
+    ) => void
   ) {}
 
   /**
@@ -177,6 +182,9 @@ export class OvenPeekService {
         (reason: unknown) => ({ ok: false as const, reason })
       )
       const probe = probeOutcome.ok ? probeOutcome.value : null
+      const protectionTask: Promise<OvenSshProtection> = probe
+        ? this.service.ssh.inspectProtection(ovenId).catch(() => ({ state: 'unverified' }))
+        : Promise.resolve({ state: 'unverified' })
       const cachedPreflight = this.cache.get(ovenId)?.preflight ?? null
       const report: OvenPreflightReport | null = cachedPreflight?.report ?? null
       void preflightTask.then(
@@ -208,10 +216,12 @@ export class OvenPeekService {
         }
       }
       const error = probeOutcome.ok ? undefined : messageOf(probeOutcome.reason)
+      const sshProtection = await protectionTask
       const peek: OvenPeek = {
         ovenId,
         checkedAt: Date.now(),
         durationMs: Date.now() - started,
+        sshProtection,
         probe,
         inventory,
         preflight: report ? { report, assessment: assessPreflight(report) } : null,
@@ -220,7 +230,7 @@ export class OvenPeekService {
       }
       this.cache.set(ovenId, peek)
       if (probe) {
-        this.onProbe?.(ovenId, probe)
+        this.onProbe?.(ovenId, probe, sshProtection)
         void this.persist(ovenId, peek)
       }
       Logger.dev('Oven check finished', {

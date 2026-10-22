@@ -111,6 +111,91 @@ function usableRatio(ratio: number): number | null {
 }
 
 /**
+ * The box an artifact is mounted in when it is rendered inline for inspection.
+ *
+ * One stage class for both kinds: the inspector's own sheet styles it, and an
+ * artifact's authored `html`/`body`/`:root` rules are rewritten to it so a
+ * document that styles its own page still styles the box it is drawn in.
+ */
+export const ARTIFACT_STAGE_CLASS = 'cio-stage'
+
+/** Id the stage carries, so a pick made on the stage itself stays resolvable. */
+export const ARTIFACT_STAGE_ID = 'cio-artifact-stage'
+
+/** What an HTML artifact becomes when it is rendered inline for picking. */
+export interface HtmlArtifactDocument {
+  /** The artifact's own style rules, scoped to the stage it is drawn in. */
+  styles: string
+  /** The artifact's body markup, sanitized. */
+  markup: string
+}
+
+/**
+ * Sanitize an HTML artifact for inline (shadow root) inspection.
+ *
+ * The preview draws an HTML artifact in a sandboxed `iframe`, where no element
+ * can be picked. The inspector re-renders the same source inline instead, so the
+ * policy is the preview's one (no scripts, no `<base>`/`<link>`/`<meta>`, no form
+ * actions) with one addition the inline mount cannot borrow from a sandbox: a
+ * form is dropped, because nothing here stops a submission from navigating the
+ * app's own window. Only the mounting otherwise changes: the document's own
+ * `<style>` rules are lifted to the shadow tree, because a shadow tree rather
+ * than a document is what they now style, and they are rewritten so a rule aimed
+ * at `html`, `body` or `:root` still reaches the stage box the artifact is
+ * mounted in.
+ */
+export function sanitizedHtmlArtifactDocument(code: string): HtmlArtifactDocument {
+  const sanitized = DOMPurify.sanitize(code, {
+    FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
+    FORBID_TAGS: ['base', 'link', 'meta', 'script', 'form'],
+    WHOLE_DOCUMENT: true
+  })
+  // Parsing a whole document into a template drops the `html`/`head`/`body`
+  // wrappers and keeps their children in document order, which is exactly the
+  // split wanted here: rules first, markup after.
+  const template = document.createElement('template')
+  template.innerHTML = sanitized
+  const styles: string[] = []
+  for (const style of template.content.querySelectorAll('style')) {
+    styles.push(scopeArtifactStyles(style.textContent ?? ''))
+    style.remove()
+  }
+  // A title names the document being previewed. There is no document here, and
+  // a stray element in the stage would only be a thing to point at.
+  for (const title of template.content.querySelectorAll('title')) title.remove()
+  return { styles: styles.join('\n'), markup: template.innerHTML }
+}
+
+/**
+ * Rewrite a document's style rules for the stage they are mounted in.
+ *
+ * Only rule preludes are rewritten, never declarations, so a value that merely
+ * contains the word `body` is left alone.
+ */
+function scopeArtifactStyles(css: string): string {
+  return css.replace(/([^{}]+)\{/gu, (rule: string, prelude: string) => {
+    // `@media`, `@font-face` and friends keep their own prelude.
+    if (prelude.trimStart().startsWith('@')) return rule
+    return `${scopeSelectorList(prelude)}{`
+  })
+}
+
+function scopeSelectorList(prelude: string): string {
+  return prelude
+    .split(',')
+    .map((selector) =>
+      selector
+        // The document root is the shadow host, exactly as for an inline SVG.
+        .replace(/:root\b/gu, ':host')
+        .replace(/(^|[\s>+~])html\b/gu, `$1.${ARTIFACT_STAGE_CLASS}`)
+        .replace(/(^|[\s>+~])body\b(?=$|[\s.:#[>+~])/gu, `$1.${ARTIFACT_STAGE_CLASS}`)
+        // `html body` names one box, not a box inside itself.
+        .replace(/\.cio-stage \.cio-stage/gu, '.cio-stage')
+    )
+    .join(',')
+}
+
+/**
  * Sanitize SVG artifact source to the SVG profile.
  *
  * One policy for both renderings of an SVG artifact: the preview, which embeds

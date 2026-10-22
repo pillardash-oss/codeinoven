@@ -19,11 +19,10 @@ import type { BrowserPermissionRequest } from '../ipc-contract'
 /**
  * The ledger permission id screen capture is remembered under.
  *
- * Electron delivers `navigator.mediaDevices.getDisplayMedia()` as a `media`
- * request with an *empty* `mediaTypes` list, which is indistinguishable from a
- * bare media check and would collide with the camera/microphone keys. The request
- * is therefore mapped onto this dedicated id, so allowing a screen share can
- * never silently allow the camera.
+ * Electron 45 reports screen capture as `display-capture`, with media types for
+ * the requested display tracks. Earlier versions report `media` with an empty
+ * `mediaTypes` list. Both forms use this dedicated id so remembered screen-share
+ * decisions survive the upgrade without granting camera or microphone access.
  */
 export const SCREEN_CAPTURE_PERMISSION = 'display-capture'
 
@@ -43,12 +42,13 @@ export function permissionOrigin(value: string): string | null {
 }
 
 /**
- * True when a `media` permission request is a screen share rather than a camera
- * or microphone request. Electron gives display capture an empty `mediaTypes`
- * list; every device request names at least one type.
+ * Recognize Electron 45's display-capture permission and the legacy empty-media
+ * request. Display audio/video tracks are never camera or microphone requests.
  */
 export function isScreenCaptureRequest(permission: string, mediaTypes: readonly string[]): boolean {
-  return permission === 'media' && mediaTypes.length === 0
+  return (
+    permission === SCREEN_CAPTURE_PERMISSION || (permission === 'media' && mediaTypes.length === 0)
+  )
 }
 
 /**

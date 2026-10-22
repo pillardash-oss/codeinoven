@@ -790,6 +790,14 @@ let startupRecoveryTimer: ReturnType<typeof setTimeout> | null = null
 void app
   .whenReady()
   .then(async () => {
+    // A packaged app carries the branded icon in its own bundle; a development
+    // launch runs Electron's stock bundle, so without this the Dock and app
+    // switcher show the Electron logo. Set the application icon at runtime
+    // instead of rebranding the Electron bundle, which would make a dev launch
+    // report itself as packaged.
+    if (process.platform === 'darwin' && app.dock && !app.isPackaged) {
+      app.dock.setIcon(getAppIconPath())
+    }
     // Do not await checks or the optional graph before making updates available.
     void startStartupUpdater(state, storage).catch(() => {})
     // A hung asynchronous initializer must leave a usable update surface too.

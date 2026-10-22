@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { Logger } from '../system/logger'
 import { layerDevHash, layerSize } from './prompt-assembler'
 
@@ -99,30 +99,30 @@ export function attributionEnabled(): boolean {
 }
 
 let cachedHarnessVersion: string | null | undefined
+let harnessVersionPending = false
 
-/**
- * Installed opencode version, read once and cached. Dev-only and only invoked
- * when attribution is enabled, so packaged builds never probe the harness.
- */
+/** Dev metadata never delays prompt composition; a single async probe fills later episodes. */
 export function currentHarnessVersion(): string | null {
+  if (!attributionEnabled()) return null
   if (cachedHarnessVersion !== undefined) return cachedHarnessVersion
-  if (!attributionEnabled()) {
-    cachedHarnessVersion = null
-    return null
+  if (!harnessVersionPending) {
+    harnessVersionPending = true
+    execFile(
+      'opencode',
+      ['--version'],
+      {
+        encoding: 'utf8',
+        timeout: 15_000,
+        maxBuffer: 64 * 1024,
+        windowsHide: true
+      },
+      (error, stdout) => {
+        cachedHarnessVersion = error ? null : stdout.trim().split(/\r?\n/u)[0]?.trim() || null
+        harnessVersionPending = false
+      }
+    )
   }
-  try {
-    const raw = execFileSync('opencode', ['--version'], {
-      encoding: 'utf8',
-      timeout: 15_000
-    })
-      .trim()
-      .split(/\r?\n/u)[0]
-      .trim()
-    cachedHarnessVersion = raw.length > 0 ? raw : null
-  } catch {
-    cachedHarnessVersion = null
-  }
-  return cachedHarnessVersion
+  return null
 }
 
 export class TokenUsageAttributionRecorder {

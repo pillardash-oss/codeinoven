@@ -727,6 +727,8 @@
     <BrowserCompositionTransport
       {tabId}
       composition={pageState.composition}
+      projectId={pageState.projectId}
+      threadId={pageState.threadId}
       active={panelVisible}
     />
   {/if}

@@ -48,7 +48,7 @@ import type {
 import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
 import { attachmentReference, attachmentTarget } from './attachment-reference'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironmentAsync } from './cli-environment'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -422,7 +422,7 @@ export class MuseDriver extends PersistentCliDriver {
     return {
       command: 'muse',
       args,
-      env: buildProcessEnvironment(),
+      env: await buildProcessEnvironmentAsync(),
       onJsonRecord: (value) => {
         const envelope = record(value)
         const payloadType = envelope?.['payload_type']

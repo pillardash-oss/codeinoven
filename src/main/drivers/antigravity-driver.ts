@@ -12,7 +12,7 @@ import type {
   ThinkingPreset,
   ThreadSettings
 } from '../../lib/types'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironmentAsync } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
 import { antigravityModelSlugs } from './antigravity-model-output'
 import type {
@@ -52,7 +52,7 @@ async function runAgy(
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
   try {
     const result = await runHarnessCommand('agy', args, {
-      env: buildProcessEnvironment({ ...process.env, ...accountEnvironment }),
+      env: await buildProcessEnvironmentAsync({ ...process.env, ...accountEnvironment }),
       timeoutMs
     })
     return { succeeded: true, ...result }
@@ -1039,7 +1039,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     return {
       command: 'agy',
       args,
-      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      env: await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment }),
       onJsonRecord: (value) => {
         if (turnState.conversationId) return
         const conversationId = stringValue(record(value)?.['conversation_id'])

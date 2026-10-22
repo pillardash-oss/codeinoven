@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { snapshotVideoSource, digestVideoOutput } from './video-evidence'
 import { BrowserWindow } from 'electron'
 import { join, relative } from 'node:path'
-import { rm, rename, mkdir, opendir, stat } from 'node:fs/promises'
+import { rm, rename, mkdir, opendir } from 'node:fs/promises'
 import { videoCaptureUrl, type VideoProjectManifest } from '../../lib/video/project'
 import { videoCaptionsSrt } from '../../lib/video/studio'
 import { atomicWrite } from '../../lib/utils'
@@ -12,10 +12,15 @@ import {
   type VideoExportEncoderDrain,
   type VideoExportEncoderSupport
 } from './video-export-encoder'
-import { checkVideoExport, keepFailedExport, type VideoExportCheck } from './video-export-check'
+import {
+  captureVideoExportReviewFrame,
+  checkVideoExport,
+  keepFailedExport,
+  type VideoExportCheck
+} from './video-export-check'
 import { videoFile, readVideoStudio, videoExportFolder } from './video-paths'
 import { loadCompositionManifest } from './video-manifest'
-import { startVideoProcess, videoProcess } from './video-process'
+import { startVideoProcess } from './video-process'
 import type { VideoJobContext } from './video-jobs'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { servedFileUrl, resolveServedEntry } from '../preview/served-folder'
@@ -349,30 +354,28 @@ export async function exportVideo(
     await mkdir(reviewDirectory)
     const reviewFrames: { time: number; file: string }[] = []
     const lastFrame = Math.max(0, Math.ceil(manifest.duration * manifest.fps) - 1)
-    for (const [index, time] of [
-      0,
-      Math.floor(lastFrame / 2) / manifest.fps,
-      lastFrame / manifest.fps
-    ].entries()) {
-      const frameFile = join(reviewDirectory, `frame-${index + 1}.jpg`)
-      await videoProcess(
-        [
-          '-ss',
-          String(time),
-          '-i',
+    try {
+      for (const [index, time] of [
+        0,
+        Math.floor(lastFrame / 2) / manifest.fps,
+        lastFrame / manifest.fps
+      ].entries()) {
+        const frameFile = join(reviewDirectory, `frame-${index + 1}.jpg`)
+        await captureVideoExportReviewFrame(
+          root,
           partial,
-          '-frames:v',
-          '1',
-          '-vf',
-          'scale=640:-2',
-          '-y',
-          frameFile
-        ],
-        root,
-        context.signal
-      )
-      if (!(await stat(frameFile)).size) throw new Error('No exported review frame was decoded')
-      reviewFrames.push({ time, file: relative(root, frameFile).replaceAll('\\', '/') })
+          frameFile,
+          { time, fps: manifest.fps, last: index === 2 },
+          context.signal
+        )
+        reviewFrames.push({ time, file: relative(root, frameFile).replaceAll('\\', '/') })
+      }
+    } catch (error) {
+      const kept = await keepFailedExport(root, partial, failed, context.signal)
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(kept ? `${reason} That render was kept as ${kept} for inspection.` : reason, {
+        cause: error
+      })
     }
     const outputDigest = await digestVideoOutput(partial, context.signal)
     const verifiedSource = await snapshotVideoSource(folder, context.signal)

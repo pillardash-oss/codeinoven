@@ -11,6 +11,7 @@
   import { cardFrameClass } from '../shared/card-frame'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { PermissionRequest } from '$shared/types'
@@ -138,7 +139,9 @@
         <div>
           <p class="text-sm font-semibold text-foreground">{request.permission}</p>
           {#if request.policy}
-            <p class="mt-1 text-xs leading-relaxed text-muted">{request.policy.reason}</p>
+            <div class="mt-1 text-xs leading-relaxed text-muted">
+              <MarkdownView text={request.policy.reason} class="markdown-body-card" />
+            </div>
           {/if}
         </div>
 

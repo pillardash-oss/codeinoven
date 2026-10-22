@@ -7,6 +7,7 @@ import type {
   SpeechCleanupMode,
   SpeechCleanupProvenance,
   SpeechCaptureSessionInfo,
+  SpeechDownloadMode,
   SpeechDownloadState,
   SpeechError,
   SpeechHistoryPage,
@@ -1195,8 +1196,8 @@ export class SpeechService {
     return this.playback.cancel(sessionId)
   }
 
-  async downloadArtifact(artifactId: string): Promise<void> {
-    return this.downloader.download(artifactId)
+  async downloadArtifact(artifactId: string, mode: SpeechDownloadMode = 'resume'): Promise<void> {
+    return this.downloader.download(artifactId, mode)
   }
 
   cancelDownload(artifactId: string): boolean {

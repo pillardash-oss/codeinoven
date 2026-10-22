@@ -201,7 +201,8 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     projectId: string,
     repoPath: string,
     title: string,
-    progress?: (event: ScopeWorktreeProgress) => void
+    progress?: (event: ScopeWorktreeProgress) => void,
+    branchPrefix = WORKTREE_BRANCH_PREFIX
   ): Promise<{ directoryName: string; branch: string; path: string }> {
     progress?.({ stage: 'naming' })
     const base = this.slugify(title)
@@ -211,7 +212,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     for (let candidate = 0; ; candidate += 1) {
       const suffix = candidate === 0 ? '' : `-${candidate + 1}`
       const directoryName = `${base}${suffix}`
-      const branch = `${WORKTREE_BRANCH_PREFIX}${directoryName}`
+      const branch = `${branchPrefix}${directoryName}`
       const path = getScopeRootPath(projectId, directoryName)
       if (persisted.has(directoryName)) continue
       if (existing.branches.has(`refs/heads/${branch}`)) continue
@@ -264,8 +265,9 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         }
 
         const baseRef = input.baseBranch?.trim() || undefined
-        const base =
-          baseRef === undefined
+        const base = input.pullRequest
+          ? await this.fetchReviewHead(repoPath, input.pullRequest)
+          : baseRef === undefined
             ? await currentBranchAndCommit(repoPath)
             : await branchToCommit(repoPath, baseRef)
 
@@ -273,11 +275,17 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
           directoryName,
           branch: createdBranch,
           path
-        } = await this.deriveNames(target.projectId, repoPath, input.title, progress)
+        } = await this.deriveNames(
+          target.projectId,
+          repoPath,
+          input.pullRequest ? `cio-pr-review-${input.pullRequest.number}` : input.title,
+          progress,
+          input.pullRequest ? '' : WORKTREE_BRANCH_PREFIX
+        )
 
         progress?.({ stage: 'creating-worktree', detail: createdBranch })
         await ensureParentDir(path)
-        await runGit(['worktree', 'add', '-b', createdBranch, path, base.commit], {
+        await runGitChecked(['worktree', 'add', '-b', createdBranch, path, base.commit], {
           cwd: repoPath,
           timeoutMs: 120_000
         }).catch(async (error) => {
@@ -324,6 +332,35 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         throw error
       }
     })
+  }
+
+  /** Fetch the provider's PR ref, including fork PRs, without checking out the project. */
+  private async fetchReviewHead(
+    repoPath: string,
+    pr: { number: number; remote: string }
+  ): Promise<{ branch: string; commit: string }> {
+    const remotes = (await runGitChecked(['remote'], { cwd: repoPath })).trim().split('\n')
+    if (!remotes.includes(pr.remote)) throw new Error('The selected PR remote no longer exists')
+    const ref = `refs/cio/pr-review/${randomBytes(16).toString('hex')}`
+    try {
+      await runGitChecked(
+        [
+          'fetch',
+          '--no-tags',
+          '--no-write-fetch-head',
+          '--',
+          pr.remote,
+          `refs/pull/${pr.number}/head:${ref}`
+        ],
+        { cwd: repoPath, timeoutMs: 120_000 }
+      )
+      const commit = (
+        await runGitChecked(['rev-parse', '--verify', `${ref}^{commit}`], { cwd: repoPath })
+      ).trim()
+      return { branch: `refs/pull/${pr.number}/head`, commit }
+    } finally {
+      await runGitChecked(['update-ref', '-d', ref], { cwd: repoPath })
+    }
   }
 
   /**

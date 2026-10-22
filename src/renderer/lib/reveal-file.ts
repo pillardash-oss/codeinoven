@@ -5,6 +5,7 @@ import {
   filePreviewFlags,
   canAnnotateDocument
 } from '$lib/components/files/project-files-panel-preview'
+import { revealInOsFileManager } from '$lib/os-file-manager'
 import { projectFilesWorkspace, type ProjectFileView } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -72,6 +73,14 @@ function relativeProjectPath(projectPath: string, citedPath: string): string {
   return target.startsWith(`${root}/`) ? target.slice(root.length + 1) : target
 }
 
+/** Whether a normalized path is a directory root itself or lives below it. */
+function insideRoot(root: string, path: string): boolean {
+  const normalizedRoot = normalizeCitationPath(root)
+  if (!normalizedRoot) return false
+  const target = normalizeCitationPath(path)
+  return target === normalizedRoot || target.startsWith(`${normalizedRoot}/`)
+}
+
 async function revealEntry(
   projectId: string,
   entry: ProjectFileEntry,
@@ -97,10 +106,56 @@ async function exactEntry(projectId: string, path: string): Promise<ProjectFileE
   }
 }
 
+/**
+ * Reveal one path from a surface that lists files the app does not necessarily
+ * own: a conversation source row, an attachment, a generated artifact, a cited
+ * path.
+ *
+ * A click on such a row can never assume the file lives inside the project that
+ * happens to be on screen: users attach files and agents cite files from
+ * anywhere on disk, while the app tree mounts exactly one directory at a time.
+ * The surface is therefore chosen from where the path actually lives - the
+ * conversation's own app-owned workspace directory, then the active project's
+ * root, and otherwise the OS file manager. `shell:revealExternalPath` is a
+ * reveal-only probe (the path must exist, no content is read, no scope grant
+ * needed), so an outside file opens in Finder/Explorer instead of a click that
+ * does nothing. A path no tree can show and the OS cannot find is reported.
+ */
+export async function revealSourceFilePath(
+  projectId: string | undefined,
+  absolutePath: string
+): Promise<void> {
+  if (!absolutePath) return
+  if (projectId && conversationWorkspaceTarget(projectId, absolutePath)) {
+    await revealFileInAppTree(projectId, absolutePath)
+    return
+  }
+  const activeProject = workspaceState.activeProject
+  if (activeProject && insideRoot(activeProject.path, absolutePath)) {
+    await revealFileInAppTree(activeProject.id, absolutePath)
+    return
+  }
+  if (!isAbsoluteishPath(absolutePath)) return
+  const revealed =
+    (await revealInOsFileManager(absolutePath)) ||
+    (await invoke('shell:revealExternalPath', absolutePath).catch(() => false))
+  if (!revealed) {
+    toast.error('This local file is outside the active project or no longer exists.')
+  }
+}
+
 export async function revealFileInAppTree(projectId: string, path: string): Promise<void> {
   const conversation = conversationWorkspaceTarget(projectId, path)
   const projectPath = conversation ? '' : workspaceState.activeProject?.path
   if (!conversation && !projectPath) return
+  // The app tree mounts the active project root or one conversation workspace
+  // directory, so an absolute path outside it can never resolve below the root:
+  // strip-to-relative turns it into the absolute path itself and the reveal ends
+  // in silence. Reveal such a path where it actually lives instead.
+  if (!conversation && isAbsoluteishPath(path) && !insideRoot(projectPath ?? '', path)) {
+    await revealSourceFilePath(projectId, path)
+    return
+  }
 
   await ensureProjectFilesReady(projectId, conversation?.threadId)
   const relativePath = conversation
@@ -188,33 +243,7 @@ export async function revealAnnotatedDocument(projectId: string, path: string): 
 /** Route an explicit local file URL to the in-app tree or the OS file manager. */
 export async function revealLocalFile(projectId: string | undefined, url: string): Promise<void> {
   if (!projectId || !url.startsWith('file://')) return
-
-  const absolutePath = fileUrlToPath(url)
-  // A file a conversation's own session produced lives in that thread's
-  // app-owned workspace directory: reveal it inside the conversation's mounted
-  // tree even though no project path is active.
-  if (conversationWorkspaceTarget(projectId, absolutePath)) {
-    await revealFileInAppTree(projectId, absolutePath)
-    return
-  }
-
-  const projectPath = workspaceState.activeProject?.path
-  if (!projectPath) return
-
-  const normalizedProjectPath = normalizeCitationPath(projectPath)
-  const normalizedFilePath = normalizeCitationPath(absolutePath)
-  if (
-    normalizedFilePath === normalizedProjectPath ||
-    normalizedFilePath.startsWith(`${normalizedProjectPath}/`)
-  ) {
-    await revealFileInAppTree(projectId, absolutePath)
-    return
-  }
-
-  const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
-  if (!revealed) {
-    toast.error('This local file is outside the active project or no longer exists.')
-  }
+  await revealSourceFilePath(projectId, fileUrlToPath(url))
 }
 
 /**
@@ -276,8 +305,6 @@ export async function revealCitationFile(
   const projectPath = workspaceState.activeProject?.path
   if (!projectPath) return
 
-  await ensureProjectFilesReady(projectId)
-
   let targetPath = citationPath
   if (focusLine === undefined) {
     const location = citationPath.match(/:(\d+)(?:-\d+)?$/u)
@@ -287,18 +314,29 @@ export async function revealCitationFile(
     }
   }
 
+  // An absolute citation outside the project root (a file the user supplied, a
+  // sibling checkout, app scratch space) is resolved before the project tree is
+  // prepared: opening that tree and failing inside it is what made an outside
+  // click look like a broken in-project reveal.
+  if (isAbsoluteCitationPath(targetPath) && !insideRoot(projectPath, targetPath)) {
+    await revealSourceFilePath(projectId, targetPath)
+    return
+  }
+
+  await ensureProjectFilesReady(projectId)
+
   const relativePath = relativeProjectPath(projectPath, targetPath)
   const exact = await exactEntry(projectId, relativePath)
   if (exact) {
     await revealEntry(projectId, exact, focusLine)
     return
   }
-  // Absolute citation outside the project root (e.g. Codex citations to files
-  // the user supplied)   reveal in the OS file manager. `shell:revealExternalPath`
-  // is a reveal-only probe: the path must exist and no content is read, so no
-  // scope grant is required.
+  // An absolute path the tree could not resolve still exists on disk: reveal it
+  // in the OS file manager rather than leaving the click with no result.
   if (isAbsoluteCitationPath(targetPath)) {
-    const revealed = await invoke('shell:revealExternalPath', targetPath).catch(() => false)
+    const revealed =
+      (await revealInOsFileManager(targetPath)) ||
+      (await invoke('shell:revealExternalPath', targetPath).catch(() => false))
     if (!revealed) {
       toast.error('This local file is outside the active project or no longer exists.')
     }

@@ -543,7 +543,7 @@
     // prevents catalog updates from snapping the user's scroll position back
     // to the selected model.
     if (projectId) void providerCatalog.refresh(projectId)
-    void loadAccounts(harnessId, true)
+    void loadAccounts(harnessId)
   }
 
   async function loadAccounts(targetHarnessId: string, force = false): Promise<void> {

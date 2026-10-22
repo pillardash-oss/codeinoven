@@ -78,6 +78,7 @@ export function generateOpenCodeV2Password(): string {
  */
 export async function startOpenCodeV2Server(options: {
   command: string
+  signal?: AbortSignal
   cwd?: string
   env?: NodeJS.ProcessEnv
   /** Extra config document merged on top of the user's own V2 config. */
@@ -86,6 +87,7 @@ export async function startOpenCodeV2Server(options: {
   /** Label used in dev logs so several pooled servers stay distinguishable. */
   label?: string
 }): Promise<OpenCodeV2ServerHandle> {
+  options.signal?.throwIfAborted()
   const args = ['serve', '--hostname', '127.0.0.1', '--port', '0']
   const password = options.password ?? generateOpenCodeV2Password()
   const prepared = await prepareHarnessInvocation(options.command, args, {
@@ -97,6 +99,7 @@ export async function startOpenCodeV2Server(options: {
     }
   })
 
+  options.signal?.throwIfAborted()
   return new Promise<OpenCodeV2ServerHandle>((resolve, reject) => {
     const child = spawn(prepared.command, prepared.args, {
       ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
@@ -113,6 +116,18 @@ export async function startOpenCodeV2Server(options: {
       child.kill('SIGKILL')
       reject(new Error(`Timed out after ${START_TIMEOUT_MS}ms waiting for the OpenCode V2 server`))
     }, START_TIMEOUT_MS)
+
+    const abort = (): void => {
+      child.kill('SIGKILL')
+      if (!settled) {
+        settled = true
+        clearTimeout(timer)
+        reject(new Error('OpenCode V2 discovery cancelled'))
+      }
+    }
+    options.signal?.addEventListener('abort', abort, { once: true })
+    child.once('exit', () => options.signal?.removeEventListener('abort', abort))
+    if (options.signal?.aborted) abort()
 
     const inspect = (text: string): void => {
       if (settled) return

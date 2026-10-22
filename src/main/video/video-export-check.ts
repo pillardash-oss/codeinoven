@@ -70,6 +70,51 @@ function display(root: string, file: string): string {
   return relative(root, file).replaceAll('\\', '/')
 }
 
+/** Decode a review image, retaining the final decoded frame for the tail sample. */
+export async function captureVideoExportReviewFrame(
+  root: string,
+  file: string,
+  output: string,
+  sample: { time: number; fps: number; last: boolean },
+  signal: AbortSignal
+): Promise<void> {
+  // A calculated final timestamp can land beyond the last encoded frame, and
+  // ffmpeg then exits successfully without an image. Decode a short tail into
+  // one repeatedly updated image to retain the actual last frame with bounded
+  // memory, rather than buffering the tail for a reverse filter.
+  const seek = sample.last
+    ? ['-sseof', String(-Math.max(0.25, 2 / sample.fps))]
+    : ['-ss', String(sample.time)]
+  const report = await videoProcess(
+    [
+      ...seek,
+      '-i',
+      file,
+      '-map',
+      '0:v:0',
+      '-vf',
+      'scale=640:-2',
+      '-q:v',
+      '2',
+      ...(sample.last ? ['-fps_mode', 'passthrough'] : ['-frames:v', '1']),
+      '-update',
+      '1',
+      '-y',
+      output
+    ],
+    root,
+    signal
+  )
+  const image = await stat(output).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+    return null
+  })
+  if (!image?.isFile() || image.size === 0)
+    throw new Error(
+      `No exported review frame was decoded at ${sample.time.toFixed(3)}s. ${report.slice(-1200).trim()}`
+    )
+}
+
 /**
  * Check one exported file against the composition it came from.
  *

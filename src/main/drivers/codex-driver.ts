@@ -1,3 +1,4 @@
+import { createWorkQueue } from '../../lib/bounded-work'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import type {
@@ -30,7 +31,7 @@ import {
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironmentAsync } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
 import { formatHistoryRecap } from '../chat/chat-engine/chat-engine-message-text'
 import { attachmentReference } from './attachment-reference'
@@ -126,6 +127,9 @@ export { mapCodexRateLimits, mapCodexUsage }
  * scheduled auto-resume dispatches the continuation. The wait only has to cover
  * dropping the dead host; the replacement app-server is spawned by the resumed
  * turn itself, and the retry scheduler adds its own fire grace on top. */
+// Account drivers share a startup slot so initialization is not competing with
+// other cold Codex processes on memory-constrained machines.
+const codexStartupQueue = createWorkQueue(1)
 const CODEX_APP_SERVER_RESTART_DELAY_MS = 5_000
 /**
  * Consecutive unexpected app-server exits CodeInOven auto-recovers for one
@@ -173,6 +177,7 @@ export class CodexDriver extends PersistentCliDriver {
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
   private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
   private appServerHosts = new Set<CodexAppServerHost>()
+  private appServerGeneration = 0
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
   /** Codex's own context windows, cached per Codex home. The CLI's catalog
@@ -190,7 +195,7 @@ export class CodexDriver extends PersistentCliDriver {
   protected async ensureCliReady(): Promise<void> {
     try {
       await runHarnessCommand('codex', ['--version'], {
-        env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        env: await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment }),
         timeoutMs: 10_000
       })
     } catch (error) {
@@ -1110,6 +1115,7 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   override dispose(): void {
+    this.appServerGeneration += 1
     for (const active of this.activeTurns.values()) {
       active.finished = true
     }
@@ -1223,7 +1229,7 @@ export class CodexDriver extends PersistentCliDriver {
       {
         cwd: projectPath,
         env: {
-          ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+          ...(await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })),
           ...providerEnv
         }
       }
@@ -1271,8 +1277,17 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const starting = this.hostsStartingByProjectPath.get(projectPath)
     if (starting) return starting
+    const generation = this.appServerGeneration
     const promise = (async (): Promise<CodexAppServerHost> => {
-      const host = await this.createAppServerHost(projectPath)
+      const host = await codexStartupQueue(async () => {
+        if (generation !== this.appServerGeneration) throw new Error('Codex driver disposed')
+        const created = await this.createAppServerHost(projectPath)
+        if (generation !== this.appServerGeneration) {
+          this.stopAppServerHost(created, 'Codex driver disposed')
+          throw new Error('Codex driver disposed')
+        }
+        return created
+      })
       this.hostsByProjectPath.set(projectPath, host)
       return host
     })()
@@ -1350,7 +1365,7 @@ export class CodexDriver extends PersistentCliDriver {
   private async readCodexWindowCatalog(projectPath: string): Promise<CodexWindowCatalog> {
     const result = await runHarnessCommand('codex', ['debug', 'models'], {
       cwd: projectPath,
-      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      env: await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment }),
       timeoutMs: 20_000,
       // The catalog embeds each model's prompt templates, so it is far larger
       // than any other harness command output.
@@ -2609,7 +2624,7 @@ export class CodexDriver extends PersistentCliDriver {
       command: 'codex',
       args,
       env: {
-        ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        ...(await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })),
         ...env
       },
       provenanceModelId: resolveFastModelId(

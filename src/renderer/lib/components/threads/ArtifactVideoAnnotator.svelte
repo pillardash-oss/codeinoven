@@ -203,7 +203,6 @@
           {armed}
           onArmedChange={handleArmedChange}
           onFocusMark={focusMark}
-          badgeVisibility="while-annotating"
           hint="Pick the frame, then draw · Esc to finish"
         />
       </div>

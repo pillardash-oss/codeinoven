@@ -140,8 +140,8 @@
   {onMinimize}
   {onClose}
   {storageKey}
-  actionLabel={canRetry ? 'Try again' : undefined}
-  onAction={canRetry ? () => scopeJobs.retry(job.id) : undefined}
+  actionLabel={canRetry ? 'Try again' : done ? job.action?.label : undefined}
+  onAction={canRetry ? () => scopeJobs.retry(job.id) : done ? job.action?.run : undefined}
   dragLabel="Drag to move the worktree run"
 >
   {#snippet details()}

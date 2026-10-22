@@ -145,7 +145,7 @@
   }
 
   function availableHeight(): number {
-    return Math.max(MIN_PANEL_HEIGHT, window.innerHeight - PANEL_MARGIN * 2)
+    return Math.max(0, window.innerHeight - PANEL_MARGIN * 2)
   }
 
   function preferredHeight(): number {
@@ -209,8 +209,8 @@
 
   const saved = loadSnapshot()
   const initialWidth = saved
-    ? Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.min(saved.width, availableWidth())))
-    : preferredWidth()
+    ? Math.min(availableWidth(), Math.max(MIN_PANEL_WIDTH, saved.width))
+    : Math.min(availableWidth(), preferredWidth())
   const initialHeight = Math.min(
     availableHeight(),
     saved ? Math.max(MIN_PANEL_HEIGHT, saved.height) : preferredHeight()
@@ -230,16 +230,12 @@
   let dragOrigin = $state({ x: 0, y: 0 })
 
   /** Keep the panel inside the viewport when the window resizes. */
-  $effect(() => {
+  function onViewportResize(): void {
     if (!open) return
-    const onResize = (): void => {
-      width = Math.min(width, availableWidth())
-      height = Math.min(height, availableHeight())
-      position = { x: clampX(position.x, width), y: clampY(position.y, height) }
-    }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  })
+    width = Math.min(width, availableWidth())
+    height = Math.min(height, availableHeight())
+    position = { x: clampX(position.x, width), y: clampY(position.y, height) }
+  }
 
   function onHeaderPointerDown(event: PointerEvent): void {
     if (minimized || event.button !== 0) return
@@ -268,6 +264,113 @@
     if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId)) {
       target.releasePointerCapture(event.pointerId)
     }
+    persistSnapshot()
+  }
+
+  const resizeHandles = [
+    { edge: 'n', label: 'top edge', classes: 'top-0 left-3 right-3 h-1 cursor-ns-resize' },
+    { edge: 's', label: 'bottom edge', classes: 'bottom-0 left-3 right-3 h-1 cursor-ns-resize' },
+    { edge: 'e', label: 'right edge', classes: 'right-0 top-3 bottom-3 w-1 cursor-ew-resize' },
+    { edge: 'w', label: 'left edge', classes: 'left-0 top-3 bottom-3 w-1 cursor-ew-resize' },
+    { edge: 'nw', label: 'top left corner', classes: 'top-0 left-0 size-3 cursor-nwse-resize' },
+    { edge: 'ne', label: 'top right corner', classes: 'top-0 right-0 size-3 cursor-nesw-resize' },
+    {
+      edge: 'sw',
+      label: 'bottom left corner',
+      classes: 'bottom-0 left-0 size-3 cursor-nesw-resize'
+    },
+    {
+      edge: 'se',
+      label: 'bottom right corner',
+      classes: 'bottom-0 right-0 size-3 cursor-nwse-resize'
+    }
+  ] as const
+
+  let resizeGesture: {
+    pointerId: number
+    edge: string
+    screenX: number
+    screenY: number
+    bounds: PanelSnapshot
+  } | null = null
+
+  function resizePanel(edge: string, bounds: PanelSnapshot, dx: number, dy: number): void {
+    const right = bounds.x + bounds.width
+    const bottom = bounds.y + bounds.height
+    const maxWidth = edge.includes('w')
+      ? right - PANEL_MARGIN
+      : window.innerWidth - bounds.x - PANEL_MARGIN
+    const maxHeight = edge.includes('n')
+      ? bottom - PANEL_MARGIN
+      : window.innerHeight - bounds.y - PANEL_MARGIN
+    if (edge.includes('w') || edge.includes('e')) {
+      width = Math.min(
+        maxWidth,
+        Math.max(
+          Math.min(MIN_PANEL_WIDTH, maxWidth),
+          bounds.width + (edge.includes('w') ? -dx : dx)
+        )
+      )
+    }
+    if (edge.includes('n') || edge.includes('s')) {
+      height = Math.min(
+        maxHeight,
+        Math.max(
+          Math.min(MIN_PANEL_HEIGHT, maxHeight),
+          bounds.height + (edge.includes('n') ? -dy : dy)
+        )
+      )
+    }
+    position = {
+      x: edge.includes('w') ? right - width : bounds.x,
+      y: edge.includes('n') ? bottom - height : bounds.y
+    }
+  }
+
+  function onResizePointerDown(event: PointerEvent, edge: string): void {
+    if (minimized || event.button !== 0 || !(event.currentTarget instanceof HTMLElement)) return
+    resizeGesture = {
+      pointerId: event.pointerId,
+      edge,
+      screenX: event.screenX,
+      screenY: event.screenY,
+      bounds: { ...position, width, height }
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  function onResizePointerMove(event: PointerEvent): void {
+    if (!resizeGesture || resizeGesture.pointerId !== event.pointerId) return
+    resizePanel(
+      resizeGesture.edge,
+      resizeGesture.bounds,
+      event.screenX - resizeGesture.screenX,
+      event.screenY - resizeGesture.screenY
+    )
+  }
+
+  function onResizePointerEnd(event: PointerEvent): void {
+    if (!resizeGesture || resizeGesture.pointerId !== event.pointerId) return
+    resizeGesture = null
+    const target = event.currentTarget
+    if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId))
+      target.releasePointerCapture(event.pointerId)
+    persistSnapshot()
+  }
+
+  function onResizeKeyDown(event: KeyboardEvent, edge: string): void {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+    const step = event.shiftKey ? 40 : 10
+    resizePanel(
+      edge,
+      { ...position, width, height },
+      event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0,
+      event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
+    )
+    event.preventDefault()
+    event.stopPropagation()
     persistSnapshot()
   }
 
@@ -393,6 +496,7 @@
 </script>
 
 <svelte:window
+  onresize={onViewportResize}
   onkeydown={(e: KeyboardEvent) => {
     // A docked panel deliberately ignores Escape: the chip is not on view, the
     // user restores the panel from it, and the key stays free for everything
@@ -525,6 +629,33 @@
           {@render footer()}
         </div>
       {/if}
+      {#each resizeHandles as handle (handle.edge)}
+        <button
+          type="button"
+          class="absolute z-10 touch-none text-muted hover:bg-primary/20 focus-visible:bg-primary/20 focus-visible:outline focus-visible:outline-primary {handle.classes}"
+          title={`Resize ${title} from the ${handle.label}. Use arrow keys to adjust.`}
+          aria-label={`Resize ${title} from the ${handle.label}`}
+          data-modal-dismiss
+          onpointerdown={(event) => onResizePointerDown(event, handle.edge)}
+          onpointermove={onResizePointerMove}
+          onpointerup={onResizePointerEnd}
+          onpointercancel={onResizePointerEnd}
+          onlostpointercapture={onResizePointerEnd}
+          onkeydown={(event) => onResizeKeyDown(event, handle.edge)}
+        >
+          {#if handle.edge === 'se'}
+            <svg
+              viewBox="0 0 12 12"
+              class="size-3"
+              fill="none"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M3 9 9 3M7 9l2-2" />
+            </svg>
+          {/if}
+        </button>
+      {/each}
     </div>
 
     {#if minimized}

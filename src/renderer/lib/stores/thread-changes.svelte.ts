@@ -1,6 +1,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { LatestRequestGuard } from '$lib/refresh-guard'
 import { diffDetailsAsync } from '$lib/components/files/file-diff-async'
+import { buildChangeBreakdown, type ChangeBreakdown } from '$shared/change-breakdown'
 import { appQuitState } from './app-quit.svelte'
 import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
 
@@ -50,6 +51,8 @@ class ThreadChangesState {
   private readonly totalsGuard = new LatestRequestGuard()
   private generation = 0
   private liveTotalsKey: string | null = null
+  private liveBreakdown: ChangeBreakdown | null = null
+  private liveBreakdownKey: string | null = null
   private totalsAbort: AbortController | null = null
 
   /** The change set the indicator summarizes: the live turn while one runs,
@@ -74,6 +77,27 @@ class ThreadChangesState {
     if (!current) return null
     if (current.status !== 'active') return this.storedTotals(current)
     return this.liveTotals
+  }
+
+  /**
+   * The current change set's areas: the grouping a settled turn recorded, or the
+   * running turn's own areas, grouped on demand from the paths it already reports.
+   * Main only groups on settle, so this is what keeps the preview honest while a
+   * turn runs; it is read by the flyout alone, and reused until the set changes.
+   */
+  get breakdown(): ChangeBreakdown | undefined {
+    const current = this.current
+    if (!current) return undefined
+    if (current.breakdown) return current.breakdown
+    if (current.status !== 'active' || current.changes.length === 0) return undefined
+    const key = liveTotalsKeyFor(current)
+    if (this.liveBreakdownKey !== key || !this.liveBreakdown) {
+      this.liveBreakdown = buildChangeBreakdown(
+        current.changes.map((change) => ({ path: change.path }))
+      )
+      this.liveBreakdownKey = key
+    }
+    return this.liveBreakdown
   }
 
   /** Point the indicator at a conversation. Idempotent for the same target. */

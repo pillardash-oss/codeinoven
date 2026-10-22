@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
@@ -535,28 +536,35 @@
                 </span>
                 <Icon size={13} class="mt-0.5 shrink-0 {stateClass(pr)}" />
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-[0.6875rem] font-medium text-foreground">{pr.title}</p>
-                  {#if labels.length > 0}
-                    <span class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
-                      {#each shownLabels as label (label.name)}
-                        <span
-                          class="max-w-[9ch] truncate px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
-                          style={prLabelStyle(label.color)}
-                          title={label.name}
-                        >
-                          {label.name}
-                        </span>
-                      {/each}
-                      {#if hiddenLabels.length > 0}
-                        <span
-                          class="shrink-0 text-[0.5rem] tabular-nums text-dimmed"
-                          title={hiddenLabels.map((label) => label.name).join(', ')}
-                        >
-                          +{hiddenLabels.length}
-                        </span>
-                      {/if}
-                    </span>
-                  {/if}
+                  <div class="flex min-w-0 items-center gap-1.5">
+                    <p
+                      class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
+                      title={pr.title}
+                    >
+                      {pr.title}
+                    </p>
+                    {#if labels.length > 0}
+                      <span class="flex max-w-[45%] min-w-0 items-center gap-1 overflow-hidden">
+                        {#each shownLabels as label (label.name)}
+                          <span
+                            class="max-w-[9ch] truncate px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
+                            style={prLabelStyle(label.color)}
+                            title={label.name}
+                          >
+                            {label.name}
+                          </span>
+                        {/each}
+                        {#if hiddenLabels.length > 0}
+                          <span
+                            class="shrink-0 text-[0.5rem] tabular-nums text-dimmed"
+                            title={hiddenLabels.map((label) => label.name).join(', ')}
+                          >
+                            +{hiddenLabels.length}
+                          </span>
+                        {/if}
+                      </span>
+                    {/if}
+                  </div>
                   <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
                     <span class="truncate"
                       >#{pr.number} by {githubDisplayLogin(pr.authorLogin)}</span
@@ -565,84 +573,78 @@
                       <BotBadge />
                     {/if}
                     <span class="shrink-0">· {formatCompactAge(pr.updatedAt)}</span>
-                  </p>
-                  <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed">
-                    {pr.headRef} → {pr.baseRef}
-                  </p>
-                  {#if pr.assignees && pr.assignees.length > 0}
-                    <!--
-                    Assignees and the milestone are one line of plain reports, not
-                    controls: a row has two lines of room for chips before the
-                    sidebar starts hiding the title, and the menu is where they are
-                    changed.
-                  -->
-                    <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
-                      <span class="truncate"
-                        >{pr.assignees
-                          .map((assignee) => githubDisplayLogin(assignee.login))
-                          .join(', ')}</span
+                    {#if pr.assignees?.length || pr.milestone}
+                      <span
+                        class="min-w-0 truncate"
+                        title={[
+                          ...(pr.assignees ?? []).map((assignee) => assignee.login),
+                          pr.milestone?.title
+                        ]
+                          .filter(Boolean)
+                          .join(', ')}
                       >
-                      {#if pr.milestone}
-                        <span class="shrink-0">· {pr.milestone.title}</span>
-                      {/if}
+                        · {pr.assignees
+                          ?.map((assignee) => githubDisplayLogin(assignee.login))
+                          .join(', ')}{pr.milestone ? ` · ${pr.milestone.title}` : ''}
+                      </span>
+                    {/if}
+                  </p>
+                  <div class="mt-0.5 flex min-w-0 items-center gap-2">
+                    <p class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed">
+                      {pr.headRef} → {pr.baseRef}
                     </p>
-                  {:else if pr.milestone}
-                    <p class="mt-0.5 truncate text-[0.5625rem] text-dimmed">{pr.milestone.title}</p>
-                  {/if}
-                </div>
-                <!--
-                The row's right edge carries the review signals GitHub puts there,
-                stacked so a labelled pull request with checks and comments still
-                fits a sidebar width. Each one is a report, not a control: the row
-                is the button, so the signals carry no hover of their own.
-              -->
-                <div class="flex shrink-0 flex-col items-end gap-1">
-                  {#if agentAssignment}
-                    <!--
-                    The agent chip leads the column because it is the one signal here the
-                    user set themselves, and the one they come back to check on.
-                  -->
-                    <span
-                      class="flex shrink-0 items-center gap-0.5 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
-                      title={agentAssignmentLabel(agentAssignment)}
-                    >
-                      <CioSubagent size={9} />
-                      {agentAssignment.count}
-                    </span>
-                  {/if}
-                  {#if hasIssue}
-                    <span
-                      class="flex shrink-0 items-center gap-0.5 bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
-                      title="This pull request has merge conflicts and needs resolution"
-                    >
-                      <CioAttention size={9} />
-                      Conflicts
-                    </span>
-                  {/if}
-                  {#if pr.checks && pr.checks.state !== 'none' && pr.checks.total > 0}
-                    <span
-                      class="flex shrink-0 items-center gap-0.5 px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
-                        pr.checks.state
-                      )}"
-                      title="{prChecksStateLabel(pr.checks.state)}: {pr.checks.passed} of {pr.checks
-                        .total}"
-                    >
-                      <ChecksIcon
-                        size={9}
-                        class={prChecksStateSpinning(pr.checks.state) ? 'animate-spin' : ''}
-                      />
-                      {pr.checks.passed}/{pr.checks.total}
-                    </span>
-                  {/if}
-                  {#if pr.comments > 0}
-                    <span
-                      class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
-                      title={commentLabel(pr.comments)}
-                    >
-                      <CioMessage size={10} />
-                      {pr.comments}
-                    </span>
-                  {/if}
+                    <div class="flex shrink-0 items-center gap-2">
+                      {#if agentAssignment}
+                        <span
+                          class="flex shrink-0 items-center gap-0.5 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
+                          title={agentAssignmentLabel(agentAssignment)}
+                        >
+                          <CioSubagent size={9} />
+                          {agentAssignment.count}
+                        </span>
+                      {/if}
+                      {#if hasIssue}
+                        <span
+                          class="flex shrink-0 items-center gap-0.5 bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
+                          title="This pull request has merge conflicts and needs resolution"
+                        >
+                          <CioAttention size={9} />
+                        </span>
+                      {/if}
+                      {#if pr.checks && pr.checks.state !== 'none' && pr.checks.total > 0}
+                        <span
+                          class="flex shrink-0 items-center gap-0.5 px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
+                            pr.checks.state
+                          )}"
+                          title="{prChecksStateLabel(pr.checks.state)}: {pr.checks.passed} of {pr
+                            .checks.total}"
+                        >
+                          <ChecksIcon
+                            size={9}
+                            class={prChecksStateSpinning(pr.checks.state) ? 'animate-spin' : ''}
+                          />
+                          {pr.checks.passed}/{pr.checks.total}
+                        </span>
+                      {/if}
+                      {#if (pr.stackCount ?? 0) > 1}
+                        <span
+                          class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-muted"
+                          title={`${pr.stackCount} stacked pull requests`}
+                        >
+                          <CioLayers size={10} />{pr.stackCount}
+                        </span>
+                      {/if}
+                      {#if pr.comments > 0}
+                        <span
+                          class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
+                          title={commentLabel(pr.comments)}
+                        >
+                          <CioMessage size={10} />
+                          {pr.comments}
+                        </span>
+                      {/if}
+                    </div>
+                  </div>
                 </div>
               </div>
             </PrRowContextMenu>

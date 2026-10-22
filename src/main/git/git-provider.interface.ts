@@ -1,8 +1,9 @@
 import type {
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
-  GitHubDeploymentOverview,
+  GitHubDeploymentPage,
   GitHubWorkflowRunDetail,
+  GitHubWorkflowRunPage,
   GitRepositoryIdentity,
   IssueDetail,
   IssueListFilter,
@@ -29,6 +30,7 @@ import type {
   PullRequestCommit,
   PullRequestCompare,
   PullRequestDetail,
+  PullRequestSummary,
   PullRequestFile,
   PullRequestLabel,
   PullRequestMilestone,
@@ -39,7 +41,8 @@ import type {
   PullRequestReference,
   RepositoryMentionUser,
   SetPrReactionInput,
-  WorkflowRerunMode
+  WorkflowRerunMode,
+  WorkflowRunFilter
 } from '../../lib/types'
 
 /** Merge a pull request with the given method. */
@@ -76,6 +79,33 @@ export interface ListPullRequestPageInput extends ListPullRequestsInput {
    * first page; a provider that pages by number instead ignores it.
    */
   cursor: string | null
+}
+
+/**
+ * Which workflow runs to list: every one, or those that settled a given way.
+ *
+ * Paged by number rather than by cursor because GitHub's runs endpoint answers a
+ * page number directly, which is also what makes an older page reachable without
+ * walking the ones before it.
+ */
+export interface ListWorkflowRunPageInput {
+  owner: string
+  repo: string
+  /** 1-based page number. */
+  page: number
+  /** Items per page; providers cap this. */
+  perPage: number
+  filter: WorkflowRunFilter
+}
+
+/** One page of a repository's deployments, newest first. */
+export interface ListDeploymentPageInput {
+  owner: string
+  repo: string
+  /** 1-based page number. */
+  page: number
+  /** Items per page; providers cap this. */
+  perPage: number
 }
 
 /** Address one pull request in a repository. */
@@ -345,6 +375,7 @@ export interface GitProvider {
   /** Permanently delete an issue comment. Only the author may do this. */
   deleteIssueComment(input: IssueCommentTarget): Promise<void>
   getPullRequest(input: PullRequestTarget): Promise<PullRequestDetail>
+  listPullRequestStack(input: PullRequestTarget): Promise<PullRequestSummary[]>
   listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]>
   listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]>
   createPullRequestComment(input: CreatePrCommentInput): Promise<PullRequestComment>
@@ -428,8 +459,15 @@ export interface GitProvider {
   listRepositoryLabels(input: { owner: string; repo: string }): Promise<PullRequestLabel[]>
   /** The repository's open milestones, for a milestone picker. */
   listRepositoryMilestones(input: { owner: string; repo: string }): Promise<PullRequestMilestone[]>
-  /** Recent workflow runs and deployments for read-only repository monitoring. */
-  getDeploymentOverview(input: { owner: string; repo: string }): Promise<GitHubDeploymentOverview>
+  /**
+   * One page of the repository's workflow runs, newest first, narrowed by the
+   * filter the Deployments view has selected.
+   */
+  listWorkflowRunPage(input: ListWorkflowRunPageInput): Promise<GitHubWorkflowRunPage>
+  /** One page of the repository's deployments, each with its latest status. */
+  listDeploymentPage(input: ListDeploymentPageInput): Promise<GitHubDeploymentPage>
+  /** Whether the repository has any Actions or Deployments activity at all. */
+  hasDeploymentActivity(input: { owner: string; repo: string }): Promise<boolean>
   /** Rich in-app deployment detail: status history, linked run, jobs/steps. */
   getDeploymentDetail(input: {
     owner: string

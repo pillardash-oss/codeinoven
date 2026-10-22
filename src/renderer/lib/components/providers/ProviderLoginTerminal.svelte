@@ -138,7 +138,9 @@
         subscribe(`pty:data:${terminalId}`, (data) => {
           const chunk = data as string
           printed = (printed + chunk).slice(-PRINTED_LIMIT)
-          terminal.write(chunk)
+          terminal.write(chunk, () => {
+            if (!destroyed) window.api.send('pty:ack', terminalId, chunk.length)
+          })
         }),
         subscribe(`pty:exit:${terminalId}`, (exitCode) => {
           const code = typeof exitCode === 'number' ? exitCode : 0

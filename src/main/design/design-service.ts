@@ -3,6 +3,7 @@ import { updateWorkDetails } from './work-details-service'
 import { rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
+import { DESIGN_REVIEW_RUBRIC } from '../../lib/design/design-review'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { DEFAULT_WORK_ROOTS, workRootForKind } from '../../lib/design/work-roots'
 import type {
@@ -244,8 +245,8 @@ export class DesignService {
           'Design rankings are temporarily unavailable while the database worker is offline'
         )
       const result = await this.options.database.queryViaWorker(
-        `SELECT harness, provider, model, COUNT(*) AS samples, ROUND(AVG(score),2) AS score FROM design_reviews WHERE created_at >= ? AND created_at < ? GROUP BY rubric,harness,provider,model ORDER BY score DESC,samples DESC LIMIT 50`,
-        [startAt, endAt],
+        `SELECT harness, provider, model, COUNT(*) AS samples, ROUND(AVG(score),2) AS score FROM design_reviews WHERE rubric = ? AND created_at >= ? AND created_at < ? GROUP BY rubric,harness,provider,model ORDER BY score DESC,samples DESC LIMIT 50`,
+        [DESIGN_REVIEW_RUBRIC, startAt, endAt],
         50,
         { allowPrimaryFallback: false }
       )

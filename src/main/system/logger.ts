@@ -48,6 +48,11 @@ export class Logger {
   private static daySinks: LogDaySinks | null = null
   private static createdDirectories = new Set<string>()
   private static writeQueue: Promise<void> = Promise.resolve()
+  private static writing = false
+  private static pending: Array<{ sinks: LogDaySinks; path: string; line: string; bytes: number }> =
+    []
+  private static pendingBytes = 0
+  private static dropped = 0
 
   /** Point the logger at the app's absolute `logs/` directory. */
   static initialize(logsDirectory: string): void {
@@ -93,37 +98,98 @@ export class Logger {
   }
 
   private static format(level: string, args: unknown[]): string {
+    let remaining = 256
+    let remainingCharacters = 64 * 1024
+    const seen = new WeakSet<object>()
+    const bounded = (value: unknown, depth = 0): unknown => {
+      if (--remaining < 0 || depth > 4) return '[truncated]'
+      if (typeof value === 'string') {
+        const text = value.slice(0, Math.max(0, Math.min(8192, remainingCharacters)))
+        remainingCharacters -= text.length
+        return text
+      }
+      if (value instanceof Date)
+        return Number.isFinite(value.getTime()) ? value.toISOString() : 'Invalid Date'
+      if (value instanceof Error) return bounded(value.stack ?? value.message, depth + 1)
+      if (ArrayBuffer.isView(value)) return `[${value.constructor.name}: ${value.byteLength} bytes]`
+      if (typeof value === 'bigint') return String(value)
+      if (!value || typeof value !== 'object') return value
+      if (seen.has(value)) return '[circular]'
+      seen.add(value)
+      if (Array.isArray(value)) return value.slice(0, 32).map((entry) => bounded(entry, depth + 1))
+      const result: Record<string, unknown> = Object.create(null)
+      let count = 0
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue
+        if (++count > 32 || remaining <= 0) break
+        try {
+          result[key.slice(0, 256)] = bounded((value as Record<string, unknown>)[key], depth + 1)
+        } catch {
+          result[key.slice(0, 256)] = '[unavailable]'
+        }
+      }
+      return result
+    }
     const message = args
-      .map((arg) =>
-        typeof arg === 'string'
-          ? arg
-          : arg instanceof Error
-            ? (arg.stack ?? arg.message)
-            : JSON.stringify(arg)
-      )
+      .slice(0, 16)
+      .map((arg) => {
+        const value = bounded(arg)
+        return typeof value === 'string' ? value : JSON.stringify(value)
+      })
       .join(' ')
+      .slice(0, 64 * 1024)
     return `[${level}] ${Logger.redact(message)}`
   }
 
   private static enqueue(sinks: LogDaySinks, path: string, line: string): void {
-    Logger.writeQueue = Logger.writeQueue
-      .then(() => Logger.ensureDayDirectory(sinks.directory))
-      .then(() => appendFile(path, line, { encoding: 'utf-8', mode: 0o600 }))
-      .catch((error: unknown) => {
-        // A day folder can vanish under a running app (the user cleaning up the
-        // data root, a test deleting its temp root). Forget the "already
-        // created" cache so the next line recreates the folder instead of
-        // failing for the rest of the day.
-        Logger.createdDirectories.delete(sinks.directory)
-        const detail = error instanceof Error ? error.message : String(error)
-        process.stderr.write(`[error] durable log write failed: ${detail}\n`)
-      })
+    const bytes = Buffer.byteLength(line)
+    if (Logger.pending.length >= 1024 || Logger.pendingBytes + bytes > 4 * 1024 * 1024) {
+      Logger.dropped += 1
+      return
+    }
+    Logger.pending.push({ sinks, path, line, bytes })
+    Logger.pendingBytes += bytes
+    if (Logger.writing) return
+    Logger.writing = true
+    Logger.writeQueue = (async () => {
+      try {
+        while (Logger.pending.length) {
+          const batch = Logger.pending.splice(0, 32)
+          const files = new Map<string, { sinks: LogDaySinks; lines: string[] }>()
+          for (const entry of batch) {
+            Logger.pendingBytes -= entry.bytes
+            const file = files.get(entry.path) ?? { sinks: entry.sinks, lines: [] }
+            file.lines.push(entry.line)
+            files.set(entry.path, file)
+          }
+          for (const [file, entry] of files) {
+            try {
+              await Logger.ensureDayDirectory(entry.sinks.directory)
+              await appendFile(file, entry.lines.join(''), { encoding: 'utf-8', mode: 0o600 })
+            } catch (error: unknown) {
+              Logger.createdDirectories.delete(entry.sinks.directory)
+              const detail = error instanceof Error ? error.message : String(error)
+              if (process.stderr.writableLength < 1024 * 1024)
+                process.stderr.write(`[error] durable log write failed: ${detail}\n`)
+            }
+          }
+          if (Logger.dropped) {
+            const dropped = Logger.dropped
+            Logger.dropped = 0
+            Logger.error(`Log writer saturated; omitted ${dropped} sink lines`)
+          }
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
+      } finally {
+        Logger.writing = false
+      }
+    })()
   }
 
   private static write(level: LogLevel, args: unknown[]): void {
     const formatted = Logger.format(level, args)
     const stream = level === 'error' || Logger.remoteOutput ? process.stderr : process.stdout
-    stream.write(`${formatted}\n`)
+    if (stream.writableLength < 1024 * 1024) stream.write(`${formatted}\n`)
 
     const sinks = Logger.resolveDaySinks()
     if (!sinks) return

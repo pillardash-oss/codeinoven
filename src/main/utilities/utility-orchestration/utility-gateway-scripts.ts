@@ -1,3 +1,4 @@
+import { authoredWorkCritiqueTool } from './authored-work-critique-tool'
 import { designMotionTools } from '../../design/design-motion-tools'
 import type {
   HarnessUtilityBinding,
@@ -283,45 +284,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
         additionalProperties: false
       }
     },
-    {
-      name: 'critique',
-      description:
-        'Record one evidence-based screen critique after rendering it. Scores philosophy, hierarchy, detail, functionality and innovation equally, 0 to 10; threshold 8. Any craft finding or critical issue blocks passing. Persists model-attributed scores for Usage; repeated assessment of identical content does not add a sample.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          directory: { type: 'string' },
-          entry: { type: 'string' },
-          dimensions: {
-            type: 'object',
-            properties: Object.fromEntries(
-              ['philosophy', 'hierarchy', 'detail', 'functionality', 'innovation'].map((name) => [
-                name,
-                {
-                  type: 'object',
-                  properties: {
-                    score: { type: 'number', minimum: 0, maximum: 10 },
-                    evidence: { type: 'string', minLength: 1, maxLength: 2000 }
-                  },
-                  required: ['score', 'evidence'],
-                  additionalProperties: false
-                }
-              ])
-            ),
-            required: ['philosophy', 'hierarchy', 'detail', 'functionality', 'innovation'],
-            additionalProperties: false
-          },
-          fixes: { type: 'array', items: { type: 'string', maxLength: 1000 }, maxItems: 30 },
-          criticalIssues: {
-            type: 'array',
-            items: { type: 'string', maxLength: 1000 },
-            maxItems: 30
-          }
-        },
-        required: ['directory', 'entry', 'dimensions', 'fixes', 'criticalIssues'],
-        additionalProperties: false
-      }
-    },
+    authoredWorkCritiqueTool(),
     {
       name: 'write-contract',
       description:
@@ -426,6 +389,7 @@ export function videoUtilityTools(roots: WorkRoots): McpTool[] {
   const videoRoot = workRootForKind(roots, 'video')
   return [
     ...videoStudioTools(),
+    authoredWorkCritiqueTool('video'),
     generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {

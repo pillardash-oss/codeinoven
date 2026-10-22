@@ -1,3 +1,4 @@
+import { createWorkQueue, mapInBatches } from '../../lib/bounded-work'
 import { unarchivedThreadSql } from '../../lib/archives'
 import { deliverWithWorkPathNotices } from '../design/work-path-notices'
 import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
@@ -71,8 +72,8 @@ import { appendPartDelta } from '../../lib/agent-part-merge'
 import { latestAgentTodo } from '../../lib/agent-todos'
 import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
-import { buildProcessEnvironment } from '../drivers/cli-environment'
-import { isHarnessCommandAvailable } from '../drivers/harness-runtime'
+import { buildProcessEnvironmentAsync } from '../drivers/cli-environment'
+import { isHarnessCommandAvailableAsync } from '../drivers/harness-runtime'
 import { CheckpointLimitError } from '../git/change-tracking-service'
 import type { ProjectFingerprint } from '../git/change-tracking-service'
 import {
@@ -666,7 +667,7 @@ import {
   BRAINSTORM_DOCUMENT_WRITE_TOOLS,
   BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
   BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
-  CHAT_WEB_ONLY_TOOLS,
+  CHAT_WORKSPACE_TOOLS,
   chatGatewayAllowedTools,
   CONVERSATION_ASSIGNMENT_INSTRUCTION,
   ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
@@ -1001,6 +1002,7 @@ export class ChatEngine {
 
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
 
+  private readonly catalogProbeQueue = createWorkQueue(2)
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
 
   /** Root for every disposable working directory a local harness turn needs.
@@ -1394,6 +1396,7 @@ export class ChatEngine {
 
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
+  private stopRemoteRetryReconciliation: (() => void) | null = null
   /** Verified device connectivity; null only before boot attaches it. */
   private connectivity: ConnectivitySource | null = null
 
@@ -3887,6 +3890,8 @@ export class ChatEngine {
 
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
+    this.stopRemoteRetryReconciliation?.()
+    this.stopRemoteRetryReconciliation = null
     for (const [requestId, pending] of this.pendingPermissions) {
       if (!pending.settleBrowserAction) continue
       this.pendingPermissions.delete(requestId)
@@ -4716,7 +4721,7 @@ export class ChatEngine {
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      const catalogs = filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      const catalogs = await filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
       this.providerCache.set(projectId, catalogs)
       return catalogs
     }
@@ -5227,19 +5232,22 @@ export class ChatEngine {
    * read it from here instead of keeping their own copy of the rule.
    */
   private async catalogDrivers(): Promise<HarnessDriver[]> {
-    const harnessEnv = buildProcessEnvironment()
-    const defaultDrivers = [...this.drivers.values()].filter((driver) => {
+    const harnessEnv = await buildProcessEnvironmentAsync()
+    const defaultDrivers: HarnessDriver[] = []
+    for (const driver of this.drivers.values()) {
       const command = findHarness(driver.id)?.command
-      return command !== undefined && isHarnessCommandAvailable(command, harnessEnv)
-    })
+      if (command !== undefined && (await isHarnessCommandAvailableAsync(command, harnessEnv)))
+        defaultDrivers.push(driver)
+    }
+
     const managedAccounts = (await this.accountRegistry.list()).filter(
       (account) =>
         account.containerKind === 'managed' &&
         defaultDrivers.some((driver) => driver.id === account.harnessId) &&
         ['pi', 'opencode', 'codex', 'claude-code'].includes(account.harnessId)
     )
-    const managedDrivers = await Promise.all(
-      managedAccounts.map((account) => this.driverForAccount(account.harnessId, account.id))
+    const managedDrivers = await mapInBatches(managedAccounts, 2, (account) =>
+      this.driverForAccount(account.harnessId, account.id)
     )
     return [...defaultDrivers, ...managedDrivers]
   }
@@ -5361,7 +5369,7 @@ export class ChatEngine {
         return null
       }
       if (Array.isArray(stored)) {
-        const catalogs = filterInstalledProviderCatalogs(stored)
+        const catalogs = await filterInstalledProviderCatalogs(stored)
         this.sharedProviderCatalog = {
           schemaVersion: 3,
           discoveredAt: Date.now(),
@@ -5388,7 +5396,7 @@ export class ChatEngine {
             return null
           }
         }
-        const catalogs = filterInstalledProviderCatalogs(stored.catalogs)
+        const catalogs = await filterInstalledProviderCatalogs(stored.catalogs)
         this.sharedProviderCatalog = { ...stored, catalogs }
         if (stored.catalogFingerprints && this.catalogFingerprints.size === 0) {
           for (const [driverId, fingerprint] of Object.entries(stored.catalogFingerprints)) {
@@ -5416,7 +5424,7 @@ export class ChatEngine {
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      const catalogs = filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      const catalogs = await filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
       this.providerCache.set(projectId, catalogs)
       return catalogs
     }
@@ -5464,8 +5472,7 @@ export class ChatEngine {
     projectPath: string
   ): Promise<DriverDiscovery> {
     const budget = ChatEngine.CATALOG_DRIVER_BUDGET_MS
-    const probe = driver
-      .listProviders(projectPath)
+    const probe = this.catalogProbeQueue(() => driver.listProviders(projectPath))
       .then((catalogs) =>
         catalogs.map((catalog) => ({
           ...catalog,
@@ -7975,7 +7982,19 @@ export class ChatEngine {
     // The Sr. Engineer planning surface owns failed initial-spec presentation
     // and its Retry specification action. Do not rehydrate a provider card.
     if (pendingSpec?.state === 'failed') return null
-    const live = this.sessionStatuses.get(thread.sessionId)
+    let live = this.sessionStatuses.get(thread.sessionId)
+    if (thread.status === 'completed' || thread.status === 'interrupted') {
+      // The shared row also repairs missed pub-sub frames and stale launch ledgers.
+      if (live?.state === 'waiting' || live?.state === 'error') {
+        this.sessionStatuses.delete(thread.sessionId)
+        live = undefined
+      }
+      if (this.retryScheduler?.getPendingRetry(thread.sessionId)) {
+        this.retryScheduler.clear(thread.sessionId)
+      }
+      this.retryScheduler?.resumed(thread.sessionId)
+      return live ?? { state: 'idle' }
+    }
     if (live?.state === 'waiting' || live?.state === 'error') return live
     // After an app restart the in-memory status is gone, but a persisted
     // auto-resume record is authoritative: reconstruct the waiting card so the
@@ -10659,7 +10678,9 @@ export class ChatEngine {
     const chatSystemPrompt = isChatThread
       ? [
           await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat'),
-          chatFileSystemEnabled ? '' : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
+          chatFileSystemEnabled
+            ? `This chat owns the dedicated workspace ${chatWorkspaceRoot}. Work inside it, including image generation, scripts, and generated files, is already authorized and requires no permission question.`
+            : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -11011,17 +11032,20 @@ export class ChatEngine {
         activeSession.estimatedContextUsed = composition.totalTokens
       }
       this.markSessionWorking(sessionId)
-      // Chat threads (standalone Chats-tab conversations) behave like a plain
-      // browser chatbot: no file-system tools, internet-first answers. File
-      // operations are granted only when the user explicitly enables the
-      // File System mode for the thread.
+      // Chat owns a writable cwd even with File System off. External paths
+      // remain subject to the thread's file-access permission policy.
       await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
         await driver.sendPrompt(projectPath, {
           sessionId,
-          settings,
+          // Full Access may skip native permission events. With File System
+          // off, retain the native cwd sandbox so external paths still ask.
+          settings:
+            isChatThread && !chatFileSystemEnabled
+              ? { ...settings, permissionLevel: 'auto_review' }
+              : settings,
           text,
           attachments,
-          readOnly: isChatThread && !chatFileSystemEnabled,
+          readOnly: false,
           systemPrompt:
             composeTurnSystemPrompt({
               chatPrompt: chatSystemPrompt,
@@ -11037,13 +11061,7 @@ export class ChatEngine {
             isChatThread &&
             !chatFileSystemEnabled &&
             (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
-              ? [
-                  ...CHAT_WEB_ONLY_TOOLS,
-                  ...chatGatewayAllowedTools(driverId),
-                  ...(projectId === GLOBAL_BROWSER_PROJECT_ID
-                    ? ['read', 'write', 'edit', 'glob', 'grep']
-                    : [])
-                ]
+              ? [...CHAT_WORKSPACE_TOOLS, ...chatGatewayAllowedTools(driverId)]
               : undefined,
           agent: utilitySetupRequested
             ? leanAgentNameForMode('utility-setup')
@@ -24434,12 +24452,7 @@ export class ChatEngine {
         return
       }
       const currentStatus = this.sessionStatuses.get(event.sessionId)
-      if (
-        event.status.state === 'idle' &&
-        currentStatus?.state === 'waiting' &&
-        currentStatus.issue.kind === 'network'
-      )
-        return
+      if (event.status.state === 'idle' && this.isAutomaticRetryWaitActive(event.sessionId)) return
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
         this.sessionStatuses.set(event.sessionId, event.status)
       }
@@ -26187,6 +26200,23 @@ export class ChatEngine {
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
+    this.stopRemoteRetryReconciliation?.()
+    this.stopRemoteRetryReconciliation = instanceEventBus.onRemoteEvent(({ event }) => {
+      // Observe recovery without feeding foreign events through local run actions.
+      // A sibling's resumed/settled session invalidates this process's saved wait.
+      if (
+        event.type !== 'session.status' ||
+        (event.status.state !== 'working' && event.status.state !== 'idle')
+      )
+        return
+      if (event.status.state === 'idle' && this.isAutomaticRetryWaitActive(event.sessionId)) return
+      const previous = this.sessionStatuses.get(event.sessionId)
+      if (previous?.state === 'waiting' || previous?.state === 'error') {
+        this.sessionStatuses.delete(event.sessionId)
+      }
+      if (scheduler.getPendingRetry(event.sessionId)) scheduler.clear(event.sessionId)
+      scheduler.resumed(event.sessionId)
+    })
     scheduler.attachNetworkTest(() => this.deviceOnline())
     scheduler.attachStoppedThreadTest(async (projectId, threadId) => {
       const visible = await this.database.queryViaWorker(
@@ -27196,7 +27226,15 @@ export class ChatEngine {
     const threadId = validateEntityId(record.threadId, 'Thread ID')
     const { sessionId } = record
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) {
+    if (
+      !thread ||
+      thread.archived ||
+      !thread.sessionId ||
+      thread.sessionId !== sessionId ||
+      thread.status !== 'working-paused'
+    ) {
+      // The shared row must still be paused on a retry. A sibling can finish
+      // the same session while this process retains an old in-memory wait.
       // The thread moved on (a newer session, an archive, a delete). This wait
       // can never be admitted, and leaving it in the ledger turns every tick
       // into a no-op attempt for a thread that is no longer waiting.
@@ -27401,8 +27439,7 @@ export class ChatEngine {
     const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
-      mode:
-        info.projectId === GLOBAL_BROWSER_PROJECT_ID && restrictToAllowed ? 'auto_review' : level,
+      mode: restrictToAllowed ? 'auto_review' : level,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})

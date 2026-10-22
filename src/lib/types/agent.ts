@@ -314,11 +314,12 @@ export interface PromptReference {
    * moment the user noted on a composition's timeline; `image` is a freehand
    * mark the user drew on a picture an inline artifact published, which is a
    * still image or one frame of a video; `svg` is an element the user picked
-   * inside an inline SVG artifact. Main validates only `id`, `label`, `text` and
-   * `comment`, so this drives presentation rather than the send: every kind
+   * inside an inline SVG artifact, and `html` is an element the user picked
+   * inside an inline HTML artifact. Main validates only `id`, `label`, `text`
+   * and `comment`, so this drives presentation rather than the send: every kind
    * reaches the model the same way a selection does.
    */
-  kind?: 'selection' | 'design' | 'file' | 'video' | 'image' | 'svg'
+  kind?: 'selection' | 'design' | 'file' | 'video' | 'image' | 'svg' | 'html'
 }
 
 /** A project-relative file or directory visibly attached to an outgoing prompt. */

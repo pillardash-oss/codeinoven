@@ -1,6 +1,10 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { reportError } from './app-errors.svelte'
-import type { SearchProgressEvent, SearchState } from '../../../lib/search/types'
+import type {
+  SearchDownloadMode,
+  SearchProgressEvent,
+  SearchState
+} from '../../../lib/search/types'
 
 /**
  * Renderer mirror of the intent-search state: catalog, installed models, live
@@ -27,11 +31,15 @@ class SearchSettingsStore {
     }
   }
 
-  async download(artifactId: string): Promise<void> {
+  async download(artifactId: string, mode: SearchDownloadMode = 'resume'): Promise<void> {
     try {
-      await invoke('search:downloadArtifact', artifactId)
+      await invoke('search:downloadArtifact', artifactId, mode)
     } catch (cause) {
-      reportError(cause, 'The embedding model could not be downloaded.')
+      // A cancellation is the user's own stop, and the row already shows its
+      // resume/restart panel from the cancelled progress event.
+      if (!(cause instanceof Error && /cancell?ed/i.test(cause.message))) {
+        reportError(cause, 'The embedding model could not be downloaded.')
+      }
     }
     await this.load()
   }

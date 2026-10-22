@@ -1386,21 +1386,32 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       // Fetched together so the sidebar renders one complete view, not six
       // staggered ones. Optional surfaces degrade to empty rather than failing
       // the whole bundle (e.g. a repo with checks disabled).
-      const [detail, commits, comments, reviews, reviewComments, reviewThreads, files, checks] =
-        await Promise.all([
-          provider.getPullRequest(target),
-          provider.listPullRequestCommits(target).catch(() => []),
-          provider.listPullRequestComments(target).catch(() => []),
-          provider.listPullRequestReviews(target).catch(() => []),
-          provider.listPullRequestReviewComments(target).catch(() => []),
-          // Resolution is GraphQL-only and optional: a thread the read could not
-          // reach must not cost the reader the comments themselves.
-          provider.listPullRequestReviewThreads(target).catch(() => []),
-          provider.listPullRequestFiles(target).catch(() => []),
-          provider
-            .getPullRequestChecks(target)
-            .catch(() => ({ state: 'none' as const, checks: [] }))
-        ])
+      const [
+        detail,
+        commits,
+        comments,
+        reviews,
+        reviewComments,
+        reviewThreads,
+        files,
+        checks,
+        stackResult
+      ] = await Promise.all([
+        provider.getPullRequest(target),
+        provider.listPullRequestCommits(target).catch(() => []),
+        provider.listPullRequestComments(target).catch(() => []),
+        provider.listPullRequestReviews(target).catch(() => []),
+        provider.listPullRequestReviewComments(target).catch(() => []),
+        // Resolution is GraphQL-only and optional: a thread the read could not
+        // reach must not cost the reader the comments themselves.
+        provider.listPullRequestReviewThreads(target).catch(() => []),
+        provider.listPullRequestFiles(target).catch(() => []),
+        provider.getPullRequestChecks(target).catch(() => ({ state: 'none' as const, checks: [] })),
+        provider.listPullRequestStack(target).then(
+          (stack) => ({ stack, stackError: undefined }),
+          () => ({ stack: [], stackError: 'PR stack could not be loaded. Refresh to retry.' })
+        )
+      ])
       // Reactions are one batched read over every subject the conversation draws,
       // so it follows the comments rather than racing them: their node ids are
       // what it addresses. Optional like the threads, for the same reason   a
@@ -1410,6 +1421,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
         .catch((): PrReactionMap => ({}))
       return {
         detail,
+        ...stackResult,
         commits,
         comments,
         reviews,

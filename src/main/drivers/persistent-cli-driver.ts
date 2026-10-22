@@ -16,7 +16,7 @@ import type {
 } from '../../lib/types'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
+import { buildProcessEnvironmentAsync, OWNED_SESSION_MARKER } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
 import { describeHarnessExit, prepareHarnessInvocation } from './harness-runtime'
 import { spawnInUtilityHost } from './harness-utility-host'
@@ -514,10 +514,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const invocationEnv = {
       ...(runtime
         ? {
-            ...(invocation.env ?? buildProcessEnvironment()),
+            ...(invocation.env ?? (await buildProcessEnvironmentAsync())),
             ...runtimeEnv
           }
-        : (invocation.env ?? buildProcessEnvironment())),
+        : (invocation.env ?? (await buildProcessEnvironmentAsync()))),
       // Session-scoped ownership marker so any daemon this harness spawns that
       // re-parents away from the process tree (e.g. the adb server) can still
       // be attributed back to this session by the agent process service.

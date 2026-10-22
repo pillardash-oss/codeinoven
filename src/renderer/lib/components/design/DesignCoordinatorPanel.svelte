@@ -55,6 +55,7 @@
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { APP_SLUG } from '$shared/brand'
   import { designContractRequest } from '$shared/design/design-contract'
   import type { VideoJob } from '$shared/video/studio'
   import { DESIGN_EXPORT_FORMATS, type DesignExportFormat } from '$shared/design/design-export'
@@ -267,6 +268,36 @@
   let savedExport = $state<string | null>(null)
   /** Whether the studio controls hold unsaved edits, which a reload would discard. */
   let studioDirty = $state(false)
+  /**
+   * Bumped when the studio controls save the composition.
+   *
+   * The timeline draws its bands from its own read of the same file, so a save has
+   * to reach it without remounting it: a remount would drop the zoom, the scroll
+   * and the open comment for a change that only moved a track.
+   */
+  let studioRevision = $state(0)
+  /**
+   * The editor's height in pixels, dragged by the splitter under the picture.
+   *
+   * A composition is read in two halves, and which half needs the room depends on
+   * what the user is doing: watching the frame, or placing a track. The splitter is
+   * what hands that choice over, and the choice is remembered per machine.
+   */
+  let editorHeight = $state(0)
+  /** The column holding the picture and the editor, measured to bound the drag. */
+  let splitArea = $state<HTMLElement | null>(null)
+  /** A drag on the splitter: the pointer it belongs to and what it started from. */
+  let resizingEditor = false
+  let resizePointer = 0
+  let resizeStartY = 0
+  let resizeStartHeight = 0
+  /** The editor never collapses below a readable strip of ruler and bands. */
+  const EDITOR_MIN_HEIGHT = 148
+  /** The picture keeps enough height to be a picture, not a sliver. */
+  const STAGE_MIN_HEIGHT = 120
+  /** The splitter's own hit area, in pixels, matching the `h-2` it is drawn at. */
+  const SPLITTER_HEIGHT = 8
+  const EDITOR_HEIGHT_KEY = `${APP_SLUG}:video-editor-height`
   /** Bumped to remount the video timeline and controls, so a refresh re-reads them. */
   let boardRevision = $state(0)
   /** Whether the user asked to reload over unsaved video controls. */
@@ -1149,6 +1180,52 @@
   /** The controls' unsaved state, so a refresh can ask before discarding it. */
   function setStudioDirty(value: boolean): void {
     studioDirty = value
+  }
+
+  /** A save moved the composition, so the timeline re-reads the bands it draws. */
+  function setStudioSaved(): void {
+    studioRevision += 1
+  }
+
+  /** The editor's height, bounded so neither half of the board can be dragged shut. */
+  function clampEditorHeight(height: number): number {
+    const available = splitArea?.clientHeight ?? 0
+    if (available <= 0) return Math.max(EDITOR_MIN_HEIGHT, height)
+    const maximum = Math.max(EDITOR_MIN_HEIGHT, available - STAGE_MIN_HEIGHT - SPLITTER_HEIGHT)
+    return Math.min(Math.max(height, EDITOR_MIN_HEIGHT), maximum)
+  }
+
+  /** Start a drag on the splitter, remembering where the editor stood. */
+  function startEditorResize(event: PointerEvent & { currentTarget: HTMLButtonElement }): void {
+    resizingEditor = true
+    resizePointer = event.pointerId
+    resizeStartY = event.clientY
+    resizeStartHeight = editorHeight
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  /** Follow the pointer: up gives the editor more room and the picture less. */
+  function resizeEditor(event: PointerEvent): void {
+    if (!resizingEditor || event.pointerId !== resizePointer) return
+    editorHeight = clampEditorHeight(resizeStartHeight - (event.clientY - resizeStartY))
+  }
+
+  /** Settle the drag and remember it, so the next visit opens the same way. */
+  function finishEditorResize(event: PointerEvent): void {
+    if (!resizingEditor || event.pointerId !== resizePointer) return
+    resizingEditor = false
+    localStorage.setItem(EDITOR_HEIGHT_KEY, String(editorHeight))
+  }
+
+  /** The same split from the keyboard, for a control that is reachable without a mouse. */
+  function resizeEditorWithKeyboard(event: KeyboardEvent): void {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown' && event.key !== 'Home') return
+    event.preventDefault()
+    editorHeight =
+      event.key === 'Home'
+        ? clampEditorHeight(Math.round((splitArea?.clientHeight ?? 0) * 0.45))
+        : clampEditorHeight(editorHeight + (event.key === 'ArrowUp' ? 24 : -24))
+    localStorage.setItem(EDITOR_HEIGHT_KEY, String(editorHeight))
   }
 
   /** The history pane's Undo and Redo, mirrored into the board header. */
@@ -2153,23 +2230,74 @@
         scrolling column with the controls would be drawn past the panel at the
         sizes where the column is taller than the panel.
       -->
-      <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
-        {@render videoStage()}
-      </div>
-      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto py-2 pl-2.5">
-        {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
-          <VideoTimeline {projectId} {threadId} directory={selected.directory} tabId={boardTabId} />
-          {#if liveEditing}
-            <VideoStudioControls
+      <div
+        class="flex min-h-0 flex-1 flex-col"
+        {@attach (node) => {
+          splitArea = node
+          // The stored height is a pixel count this window has to be able to hold,
+          // so it is corrected against the column it is being placed in rather than
+          // trusted: a board opened on a smaller window opens with both halves whole.
+          if (editorHeight === 0) {
+            const stored = Number.parseInt(localStorage.getItem(EDITOR_HEIGHT_KEY) ?? '', 10)
+            editorHeight = clampEditorHeight(
+              Number.isFinite(stored) ? stored : Math.round(node.clientHeight * 0.45)
+            )
+          }
+          return () => {
+            splitArea = null
+          }
+        }}
+      >
+        <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
+          {@render videoStage()}
+        </div>
+        <!--
+          The split between the picture and the editor.
+
+          The band belongs to the bottom of the picture, not to the top of the
+          timeline: the picture's own frame already draws the line between the two
+          halves, so the band draws nothing and a second hairline here would read
+          as an extra rule floating above the timeline. The whole band is the
+          control, there is no grabber to aim at, its cursor is the row resize it
+          performs, and it is a button so the split can be moved from the keyboard.
+        -->
+        <button
+          type="button"
+          class="flex h-2 w-full shrink-0 cursor-row-resize touch-none items-center px-2.5 outline-none"
+          aria-label="Resize the composition editor"
+          title="Drag to resize the timeline, or use the arrow keys"
+          onpointerdown={startEditorResize}
+          onpointermove={resizeEditor}
+          onpointerup={finishEditorResize}
+          onpointercancel={finishEditorResize}
+          onkeydown={resizeEditorWithKeyboard}
+        ></button>
+        <div class="flex min-h-0 shrink-0 flex-col pb-2 pl-2.5" style:height={`${editorHeight}px`}>
+          {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
+            <VideoTimeline
               {projectId}
+              {threadId}
               directory={selected.directory}
-              jobs={videoJobs}
-              onCancelJob={cancelVideoJob}
-              onExport={exportVideo}
-              onDirtyChange={setStudioDirty}
-            />
-          {/if}
-        {/key}
+              tabId={boardTabId}
+              revision={studioRevision}
+            >
+              {#snippet controls(section)}
+                {#if liveEditing}
+                  <VideoStudioControls
+                    {projectId}
+                    {section}
+                    directory={selected.directory}
+                    jobs={videoJobs}
+                    onCancelJob={cancelVideoJob}
+                    onExport={exportVideo}
+                    onDirtyChange={setStudioDirty}
+                    onSaved={setStudioSaved}
+                  />
+                {/if}
+              {/snippet}
+            </VideoTimeline>
+          {/key}
+        </div>
       </div>
     {:else}
       <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">

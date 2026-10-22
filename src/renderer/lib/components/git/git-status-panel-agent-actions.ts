@@ -2,20 +2,22 @@ import { invoke } from '$lib/ipc.svelte'
 import { pathToFileUrl } from '$lib/mime'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { gitState } from '$lib/stores/git.svelte'
-import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { threadSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
-import type { PromptAttachment } from '$shared/types'
-import type {
-  GitHubDeployment,
-  GitHubDeploymentJob,
-  GitHubDeploymentJobLog,
-  GitHubWorkflowRun,
-  Project,
-  PullRequestCheck,
-  IssueSummary,
-  PullRequestSummary
+import {
+  DEFAULT_SCOPE_BUCKET_ID,
+  type GitHubDeployment,
+  type GitHubDeploymentJob,
+  type GitHubDeploymentJobLog,
+  type GitHubWorkflowRun,
+  type IssueSummary,
+  type Project,
+  type PromptAttachment,
+  type PullRequestCheck,
+  type PullRequestSummary,
+  type Thread,
+  type ThreadSettings
 } from '$shared/types'
+import { agentAssist, type AgentAssistPrepared } from '../assist/agent-assist-store.svelte'
 import type { PrCommentChatSubject } from './git-status-panel-prompts'
 import { jobForCheck } from './pr-check-job'
 import {
@@ -28,18 +30,30 @@ import {
   workflowJobDiagnosisPrompt
 } from './git-status-panel-prompts'
 
-/** Open a new agent thread and return it, or null when unavailable. */
-async function createDeploymentDiagnosisThread(projectId: string, title: string) {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
+/**
+ * Create the thread an agent handoff runs in.
+ *
+ * The dialog already resolved the scope and the run configuration, so this is
+ * only the record: a thread in that scope, with the confirmed settings. It
+ * throws rather than returning null, because a handoff that produced no thread
+ * is a failure the dialog has to report.
+ */
+async function createHandoffThread(input: {
+  projectId: string
+  projectPath: string
+  title: string
+  settings: ThreadSettings
+  scopeBucketId?: string
+}): Promise<Thread> {
   const thread = await invoke('thread:create', {
-    projectId,
-    providerId: 'pi',
-    title,
-    workingDirectory: project.path,
-    settings: { ...threadSettings.lastUsed }
+    projectId: input.projectId,
+    providerId: input.settings.harnessId,
+    title: input.title,
+    workingDirectory: input.projectPath,
+    ...(input.scopeBucketId ? { scopeBucketId: input.scopeBucketId } : {}),
+    settings: input.settings
   }).catch(() => null)
-  if (!thread) return
+  if (!thread) throw new Error('The agent thread could not be created')
   return thread
 }
 
@@ -62,29 +76,37 @@ async function jobLogAttachment(
   }
 }
 
-/** Hand a failed workflow run job to a fresh diagnosis thread. */
+/** Hand a failed workflow run job to an agent, with the log attached. */
 export function diagnoseWorkflowJob(
   projectId: string,
   run: GitHubWorkflowRun,
   job: GitHubDeploymentJob,
   log: GitHubDeploymentJobLog | null
 ): void {
-  const prompt = workflowJobDiagnosisPrompt(run, job, log)
-  void (async () => {
-    const project = await invoke('project:get', projectId).catch(() => null)
-    if (!project) return
-    const thread = await createDeploymentDiagnosisThread(
-      projectId,
-      `Review failed job: ${job.name}`
-    )
-    if (!thread) return
-    const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
-    rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
-    workspaceState.openThread(thread, project)
-  })()
+  agentAssist.open({
+    projectId,
+    title: `Diagnose ${job.name} with agent`,
+    summary: `The agent reads the failed job${log ? ' and its log' : ''} and proposes a fix without changing the pipeline.`,
+    scopeBucketId: DEFAULT_SCOPE_BUCKET_ID,
+    prepare: async ({ project, settings, scopeBucketId }) => {
+      const thread = await createHandoffThread({
+        projectId,
+        projectPath: project.path,
+        title: `Review failed job: ${job.name}`,
+        settings,
+        scopeBucketId
+      })
+      const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
+      return {
+        threadId: thread.id,
+        text: workflowJobDiagnosisPrompt(run, job, log),
+        attachments
+      }
+    }
+  })
 }
 
-/** Hand a failed deployment job to a fresh diagnosis thread. */
+/** Hand a failed deployment job to an agent, with the log attached. */
 export function diagnoseDeployment(
   projectId: string,
   owner: string,
@@ -94,67 +116,65 @@ export function diagnoseDeployment(
   job: GitHubDeploymentJob,
   log: GitHubDeploymentJobLog | null
 ): void {
-  const prompt = deploymentJobDiagnosisPrompt(deployment, run, job, log, owner, repo)
-  void (async () => {
-    const project = await invoke('project:get', projectId).catch(() => null)
-    if (!project) return
-    const thread = await createDeploymentDiagnosisThread(
-      projectId,
-      `Review failed job: ${job.name}`
-    )
-    if (!thread) return
-    const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
-    rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
-    workspaceState.openThread(thread, project)
-  })()
-}
-
-/**
- * Open the thread an agent assignment runs in, or null when it could not be made.
- *
- * The thread exists before the assignment does, because the assignment records the
- * thread that owns it. Both are made from one user action, so a thread left behind
- * by a failed assignment is a stray the user can delete, never a report that claims
- * work no thread ever did.
- */
-async function createAssignmentThread(projectId: string, projectPath: string, title: string) {
-  return invoke('thread:create', {
+  agentAssist.open({
     projectId,
-    providerId: 'pi',
-    title,
-    workingDirectory: projectPath,
-    settings: { ...threadSettings.lastUsed }
-  }).catch(() => null)
+    title: `Diagnose ${job.name} with agent`,
+    summary: `The agent reads the failed deployment${log ? ' and its log' : ''} and proposes a fix without redeploying.`,
+    scopeBucketId: DEFAULT_SCOPE_BUCKET_ID,
+    prepare: async ({ project, settings, scopeBucketId }) => {
+      const thread = await createHandoffThread({
+        projectId,
+        projectPath: project.path,
+        title: `Review failed job: ${job.name}`,
+        settings,
+        scopeBucketId
+      })
+      const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
+      return {
+        threadId: thread.id,
+        text: deploymentJobDiagnosisPrompt(deployment, run, job, log, owner, repo),
+        attachments
+      }
+    }
+  })
 }
 
 /**
  * Hand a pull request to an agent as an assignment.
  *
  * The agent gets a fresh thread, its own report file, and a brief that tells it to
- * triage the pull request in a throwaway worktree and stop for a go-ahead. The report
- * lands in `.cio/git/pr/<number>/review-<id>.md`, which is what the reader's Agent
+ * triage the pull request and stop for a go-ahead. The report lands in
+ * `.cio/git/pr/<number>/review-<id>.md`, which is what the reader's Agent
  * tab lists, and the thread is recorded as the assignment's owner so the tab can jump
  * back into it.
- *
- * The brief opens as a draft rather than sending itself: an assignment is a large
- * action, and this is the moment the user can add to it before the agent starts.
  */
 export async function assignAgentToPullRequest(
   projectId: string,
   pr: PullRequestSummary
 ): Promise<void> {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
   const title = `Triage PR #${pr.number}`
-  const thread = await createAssignmentThread(projectId, project.path, title)
-  if (!thread) return
-  const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
-    kind: 'triage',
-    title
+  agentAssist.open({
+    projectId,
+    title: `Triage PR #${pr.number} with agent`,
+    summary: `The agent reads the pull request in the scope you pick and writes a triage report to it.`,
+    scopeBucketId: DEFAULT_SCOPE_BUCKET_ID,
+    newCheckout: { title: `triage-pr-${pr.number}` },
+    prepare: async ({ project, settings, scopeBucketId }) => {
+      const thread = await createHandoffThread({
+        projectId,
+        projectPath: project.path,
+        title,
+        settings,
+        scopeBucketId
+      })
+      const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
+        kind: 'triage',
+        title
+      })
+      if (!assignment) throw new Error('The agent assignment could not be created')
+      return { threadId: thread.id, text: prTriagePrompt(pr, assignment.reportPath) }
+    }
   })
-  if (!assignment) return
-  rendererRecovery.setDraft(projectId, thread.id, prTriagePrompt(pr, assignment.reportPath), [], [])
-  workspaceState.openThread(thread, project)
 }
 
 /**
@@ -172,29 +192,33 @@ export async function assignAgentToComment(
   comment: PrCommentChatSubject,
   body: string
 ): Promise<void> {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
   const title = `Comment by @${comment.author}`
-  const thread = await createAssignmentThread(
+  agentAssist.open({
     projectId,
-    project.path,
-    `${title} on PR #${pr.number}`
-  )
-  if (!thread) return
-  const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
-    kind: 'comment',
-    title,
-    url: comment.url
+    title: `Work on @${comment.author}'s comment with agent`,
+    summary: `The agent reads the comment on PR #${pr.number} and answers it with a change or a finding.`,
+    scopeBucketId: DEFAULT_SCOPE_BUCKET_ID,
+    newCheckout: { title: `comment-pr-${pr.number}` },
+    prepare: async ({ project, settings, scopeBucketId }) => {
+      const thread = await createHandoffThread({
+        projectId,
+        projectPath: project.path,
+        title: `${title} on PR #${pr.number}`,
+        settings,
+        scopeBucketId
+      })
+      const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
+        kind: 'comment',
+        title,
+        url: comment.url
+      })
+      if (!assignment) throw new Error('The agent assignment could not be created')
+      return {
+        threadId: thread.id,
+        text: prCommentAssignmentPrompt(comment, body, pr, repository, assignment.reportPath)
+      }
+    }
   })
-  if (!assignment) return
-  rendererRecovery.setDraft(
-    projectId,
-    thread.id,
-    prCommentAssignmentPrompt(comment, body, pr, repository, assignment.reportPath),
-    [],
-    []
-  )
-  workspaceState.openThread(thread, project)
 }
 
 /**
@@ -212,54 +236,59 @@ export async function assignAgentToCheck(
   identity: { owner: string; repo: string },
   check: PullRequestCheck
 ): Promise<void> {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
-  const run =
-    check.workflowRunId !== null
-      ? await gitState
-          .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
-          .catch(() => null)
-      : null
-  const job = jobForCheck(run, check)
-  const jobId = check.jobId ?? job?.id ?? null
-  const log =
-    jobId !== null
-      ? await gitState
-          .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, jobId)
-          .catch(() => null)
-      : null
   // GitHub names a job from the workflow, and a matrix leg's name carries its
   // whole parameter list, so the title is cut to what the sidecar accepts rather
   // than failing the whole assignment on a long one.
   const title = `Failed check: ${check.name}`.slice(0, 120)
-  const thread = await createAssignmentThread(
+  agentAssist.open({
     projectId,
-    project.path,
-    `${title} on PR #${pr.number}`
-  )
-  if (!thread) return
-  const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
-    kind: 'check',
-    title,
-    ...(check.url ? { url: check.url } : {})
+    title: `Fix ${check.name} with agent`,
+    summary: `The agent reads the failing check on PR #${pr.number}, works out why it failed, and proposes the fix.`,
+    scopeBucketId: DEFAULT_SCOPE_BUCKET_ID,
+    newCheckout: { title: `check-pr-${pr.number}` },
+    prepare: async ({ project, settings, scopeBucketId }) => {
+      const run =
+        check.workflowRunId !== null
+          ? await gitState
+              .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
+              .catch(() => null)
+          : null
+      const job = jobForCheck(run, check)
+      const jobId = check.jobId ?? job?.id ?? null
+      const log =
+        jobId !== null
+          ? await gitState
+              .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, jobId)
+              .catch(() => null)
+          : null
+      const thread = await createHandoffThread({
+        projectId,
+        projectPath: project.path,
+        title: `${title} on PR #${pr.number}`,
+        settings,
+        scopeBucketId
+      })
+      const assignment = await gitState.createAgentAssignment(projectId, pr.number, thread.id, {
+        kind: 'check',
+        title,
+        ...(check.url ? { url: check.url } : {})
+      })
+      if (!assignment) throw new Error('The agent assignment could not be created')
+      const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
+      return {
+        threadId: thread.id,
+        text: prCheckAssignmentPrompt(
+          pr,
+          `${identity.owner}/${identity.repo}`,
+          check,
+          job,
+          log,
+          assignment.reportPath
+        ),
+        attachments
+      }
+    }
   })
-  if (!assignment) return
-  const attachments = log ? await jobLogAttachment(projectId, log, thread.id) : []
-  rendererRecovery.setDraft(
-    projectId,
-    thread.id,
-    prCheckAssignmentPrompt(
-      pr,
-      `${identity.owner}/${identity.repo}`,
-      check,
-      job,
-      log,
-      assignment.reportPath
-    ),
-    attachments,
-    []
-  )
-  workspaceState.openThread(thread, project)
 }
 
 /**
@@ -276,16 +305,23 @@ export async function assignAgentToIssue(
   repository: string,
   body: string | null
 ): Promise<void> {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
-  const thread = await createAssignmentThread(
+  agentAssist.open({
     projectId,
-    project.path,
-    `Work on issue #${issue.number}`
-  )
-  if (!thread) return
-  rendererRecovery.setDraft(projectId, thread.id, issueWorkPrompt(issue, repository, body), [], [])
-  workspaceState.openThread(thread, project)
+    title: `Work on issue #${issue.number} with agent`,
+    summary: `The agent reads issue #${issue.number} in the scope you pick and does the work it asks for.`,
+    scopeBucketId: DEFAULT_SCOPE_BUCKET_ID,
+    newCheckout: { title: `issue-${issue.number}` },
+    prepare: async ({ project, settings, scopeBucketId }) => {
+      const thread = await createHandoffThread({
+        projectId,
+        projectPath: project.path,
+        title: `Work on issue #${issue.number}`,
+        settings,
+        scopeBucketId
+      })
+      return { threadId: thread.id, text: issueWorkPrompt(issue, repository, body) }
+    }
+  })
 }
 
 /** Reopen the thread that owns a pull request's agent assignment. */ export async function openAgentThread(
@@ -300,49 +336,40 @@ export async function assignAgentToIssue(
 }
 
 /**
- * Open a thread that resolves the given conflicted paths, with the brief
- * pre-loaded as a draft so the user reviews it before sending. The panel's
- * own conflict controls stay the place the merge is completed from.
+ * Build the resolution thread for a checkout whose conflicts are already in the
+ * working tree.
  *
- * The thread carries the scope the panel is attached to, so conflicts that
- * live in a managed worktree are resolved in that worktree. Main derives the
- * working root from the scope id and fails closed on an unhealthy checkout,
- * which is why the renderer never supplies a worktree path here.
+ * The brief opens as a draft or is sent immediately, decided by the shared
+ * runner; the panel's own conflict controls stay the place the merge is
+ * completed from. The thread carries the scope the panel is attached to, so
+ * conflicts that live in a managed worktree are resolved in that worktree. Main
+ * derives the working root from the scope id and fails closed on an unhealthy
+ * checkout, which is why the renderer never supplies a worktree path here.
  */
-async function launchConflictAgent(
-  projectId: string,
-  project: Project,
-  scopeBucketId: string,
-  title: string,
-  conflictedPaths: string[],
+async function prepareConflictHandoff(input: {
+  projectId: string
+  project: Project
+  settings: ThreadSettings
+  scopeBucketId: string
+  title: string
+  conflictedPaths: string[]
   pullRequest: PullRequestSummary | null
-): Promise<void> {
-  const thread = await invoke('thread:create', {
-    projectId,
-    providerId: 'pi',
-    title,
-    workingDirectory: project.path,
-    scopeBucketId,
-    settings: { ...threadSettings.lastUsed }
-  }).catch((error: unknown) => {
-    // A refused create is actionable (an unhealthy worktree, a full bucket),
-    // so it must never read as a button that did nothing.
-    reportError(error, 'The conflict resolution thread could not be created.')
-    return null
+}): Promise<AgentAssistPrepared> {
+  const thread = await createHandoffThread({
+    projectId: input.projectId,
+    projectPath: input.project.path,
+    title: input.title,
+    settings: input.settings,
+    scopeBucketId: input.scopeBucketId
   })
-  if (!thread) return
-  rendererRecovery.setDraft(
-    projectId,
-    thread.id,
-    conflictResolutionPrompt(
-      conflictedPaths,
-      pullRequest,
+  return {
+    threadId: thread.id,
+    text: conflictResolutionPrompt(
+      input.conflictedPaths,
+      input.pullRequest,
       gitState.conflictState === 'rebase' ? 'rebase' : 'merge'
-    ),
-    [],
-    []
-  )
-  workspaceState.openThread(thread, project)
+    )
+  }
 }
 
 /**
@@ -367,11 +394,12 @@ export async function preparePrConflictSession(
 }
 
 /**
- * Resolve a PR's online conflicts with the agent's help: prepare the working
- * tree, then (once `onPrepared` has let the panel switch views) hand the agent
- * a thread to resolve the conflict markers. The agent never pushes   the user
- * finishes with Complete merge. The scope is the one the panel is attached to,
- * so the checkout that was prepared is the checkout the agent resolves in.
+ * Resolve a PR's online conflicts with the agent's help.
+ *
+ * The confirmed handoff first prepares the working tree and then builds the
+ * thread on exactly that checkout, so the agent can never resolve markers in a
+ * different directory from the one the panel prepared. The agent never pushes;
+ * the user finishes with Complete merge.
  */
 export async function resolvePrConflictsWithAgent(
   projectId: string,
@@ -381,41 +409,56 @@ export async function resolvePrConflictsWithAgent(
   returnBranch: string,
   onPrepared: () => void
 ): Promise<void> {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
-  const prepared = await preparePrConflictSession(projectId, pr, remote, returnBranch)
-  if (!prepared) return
-  onPrepared()
-  await launchConflictAgent(
+  agentAssist.open({
     projectId,
-    project,
+    title: `Resolve conflicts in PR #${pr.number} with agent`,
+    summary: 'The agent resolves the conflict markers in the prepared checkout, then stops for your review.',
     scopeBucketId,
-    `Resolve conflicts in PR #${pr.number}`,
-    [...gitState.conflicted],
-    pr
-  )
+    scopeLocked: true,
+    prepare: async ({ project, settings }) => {
+      const prepared = await preparePrConflictSession(projectId, pr, remote, returnBranch)
+      if (!prepared)
+        throw new Error(gitState.error ?? 'The pull request head could not be checked out here')
+      onPrepared()
+      return prepareConflictHandoff({
+        projectId,
+        project,
+        settings,
+        scopeBucketId,
+        title: `Resolve conflicts in PR #${pr.number}`,
+        conflictedPaths: [...gitState.conflicted],
+        pullRequest: pr
+      })
+    }
+  })
 }
 
 /**
  * Resolve whatever integration is in progress with the agent's help. The
  * conflicts are already in the working tree (a pull, a merge or a rebase), so
- * this only has to hand the agent the brief   the same brief the PR path uses.
- * The thread opens in `scopeBucketId`, which is the checkout the conflicted
- * working tree belongs to.
+ * this only has to hand the agent the brief. The thread opens in
+ * `scopeBucketId`, which is the checkout the conflicted working tree belongs to.
  */
 export async function resolveCurrentConflictsWithAgent(
   projectId: string,
   scopeBucketId: string,
   branchLabel: string
 ): Promise<void> {
-  const project = await invoke('project:get', projectId).catch(() => null)
-  if (!project) return
-  await launchConflictAgent(
+  agentAssist.open({
     projectId,
-    project,
+    title: `Resolve conflicts in ${branchLabel} with agent`,
+    summary: 'The agent resolves the conflict markers in this checkout, then stops for your review.',
     scopeBucketId,
-    `Resolve conflicts in ${branchLabel}`,
-    [...gitState.conflicted],
-    null
-  )
+    scopeLocked: true,
+    prepare: async ({ project, settings }) =>
+      prepareConflictHandoff({
+        projectId,
+        project,
+        settings,
+        scopeBucketId,
+        title: `Resolve conflicts in ${branchLabel}`,
+        conflictedPaths: [...gitState.conflicted],
+        pullRequest: null
+      })
+  })
 }

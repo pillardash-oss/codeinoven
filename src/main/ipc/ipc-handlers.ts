@@ -9,6 +9,7 @@ import { appearanceImagesDirectory } from '../../lib/icon-file'
 import { threadAttachmentDirectory } from '../../lib/thread-storage-paths'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { Logger } from '../system/logger'
+import { setFileDialogStorage } from '../system/file-dialogs'
 import { openWithService } from '../system/open-with-service'
 import { GitHubProvider } from '../providers/github-provider'
 import {
@@ -104,6 +105,9 @@ export function registerIpcHandlers(
   chatEngine?: IpcChatEngine,
   options: RegisterIpcHandlersOptions = {}
 ): void {
+  // The picker memory belongs to this app's data root, never to a second engine
+  // resolved from the canonical root (which a test or a probe would overwrite).
+  setFileDialogStorage(storage)
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const assistantManager = options.assistantManager ?? new AssistantManager(database)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()

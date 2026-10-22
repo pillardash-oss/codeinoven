@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   AgentEvent,
+  SessionAgentEvent,
   AgentMessage,
   PromptAttachment,
   Thread,
@@ -31,6 +32,8 @@ import { mapClaudeCodeRecord } from '../drivers/claude-code/claude-stream-fold'
 import { mapPiRecord } from '../drivers/pi/pi-stream-fold'
 import { mapMuseRecord } from '../drivers/muse/muse-stream-fold'
 import { mapClineRecord } from '../drivers/cline/cline-stream-fold'
+import { mapOpenCodeEvent } from '../drivers/opencode/opencode-events'
+import { recordValue } from '../drivers/opencode/opencode-values'
 import type { MuseTurnState } from '../drivers/muse/muse-parts'
 import type { PiTurnState } from '../drivers/pi/pi-stream-types'
 import {
@@ -782,7 +785,7 @@ export class OvenChat {
         mapped = mapClineRecord(value, context)
         break
       default:
-        mapped = this.openCode(value, context.sessionId, binding.runId)
+        mapped = this.openCode(value, binding.session, binding.runId)
         break
     }
     if (!mapped) return
@@ -882,32 +885,44 @@ export class OvenChat {
     }
   }
 
-  private openCode(value: unknown, sessionId: string, runId: string): CliLineParseResult | null {
-    if (!value || typeof value !== 'object') return null
-    const entry = value as Record<string, unknown>
-    const part = entry.part as Record<string, unknown> | undefined
+  private openCode(
+    value: unknown,
+    session: PersistentCliSession,
+    runId: string
+  ): CliLineParseResult | null {
+    const entry = recordValue(value)
+    if (!entry) return null
+    const part = recordValue(entry.part)
     const nativeSessionId = typeof entry.sessionID === 'string' ? entry.sessionID : undefined
-    if (entry.type !== 'text' || typeof part?.text !== 'string')
-      return nativeSessionId ? { nativeSessionId } : null
+    if (!part || typeof part.type !== 'string') return nativeSessionId ? { nativeSessionId } : null
     const messageId = `${runId}:assistant`
-    const agentPart = {
-      type: 'text' as const,
-      id: typeof part.id === 'string' ? `${runId}:${part.id}` : `${runId}:text`,
-      messageID: messageId,
-      text: part.text
-    }
+    const events = mapOpenCodeEvent('message.part.updated', {
+      sessionID: session.id,
+      part: {
+        ...part,
+        id: typeof part.id === 'string' ? `${runId}:${part.id}` : `${runId}:${part.type}`,
+        messageID: messageId
+      }
+    }).filter((event): event is SessionAgentEvent => 'sessionId' in event)
+    if (events.length === 0) return nativeSessionId ? { nativeSessionId } : null
+    // CLI records contain one part, not a whole-message snapshot. Create the
+    // message once, then let record() fold each event into its retained parts.
+    // Replacing it for every record discarded earlier tools and reasoning.
+    const exists = session.messages.some((message) => message.id === messageId)
     return {
       nativeSessionId,
-      messages: [
-        {
-          id: messageId,
-          role: 'assistant',
-          createdAt: Date.now(),
-          parts: [agentPart],
-          harnessId: 'opencode'
-        }
-      ],
-      events: [{ type: 'message.part.updated', sessionId, part: agentPart }]
+      messages: exists
+        ? undefined
+        : [
+            {
+              id: messageId,
+              role: 'assistant',
+              createdAt: Date.now(),
+              parts: [],
+              harnessId: 'opencode'
+            }
+          ],
+      events
     }
   }
 

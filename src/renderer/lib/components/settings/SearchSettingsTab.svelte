@@ -17,11 +17,13 @@
     SEARCH_CONTEXT_TOKENS_MIN,
     SEARCH_MIN_RUNTIME_BUILD,
     clampSearchContextTokens,
+    type SearchDownloadMode,
     type SearchDownloadState,
     type SearchModelArtifact
   } from '../../../../lib/search/types'
   import type { SpeechLlamaRuntimeStatus } from '../../../../lib/speech/types'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
+  import DownloadRecovery from '../ui/DownloadRecovery.svelte'
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import PasteModelPathModal from './PasteModelPathModal.svelte'
@@ -56,6 +58,8 @@
   let pasteOpen = $state(false)
   let pendingDelete: { id: string; label: string } | null = $state(null)
   let deleting = $state(false)
+  /** Artifacts whose resume/restart request has not reported progress yet. */
+  let recovering = $state<Record<string, boolean>>({})
 
   const runtimeReady = $derived(
     Boolean(status?.runtimeAvailable) && Boolean(status?.runtimeSupported)
@@ -67,6 +71,21 @@
 
   function downloadState(artifactId: string): SearchDownloadState | undefined {
     return downloads[artifactId]
+  }
+
+  /**
+   * Pick a stopped embedding download back up, or start it over, from its row.
+   * The button spins until the download's first progress event replaces it.
+   */
+  async function recoverDownload(artifactId: string, mode: SearchDownloadMode): Promise<void> {
+    if (recovering[artifactId]) return
+    recovering = { ...recovering, [artifactId]: true }
+    try {
+      await search.download(artifactId, mode)
+    } finally {
+      const { [artifactId]: _done, ...rest } = recovering
+      recovering = rest
+    }
   }
 
   async function loadRuntime(): Promise<void> {
@@ -399,6 +418,9 @@
 
 {#snippet artifactRow(artifact: SearchModelArtifact)}
   {@const download = downloadState(artifact.id)}
+  {@const progressing = download?.state === 'downloading' || download?.state === 'verifying'}
+  {@const recoverable = download?.state === 'cancelled' || download?.state === 'failed'}
+  {@const busy = progressing || recovering[artifact.id] === true}
   <li class="py-3">
     <div class="flex items-start justify-between gap-6">
       <div class="min-w-0 flex-1">
@@ -414,7 +436,7 @@
             1024}K context · {artifact.license}
         </p>
       </div>
-      {#if !download || download.state === 'cancelled' || download.state === 'failed'}
+      {#if !busy && !recoverable}
         <button
           type="button"
           class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
@@ -423,12 +445,12 @@
           onclick={() => void search.download(artifact.id)}
         >
           <CioDownload size={12} aria-hidden="true" />
-          {download?.state === 'failed' ? 'Retry' : 'Download'}
+          Download
         </button>
       {/if}
     </div>
 
-    {#if download?.state === 'downloading' || download?.state === 'verifying'}
+    {#if progressing}
       <div class="mt-2.5">
         <DownloadProgress
           percent={download.state === 'verifying' ? 100 : downloadPercent(download)}
@@ -436,14 +458,39 @@
           detail="{formatBytes(download.bytesReceived)} / {formatBytes(download.totalBytes)}"
           tone={download.state === 'verifying' ? 'verifying' : 'default'}
           ariaLabel="Downloading {artifact.label}"
+          hint={download.state === 'downloading' && download.resumedFromBytes
+            ? `Continuing from ${formatBytes(download.resumedFromBytes)} kept by the stopped download.`
+            : undefined}
           onCancel={() => void search.cancelDownload(artifact.id)}
           cancelLabel="Cancel download"
         />
       </div>
     {:else if download?.state === 'failed'}
-      <p class="mt-2.5 text-xs text-danger">{download.message}</p>
+      <div class="mt-2.5">
+        <DownloadRecovery
+          label={artifact.label}
+          message={download.message}
+          keptBytes={download.bytesReceived}
+          totalBytes={download.totalBytes}
+          tone="failed"
+          busy={recovering[artifact.id] === true}
+          onResume={() => void recoverDownload(artifact.id, 'resume')}
+          onRestart={() => void recoverDownload(artifact.id, 'restart')}
+        />
+      </div>
     {:else if download?.state === 'cancelled'}
-      <p class="mt-2.5 text-xs text-muted">Download cancelled.</p>
+      <div class="mt-2.5">
+        <DownloadRecovery
+          label={artifact.label}
+          message="Download cancelled."
+          keptBytes={download.bytesReceived}
+          totalBytes={download.totalBytes}
+          tone="cancelled"
+          busy={recovering[artifact.id] === true}
+          onResume={() => void recoverDownload(artifact.id, 'resume')}
+          onRestart={() => void recoverDownload(artifact.id, 'restart')}
+        />
+      </div>
     {/if}
   </li>
 {/snippet}

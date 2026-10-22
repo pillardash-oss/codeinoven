@@ -1,48 +1,56 @@
 <script lang="ts">
-  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
-  import CioCaptions from '@pdslng/cio-icon/CioCaptions.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioSkipBack from '@pdslng/cio-icon/CioSkipBack.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import type { VideoJob, VideoStudioDocument, VideoValue } from '$shared/video/studio'
+  import { videoTimecode } from '$shared/video/timeline'
+  import type {
+    VideoAudioTrack,
+    VideoJob,
+    VideoStudioDocument,
+    VideoValue
+  } from '$shared/video/studio'
+
+  /** The three editor sections, as the timeline's tab strip names them. */
+  type EditorSection = 'timeline' | 'audio' | 'exports'
 
   /**
-   * What the composition declares as values, and what it is doing.
+   * The editable half of a composition: its values, its captions, its audio, its jobs.
    *
-   * The board reads the composition from the timeline and the picture; this card is
-   * the editable half of the same file. It carries the parameters the composition
-   * reads at draw time, the caption text and its style, the audio tracks, and the
-   * jobs that are turning any of it into a file.
-   *
-   * It is a card like the timeline, not a second panel: the same icon-and-title
-   * header, the same `text-xs` rows, the same inputs and pickers as the rest of the
-   * app. Nothing here is titled "video controls", because the board is already the
-   * video board and a label that restates its own surface is noise.
+   * It is not a card and it has no header of its own. The timeline above draws one
+   * tab strip and this is the body of the tab that is open, so a tab titled "Audio"
+   * that then said "Settings · Audio tracks" would be the panel restating the tab.
+   * Each section therefore draws only its own rows, on the board's own surface,
+   * with no frame around them: the panel is already the frame.
    */
   interface Props {
     projectId: string
     directory: string
+    /** Which section is open, owned by the timeline's tab strip. */
+    section: EditorSection
     /**
      * The composition's jobs, owned by the board.
      *
-     * The board polls them because it draws the export above these controls, so it
-     * holds the one list and hands it down instead of the controls reading a second
-     * copy that could disagree. The board also cancels a job, so the cancel action is
-     * a request rather than a second writer of the same state.
+     * The board polls them because it draws the export in its own dock, so it holds
+     * the one list and hands it down instead of these controls reading a second copy
+     * that could disagree. The board also cancels a job, so the cancel action is a
+     * request rather than a second writer of the same state.
      */
     jobs: VideoJob[]
     onCancelJob: (id: string) => void
     /**
      * Start an export.
      *
-     * The board owns the export, so it reports in the shared dockable export
-     * panel its own menu opens rather than a second copy of that surface. These
-     * controls only say when the user asked for one.
+     * The board owns the export, so it reports in the shared dockable export panel
+     * its own menu opens rather than a second copy of that surface. These controls
+     * only say when the user asked for one.
      */
     onExport: () => void
     /**
@@ -52,8 +60,19 @@
      * away and ask first. The board owns the question; the controls own the answer.
      */
     onDirtyChange?: (dirty: boolean) => void
+    /** Told after a save, so the timeline's bands re-read the file they draw. */
+    onSaved?: () => void
   }
-  let { projectId, directory, jobs, onCancelJob, onExport, onDirtyChange }: Props = $props()
+  let {
+    projectId,
+    directory,
+    section,
+    jobs,
+    onCancelJob,
+    onExport,
+    onDirtyChange,
+    onSaved
+  }: Props = $props()
   let studio = $state<VideoStudioDocument | null>(null)
   let revision = ''
   let error = $state('')
@@ -61,8 +80,23 @@
   let dirty = $state(false)
   let cancelledJob = $state<VideoJob | null>(null)
   let captionPage = $state(0)
-  let captionsOpen = $state(false)
-  let tracksOpen = $state(false)
+  /** Which track boxes are folded open, by index. The first opens by default. */
+  let openTracks = $state<Record<number, boolean>>({})
+  /** Which job records are folded open, by id. A running job opens by itself. */
+  let openJobs = $state<Record<string, boolean>>({})
+  /**
+   * The track being auditioned, and where the file is playing.
+   *
+   * One element for the whole list rather than one per track: two tracks playing
+   * at once is never what a user means by pressing play on a row, and the browser
+   * refuses the second play anyway. The index says which row owns the sound.
+   */
+  let audio = $state<HTMLAudioElement | null>(null)
+  let auditionIndex = $state<number | null>(null)
+  let auditionSeconds = $state(0)
+  let auditionPlaying = $state(false)
+  /** The trim window of the track in the element, so playback stops at its end. */
+  let auditionWindow = { start: 0, end: 0 }
   let visibleCaptions = $derived(
     studio?.captions.slice(captionPage * 25, captionPage * 25 + 25) ?? []
   )
@@ -88,6 +122,9 @@
     track: 'Motion tracking',
     'remove-background': 'Background removal'
   }
+  /** A job still going, which an export would queue behind rather than replace. */
+  let running = $derived(jobs.filter((job) => job.state === 'running'))
+
   function primaryAction(event: KeyboardEvent): void {
     if (
       !(event.target instanceof Node) ||
@@ -153,6 +190,7 @@
       revision = result.revision
       dirty = false
       error = ''
+      onSaved?.()
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause)
     } finally {
@@ -164,21 +202,105 @@
     onCancelJob(cancelledJob.id)
     cancelledJob = null
   }
+
+  /**
+   * Where a track's audio is served from.
+   *
+   * A track names a file relative to the composition folder, and that folder lives
+   * inside the project, so the app's own `appfile://` reader resolves it with the
+   * Range support a media element needs to seek. Nothing is copied and no second
+   * player is invented: the browser plays the same bytes the export will mix.
+   */
+  function trackUrl(source: string): string {
+    const relative = `${directory}/${source}`
+      .split('/')
+      .filter(Boolean)
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+    return `appfile://project/${projectId}/${relative}`
+  }
+
+  /** The end of a track's used window, which is where auditioning stops. */
+  function trackEnd(track: VideoAudioTrack): number {
+    return track.trim + Math.max(track.duration, 0.01)
+  }
+
+  /** Play or pause one track in place, from the place it was left at. */
+  function auditionTrack(index: number, track: VideoAudioTrack): void {
+    const element = audio
+    if (!element) return
+    if (auditionIndex === index && auditionPlaying) {
+      element.pause()
+      return
+    }
+    const url = trackUrl(track.source)
+    if (element.src !== url) element.src = url
+    if (auditionIndex !== index) {
+      auditionIndex = index
+      auditionWindow = { start: track.trim, end: trackEnd(track) }
+      auditionSeconds = track.trim
+      element.currentTime = track.trim
+    }
+    element.volume = Math.min(1, Math.max(0, track.gain))
+    void element.play().catch(() => {
+      auditionPlaying = false
+    })
+  }
+
+  /** Move the audition to a second inside a track's window, loading it if needed. */
+  function seekTrack(index: number, track: VideoAudioTrack, seconds: number): void {
+    const element = audio
+    if (!element) return
+    const url = trackUrl(track.source)
+    if (element.src !== url) element.src = url
+    if (auditionIndex !== index) {
+      auditionIndex = index
+      auditionWindow = { start: track.trim, end: trackEnd(track) }
+    }
+    const target = Math.min(Math.max(seconds, auditionWindow.start), auditionWindow.end)
+    element.currentTime = target
+    auditionSeconds = target
+  }
+
+  /** Follow the element, and stop at the end of the track's own window. */
+  function auditionTimeUpdate(): void {
+    const element = audio
+    if (!element) return
+    if (element.currentTime >= auditionWindow.end) {
+      element.pause()
+      element.currentTime = auditionWindow.start
+      auditionSeconds = auditionWindow.start
+      return
+    }
+    auditionSeconds = element.currentTime
+  }
+
+  /** Fold a track, silencing it if it is the one playing. */
+  function toggleTrack(index: number, open: boolean): void {
+    openTracks = { ...openTracks, [index]: !open }
+    if (!open && auditionIndex === index) audio?.pause()
+  }
+
+  /** A job whose record is worth reading: it has files or an error to show. */
+  function jobMessages(job: VideoJob): string {
+    return [...job.files, job.error ?? ''].filter((line) => line !== '').join('\n')
+  }
 </script>
 
 <svelte:window onkeydown={primaryAction} />
-<section
+<div
   {@attach (node) => {
     panel = node
     return () => {
       panel = null
     }
   }}
-  class="mb-3 border border-border bg-surface p-3"
-  aria-label="Composition settings"
+  class="min-w-0"
+  role="group"
+  aria-label="Composition editor"
 >
   {#if error}
-    <p class="mb-2 border border-danger/20 bg-danger/10 px-2 py-1 text-xs text-danger" role="alert">
+    <p class="mb-2 bg-danger/10 px-2 py-1 text-xs text-danger" role="alert">
       {error}
     </p>
   {/if}
@@ -189,280 +311,413 @@
         void save()
       }}
     >
-      <fieldset disabled={busy} class="space-y-2">
-        <legend class="sr-only">Composition settings</legend>
-        <div class="flex items-center justify-between gap-2">
-          <div class="flex min-w-0 items-center gap-1.5">
-            <CioTabSettings size={13} class="text-accent" aria-hidden="true" />
-            <span class="text-xs font-semibold text-foreground">Settings</span>
-            {#if dirty}
-              <span class="truncate text-[0.6875rem] text-muted">Unsaved changes</span>
-            {/if}
-          </div>
-          {#if dirty}
+      <fieldset disabled={busy} class="min-w-0">
+        <legend class="sr-only">Composition editor</legend>
+        {#if dirty}
+          <div class="mb-2 flex items-center justify-end gap-2">
+            <span class="text-[0.6875rem] text-dimmed">Unsaved changes</span>
             <button
               type="submit"
               class="flex h-7 shrink-0 items-center bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             >
               Save changes
             </button>
-          {/if}
-        </div>
-        {#each studio.controls as control (control.key)}
-          <div class="flex items-center justify-between gap-2">
-            <label for={`video-${control.key}`} class="min-w-0 truncate text-xs text-muted">
-              {control.label}
-            </label>
-            {#if control.kind === 'switch'}
-              <Switch
-                checked={control.value === true}
-                label={control.label}
-                title={control.label}
-                aria-label={control.label}
-                onchange={(value) => setControl(control.key, value)}
-              />
-            {:else if control.kind === 'color'}
-              <input
-                id={`video-${control.key}`}
-                class="h-7 w-12 shrink-0 cursor-pointer border border-border bg-elevated p-0.5"
-                type="color"
-                value={String(control.value)}
-                title={control.label}
-                aria-label={control.label}
-                oninput={(event) => setControl(control.key, event.currentTarget.value)}
-              />
-            {:else}
-              <input
-                id={`video-${control.key}`}
-                class="h-7 w-28 shrink-0 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                type={control.kind === 'number' ? 'number' : 'text'}
-                value={String(control.value)}
-                min={control.min}
-                max={control.max}
-                step="any"
-                oninput={(event) =>
-                  setControl(
-                    control.key,
-                    control.kind === 'number'
-                      ? Number(event.currentTarget.value)
-                      : event.currentTarget.value
-                  )}
-              />
-            {/if}
-          </div>
-        {/each}
-        {#if studio.captions.length > 0}
-          <div class="border-t border-border pt-2">
-            <button
-              type="button"
-              class="flex w-full items-center justify-between gap-2 py-1 text-xs text-muted transition-colors hover:text-foreground"
-              aria-expanded={captionsOpen}
-              title={`Captions, ${studio.captions.length} in this composition`}
-              aria-label={`Captions, ${studio.captions.length} in this composition`}
-              onclick={() => (captionsOpen = !captionsOpen)}
-            >
-              <span class="flex items-center gap-1.5">
-                <CioCaptions size={12} aria-hidden="true" />
-                <span class="font-medium text-foreground">Captions</span>
-                <span class="tabular-nums text-dimmed">{studio.captions.length}</span>
-              </span>
-              <CioChevronDown
-                size={12}
-                aria-hidden="true"
-                class={captionsOpen ? 'rotate-180 transition-transform' : 'transition-transform'}
-              />
-            </button>
-            {#if captionsOpen}
-              <div class="mt-1 space-y-2 border border-border bg-app p-2">
-                <div class="flex items-center justify-between gap-2">
-                  <span class="text-xs text-muted">Style</span>
-                  <EnumSelect
-                    options={CAPTION_STYLES}
-                    value={studio.captionStyle}
-                    placeholder="Plain"
-                    ariaLabel="Caption style"
-                    title="How the captions are drawn over the composition"
-                    inline
-                    compact
-                    onChange={(style) => {
-                      if (!studio) return
-                      studio.captionStyle = style
-                      dirty = true
-                    }}
-                  />
-                </div>
-                {#each visibleCaptions as caption (caption)}
-                  <div class="space-y-1 border-t border-border pt-2 first:border-t-0 first:pt-0">
-                    <label class="block text-xs text-muted">
-                      Caption at {caption.start.toFixed(2)}s
-                      <textarea
-                        class="mt-1 w-full border border-border bg-elevated p-1.5 text-xs text-foreground outline-none focus:border-primary"
-                        rows="2"
-                        bind:value={caption.text}
-                        oninput={() => {
-                          caption.words = undefined
-                          dirty = true
-                        }}></textarea>
-                    </label>
-                    <div class="flex gap-2">
-                      <label class="flex items-center gap-1 text-xs text-muted">
-                        Start
-                        <input
-                          type="number"
-                          class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                          min="0"
-                          step="0.01"
-                          bind:value={caption.start}
-                          onchange={() => {
-                            caption.words = undefined
-                            dirty = true
-                          }}
-                        />
-                      </label>
-                      <label class="flex items-center gap-1 text-xs text-muted">
-                        End
-                        <input
-                          type="number"
-                          class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                          min="0"
-                          step="0.01"
-                          bind:value={caption.end}
-                          onchange={() => {
-                            caption.words = undefined
-                            dirty = true
-                          }}
-                        />
-                      </label>
-                    </div>
-                  </div>
-                {/each}
-                {#if studio.captions.length > 25}
-                  <div class="flex items-center justify-between gap-2 border-t border-border pt-2">
-                    <button
-                      type="button"
-                      class="h-7 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                      disabled={captionPage === 0}
-                      onclick={() => {
-                        captionPage -= 1
-                      }}
-                    >
-                      Previous
-                    </button>
-                    <span class="text-[0.6875rem] text-dimmed tabular-nums">
-                      {captionPage * 25 + 1}–{Math.min(
-                        (captionPage + 1) * 25,
-                        studio.captions.length
-                      )} of {studio.captions.length}
-                    </span>
-                    <button
-                      type="button"
-                      class="h-7 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                      disabled={(captionPage + 1) * 25 >= studio.captions.length}
-                      onclick={() => {
-                        captionPage += 1
-                      }}
-                    >
-                      Next
-                    </button>
-                  </div>
-                {/if}
-              </div>
-            {/if}
           </div>
         {/if}
-        {#if studio.audioTracks.length > 0}
-          <div class="border-t border-border pt-2">
+
+        {#if section === 'timeline'}
+          {#if studio.controls.length > 0}
+            <div class="space-y-1.5 pt-1">
+              {#each studio.controls as control (control.key)}
+                <div class="flex items-center justify-between gap-2">
+                  <label for={`video-${control.key}`} class="min-w-0 truncate text-xs text-muted">
+                    {control.label}
+                  </label>
+                  {#if control.kind === 'switch'}
+                    <Switch
+                      checked={control.value === true}
+                      label={control.label}
+                      title={control.label}
+                      aria-label={control.label}
+                      onchange={(value) => setControl(control.key, value)}
+                    />
+                  {:else if control.kind === 'color'}
+                    <input
+                      id={`video-${control.key}`}
+                      class="h-7 w-12 shrink-0 cursor-pointer border border-border bg-elevated p-0.5"
+                      type="color"
+                      value={String(control.value)}
+                      title={control.label}
+                      aria-label={control.label}
+                      oninput={(event) => setControl(control.key, event.currentTarget.value)}
+                    />
+                  {:else}
+                    <input
+                      id={`video-${control.key}`}
+                      class="h-7 w-28 shrink-0 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                      type={control.kind === 'number' ? 'number' : 'text'}
+                      value={String(control.value)}
+                      min={control.min}
+                      max={control.max}
+                      step="any"
+                      oninput={(event) =>
+                        setControl(
+                          control.key,
+                          control.kind === 'number'
+                            ? Number(event.currentTarget.value)
+                            : event.currentTarget.value
+                        )}
+                    />
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if studio.captions.length > 0}
+            <div class="mt-3 space-y-2">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[0.6875rem] font-medium text-muted">
+                  Captions
+                  <span class="tabular-nums text-dimmed">{studio.captions.length}</span>
+                </span>
+                <EnumSelect
+                  options={CAPTION_STYLES}
+                  value={studio.captionStyle}
+                  placeholder="Plain"
+                  ariaLabel="Caption style"
+                  title="How the captions are drawn over the composition"
+                  inline
+                  compact
+                  onChange={(style) => {
+                    if (!studio) return
+                    studio.captionStyle = style
+                    dirty = true
+                  }}
+                />
+              </div>
+              {#each visibleCaptions as caption, index (index)}
+                <div class="space-y-1">
+                  <label class="block text-xs text-muted">
+                    Caption at {caption.start.toFixed(2)}s
+                    <textarea
+                      class="mt-1 w-full border border-border bg-elevated p-1.5 text-xs text-foreground outline-none focus:border-primary"
+                      rows="2"
+                      bind:value={caption.text}
+                      oninput={() => {
+                        caption.words = undefined
+                        dirty = true
+                      }}></textarea>
+                  </label>
+                  <div class="flex gap-2">
+                    <label class="flex items-center gap-1 text-xs text-muted">
+                      Start
+                      <input
+                        type="number"
+                        class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                        min="0"
+                        step="0.01"
+                        bind:value={caption.start}
+                        onchange={() => {
+                          caption.words = undefined
+                          dirty = true
+                        }}
+                      />
+                    </label>
+                    <label class="flex items-center gap-1 text-xs text-muted">
+                      End
+                      <input
+                        type="number"
+                        class="h-7 w-20 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                        min="0"
+                        step="0.01"
+                        bind:value={caption.end}
+                        onchange={() => {
+                          caption.words = undefined
+                          dirty = true
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+              {/each}
+              {#if studio.captions.length > 25}
+                <div class="flex items-center justify-between gap-2 pt-1">
+                  <button
+                    type="button"
+                    class="h-7 px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={captionPage === 0}
+                    onclick={() => {
+                      captionPage -= 1
+                    }}
+                  >
+                    Previous
+                  </button>
+                  <span class="text-[0.6875rem] text-dimmed tabular-nums">
+                    {captionPage * 25 + 1}–{Math.min(
+                      (captionPage + 1) * 25,
+                      studio.captions.length
+                    )} of {studio.captions.length}
+                  </span>
+                  <button
+                    type="button"
+                    class="h-7 px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={(captionPage + 1) * 25 >= studio.captions.length}
+                    onclick={() => {
+                      captionPage += 1
+                    }}
+                  >
+                    Next
+                  </button>
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          {#if studio.controls.length === 0 && studio.captions.length === 0}
+            <p class="pt-1 text-[0.6875rem] text-dimmed">
+              This composition declares no values to edit and no captions.
+            </p>
+          {/if}
+        {:else if section === 'audio'}
+          {#if studio.audioTracks.length === 0}
+            <p class="pt-1 text-[0.6875rem] text-dimmed">
+              This composition declares no audio tracks to place.
+            </p>
+          {:else}
+            <!--
+              One box per track, and each box folds. A track is a thing the user
+              works on whole: its placement, its trim and how loud it sits. The
+              header is where it is named and where it is played, because
+              auditioning a file is how a placement is decided, and the two
+              belong on one line rather than in a player somewhere else.
+            -->
+            <div class="space-y-1.5 pt-1">
+              {#each studio.audioTracks as track, index (index)}
+                {@const open = openTracks[index] ?? index === 0}
+                {@const playing = auditionIndex === index && auditionPlaying}
+                {@const at = auditionIndex === index ? auditionSeconds : track.trim}
+                <div class="border border-border">
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                      aria-expanded={open}
+                      title={`${open ? 'Fold' : 'Open'} ${track.source}, ${videoTimecode(track.start)} for ${track.duration.toFixed(2)}s at gain ${track.gain}`}
+                      onclick={() => toggleTrack(index, open)}
+                    >
+                      <CioChevronDown
+                        size={12}
+                        aria-hidden="true"
+                        class="shrink-0 text-muted {open ? 'rotate-180' : ''} transition-transform"
+                      />
+                      <span class="min-w-0 flex-1 truncate text-xs text-foreground">
+                        {track.source.split('/').pop() ?? track.source}
+                      </span>
+                      <span class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">
+                        {videoTimecode(track.start)} · {track.duration.toFixed(2)}s
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title={playing
+                        ? `Pause ${track.source} here`
+                        : `Play ${track.source} from ${videoTimecode(at)}`}
+                      aria-label={playing
+                        ? `Pause ${track.source} here`
+                        : `Play ${track.source} from ${videoTimecode(at)}`}
+                      onclick={() => auditionTrack(index, track)}
+                    >
+                      {#if playing}
+                        <CioPause size={12} />
+                      {:else}
+                        <CioPlay size={12} />
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      title="Seek this track back to its trim start"
+                      aria-label="Seek this track back to its trim start"
+                      disabled={at <= track.trim}
+                      onclick={() => seekTrack(index, track, track.trim)}
+                    >
+                      <CioSkipBack size={12} />
+                    </button>
+                  </div>
+                  {#if open}
+                    <div class="flex items-center gap-2 px-2 pt-0.5 pb-2">
+                      <SeekBar
+                        class="min-w-0 flex-1"
+                        value={at}
+                        min={track.trim}
+                        max={trackEnd(track)}
+                        step={0.05}
+                        label={`Seek ${track.source}`}
+                        title={`Seek ${track.source}`}
+                        onInput={(seconds) => seekTrack(index, track, seconds)}
+                      />
+                      <span class="shrink-0 text-[0.625rem] text-muted tabular-nums">
+                        {videoTimecode(at)}<span class="text-dimmed">
+                          / {videoTimecode(trackEnd(track))}</span
+                        >
+                      </span>
+                    </div>
+                    <div class="space-y-1.5 px-2 pb-2">
+                      <div class="grid grid-cols-2 gap-1.5">
+                        {#each ['start', 'trim', 'duration', 'gain'] as field (field)}
+                          {@const key = field as 'start' | 'trim' | 'duration' | 'gain'}
+                          <label
+                            class="flex items-center justify-between gap-1 text-[0.6875rem] text-muted"
+                          >
+                            {field}
+                            <input
+                              type="number"
+                              class="h-7 w-16 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
+                              min="0"
+                              step="0.01"
+                              bind:value={track[key]}
+                              onchange={() => {
+                                dirty = true
+                              }}
+                            />
+                          </label>
+                        {/each}
+                      </div>
+                      <p
+                        class="truncate font-mono text-[0.625rem] text-dimmed"
+                        title={track.source}
+                      >
+                        {track.source}
+                      </p>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          <div class="flex items-center justify-between gap-2 pt-1">
+            <p class="min-w-0 text-[0.6875rem] leading-relaxed text-muted">
+              {running.length > 0
+                ? `${running.length} job${running.length === 1 ? '' : 's'} still running in this composition.`
+                : 'Render the composition to a video file. It opens in the export panel while it runs.'}
+            </p>
             <button
               type="button"
-              class="flex w-full items-center justify-between gap-2 py-1 text-xs text-muted transition-colors hover:text-foreground"
-              aria-expanded={tracksOpen}
-              title={`Audio tracks, ${studio.audioTracks.length} in this composition`}
-              aria-label={`Audio tracks, ${studio.audioTracks.length} in this composition`}
-              onclick={() => (tracksOpen = !tracksOpen)}
+              class="flex h-7 shrink-0 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+              title="Render this composition to a video file"
+              aria-label="Render this composition to a video file"
+              onclick={onExport}
             >
-              <span class="flex items-center gap-1.5">
-                <CioAudioLines size={12} aria-hidden="true" />
-                <span class="font-medium text-foreground">Audio tracks</span>
-                <span class="tabular-nums text-dimmed">{studio.audioTracks.length}</span>
-              </span>
-              <CioChevronDown
-                size={12}
-                aria-hidden="true"
-                class={tracksOpen ? 'rotate-180 transition-transform' : 'transition-transform'}
-              />
+              Export video
             </button>
-            {#if tracksOpen}
-              <div class="mt-1 space-y-2 border border-border bg-app p-2">
-                {#each studio.audioTracks as track (track)}
-                  <div class="space-y-1.5 border-t border-border pt-2 first:border-t-0 first:pt-0">
-                    <p class="truncate font-mono text-[0.625rem] text-muted" title={track.source}>
-                      {track.source}
-                    </p>
-                    <div class="grid grid-cols-2 gap-1.5">
-                      {#each ['start', 'trim', 'duration', 'gain'] as field (field)}
-                        {@const key = field as 'start' | 'trim' | 'duration' | 'gain'}
-                        <label
-                          class="flex items-center justify-between gap-1 text-[0.6875rem] text-muted"
-                        >
-                          {field}
-                          <input
-                            type="number"
-                            class="h-7 w-16 border border-border bg-elevated px-2 text-xs text-foreground tabular-nums outline-none focus:border-primary"
-                            min="0"
-                            step="0.01"
-                            bind:value={track[key]}
-                            onchange={() => {
-                              dirty = true
-                            }}
-                          />
-                        </label>
-                      {/each}
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            {/if}
           </div>
         {/if}
       </fieldset>
     </form>
   {/if}
-  {#each jobs as job (job.id)}
-    <div class="mt-2 space-y-1 border border-border bg-app p-2">
-      <div class="flex items-center justify-between gap-2 text-xs">
-        <span class="min-w-0 truncate">
-          {labels[job.operation] ?? 'Video processing'}
-          <span class="text-muted">· {job.stage}</span>
-        </span>
-        {#if job.state === 'running'}
-          <button
-            type="button"
-            class="shrink-0 text-[0.6875rem] text-danger transition-colors hover:underline"
-            onclick={() => {
-              cancelledJob = job
-            }}
-          >
-            Cancel
-          </button>
-        {/if}
-      </div>
-      {#if job.state === 'running'}
-        <progress
-          class="h-1 w-full accent-primary"
-          value={job.progress}
-          max="1"
-          aria-label={`${job.operation} progress`}
-        ></progress>
-      {/if}
-      {#if job.error}
-        <p class="text-[0.6875rem] text-danger">{job.error}</p>
-      {/if}
-      {#each job.files as file (file)}
-        <p class="truncate font-mono text-[0.625rem] text-muted" title={file}>{file}</p>
+
+  {#if section === 'exports'}
+    <!--
+      The jobs, one folded box each. A job's record is a list of paths and the
+      reason it failed, which is reading matter rather than a row: it lives in a
+      code block under the fold so a finished render reads as one line and the
+      panel does not turn into a log. A running job keeps its progress in sight.
+    -->
+    <div class="mt-2 space-y-1.5">
+      {#each jobs as job (job.id)}
+        {@const messages = jobMessages(job)}
+        {@const open = openJobs[job.id] ?? job.state === 'running'}
+        <div class="border border-border">
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated disabled:cursor-default disabled:hover:bg-transparent"
+              aria-expanded={open}
+              disabled={messages === '' && job.state !== 'running'}
+              title={`${open ? 'Fold' : 'Open'} ${labels[job.operation] ?? 'video processing'}, ${job.state}`}
+              onclick={() => (openJobs = { ...openJobs, [job.id]: !open })}
+            >
+              <CioChevronDown
+                size={12}
+                aria-hidden="true"
+                class="shrink-0 text-muted {open ? 'rotate-180' : ''} transition-transform"
+              />
+              <span class="min-w-0 flex-1 truncate text-xs text-foreground">
+                {labels[job.operation] ?? 'Video processing'}
+                <span class="text-muted">· {job.stage}</span>
+              </span>
+              <span
+                class="shrink-0 text-[0.625rem] tabular-nums {job.state === 'failed'
+                  ? 'text-danger'
+                  : job.state === 'running'
+                    ? 'text-muted'
+                    : 'text-dimmed'}"
+              >
+                {job.state === 'running' ? `${Math.round(job.progress * 100)}%` : job.state}
+              </span>
+            </button>
+            {#if job.state === 'running'}
+              <button
+                type="button"
+                class="shrink-0 px-2 text-[0.6875rem] text-danger transition-colors hover:underline"
+                title="Cancel this render"
+                onclick={() => {
+                  cancelledJob = job
+                }}
+              >
+                Cancel
+              </button>
+            {/if}
+          </div>
+          {#if job.state === 'running'}
+            <progress
+              class="h-0.5 w-full accent-primary"
+              value={job.progress}
+              max="1"
+              aria-label={`${labels[job.operation] ?? job.operation} progress`}
+            ></progress>
+          {/if}
+          {#if open && messages !== ''}
+            <pre
+              class="overflow-x-auto bg-app px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed whitespace-pre-wrap text-muted"><code
+                >{messages}</code
+              ></pre>
+          {/if}
+        </div>
       {/each}
+      {#if jobs.length === 0}
+        <p class="text-[0.6875rem] text-dimmed">No render has run for this composition yet.</p>
+      {/if}
     </div>
-  {/each}
-</section>
+  {/if}
+</div>
+
+<!--
+  The one player for the audio section.
+
+  It has no controls of its own: the track headers are the controls, so this is
+  the element they drive rather than a second surface the user would have to
+  match a row against. It stays mounted so a paused audition resumes where the
+  user left it, and folds away with nothing to show.
+-->
+<audio
+  {@attach (node) => {
+    audio = node
+    return () => {
+      node.pause()
+      audio = null
+    }
+  }}
+  hidden
+  preload="metadata"
+  onplay={() => (auditionPlaying = true)}
+  onpause={() => (auditionPlaying = false)}
+  onended={() => (auditionPlaying = false)}
+  ontimeupdate={auditionTimeUpdate}
+></audio>
 
 <ConfirmDialog
   open={cancelledJob !== null}

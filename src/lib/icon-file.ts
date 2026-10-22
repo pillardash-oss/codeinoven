@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { extname, join } from 'path'
-import { nativeImage } from 'electron'
+import { backgroundIo } from '../main/system/background-io'
 import { getConfigRoot } from './utils'
 import { isWebpImage, MAX_CUSTOM_ICON_BYTES, type CustomIconImage } from './custom-icon'
 
@@ -16,64 +16,28 @@ export const ICON_MIME: Record<string, string> = {
 }
 
 /**
- * The largest square an auto-detected project icon is kept at.
- *
- * Icons are drawn at 12 to 24 px, so 256 covers every slot on a retina display
- * with room to spare. A project's own logo can ship at any size, and an
- * unbounded one is read back into a data URL that every panel carrying it holds,
- * so the copy is bounded once, at the one path that takes an arbitrary file.
- */
-const MAX_STORED_ICON_EDGE = 256
-
-/**
- * Re-encode an oversized icon at a bounded square, or null when the source is
- * already small enough or is a format this process cannot decode (an SVG, an
- * .ico). The caller keeps the original copy in that case, so bounding a picked
- * icon can never lose it.
- */
-function boundedIconPng(source: Buffer): Buffer | null {
-  try {
-    const image = nativeImage.createFromBuffer(source)
-    if (image.isEmpty()) return null
-    const size = image.getSize()
-    const edge = Math.max(size.width, size.height)
-    if (edge <= MAX_STORED_ICON_EDGE) return null
-    const scale = MAX_STORED_ICON_EDGE / edge
-    return image
-      .resize({
-        width: Math.max(1, Math.round(size.width * scale)),
-        height: Math.max(1, Math.round(size.height * scale))
-      })
-      .toPNG()
-  } catch {
-    return null
-  }
-}
-
-/**
  * Copy `sourcePath` into `dir` as `icon<ext>`, replacing any previous icon file.
  *
  * This is the **auto-detected** path only (a project's own bundled icon found at
  * add time). Every user-picked image goes through the renderer's custom-icon
  * pipeline and lands through `storeCustomIconFile` instead, already cropped,
  * scaled and WebP-encoded, so nothing the user chooses keeps its original size.
- * An auto-detected icon is bounded here when it decodes and would otherwise be
- * stored at full size.
+ * Auto-detected icons are decoded and bounded in the background worker before
+ * replacing the stored image.
  */
 export async function storeIconFile(
   dir: string,
   sourcePath: string,
   previousIcon?: string
 ): Promise<string> {
-  if (previousIcon) await removeIconFile(dir, previousIcon)
+  const prepared = await backgroundIo<{ bytes: Uint8Array; extension: string }>({
+    kind: 'prepare-icon',
+    sourcePath
+  })
+  const iconFile = `icon${prepared.extension}`
   await mkdir(dir, { recursive: true })
-  const bounded = boundedIconPng(await readFile(sourcePath))
-  if (bounded) {
-    await writeFile(join(dir, 'icon.png'), bounded)
-    return 'icon.png'
-  }
-  const iconFile = `icon${(extname(sourcePath) || '.png').toLowerCase()}`
-  await copyFile(sourcePath, join(dir, iconFile))
+  await writeFile(join(dir, iconFile), prepared.bytes)
+  if (previousIcon && previousIcon !== iconFile) await removeIconFile(dir, previousIcon)
   return iconFile
 }
 

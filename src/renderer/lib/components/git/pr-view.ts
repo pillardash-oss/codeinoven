@@ -7,6 +7,7 @@
 
 import CioChat from '@pdslng/cio-icon/CioChat.svelte'
 import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
 import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
 import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
 import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
@@ -24,7 +25,7 @@ import type {
 import { buildConversation, conversationEntryCount } from './git-pull-request-detail-format'
 
 /** The views the pull request detail reader switches between. */
-export type PrDetailTabId = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
+export type PrDetailTabId = 'conversation' | 'commits' | 'files' | 'checks' | 'agent' | 'stacks'
 
 /**
  * The reader's views, in the order both surfaces list them. The panel's switcher
@@ -37,6 +38,7 @@ export const PR_DETAIL_VIEWS: Array<{
   icon: typeof CioSubagent
 }> = [
   { id: 'conversation', label: 'Conversation', icon: CioChat },
+  { id: 'stacks', label: 'Stacks', icon: CioLayers },
   { id: 'commits', label: 'Commits', icon: CioCommit },
   { id: 'files', label: 'Files', icon: CioDiff },
   { id: 'checks', label: 'Checks', icon: CioShieldCheck },
@@ -57,6 +59,7 @@ export function prViewCount(
   // bundle, so this view counts before the bundle arrives.
   if (view === 'agent') return agentAssignments
   if (!bundle) return 0
+  if (view === 'stacks') return bundle.stack?.length ?? 0
   if (view === 'commits') return bundle.commits.length
   if (view === 'files') return bundle.files.length
   if (view === 'checks') return bundle.checks.checks.length

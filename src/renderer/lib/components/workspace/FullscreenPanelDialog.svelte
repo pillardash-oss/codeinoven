@@ -27,6 +27,10 @@
     tabIndicator?: Snippet<[{ id: string; title: string }]>
     /** Extra controls in the same top-right strip, before create/minimize. */
     actions?: Snippet
+    /** Extra trailing controls drawn just before minimize. A surface whose strip
+     *  ends in its own overflow menu passes it here, so the way out of full
+     *  screen stays the last control. */
+    trailing?: Snippet
     /** Create a tab. Omit to hide the create button, for a surface whose tabs
      *  are sections of one panel rather than open instances. */
     onNew?: () => void
@@ -66,6 +70,7 @@
     tabIcon,
     tabIndicator,
     actions,
+    trailing,
     onNew,
     onMinimize,
     onSelect,
@@ -83,6 +88,23 @@
     tabs.find((tab) => tab.id === activeTabId)?.title ?? 'Full screen panel'
   )
 </script>
+
+<!-- The surface still owns the way out, so the caller's own trailing controls
+     are drawn just before minimize. It is declared here rather than inside the
+     dialog's content, because a snippet written inside a component tag becomes
+     a prop of that component. -->
+{#snippet stripTrailing()}
+  {@render trailing?.()}
+  <button
+    type="button"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    aria-label={minimizeLabel}
+    title={minimizeLabel}
+    onclick={onMinimize}
+  >
+    <CioMinimize size={14} />
+  </button>
+{/snippet}
 
 <!--
   A full screen surface is a `Modal` with `placement="fullscreen"`, so it shares
@@ -139,23 +161,18 @@
   <PanelTabStrip
     {tabs}
     {activeTabId}
-    trailingLabel={minimizeLabel}
-    onTrailingAction={onMinimize}
     {onSelect}
     {newLabel}
     {icon}
     {tabIcon}
     {tabIndicator}
     {actions}
+    trailing={stripTrailing}
     {onNew}
     {onCloseTab}
     {onTabContextMenu}
     {onMoveTab}
     titlebar
-  >
-    {#snippet trailingIcon()}
-      <CioMinimize size={14} />
-    {/snippet}
-  </PanelTabStrip>
+  />
   {@render children()}
 </Modal>

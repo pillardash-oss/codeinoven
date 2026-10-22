@@ -1,13 +1,17 @@
+import { pathIsAccessible } from '../../lib/utils'
 import { execFile, spawn } from 'child_process'
 import { createHash } from 'crypto'
-import { existsSync, realpathSync } from 'fs'
-import { readFile, readdir, stat, unlink, writeFile } from 'fs/promises'
+import { realpath, readFile, readdir, stat, unlink, writeFile } from 'fs/promises'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { app, shell } from 'electron'
+import { mapInBatches } from '../../lib/bounded-work'
 import { APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import type { EditorId, EditorInfo } from '../../lib/types'
-import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import {
+  buildProcessEnvironmentAsync,
+  resolveExecutablePathAsync
+} from '../drivers/cli-environment'
 
 type TargetKind = 'directory' | 'file'
 
@@ -151,11 +155,9 @@ export class EditorService {
   private async runDetect(): Promise<EditorInfo[]> {
     const nonSystem = EDITOR_DEFINITIONS.filter((def) => def.id !== 'system')
     const appPaths = new Map<EditorId, string | null>()
-    await Promise.all(
-      nonSystem.map(async (def) => {
-        appPaths.set(def.id, await this.resolveAppPath(def))
-      })
-    )
+    await mapInBatches(nonSystem, 2, async (def) => {
+      appPaths.set(def.id, await this.resolveAppPath(def))
+    })
 
     const paths = [...new Set([...appPaths.values()].filter((p): p is string => p !== null))]
     await this.harvestIcons(paths)
@@ -169,7 +171,7 @@ export class EditorService {
         iconDataUrl: appPath ? this.iconCache.get(appPath) : undefined
       }
     })
-    return [this.buildSystemEntry(), ...editors]
+    return [await this.buildSystemEntry(), ...editors]
   }
 
   /** Open a filesystem target in the selected editor or terminal. */
@@ -181,7 +183,7 @@ export class EditorService {
     const resolvedTargetKind = await this.resolveTargetKind(targetPath, targetKind)
     const def = EDITOR_DEFINITIONS.find((d) => d.id === editorId)
     if (!def) {
-      this.openSystemDefault(targetPath, resolvedTargetKind)
+      await this.openSystemDefault(targetPath, resolvedTargetKind)
       return
     }
 
@@ -190,7 +192,7 @@ export class EditorService {
       if (resolvedTargetKind === 'file' && systemTerminal) {
         await this.openFileInTerminal(systemTerminal, targetPath)
       } else {
-        this.openSystemDefault(targetPath, resolvedTargetKind)
+        await this.openSystemDefault(targetPath, resolvedTargetKind)
       }
       return
     }
@@ -214,7 +216,7 @@ export class EditorService {
         const cliArgs = this.cliArgs(def, targetPath)
         const child = spawn(cli, cliArgs, {
           cwd: def.id === 'terminal' ? targetPath : undefined,
-          env: this.buildEnv(),
+          env: await this.buildEnv(),
           detached: true,
           stdio: 'ignore'
         })
@@ -393,11 +395,11 @@ export class EditorService {
     this.spawnTerminal('osascript', args)
   }
 
-  private spawnTerminal(command: string, args: string[], cwd?: string): void {
+  private async spawnTerminal(command: string, args: string[], cwd?: string): Promise<void> {
     try {
       const child = spawn(command, args, {
         cwd,
-        env: this.buildEnv(),
+        env: await this.buildEnv(),
         detached: true,
         stdio: 'ignore'
       })
@@ -441,7 +443,7 @@ export class EditorService {
    * Returns null when the editor cannot be found on this machine.
    */
   private async resolveAppPath(def: EditorDefinition): Promise<string | null> {
-    const macPath = this.findMacAppPath(def.macApps ?? [])
+    const macPath = await this.findMacAppPath(def.macApps ?? [])
     if (macPath) return macPath
     if (def.id === 'terminal') {
       return (await this.resolveCli(def)) ?? null
@@ -450,7 +452,7 @@ export class EditorService {
     if (def.cli) {
       const located = await this.locateBinary(def.cli)
       if (located.found && located.path) {
-        const bundle = this.bundleFromBinary(located.path)
+        const bundle = await this.bundleFromBinary(located.path)
         if (bundle) return bundle
         return located.path
       }
@@ -465,10 +467,10 @@ export class EditorService {
     }
 
     if (def.id === 'cmux' && process.platform === 'darwin') {
-      const appPath = this.findMacAppPath(def.macApps ?? [])
+      const appPath = await this.findMacAppPath(def.macApps ?? [])
       if (appPath) {
         const bundledCli = join(appPath, 'Contents', 'Resources', 'bin', 'cmux')
-        if (existsSync(bundledCli)) return bundledCli
+        if (await pathIsAccessible(bundledCli)) return bundledCli
       }
     }
 
@@ -483,11 +485,11 @@ export class EditorService {
   }
 
   /** If a CLI binary lives inside a .app bundle (via symlink), return the bundle path. */
-  private bundleFromBinary(binPath: string): string | null {
+  private async bundleFromBinary(binPath: string): Promise<string | null> {
     try {
-      const real = realpathSync(binPath)
+      const real = await realpath(binPath)
       const match = /(.+?\.app)\//.exec(real)
-      if (match?.[1] && existsSync(match[1])) return match[1]
+      if (match?.[1] && (await pathIsAccessible(match[1]))) return match[1]
     } catch {
       // Symlink resolution failed   treat as bare binary.
     }
@@ -495,14 +497,14 @@ export class EditorService {
   }
 
   /** Probe common macOS application locations for a .app bundle; returns its path. */
-  private findMacAppPath(appNames: string[]): string | null {
+  private async findMacAppPath(appNames: string[]): Promise<string | null> {
     if (process.platform !== 'darwin') return null
     const home = process.env['HOME'] ?? ''
     const roots = ['/Applications', join(home, 'Applications'), '/System/Applications/Utilities']
     for (const name of appNames) {
       for (const root of roots) {
         const candidate = join(root, `${name}.app`)
-        if (existsSync(candidate)) return candidate
+        if (await pathIsAccessible(candidate)) return candidate
       }
     }
     return null
@@ -530,7 +532,7 @@ export class EditorService {
    * Finder) with its real name and icon; when resolution fails we fall back
    * to Terminal's identity instead of a generic "System Default" label.
    */
-  private buildSystemEntry(): EditorInfo {
+  private async buildSystemEntry(): Promise<EditorInfo> {
     if (this.defaultHandler) {
       return {
         id: 'system',
@@ -539,7 +541,7 @@ export class EditorService {
         iconDataUrl: this.defaultHandler.iconDataUrl
       }
     }
-    const terminalPath = this.findMacAppPath(['Terminal'])
+    const terminalPath = await this.findMacAppPath(['Terminal'])
     if (terminalPath && process.platform === 'darwin') {
       return {
         id: 'system',
@@ -584,11 +586,11 @@ export class EditorService {
    * Open with the OS folder handler; when its resolution failed (the picker
    * shows Terminal in that case) launch Terminal so the UI stays truthful.
    */
-  private openSystemDefault(targetPath: string, targetKind: TargetKind): void {
+  private async openSystemDefault(targetPath: string, targetKind: TargetKind): Promise<void> {
     if (
       process.platform === 'darwin' &&
       this.defaultHandler === null &&
-      this.findMacAppPath(['Terminal'])
+      (await this.findMacAppPath(['Terminal']))
     ) {
       const launchTarget = targetKind === 'file' ? dirname(targetPath) : targetPath
       try {
@@ -613,7 +615,7 @@ export class EditorService {
         this.defaultHandler =
           process.platform === 'linux'
             ? await this.resolveLinuxDefaultHandler()
-            : this.resolveWindowsDefaultHandler()
+            : await this.resolveWindowsDefaultHandler()
       }
       const pending = paths.filter((p) => !this.iconCache.has(p))
       // The system handler's icon is harvested in the same pass as the editors.
@@ -655,9 +657,9 @@ export class EditorService {
    * from `explorer.exe`, which `app.getFileIcon` renders reliably (unlike
    * the 0-byte app-execution aliases under WindowsApps).
    */
-  private resolveWindowsDefaultHandler(): { path: string; name: string } | null {
+  private async resolveWindowsDefaultHandler(): Promise<{ path: string; name: string } | null> {
     const explorer = join(process.env['WINDIR'] ?? 'C:\\Windows', 'explorer.exe')
-    return existsSync(explorer) ? { path: explorer, name: 'File Explorer' } : null
+    return (await pathIsAccessible(explorer)) ? { path: explorer, name: 'File Explorer' } : null
   }
 
   /**
@@ -666,7 +668,7 @@ export class EditorService {
    * fall back to the real `powershell.exe`   the terminal Windows actually
    * opens in auto mode.
    */
-  private windowsTerminalIconFallback(): string | null {
+  private async windowsTerminalIconFallback(): Promise<string | null> {
     const powershell = join(
       process.env['WINDIR'] ?? 'C:\\Windows',
       'System32',
@@ -674,23 +676,21 @@ export class EditorService {
       'v1.0',
       'powershell.exe'
     )
-    return existsSync(powershell) ? powershell : null
+    return (await pathIsAccessible(powershell)) ? powershell : null
   }
 
   /** Electron's getFileIcon is generic for .app bundles, but better than nothing. */
   private async harvestFallback(paths: string[]): Promise<void> {
-    await Promise.all(
-      paths.map(async (p) => {
-        this.iconCache.set(p, await this.getElectronIcon(p))
-      })
-    )
+    await mapInBatches(paths, 2, async (p) => {
+      this.iconCache.set(p, await this.getElectronIcon(p))
+    })
     // Windows Terminal's app-execution alias is unrenderable   use the real shell icon.
     if (process.platform === 'win32') {
       const broken = paths.filter(
         (p) => this.iconCache.get(p) === undefined && /wt\.exe$/iu.test(p)
       )
       if (broken.length > 0) {
-        const fallback = this.windowsTerminalIconFallback()
+        const fallback = await this.windowsTerminalIconFallback()
         if (fallback) {
           const shellIcon = this.iconCache.get(fallback) ?? (await this.getElectronIcon(fallback))
           for (const p of broken) this.iconCache.set(p, shellIcon)
@@ -705,11 +705,12 @@ export class EditorService {
     name?: string
     iconDataUrl?: string
   } | null> {
+    const env = await this.buildEnv()
     const desktopId = await new Promise<string>((resolve) => {
       execFile(
         'xdg-mime',
         ['query', 'default', 'inode/directory'],
-        { env: this.buildEnv(), timeout: 5000 },
+        { env, timeout: 5000 },
         (error, stdout) => resolve(error ? '' : stdout.trim())
       )
     })
@@ -914,13 +915,13 @@ export class EditorService {
   }
 
   /** Use the app-wide desktop process environment for every editor launch and probe. */
-  private buildEnv(): NodeJS.ProcessEnv {
+  private async buildEnv(): Promise<NodeJS.ProcessEnv> {
     // Editors and terminals belong to the user, not the app's orphan reaper.
-    return buildProcessEnvironment(process.env, process.platform, false)
+    return buildProcessEnvironmentAsync(process.env, process.platform, false)
   }
 
-  private locateBinary(command: string): Promise<{ found: boolean; path?: string }> {
-    const resolved = resolveExecutablePath(command, this.buildEnv())
+  private async locateBinary(command: string): Promise<{ found: boolean; path?: string }> {
+    const resolved = await resolveExecutablePathAsync(command, await this.buildEnv())
     return Promise.resolve(resolved ? { found: true, path: resolved } : { found: false })
   }
 }

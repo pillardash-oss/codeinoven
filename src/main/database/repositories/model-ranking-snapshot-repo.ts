@@ -645,6 +645,14 @@ export class ModelRankingSnapshotRepo {
     // range-scoped purges and this one share a single batched implementation.
     return purgeRowsViaWorker(this.db, 'model_ranking_snapshots', '1 = 1', [])
   }
+
+  /**
+   * Drop a deleted project's queue rows in bounded worker batches, so no
+   * grading job survives the project that produced it.
+   */
+  clearProjectViaWorker(projectId: string): Promise<RowsPurged> {
+    return purgeRowsViaWorker(this.db, 'model_ranking_snapshots', 'project_id = ?', [projectId])
+  }
 }
 
 /**

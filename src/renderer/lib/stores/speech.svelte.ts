@@ -3,6 +3,7 @@ import { toast } from 'svelte-sonner'
 import { reportError } from './app-errors.svelte'
 import type {
   SpeechCapabilitySnapshot,
+  SpeechDownloadMode,
   SpeechDownloadState,
   SpeechHistoryPage,
   SpeechLlamaRuntimeStatus,
@@ -63,16 +64,21 @@ class SpeechSettingsStore {
     }
   }
 
-  async download(artifactId: string): Promise<void> {
+  async download(artifactId: string, mode: SpeechDownloadMode = 'resume'): Promise<void> {
     this.error = ''
     try {
-      const result = await invoke('speech:downloadArtifact', artifactId)
+      const result = await invoke('speech:downloadArtifact', artifactId, mode)
       if (!result.ok) {
+        // Stopping a download is the user's own request, not a failure: the row
+        // turns into its resume/restart panel from the cancelled progress event,
+        // so it stays quiet here instead of raising an error toast.
+        if (result.error.code === 'cancelled') return
         this.error = result.error.message
         toast.error(result.error.message)
         return
       }
     } catch (cause) {
+      if (cause instanceof Error && /cancell?ed/i.test(cause.message)) return
       this.error = cause instanceof Error ? cause.message : String(cause)
       reportError(cause, 'The speech model could not be downloaded.')
       return

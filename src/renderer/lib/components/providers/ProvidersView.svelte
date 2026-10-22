@@ -430,6 +430,13 @@
     return customCountFor(harness.id) + authCountFor(harness.id)
   }
 
+  function providerSummary(harness: ProviderConnectionInfo): string {
+    const total = totalProviderCount(harness)
+    const base = `${total} provider${total === 1 ? '' : 's'}`
+    if (authStatuses[harness.id] === undefined) return base
+    return `${base} · ${customCountFor(harness.id)} custom · ${authCountFor(harness.id)} signed in`
+  }
+
   async function checkAuth(harnessId: string): Promise<void> {
     try {
       const status = await invoke('providerAccounts:getAuthStatus', harnessId)
@@ -725,12 +732,14 @@
       </button>
     </div>
 
-    <div class="space-y-3">
+    <div class="@container space-y-3">
       {#each filteredProviders as provider (provider.id)}
         {@const badge = badgeFor(provider)}
         {@const expanded = expandedSettings[provider.id] === true}
         <SettingsEntry {expanded}>
-          <div class="grid grid-cols-[13rem_10rem_11rem_minmax(0,1fr)_auto] items-center gap-3">
+          <div
+            class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_auto_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
+          >
             <div class="flex min-w-0 items-center gap-3">
               <div
                 class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
@@ -745,7 +754,7 @@
               </div>
             </div>
 
-            <div class="min-w-0">
+            <div class="min-w-0 shrink-0">
               {#key provider.status}
                 <SettingsStatusBadge label={badge.label} classes={badge.classes}>
                   <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
@@ -753,8 +762,15 @@
               {/key}
             </div>
 
-            <div class="min-w-0">
-              <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+            <div class="col-span-2 min-w-0 @5xl:col-span-1">
+              <p
+                class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
+                title={provider.executionTarget?.kind === 'wsl'
+                  ? 'WSL path'
+                  : provider.executionTarget?.kind === 'bundled'
+                    ? 'Source'
+                    : 'Path'}
+              >
                 {provider.executionTarget?.kind === 'wsl'
                   ? `WSL path · ${provider.executionTarget.distribution}`
                   : provider.executionTarget?.kind === 'bundled'
@@ -791,7 +807,7 @@
               </div>
             </div>
 
-            <div class="min-w-0">
+            <div class="col-span-2 min-w-0 @5xl:col-span-1">
               {#if provider.status === 'error'}
                 <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Issue</p>
                 <p class="mt-0.5 truncate text-xs text-danger" title={provider.detail}>
@@ -801,12 +817,8 @@
                 <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
                   Providers
                 </p>
-                <p class="mt-0.5 truncate text-xs text-muted">
-                  {totalProviderCount(provider)} provider{totalProviderCount(provider) === 1
-                    ? ''
-                    : 's'}{#if authStatuses[provider.id] !== undefined}
-                    · {customCountFor(provider.id)} custom · {authCountFor(provider.id)} signed in
-                  {/if}
+                <p class="mt-0.5 truncate text-xs text-muted" title={providerSummary(provider)}>
+                  {providerSummary(provider)}
                 </p>
               {:else}
                 <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
@@ -816,10 +828,12 @@
               {/if}
             </div>
 
-            <div class="flex items-center justify-end gap-2">
+            <div
+              class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
+            >
               {#if provider.status === 'error'}
                 <button
-                  class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                  class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
                   title="Re-check {provider.name}"
                   onclick={() => void checkOne(provider.id)}
                 >
@@ -827,7 +841,7 @@
                   Retry
                 </button>
                 <button
-                  class="border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="shrink-0 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                   title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
                   aria-expanded={expanded}
                   onclick={() => toggleSettings(provider.id)}
@@ -837,7 +851,7 @@
               {:else}
                 {#if provider.status === 'not_found'}
                   <button
-                    class="flex items-center gap-1.5 border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
                     title="Install {provider.name} in the embedded terminal"
                     disabled={harnessLifecycleStore.isRunning(provider.id)}
                     onclick={() =>
@@ -851,7 +865,7 @@
                     Install
                   </button>
                   <button
-                    class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                     title="Open the {provider.name} install page for your operating system"
                     onclick={() => void openInstallPage(provider)}
                   >
@@ -859,7 +873,7 @@
                   </button>
                 {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
                   <button
-                    class="flex items-center gap-1.5 border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
                     title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
                       provider.id
                     )?.latestVersion}"
@@ -876,7 +890,7 @@
                   </button>
                 {/if}
                 <button
-                  class="flex items-center gap-1.5 bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                  class="flex shrink-0 items-center gap-1.5 whitespace-nowrap bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
                   title={canAddProvider(provider)
                     ? `Add a provider to ${provider.name}`
                     : 'Install the harness first, then re-check to add providers'}

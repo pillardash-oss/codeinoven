@@ -1,4 +1,5 @@
-import { realpathSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
+import { mapInBatches } from '../../lib/bounded-work'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
 import {
@@ -8,7 +9,10 @@ import {
   type OpenCodeInstallation
 } from '../../lib/opencode-version'
 import { compareVersions, selectNewestCandidate } from '../../lib/version-compare'
-import { buildProcessEnvironment, resolveExecutablePaths } from '../drivers/cli-environment'
+import {
+  buildProcessEnvironmentAsync,
+  resolveExecutablePathsAsync
+} from '../drivers/cli-environment'
 import {
   discoverHarnessRuntimes,
   probeHarnessRuntime,
@@ -173,9 +177,9 @@ function isManagedInstall(executable: string, env: NodeJS.ProcessEnv): boolean {
   return executable === root || executable.startsWith(`${root}${sep}`)
 }
 
-function realPathOf(path: string): string {
+async function realPathOf(path: string): Promise<string> {
   try {
-    return realpathSync(path)
+    return await realpath(path)
   } catch {
     return path
   }
@@ -196,13 +200,13 @@ function realPathOf(path: string): string {
  * so a broken copy cannot take detection down with it.
  */
 export async function detectOpenCodeInstallations(): Promise<OpenCodeInstall[]> {
-  const env = buildProcessEnvironment()
+  const env = await buildProcessEnvironmentAsync()
   const seen = new Set<string>()
-  const probes: Array<Promise<(OpenCodeInstall & { pathOrder: number }) | null>> = []
+  const probes: Array<() => Promise<(OpenCodeInstall & { pathOrder: number }) | null>> = []
   let pathOrder = 0
   for (const command of OPENCODE_COMMAND_CANDIDATES) {
-    for (const executable of resolveExecutablePaths(command, env)) {
-      const identity = realPathOf(executable)
+    for (const executable of await resolveExecutablePathsAsync(command, env)) {
+      const identity = await realPathOf(executable)
       if (seen.has(identity)) continue
       seen.add(identity)
       const order = pathOrder
@@ -213,7 +217,7 @@ export async function detectOpenCodeInstallations(): Promise<OpenCodeInstall[]> 
         resolvedPath: executable,
         target: { kind: 'native' }
       }
-      probes.push(
+      probes.push(() =>
         probeHarnessRuntime(runtime, ['--version'], env).then((result) => {
           if (!result.ok) return null
           const version = firstLine(result.stdout || result.stderr)
@@ -231,13 +235,14 @@ export async function detectOpenCodeInstallations(): Promise<OpenCodeInstall[]> 
       )
     }
   }
-  const probed = await Promise.all(probes)
+  const probed = await mapInBatches(probes, 2, (probe) => probe())
   return probed
     .filter((entry): entry is OpenCodeInstall & { pathOrder: number } => entry !== null)
     .sort((a, b) => {
       const byVersion = compareVersions(b.version, a.version)
       if (byVersion !== 0) return byVersion
-      const byManaged = Number(isManagedInstall(b.executable, env)) - Number(isManagedInstall(a.executable, env))
+      const byManaged =
+        Number(isManagedInstall(b.executable, env)) - Number(isManagedInstall(a.executable, env))
       if (byManaged !== 0) return byManaged
       return a.pathOrder - b.pathOrder
     })
@@ -255,7 +260,8 @@ export async function detectOpenCodeInstallations(): Promise<OpenCodeInstall[]> 
 function reportInstalls(installs: OpenCodeInstall[], canonical: OpenCodeInstall | undefined): void {
   const duplicates = canonical
     ? installs.filter(
-        (install) => install.identity !== canonical.identity && install.version !== canonical.version
+        (install) =>
+          install.identity !== canonical.identity && install.version !== canonical.version
       )
     : []
   cachedDuplicates = duplicates
@@ -345,34 +351,29 @@ async function detectOpenCodeInstallationByName(
   // Per-candidate reasons, kept so an unanswered detection is diagnosable at
   // dev level instead of a silent null.
   const attempts: Array<{ command: string; executable: string | null; reason: string }> = []
-  // Probe every candidate at once: each probe is an independent `--version`
-  // child process, so running them sequentially only makes the pass pay the
-  // slowest one once per candidate. A bounded handful of candidates keeps this
-  // from hammering a low-end machine.
-  const probed = await Promise.all(
-    OPENCODE_COMMAND_CANDIDATES.map(async (command) => {
-      const runtime = runtimes.get(command)
-      if (!runtime) {
-        attempts.push({ command, executable: null, reason: 'not found on the app PATH' })
-        return null
-      }
-      const result = await probeHarnessRuntime(runtime, ['--version'])
-      if (!result.ok) {
-        attempts.push({ command, executable: runtime.executable, reason: result.reason })
-        return null
-      }
-      const version = firstLine(result.stdout || result.stderr)
-      if (!version) {
-        attempts.push({
-          command,
-          executable: runtime.executable,
-          reason: 'answered an empty --version line'
-        })
-        return null
-      }
-      return { version, value: runtime }
-    })
-  )
+  // Keep version-process bursts small on machines also starting a model server.
+  const probed = await mapInBatches(OPENCODE_COMMAND_CANDIDATES, 2, async (command) => {
+    const runtime = runtimes.get(command)
+    if (!runtime) {
+      attempts.push({ command, executable: null, reason: 'not found on the app PATH' })
+      return null
+    }
+    const result = await probeHarnessRuntime(runtime, ['--version'])
+    if (!result.ok) {
+      attempts.push({ command, executable: runtime.executable, reason: result.reason })
+      return null
+    }
+    const version = firstLine(result.stdout || result.stderr)
+    if (!version) {
+      attempts.push({
+        command,
+        executable: runtime.executable,
+        reason: 'answered an empty --version line'
+      })
+      return null
+    }
+    return { version, value: runtime }
+  })
   for (const candidate of probed) {
     if (candidate) candidates.push(candidate)
   }

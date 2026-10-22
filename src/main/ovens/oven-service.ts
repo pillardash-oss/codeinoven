@@ -59,12 +59,33 @@ function serviceNotRunning(message: string): boolean {
   return /service\.sock/u.test(message) || /codeinoven-oven-/u.test(message)
 }
 
+/**
+ * Whether an answer proves the channel is older than the bundle on disk.
+ *
+ * A bundle from before file work moved into the channel forwards it to the daemon,
+ * which knows nothing about it and used to blame a run id that was never sent. A
+ * later bundle names the unknown method outright. Both mean the same thing: the
+ * process answering is not the code this app installed.
+ */
+function staleChannelAnswer(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /Invalid run ID|Unknown Oven request method/iu.test(message)
+}
+
 /** How one request should travel when the warm channel cannot carry it. */
 interface SendOptions {
   /** How long the warm channel waits before it is judged wedged. */
   timeoutMs?: number
   /** The service mode the one-request fallback has to run. */
   mode?: 'request' | 'root-operation'
+  /**
+   * The payload the one-request fallback has to receive, when it differs.
+   *
+   * The warm channel reads envelopes (`method` plus `input`), while the one-shot
+   * `root-operation` mode reads the input itself, so one body cannot be correct
+   * for both. This is the body the fallback sends.
+   */
+  fallbackData?: string
 }
 
 /**
@@ -103,6 +124,7 @@ export class OvenService {
   private bundle: Promise<{ source: string; revision: string }> | undefined
   /** Per-Oven guard, so a service that keeps failing cannot be reinstalled in a loop. */
   private readonly serviceRepairs = new Map<string, number>()
+  private readonly repairingServices = new Map<string, Promise<boolean>>()
 
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
@@ -192,7 +214,7 @@ export class OvenService {
   }
 
   async runs(id: string): Promise<OvenRun[]> {
-    return this.decode<OvenRun[]>(await this.request(id, { method: 'runs' }))
+    return this.decode<OvenRun[]>(await this.control(id, { method: 'runs' }))
   }
 
   async start(id: string, input: StartOvenRunInput): Promise<OvenRun> {
@@ -209,15 +231,15 @@ export class OvenService {
     runId: string,
     after: number
   ): Promise<{ run: OvenRun; events: OvenRunEvent[] }> {
-    return this.decode(await this.request(id, { method: 'events', runId, after }))
+    return this.decode(await this.control(id, { method: 'events', runId, after }))
   }
 
   async write(id: string, runId: string, input: string, closeInput = false): Promise<void> {
-    this.decode(await this.request(id, { method: 'write', runId, input, closeInput }))
+    this.decode(await this.control(id, { method: 'write', runId, input, closeInput }))
   }
 
   async stop(id: string, runId: string): Promise<void> {
-    this.decode(await this.request(id, { method: 'stop', runId }))
+    this.decode(await this.control(id, { method: 'stop', runId }))
   }
 
   /**
@@ -297,15 +319,34 @@ export class OvenService {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > ROOT_OPERATION_LIMIT_BYTES)
       throw new Error('The Oven operation exceeds 8 MiB.')
-    if (!network)
-      return this.decode<unknown>(
-        await this.withServiceRepair(id, () =>
-          this.send(id, data, {
-            timeoutMs: ROOT_OPERATION_TIMEOUT_MS,
-            mode: 'root-operation'
-          })
-        )
+    if (!network) {
+      // The warm channel reads envelopes, never bare inputs. A line without a
+      // `method` is neither file work nor a run request, so the channel handed it
+      // to the daemon, which answered "Invalid run ID." and then named the missing
+      // method: every file action on a channel took that detour.
+      const envelope = JSON.stringify({
+        method: 'root-operation',
+        protocolVersion: OVEN_PROTOCOL_VERSION,
+        input
+      })
+      const output = await this.withServiceRepair(id, () =>
+        this.send(id, envelope, {
+          timeoutMs: ROOT_OPERATION_TIMEOUT_MS,
+          mode: 'root-operation',
+          fallbackData: data
+        })
       )
+      try {
+        return this.decode<unknown>(output)
+      } catch (error) {
+        // A channel whose process predates this bundle still forwards the request
+        // to a daemon that may not know it. Replacing the channel is the repair,
+        // and the work then runs against the bundle on disk.
+        if (!staleChannelAnswer(error)) throw error
+        this.channel.dispose(id)
+        return this.decode<unknown>(await this.oneShot(id, data, 'root-operation'))
+      }
+    }
     // The command is built once, before any repair runs: a second attempt must
     // repeat the same call, never re-resolve the shell in the middle of it.
     const command = remoteServiceCommand(await remoteShell(this.ssh, id), ['root-operation'])
@@ -346,6 +387,32 @@ export class OvenService {
   }
 
   /**
+   * Run control: the run inventory, its events, its steering input, its stop.
+   *
+   * Every bundle this app speaks to answers these, and stopping the run is the
+   * only way to release the Oven for the service replacement it is waiting for.
+   * Repairing the service first is what made Stop impossible exactly when it was
+   * needed: an Oven refuses to replace its service while a run is active, so a
+   * guard that requires the current service here can never be satisfied. These
+   * requests therefore go to whatever service the Oven is already running, and
+   * the update happens on the next ordinary request once the run is gone.
+   */
+  private async control(id: string, input: Record<string, unknown>): Promise<string> {
+    const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
+    if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
+    try {
+      return await this.channel.request(id, data, undefined, { acceptOutdated: true })
+    } catch (error) {
+      // A channel that will not open is not a refused request. Stopping a run is
+      // worth one process, which is also the path an Oven without a warm session
+      // would take anyway.
+      if (error instanceof OvenChannelUnavailable || error instanceof OvenServiceMissingError)
+        return await this.oneShot(id, data)
+      throw error
+    }
+  }
+
+  /**
    * Run one Oven call, replacing the service first if it answers as an older one.
    *
    * File and Git actions used to bypass this, so an Oven still running an older
@@ -361,11 +428,13 @@ export class OvenService {
       if (!first.ok) throw first.error
       return first.value
     }
-    // The answer came from a service this app did not install, and this app owns
-    // that file on the Oven. Replace it once, then send the same request again.
+    // A stopped daemon can answer through the SSH process as { ok: false } too.
+    // Recover before decode() throws that payload outside this repair boundary.
     if (!(await this.refreshService(id, fault.message)))
       throw new Error(
-        'This Oven runs an older service than this app. Finish its active runs, then install the service again from its settings.',
+        serviceNotRunning(fault.message)
+          ? 'The Oven service is not running and automatic recovery could not start it. Check its service settings.'
+          : 'This Oven runs an older service than this app. Finish its active runs, then install the service again from its settings.',
         { cause: fault }
       )
     const second = await attempt(run)
@@ -373,12 +442,11 @@ export class OvenService {
     return second.value
   }
 
-  /** The failure that proves a request met an outdated service, if any. */
+  /** A stopped or outdated service, from either a thrown error or a JSON answer. */
   private serviceFaultOf(result: Attempt<string>): Error | null {
-    if (!result.ok)
-      return isStaleServiceFault(messageOf(result.error)) ? toError(result.error) : null
-    const answer = failedAnswerError(result.value)
-    return answer && isStaleServiceFault(answer) ? new Error(answer) : null
+    const message = result.ok ? failedAnswerError(result.value) : messageOf(result.error)
+    if (!message || (!isStaleServiceFault(message) && !serviceNotRunning(message))) return null
+    return result.ok ? new Error(message) : toError(result.error)
   }
 
   /**
@@ -388,20 +456,30 @@ export class OvenService {
    * already has instead of an install failure the user did not ask for.
    */
   private async refreshService(id: string, reason: string): Promise<boolean> {
+    const pending = this.repairingServices.get(id)
+    if (pending) return pending
     const last = this.serviceRepairs.get(id) ?? 0
     if (Date.now() - last < SERVICE_REPAIR_COOLDOWN_MS) return false
     this.serviceRepairs.set(id, Date.now())
-    Logger.info('Installing the current Oven service', { ovenId: id, reason })
-    try {
-      await this.install(id)
-      return true
-    } catch (error) {
-      Logger.error('The Oven service could not be installed', {
-        ovenId: id,
-        error: messageOf(error)
-      })
-      return false
-    }
+    const repair = (async () => {
+      Logger.info('Installing the current Oven service', { ovenId: id, reason })
+      try {
+        await this.install(id)
+        return true
+      } catch (error) {
+        Logger.error('The Oven service could not be installed', {
+          ovenId: id,
+          error: messageOf(error)
+        })
+        return false
+      } finally {
+        // install() re-arms manual recovery. Automatic repair retains its floor.
+        this.serviceRepairs.set(id, Date.now())
+        this.repairingServices.delete(id)
+      }
+    })()
+    this.repairingServices.set(id, repair)
+    return repair
   }
 
   /** This app's own bundle, read and hashed exactly once per process. */
@@ -426,6 +504,7 @@ export class OvenService {
    */
   private async send(id: string, data: string, options: SendOptions = {}): Promise<string> {
     const mode = options.mode ?? 'request'
+    const fallback = options.fallbackData ?? data
     try {
       return await this.channel.request(id, data, options.timeoutMs)
     } catch (error) {
@@ -446,11 +525,19 @@ export class OvenService {
           (await this.refreshService(id, 'The Oven service is not running.'))
         )
           return await this.channel.request(id, data, options.timeoutMs)
-        return await this.oneShot(id, data, mode)
+        return await this.oneShot(id, fallback, mode)
+      }
+      // A channel opened before the installed bundle was replaced keeps running
+      // the code it started with, so file work that bundle cannot answer comes
+      // back naming a run that was never sent. The channel is stale, not the
+      // request: close it and run the operation against the bundle on disk.
+      if (mode === 'root-operation' && staleChannelAnswer(error)) {
+        this.channel.dispose(id)
+        return await this.oneShot(id, fallback, mode)
       }
       if (!(error instanceof OvenServiceMissingError)) throw error
       await this.install(id)
-      return await this.oneShot(id, data, mode)
+      return await this.oneShot(id, fallback, mode)
     }
   }
 

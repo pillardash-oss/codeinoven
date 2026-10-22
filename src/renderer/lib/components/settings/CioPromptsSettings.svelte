@@ -12,6 +12,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import {
     CIO_PROMPT_TEMPLATE_TAGS,
+    PR_REVIEW_PROMPT_TAGS,
     type CioPromptId,
     type CioPromptMode,
     type CioPromptSetting
@@ -34,7 +35,8 @@
     { id: 'engineer', label: 'Engineer' },
     { id: 'assignment', label: 'Assignment' },
     { id: 'achievement', label: 'Achievement' },
-    { id: 'audit', label: 'Audit' }
+    { id: 'audit', label: 'Audit' },
+    { id: 'review', label: 'PR Review' }
   ]
 
   let prompts = $state<CioPromptSetting[]>([])
@@ -166,6 +168,18 @@
         </p>
         <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {#each CIO_PROMPT_TEMPLATE_TAGS as item (item.tag)}
+            <div class="border bg-elevated px-3 py-2">
+              <code class="text-[0.6875rem] font-semibold text-primary">{item.tag}</code>
+              <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-dimmed">{item.description}</p>
+            </div>
+          {/each}
+        </div>
+        <h3 class="mt-4 text-xs font-semibold text-foreground">PR review tags</h3>
+        <p class="mt-0.5 text-xs text-muted">
+          Filled from the pull request each review is handed, so the prompt never names one.
+        </p>
+        <div class="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {#each PR_REVIEW_PROMPT_TAGS as item (item.tag)}
             <div class="border bg-elevated px-3 py-2">
               <code class="text-[0.6875rem] font-semibold text-primary">{item.tag}</code>
               <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-dimmed">{item.description}</p>

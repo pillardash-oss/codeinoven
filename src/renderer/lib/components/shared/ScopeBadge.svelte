@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import type { ScopeBucket } from '$shared/types'
 
   interface Props {
@@ -17,14 +18,14 @@
      * only surface there and a scope must never read as a card inside a card.
      */
     variant?: 'chip' | 'mark'
+    showIcon?: boolean
   }
 
-  let { bucket, name, size = 'xs', variant = 'chip' }: Props = $props()
+  let { bucket, name, size = 'xs', variant = 'chip', showIcon = false }: Props = $props()
 
   let label = $derived(bucket?.name ?? name ?? 'Scope')
-  /** Scopes are identified by colour only   no icons. The deterministic picked
-   *  colour is the fallback when no explicit bucket colour is persisted, and the
-   *  only colour source for a scope that is not on the board yet. */
+  /** The persisted colour wins, with a deterministic fallback for uncoloured
+   *  scopes. Callers may also opt into the scope's saved icon. */
   let color = $derived(bucket?.color ?? pickColorForSeed(bucket?.id ?? label))
   /** Washed-out tint of the scope colour. */
   let wash = $derived(`color-mix(in srgb, ${color} 16%, var(--color-raised))`)
@@ -39,6 +40,14 @@
 {#if variant === 'mark'}
   <code class="flex min-w-0 items-center gap-1.5 font-mono font-normal text-foreground">
     <span class="h-3 w-0.5 shrink-0" style:background-color={color} aria-hidden="true"></span>
+    {#if showIcon && bucket?.iconType}
+      <img
+        src={getIconSvgDataUrl(bucket.iconType, color)}
+        alt=""
+        class="size-3.5 shrink-0 object-contain"
+        draggable="false"
+      />
+    {/if}
     {#if bucket?.pinned}
       <span
         class="shrink-0 text-accent"
@@ -60,6 +69,14 @@
     style:background-color={wash}
     style:border-color={edge}
   >
+    {#if showIcon && bucket?.iconType}
+      <img
+        src={getIconSvgDataUrl(bucket.iconType, color)}
+        alt=""
+        class="size-3.5 shrink-0 object-contain"
+        draggable="false"
+      />
+    {/if}
     {#if bucket?.pinned}
       <span
         class="shrink-0 text-accent"

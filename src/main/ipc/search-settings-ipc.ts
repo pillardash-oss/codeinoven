@@ -2,6 +2,7 @@ import { dialog } from '../system/file-dialogs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import type { SearchService } from '../search/search-service'
+import type { SearchDownloadMode } from '../../lib/search/types'
 import { validateSearchModelPath } from '../search/search-path-validation'
 import { sendToRenderer } from './renderer-delivery'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
@@ -10,6 +11,13 @@ function requireArtifactId(value: unknown): string {
   if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9._-]{1,127}$/u.test(value)) {
     throw new RangeError('Model artifact id is invalid.')
   }
+  return value
+}
+
+/** Continue a model download from kept bytes, or start it over from zero. */
+function requireDownloadMode(value: unknown): SearchDownloadMode {
+  if (value === undefined) return 'resume'
+  if (value !== 'resume' && value !== 'restart') throw new RangeError('Download mode is invalid.')
   return value
 }
 
@@ -48,8 +56,8 @@ export function registerSearchSettingsIpc(
 
   ipcMain.handle('search:getState', () => service.state())
   ipcMain.handle('search:warm', () => service.warm())
-  ipcMain.handle('search:downloadArtifact', (_event, rawId: unknown) =>
-    service.downloadArtifact(requireArtifactId(rawId))
+  ipcMain.handle('search:downloadArtifact', (_event, rawId: unknown, rawMode?: unknown) =>
+    service.downloadArtifact(requireArtifactId(rawId), requireDownloadMode(rawMode))
   )
   ipcMain.handle('search:cancelDownload', (_event, rawId: unknown) =>
     service.cancelDownload(requireArtifactId(rawId))
