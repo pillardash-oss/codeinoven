@@ -208,6 +208,16 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **The task card says what the agent is on, not only how far the list has come.**
+  Its head read `Tasks`, a position (`2/3`), and the state (`Running`), so a folded card
+  told you progress and never the work: the one thing the list exists to answer still
+  took opening it. The head now names the task at that position, truncated between the
+  position and the state with the whole label on hover, so a folded card says what the
+  agent is doing right now. The label is derived from the same active index the counter
+  counts (`activeAgentTodoIndex`), so it appears only while a run is live: a stopped card
+  keeps its completed count and names no task, because nothing is being worked on.
+  Verified on an isolated probe with a live card and a stopped one.
+
 - **A new assistant introduces itself, and the Getting started thread stops
   looking like a place to give it work.** An assistant created from the form used
   to sit silent until the user spoke first, and the interview then asked for the
