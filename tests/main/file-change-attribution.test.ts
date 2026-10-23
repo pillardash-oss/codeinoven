@@ -73,6 +73,36 @@ PY"`
     ])
   })
 
+  // Regression: the same inline script is normally reached through
+  // `cd <project> && python3 - <<'PY'`. The heredoc scanner only recognized a
+  // command that started the string, followed `;`, or followed a newline, so
+  // the chained form produced no write target and the card dropped the edit.
+  it('extracts paths from a python heredoc chained after cd with &&', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-chained-script',
+      messageID: 'message-chained-script',
+      callID: 'call-chained-script',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `cd /project && python3 - <<'PY'
+p='packages/shared/src/ui/floating-panel.ts'
+s=open(p).read()
+s=s.replace('a','b')
+open(p,'w').write(s)
+PY
+sed -n 44,60p packages/shared/src/ui/floating-panel.ts`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'packages/shared/src/ui/floating-panel.ts'
+    ])
+  })
+
   it('extracts paths from Codex file-change items', () => {
     const part: Extract<AgentPart, { type: 'tool' }> = {
       type: 'tool',
