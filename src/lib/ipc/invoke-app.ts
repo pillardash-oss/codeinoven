@@ -143,6 +143,13 @@ export const invokeAppContract = {
    */
   'app:parkWindow': {} as Contract<[], void>,
   /**
+   * The renderer kept the app open: the user dismissed the close confirmation,
+   * or a save it asked for failed. Main cancels the quit watchdog armed when the
+   * close was requested, so the app is not force-exited after they said "not
+   * now".
+   */
+  'app:abandonClose': {} as Contract<[], void>,
+  /**
    * Quit CodeInOven for real, bypassing background mode's park: the menu bar's
    * Quit item as a shortcut. The shutdown pipeline still runs, so a turn left in
    * flight is settled as a deliberate close rather than a crash.

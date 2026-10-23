@@ -283,5 +283,19 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   // chance to write. The will-quit handler flushes again as a final guard.
   flushSessionStorage()
 
+  // A packaged smoke run has already proven what it came for (a real window, a
+  // rendered frame, hydration, the feature graph, and this disposal pipeline),
+  // so it ends here instead of handing the last step to Electron. Electron's
+  // teardown after `will-quit` can stall on a bundle that is ad-hoc signed,
+  // which is exactly what `ci:local` packages on macOS, and no JavaScript runs
+  // once `will-quit` has been emitted   so an in-process
+  // watchdog cannot recover from a stalled teardown and the gate waited out its
+  // whole timeout instead of reporting a pass. Nothing here belongs to a user
+  // profile: the smoke runs against a throwaway config root it deletes.
+  if (state.packagedSmokeProofStarted) {
+    app.exit(0)
+    return
+  }
+
   app.quit()
 }

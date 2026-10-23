@@ -53,7 +53,7 @@ export function flushSessionStorage(): void {
  * repeated close attempts.
  */
 export function armQuitFailsafe(state: QuitLifecycleState): void {
-  if (state.shutdownFailsafe) clearTimeout(state.shutdownFailsafe)
+  disarmQuitFailsafe(state)
   state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Quit failsafe fired   forcing exit')
     flushSessionStorage()
@@ -63,6 +63,18 @@ export function armQuitFailsafe(state: QuitLifecycleState): void {
     state.cleanShutdownStore?.recordSync()
     app.exit(0)
   }, 15_000)
+}
+
+/**
+ * Cancel the armed failsafe because the close it was guarding was abandoned:
+ * the user dismissed the confirmation, or a save it asked for failed and the app
+ * deliberately stays open. Without this the armed timer force-exits an app the
+ * user chose to keep working in fifteen seconds after they said "not now".
+ */
+export function disarmQuitFailsafe(state: QuitLifecycleState): void {
+  if (!state.shutdownFailsafe) return
+  clearTimeout(state.shutdownFailsafe)
+  state.shutdownFailsafe = null
 }
 
 export interface CloseConfirmationDeps {

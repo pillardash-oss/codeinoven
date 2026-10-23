@@ -47,6 +47,7 @@ import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
 import {
   armQuitFailsafe,
+  disarmQuitFailsafe,
   flushSessionStorage,
   requestCloseConfirmation
 } from './bootstrap/quit-lifecycle'
@@ -173,6 +174,13 @@ ipcMain.handle('app:confirmClose', async () => {
 // keeps the backend alive in the menu bar.
 ipcMain.handle('app:parkWindow', async () => {
   await state.backgroundLifecycle?.park()
+})
+
+// The user dismissed the close confirmation (or a save it asked for failed), so
+// the app keeps working. The quit watchdog armed before the question was asked
+// must be cancelled here, or it force-exits an app the user just kept open.
+ipcMain.handle('app:abandonClose', () => {
+  disarmQuitFailsafe(state)
 })
 
 // Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+D) is the menu bar's
@@ -1140,19 +1148,12 @@ app.on('before-quit', (event) => {
   }
 
   void runShutdownPipeline({ state, windowStateService, database }).finally(() => {
-    if (state.shutdownFailsafe) {
-      clearTimeout(state.shutdownFailsafe)
-      state.shutdownFailsafe = null
-    }
+    // The pipeline has finished every disposal step; the quit it was guarding
+    // can no longer hang here, so its watchdog is done. The single armed timer
+    // from `armQuitFailsafe` is the one this clears   there used to be a second
+    // one assigned beside this pipeline, which nothing could ever clear.
+    disarmQuitFailsafe(state)
   })
-
-  // Failsafe: if any disposal step hangs, force the process to exit so the app
-  // never lingers in the Dock with a stale icon after the user chose to close.
-  state.shutdownFailsafe = setTimeout(() => {
-    Logger.error('Shutdown pipeline timed out   forcing exit')
-    flushSessionStorage()
-    app.exit(0)
-  }, 15_000)
 })
 
 app.on('will-quit', () => {

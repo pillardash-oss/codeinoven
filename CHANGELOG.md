@@ -337,10 +337,23 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **The packaged startup gate ends when it is done, and a dismissed close no
+  longer quits the app.** The gate proves a packaged boot by launching the real
+  window and reading the startup proof the app writes, then letting the app quit
+  itself; it now ends the process itself once disposal has finished, because
+  Electron's teardown after `will-quit` can stall on an ad-hoc signed bundle
+  (which is what the local macOS gate packages) and no JavaScript runs after
+  `will-quit`, so the run waited out its timeout instead of reporting the pass it
+  had already proven. Separately, the quit watchdog armed while the close
+  confirmation is open was never cancelled when the user dismissed it (or when a
+  save it asked for failed), so the app force-exited fifteen seconds after they
+  chose to keep working; the renderer now reports the abandoned close and the
+  watchdog is disarmed.
+
 - **A selection in the agent's instruction modal can be copied again.** That modal exists to
   be copied from, yet right-clicking a highlighted line gave no menu and nothing reached the
   clipboard. The dialog was drawn the way every blocking dialog is drawn: projected into the
-  browser overlay window, which is a separate document whose projected text *is* selectable but
+  browser overlay window, which is a separate document whose projected text _is_ selectable but
   where nothing owns a right-click. The shared text menu
   (`components/shared/TextSelectionContextMenu.svelte`) lives in the app window, so it never saw
   the event. The instruction modal now stays in the app window (`nativePresentation={false}` on
