@@ -270,6 +270,10 @@ export function piCoreToolsEventsSource(): string {
   // stays transparent there.
   pi.on('tool_call', async (event, ctx) => {
     const input = recordValue(event.input) ?? {}
+    // Session ownership is an invariant, including in Full Access. Never route
+    // this through a permission card that could auto-approve the bypass.
+    const cuaBypass = unmanagedCuaShellReason(event.toolName, input)
+    if (cuaBypass) return { block: true, reason: cuaBypass }
     const contaminated = findContaminatedToolArg(input)
     if (contaminated) {
       return {

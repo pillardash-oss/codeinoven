@@ -620,6 +620,8 @@ export function piCoreToolsSubagentSource(): string {
   /** Built-in worker tools wrapped with the same permission gate as the primary. */
   function gatedWorkerTools(parentCtx, touchedFiles) {
     async function gate(toolName, params) {
+      const cuaBypass = unmanagedCuaShellReason(toolName, recordValue(params) ?? {})
+      if (cuaBypass) return cuaBypass
       if (['bash', 'powershell', 'cmd'].includes(toolName) && recordValue(params) && typeof params['command'] === 'string') {
         const workspaceWide = params['command']
           .split(/&&|;|\\|\\||\\|/u)
