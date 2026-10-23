@@ -4,9 +4,14 @@ import type { AppUpdater } from 'electron-updater'
 import { GitHubProvider } from 'electron-updater/out/providers/GitHubProvider.js'
 import type { ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider.js'
 import { Logger } from '../system/logger'
-import { compareVersions } from './updater-install-recovery'
+import { selectNightlyChannelRelease } from './updater-install-recovery'
 
-/** Nightly is an opt-in to prereleases, including their eventual stable promotion. */
+/**
+ * Nightly is an opt-in to prereleases that also cross over to the stable
+ * release its cycle is promoted to, but never back to the stable build of the
+ * very same base: `0.5.66` next to a running or offered `0.5.66-nightly.5` is
+ * the code the install already has. See `selectNightlyChannelRelease`.
+ */
 export class UpdaterReleaseProvider extends GitHubProvider {
   private readonly stableProvider: GitHubProvider
 
@@ -59,8 +64,6 @@ export class UpdaterReleaseProvider extends GitHubProvider {
       Logger.dev('Updater: stable lookup failed; using the nightly feed')
       return nightly.value
     }
-    return compareVersions(stable.value.version, nightly.value.version) > 0
-      ? stable.value
-      : nightly.value
+    return selectNightlyChannelRelease(nightly.value, stable.value)
   }
 }
