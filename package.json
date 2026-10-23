@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.66",
+  "version": "0.5.67",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.4.3",
