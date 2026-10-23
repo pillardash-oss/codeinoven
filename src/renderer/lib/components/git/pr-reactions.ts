@@ -60,7 +60,7 @@ export function entryReactions(
  *
  * The count is GitHub's total and the actor list is capped by the read, so the
  * names are the first few and the remainder is counted rather than dropped: "You,
- * @pullfrog and 4 others" is honest about a list it could not finish.
+ * @dependabot and 4 others" is honest about a list it could not finish.
  */
 export function reactionTooltip(group: PrReactionGroup, viewerLogin: string | null): string {
   const option = reactionOption(group.content)
