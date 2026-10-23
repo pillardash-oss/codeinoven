@@ -118,10 +118,12 @@ jobs:
           arch: ${{ matrix.arch }}
           artifact: ${{ matrix.artifact }}
           app-dir: ${{ matrix.app_dir }}
-          # The Microsoft Store package is opt-in: it needs the package identity
-          # Partner Center assigns, which cannot exist before the app name is
-          # reserved. See packaging/msix/README.md.
-          msix: ${{ vars.CODEINOVEN_MSIX_BUILD }}
+          # The Microsoft Store package is built on every stable release, and
+          # submitted to the Store when the submission credentials exist. A
+          # Store-installed app cannot update itself (see
+          # src/main/notifications/updater-service.ts), so an unsubmitted
+          # package means Store users never receive the release at all.
+          msix: ${{ vars.CODEINOVEN_MSIX_BUILD || vars.CODEINOVEN_MSIX_SUBMIT }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -168,3 +170,41 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOWNLOAD_MIRROR_S3_ENDPOINT: ${{ vars.DOWNLOAD_MIRROR_S3_ENDPOINT }}
+
+  # The Store channel is updated here rather than by a human. It runs after the
+  # GitHub release exists so the Store never carries a build before the release
+  # it came from, and it is independent of the release job's success so a Store
+  # outage cannot fail a release that already shipped to every other channel.
+  #
+  # Off unless the submission credentials are configured: the Microsoft Store
+  # Submission API needs an Azure AD application associated with the Partner
+  # Center account, and the app needs one published submission to copy. See
+  # packaging/msix/README.md.
+  store:
+    name: Submit the Microsoft Store package
+    needs: release
+    if: vars.CODEINOVEN_MSIX_SUBMIT == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup
+
+      # Built by the Windows leg of this same run and verified there, so it is
+      # downloaded rather than rebuilt.
+      - name: Download the Microsoft Store package
+        uses: actions/download-artifact@v6
+        with:
+          name: codeinoven-msix
+          path: dist
+
+      - name: Submit to the Microsoft Store
+        run: bun scripts/store-submission.ts --poll-seconds 900
+        env:
+          STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
+          STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
+          STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          STORE_APP_ID: ${{ vars.STORE_APP_ID }}

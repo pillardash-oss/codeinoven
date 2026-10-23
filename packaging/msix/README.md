@@ -172,6 +172,53 @@ and the launcher continues without it.
 5. Submit for certification. Partner Center re-validates the package and
    re-signs it with a Microsoft certificate.
 
+That is the first submission only. Everything after it is automatic; see the
+next section.
+
+## Updating the Store on every stable release
+
+A Store-installed copy cannot update itself: the package directory is read-only
+and the Store owns delivery, so `canAutoUpdate` is false under package identity
+(`src/main/notifications/updater-service.ts`). Nothing else in the release
+pipeline reaches those users, which means an unsubmitted package means they
+never receive the release at all.
+
+So the stable release path submits for us. `.github/workflows/release.yml` has a
+`store` job that runs after the GitHub release is published, downloads the
+`codeinoven-msix` artifact the Windows leg already built and verified, and runs
+`scripts/store-submission.ts`, which drives the Microsoft Store Submission API:
+create a submission from the last one, upload the package, commit, poll. Because
+it copies the previous submission, the listing copy, age ratings and pricing
+carry over, and only the package changes.
+
+It is off until three secrets and two variables exist:
+
+| Name                     | Kind     | Where it comes from                                  |
+| ------------------------ | -------- | ---------------------------------------------------- |
+| `STORE_TENANT_ID`        | secret   | Azure AD tenant that owns the Partner Center account |
+| `STORE_CLIENT_ID`        | secret   | Azure AD application (client) id                     |
+| `STORE_CLIENT_SECRET`    | secret   | that application's client secret                     |
+| `STORE_APP_ID`           | variable | `9NC20ZH8DFCN`, the product's Store ID               |
+| `CODEINOVEN_MSIX_SUBMIT` | variable | `true` to switch the job on                          |
+
+Creating the Azure AD application is the part only the account owner can do: in
+the Azure portal, register an app in the same tenant as the Partner Center
+account, add the **Windows Store Submission API** permission from the Microsoft
+Store Developer Center API and grant admin consent, then create a client secret
+and set the three secrets above with `gh secret set`. The tenant administrator
+permission this needs is why it is not scripted here.
+
+Two constraints come from the API rather than from this repository. It cannot
+create the first submission, because it copies an existing one that already has
+age ratings, which is why the manual steps above come first. And it must own the
+submission it works on: editing that submission in Partner Center afterwards
+leaves it in a state the API can no longer commit, so once this is switched on,
+change submissions through the pipeline.
+
+`bun scripts/store-submission.ts --dry-run` authenticates and reports the last
+submission without changing anything, which is the way to check the credentials
+before a release depends on them.
+
 If Partner Center insists on a `.msixupload` rather than a `.msix`, note that
 `MakeAppx.exe` cannot produce one; it is a zip container that Visual Studio
 normally writes. Report it here and that packaging step gets added.
