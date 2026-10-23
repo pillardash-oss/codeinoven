@@ -58,6 +58,35 @@
 
   const bodyClass =
     'flex min-w-0 flex-1 items-start gap-2.5 p-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+
+  /*
+    The frame is one choice, so the whole box is one target: the label row and the
+    explanation under it highlight together, and the explanation selects the
+    option as the label does.
+
+    The explanation cannot live inside the button, because it is markdown and a
+    live link inside a button is invalid (and would choose the option instead of
+    opening). So that block carries the click itself and leaves alone the two
+    things it is there for: a click that landed on a link, and a drag that
+    selected text to copy.
+  */
+  const choiceColumnClass = 'group/choice min-w-0 flex-1'
+  const descriptionClass = $derived(
+    [
+      'px-2.5 pb-2.5 text-[0.6875rem] leading-relaxed text-muted',
+      onclick ? 'cursor-pointer' : '',
+      onclick && !selected ? 'group-hover/choice:bg-elevated' : ''
+    ].join(' ')
+  )
+
+  function chooseFromExplanation(event: MouseEvent): void {
+    if (!onclick || disabled) return
+    const target = event.target
+    if (target instanceof Element && target.closest('a')) return
+    const selection = window.getSelection()
+    if (selection && !selection.isCollapsed) return
+    onclick()
+  }
 </script>
 
 {#snippet optionBody()}
@@ -89,11 +118,11 @@
 <!-- The design's option box: one framed choice with its label and its explanation,
 and the selected state carried by the frame rather than by a fill. -->
 <div class={frameClass}>
-  <div class="min-w-0 flex-1">
+  <div class={choiceColumnClass}>
     {#if onclick}
       <button
         type="button"
-        class="{bodyClass} w-full {!selected ? 'hover:bg-elevated' : ''}"
+        class="{bodyClass} w-full {!selected ? 'group-hover/choice:bg-elevated' : ''}"
         {disabled}
         aria-pressed={selected}
         {onclick}
@@ -106,7 +135,7 @@ and the selected state carried by the frame rather than by a fill. -->
       </div>
     {/if}
     {#if description}
-      <div class="px-2.5 pb-2.5 text-[0.6875rem] leading-relaxed text-muted">
+      <div class={descriptionClass} role="presentation" onclick={chooseFromExplanation}>
         <MarkdownView text={description} class="markdown-body-card" />
       </div>
     {/if}
