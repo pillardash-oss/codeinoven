@@ -183,6 +183,14 @@ linux:
     - AppImage
     - deb
   category: Development
+  # x64 Linux keeps versionless file names (`codeinoven-0.5.67.AppImage`) because
+  # the mirror serves them under stable links (`stable/codeinoven.AppImage`) that
+  # are published on the download page and must not rot. The arm64 build
+  # overrides this name with an `-arm64` suffix (see package:linux:arm64 and the
+  # `linux-artifact-name` input of .github/actions/build-app), so the two
+  # architectures never collide in one release and electron-builder's own
+  # per-architecture update feed (`latest-linux-arm64.yml`) matches the artifact
+  # it points at.
   artifactName: ${name}-${version}.${ext}
   # `%F` passes every selected path as its own argument, so "Open in CodeInOven"
   # with a folder (or a multi-selection) is one launch with several paths, which

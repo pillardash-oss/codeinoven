@@ -165,9 +165,9 @@ Run these scoped to the files you touched. Passing paths keeps them fast.
 
 ### Package
 
-`bun run package` builds an unpacked app for your machine. Per-platform builds are `package:mac`, `package:win`, and `package:linux`. Publishing goes through CI; see [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
+`bun run package` builds an unpacked app for your machine. Per-platform builds are `package:mac`, `package:win`, `package:linux`, and `package:linux:arm64` (run the arm64 one on an arm64 Linux machine; the native modules are compiled, not cross-compiled). Publishing goes through CI; see [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
 
-Builds Apple Silicon macOS (`.dmg` and `.zip`), x64 Windows (`.exe`), and x64 Linux (`.AppImage` and `.deb`). Intel macOS is not a supported target.
+Builds Apple Silicon macOS (`.dmg` and `.zip`), x64 Windows (`.exe`), and Linux arm64 and x64 (`.AppImage` and `.deb`). The Linux arm64 pair carries `-arm64` in its file name (`codeinoven-<version>-arm64.AppImage`) because the x64 names are published, versionless download links. Intel macOS is not a supported target.
 
 ## Troubleshooting
 
