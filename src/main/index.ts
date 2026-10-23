@@ -47,6 +47,7 @@ import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
 import {
   armQuitFailsafe,
+  disarmQuitFailsafe,
   flushSessionStorage,
   requestCloseConfirmation
 } from './bootstrap/quit-lifecycle'
@@ -175,6 +176,13 @@ ipcMain.handle('app:parkWindow', async () => {
   await state.backgroundLifecycle?.park()
 })
 
+// The user dismissed the close confirmation (or a save it asked for failed), so
+// the app keeps working. The quit watchdog armed before the question was asked
+// must be cancelled here, or it force-exits an app the user just kept open.
+ipcMain.handle('app:abandonClose', () => {
+  disarmQuitFailsafe(state)
+})
+
 // Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+D) is the menu bar's
 // Quit item without reaching for the menu bar, so it bypasses background mode
 // entirely.
@@ -205,12 +213,27 @@ ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
 })
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */
-const featuresReadyPromise = new Promise<void>((resolve, reject) => {
+const featuresReadyPromise = new Promise<void>((resolve) => {
   state.resolveFeaturesReady = resolve
-  state.rejectFeaturesReady = reject
 })
-// A startup failure may precede the first renderer waiter.
-void featuresReadyPromise.catch(() => undefined)
+
+/**
+ * Release a renderer waiting on the feature graph after a boot that died before
+ * it could announce readiness.
+ *
+ * Leaving the promise pending is what made a failed boot look like an app that
+ * never finished loading, with nothing to read anywhere. Releasing it is honest
+ * in the other direction too: the window, the database and every hydration
+ * channel are already alive, so the app stays usable and each channel that never
+ * registered reports its own precise failure. The startup smoke gate stays
+ * unfulfilled, so this can never pass a release check as a healthy launch.
+ */
+function releaseFeaturesAfterBootFailure(): void {
+  if (state.featuresReady) return
+  state.featuresReady = true
+  state.resolveFeaturesReady?.()
+  state.resolveFeaturesReady = null
+}
 
 /**
  * A packaged smoke pass proves more than script execution: the document must
@@ -220,6 +243,9 @@ void featuresReadyPromise.catch(() => undefined)
  */
 function markWorkspaceReadyIfInteractive(): void {
   if (!state.rendererReadyReported || !state.featuresReady) return
+  // A degraded boot released the renderer but never completed the feature
+  // graph, so it must not satisfy the packaged smoke gate.
+  if (state.startupServicesFailed) return
   startupTelemetry.mark('workspace:ready')
   // The app is interactive: boot the embedding model behind the settled
   // workspace so the first Cmd+K thread search ranks semantically instead of
@@ -958,13 +984,7 @@ void app
       // window is opened, from the menu bar or a notification click.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
-        if (!state.featuresReady) {
-          state.rejectFeaturesReady?.(
-            new Error('Application services failed to initialize', { cause: error })
-          )
-          state.rejectFeaturesReady = null
-          state.resolveFeaturesReady = null
-        }
+        releaseFeaturesAfterBootFailure()
         Logger.error('Headless service boot failed; background work is degraded', error)
       })
       app.on('activate', () => {
@@ -998,13 +1018,7 @@ void app
       // the whole app on the user's behalf.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
-        if (!state.featuresReady) {
-          state.rejectFeaturesReady?.(
-            new Error('Application services failed to initialize', { cause: error })
-          )
-          state.rejectFeaturesReady = null
-          state.resolveFeaturesReady = null
-        }
+        releaseFeaturesAfterBootFailure()
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }
@@ -1134,19 +1148,12 @@ app.on('before-quit', (event) => {
   }
 
   void runShutdownPipeline({ state, windowStateService, database }).finally(() => {
-    if (state.shutdownFailsafe) {
-      clearTimeout(state.shutdownFailsafe)
-      state.shutdownFailsafe = null
-    }
+    // The pipeline has finished every disposal step; the quit it was guarding
+    // can no longer hang here, so its watchdog is done. The single armed timer
+    // from `armQuitFailsafe` is the one this clears   there used to be a second
+    // one assigned beside this pipeline, which nothing could ever clear.
+    disarmQuitFailsafe(state)
   })
-
-  // Failsafe: if any disposal step hangs, force the process to exit so the app
-  // never lingers in the Dock with a stale icon after the user chose to close.
-  state.shutdownFailsafe = setTimeout(() => {
-    Logger.error('Shutdown pipeline timed out   forcing exit')
-    flushSessionStorage()
-    app.exit(0)
-  }, 15_000)
 })
 
 app.on('will-quit', () => {

@@ -1399,6 +1399,17 @@
   }
 
   /**
+   * The close was abandoned: dismissed, or a save it asked for failed. Main armed
+   * a quit watchdog when the close was requested, so it is told the app is
+   * staying open; otherwise that watchdog force-exits the workspace the user just
+   * chose to keep.
+   */
+  function abandonClose(): void {
+    closeConfirmation = null
+    void invoke('app:abandonClose')
+  }
+
+  /**
    * While the close-confirmation modal is open, watch the threads it listed as
    * still working. As each one leaves that state (completed, failed, or
    * otherwise no longer executing/planning) it drops off the list. Once none
@@ -1439,6 +1450,7 @@
     if (savedProjectFiles && savedStandaloneFiles) {
       await (closeIsPark() ? invoke('app:parkWindow') : invoke('app:confirmClose'))
     } else {
+      abandonClose()
       toast.error('Some files could not be saved', {
         description: 'The application stayed open so you can review them.'
       })
@@ -2251,7 +2263,7 @@
       <CloseConfirmationModal
         payload={closeConfirmation}
         projects={scopeState.projectRecords}
-        onDismiss={() => (closeConfirmation = null)}
+        onDismiss={abandonClose}
         onConfirm={confirmForceClose}
         onConfirmSave={confirmForceCloseSaving}
       />

@@ -59,6 +59,16 @@
   let activeIndex = $derived(activeAgentTodoIndex(items, live))
   let counter = $derived(agentTodoCounter(items, activeIndex))
   /**
+   * The task the run is on, named in the card head.
+   *
+   * The counter says how far the list has come and the chip says whether the run
+   * is live, but neither says what the run is actually doing, so a folded card
+   * left the reader to open the list to find out. This is the label at the
+   * position the counter is counting, and it is empty when no position is live
+   * (a stopped run is a record, not work in progress).
+   */
+  let currentTask = $derived(activeIndex >= 0 ? (items[activeIndex]?.label.trim() ?? '') : '')
+  /**
    * What the list is, in one reading. A run another window is streaming is live
    * work, not a stopped one: the item that is marked active is marked by that
    * window's activity, and calling it "Stopped" here contradicts the transfer
@@ -133,6 +143,13 @@
       {counter.value}/{items.length}
     </span>
     <span class="sr-only">{counter.meaning}</span>
+    {#if currentTask}
+      <!-- The run's position, then what that position is about. Truncated rather
+           than wrapped so the head stays one row, with the whole label on hover. -->
+      <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted" title={currentTask}>
+        <span class="sr-only">Working on: </span>{currentTask}
+      </span>
+    {/if}
     {#if stoppedUnfinished}
       <span class="flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-warning">
         <CioAttention size={12} class="shrink-0" />

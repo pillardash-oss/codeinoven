@@ -596,11 +596,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
     unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
   })
-  await state.searchService.initialize()
-  state.unregisterSearchIpc = registerSearchSettingsIpc(
-    state.searchService,
-    () => state.mainWindow?.webContents ?? null
-  )
+  // A runtime that will not start disables semantic search and nothing else:
+  // this used to abort the whole feature boot, which left every feature channel
+  // registered only because readiness was announced too early to notice. It is
+  // an optional engine, so it degrades like speech does.
+  try {
+    await state.searchService.initialize()
+    state.unregisterSearchIpc = registerSearchSettingsIpc(
+      state.searchService,
+      () => state.mainWindow?.webContents ?? null
+    )
+  } catch (error) {
+    Logger.error('Semantic search unavailable; intent ranking stays disabled', error)
+  }
   state.prototypePreviewService = new PrototypePreviewService()
   try {
     const startupConfig = await storage.getConfig()
@@ -883,7 +891,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   }
   await (async () => {
     const [
-      { PtyService },
       { ProviderConnectionService },
       { OpenCodeV2Service },
       { HarnessUpdateService },
@@ -891,7 +898,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       { HarnessAutoUpdateService },
       { NotificationService }
     ] = await Promise.all([
-      import('../system/pty-service'),
       import('../providers/provider-connection'),
       import('../opencode-v2/opencode-v2-service'),
       import('../agents/harness-update-service'),
@@ -900,30 +906,50 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../notifications/notification-service')
     ])
 
+    // `node-pty` is the only compiled native module in this graph, and it is
+    // built on whichever machine packages the app. A build whose binary will not
+    // load (a glibc floor newer than the user's distribution, a missing arch, an
+    // ABI mismatch) used to abort this entire block, so terminals took
+    // providers, utilities, notifications and every other feature down with
+    // them. Importing it on its own keeps that failure where it belongs.
+    let ptyModule: typeof import('../system/pty-service') | null = null
+    try {
+      ptyModule = await import('../system/pty-service')
+    } catch (error) {
+      const { registerUnavailablePtyHandlers } = await import('../system/pty-unavailable')
+      registerUnavailablePtyHandlers(error instanceof Error ? error.message : String(error))
+      Logger.error(
+        'Terminal support could not start; every other feature continues',
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      )
+    }
+
     const { ovenTerminalLaunch, ovenShellLaunch } = await import('../ovens/oven-terminal')
     if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
-    state.ptyService = new PtyService(
-      storage,
-      database,
-      scopeRootResolver,
-      (process) => {
-        state.chatEngine?.trackPtyProcess(
-          process.scopeId,
-          process.projectId,
-          process.threadId,
-          process.pid,
-          process.command,
-          process.cwd
+    state.ptyService = ptyModule
+      ? new ptyModule.PtyService(
+          storage,
+          database,
+          scopeRootResolver,
+          (process) => {
+            state.chatEngine?.trackPtyProcess(
+              process.scopeId,
+              process.projectId,
+              process.threadId,
+              process.pid,
+              process.command,
+              process.cwd
+            )
+          },
+          (projectId, projectPath) => {
+            // User typed in a project terminal   open a user-activity window so
+            // their shell-driven edits are excluded from concurrent agent turns.
+            state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
+          },
+          ovenTerminalLaunch(storage, vault, database, context.threadCreation),
+          ovenShellLaunch(storage, vault)
         )
-      },
-      (projectId, projectPath) => {
-        // User typed in a project terminal   open a user-activity window so
-        // their shell-driven edits are excluded from concurrent agent turns.
-        state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
-      },
-      ovenTerminalLaunch(storage, vault, database, context.threadCreation),
-      ovenShellLaunch(storage, vault)
-    )
+      : null
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects
     // it, and rebuilds the `opencode` driver when the detected line changed.
@@ -954,7 +980,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.chatEngine?.setPtyStopAnnouncer(
       (pid) => state.ptyService?.announceStopForPid(pid) ?? false
     )
-    state.ptyService.register()
+    state.ptyService?.register()
     state.providerConnection.register()
     state.openCodeV2Service.register()
     state.harnessUpdateService.register()
@@ -1019,7 +1045,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     // Wire PTY to the window now that it exists.
     if (state.mainWindow && !state.mainWindow.isDestroyed()) {
-      state.ptyService.attach(state.mainWindow.webContents)
+      state.ptyService?.attach(state.mainWindow.webContents)
     }
 
     if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
@@ -1043,7 +1069,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     context.onFeaturesReady()
     state.resolveFeaturesReady?.()
     state.resolveFeaturesReady = null
-    state.rejectFeaturesReady = null
     if (
       state.mainWindow &&
       !state.mainWindow.isDestroyed() &&

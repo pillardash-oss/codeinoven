@@ -78,7 +78,6 @@ export interface BootstrapState {
   startupTelemetryReported: boolean
   featuresReady: boolean
   resolveFeaturesReady: (() => void) | null
-  rejectFeaturesReady: ((error: Error) => void) | null
   /** Whether a terminal in the renderer currently holds focus. */
   terminalFocused: boolean
 
@@ -184,7 +183,6 @@ export function createBootstrapState(): BootstrapState {
     startupTelemetryReported: false,
     featuresReady: false,
     resolveFeaturesReady: null,
-    rejectFeaturesReady: null,
     terminalFocused: false,
     chatEngine: null,
     ptyService: null,

@@ -132,7 +132,13 @@ jobs:
             artifact: win-x64
             app_dir: dist/win-unpacked
           - name: Linux (x64)
-            os: ubuntu-latest
+            # Ubuntu 22.04 on purpose, not `ubuntu-latest`. The native modules
+            # this job compiles (node-pty) inherit the runner's glibc, so the
+            # runner's glibc becomes the floor for every user. Compiling on a
+            # newer image shipped terminals that could not load on older
+            # distributions while the rest of the app booted fine. The packaged
+            # app is verified against GLIBC_2.35 by `bun run verify:packaged-app`.
+            os: ubuntu-22.04
             target: linux
             arch: --x64
             artifact: linux-x64
