@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.66",
+  "version": "0.5.67",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.4.3",
@@ -77,7 +77,8 @@
     "release:mirror": "bun scripts/publish-release-mirror.ts",
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
-    "msix:build": "bun scripts/msix.ts"
+    "msix:build": "bun scripts/msix.ts",
+    "msix:submit": "bun scripts/store-submission.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

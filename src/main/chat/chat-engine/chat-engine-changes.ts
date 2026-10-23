@@ -354,8 +354,13 @@ export function shellWritePaths(projectPath: string, input: Record<string, unkno
   }
   // Quoted heredocs carry code outside shell arguments. Limit inspection to a
   // writer's own delimiter body, never arbitrary quoted strings or log output.
+  // The command separator matters: editing a project usually means
+  // `cd <project> && python3 - <<'PY'`, so a heredoc that only starts a command
+  // at the beginning of the string, after `;` or after a newline silently lost
+  // the write target, the turn claimed nothing, and completion dropped the real
+  // edit from the changes card. Any shell separator opens a new command.
   const heredoc =
-    /(?:^|[;\n])\s*(python[\d.]*|node|bun|deno|apply_patch)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z_0-9]*)['"]?[^\n]*\n([\s\S]*?)\n\2(?:\n|$)/gmu
+    /(?:^|[;\n|&(])\s*(python[\d.]*|node|bun|deno|apply_patch)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z_0-9]*)['"]?[^\n]*\n([\s\S]*?)\n\2(?:\n|$)/gmu
   for (const match of sourceCommand.matchAll(heredoc)) {
     const code = match[3] ?? ''
     for (const path of match[1] === 'apply_patch' ? patchPaths(code) : scriptWritePaths(code))

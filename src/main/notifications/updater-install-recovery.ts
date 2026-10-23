@@ -74,6 +74,21 @@ export type DispatchOutcome =
 /** Trailing build counter of a prerelease tag, e.g. `nightly.9` in `0.5.58-nightly.9`. */
 const PRERELEASE_BUILD = /(\d+)$/
 
+/** The prerelease tag, e.g. `nightly.5`; null for a bare release. */
+export function prereleaseTag(version: string): string | null {
+  return version.split('-')[1] ?? null
+}
+
+/**
+ * The release base of a version, e.g. `0.5.66` for `0.5.66-nightly.5`.
+ *
+ * `nightly`'s package version IS the next stable version (`deploy-nightly.sh`),
+ * so the base of a nightly names the stable release it is a preview of.
+ */
+export function baseVersion(version: string): string {
+  return version.split('-')[0] ?? version
+}
+
 /**
  * Compare two semver-shaped version strings, tolerating a prerelease suffix
  * (`0.5.58-nightly.5`). Missing segments read as zero, so `0.5.58` and
@@ -125,9 +140,39 @@ export function compareVersions(a: string, b: string): number {
  * re-download and replay the same install on every start. Nothing equal to or
  * older than the running build is ever an update, so this is the last word that
  * stops the loop before a download begins.
+ *
+ * A bare release whose base equals the running nightly's base is the same
+ * release the nightly previews (`0.5.66` next to `0.5.66-nightly.5`), so it is
+ * not an upgrade either: crossing over only re-downloads and re-installs the
+ * build the user effectively already runs.
  */
 export function isRunningNewestBuild(runningVersion: string, offeredVersion: string): boolean {
-  return compareVersions(runningVersion, offeredVersion) >= 0
+  if (compareVersions(runningVersion, offeredVersion) >= 0) return true
+  const runningFromNightly = prereleaseTag(runningVersion) !== null
+  const offeredIsStable = prereleaseTag(offeredVersion) === null
+  return (
+    runningFromNightly &&
+    offeredIsStable &&
+    baseVersion(runningVersion) === baseVersion(offeredVersion)
+  )
+}
+
+/**
+ * Pick the release a nightly-channel install should move to.
+ *
+ * Stable only wins when its base is genuinely newer than the nightly feed's,
+ * which is the one case where a nightly user has to cross over (the cycle that
+ * nightly was previewing is published, and nightlies have moved past it). Once
+ * stable has caught up to the nightly's own base the two are the same release,
+ * so switching to it is churn and the nightly feed stays the source of truth.
+ */
+export function selectNightlyChannelRelease<T extends { version: string }>(
+  nightly: T,
+  stable: T
+): T {
+  return compareVersions(baseVersion(stable.version), baseVersion(nightly.version)) > 0
+    ? stable
+    : nightly
 }
 
 /**
