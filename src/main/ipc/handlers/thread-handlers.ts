@@ -36,13 +36,6 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('thread:create', async (_, input: unknown) => {
     const validated = validateCreateThreadInput(input)
-    // The project is the thread's only owner: reject an optimistic create for a
-    // project that no longer exists here, instead of returning a thread whose
-    // row can never persist. Without this, a stale renderer list (a project
-    // deleted in another view) produces a phantom thread that reads as broken
-    // everywhere it is opened.
-    const owner = await projectManager.getProject(validated.projectId)
-    if (!owner) throw new Error(`Project not found: ${validated.projectId}`)
     // Optimistic create: the thread object (with its stable id) is returned
     // immediately while persistence, lazy capacity eviction, and branch
     // detection finalize in the background. Only the send path awaits
@@ -69,6 +62,25 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
         )
       }
     })
+    // The renderer opens this thread on the click, not on this response, so its
+    // first thread-scoped read can arrive before the row exists. Reserve the
+    // readiness gate here   before the awaited ownership check below   so those
+    // reads wait for persistence instead of failing on a missing row.
+    threadCreation.reserve(thread.id)
+    // The project is the thread's only owner: reject an optimistic create for a
+    // project that no longer exists here, instead of returning a thread whose
+    // row can never persist. Without this, a stale renderer list (a project
+    // deleted in another view) produces a phantom thread that reads as broken
+    // everywhere it is opened.
+    try {
+      const owner = await projectManager.getProject(validated.projectId)
+      if (!owner) throw new Error(`Project not found: ${validated.projectId}`)
+    } catch (error) {
+      // The row will never exist. Close the reserved gate so readers stop
+      // waiting and report the real cause rather than a missing-row scope error.
+      threadCreation.abandon(thread.id)
+      throw error
+    }
     threadCreation.begin(
       thread.id,
       async () => {

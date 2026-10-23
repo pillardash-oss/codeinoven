@@ -20,11 +20,51 @@ import { Logger } from '../system/logger'
  *
  * A failed finalization is logged and `awaitReady` still resolves, so a
  * best-effort create never wedges the send path.
+ *
+ * `reserve` exists because the create handler has awaited work (ownership and
+ * capacity reads) *before* it can schedule the gated persistence. The renderer
+ * opens the thread on the click, not on the response, so a read from the freshly
+ * mounted view arrives inside that window where no finalization is registered
+ * yet. Reserving the id synchronously closes that window: the gate is already
+ * open, so every reader waits for the create instead of reading a row that does
+ * not exist yet.
  */
 export class ThreadCreationCoordinator {
   private finalizing = new Map<string, Promise<void>>()
+  private reservations = new Map<string, { promise: Promise<void>; release: () => void }>()
   private failed = new Set<string>()
   private tail: Promise<void> = Promise.resolve()
+
+  /**
+   * Open a thread's readiness gate before any awaited work in its create runs.
+   * Call this synchronously, as soon as the create is accepted; `begin` then
+   * hands the reserved gate to the real finalization. Idempotent, so a repeated
+   * create for the same id never stacks a second gate.
+   */
+  reserve(threadId: string): void {
+    if (this.finalizing.has(threadId) || this.reservations.has(threadId)) return
+    let release!: () => void
+    const promise = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.reservations.set(threadId, { promise, release })
+    this.finalizing.set(threadId, promise)
+  }
+
+  /**
+   * Close a reserved gate whose create never reached `begin`   for example an
+   * optimistic create rejected by its ownership check. Readers waiting on the
+   * reservation resolve immediately, and `didFinalizationFail` names the real
+   * cause instead of a missing-row scope error.
+   */
+  abandon(threadId: string): void {
+    const reservation = this.reservations.get(threadId)
+    if (!reservation) return
+    this.reservations.delete(threadId)
+    if (this.finalizing.get(threadId) === reservation.promise) this.finalizing.delete(threadId)
+    this.failed.add(threadId)
+    reservation.release()
+  }
 
   /**
    * Schedule `work` to run serialized with every other finalization. This is
@@ -46,11 +86,19 @@ export class ThreadCreationCoordinator {
       () => undefined,
       () => undefined
     )
+    // A reader that captured the reserved gate before this call must still wait
+    // for the real persistence, so the gate settles with the finalization.
+    const reservation = this.reservations.get(threadId)
+    if (reservation) {
+      this.reservations.delete(threadId)
+      const release = (): void => reservation.release()
+      void run.then(release, release)
+    }
     this.finalizing.set(threadId, run)
     void run
       .catch((error) => {
         Logger.error('Thread finalization failed', { threadId, error: String(error) })
-        // Remember the failure so scoped reads can report the real cause  
+        // Remember the failure so scoped reads can report the real cause
         // without a persisted row they would otherwise surface as a
         // misleading "thread does not belong to the project".
         this.failed.add(threadId)
