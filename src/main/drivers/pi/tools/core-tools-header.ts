@@ -11,6 +11,7 @@ import {
   CIO_SPAWN_AGENT_TOOL_NAME
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
+import { unmanagedCuaShellReason } from '../../../../lib/agent-control-policy'
 
 export function piCoreToolsHeaderSource(): string {
   return `import { spawn } from 'node:child_process'
@@ -37,6 +38,8 @@ const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 const CIO_HISTORY_RECAP_PATH = '__CIO_HISTORY_RECAP_PATH__'
 const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
+
+const unmanagedCuaShellReason = ${unmanagedCuaShellReason.toString()}
 
 // The tools pi bundles itself. When the driver hands this session a tool
 // allowlist (File-System-OFF chat threads), every call to one of these that

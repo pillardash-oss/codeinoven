@@ -831,7 +831,7 @@ describe('GitHubProvider', () => {
         {
           id: 11,
           event: 'commented',
-          actor: { login: 'pullfrog[bot]', type: 'Bot' },
+          actor: { login: 'dependabot[bot]', type: 'Bot' },
           created_at: '2026-10-10T09:24:24Z'
         }
       ])

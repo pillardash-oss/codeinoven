@@ -2547,7 +2547,14 @@ export class UtilityOrchestrationService {
             .map((tool) => tool.name)
         )
       )
-      await this.prepareComputerUseSession(state, utilityId, client)
+      try {
+        await this.prepareComputerUseSession(state, utilityId, client)
+      } catch (error) {
+        // A failed setup must not leave an uncached transport behind on every
+        // retry, or fall through to the driver's implicit cursor session.
+        await client.close().catch(() => undefined)
+        throw error
+      }
     }
     return client
   }
@@ -2805,6 +2812,19 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+      if (
+        this.isComputerUseUtility(resolved) &&
+        [
+          'start_session',
+          'end_session',
+          'set_agent_cursor_enabled',
+          'set_agent_cursor_motion'
+        ].includes(operation)
+      ) {
+        throw new Error(
+          'The app owns the computer-use session and cursor lifecycle. Invoke actions directly without starting, ending, or reconfiguring sessions.'
+        )
+      }
       const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
       if (this.isComputerUseUtility(resolved)) {
@@ -2957,10 +2977,22 @@ export class UtilityOrchestrationService {
   ): Promise<void> {
     const sessionId = buildCuaSessionId(state.request.threadTitle, state.id)
     try {
-      await client.callTool('start_session', { session: sessionId })
+      const result: unknown = await client.callTool('start_session', { session: sessionId })
+      if (
+        result &&
+        typeof result === 'object' &&
+        (result as Record<string, unknown>)['isError'] === true
+      ) {
+        throw new Error('The driver refused the managed computer-use session.')
+      }
     } catch (error) {
       Logger.dev('Cua cursor session could not be started:', error)
-      return
+      throw new Error(
+        'The managed computer-use session could not be started. No action was executed.',
+        {
+          cause: error
+        }
+      )
     }
     state.cuaSessionIds.set(utilityId, sessionId)
     try {
