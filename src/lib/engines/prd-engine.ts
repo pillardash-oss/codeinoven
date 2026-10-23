@@ -507,8 +507,15 @@ export class PrdEngine {
       'SELECT project_id FROM threads WHERE id=?',
       threadId
     )
-    if (!row || row.project_id !== projectId) {
-      throw new PrdEngineError('not_found', 'Thread does not belong to the project')
+    // Distinguish a missing row (an optimistic create whose persistence has not
+    // landed, or a deleted thread) from a genuine cross-project mismatch, so the
+    // error names the real problem instead of blaming the project.
+    if (!row) throw new PrdEngineError('not_found', `Thread not found: ${threadId}`)
+    if (row.project_id !== projectId) {
+      throw new PrdEngineError(
+        'not_found',
+        `Thread ${threadId} does not belong to the requested project`
+      )
     }
   }
 
