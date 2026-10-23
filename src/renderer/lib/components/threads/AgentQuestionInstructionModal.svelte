@@ -40,7 +40,18 @@
   }
 </script>
 
-<Modal {open} {onClose} title="Instruction: {optionLabel}" size="lg">
+<!--
+  Drawn in the app window instead of being projected into the native overlay.
+
+  A blocking dialog is normally projected into the overlay window, which is a
+  separate document: its text is selectable there, but nothing in that window
+  owns a right-click, so selecting part of this instruction and right-clicking
+  offered no Copy at all. This modal exists to be copied from, so it keeps the
+  app's own selection behaviour: in this document `TextSelectionContextMenu`
+  answers the right-click with Copy and Select All, exactly as it does for the
+  rest of the app's text.
+-->
+<Modal {open} {onClose} title="Instruction: {optionLabel}" size="lg" nativePresentation={false}>
   <div class="space-y-2">
     <p class="text-xs text-muted">
       Follow this to produce the answer. Select any part you need, or copy the whole instruction.

@@ -327,6 +327,23 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **A selection in the agent's instruction modal can be copied again.** That modal exists to
+  be copied from, yet right-clicking a highlighted line gave no menu and nothing reached the
+  clipboard. The dialog was drawn the way every blocking dialog is drawn: projected into the
+  browser overlay window, which is a separate document whose projected text *is* selectable but
+  where nothing owns a right-click. The shared text menu
+  (`components/shared/TextSelectionContextMenu.svelte`) lives in the app window, so it never saw
+  the event. The instruction modal now stays in the app window (`nativePresentation={false}` on
+  its `ui/Modal.svelte` call), which is the shell's existing presentation whenever a projection
+  cannot be used, so its text answers a right-click with Copy and Select All exactly like the
+  rest of the app's text, while "Copy instruction" still copies the whole block. Verified on an
+  isolated probe against both revisions: before the change the app-window panel sat inside an
+  `inert` ancestor, `elementFromPoint` over the instruction returned `html`, and the selection
+  was dropped at once; after it the hit test lands on the `pre`, the selection survives the
+  right-click, and the menu opens above the panel. Every other blocking dialog is still
+  projected into the overlay window, so text in those still has no right-click menu; that is the
+  same gap one layer up, in the overlay document rather than in a dialog.
+
 - **A comment written in a temporary chat now exists.** Selecting a passage
   inside a side chat dropped the text into the composer and nothing else: the
   comment editor never opened, because a side chat keeps its own references on
