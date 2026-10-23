@@ -219,6 +219,31 @@ change submissions through the pipeline.
 submission without changing anything, which is the way to check the credentials
 before a release depends on them.
 
+### Rotating the Store credentials
+
+Only the client secret expires; the tenant and client id are stable, and the
+Partner Center association is by client id, so a secret rotation touches one
+secret and nothing else.
+
+1. Entra admin center, **App registrations**, the Store submission app,
+   **Certificates & secrets**, **New client secret**. Note the expiry.
+2. `gh secret set STORE_CLIENT_SECRET` and paste the new value. The old secret
+   keeps working until it expires, so both are valid for a moment and no release
+   can fail in between.
+3. Delete the old secret in the same blade once the next stable release has
+   submitted successfully.
+
+Rotating the client id is a bigger change: register a new app (or rotate the
+application), grant the Windows Store Submission API permission with admin
+consent, replace the **Azure AD application** entry in Partner Center, then
+`gh secret set STORE_CLIENT_ID`. Do it in that order so the account never points
+at an app that cannot submit.
+
+The secret is rebuilt by nobody automatically. A 12 month lifetime with a
+calendar reminder beats a 24 month one that nobody remembers; the failure mode
+when it expires is a release whose Store job cannot authenticate, which is loud
+and harmless because the GitHub release and every other channel already shipped.
+
 If Partner Center insists on a `.msixupload` rather than a `.msix`, note that
 `MakeAppx.exe` cannot produce one; it is a zip container that Visual Studio
 normally writes. Report it here and that packaging step gets added.
