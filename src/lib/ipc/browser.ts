@@ -144,6 +144,29 @@ export interface BrowserLoadError {
   description: string
 }
 
+/**
+ * The page a conversation's thread browser is in use on.
+ *
+ * The thread browser is the browser a conversation shares with its agent, so
+ * main has to know which tab it is on: without this binding an agent could only
+ * reach a page it opened itself, and the page the user is reading would be
+ * invisible to it. It is a reference to a tab rather than to an address, so a
+ * navigation under it keeps answering, and it carries what main needs to mount
+ * that page when this process holds no view for it (a tab restored from a
+ * previous launch). The renderer reports it; no agent operation changes which
+ * tab the thread browser is on.
+ */
+export interface BrowserThreadBrowserPage {
+  tabId: string
+  /** The project and thread that own the tab the browser is on. */
+  projectId: string
+  threadId: string
+  /** The cookie box the tab runs in, or null for the conversation's own jar. */
+  boxId: string | null
+  /** The address the tab is on, or the empty string for a blank tab. */
+  url: string
+}
+
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
 export interface BrowserPageState {
   tabId: string

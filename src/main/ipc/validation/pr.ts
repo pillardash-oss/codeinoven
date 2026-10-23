@@ -10,6 +10,7 @@ import {
 } from './primitives'
 import { validateBranchName, validateRemoteName } from './git'
 import { GITHUB_REACTIONS } from '../../../lib/github-reactions'
+import { WORKFLOW_RUN_FILTER_VALUES } from '../../../lib/types'
 
 const MERGE_METHODS = new Set<import('../../../lib/types').PrMergeMethod>([
   'merge',
@@ -61,11 +62,9 @@ const WORKFLOW_RERUN_MODES = new Set<import('../../../lib/types').WorkflowRerunM
   'failed'
 ])
 /** The run states the Deployments view filters by, which GitHub answers server-side. */
-const WORKFLOW_RUN_FILTERS = new Set<import('../../../lib/types').WorkflowRunFilter>([
-  'all',
-  'failed',
-  'succeeded'
-])
+const WORKFLOW_RUN_FILTERS = new Set<import('../../../lib/types').WorkflowRunFilter>(
+  WORKFLOW_RUN_FILTER_VALUES
+)
 /**
  * GitHub's eight reaction values, taken from the shared table the picker draws
  * from so the boundary can never reject an emoji the picker offers.

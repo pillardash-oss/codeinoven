@@ -73,6 +73,30 @@
   let host = $state<HTMLDivElement>()
   /** The pane's on-screen rectangle, which is the area the frame is fitted into. */
   let paneRect = $state<BrowserViewBounds | null>(null)
+  /**
+   * The same rectangle, mirrored outside the reactive graph.
+   *
+   * The cover only needs a pane to measure against, not the latest one: reading
+   * `paneRect` there would restart the cover on every resize and re-take the
+   * picture each time, while the rectangle's only job is the intersection the
+   * store resolves with.
+   */
+  let paneCoverRect: BrowserViewBounds | null = null
+  /**
+   * The last picture taken of this page, drawn in the pane while the native view
+   * steps aside for one of the board's menus.
+   *
+   * A native view cannot be layered under a DOM node, so a menu over it needs the
+   * page off screen, and a pane left empty is a playback frame that vanishes every
+   * time the user reaches for its own menu. This still stands in for the page, so
+   * the picture the user was watching stays where it was with the menu over it.
+   * It never covers the page on the way back either: the view composites above
+   * every DOM node, so a picture left in the pane is only visible while the view
+   * is not, which is exactly when it is wanted.
+   */
+  let stillPicture = $state<string | null>(null)
+  /** Bumped per menu so a late capture cannot overwrite a newer one. */
+  let pictureRevision = 0
 
   /**
    * The composition's rectangle: its own ratio, contained in the pane, centred.
@@ -135,6 +159,7 @@
     // rectangle even while the view is detached, so this stage notices as soon as
     // an overlay stops covering it.
     paneRect = pane
+    paneCoverRect = pane
     if (!pane) return
     const frame = fittedBounds(pane)
     if (!frame) return
@@ -202,16 +227,47 @@
   })
 
   /**
-   * Publish this pane as covered while one of the board's menus is open.
+   * Take a picture of the page, then stand this pane aside for the menu.
    *
    * The rectangle is only what the store measures with: its answer is whether the
    * surface may show its page at all, so any overlap takes the whole pane off
-   * screen, which is what makes the menu readable.
+   * screen, which is what makes the menu readable - and the picture taken first is
+   * what keeps the frame the user was watching in place under that menu.
+   *
+   * The picture has to be taken while the page is still on screen, because a view
+   * that has already stepped aside captures blank, so covering waits for the
+   * capture. It never waits long, because a menu the user has already clicked must
+   * not sit unreadable behind the page: a capture that has not answered within a
+   * tenth of a second is raced by the timer below, so a slow or failing picture can
+   * only ever cost the still, never the menu.
    */
+  const PICTURE_WAIT_MS = 140
   $effect(() => {
-    if (!covered || !paneRect) return
-    browserVisibility.publishOcclusion(occlusionKey, paneRect)
-    return () => browserVisibility.clearOcclusion(occlusionKey)
+    if (!covered) return
+    const tabId = placedTab.tabId
+    const revision = ++pictureRevision
+    let cancelled = false
+    let stepped = false
+    const stepAside = (): void => {
+      if (cancelled || stepped) return
+      const pane = paneCoverRect ?? measurePane()
+      if (pane === null) return
+      stepped = true
+      browserVisibility.publishOcclusion(occlusionKey, pane)
+    }
+    const patience = setTimeout(stepAside, PICTURE_WAIT_MS)
+    void invoke('browser:peekSnapshot', tabId)
+      .catch(() => null)
+      .then((picture) => {
+        if (cancelled) return
+        if (picture !== null && revision === pictureRevision) stillPicture = picture
+        stepAside()
+      })
+    return () => {
+      cancelled = true
+      clearTimeout(patience)
+      browserVisibility.clearOcclusion(occlusionKey)
+    }
   })
 
   /**
@@ -242,17 +298,24 @@
       intersection.disconnect()
       window.removeEventListener('resize', place)
       if (host === element) host = undefined
-      browserVisibility.detachUnlessAnotherSurfaceDisplays(placedTab.tabId, surface)
+      // The tab this stage was built for, not the one the board is showing now:
+      // the pane is re-keyed per tab, so by the time this runs the live prop can
+      // already name its successor, and detaching that one would take the new
+      // page off screen while leaving this stage's own page behind.
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(mountedTab.tabId, surface)
     }
   }
 
   onMount(() => {
     // Claim the native view for this tab while the stage is mounted. The claim is
     // released with the component, so a torn-down board can never keep the view.
-    const releaseClaim = browserVisibility.claimTab(placedTab.tabId, surface)
+    // Both ends name the tab this stage was built for: a release read from the
+    // live prop would let go of the board's next tab and hold on to this one.
+    const tabId = mountedTab.tabId
+    const releaseClaim = browserVisibility.claimTab(tabId, surface)
     return () => {
       releaseClaim()
-      browserVisibility.detachReleasedTab(placedTab.tabId)
+      browserVisibility.detachReleasedTab(tabId)
     }
   })
 </script>
@@ -268,7 +331,23 @@
   <div
     {@attach attachHost}
     data-native-composition-stage
-    class="min-h-0 flex-1 bg-app"
+    class="relative min-h-0 flex-1 bg-app"
     aria-label={`Live composition ${placedTab.directory}`}
-  ></div>
+  >
+    <!--
+      The still of the page, drawn under the native view.
+
+      It only ever shows while the view has stepped aside for a menu, because the
+      view composites above every DOM node, and `object-contain` on the pane is the
+      same fit the view itself is placed with, so the picture the user was watching
+      holds its exact frame rather than jumping as the menu opens.
+    -->
+    {#if stillPicture !== null}
+      <img
+        src={stillPicture}
+        alt=""
+        class="pointer-events-none absolute inset-0 h-full w-full object-contain"
+      />
+    {/if}
+  </div>
 </div>

@@ -20,7 +20,7 @@
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
   import { assistantIsScheduled, type Assistant } from '$shared/types'
-  import { assistantGap, assistantNextRunLine, assistantRunCountLabel } from './assistant-view'
+  import { assistantGap, assistantNextRunLine, assistantThreadCountLabel } from './assistant-view'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     threadHoverPopoverStyle
@@ -41,9 +41,10 @@
     attention: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
-    /** How many times this assistant has run: one row per execution. The assistant's
-     *  Getting started host is not an execution, so it is never counted here. */
-    runCount: number
+    /** How many threads this assistant holds: its tasks and their runs. The
+     *  Getting started host is the assistant's behavior, not a thread, so it is
+     *  never counted here. */
+    threadCount: number
     /** Custom icon data URL for this assistant, when it stores one. */
     iconUrl?: string | null
     /** Next intended fire for the assistant, or null when unscheduled. */
@@ -74,7 +75,7 @@
     stateCounts,
     attention,
     missed,
-    runCount,
+    threadCount,
     iconUrl = null,
     nextRunAt,
     searchOpen,
@@ -303,16 +304,16 @@
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
         <span
-          class="shrink-0 border border-border px-1.5 py-px text-[0.5rem] tracking-wide uppercase {scheduled
-            ? 'bg-elevated text-dimmed'
-            : 'bg-elevated text-accent'}"
+          class="shrink-0 border border-border bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
           title={scheduled
             ? 'This assistant runs on a schedule'
             : 'This assistant runs only when you ask it to'}
         >
           {scheduled ? 'Scheduled' : 'Unscheduled'}
         </span>
-        <span class="shrink-0">{assistantRunCountLabel(runCount)}</span>
+        {#if threadCount > 0}
+          <span class="shrink-0">{assistantThreadCountLabel(threadCount)}</span>
+        {/if}
         {#if nextRunLabel}
           <span class="shrink-0" aria-hidden="true">·</span>
           <span class="truncate">{nextRunLabel}</span>
@@ -491,7 +492,14 @@
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
       style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
     >
-      <AssistantHoverPopover {assistant} {runCount} {working} {missed} {nextRunAt} {attention} />
+      <AssistantHoverPopover
+        {assistant}
+        {threadCount}
+        {working}
+        {missed}
+        {nextRunAt}
+        {attention}
+      />
     </div>
   </Portal>
 {/if}

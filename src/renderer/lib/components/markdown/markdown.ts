@@ -48,16 +48,25 @@ import { githubEmojiExtension } from './github-emoji'
 
 // A fragment URL survives DOMPurify's default URI policy while remaining
 // entirely inside the renderer. MarkdownView intercepts it before navigation.
-export const OPENCODE_SOURCE_PREFIX = '#opencode-source:'
+export const CITATION_LINK_PREFIX = '#cio-cite:'
+
+/** The fragment transcripts were rendered and exported with before the scheme
+ *  was renamed. It is only ever read, so a link copied out of an older thread
+ *  still resolves to the file it names. */
+const LEGACY_CITATION_LINK_PREFIX = '#opencode-source:'
 
 export interface MarkdownFileCitationTarget {
   path: string
   line?: number
 }
 
-/** Read the current citation href format. */
+/** Read the citation href format, current or legacy. */
 export function fileCitationTarget(href: string): MarkdownFileCitationTarget | null {
-  const prefix = href.startsWith(OPENCODE_SOURCE_PREFIX) ? OPENCODE_SOURCE_PREFIX : null
+  const prefix = href.startsWith(CITATION_LINK_PREFIX)
+    ? CITATION_LINK_PREFIX
+    : href.startsWith(LEGACY_CITATION_LINK_PREFIX)
+      ? LEGACY_CITATION_LINK_PREFIX
+      : null
   if (!prefix) return parseAbsoluteFileCitationTarget(href)
 
   try {
@@ -285,7 +294,17 @@ const SANITIZE_CONFIG = {
     'option',
     'textarea'
   ],
-  FORBID_ATTR: ['style', 'srcdoc', 'formaction', 'ping']
+  FORBID_ATTR: ['style', 'srcdoc', 'formaction', 'ping'],
+  // DOMPurify's default URI policy drops every scheme it does not list, and
+  // `file:` is not on that list. An agent that links a local path writes
+  // `[launch video](file:///.cio/videos/launch/index.html)`, so a link whose
+  // target never resolved to a confirmed citation lost its `href` on the way
+  // through sanitization and rendered as dead text: no pointer cursor, no
+  // click, no tooltip, no explanation. The scheme is added back to the default
+  // policy, and MarkdownView intercepts every `file:` click itself, so the
+  // anchor only ever reports what happened to the path.
+  ALLOWED_URI_REGEXP:
+    /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.-]+(?:[^-a-z+.:]|$))/i
 }
 
 // Preserve citation metadata before DOMPurify removes the custom scheme
@@ -309,7 +328,10 @@ DOMPurify.addHook('beforeSanitizeAttributes', (node) => {
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName !== 'A') return
   const href = node.getAttribute('href')
-  if (node.getAttribute('data-citation-path') || (href && href.startsWith('#'))) {
+  if (
+    node.getAttribute('data-citation-path') ||
+    (href && (href.startsWith('#') || href.startsWith('file:')))
+  ) {
     node.removeAttribute('target')
     node.removeAttribute('rel')
   } else {

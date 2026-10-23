@@ -5,6 +5,7 @@ import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
+import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
 import { installForceRestartMenu } from './system/force-restart'
 import { usageAnalytics } from './system/usage-analytics'
@@ -46,6 +47,7 @@ import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
 import {
   armQuitFailsafe,
+  disarmQuitFailsafe,
   flushSessionStorage,
   requestCloseConfirmation
 } from './bootstrap/quit-lifecycle'
@@ -174,6 +176,13 @@ ipcMain.handle('app:parkWindow', async () => {
   await state.backgroundLifecycle?.park()
 })
 
+// The user dismissed the close confirmation (or a save it asked for failed), so
+// the app keeps working. The quit watchdog armed before the question was asked
+// must be cancelled here, or it force-exits an app the user just kept open.
+ipcMain.handle('app:abandonClose', () => {
+  disarmQuitFailsafe(state)
+})
+
 // Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+D) is the menu bar's
 // Quit item without reaching for the menu bar, so it bypasses background mode
 // entirely.
@@ -209,6 +218,24 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
 })
 
 /**
+ * Release a renderer waiting on the feature graph after a boot that died before
+ * it could announce readiness.
+ *
+ * Leaving the promise pending is what made a failed boot look like an app that
+ * never finished loading, with nothing to read anywhere. Releasing it is honest
+ * in the other direction too: the window, the database and every hydration
+ * channel are already alive, so the app stays usable and each channel that never
+ * registered reports its own precise failure. The startup smoke gate stays
+ * unfulfilled, so this can never pass a release check as a healthy launch.
+ */
+function releaseFeaturesAfterBootFailure(): void {
+  if (state.featuresReady) return
+  state.featuresReady = true
+  state.resolveFeaturesReady?.()
+  state.resolveFeaturesReady = null
+}
+
+/**
  * A packaged smoke pass proves more than script execution: the document must
  * load, Electron must report a rendered visual frame, and application
  * hydration must complete. The guard makes concurrent milestone callbacks
@@ -216,6 +243,9 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
  */
 function markWorkspaceReadyIfInteractive(): void {
   if (!state.rendererReadyReported || !state.featuresReady) return
+  // A degraded boot released the renderer but never completed the feature
+  // graph, so it must not satisfy the packaged smoke gate.
+  if (state.startupServicesFailed) return
   startupTelemetry.mark('workspace:ready')
   // The app is interactive: boot the embedding model behind the settled
   // workspace so the first Cmd+K thread search ranks semantically instead of
@@ -277,7 +307,7 @@ ipcMain.handle('app:waitForFeatures', () =>
 )
 
 ipcMain.handle('app:setWindowControls', (event, symbolColor: unknown, headerHeight: unknown) => {
-  if (process.platform !== 'win32') return
+  if (!hasCaptionOverlay(process.platform)) return
   const window = state.mainWindow
   if (!window || window.isDestroyed() || window.webContents !== event.sender) return
   if (typeof symbolColor !== 'string' || !/^#[\da-f]{6}$/i.test(symbolColor)) return
@@ -489,6 +519,11 @@ function getStartupBackground(): string {
 }
 
 function createWindow(): BrowserWindow {
+  // Windows and Linux both hide the native title bar and hand the whole top row
+  // to the renderer, which draws the app header there; the OS caption buttons
+  // come back as a Window Controls Overlay on the header's right edge. On Linux
+  // that is the only way to avoid a second, title-only GTK row above the header.
+  const captionOverlay = hasCaptionOverlay(process.platform)
   const window = new BrowserWindow({
     ...windowStateService.getWindowOptions(),
     minWidth: 1024,
@@ -497,8 +532,12 @@ function createWindow(): BrowserWindow {
     backgroundColor: getStartupBackground(),
     title: APP_NAME,
     icon: getAppIconPath(),
-    titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
-    ...(process.platform === 'win32'
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    // With the title bar gone, an application menu would claim a row of its own
+    // above the header on Linux. Alt still reveals it, which is the platform's
+    // own convention for a hidden menu bar.
+    ...(process.platform === 'linux' ? { autoHideMenuBar: true } : {}),
+    ...(captionOverlay
       ? {
           titleBarOverlay: {
             color: '#00000000',
@@ -507,7 +546,7 @@ function createWindow(): BrowserWindow {
           }
         }
       : {}),
-    trafficLightPosition: { x: 16, y: 16 },
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 16, y: 16 } } : {}),
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
       // Chromium throttles a hidden or occluded window by default, and that is
@@ -945,6 +984,7 @@ void app
       // window is opened, from the menu bar or a notification click.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
+        releaseFeaturesAfterBootFailure()
         Logger.error('Headless service boot failed; background work is degraded', error)
       })
       app.on('activate', () => {
@@ -978,6 +1018,7 @@ void app
       // the whole app on the user's behalf.
       void bootPostPaintServices(bootContext).catch((error) => {
         state.startupServicesFailed = true
+        releaseFeaturesAfterBootFailure()
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }
@@ -1107,19 +1148,12 @@ app.on('before-quit', (event) => {
   }
 
   void runShutdownPipeline({ state, windowStateService, database }).finally(() => {
-    if (state.shutdownFailsafe) {
-      clearTimeout(state.shutdownFailsafe)
-      state.shutdownFailsafe = null
-    }
+    // The pipeline has finished every disposal step; the quit it was guarding
+    // can no longer hang here, so its watchdog is done. The single armed timer
+    // from `armQuitFailsafe` is the one this clears   there used to be a second
+    // one assigned beside this pipeline, which nothing could ever clear.
+    disarmQuitFailsafe(state)
   })
-
-  // Failsafe: if any disposal step hangs, force the process to exit so the app
-  // never lingers in the Dock with a stale icon after the user chose to close.
-  state.shutdownFailsafe = setTimeout(() => {
-    Logger.error('Shutdown pipeline timed out   forcing exit')
-    flushSessionStorage()
-    app.exit(0)
-  }, 15_000)
 })
 
 app.on('will-quit', () => {

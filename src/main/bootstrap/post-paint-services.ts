@@ -596,11 +596,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
     unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
   })
-  await state.searchService.initialize()
-  state.unregisterSearchIpc = registerSearchSettingsIpc(
-    state.searchService,
-    () => state.mainWindow?.webContents ?? null
-  )
+  // A runtime that will not start disables semantic search and nothing else:
+  // this used to abort the whole feature boot, which left every feature channel
+  // registered only because readiness was announced too early to notice. It is
+  // an optional engine, so it degrades like speech does.
+  try {
+    await state.searchService.initialize()
+    state.unregisterSearchIpc = registerSearchSettingsIpc(
+      state.searchService,
+      () => state.mainWindow?.webContents ?? null
+    )
+  } catch (error) {
+    Logger.error('Semantic search unavailable; intent ranking stays disabled', error)
+  }
   state.prototypePreviewService = new PrototypePreviewService()
   try {
     const startupConfig = await storage.getConfig()
@@ -872,37 +880,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   })
   state.threadTransfer.registerIpc()
   state.threadTransfer.start()
-  state.featuresReady = true
-  startupTelemetry.mark('features:ready')
-  // The lean-agent merge is maintenance, not first interaction: it shells out
-  // for the installed version and rewrites the machine-wide opencode config, so
-  // it is deferred past `features:ready` instead of holding the feature boot.
-  setTimeout(() => {
-    void import('../opencode/opencode-agent-service')
-      .then(({ syncOpenCodeLeanAgents }) => syncOpenCodeLeanAgents())
-      .catch((error) => Logger.dev('opencode lean-agent sync failed (non-fatal):', error))
-  }, 0)
-  // Every scoped utility gets its install folder back once the app is up, so a
-  // registry entry written before this pass existed, or one whose project moved
-  // while the app was closed, never stays an entry with nothing on disk.
-  void (async () => {
-    const { UtilityRegistryService } = await import('../utilities/utility-registry-service')
-    await utilityFootprint.reconcile(await new UtilityRegistryService(storage).list())
-  })().catch((error) => Logger.dev('Utility install folders could not be reconciled:', error))
-  context.onFeaturesReady()
-  state.resolveFeaturesReady?.()
-  state.resolveFeaturesReady = null
-  if (
-    state.mainWindow &&
-    !state.mainWindow.isDestroyed() &&
-    !state.mainWindow.webContents.isDestroyed()
-  ) {
-    sendToRenderer(state.mainWindow.webContents, 'app:featuresReady')
+  // Custom vendor artwork is read by every `VendorIcon` the first frame mounts,
+  // and the renderer only invokes feature channels once `app:featuresReady` has
+  // fired. Register it ahead of that signal so the gate is truthful: registering
+  // it from the deferred provider block below announced readiness too early and
+  // the renderer reported `No handler registered for 'customVendors:listIcons'`.
+  {
+    const { registerCustomVendorIpc } = await import('../providers/custom-vendor-ipc')
+    registerCustomVendorIpc(storage)
   }
-
-  void (async () => {
+  await (async () => {
     const [
-      { PtyService },
       { ProviderConnectionService },
       { OpenCodeV2Service },
       { HarnessUpdateService },
@@ -910,7 +898,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       { HarnessAutoUpdateService },
       { NotificationService }
     ] = await Promise.all([
-      import('../system/pty-service'),
       import('../providers/provider-connection'),
       import('../opencode-v2/opencode-v2-service'),
       import('../agents/harness-update-service'),
@@ -919,29 +906,50 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../notifications/notification-service')
     ])
 
+    // `node-pty` is the only compiled native module in this graph, and it is
+    // built on whichever machine packages the app. A build whose binary will not
+    // load (a glibc floor newer than the user's distribution, a missing arch, an
+    // ABI mismatch) used to abort this entire block, so terminals took
+    // providers, utilities, notifications and every other feature down with
+    // them. Importing it on its own keeps that failure where it belongs.
+    let ptyModule: typeof import('../system/pty-service') | null = null
+    try {
+      ptyModule = await import('../system/pty-service')
+    } catch (error) {
+      const { registerUnavailablePtyHandlers } = await import('../system/pty-unavailable')
+      registerUnavailablePtyHandlers(error instanceof Error ? error.message : String(error))
+      Logger.error(
+        'Terminal support could not start; every other feature continues',
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      )
+    }
+
     const { ovenTerminalLaunch, ovenShellLaunch } = await import('../ovens/oven-terminal')
-    state.ptyService = new PtyService(
-      storage,
-      database,
-      scopeRootResolver,
-      (process) => {
-        state.chatEngine?.trackPtyProcess(
-          process.scopeId,
-          process.projectId,
-          process.threadId,
-          process.pid,
-          process.command,
-          process.cwd
+    if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
+    state.ptyService = ptyModule
+      ? new ptyModule.PtyService(
+          storage,
+          database,
+          scopeRootResolver,
+          (process) => {
+            state.chatEngine?.trackPtyProcess(
+              process.scopeId,
+              process.projectId,
+              process.threadId,
+              process.pid,
+              process.command,
+              process.cwd
+            )
+          },
+          (projectId, projectPath) => {
+            // User typed in a project terminal   open a user-activity window so
+            // their shell-driven edits are excluded from concurrent agent turns.
+            state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
+          },
+          ovenTerminalLaunch(storage, vault, database, context.threadCreation),
+          ovenShellLaunch(storage, vault)
         )
-      },
-      (projectId, projectPath) => {
-        // User typed in a project terminal   open a user-activity window so
-        // their shell-driven edits are excluded from concurrent agent turns.
-        state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
-      },
-      ovenTerminalLaunch(storage, vault, database),
-      ovenShellLaunch(storage, vault)
-    )
+      : null
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects
     // it, and rebuilds the `opencode` driver when the detected line changed.
@@ -972,7 +980,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.chatEngine?.setPtyStopAnnouncer(
       (pid) => state.ptyService?.announceStopForPid(pid) ?? false
     )
-    state.ptyService.register()
+    state.ptyService?.register()
     state.providerConnection.register()
     state.openCodeV2Service.register()
     state.harnessUpdateService.register()
@@ -1037,7 +1045,36 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     // Wire PTY to the window now that it exists.
     if (state.mainWindow && !state.mainWindow.isDestroyed()) {
-      state.ptyService.attach(state.mainWindow.webContents)
+      state.ptyService?.attach(state.mainWindow.webContents)
+    }
+
+    if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
+    state.featuresReady = true
+    startupTelemetry.mark('features:ready')
+    // The lean-agent merge is maintenance, not first interaction: it shells out
+    // for the installed version and rewrites the machine-wide opencode config, so
+    // it is deferred past `features:ready` instead of holding the feature boot.
+    setTimeout(() => {
+      void import('../opencode/opencode-agent-service')
+        .then(({ syncOpenCodeLeanAgents }) => syncOpenCodeLeanAgents())
+        .catch((error) => Logger.dev('opencode lean-agent sync failed (non-fatal):', error))
+    }, 0)
+    // Every scoped utility gets its install folder back once the app is up, so a
+    // registry entry written before this pass existed, or one whose project moved
+    // while the app was closed, never stays an entry with nothing on disk.
+    void (async () => {
+      const { UtilityRegistryService } = await import('../utilities/utility-registry-service')
+      await utilityFootprint.reconcile(await new UtilityRegistryService(storage).list())
+    })().catch((error) => Logger.dev('Utility install folders could not be reconciled:', error))
+    context.onFeaturesReady()
+    state.resolveFeaturesReady?.()
+    state.resolveFeaturesReady = null
+    if (
+      state.mainWindow &&
+      !state.mainWindow.isDestroyed() &&
+      !state.mainWindow.webContents.isDestroyed()
+    ) {
+      sendToRenderer(state.mainWindow.webContents, 'app:featuresReady')
     }
 
     try {

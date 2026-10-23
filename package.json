@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.65",
+  "version": "0.5.66",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.4.3",
@@ -130,7 +130,7 @@
     "@typescript/native": "npm:typescript@^7.0.2",
     "bits-ui": "^2.19.3",
     "builder-util": "26.15.3",
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "electron": "^44.9.3",
     "electron-builder": "^26.15.3",
     "electron-vite": "^6.0.0",

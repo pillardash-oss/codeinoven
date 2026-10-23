@@ -350,22 +350,38 @@
   })
 
   /**
-   * Whether the row is out of room. The rate and the context percent are the first
-   * readings it gives up, because a tap or a hover restores both from the panel
-   * behind their marks, and nothing else in the row states them.
+   * How much of the row the composer's room can hold, as measured:
+   *
+   * - `full`: every reading in the row fits.
+   * - `tips`: the keyboard tips give way. They are read once, so they go before the
+   *   row shortens a name or drops a figure.
+   * - `readings`: the rate and the context percent go down to their own marks, each
+   *   of which still says what it is and states its figure under a tap or a hover.
+   *
+   * A stage is only entered when the row genuinely does not fit with the stage above
+   * it, and the read below runs again whenever the composer's room changes, so a
+   * composer that grows gives every reading back.
    *
    * The decision is measured, never a width of the composer: the shoe hugs its own
    * content, so a width threshold is a guess about how long the names in the row
    * happen to be, and it takes the figures away while the row still has room to
    * spare.
    */
-  let tight = $state(false)
+  type ShoeFit = 'full' | 'tips' | 'readings'
+  const FITS: readonly ShoeFit[] = ['full', 'tips', 'readings']
+  let fit = $state<ShoeFit>('full')
   const MEASURING_CLASS = 'shoe-measuring'
 
+  /** A computed length, and zero for the keywords a computed style can report in
+   *  place of one, so the room is a number even on a box with no border. */
+  function length(value: string): number {
+    const parsed = Number.parseFloat(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
   /**
-   * Attached to the row, which is the box that has to hold every segment: the card
-   * above it hugs the row until the composer runs out of room, so the card's own
-   * resize is what reports a tighter composer and a longer name alike.
+   * Attached to the row, which is the box that has to hold every segment, and the
+   * one box whose stage decides what the row reads.
    */
   function attachRow(row: HTMLElement): () => void {
     const foundCard = row.parentElement
@@ -373,37 +389,68 @@
     if (!foundCard || !foundWrapper) return () => {}
     const card: HTMLElement = foundCard
     const wrapper: HTMLElement = foundWrapper
+    let disposed = false
 
+    /**
+     * One read per stage, from the top down: the row laid out at the width it asks
+     * for, showing exactly what that stage still shows, and the first stage that
+     * fits is the one the row keeps. The stage is the row's own attribute for the
+     * length of the read, so the rules that hide a stage's readings are also what
+     * measures it, and nothing paints between the writes.
+     */
     function measure(): void {
       const wrapperStyle = getComputedStyle(wrapper)
       const cardStyle = getComputedStyle(card)
       const available =
         wrapper.clientWidth -
-        Number.parseFloat(wrapperStyle.paddingLeft) -
-        Number.parseFloat(wrapperStyle.paddingRight) -
-        Number.parseFloat(cardStyle.paddingLeft) -
-        Number.parseFloat(cardStyle.paddingRight) -
-        Number.parseFloat(cardStyle.borderLeftWidth) -
-        Number.parseFloat(cardStyle.borderRightWidth)
+        length(wrapperStyle.paddingLeft) -
+        length(wrapperStyle.paddingRight) -
+        length(cardStyle.paddingLeft) -
+        length(cardStyle.paddingRight) -
+        length(cardStyle.borderLeftWidth) -
+        length(cardStyle.borderRightWidth)
       if (!(available > 0)) return
-      // One synchronous read of the row at the width it asks for, with every reading
-      // in it: nothing else can say whether they fit, and nothing paints between this
-      // class going on and coming off.
       row.classList.add(MEASURING_CLASS)
-      const natural = row.scrollWidth
+      let next: ShoeFit = 'readings'
+      for (const stage of FITS) {
+        row.dataset.shoeFit = stage
+        // The box it asks for, and the scroll extent in case a segment overflows
+        // that box: both are read from the one layout this stage just forced.
+        const natural = Math.max(row.scrollWidth, row.getBoundingClientRect().width)
+        if (natural <= available) {
+          next = stage
+          break
+        }
+      }
       row.classList.remove(MEASURING_CLASS)
-      tight = natural > available
+      row.dataset.shoeFit = next
+      fit = next
     }
 
     measure()
+    // Every width in this row is text, and the real faces land after the first read
+    // on a cold start: one more read once they are ready keeps a fallback face from
+    // deciding a stage.
+    void document.fonts?.ready.then(() => {
+      if (!disposed) measure()
+    })
+    // The composer's own width is the room, and the card is what reports the row
+    // outgrowing it. Observing the card alone never reports the room coming back: a
+    // card that hugs a truncated row keeps its width while the composer grows around
+    // it, which is how a figure stayed hidden after the composer had space for it.
     const observer = new ResizeObserver(measure)
+    observer.observe(wrapper)
     observer.observe(card)
-    return () => observer.disconnect()
+    return () => {
+      disposed = true
+      observer.disconnect()
+    }
   }
 </script>
 
 <div
-  class="flex min-w-0 items-center gap-px whitespace-nowrap {tight ? 'shoe-tight' : ''}"
+  class="flex min-w-0 items-center gap-px whitespace-nowrap"
+  data-shoe-fit={fit}
   {@attach attachRow}
 >
   <!-- Scope: the board the thread belongs to. Project threads only. -->
@@ -810,18 +857,17 @@
      `@container` class), so every threshold below is a width of the room the
      composer leaves that wrapper: the composer, less the wrapper's own inline
      padding. As the composer tightens, give the truncating stages room in
-     order   the tips first (they are read once), then the worker label and the
-     location, then the scope and Oven names. The branch keeps a name of some
-     length all the way down, and the identity is what holds out longest.
+     order   the worker label and the location, then the scope and Oven names. The
+     branch keeps a name of some length all the way down, and the identity is what
+     holds out longest.
 
-     The rate and the context percent are not on that list, because no width can
-     say when they cost the row something: see `.shoe-tight` below, which is set by
-     measuring the row instead.
+     The tips, the rate and the context percent are not on that list, because no
+     width can say when they cost the row something: see `data-shoe-fit` below,
+     which is set by measuring the row instead.
 
      The scope badge, the Oven's label and the context percent are drawn by child
-     components, so only `:global(...)` reaches them from here. `shoe-branch-label`,
-     `shoe-report-label`, `shoe-generation-label` and `shoe-tips` are this
-     component's own markup and stay scoped. */
+     components, so only `:global(...)` reaches them from here. `shoe-branch-label`
+     and `shoe-report-label` are this component's own markup and stay scoped. */
 
   /* The reporting pill reserves the width of its widest label so flipping the
      switch never shifts the row, and truncates once the shoe runs out of room. */
@@ -848,33 +894,31 @@
     }
   }
 
-  /* Out of room, as measured: the rate and the context percent go down to their own
-     marks, each of which still says what it is, and each of which states its figure
-     under a tap or a hover. The keyboard tips also yield room to the names.
+  /* Out of room, as measured, in two steps: the tips go first, because they are
+     read once, and only then do the rate and the context percent go down to their
+     own marks, each of which still says what it is and states its figure under a tap
+     or a hover.
 
-     These rules are global on purpose: the class they key off is put on the row by
-     the measurement below, not written in this template where the compiler could
-     find it, and the measuring rule has to be able to win over the hiding one. */
-  :global(.shoe-tight .shoe-generation-label),
-  :global(.shoe-tight .context-usage-label),
-  :global(.shoe-tight .shoe-tips) {
+     These rules are global on purpose: the stage they key off is put on the row by
+     the measurement, not written in this template where the compiler could find it,
+     and that same measurement lays the row out for a stage by writing the attribute,
+     so what hides a stage's readings is also what measures it. */
+  :global([data-shoe-fit='tips'] .shoe-tips),
+  :global([data-shoe-fit='readings'] .shoe-tips) {
     display: none;
   }
 
-  /* The one read that decides it: the row laid out at the width it asks for, with
-     every reading in it. Nothing paints between the class going on and coming off. */
+  :global([data-shoe-fit='readings'] .shoe-generation-label),
+  :global([data-shoe-fit='readings'] .context-usage-label) {
+    display: none;
+  }
+
+  /* The one read that decides a stage: the row laid out at the width it asks for,
+     showing exactly what the stage it is being measured as still shows. Nothing
+     paints between the class going on and coming off. */
   :global(.shoe-measuring) {
     flex: none;
     width: max-content;
-  }
-
-  :global(.shoe-measuring .shoe-generation-label),
-  :global(.shoe-measuring .context-usage-label) {
-    display: inline;
-  }
-
-  :global(.shoe-measuring .shoe-tips) {
-    display: flex;
   }
 
   @container (max-width: 610px) {
@@ -883,13 +927,6 @@
     }
 
     :global(.shoe-identity-location) {
-      display: none;
-    }
-  }
-
-  /* The keys are a courtesy, not a control: they go before any name does. */
-  @container (max-width: 520px) {
-    .shoe-tips {
       display: none;
     }
   }

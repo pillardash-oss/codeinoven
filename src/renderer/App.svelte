@@ -26,7 +26,7 @@
   import AppConfirmDialog from '$lib/components/ui/AppConfirmDialog.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
-  import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
+  import { invoke, subscribeGuarded, waitForFeatures } from '$lib/ipc.svelte'
   import {
     closeBlockingSurfaces,
     closeTopVisibleDialog,
@@ -1179,21 +1179,25 @@
       //    chats), after the post-paint feature IPC contract is available.
       //    `app:waitForFeatures` is sticky, so this remains safe when the
       //    feature-ready event arrived before the renderer mounted.
-      void invoke('app:waitForFeatures').then(() => {
-        window.requestAnimationFrame(() => {
-          const targets = scopeState.activeProjectId
-            ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
-            : [INBOX_PROJECT_ID]
-          // Seed model pickers from local snapshots, then kick off a background
-          // harness probe automatically (after first paint) so the picker always
-          // has live data ready instead of fetching lazily on open.
-          void providerCatalog.init(targets, { refresh: true })
-          // Canonical-ordered harness list (registry order)   the model picker's
-          // harness filter sorts against this so its chip order never depends on
-          // catalog insertion order.
-          void providerStore.init()
+      void waitForFeatures()
+        .then(() => {
+          window.requestAnimationFrame(() => {
+            const targets = scopeState.activeProjectId
+              ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
+              : [INBOX_PROJECT_ID]
+            // Seed model pickers from local snapshots, then kick off a background
+            // harness probe automatically (after first paint) so the picker always
+            // has live data ready instead of fetching lazily on open.
+            void providerCatalog.init(targets, { refresh: true })
+            // Canonical-ordered harness list (registry order)   the model picker's
+            // harness filter sorts against this so its chip order never depends on
+            // catalog insertion order.
+            void providerStore.init()
+          })
         })
-      })
+        // A feature graph that failed to start is already reported once by
+        // `waitForFeatures`; warming catalogs against it is pointless.
+        .catch(() => undefined)
     } catch {
       scopeState.setScopesFromProjects([], new Map())
       scopeState.setThreads([])
@@ -1395,6 +1399,17 @@
   }
 
   /**
+   * The close was abandoned: dismissed, or a save it asked for failed. Main armed
+   * a quit watchdog when the close was requested, so it is told the app is
+   * staying open; otherwise that watchdog force-exits the workspace the user just
+   * chose to keep.
+   */
+  function abandonClose(): void {
+    closeConfirmation = null
+    void invoke('app:abandonClose')
+  }
+
+  /**
    * While the close-confirmation modal is open, watch the threads it listed as
    * still working. As each one leaves that state (completed, failed, or
    * otherwise no longer executing/planning) it drops off the list. Once none
@@ -1435,6 +1450,7 @@
     if (savedProjectFiles && savedStandaloneFiles) {
       await (closeIsPark() ? invoke('app:parkWindow') : invoke('app:confirmClose'))
     } else {
+      abandonClose()
       toast.error('Some files could not be saved', {
         description: 'The application stayed open so you can review them.'
       })
@@ -2247,7 +2263,7 @@
       <CloseConfirmationModal
         payload={closeConfirmation}
         projects={scopeState.projectRecords}
-        onDismiss={() => (closeConfirmation = null)}
+        onDismiss={abandonClose}
         onConfirm={confirmForceClose}
         onConfirmSave={confirmForceCloseSaving}
       />

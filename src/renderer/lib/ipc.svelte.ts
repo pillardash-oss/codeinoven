@@ -30,6 +30,7 @@ declare global {
 /** IPC channels registered before the first renderer paint. */
 const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:confirmClose',
+  'app:abandonClose',
   'app:parkWindow',
   'app:quitDirect',
   'app:instanceRole',
@@ -78,12 +79,29 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
 
 let featureReadyPromise: Promise<void> | null = null
 
+/**
+ * The post-paint feature graph, resolved once and cached for the process
+ * lifetime.
+ *
+ * A boot that dies before the graph exists releases this wait instead of leaving
+ * it pending forever, so this promise is what keeps every feature channel on one
+ * gate: the app either has the graph or is running degraded, never stuck on a
+ * spinner that nothing explains. A rejected wait means the channel itself is
+ * unavailable, and that is recorded once here.
+ */
+export function waitForFeatures(): Promise<void> {
+  featureReadyPromise ??= window.api.invoke('app:waitForFeatures').catch((error: unknown) => {
+    logRendererError('Feature readiness could not be read', error)
+    throw error
+  })
+  return featureReadyPromise
+}
+
 async function waitForFeatureHandlers(channel: InvokeChannel): Promise<void> {
   // Hydration channels are registered before navigation, so they are always
   // answerable; every other feature channel waits for the post-paint graph.
   if (HYDRATION_CHANNELS.has(channel)) return
-  featureReadyPromise ??= window.api.invoke('app:waitForFeatures')
-  await featureReadyPromise
+  await waitForFeatures()
 }
 
 /**

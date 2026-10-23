@@ -1,11 +1,13 @@
+import { hasCaptionOverlay } from '$shared/traffic-light'
 import { logRendererError } from './system/renderer-logger'
 
 let pendingFrame: number | undefined
 let lastAppearance = ''
 
-/** Sync native Windows captions only when app appearance changes. */
+/** Sync the native caption buttons only when app appearance changes. */
 export function syncWindowControls(): void {
-  if (typeof window === 'undefined' || window.api?.windowInfo.platform !== 'win32') return
+  if (typeof window === 'undefined') return
+  if (!hasCaptionOverlay(window.api?.windowInfo.platform)) return
   if (pendingFrame !== undefined) return
   pendingFrame = requestAnimationFrame(() => {
     pendingFrame = undefined

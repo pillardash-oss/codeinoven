@@ -42,9 +42,10 @@ flowchart LR
   icon and schedule override), so the copy sits under that assistant. It is
   never a run and never the knowledge thread, so neither link travels.
 - **Hierarchy is always Assistant -> Task -> runs.** A run is never a task: it is
-  never scheduled, never counted in an assistant's task count, and never grouped.
-  Each task may override its assistant's schedule (`scheduleOverride`), and shows a
-  custom icon (`assistantIconType`) on its row.
+  never scheduled and never grouped. An assistant row's count states its threads,
+  so the tasks and their runs are both counted there. Each task may override its
+  assistant's schedule (`scheduleOverride`), and shows a custom icon
+  (`assistantIconType`) on its row.
 
 ### V1 pillars
 
@@ -563,8 +564,17 @@ creation with the newest assistant on top, so writing an assistant's knowledge (
 other edit) never reshuffles the list. `src/lib/assistant-order.ts` holds that one
 comparator, and both the main process's assistant list and this sidebar sort
 through it. Hovering an assistant reveals a
-popover with its status, schedule type, next run, task count, a knowledge preview,
+popover with its status, schedule type, next run, thread count, a knowledge preview,
 and when it was created and last updated (`AssistantHoverPopover.svelte`).
+
+The row's second line states the assistant's **thread count**: its tasks and every
+run under them, collapsed to `10+ threads` past `ASSISTANT_THREAD_COUNT_CAP` so an
+assistant that has run for months cannot widen its row. Counting executions alone
+reported `0 runs` for an on-demand assistant that had never fired, even while its
+task threads sat right below the row, so the count answers "what is in here"
+instead, and an assistant that holds no task thread yet states no count at all.
+The Getting started host is the assistant's behavior, not a thread the user works
+in, so `assistantThreadCount` (`assistant-view.ts`) never counts it.
 **Remove** deletes the assistant
 and every thread it owns, the hidden getting-started thread included, through the
 same thread-deletion path a plain thread delete uses (`AssistantManager` is handed
@@ -649,7 +659,7 @@ optional `row` snippet, so the assistant supplies its own `AssistantTaskRow`
 while the header, the persisted fold state (`pinnedFold`, keyed `assistant`),
 the divider, and the row list stay one implementation. A pinned task leaves its
 assistant's nested list and the Tasks list, so it appears exactly once, and its
-row carries the pin indicator next to the title. The assistant row's task count
+row carries the pin indicator next to the title. The assistant row's thread count
 still counts it, and an assistant whose every task is pinned says so in place of an
 empty list. The one exception is an assistant's **knowledge thread**: it is pinned for
 life so it is never evicted, but it belongs to its assistant and renders nested
@@ -732,7 +742,9 @@ What the flag changes:
 - **Every surface says so.** An assistant row, its hover popover, the panel's All
   and Assistant tabs, the search results and the recap card all read the flag: a row
   wears a small **Scheduled** / **Unscheduled** badge, and the schedule line reads
-  **Runs on demand** instead of a cadence. The **Skip next run** menu items are
+  **Runs on demand** instead of a cadence. The badge stays a neutral chip in both
+  states: an on-demand assistant is a supported way to work, not an alert, so it
+  carries no accent tint. The **Skip next run** menu items are
   hidden for an on-demand assistant, because it has nothing to skip.
 
 ### Scheduling is per function
@@ -804,7 +816,7 @@ create flow had to store (`ASSISTANT_PLACEHOLDER_NAME`).
   `assistantGap` (`assistant-view.ts`) is the single source for that rule and names
   what is missing ("Needs a knowledge and a model"); the missed state uses the same
   icon in `--color-missed`. Assistant rows never carry the state as text, and the
-  badge shares the second row with the task count. The sidebar, the hover
+  badge shares the second row with the thread count. The sidebar, the hover
   popover, and the search results all read the same helper, so they cannot
   disagree.
 - The knowledge is authored conservatively in the assistant's task thread, never in

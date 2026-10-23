@@ -27,8 +27,19 @@ import type {
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
-  SendPromptOptions
+  PreparedUtilityRuntime,
+  SendPromptOptions,
+  UtilityRuntimeOverlay,
+  UtilityRuntimePreparationRequest
 } from './driver.interface'
+import {
+  ANTIGRAVITY_MCP_CONFIG_PATH,
+  ANTIGRAVITY_SESSION_HOME,
+  antigravityGatewayRoutingNote,
+  antigravityMcpServers,
+  linkAntigravityProfile,
+  readAntigravityGlobalMcpServers
+} from './antigravity/antigravity-mcp-bridge'
 import { open } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -805,6 +816,60 @@ export class AntigravityDriver extends PersistentCliDriver {
     private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
+  }
+
+  /**
+   * The HOME `agy` itself runs under, before this turn's MCP overlay. A managed
+   * account is already a HOME container, so the overlay has to inherit from the
+   * account's home rather than from the process environment.
+   */
+  private antigravityHome(): string {
+    return this.accountEnvironment['HOME'] ?? process.env['HOME'] ?? homedir()
+  }
+
+  /**
+   * Antigravity takes MCP servers from one global file and has no per-launch
+   * override, so a turn gets its own HOME whose `mcp_config.json` carries this
+   * turn's servers plus whatever the user already configured.
+   */
+  async prepareUtilityRuntime(
+    request: UtilityRuntimePreparationRequest
+  ): Promise<UtilityRuntimeOverlay> {
+    const { servers, gatewayKey } = antigravityMcpServers(request.resolvedUtilities)
+    if (Object.keys(servers).length === 0) return {}
+    const inherited = await readAntigravityGlobalMcpServers(this.antigravityHome())
+    return {
+      env: { HOME: `{{runtime-directory}}/config/${ANTIGRAVITY_SESSION_HOME}` },
+      configFiles: [
+        {
+          id: 'antigravity-mcp',
+          relativePath: ANTIGRAVITY_MCP_CONFIG_PATH,
+          content: `${JSON.stringify({ mcpServers: { ...inherited, ...servers } }, null, 2)}\n`
+        }
+      ],
+      ...(gatewayKey ? { instructions: antigravityGatewayRoutingNote(gatewayKey) } : {})
+    }
+  }
+
+  /**
+   * Link the CLI profile into the turn's HOME once the runtime directory exists.
+   * The profile carries authentication, conversations and brain transcripts, so
+   * linking it keeps native resume working while the overlay owns only the MCP
+   * config.
+   */
+  async applyPreparedUtilityRuntime(
+    projectPath: string,
+    runtime: PreparedUtilityRuntime | null,
+    sessionId: string
+  ): Promise<void> {
+    await super.applyPreparedUtilityRuntime(projectPath, runtime, sessionId)
+    if (!runtime) return
+    const sessionHome = runtime.env['HOME']
+    if (!sessionHome) return
+    await linkAntigravityProfile(
+      this.resolveRuntimePlaceholders(sessionHome, runtime),
+      this.antigravityHome()
+    )
   }
 
   protected async ensureCliReady(): Promise<void> {

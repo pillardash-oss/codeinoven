@@ -261,6 +261,7 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
   if (
     !target ||
     /^(?:https?:|mailto:|data:|#(?!L\d))/iu.test(target) ||
+    target.startsWith('cio-cite:') ||
     target.startsWith('opencode-source:') ||
     // Reject `:name{...}` directive tokens (e.g. backticked codex citations)
     //   they are markup, not file paths.
@@ -323,6 +324,14 @@ export function parseAbsoluteFileCitationTarget(
  * agents mean) and the pathname alone (a genuine filesystem URL such as
  * `file:///Users/...`)   and the first candidate confirmed on disk wins.
  *
+ * A hostless URL whose path starts at the root carries a third reading. Agents
+ * also spell a project file as `file:///.cio/videos/launch/index.html` or
+ * `file:///src/app.html`, which as a URL names a path under the machine's
+ * filesystem root that does not exist, so the link never resolved and never
+ * became clickable. Dropping the leading slash yields the project-relative path
+ * the author meant, tried after the absolute reading so a genuine
+ * `file:///Users/...` URL still resolves to the path it names.
+ *
  * Every other target has exactly one reading, so the candidate list stays
  * length one and nothing else changes behaviour.
  */
@@ -353,6 +362,10 @@ function fileLinkCitationCandidates(value: string, explicitLink: boolean): Parse
   }
   if (host) add(`${host}${pathname}`)
   add(pathname)
+  // A hostless path under the root is also read as project-relative (see the
+  // doc comment above): `file:///.cio/videos/launch/index.html` names the
+  // project's own file, not `/.cio/...` under the filesystem root.
+  if (!host && pathname.startsWith('/') && !pathname.startsWith('//')) add(pathname.slice(1))
   // The plain reading last, because it is the only one that keeps a target the
   // URL parser would reject, and it never duplicates a path already queued.
   if (literal && !candidates.some((existing) => existing.path === literal.path)) {
@@ -372,7 +385,7 @@ function citationHref(citation: ParsedFileCitation): string {
   const params = new URLSearchParams({ path: citation.path })
   if (citation.line) params.set('line', String(citation.line))
   if (citation.lineEnd) params.set('lineEnd', String(citation.lineEnd))
-  return `#opencode-source:file?${params.toString()}`
+  return `#cio-cite:file?${params.toString()}`
 }
 
 function normalizeEscapedSlashes(value: string): string {
@@ -494,7 +507,7 @@ export function linkifyFileCitations(
   // Every remaining pass runs line by line and never reaches inside fenced code
   // or an inline-code span. Rewriting a fragment of a span injects backticks
   // into it, the span breaks, and the citation link it was supposed to become
-  // shows up as literal text in the thread, `#opencode-source:` target and all.
+  // shows up as literal text in the thread, `#cio-cite:` target and all.
   const out: string[] = []
   scanMarkdownLines(result, (line, inFence) => {
     out.push(inFence ? line : linkifyLine(line, isClickable))
@@ -521,7 +534,7 @@ function linkifyLine(line: string, isClickable: (path: string) => boolean): stri
   // protect a markdown link label, desynchronizes the pairing as soon as a line
   // holds a backticked label such as `[\`path\`](url)`. Every later span is then
   // read from the wrong backtick: the text between two labels looked like a path
-  // and prose slashes became `[/](#opencode-source:file?path=%2F)` links. A
+  // and prose slashes became `[/](#cio-cite:file?path=%2F)` links. A
   // split cannot drift, and a label span is recognized from its neighbors.
   const segments = withLinks.split('`')
 
@@ -667,9 +680,25 @@ function linkifyCodexCitations(text: string, isKnown: (path: string) => boolean)
 
 /** Extract the normalized file-citation paths a renderer should verify on disk. */
 export function extractCitationCandidates(text: string): string[] {
+  const normalized = normalizeEscapedSlashes(text)
   const candidates: string[] = []
-  for (const citation of extractCitations(normalizeEscapedSlashes(text))) {
-    if (citation.kind === 'file') candidates.push(citation.path)
+  const seen = new Set<string>()
+  const add = (path: string): void => {
+    if (!path || seen.has(path)) return
+    seen.add(path)
+    candidates.push(path)
+  }
+  for (const citation of extractCitations(normalized)) {
+    if (citation.kind === 'file') add(citation.path)
+  }
+  // Every reading of a `file://` link target is probed, not only the one the
+  // sources list shows: an agent that spells a project path as a URL becomes a
+  // clickable link only once the reading it meant is confirmed to exist, and
+  // its two readings cannot both name the file the author wrote.
+  for (const match of normalized.matchAll(MARKDOWN_LINK_PATTERN)) {
+    for (const candidate of fileLinkCitationCandidates(match[2] ?? match[3] ?? '', true)) {
+      add(candidate.path)
+    }
   }
   return candidates
 }

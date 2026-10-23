@@ -134,7 +134,14 @@ function findVisualStudio() {
   ])
 }
 
-function compileWindows(output, includeDirectory, arch, temporaryDirectory, version, productFilename) {
+function compileWindows(
+  output,
+  includeDirectory,
+  arch,
+  temporaryDirectory,
+  version,
+  productFilename
+) {
   const architecture = architectureName(arch)
   const vcArchitecture =
     architecture === 'arm64' ? 'arm64' : architecture === 'ia32' ? 'x86' : 'x64'
@@ -177,6 +184,10 @@ async function hardenElectron(electronExecutable, platform) {
 
 export default async function installNativeSplash(context) {
   const platform = context.electronPlatformName
+  if (platform === 'linux') {
+    const { verifyLinuxNative } = await import('../verify-linux-native.js')
+    verifyLinuxNative(join(context.appOutDir, 'resources', 'app.asar.unpacked'))
+  }
   const productFilename = context.packager.appInfo.productFilename
   const applicationVersion = context.packager.appInfo.version
   const executableName = context.packager.executableName ?? productFilename.toLowerCase()
@@ -265,5 +276,7 @@ export default async function installNativeSplash(context) {
     chmodSync(publicExecutable, 0o755)
     chmodSync(electronExecutable, 0o755)
   }
-  report(`installed ${platform}/${architectureName(context.arch)} splash (${runtimeExecutableName})`)
+  report(
+    `installed ${platform}/${architectureName(context.arch)} splash (${runtimeExecutableName})`
+  )
 }

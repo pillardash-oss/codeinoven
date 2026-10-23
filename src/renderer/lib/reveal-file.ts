@@ -7,6 +7,7 @@ import {
 } from '$lib/components/files/project-files-panel-preview'
 import { revealInOsFileManager } from '$lib/os-file-manager'
 import { projectFilesWorkspace, type ProjectFileView } from '$lib/stores/project-files.svelte'
+import { citationPathsState } from '$lib/stores/citation-paths.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
@@ -240,10 +241,37 @@ export async function revealAnnotatedDocument(projectId: string, path: string): 
   return true
 }
 
+/**
+ * The project-relative reading of a `file://` URL's path, when it has one.
+ *
+ * Agents spell a project file as `file:///.cio/videos/launch/index.html` as
+ * readily as they spell it `file://apps/marketing/src/app.html`, and read as a
+ * URL the former starts at the machine's filesystem root. Dropping the leading
+ * slash turns it back into the path its author meant; a URL that already names
+ * a project-relative path is returned unchanged.
+ */
+function projectRelativeFileUrlPath(absolutePath: string): string | null {
+  const normalized = normalizeCitationPath(absolutePath)
+  if (!normalized || normalized.includes('..')) return null
+  const relative = normalized.startsWith('/') ? normalized.slice(1) : normalized
+  return relative.length > 0 ? relative : null
+}
+
 /** Route an explicit local file URL to the in-app tree or the OS file manager. */
 export async function revealLocalFile(projectId: string | undefined, url: string): Promise<void> {
   if (!projectId || !url.startsWith('file://')) return
-  await revealSourceFilePath(projectId, fileUrlToPath(url))
+  const absolutePath = fileUrlToPath(url)
+  // A link only counts as a project file once the store confirmed the path
+  // exists inside the mount, so a real `file:///Users/...` URL outside the
+  // project is never mistaken for one and never prepares a file tree it has no
+  // entry in. Clicking a path that resolves nowhere still reports it through
+  // `revealSourceFilePath` instead of leaving the click with no result.
+  const projectRelative = projectRelativeFileUrlPath(absolutePath)
+  if (projectRelative && citationPathsState.isValidPath(projectRelative)) {
+    await revealCitationFile(projectId, projectRelative)
+    return
+  }
+  await revealSourceFilePath(projectId, absolutePath)
 }
 
 /**

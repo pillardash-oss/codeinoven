@@ -148,8 +148,12 @@ appx:
   # byte for byte, including case and punctuation. They are left deliberately
   # unset-looking so `bun run msix:check` fails with the value to paste instead of
   # producing a package with an invented identity; see scripts/msix.ts.
-  identityName: REPLACE_WITH_PARTNER_CENTER_IDENTITY_NAME
-  publisher: REPLACE_WITH_PARTNER_CENTER_PUBLISHER
+  # Assigned by Partner Center when the app name was reserved, read from
+  # Product management > Product identity on 2026-10-22. Both are case sensitive
+  # and must match byte for byte; the name is Partner Center's own composition,
+  # which truncates the publisher segment ("Limite", not "Limited").
+  identityName: PillardashSolutionsLimite.CodeInOven
+  publisher: CN=8427AEFC-A925-498E-8052-3847625880EA
   applicationId: CodeInOven
   displayName: CodeInOven
   publisherDisplayName: Pillardash Solutions Limited

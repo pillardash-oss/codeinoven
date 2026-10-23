@@ -19,6 +19,7 @@ import {
   deploymentLogKey,
   deploymentPageKey,
   errorMessage,
+  parseWorkflowRunPageKey,
   workflowRunKey,
   workflowRunPageKey,
   type GitOperation
@@ -261,19 +262,12 @@ export class GitDeploymentCache {
    */
   async refreshDeploymentPages(projectId: string, owner: string, repo: string): Promise<void> {
     const runRequests = Object.keys(this.runPages).flatMap((key) => {
-      if (!key.startsWith(`${owner}/${repo}#runs:`)) return []
-      const [, filter = '', page = '1'] = key.slice(`${owner}/${repo}#runs:`.length).split(':')
-      return [
-        this.requestRunPage(
-          projectId,
-          owner,
-          repo,
-          filter as WorkflowRunFilter,
-          Number(page),
-          key,
-          false
-        )
-      ]
+      // The key is parsed, never destructured by hand: the filter and the page are
+      // the fields after the prefix, and reading one field off means the refresh
+      // sends a page number where a filter belongs.
+      const cached = parseWorkflowRunPageKey(key, owner, repo)
+      if (!cached) return []
+      return [this.requestRunPage(projectId, owner, repo, cached.filter, cached.page, key, false)]
     })
     const deploymentRequests = Object.keys(this.deploymentPages).flatMap((key) => {
       if (!key.startsWith(`${owner}/${repo}#deployments:`)) return []

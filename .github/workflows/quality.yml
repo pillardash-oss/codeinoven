@@ -247,7 +247,8 @@ jobs:
     name: Linux quality and packaged startup
     needs: [policy]
     if: needs.policy.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    # Exercise the oldest supported glibc, not just the build host's runtime.
+    runs-on: ubuntu-22.04
     timeout-minutes: 40
 
     steps:
@@ -260,7 +261,7 @@ jobs:
           install: 'true'
 
       - name: Install native launcher headers
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev binutils
 
       - name: Build Pi harness
         run: bun run harness:build-pi

@@ -496,9 +496,10 @@
                      A right-side panel also reserves right-hand controls. Other panels
                      are inset from the window edge and keep the intrinsic `py-4`
                      that matches the header of every centred dialog. Windows keeps
-                     its caption buttons on the right, which would leave the heading
-                     hugging the left window edge, so these headers reserve a left gutter
-                     as well. -->
+                     its caption buttons on the right, and a Linux desktop may keep
+                     them on the left, so a fullscreen header reserves both edges
+                     through `trafficLightInsetStyle` and keeps a left gutter as a
+                     floor. -->
                 <div
                   class={[
                     'flex shrink-0 items-center justify-between border-b px-6',

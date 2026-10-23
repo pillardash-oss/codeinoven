@@ -43,6 +43,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { PermissionLevel, Project, Thread } from '../../lib/types'
+import { conversationScopeId, ASSISTANT_SPACE_ID } from '../../lib/types'
 import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
 import {
   BUILT_IN_BROWSER_SEARCH_ENGINES,
@@ -69,6 +70,7 @@ import type {
   BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserTabDestroyReason,
+  BrowserThreadBrowserPage,
   BrowserScrollbarTheme,
   BrowserTransportCommand,
   BrowserViewBounds
@@ -279,7 +281,11 @@ import {
   validateSitePermissionState,
   validateTabDestroyReason,
   validateTabId,
+  validateThreadBrowserPage,
+  validateConversationScopeId,
   validateThreadId,
+  validateUtilityPage,
+  type BrowserUtilityPage,
   validateToastOverlayAck,
   validateToastOverlayInteraction,
   validateToastOverlayRequest,
@@ -602,6 +608,20 @@ export class BrowserService {
    * it is dropped with the tab that carried it.
    */
   private readonly assistantPageTabIds = new Map<string, string>()
+  /**
+   * The page each conversation's thread browser is in use on, by conversation
+   * scope.
+   *
+   * The thread browser is the browser a conversation shares with its agent, so
+   * this is what lets the agent's browser capability reach the page the user is
+   * reading: without it an agent could only ever answer about a page it opened
+   * itself. Keyed by scope because that is what the strip groups its tabs by (a
+   * project's threads share one browser, an inbox chat and an assistant own
+   * theirs), and it holds the whole reference so a page this process has no view
+   * for yet can be mounted. The app reports it; nothing an agent calls moves the
+   * thread browser to another tab or another box.
+   */
+  private readonly threadBrowserPages = new Map<string, BrowserThreadBrowserPage>()
   private readonly configuredSessions = new Set<string>()
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly permissionDenies = new Map<string, Set<string>>()
@@ -1261,7 +1281,7 @@ export class BrowserService {
         // Remove the outgoing page before waiting: native views cover the new
         // tab's DOM, including its loading and blank states.
         if (this.activeTabId && this.activeTabId !== tabId) {
-          this.parkTab(this.activeTabId)
+          this.parkTab(this.activeTabId, { pausePlayback: true })
         }
         // The first document must not outrun extensions in its jar. If a page
         // navigates before Chromium has loaded an extension, its manifest content
@@ -1288,7 +1308,7 @@ export class BrowserService {
         // invisible stage window instead of going dead behind the app window.
         const previousActiveTabId = this.activeTabId
         if (this.activeTabId && this.activeTabId !== tabId) {
-          this.parkTab(this.activeTabId)
+          this.parkTab(this.activeTabId, { pausePlayback: true })
         }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
@@ -1885,6 +1905,19 @@ export class BrowserService {
     replaceHandler('browser:unbindAssistantPage', (_event, rawThreadId) => {
       this.assistantPageTabIds.delete(validateThreadId(rawThreadId))
     })
+    replaceHandler('browser:bindThreadBrowserPage', (_event, rawScopeId, rawPage) => {
+      // Binding is tolerant about the page: a tab restored from a previous launch
+      // has no view in this process until something shows it, and the binding is
+      // only read when an operation actually needs that page (see
+      // `conversationPageTab`).
+      this.threadBrowserPages.set(
+        validateConversationScopeId(rawScopeId),
+        validateThreadBrowserPage(rawPage)
+      )
+    })
+    replaceHandler('browser:unbindThreadBrowserPage', (_event, rawScopeId) => {
+      this.threadBrowserPages.delete(validateConversationScopeId(rawScopeId))
+    })
     replaceHandler('browser:destroyThread', (_event, rawProjectId, rawThreadId) => {
       const projectId = validateProjectId(rawProjectId)
       const threadId = validateThreadId(rawThreadId)
@@ -2173,6 +2206,7 @@ export class BrowserService {
     const projectId = validateProjectId(context.projectId)
     const threadId = validateThreadId(context.threadId)
     const contextKey = browserContextKey(projectId, threadId)
+    const scope = this.conversationScope(projectId, threadId)
     if (operation === 'open') {
       const url = validateBrowserUrl(this.requiredInputString(input, 'url'))
       const attention = validateAttention(input['attention'])
@@ -2201,19 +2235,25 @@ export class BrowserService {
         viewport: this.parkedViewportFor(tab),
         attention: reveal ? 'focus' : 'background',
         relaxed,
-        page: this.stateFor(tabId, tab)
+        page: this.stateFor(tabId, tab),
+        ...this.threadBrowserHint(scope, tabId)
       }
     }
 
-    const target = this.utilityTarget(contextKey, threadId)
+    const page = validateUtilityPage(input['page'])
+    const target = this.utilityTarget({ scope, threadId, contextKey, page })
     if (!target) {
-      // A browser assistant conversation that has a page bound but whose page is
-      // not in memory right now (a hibernated tab) is told exactly that, instead
-      // of being told to open a page it already has.
+      // The conversation's browser holding a page this process has not mounted, or
+      // a browser conversation's bound page that is not in memory right now, is
+      // told exactly that instead of being told to open a page it already has.
       throw new Error(
-        this.assistantPageTabIds.has(threadId)
-          ? 'The page the user is on is not loaded right now, so it cannot be read. Open a page of your own with "open" if you need one.'
-          : 'Open a browser page before using this operation'
+        page === 'user'
+          ? 'The thread browser has no page for this conversation right now, so there is nothing to read. Open a page of your own with "open" if you need one.'
+          : page === 'agent'
+            ? 'You have no page of your own open in this conversation. Open one with "open", or pass page "user" to reach the thread browser\u2019s page.'
+            : this.assistantPageTabIds.has(threadId)
+              ? 'The page the user is on is not loaded right now, so it cannot be read. Open a page of your own with "open" if you need one.'
+              : 'Open a browser page before using this operation'
       )
     }
     const { tabId, tab, attached } = target
@@ -2244,7 +2284,8 @@ export class BrowserService {
         return {
           ...this.utilityTabContext(tabId, tab),
           page: attached ? 'user' : 'agent',
-          cancelled: true
+          cancelled: true,
+          ...this.threadBrowserHint(scope, tabId)
         }
       }
       reviewedTarget = reviewed.target
@@ -2264,7 +2305,8 @@ export class BrowserService {
       ...this.utilityTabContext(tabId, tab),
       // Which page the answer came from, so the agent can tell a page it opened
       // apart from the page the user is reading.
-      page: attached ? ('user' as const) : ('agent' as const)
+      page: attached ? ('user' as const) : ('agent' as const),
+      ...this.threadBrowserHint(scope, tabId)
     }
     if (operation === 'viewport') {
       const viewport = validateViewportRequest(
@@ -2717,7 +2759,7 @@ export class BrowserService {
     )
     const tabId = movedTab?.[0] ?? designScreenTabId(input)
     const reused = this.tabs.has(tabId)
-    const tab = this.ensureTab(tabId, input.projectId, input.threadId)
+    const tab = this.ensureTab(tabId, input.projectId, input.threadId, this.boxOfExistingTab(tabId))
     if (!reused) {
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether or
@@ -2776,7 +2818,7 @@ export class BrowserService {
     const existing = this.agentTabFor(projectId, threadId)
     const reused = existing !== null && this.tabs.has(existing)
     const tabId = reused ? existing : `browser:agent:${crypto.randomUUID()}`
-    const tab = this.ensureTab(tabId, projectId, threadId)
+    const tab = this.ensureTab(tabId, projectId, threadId, this.boxOfExistingTab(tabId))
     if (!reused) {
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
@@ -2850,7 +2892,7 @@ export class BrowserService {
       this.load(tabId, url)
       return { tabId, tab: 'reused' }
     }
-    const tab = this.ensureTab(tabId, projectId, threadId)
+    const tab = this.ensureTab(tabId, projectId, threadId, this.boxOfExistingTab(tabId))
     tab.initialNavigationStarted = true
     // Mount the view offscreen before anything else: the page must run whether or
     // not the board is on screen to place it yet.
@@ -3682,6 +3724,21 @@ export class BrowserService {
         type: 'error'
       })
     }
+  }
+
+  /**
+   * The cookie box a tab already runs in, or the conversation's own jar when this
+   * is a tab this process has not created yet.
+   *
+   * A jar cannot move between boxes, so an app-owned surface that re-addresses a
+   * tab the user put in a box has to keep that box: asking for the unboxed jar
+   * instead would refuse the very page the surface is about to show, which is what
+   * made a page unreachable the moment the user switched the thread browser's box.
+   * Only the strip's own show chooses a box, because that is the surface the user
+   * picks one in.
+   */
+  private boxOfExistingTab(tabId: string): string | null {
+    return this.tabs.get(tabId)?.boxId ?? null
   }
 
   private ensureTab(
@@ -6928,6 +6985,16 @@ export class BrowserService {
       this.pendingPageFocusTabId = null
     }
     const viewport = options.size ?? this.parkedViewportFor(tab)
+    // A composition the user has moved away from must not keep playing. Parking
+    // leaves the page running at a real viewport in the stage window, so a
+    // transport left playing carries on with its sound from a surface nobody can
+    // see, and the film is found mid-way through when the tab comes back. Only a
+    // departure pauses: a surface that stepped aside for an overlay it will be
+    // back in front of has not left its page, and stopping the film under a menu
+    // would be the panel dying while the user reaches for its own controls.
+    if (options.pausePlayback === true && tab.composition !== null && tab.transport !== null) {
+      void this.sendTransport(tabId, 'pause', 0).catch(() => null)
+    }
     this.window.contentView.removeChildView(tab.view)
     // The view is leaving the window, so whatever frame it was displayed at no
     // longer describes where it is.
@@ -7431,6 +7498,12 @@ export class BrowserService {
     for (const [threadId, pageTabId] of this.assistantPageTabIds) {
       if (pageTabId === tabId) this.assistantPageTabIds.delete(threadId)
     }
+    for (const [scopeId, page] of this.threadBrowserPages) {
+      // A hibernated tab is put to sleep, not closed: its binding stays so the
+      // page can be mounted again the next time the agent reaches for it, which is
+      // what the revival in `conversationPageTab` is for.
+      if (page.tabId === tabId && reason === 'closed') this.threadBrowserPages.delete(scopeId)
+    }
   }
 
   /**
@@ -7450,25 +7523,161 @@ export class BrowserService {
   /**
    * The tab one browser utility call works on.
    *
-   * An ordinary agent tab is one the agent opened and owns (`open`), addressed by
-   * the conversation that asked for it. A browser tab's assistant conversation
-   * owns no page, so it falls back to the page bound to it: the tab the user is
-   * on. `attached` is what tells the caller the difference, because the two are
-   * not interchangeable (see {@link ATTACHED_PAGE_OPERATIONS}).
+   * Three kinds of page answer here, and `attached` is what tells the caller them
+   * apart, because they are not interchangeable (see
+   * {@link ATTACHED_PAGE_READ_OPERATIONS}):
+   *
+   *   - the page the agent opened and owns (`open`), which it edits freely;
+   *   - the page this conversation's thread browser is in use on, which is the
+   *     page the user is reading and is therefore attached;
+   *   - the page a browser tab's assistant conversation is bound to, which is the
+   *     same rule for the global browser's strips.
+   *
+   * `page` picks between the first and the second, and it is honoured exactly: an
+   * agent that asks for its own page is not handed the user's. The thread browser's
+   * page is the default when the agent owns none, and `"user"` asks for it
+   * explicitly, so an agent that opened a page of its own can still reach the one
+   * that holds the user's session.
    */
-  private utilityTarget(
-    contextKey: string,
+  private utilityTarget(input: {
+    scope: string
     threadId: string
-  ): { tabId: string; tab: BrowserTab; attached: boolean } | null {
-    const ownedTabId = this.agentTabIds.get(contextKey)
-    if (ownedTabId) {
-      const owned = this.tabs.get(ownedTabId)
-      if (owned) return { tabId: ownedTabId, tab: owned, attached: false }
+    contextKey: string
+    page: BrowserUtilityPage | null
+  }): { tabId: string; tab: BrowserTab; attached: boolean } | null {
+    const ownedTabId = this.agentTabIds.get(input.contextKey)
+    const owned = ownedTabId ? this.tabs.get(ownedTabId) : undefined
+    const ownedTarget =
+      owned && ownedTabId ? { tabId: ownedTabId, tab: owned, attached: false } : null
+    if (input.page === 'user') {
+      const userPage = this.conversationPageTab(input.scope)
+      if (!userPage) return null
+      // A page the agent opened may itself be the tab the thread browser is on, and
+      // then it is still the agent's own page: nothing changes about who may edit
+      // it.
+      return { ...userPage, attached: userPage.tabId !== ownedTabId }
     }
-    const pageTabId = this.assistantPageTabIds.get(threadId)
+    if (input.page === 'agent') return ownedTarget
+    if (ownedTarget) return ownedTarget
+    const conversationPage = this.conversationPageTab(input.scope)
+    if (conversationPage) return { ...conversationPage, attached: true }
+    const pageTabId = this.assistantPageTabIds.get(input.threadId)
     if (!pageTabId) return null
     const page = this.tabs.get(pageTabId)
     return page ? { tabId: pageTabId, tab: page, attached: true } : null
+  }
+
+  /**
+   * The page one conversation's thread browser is in use on, when it is live.
+   *
+   * Used for what an answer advertises rather than for what it does, so it never
+   * mounts anything: telling an agent about a page must not cost a process.
+   */
+  private liveConversationPage(scope: string): { tabId: string; tab: BrowserTab } | null {
+    const binding = this.threadBrowserPage(scope)
+    if (!binding) return null
+    const tab = this.tabs.get(binding.tabId)
+    return tab ? { tabId: binding.tabId, tab } : null
+  }
+
+  /**
+   * The page one conversation's thread browser is on, mounted when this process
+   * holds no view for its tab.
+   *
+   * A tab the user left in the thread browser across a restart has no page until
+   * something shows it. It is mounted offscreen and put back on its address,
+   * exactly as an agent's own `open` mounts its page, so the agent can read it
+   * without the user's view changing and without taking the tab over.
+   */
+  private conversationPageTab(scope: string): { tabId: string; tab: BrowserTab } | null {
+    const binding = this.threadBrowserPage(scope)
+    if (!binding) return null
+    const live = this.tabs.get(binding.tabId)
+    if (live) return { tabId: binding.tabId, tab: live }
+    // A blank tab has no address to restore, so it has nothing to read either.
+    if (binding.url === '') return null
+    try {
+      const url = this.validateTabNavigationUrl(binding.projectId, binding.boxId, binding.url)
+      const tab = this.ensureTab(binding.tabId, binding.projectId, binding.threadId, binding.boxId)
+      tab.initialNavigationStarted = true
+      this.parkTab(binding.tabId)
+      this.load(binding.tabId, url)
+      return { tabId: binding.tabId, tab }
+    } catch (error: unknown) {
+      Logger.dev('A thread browser page could not be mounted for the agent:', error)
+      return null
+    }
+  }
+
+  /**
+   * What one conversation's agent is told about the page the thread browser is on
+   * when that is not the page that answered.
+   *
+   * An agent that opened a page of its own would otherwise never learn that the
+   * user has one, which is exactly how a signed-in page stayed invisible to it. The
+   * hint names the page and the argument that reaches it, and it is empty when the
+   * page that answered already is that page.
+   */
+  private threadBrowserHint(
+    scope: string,
+    answeredTabId: string | null
+  ): {
+    threadBrowser?: {
+      tabId: string
+      url: string
+      title: string
+      boxId: string | null
+      detail: string
+    }
+  } {
+    const page = this.liveConversationPage(scope)
+    if (!page || page.tabId === answeredTabId) return {}
+    const contents = page.tab.view.webContents
+    const url = contents.isDestroyed() ? '' : contents.getURL()
+    return {
+      threadBrowser: {
+        tabId: page.tabId,
+        url,
+        title: contents.isDestroyed() ? url : contents.getTitle(),
+        boxId: page.tab.boxId,
+        detail:
+          'This conversation\u2019s thread browser is on this page. Pass page "user" to read or act on it, or page "agent" for a page you opened.'
+      }
+    }
+  }
+
+  /**
+   * The binding one conversation's thread browser filed, when the page it names
+   * belongs to that conversation.
+   *
+   * A binding is a reference, not an authority: a page answers only for the
+   * conversation whose browser it is in, so a scope that outlived the tab it was
+   * filed with can never hand one conversation's page to another's agent.
+   */
+  private threadBrowserPage(scope: string): BrowserThreadBrowserPage | null {
+    const page = this.threadBrowserPages.get(scope)
+    if (!page) return null
+    return this.conversationScope(page.projectId, page.threadId) === scope ? page : null
+  }
+
+  /**
+   * The scope a thread's browsers belong to, as the strip groups its tabs by.
+   *
+   * A project's threads share one thread browser, an inbox chat owns its own, and
+   * an assistant's tasks share the assistant (see `conversationScopeId`). The
+   * global browser's own project holds every browser conversation's tabs, so it is
+   * never addressed by scope: those pages arrive through
+   * `browser:bindAssistantPage`.
+   */
+  private conversationScope(projectId: string, threadId: string): string {
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) return `browser-conversation:${threadId}`
+    // Only an assistant's tasks file a browser under something other than the
+    // project or the thread, so only there does resolving a scope need the thread
+    // row. Reading it on every browser operation would put a database read on the
+    // path of every click.
+    const assistantId =
+      projectId === ASSISTANT_SPACE_ID ? (this.threads.get(threadId)?.assistantId ?? null) : null
+    return conversationScopeId(projectId, threadId, assistantId)
   }
 
   private requiredInputString(

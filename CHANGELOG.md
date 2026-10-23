@@ -208,6 +208,16 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **The task card says what the agent is on, not only how far the list has come.**
+  Its head read `Tasks`, a position (`2/3`), and the state (`Running`), so a folded card
+  told you progress and never the work: the one thing the list exists to answer still
+  took opening it. The head now names the task at that position, truncated between the
+  position and the state with the whole label on hover, so a folded card says what the
+  agent is doing right now. The label is derived from the same active index the counter
+  counts (`activeAgentTodoIndex`), so it appears only while a run is live: a stopped card
+  keeps its completed count and names no task, because nothing is being worked on.
+  Verified on an isolated probe with a live card and a stopped one.
+
 - **A new assistant introduces itself, and the Getting started thread stops
   looking like a place to give it work.** An assistant created from the form used
   to sit silent until the user spoke first, and the interview then asked for the
@@ -326,6 +336,36 @@ All notable changes to CodeInOven are documented here. This project follows
   and select all.
 
 ### Fixed
+
+- **The packaged startup gate ends when it is done, and a dismissed close no
+  longer quits the app.** The gate proves a packaged boot by launching the real
+  window and reading the startup proof the app writes, then letting the app quit
+  itself; it now ends the process itself once disposal has finished, because
+  Electron's teardown after `will-quit` can stall on an ad-hoc signed bundle
+  (which is what the local macOS gate packages) and no JavaScript runs after
+  `will-quit`, so the run waited out its timeout instead of reporting the pass it
+  had already proven. Separately, the quit watchdog armed while the close
+  confirmation is open was never cancelled when the user dismissed it (or when a
+  save it asked for failed), so the app force-exited fifteen seconds after they
+  chose to keep working; the renderer now reports the abandoned close and the
+  watchdog is disarmed.
+
+- **A selection in the agent's instruction modal can be copied again.** That modal exists to
+  be copied from, yet right-clicking a highlighted line gave no menu and nothing reached the
+  clipboard. The dialog was drawn the way every blocking dialog is drawn: projected into the
+  browser overlay window, which is a separate document whose projected text _is_ selectable but
+  where nothing owns a right-click. The shared text menu
+  (`components/shared/TextSelectionContextMenu.svelte`) lives in the app window, so it never saw
+  the event. The instruction modal now stays in the app window (`nativePresentation={false}` on
+  its `ui/Modal.svelte` call), which is the shell's existing presentation whenever a projection
+  cannot be used, so its text answers a right-click with Copy and Select All exactly like the
+  rest of the app's text, while "Copy instruction" still copies the whole block. Verified on an
+  isolated probe against both revisions: before the change the app-window panel sat inside an
+  `inert` ancestor, `elementFromPoint` over the instruction returned `html`, and the selection
+  was dropped at once; after it the hit test lands on the `pre`, the selection survives the
+  right-click, and the menu opens above the panel. Every other blocking dialog is still
+  projected into the overlay window, so text in those still has no right-click menu; that is the
+  same gap one layer up, in the overlay document rather than in a dialog.
 
 - **A comment written in a temporary chat now exists.** Selecting a passage
   inside a side chat dropped the text into the composer and nothing else: the

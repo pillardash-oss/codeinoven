@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { readdirSync, readFileSync, accessSync } from 'node:fs'
+import { readdirSync, readFileSync, accessSync, type Dirent } from 'node:fs'
 import { join, resolve, extname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { Logger } from '../src/main/system/logger'
@@ -56,7 +56,7 @@ function findFileUnder(root: string, matches: (entry: string) => boolean): strin
   while (queue.length > 0) {
     const current = queue.shift()
     if (!current) continue
-    let children: string[]
+    let children: Dirent[]
     try {
       children = readdirSync(current, { withFileTypes: true })
     } catch {
@@ -69,6 +69,101 @@ function findFileUnder(root: string, matches: (entry: string) => boolean): strin
     }
   }
   return undefined
+}
+
+function collectFilesUnder(root: string, matches: (entry: string) => boolean): string[] {
+  const found: string[] = []
+  const queue = [root]
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current) continue
+    let children: Dirent[]
+    try {
+      children = readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const child of children) {
+      const entry = join(current, child.name)
+      if (child.isDirectory()) queue.push(entry)
+      else if (matches(child.name)) found.push(entry)
+    }
+  }
+  return found
+}
+
+/**
+ * The oldest glibc a packaged Linux build may require: Ubuntu 22.04's.
+ *
+ * Electron ships its own binaries prebuilt against an old glibc, but the native
+ * modules we compile ourselves (`node-pty`) inherit the packaging runner's, so
+ * a runner upgrade silently raises the floor for every user. That happened once:
+ * a build compiled on a glibc 2.42 runner shipped terminals that could not load
+ * on anything older, while the rest of the app booted. Raising this ceiling is a
+ * support-policy decision, not a build detail.
+ */
+const LINUX_GLIBC_CEILING = '2.35'
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = left.split('.').map(Number)
+  const rightParts = right.split('.').map(Number)
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+/** The highest `GLIBC_x.y` a shared object asks the loader for at runtime. */
+function requiredGlibc(binary: string): string | null {
+  const result = spawnSync('readelf', ['--version-info', binary], {
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024
+  })
+  if (result.error) {
+    Logger.error(
+      `[verify-packaged-app] readelf is required to verify the Linux native glibc floor: ${result.error.message}`
+    )
+    process.exit(1)
+  }
+  if (result.status !== 0) return null
+  let highest: string | null = null
+  for (const match of result.stdout.matchAll(/GLIBC_(\d+\.\d+(?:\.\d+)?)/gu)) {
+    const version = match[1]
+    if (version && (highest === null || compareVersions(version, highest) > 0)) highest = version
+  }
+  return highest
+}
+
+/**
+ * Every compiled module in a Linux package must load on our oldest supported
+ * distribution. The renderer and main bundles are platform-neutral, so the
+ * unpacked native modules are the whole risk surface.
+ */
+function verifyLinuxNativeFloor(): void {
+  const unpacked = findFileUnder(absArtifactDir, (entry) => entry === 'app.asar.unpacked')
+  if (!unpacked) {
+    Logger.error('[verify-packaged-app] packaged app.asar.unpacked is missing')
+    process.exit(1)
+  }
+  const modules = collectFilesUnder(unpacked, (entry) => entry.endsWith('.node'))
+  mustHave('packaged native modules', modules.length > 0)
+  const offenders: string[] = []
+  for (const modulePath of modules) {
+    const required = requiredGlibc(modulePath)
+    if (required && compareVersions(required, LINUX_GLIBC_CEILING) > 0) {
+      offenders.push(`${modulePath} requires GLIBC_${required}`)
+    }
+  }
+  if (offenders.length > 0) {
+    Logger.error(
+      `[verify-packaged-app] native modules require a newer glibc than ${LINUX_GLIBC_CEILING}:\n${offenders.join('\n')}`
+    )
+    process.exit(1)
+  }
+  Logger.info(
+    `[verify-packaged-app] ${modules.length} packaged native module(s) stay within GLIBC_${LINUX_GLIBC_CEILING}`
+  )
 }
 
 const mustHave = (label: string, condition: boolean): void => {
@@ -117,6 +212,8 @@ if (target === 'mac') {
 } else if (target === 'linux') {
   mustHave('linux AppImage', hasExtension('.AppImage'))
   mustHave('linux deb', hasExtension('.deb'))
+  // Only a Linux packaging host can inspect its own ELF modules.
+  if (process.platform === 'linux') verifyLinuxNativeFloor()
 } else {
   Logger.error(`[verify-packaged-app] unsupported target: ${target}`)
   process.exit(1)

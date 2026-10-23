@@ -1,0 +1,98 @@
+name: Microsoft Store package
+
+# Builds the MSIX submission package on demand, on Windows, and hands it back as
+# an artifact.
+#
+# It exists because the Store package is not a user-facing download: it is never
+# attached to a GitHub release and never mirrored (see packaging/msix/README.md),
+# so wiring it only into the stable release path meant that producing one
+# required cutting a public release. A first Store submission, and every
+# re-submission after a certification failure, needs a package without a
+# release, which is what this workflow is for.
+#
+# Nothing here signs anything. The Store re-signs an MSIX with a Microsoft
+# certificate during certification, so the Authenticode certificate the release
+# path signs the NSIS installer with is irrelevant to this package, and
+# `scripts/msix.ts` refuses to build without the package identity Partner Center
+# assigns. Publishing is a manual upload in Partner Center (see the runbook in
+# packaging/msix/README.md); CI only produces and verifies the file.
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Architecture of the package
+        type: choice
+        options:
+          - x64
+        default: x64
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build the MSIX
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
+        with:
+          install: 'true'
+
+      - name: Build Pi harness
+        shell: bash
+        run: bun run harness:build-pi
+
+      - name: Build production bundle
+        shell: bash
+        run: bun run build:production
+
+      # The same unsigned Windows package the release path builds, except that no
+      # signing credential is read at all: an MSIX submission does not need one,
+      # and requiring CSC_LINK here would make a Store package depend on the
+      # Windows Authenticode certificate this project does not have yet.
+      - name: Package the Windows app
+        shell: bash
+        run: >
+          bunx electron-builder --win --${{ inputs.arch }} --publish never
+          -c.forceCodeSigning=false -c.npmRebuild=false
+
+      # Builds the MSIX from the app directory just produced (--prepackaged), so
+      # the native launcher, the fuses and the extra resources are not built a
+      # second time, then reads the package back and asserts the identity, the
+      # version rules and the files the manifest names. The appx target's tools
+      # only exist on Windows, so this verification is the only place the first
+      # build of a change is ever inspected.
+      - name: Build and verify the Microsoft Store package
+        shell: bash
+        run: bun scripts/msix.ts --prepackaged dist/win-unpacked --arch ${{ inputs.arch }}
+
+      - name: Upload the Microsoft Store package
+        uses: actions/upload-artifact@v6
+        with:
+          name: codeinoven-msix
+          path: dist/*.msix
+          if-no-files-found: error
+
+      # A package that fails verification is still the evidence for why, and the
+      # appx target cannot be run anywhere but a Windows runner, so the artifact
+      # is kept under a different name for inspection instead of being thrown
+      # away with the job.
+      - name: Upload the package when verification fails
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: codeinoven-msix-unverified
+          path: dist/*.msix
+          if-no-files-found: ignore

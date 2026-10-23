@@ -1,5 +1,8 @@
 <script lang="ts">
-  const isWindows = window.api?.windowInfo.platform === 'win32'
+  // Windows and Linux hide the native title bar, so the header itself is the only
+  // place the application name can live there. macOS keeps 'cio' beside the icon
+  // because the traffic lights and the menu bar already name the app.
+  const captionOverlayChrome = hasCaptionOverlay(window.api?.windowInfo.platform)
 
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
@@ -15,6 +18,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { buildEnvironmentLabel } from '$shared/build-environment'
+  import { hasCaptionOverlay } from '$shared/traffic-light'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -248,7 +252,7 @@
     >
       <VendorIcon name="CodeInOven" size={20} />
       <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"
-        >{isWindows ? 'CodeInOven' : 'cio'}</span
+        >{captionOverlayChrome ? 'CodeInOven' : 'cio'}</span
       >
     </button>
 
