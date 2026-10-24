@@ -37,7 +37,10 @@
      * surface to place it: no call site can put Cancel next to the commit action.
      */
     onCancel?: () => void
-    /** What cancel dismisses, when "Cancel" alone would not say it ("Cancel editing"). */
+    /**
+     * What cancel dismisses, for the button's tooltip ("Cancel annotation",
+     * "Cancel editing"). The label stays "Cancel" on every surface.
+     */
     cancelTitle?: string
     /** The surface's own annotation actions, drawn after Cancel (falsy actions lead). */
     leading?: Snippet
@@ -64,8 +67,8 @@
     <button
       type="button"
       class="shrink-0 px-2 py-1.5 text-xs text-muted transition-colors hover:bg-overlay"
-      title={cancelTitle}
-      onclick={onCancel}>{cancelTitle}</button
+      title={cancelTitle ?? 'Cancel'}
+      onclick={onCancel}>Cancel</button
     >
   {/if}
   {@render leading?.()}
