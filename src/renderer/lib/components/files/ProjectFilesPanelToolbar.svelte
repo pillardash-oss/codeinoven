@@ -130,15 +130,6 @@
 </script>
 
 <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
-  {#if ideStatusPortal}
-    <div
-      class="order-last ml-auto min-w-0"
-      {@attach (node) => {
-        ideStatusPortal.registerSlot(node)
-        return () => ideStatusPortal.unregisterSlot(node)
-      }}
-    ></div>
-  {/if}
   <!-- Read-aloud leads the row, away from the view toggles: it is an action,
        and sitting between annotate and preview it was tapped by mistake. -->
   {#if readAloud}
@@ -236,6 +227,15 @@
     <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
   {/if}
   <span class="flex-1"></span>
+  {#if ideStatusPortal}
+    <div
+      class="mx-1 min-w-0 shrink-0"
+      {@attach (node) => {
+        ideStatusPortal.registerSlot(node)
+        return () => ideStatusPortal.unregisterSlot(node)
+      }}
+    ></div>
+  {/if}
   <ProjectFileViewerMenu
     {ideModeEnabled}
     {ideModeDisabled}

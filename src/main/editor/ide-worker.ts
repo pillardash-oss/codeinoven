@@ -256,6 +256,8 @@ async function sessionFor(
       candidate = dirname(candidate)
     }
   }
+  if (!(await stat(workspaceRoot)).isDirectory())
+    throw new Error(`Language server workspace is not a directory: ${workspaceRoot}`)
   const key = `${workspaceRoot}\0${JSON.stringify(definition)}`
   let pending = sessions.get(key)
   if (!pending) {
@@ -286,6 +288,26 @@ async function sessionFor(
           // Fall back to the configured command until a managed copy is installed.
         }
       }
+      // Resolve PATH ourselves so non-directory entries cannot make spawn fail with ENOTDIR.
+      if (!executable.includes('/') && !executable.includes('\\')) {
+        for (const directory of (localEnv.PATH ?? '').split(delimiter)) {
+          if (!directory) continue
+          try {
+            if (!(await stat(directory)).isDirectory()) continue
+            const candidate = join(directory, executable)
+            await access(candidate, constants.X_OK)
+            if (!(await stat(candidate)).isFile()) continue
+            executable = candidate
+            break
+          } catch {
+            // Missing or invalid PATH entries do not prevent checking the next entry.
+          }
+        }
+      }
+      if (!executable.includes('/') && !executable.includes('\\'))
+        throw new Error(
+          `Cannot find executable ${command} in valid PATH directories. Check LSP settings.`
+        )
       const session = new Session(
         workspaceRoot,
         executable,

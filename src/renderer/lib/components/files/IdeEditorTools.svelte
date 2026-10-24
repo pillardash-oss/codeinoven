@@ -455,9 +455,7 @@
 
 {#if active}
   <div
-    class={statusPortal
-      ? 'min-w-0 text-xs text-muted'
-      : 'max-h-[30vh] shrink-0 overflow-y-auto overscroll-contain border-t border-border bg-surface px-2 py-1 text-xs text-muted'}
+    class="min-w-0 text-xs text-muted"
     {@attach (node) => {
       if (!statusPortal || !node.parentElement) return
       const fallback = node.parentElement
@@ -469,51 +467,15 @@
     }}
     aria-live="polite"
   >
-    <div
-      class={statusPortal
-        ? 'flex min-w-0 items-center gap-1'
-        : 'flex min-w-0 flex-wrap items-center gap-2'}
-    >
+    <div class="flex min-w-0 items-center gap-1 whitespace-nowrap">
       {#if connecting}<CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />{/if}
-      <span class="min-w-0 max-w-xs flex-1 truncate"
-        >{serverError
-          ? serverError.includes('ENOENT')
-            ? 'Language server executable not found. Install it or choose its executable in LSP settings.'
-            : 'Language server unavailable. Check its installation in LSP settings.'
-          : connecting
-            ? 'Starting language server...'
-            : capabilities
-              ? 'Language server connected'
-              : 'IDE Mode: connecting...'}</span
-      >
-      {#if serverError}
-        <button
-          type="button"
-          class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
-          onclick={() => {
-            retryVersion++
-          }}>Retry</button
-        >
-      {/if}
       <button
         type="button"
         class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
         aria-expanded={infoOpen}
         onclick={() => (infoOpen = !infoOpen)}>LSP info</button
       >
-      <button
-        type="button"
-        class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
-        onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
-      >
     </div>
-    {#if serverError && !statusPortal}
-      <details class="min-w-0">
-        <summary class="cursor-pointer py-1 text-foreground">Error details</summary>
-        <pre
-          class="max-h-24 overflow-auto overscroll-contain whitespace-pre-wrap break-all py-2 font-mono text-xs">{serverError}</pre>
-      </details>
-    {/if}
   </div>
 {/if}
 
@@ -605,6 +567,30 @@
       >
     </div>
     <div class="space-y-2 p-2">
+      <p role="status">
+        {serverError
+          ? 'Language server unavailable'
+          : connecting
+            ? 'Starting language server...'
+            : capabilities
+              ? 'Language server connected'
+              : 'No server connected'}
+      </p>
+      <div class="flex items-center justify-between gap-2">
+        {#if serverError}<button
+            type="button"
+            class="px-2 py-1 hover:bg-elevated"
+            onclick={() => {
+              retryVersion++
+            }}>Retry</button
+          >{/if}
+        <button
+          type="button"
+          class="ml-auto px-2 py-1 hover:bg-elevated"
+          onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
+        >
+      </div>
+
       <p class="break-all font-mono">{path}</p>
       {#each connectedServers ?? [] as server (server.id)}<section
           class="space-y-1 border-t border-border py-2"
@@ -622,9 +608,11 @@
         </section>{:else}<p class="text-muted">
           {connecting ? 'Connecting...' : 'No server connected to this file.'}
         </p>{/each}
-      {#if serverError}<p class="max-h-48 overflow-auto break-all text-danger">
-          {serverError}
-        </p>{/if}
+      {#if serverError}<details class="min-w-0">
+          <summary class="cursor-pointer text-danger">Error details</summary>
+          <pre
+            class="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono">{serverError}</pre>
+        </details>{/if}
     </div>
   </aside>
 {/if}

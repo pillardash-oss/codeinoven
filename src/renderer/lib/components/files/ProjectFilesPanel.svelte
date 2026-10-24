@@ -1,5 +1,6 @@
 <script lang="ts">
   import { AppPanelPortal } from '$lib/app-panel-portal'
+  const sidebarIdeStatusPortal = new AppPanelPortal()
   const fullscreenIdeStatusPortal = new AppPanelPortal()
   import { fileTabLabels } from '$lib/file-tab-labels'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
@@ -1128,6 +1129,7 @@
 
       {#if activeTab}
         <ProjectFilesPanelToolbar
+          ideStatusPortal={sidebarIdeStatusPortal}
           ideModeEnabled={projectState.ideModeEnabled}
           ideModeDisabled={ovenFile}
           onIdeModeChange={(enabled) => (projectState.ideModeEnabled = enabled)}
@@ -1360,6 +1362,7 @@
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
+            ideStatusPortal={sidebarIdeStatusPortal}
             {projectName}
             {projectId}
             scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
