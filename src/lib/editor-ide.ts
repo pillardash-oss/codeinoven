@@ -1,6 +1,7 @@
 /** Read-only editor intelligence. Positions use LSP UTF-16 offsets. */
 export type IdeAction =
   | 'install'
+  | 'inventory'
   | 'check'
   | 'sync'
   | 'close'
@@ -27,8 +28,26 @@ export interface IdeLocation {
   preview?: string
 }
 export interface IdeResponse {
+  installations?: IdeInstallation[]
+  servers?: {
+    id: string
+    name: string
+    executable: string
+    root: string
+    language: string
+    languages: string[]
+  }[]
   locations?: IdeLocation[]
   documentation?: string
   capabilities?: { definition: boolean; references: boolean; hover: boolean }
   truncated?: boolean
+}
+export interface IdeInstallation {
+  serverId: string
+  source: 'managed' | 'external' | 'missing'
+  executable?: string
+  packageName?: string
+  version?: string
+  latestVersion?: string
+  updateError?: string
 }

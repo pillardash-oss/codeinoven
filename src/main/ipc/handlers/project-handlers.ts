@@ -767,6 +767,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     }
   )
   const ide = ideService
+  ctx.updaterService?.setEditorActivitySource(() => ide.hasOpenDocuments)
   app.on('before-quit', () => ide.stop())
   ipcMain.handle(
     'projectFiles:ide',
@@ -774,6 +775,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       if (!input || typeof input !== 'object') throw new TypeError('Invalid IDE request')
       const value = input as Record<string, unknown>
       const actions = [
+        'inventory',
         'install',
         'check',
         'sync',
@@ -793,6 +795,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         value.path,
         'IDE path',
         action === 'install' ||
+          action === 'inventory' ||
           action === 'check' ||
           action === 'grep' ||
           action === 'close' ||
@@ -815,7 +818,11 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         return value
       }
       return ide.request(
-        action === 'install' || action === 'check' || action === 'close' || action === 'cancel'
+        action === 'inventory' ||
+          action === 'install' ||
+          action === 'check' ||
+          action === 'close' ||
+          action === 'cancel'
           ? ''
           : await projectFilesService.ideRoot(
               validateEntityId(projectId, 'Project ID'),

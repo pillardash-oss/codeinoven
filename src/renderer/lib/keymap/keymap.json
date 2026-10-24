@@ -1009,6 +1009,13 @@
           "scenario": "A project source editor with IDE Mode enabled."
         },
         {
+          "id": "ide-info-close",
+          "keys": ["escape"],
+          "label": "Close code information",
+          "description": "Dismisses floating documentation and code locations.",
+          "scenario": "IDE code information is open."
+        },
+        {
           "id": "ide-result-next",
           "keys": ["arrowdown"],
           "label": "Next IDE result",

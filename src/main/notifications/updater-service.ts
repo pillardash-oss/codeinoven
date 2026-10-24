@@ -105,6 +105,10 @@ interface PendingInstallState {
 }
 
 export class UpdaterService {
+  private editorIsActive: (() => boolean) | undefined
+  setEditorActivitySource(source: () => boolean): void {
+    this.editorIsActive = source
+  }
   private storage: StorageEngine
   private chatEngine: SessionActivitySource | null = null
   /** How to name the working threads behind the engine's count, for the modal. */
@@ -986,6 +990,16 @@ export class UpdaterService {
       // Fetching the feed can run ahead of disk recovery, but unattended
       // installation must still observe the previous failed-install guard.
       // An explicit recovery install can proceed even if that disk read hangs.
+      if (!this.installApproved && this.editorIsActive?.()) {
+        this.installPending = false
+        this.clearDeferredInstall()
+        this.updateState({
+          state: 'downloaded',
+          blockedReason: 'IDE Mode is open. Restart to install when you have finished editing.'
+        })
+        await this.persistPendingInstall()
+        return
+      }
       const activeCount =
         this.activeSessionCount() +
         (this.installRecoveryPending && !this.installApproved && !this.forceUpdateInBackground

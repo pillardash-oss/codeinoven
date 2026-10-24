@@ -468,7 +468,8 @@ async function handle(
   env: NodeJS.ProcessEnv,
   servers: IdeLanguageServer[]
 ): Promise<IdeResponse> {
-  if (request.action === 'install') throw new Error('Installation must run through the IDE service')
+  if (request.action === 'install' || request.action === 'inventory')
+    throw new Error('Setup must run through the IDE service')
   if (request.action === 'cancel') {
     searches.get(request.owner)?.kill()
     return {}
@@ -548,7 +549,21 @@ async function handle(
     references: Boolean(session.capabilities.referencesProvider),
     hover: Boolean(session.capabilities.hoverProvider)
   }
-  if (request.action === 'capabilities' || request.action === 'sync') return { capabilities }
+  const connected = [
+    {
+      id: selected!.server.id,
+      name: selected!.server.name,
+      executable: session.child.spawnfile,
+      root: session.root,
+      language,
+      languages:
+        selected!.server.command === 'svelteserver'
+          ? ['Svelte', 'HTML', 'CSS', 'JavaScript', 'TypeScript']
+          : [language]
+    }
+  ]
+  if (request.action === 'capabilities' || request.action === 'sync')
+    return { capabilities, servers: connected }
   if (!capabilities[request.action]) return { capabilities, locations: [] }
   const result = await session.request(`textDocument/${request.action}`, {
     textDocument: { uri },

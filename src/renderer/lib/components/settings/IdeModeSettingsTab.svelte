@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import type { IdeInstallation } from '$shared/editor-ide'
   import CioCode from '@pdslng/cio-icon/CioCode.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
@@ -23,6 +25,41 @@
   }
   let { config, updateConfig }: Props = $props()
   let servers = $derived(config.ideLanguageServers ?? DEFAULT_IDE_LANGUAGE_SERVERS)
+  let installations = $state.raw<Record<string, IdeInstallation>>({})
+  let loadingInstallations = $state(true)
+  let checkingUpdates = $state(false)
+  let inventorySequence = 0
+  async function refreshInstallations(updates = false): Promise<void> {
+    const id = ++inventorySequence
+    if (updates) checkingUpdates = true
+    try {
+      const result = await invoke('projectFiles:ide', '', {
+        owner: crypto.randomUUID(),
+        action: 'inventory',
+        path: '',
+        query: updates ? 'updates' : undefined
+      })
+      if (id !== inventorySequence) return
+      installations = Object.fromEntries(
+        (result.installations ?? []).map((item) => [item.serverId, item])
+      )
+    } catch (reason) {
+      if (id === inventorySequence)
+        error = reason instanceof Error ? reason.message : String(reason)
+    } finally {
+      if (id === inventorySequence) {
+        loadingInstallations = false
+        checkingUpdates = false
+      }
+    }
+  }
+  onMount(() => {
+    void refreshInstallations()
+  })
+  function hasUpdate(item: IdeInstallation | undefined): boolean {
+    if (!item?.version || !item.latestVersion) return false
+    return item.latestVersion.localeCompare(item.version, undefined, { numeric: true }) > 0
+  }
   let presetId = $state('typescript')
   let editing = $state<IdeLanguageServer | null>(null)
   let deleting = $state<IdeLanguageServer | null>(null)
@@ -38,6 +75,7 @@
   async function persist(next: IdeLanguageServer[]): Promise<void> {
     await updateConfig({ ideLanguageServers: validateIdeLanguageServers(next) })
     status = {}
+    await refreshInstallations()
   }
   async function saveServer(server: IdeLanguageServer): Promise<void> {
     await persist(
@@ -154,6 +192,7 @@
         path: '',
         serverId: server.id
       })
+      await refreshInstallations()
       await check(server)
     } catch (reason) {
       status = { ...status, [server.id]: reason instanceof Error ? reason.message : String(reason) }
@@ -215,6 +254,19 @@
       <button
         type="button"
         class={buttonClass}
+        disabled={checkingUpdates || loadingInstallations}
+        onclick={() => void refreshInstallations(true)}
+        ><span class="flex items-center gap-2"
+          >{#if checkingUpdates}<CioSpinner
+              size={13}
+              class="animate-spin"
+              aria-hidden="true"
+            />{/if}Check for updates</span
+        ></button
+      >
+      <button
+        type="button"
+        class={buttonClass}
         onclick={() => {
           error = ''
           importing = true
@@ -245,6 +297,7 @@
   {#if error && !importing}<p class="mb-4 text-xs text-danger" role="alert">{error}</p>{/if}
   <div class="space-y-2">
     {#each servers as server (server.id)}
+      {@const installation = installations[server.id]}
       <section class="border border-border bg-surface p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
@@ -262,14 +315,22 @@
               <button
                 type="button"
                 class={buttonClass}
-                disabled={busy || installing[server.id] || checking[server.id]}
+                disabled={loadingInstallations ||
+                  busy ||
+                  installing[server.id] ||
+                  checking[server.id]}
                 onclick={() => void install(server)}
                 ><span class="flex items-center gap-2"
                   >{#if installing[server.id]}<CioSpinner
                       size={13}
                       class="animate-spin"
                       aria-hidden="true"
-                    />Setting up...{:else}Install{/if}</span
+                    />Setting up...{:else if loadingInstallations}Checking...{:else if installation?.source === 'managed'}{hasUpdate(
+                      installation
+                    )
+                      ? 'Update'
+                      : 'Reinstall'}{:else if installation?.source === 'external'}Install managed
+                    copy{:else}Install{/if}</span
                 ></button
               >
             {/if}
@@ -304,11 +365,35 @@
             >
           </div>
         </div>
+        {#if installation && installation.source !== 'missing'}
+          <div class="mt-2 space-y-1 text-xs text-muted">
+            <p>
+              Installed{installation.version ? ` v${installation.version}` : ''} · {installation.source ===
+              'managed'
+                ? 'Managed by app'
+                : 'External executable'}
+            </p>
+            {#if installation.packageName && installation.source === 'managed'}<p>
+                npm package: {installation.packageName}
+              </p>{/if}
+            <p class="break-all font-mono">{installation.executable}</p>
+            {#if hasUpdate(installation)}<p class="text-primary">
+                Update available: {installation.latestVersion}
+              </p>{:else if installation.latestVersion && installation.version}<p>
+                Up to date
+              </p>{:else if installation.latestVersion}<p>
+                Latest version: {installation.latestVersion}
+              </p>{/if}
+            {#if installation.updateError}<p>{installation.updateError}</p>{/if}
+          </div>
+        {/if}
         <p class="mt-3 text-xs text-muted" role="status">
           {status[server.id] ??
-            (IDE_SERVER_PACKAGES[server.command]
-              ? 'Install here, or verify an existing installation on PATH.'
-              : 'Install this executable on PATH, or choose its path with Edit.')}
+            (installation && installation.source !== 'missing'
+              ? 'Installed. Verify installation to check its connection.'
+              : IDE_SERVER_PACKAGES[server.command]
+                ? 'Install here, or verify an existing installation on PATH.'
+                : 'Install this executable on PATH, or choose its path with Edit.')}
         </p>
         {#if !busy && !checking[server.id] && !installing[server.id] && status[server.id] && !status[server.id].startsWith('Ready.')}
           <div class="mt-2 flex justify-end">

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { AppPanelPortal } from '$lib/app-panel-portal'
+  const fullscreenIdeStatusPortal = new AppPanelPortal()
   import { fileTabLabels } from '$lib/file-tab-labels'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
@@ -1358,6 +1360,7 @@
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
+            {projectName}
             {projectId}
             scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
             threadId={mountThreadId ?? undefined}
@@ -1609,6 +1612,7 @@
           saving={false}
           saveLabel=""
           fullscreen
+          ideStatusPortal={fullscreenIdeStatusPortal}
           findDisabled={!editorFindAvailable && !documentFindAvailable}
           replaceDisabled={!editorFindAvailable}
           onSearch={() => openReaderFind(false)}
@@ -1738,6 +1742,8 @@
           {:else}
             {#key activeTab.id}
               <ProjectTextEditor
+                {projectName}
+                ideStatusPortal={fullscreenIdeStatusPortal}
                 {projectId}
                 scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
                 threadId={mountThreadId ?? undefined}

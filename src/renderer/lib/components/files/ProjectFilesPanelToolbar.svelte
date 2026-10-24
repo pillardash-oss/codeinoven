@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { AppPanelPortal } from '$lib/app-panel-portal'
   import CioCode from '@pdslng/cio-icon/CioCode.svelte'
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
@@ -18,6 +19,7 @@
   }
 
   interface Props {
+    ideStatusPortal?: AppPanelPortal
     ideModeEnabled: boolean
     ideModeDisabled: boolean
     onIdeModeChange: (enabled: boolean) => void
@@ -80,6 +82,7 @@
   }
 
   let {
+    ideStatusPortal,
     ideModeEnabled,
     ideModeDisabled,
     onIdeModeChange,
@@ -127,6 +130,15 @@
 </script>
 
 <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
+  {#if ideStatusPortal}
+    <div
+      class="order-last ml-auto min-w-0"
+      {@attach (node) => {
+        ideStatusPortal.registerSlot(node)
+        return () => ideStatusPortal.unregisterSlot(node)
+      }}
+    ></div>
+  {/if}
   <!-- Read-aloud leads the row, away from the view toggles: it is an action,
        and sitting between annotate and preview it was tapped by mistake. -->
   {#if readAloud}

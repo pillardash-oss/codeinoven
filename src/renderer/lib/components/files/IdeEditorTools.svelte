@@ -1,8 +1,16 @@
 <script lang="ts">
+  import {
+    rememberIdeResults,
+    recalledIdeResults,
+    forgetIdeResults
+  } from '$lib/editor/ide-floating-results'
+  import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { navigateTo } from '$lib/app-control/app-control-actions'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import type { AppPanelPortal } from '$lib/app-panel-portal'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -16,8 +24,25 @@
     path: string
     value: string
     enabled?: boolean
+    projectName?: string
+    statusPortal?: AppPanelPortal
   }
-  let { projectId, scopeBucketId, threadId, path, value, enabled = false }: Props = $props()
+  let {
+    projectId,
+    scopeBucketId,
+    threadId,
+    path,
+    value,
+    enabled = false,
+    projectName = '',
+    statusPortal
+  }: Props = $props()
+  let resolvedProjectName = $state('')
+  let connectedServers = $state<IdeResponse['servers']>([])
+  let infoOpen = $state(false)
+  let floatingRoot: HTMLDivElement | undefined
+  let anchor = $state({ x: 16, y: 80 })
+  let hoverLeaveTimer: ReturnType<typeof setTimeout> | undefined
   const owner = crypto.randomUUID()
   let capabilities = $state<IdeResponse['capabilities']>()
   let open = $state(false)
@@ -40,6 +65,7 @@
   let alive = false
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   let searchStarted = false
+  const floatingKey = $derived(`${projectId}:${scopeBucketId ?? ''}:${threadId ?? ''}`)
   const active = $derived(enabled && Boolean(projectId))
 
   async function request(action: IdeAction, token?: IdeToken): Promise<IdeResponse> {
@@ -71,13 +97,31 @@
   function connect(enabled: boolean, context: SessionContext): (() => void) | undefined {
     if (!enabled) return
     alive = true
+    const recalled = recalledIdeResults(floatingKey)
+    if (recalled) {
+      results = recalled.results
+      selectedIndex = recalled.selectedIndex
+      locationTitle = recalled.title
+      anchor = recalled.anchor
+      mode = 'locations'
+      open = true
+    }
+    if (!projectName)
+      void invoke('project:get', context.projectId)
+        .then((project) => {
+          if (alive) resolvedProjectName = project?.name ?? context.projectId
+        })
+        .catch(() => {
+          resolvedProjectName = context.projectId
+        })
     serverError = ''
     failedRetry = -1
     return () => {
       alive = false
+      clearTimeout(hoverLeaveTimer)
       capabilities = undefined
       hover = null
-      closeModal()
+      closeModal(true)
       void invoke(
         'projectFiles:ide',
         context.projectId,
@@ -111,6 +155,7 @@
       )
         .then((result) => {
           if (!cancelled && alive) {
+            connectedServers = result.servers ?? []
             capabilities = result.capabilities
             failedRetry = -1
             connecting = false
@@ -141,7 +186,8 @@
     }
   }
 
-  function closeModal(): void {
+  function closeModal(preserve = false): void {
+    if (!preserve) forgetIdeResults(floatingKey)
     sequence++
     open = false
     busy = false
@@ -149,10 +195,46 @@
   }
 
   export function dismissHover(): void {
-    hover = null
-    if (!busy && !open) sequence++
+    clearTimeout(hoverLeaveTimer)
+    hoverLeaveTimer = setTimeout(() => {
+      hover = null
+      if (!busy && !open) sequence++
+    }, 400)
   }
-
+  function keepHover(): void {
+    clearTimeout(hoverLeaveTimer)
+  }
+  function dismissOutside(event: PointerEvent): void {
+    if (event.target instanceof Node && floatingRoot?.contains(event.target)) return
+    hover = null
+    if (open && mode !== 'grep' && mode !== 'files') closeModal()
+  }
+  function positionFloating(node: HTMLDivElement): () => void {
+    floatingRoot = node
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    node.showPopover()
+    if (!hover) node.focus({ preventScroll: true })
+    const unregister = registerOverlayClose(() => {
+      hover = null
+      closeModal()
+    }, false)
+    const position = () => {
+      const rect = node.getBoundingClientRect()
+      node.style.left = `${Math.max(8, Math.min(anchor.x, window.innerWidth - rect.width - 8))}px`
+      node.style.top = `${Math.max(8, Math.min(anchor.y, window.innerHeight - rect.height - 8))}px`
+    }
+    const observer = new ResizeObserver(position)
+    observer.observe(node)
+    position()
+    return () => {
+      if (node.contains(document.activeElement) && previousFocus?.isConnected)
+        previousFocus.focus({ preventScroll: true })
+      unregister()
+      observer.disconnect()
+      floatingRoot = undefined
+    }
+  }
   export function actions(token: IdeToken): IdeMenuAction[] {
     if (!active) return []
     const items: IdeMenuAction[] = []
@@ -179,13 +261,13 @@
       })
     items.push(
       {
-        label: 'Search Project Text',
+        label: `Search ${projectName || resolvedProjectName} text`,
         run: () => {
           handle('grep', token)
         }
       },
       {
-        label: 'Find Project File',
+        label: `Find file in ${projectName || resolvedProjectName}`,
         run: () => {
           handle('files', token)
         }
@@ -198,6 +280,10 @@
     token: IdeToken
   ): boolean {
     if (!active) return false
+    if (action !== 'hover') {
+      clearTimeout(hoverLeaveTimer)
+      anchor = { x: token.x || 16, y: (token.y || 64) + 12 }
+    }
     if (action === 'grep' || action === 'files') {
       mode = action
       query = action === 'grep' ? token.word : ''
@@ -231,12 +317,14 @@
         connecting = false
         serverError = ''
         if (action === 'hover') {
-          if (result.documentation)
+          if (result.documentation) {
+            anchor = { x: token.x, y: token.y + 12 }
             hover = {
               text: result.documentation,
-              x: Math.min(token.x, window.innerWidth - 360),
-              y: Math.min(token.y + 12, window.innerHeight - 220)
+              x: token.x,
+              y: token.y + 12
             }
+          }
           return
         }
         if (action === 'documentation') {
@@ -266,6 +354,13 @@
     return true
   }
   function handleResultKey(event: KeyboardEvent): void {
+    if (keymapState.matches('ide-info-close', event) && (open || hover)) {
+      event.preventDefault()
+      event.stopPropagation()
+      hover = null
+      closeModal()
+      return
+    }
     if (!open || mode === 'documentation' || busy || !results.length || event.defaultPrevented)
       return
     if (keymapState.matches('ide-result-open', event)) {
@@ -286,7 +381,14 @@
     resultList?.children.item(selectedIndex)?.scrollIntoView({ block: 'nearest' })
   }
   async function navigate(location: IdeLocation): Promise<void> {
-    closeModal()
+    if (open && mode === 'locations' && results.length)
+      rememberIdeResults(floatingKey, {
+        results: $state.snapshot(results),
+        selectedIndex,
+        title: locationTitle,
+        anchor: $state.snapshot(anchor)
+      })
+    else closeModal()
     hover = null
     await projectFilesWorkspace.openLocation(
       projectId,
@@ -353,12 +455,27 @@
 
 {#if active}
   <div
-    class="max-h-[30vh] shrink-0 overflow-y-auto overscroll-contain border-t border-border bg-surface px-3 py-1 text-xs text-muted"
+    class={statusPortal
+      ? 'min-w-0 text-xs text-muted'
+      : 'max-h-[30vh] shrink-0 overflow-y-auto overscroll-contain border-t border-border bg-surface px-2 py-1 text-xs text-muted'}
+    {@attach (node) => {
+      if (!statusPortal || !node.parentElement) return
+      const fallback = node.parentElement
+      statusPortal.registerHost({ host: node, fallback })
+      return () => {
+        fallback.appendChild(node)
+        statusPortal.unregisterHost(node)
+      }
+    }}
     aria-live="polite"
   >
-    <div class="flex min-w-0 flex-wrap items-center gap-2">
+    <div
+      class={statusPortal
+        ? 'flex min-w-0 items-center gap-1'
+        : 'flex min-w-0 flex-wrap items-center gap-2'}
+    >
       {#if connecting}<CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />{/if}
-      <span class="min-w-0 flex-1"
+      <span class="min-w-0 max-w-xs flex-1 truncate"
         >{serverError
           ? serverError.includes('ENOENT')
             ? 'Language server executable not found. Install it or choose its executable in LSP settings.'
@@ -381,10 +498,16 @@
       <button
         type="button"
         class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
+        aria-expanded={infoOpen}
+        onclick={() => (infoOpen = !infoOpen)}>LSP info</button
+      >
+      <button
+        type="button"
+        class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
         onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
       >
     </div>
-    {#if serverError}
+    {#if serverError && !statusPortal}
       <details class="min-w-0">
         <summary class="cursor-pointer py-1 text-foreground">Error details</summary>
         <pre
@@ -394,64 +517,19 @@
   </div>
 {/if}
 
-<svelte:window
-  onkeydown={handleResultKey}
-  onpointerdown={() => {
-    hover = null
-  }}
-  onscroll={() => {
-    hover = null
-  }}
-/>
-{#if hover}
-  <div
-    class="pointer-events-none fixed z-50 max-h-48 max-w-sm overflow-hidden whitespace-pre-wrap border border-border bg-elevated p-3 font-mono text-xs text-foreground shadow-lg"
-    style:left={`${Math.max(0, hover.x)}px`}
-    style:top={`${Math.max(0, hover.y)}px`}
-    role="tooltip"
-  >
-    <MarkdownView text={hover.text} class="markdown-body-card" />
-  </div>
-{/if}
-<Modal
-  {open}
-  onClose={closeModal}
-  title={mode === 'grep'
-    ? 'Search project text'
-    : mode === 'files'
-      ? 'Find project file'
-      : mode === 'documentation'
-        ? 'Documentation'
-        : locationTitle}
-  size="lg"
->
-  {#if mode === 'grep' || mode === 'files'}
-    <input
-      class="w-full border border-border bg-app px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
-      aria-label={mode === 'grep' ? 'Search project text' : 'Find project file'}
-      placeholder={mode === 'grep' ? 'Find text across files' : 'Find a file by name or path'}
-      value={query}
-      oninput={(event) => {
-        query = event.currentTarget.value
-        scheduleSearch()
-      }}
-    />
-  {/if}
-  {#if error}<p class="py-2 text-xs text-muted" role="status">{error}</p>{/if}
-  {#if busy}<p class="py-2 text-xs text-muted" role="status">
-      {mode === 'documentation'
-        ? 'Loading documentation...'
-        : mode === 'locations'
-          ? 'Finding code locations...'
-          : 'Searching...'}
+<svelte:window onkeydown={handleResultKey} onpointerdown={dismissOutside} />
+{#snippet resultRows()}
+  {#if error}<p class="px-2 py-1 text-xs text-danger" role="status">{error}</p>{/if}
+  {#if busy}<p class="flex items-center gap-2 px-2 py-1 text-xs text-muted" role="status">
+      <CioSpinner size={13} class="animate-spin" />Loading...
     </p>{/if}
-  {#if mode === 'documentation'}
-    <div class="max-h-96 overflow-auto py-3 text-sm text-foreground">
-      <MarkdownView text={documentation} class="markdown-body-card" />
+  {#if mode === 'documentation' || hover}
+    <div class="min-h-0 overflow-auto px-2 py-1 text-xs text-foreground">
+      <MarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
     </div>
   {:else}
     <div
-      class="max-h-96 overflow-auto py-2"
+      class="max-h-96 min-h-0 overflow-auto"
       {@attach (node) => {
         resultList = node
         return () => {
@@ -463,28 +541,121 @@
         <button
           type="button"
           class={[
-            'block w-full border-b border-border px-3 py-2 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated',
+            'block w-full border-b border-border px-2 py-1 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated',
             index === selectedIndex && 'bg-elevated'
           ]}
-          data-modal-primary={index === selectedIndex ? '' : undefined}
           onfocus={() => (selectedIndex = index)}
+          data-modal-primary={index === selectedIndex ? '' : undefined}
           onclick={() => void navigate(result)}
         >
           <span class="block truncate font-mono">{result.path}:{result.line}</span>
           {#if result.preview}<span class="block truncate text-muted">{result.preview}</span>{/if}
         </button>
-      {:else}
-        {#if !busy && !error}<p class="py-2 text-xs text-muted">
+      {:else}{#if !busy && !error}<p class="px-2 py-1 text-xs text-muted">
             {mode === 'locations'
-              ? `No ${locationTitle.toLowerCase()} found for this symbol in this project.`
+              ? `No ${locationTitle.toLowerCase()} found for this symbol.`
               : query
                 ? 'No matches found.'
                 : 'Type to search.'}
-          </p>{/if}
-      {/each}
+          </p>{/if}{/each}
     </div>
-    {#if truncated}<p class="text-xs text-muted">
-        Results limited. Narrow your search to find more.
-      </p>{/if}
   {/if}
+{/snippet}
+{#if hover || (open && (mode === 'locations' || mode === 'documentation'))}
+  <div
+    popover="manual"
+    role="region"
+    tabindex="-1"
+    aria-label={hover || mode === 'documentation' ? 'Documentation' : locationTitle}
+    class="fixed inset-auto z-50 m-0 flex max-h-[min(24rem,60vh)] w-max max-w-[min(34rem,calc(100vw-1rem))] flex-col overflow-hidden border border-border bg-elevated text-foreground shadow-lg"
+    style:left={`${anchor.x}px`}
+    style:top={`${anchor.y}px`}
+    onpointerenter={keepHover}
+    onpointerleave={() => {
+      if (hover) dismissHover()
+    }}
+    {@attach positionFloating}
+  >
+    {#if !hover}<div
+        class="flex items-center justify-between gap-3 border-b border-border px-2 py-1 text-xs"
+      >
+        <span>{mode === 'documentation' ? 'Documentation' : locationTitle}</span><button
+          type="button"
+          title="Close code information"
+          aria-label="Close code information"
+          class="p-0.5 hover:bg-surface"
+          onclick={() => closeModal()}><CioClose size={13} /></button
+        >
+      </div>{/if}
+    {@render resultRows()}
+  </div>
+{/if}
+{#if infoOpen}
+  <aside
+    class="absolute inset-y-0 right-0 z-40 flex w-80 max-w-full flex-col overflow-auto border-l border-border bg-surface text-xs text-foreground"
+    aria-label="Language servers for this file"
+  >
+    <div class="flex items-center justify-between border-b border-border px-2 py-1">
+      <span>LSP info</span><button
+        type="button"
+        class="p-1"
+        title="Close LSP info"
+        aria-label="Close LSP info"
+        onclick={() => (infoOpen = false)}><CioClose size={13} /></button
+      >
+    </div>
+    <div class="space-y-2 p-2">
+      <p class="break-all font-mono">{path}</p>
+      {#each connectedServers ?? [] as server (server.id)}<section
+          class="space-y-1 border-t border-border py-2"
+        >
+          <p class="font-medium">{server.name}</p>
+          <p>Languages: {(server.languages ?? [server.language]).join(', ')}</p>
+          <p class="break-all font-mono text-muted">{server.executable}</p>
+          <p class="break-all text-muted">Workspace: {server.root}</p>
+          <p>
+            {Object.entries(capabilities ?? {})
+              .filter(([, value]) => value)
+              .map(([name]) => name)
+              .join(', ')}
+          </p>
+        </section>{:else}<p class="text-muted">
+          {connecting ? 'Connecting...' : 'No server connected to this file.'}
+        </p>{/each}
+      {#if serverError}<p class="max-h-48 overflow-auto break-all text-danger">
+          {serverError}
+        </p>{/if}
+    </div>
+  </aside>
+{/if}
+<Modal
+  open={open && (mode === 'grep' || mode === 'files')}
+  onClose={() => closeModal()}
+  title={mode === 'grep'
+    ? `Search ${projectName || resolvedProjectName} text`
+    : mode === 'files'
+      ? `Find file in ${projectName || resolvedProjectName}`
+      : mode === 'documentation'
+        ? 'Documentation'
+        : locationTitle}
+  size="lg"
+>
+  {#if mode === 'grep' || mode === 'files'}
+    <input
+      class="w-full border border-border bg-app px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+      aria-label={mode === 'grep'
+        ? `Search ${projectName || resolvedProjectName} text`
+        : 'Find project file'}
+      placeholder={mode === 'grep' ? 'Find text across files' : 'Find a file by name or path'}
+      value={query}
+      oninput={(event) => {
+        query = event.currentTarget.value
+        scheduleSearch()
+      }}
+    />
+  {/if}
+  {@render resultRows()}
+  {#if truncated}<p class="text-xs text-muted">
+      Results limited. Narrow your search to find more.
+    </p>{/if}
 </Modal>

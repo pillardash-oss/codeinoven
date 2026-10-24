@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { AppPanelPortal } from '$lib/app-panel-portal'
   import IdeEditorTools from './IdeEditorTools.svelte'
   import { onMount } from 'svelte'
 
@@ -13,6 +14,8 @@
     scopeBucketId?: string
     threadId?: string
     ideEnabled?: boolean
+    projectName?: string
+    ideStatusPortal?: AppPanelPortal
     value: string
     path: string
     readonly?: boolean
@@ -48,6 +51,8 @@
     scopeBucketId,
     threadId,
     ideEnabled = false,
+    projectName = '',
+    ideStatusPortal,
     value,
     path,
     readonly = false,
@@ -195,5 +200,7 @@
     {path}
     {value}
     enabled={ideEnabled}
+    {projectName}
+    statusPortal={ideStatusPortal}
   />
 {/if}
