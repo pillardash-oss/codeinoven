@@ -32,6 +32,8 @@ import {
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
 import { designSessionBriefing, type DesignSessionMode } from './cio-design-prompt'
 import { videoSessionBriefing, type VideoSessionMode } from './cio-video-prompt'
+import { CUA_PLAYBOOK } from './cio-cua-prompt'
+import { mcpCatalogPayload } from './mcp-tool-catalog'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
@@ -2439,9 +2441,16 @@ export class UtilityOrchestrationService {
         tools: videoUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
+    if (resolved.utility.id === CUA_UTILITY_ID) {
+      // The driver's catalog is a list of single actions, so the activation hands
+      // the batching contract with it: a desktop task that takes one script must
+      // not be driven one gateway call per keystroke.
+      const client = await this.ensureMcpClient(state, resolved)
+      return { instructions: CUA_PLAYBOOK, tools: mcpCatalogPayload(await client.listTools()) }
+    }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
-      return { tools: await client.listTools() }
+      return { tools: mcpCatalogPayload(await client.listTools()) }
     }
     if (resolved.utility.kind === 'skill') {
       // Skills hand back their instructions: the full contract, only now, and
