@@ -165,11 +165,9 @@ export class CodexDriver extends PersistentCliDriver {
     contextUsage: true,
     compaction: true,
     subagents: true,
-    // Computer use is declared here as the intent, not as a fact: Codex ships it
-    // as an installed MCP server, so `resolveNativeUtilities` decides per turn
-    // whether this machine actually has it. `web_search` and `web_fetch` are the
-    // harness's own and are answered as declared.
-    nativeUtilities: ['web_search', 'web_fetch', 'computer_use']
+    // The app-server does not guarantee desktop tools for every model/session.
+    // Keep the app-managed computer-use fallback available.
+    nativeUtilities: ['web_search', 'web_fetch']
   }
   /** How long a computer-use answer is reused. One turn start asks for it from
    *  several places (host launch, gateway, behavior prompt), and the answer is a
