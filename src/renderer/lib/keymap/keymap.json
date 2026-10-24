@@ -989,21 +989,14 @@
         },
         {
           "id": "ide-documentation",
-          "keys": [
-            "alt",
-            "enter"
-          ],
+          "keys": ["alt", "enter"],
           "label": "Show documentation",
           "description": "Show documentation in IDE Mode.",
           "scenario": "A project source editor with IDE Mode enabled."
         },
         {
           "id": "ide-grep",
-          "keys": [
-            "mod",
-            "shift",
-            "g"
-          ],
+          "keys": ["mod", "shift", "g"],
           "label": "Search project text",
           "description": "Search project text in IDE Mode.",
           "scenario": "A project source editor with IDE Mode enabled."
@@ -1014,6 +1007,27 @@
           "label": "Find project file",
           "description": "Find project file in IDE Mode.",
           "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-result-next",
+          "keys": ["arrowdown"],
+          "label": "Next IDE result",
+          "description": "Select the next code location or project search result.",
+          "scenario": "IDE Mode results open."
+        },
+        {
+          "id": "ide-result-previous",
+          "keys": ["arrowup"],
+          "label": "Previous IDE result",
+          "description": "Select the previous code location or project search result.",
+          "scenario": "IDE Mode results open."
+        },
+        {
+          "id": "ide-result-open",
+          "keys": ["enter"],
+          "label": "Open IDE result",
+          "description": "Open the selected code location or project search result.",
+          "scenario": "IDE Mode results open."
         }
       ]
     }

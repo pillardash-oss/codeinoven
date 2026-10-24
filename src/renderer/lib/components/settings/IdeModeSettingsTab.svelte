@@ -146,12 +146,19 @@
         [server.id]: `Connected. ${supported.length ? supported.join(', ') : 'No navigation capabilities advertised'}.`
       }
     } catch (reason) {
-      status = { ...status, [server.id]: reason instanceof Error ? reason.message : String(reason) }
+      status = {
+        ...status,
+        [server.id]: String(reason).includes('ENOENT')
+          ? `Executable not found: ${server.command}. Install this server or choose its executable with Edit.`
+          : reason instanceof Error
+            ? reason.message
+            : String(reason)
+      }
     } finally {
       checking = null
     }
   }
-  async function setupWithAgent(): Promise<void> {
+  async function setupWithAgent(server?: IdeLanguageServer): Promise<void> {
     if (busy) return
     busy = true
     error = ''
@@ -159,8 +166,8 @@
       const project = projects.find((project) => project.id === projectId) ?? null
       await openSetupConversation(
         project,
-        'Set up IDE Mode language servers',
-        `Help me set up standard stdio language servers for IDE Mode. Ask which languages and existing editor configuration I want to use. Inspect this project's languages and existing server installations. Help install missing language servers using the appropriate tools. Return a JSON array I can import into Settings > IDE Mode. Each server has id, name, enabled, command (executable only), args (string array), languages ([{extension:'.go',languageId:'go'}]), env (string record supporting inherited variable references), rootMarkers (file/directory names), initializationOptions (object), and settings (object). Keep credentials in environment variables. Use one enabled server per extension. Return only the new or modified entries; preserve other server configurations. Do not turn on IDE Mode globally or modify project source to remember configuration. Existing server identities and languages:\n${JSON.stringify(
+        server ? `Set up ${server.name} for IDE Mode` : 'Set up IDE Mode language servers',
+        `Help me set up standard stdio language servers for IDE Mode. ${server ? `Set up ${server.name}, executable ${server.command}, for ${server.languages.map((mapping) => mapping.languageId).join(', ')}. Latest setup result: ${status[server.id] ?? 'Not checked'}.` : 'Inspect the project languages and ask which existing editor configuration I want to reuse.'} Inspect this project's languages and existing server installations. Help install missing language servers using the appropriate tools. Return a JSON array I can import into Settings > IDE Mode. Each server has id, name, enabled, command (executable only), args (string array), languages ([{extension:'.go',languageId:'go'}]), env (string record supporting inherited variable references), rootMarkers (file/directory names), initializationOptions (object), and settings (object). Keep credentials in environment variables. Use one enabled server per extension. Return only the new or modified entries; preserve other server configurations. Do not turn on IDE Mode globally or modify project source to remember configuration. Existing server identities and languages:\n${JSON.stringify(
           servers.map((server) => ({
             id: server.id,
             name: server.name,
@@ -235,7 +242,8 @@
       <button
         type="button"
         class="bg-primary px-3 py-2 text-xs font-medium text-on-primary disabled:opacity-40"
-        disabled={busy || servers.length >= 32}
+        disabled={busy ||
+          (servers.length >= 32 && !servers.some((server) => server.id === presetId))}
         onclick={add}>Set up manually</button
       >
     </div>
@@ -281,9 +289,19 @@
             >
           </div>
         </div>
-        {#if status[server.id]}<p class="mt-3 text-xs text-muted" role="status">
-            {status[server.id]}
-          </p>{/if}
+        <p class="mt-3 text-xs text-muted" role="status">
+          {status[server.id] ?? 'Not checked. Enabling a server does not install it.'}
+        </p>
+        {#if status[server.id] && !status[server.id].startsWith('Connected.')}
+          <div class="mt-2 flex justify-end">
+            <button
+              type="button"
+              class={buttonClass}
+              disabled={busy}
+              onclick={() => void setupWithAgent(server)}>Set up with agent</button
+            >
+          </div>
+        {/if}
       </section>
     {:else}<p class="text-sm text-muted">
         No language servers configured. Choose a preset or add a custom server.

@@ -475,11 +475,15 @@ export async function createFileEditor(
         return options.onIdeAction?.(command, token) ?? false
       },
       mousemove(event, view) {
-        clearTimeout(hoverTimer)
         if (!options.isIdeEnabled?.()) return false
-        options.onIdeHoverEnd?.()
         const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
-        if (position !== null && options.onIdeAction)
+        const word = position === null ? null : view.state.wordAt(position)
+        const key = word ? `${word.from}:${word.to}` : null
+        if (key === hoverWord) return false
+        hoverWord = key
+        clearTimeout(hoverTimer)
+        options.onIdeHoverEnd?.()
+        if (word && position !== null && options.onIdeAction)
           hoverTimer = setTimeout(() => {
             const token = tokenAt(view, position, event.clientX, event.clientY)
             if (token) options.onIdeAction?.('hover', token)
@@ -487,12 +491,14 @@ export async function createFileEditor(
         return false
       },
       mouseleave() {
+        hoverWord = null
         clearTimeout(hoverTimer)
         options.onIdeHoverEnd?.()
         return false
       }
     })
   )
+  let hoverWord: string | null = null
   let hoverTimer: ReturnType<typeof setTimeout> | undefined
   const state = api.EditorState.create({ doc: value, extensions })
   const view = new api.EditorView({ state, parent: host })

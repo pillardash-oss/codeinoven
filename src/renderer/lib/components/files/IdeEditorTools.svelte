@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { navigateTo } from '$lib/app-control/app-control-actions'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -19,11 +22,17 @@
   let open = $state(false)
   let mode = $state<'grep' | 'files' | 'locations' | 'documentation'>('locations')
   let query = $state('')
+  let selectedIndex = $state(0)
+  let resultList: HTMLDivElement | undefined
   let results = $state.raw<IdeLocation[]>([])
   let documentation = $state('')
   let error = $state('')
   let busy = $state(false)
-  let serverUnavailable = false
+  let failedRetry = -1
+  let serverError = $state('')
+  let connecting = $state(false)
+  let retryVersion = $state(0)
+  let locationTitle = $state('Code locations')
   let truncated = $state(false)
   let hover = $state<{ text: string; x: number; y: number } | null>(null)
   let sequence = 0
@@ -61,7 +70,8 @@
   function connect(enabled: boolean, context: SessionContext): (() => void) | undefined {
     if (!enabled) return
     alive = true
-    serverUnavailable = false
+    serverError = ''
+    failedRetry = -1
     return () => {
       alive = false
       capabilities = undefined
@@ -80,14 +90,17 @@
   function syncDocument(
     enabled: boolean,
     context: SessionContext,
-    text: string
+    text: string,
+    retry: number
   ): (() => void) | undefined {
-    if (!enabled || serverUnavailable) return
+    if (!enabled || failedRetry === retry) return
     sequence++
     busy = false
     hover = null
     let cancelled = false
     const timer = setTimeout(() => {
+      connecting = !capabilities
+      serverError = ''
       void invoke(
         'projectFiles:ide',
         context.projectId,
@@ -98,11 +111,16 @@
         .then((result) => {
           if (!cancelled && alive) {
             capabilities = result.capabilities
+            failedRetry = -1
+            connecting = false
           }
         })
-        .catch(() => {
+        .catch((reason: unknown) => {
           if (!cancelled && alive) {
-            serverUnavailable = true
+            connecting = false
+            capabilities = undefined
+            failedRetry = retry
+            serverError = reason instanceof Error ? reason.message : String(reason)
           }
         })
     }, 250)
@@ -137,21 +155,21 @@
   export function actions(token: IdeToken): IdeMenuAction[] {
     if (!active) return []
     const items: IdeMenuAction[] = []
-    if (capabilities?.definition)
+    if (!capabilities || capabilities.definition)
       items.push({
         label: 'Go to Definition',
         run: () => {
           handle('definition', token)
         }
       })
-    if (capabilities?.references)
+    if (!capabilities || capabilities.references)
       items.push({
         label: 'Find References',
         run: () => {
           handle('references', token)
         }
       })
-    if (capabilities?.hover)
+    if (!capabilities || capabilities.hover)
       items.push({
         label: 'Show Documentation',
         run: () => {
@@ -182,6 +200,7 @@
     if (action === 'grep' || action === 'files') {
       mode = action
       query = action === 'grep' ? token.word : ''
+      selectedIndex = 0
       results = []
       hover = null
       open = true
@@ -189,17 +208,27 @@
       scheduleSearch()
       return true
     }
-    if (action === 'hover' && (!capabilities?.hover || open)) return false
+    if (action === 'hover' && (!capabilities?.hover || open || busy)) return false
     const id = ++sequence
     if (action !== 'hover') {
       busy = true
       error = ''
       hover = null
+      mode = action === 'documentation' ? 'documentation' : 'locations'
+      locationTitle = action === 'references' ? 'References' : 'Definitions'
+      selectedIndex = 0
+      results = []
+      documentation = ''
+      truncated = false
+      open = true
     }
     void request(action === 'documentation' ? 'hover' : action, token)
       .then(async (result) => {
         if (!alive || id !== sequence) return
         capabilities = result.capabilities
+        failedRetry = -1
+        connecting = false
+        serverError = ''
         if (action === 'hover') {
           if (result.documentation)
             hover = {
@@ -217,6 +246,7 @@
           await navigate(result.locations[0])
         else {
           mode = 'locations'
+          selectedIndex = 0
           results = result.locations ?? []
           open = true
         }
@@ -225,6 +255,7 @@
         if (!alive || id !== sequence || action === 'hover') return
         error = reason instanceof Error ? reason.message : String(reason)
         mode = 'locations'
+        selectedIndex = 0
         results = []
         open = true
       })
@@ -232,6 +263,26 @@
         if (id === sequence) busy = false
       })
     return true
+  }
+  function handleResultKey(event: KeyboardEvent): void {
+    if (!open || mode === 'documentation' || busy || !results.length || event.defaultPrevented)
+      return
+    if (keymapState.matches('ide-result-open', event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      void navigate(results[selectedIndex])
+      return
+    }
+    const delta = keymapState.matches('ide-result-next', event)
+      ? 1
+      : keymapState.matches('ide-result-previous', event)
+        ? -1
+        : 0
+    if (!delta) return
+    event.preventDefault()
+    event.stopPropagation()
+    selectedIndex = (selectedIndex + delta + results.length) % results.length
+    resultList?.children.item(selectedIndex)?.scrollIntoView({ block: 'nearest' })
   }
   async function navigate(location: IdeLocation): Promise<void> {
     closeModal()
@@ -249,6 +300,7 @@
     const search = query.trim()
     const searchMode = mode
     const id = ++sequence
+    selectedIndex = 0
     results = []
     truncated = false
     if (!search) {
@@ -271,6 +323,7 @@
       void pending
         .then((result) => {
           if (!alive || id !== sequence) return
+          selectedIndex = 0
           results = result.locations ?? []
           truncated = result.truncated ?? false
           error = ''
@@ -293,10 +346,45 @@
   class="hidden"
   aria-hidden="true"
   {@attach () => connect(active, { projectId, scopeBucketId, threadId, path })}
-  {@attach () => syncDocument(active, { projectId, scopeBucketId, threadId, path }, value)}
+  {@attach () =>
+    syncDocument(active, { projectId, scopeBucketId, threadId, path }, value, retryVersion)}
 ></span>
 
+{#if active}
+  <div
+    class="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-surface px-3 py-1 text-xs text-muted"
+    aria-live="polite"
+  >
+    <span class="min-w-0 flex-1 break-words"
+      >{serverError
+        ? serverError.includes('ENOENT')
+          ? 'Language server executable not found. Install it or choose its executable in LSP settings.'
+          : `Language server unavailable: ${serverError}`
+        : connecting
+          ? 'Starting language server...'
+          : capabilities
+            ? 'Language server connected'
+            : 'IDE Mode: connecting...'}</span
+    >
+    {#if serverError}
+      <button
+        type="button"
+        class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
+        onclick={() => {
+          retryVersion++
+        }}>Retry</button
+      >
+    {/if}
+    <button
+      type="button"
+      class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
+      onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
+    >
+  </div>
+{/if}
+
 <svelte:window
+  onkeydown={handleResultKey}
   onpointerdown={() => {
     hover = null
   }}
@@ -311,7 +399,7 @@
     style:top={`${Math.max(0, hover.y)}px`}
     role="tooltip"
   >
-    {hover.text}
+    <MarkdownView text={hover.text} class="markdown-body-card" />
   </div>
 {/if}
 <Modal
@@ -323,7 +411,7 @@
       ? 'Find project file'
       : mode === 'documentation'
         ? 'Documentation'
-        : 'Code locations'}
+        : locationTitle}
   size="lg"
 >
   {#if mode === 'grep' || mode === 'files'}
@@ -339,16 +427,36 @@
     />
   {/if}
   {#if error}<p class="py-2 text-xs text-muted" role="status">{error}</p>{/if}
-  {#if busy}<p class="py-2 text-xs text-muted" role="status">Searching...</p>{/if}
+  {#if busy}<p class="py-2 text-xs text-muted" role="status">
+      {mode === 'documentation'
+        ? 'Loading documentation...'
+        : mode === 'locations'
+          ? 'Finding code locations...'
+          : 'Searching...'}
+    </p>{/if}
   {#if mode === 'documentation'}
-    <pre
-      class="max-h-96 overflow-auto whitespace-pre-wrap py-3 font-mono text-xs text-foreground">{documentation}</pre>
+    <div class="max-h-96 overflow-auto py-3 text-sm text-foreground">
+      <MarkdownView text={documentation} class="markdown-body-card" />
+    </div>
   {:else}
-    <div class="max-h-96 overflow-auto py-2">
+    <div
+      class="max-h-96 overflow-auto py-2"
+      {@attach (node) => {
+        resultList = node
+        return () => {
+          resultList = undefined
+        }
+      }}
+    >
       {#each results as result, index (`${result.path}:${result.line}:${index}`)}
         <button
           type="button"
-          class="block w-full border-b border-border px-3 py-2 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated"
+          class={[
+            'block w-full border-b border-border px-3 py-2 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated',
+            index === selectedIndex && 'bg-elevated'
+          ]}
+          data-modal-primary={index === selectedIndex ? '' : undefined}
+          onfocus={() => (selectedIndex = index)}
           onclick={() => void navigate(result)}
         >
           <span class="block truncate font-mono">{result.path}:{result.line}</span>
@@ -356,7 +464,11 @@
         </button>
       {:else}
         {#if !busy && !error}<p class="py-2 text-xs text-muted">
-            {query || mode === 'locations' ? 'No results.' : 'Type to search.'}
+            {mode === 'locations'
+              ? `No ${locationTitle.toLowerCase()} found for this symbol in this project.`
+              : query
+                ? 'No matches found.'
+                : 'Type to search.'}
           </p>{/if}
       {/each}
     </div>

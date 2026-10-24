@@ -13,15 +13,27 @@
       name: server.name,
       command: server.command,
       args: server.args.join('\n'),
-      languages: server.languages
-        .map((mapping) => `${mapping.extension}=${mapping.languageId}`)
-        .join('\n'),
       markers: server.rootMarkers.join('\n'),
       env: JSON.stringify(server.env, null, 2),
       initializationOptions: JSON.stringify(server.initializationOptions, null, 2),
       settings: JSON.stringify(server.settings, null, 2)
     }
   }
+  function initialMappings() {
+    const groups: { id: string; languageId: string; extensions: string }[] = []
+    for (const mapping of server.languages) {
+      const group = groups.find((item) => item.languageId === mapping.languageId)
+      if (group) group.extensions += `, ${mapping.extension}`
+      else
+        groups.push({
+          id: crypto.randomUUID(),
+          languageId: mapping.languageId,
+          extensions: mapping.extension
+        })
+    }
+    return groups.length ? groups : [{ id: crypto.randomUUID(), languageId: '', extensions: '' }]
+  }
+  let mappings = $state(initialMappings())
   let fields = $state(initialFields())
   let error = $state('')
   let saving = $state(false)
@@ -32,17 +44,13 @@
     saving = true
     error = ''
     try {
-      const languages = fields.languages
-        .split('\n')
-        .filter((line) => line.trim())
-        .map((line) => {
-          const index = line.indexOf('=')
-          if (index < 1) throw new Error('Use extension=languageId for each language mapping')
-          return {
-            extension: line.slice(0, index).trim(),
-            languageId: line.slice(index + 1).trim()
-          }
-        })
+      const languages = mappings.flatMap((mapping) => {
+        const extensions = mapping.extensions.split(/[\s,]+/).filter(Boolean)
+        if (!extensions.length) return []
+        if (!mapping.languageId.trim())
+          throw new Error('Enter a language ID for each set of file extensions')
+        return extensions.map((extension) => ({ extension, languageId: mapping.languageId.trim() }))
+      })
       const [result] = validateIdeLanguageServers([
         {
           ...server,
@@ -81,8 +89,7 @@
       /></label
     >
     <p class="text-xs text-muted">
-      Commands run directly over stdio. Put each argument on its own line. Shell command strings are
-      not supported.
+      Commands run directly over stdio. Put each argument on its own line.
     </p>
     <div class="grid gap-4 sm:grid-cols-2">
       <label class="block text-xs text-muted"
@@ -92,15 +99,38 @@
           rows="3"
           bind:value={fields.args}></textarea></label
       >
-      <label class="block text-xs text-muted"
-        >Language mappings, extension=languageId<textarea
-          maxlength={131072}
-          class={`${inputClass} font-mono`}
-          rows="3"
-          bind:value={fields.languages}
-          placeholder=".go=go"></textarea></label
-      >
     </div>
+    <fieldset class="space-y-3">
+      <legend class="mb-2 text-sm font-medium text-foreground">Languages and files</legend>
+      {#each mappings as mapping (mapping.id)}
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="block text-xs text-muted"
+            >Language ID<input
+              class={inputClass}
+              bind:value={mapping.languageId}
+              placeholder="python"
+            /></label
+          >
+          <label class="block text-xs text-muted"
+            >File extensions<input
+              class={inputClass}
+              bind:value={mapping.extensions}
+              placeholder=".py, .pyi"
+            /></label
+          >
+        </div>
+      {/each}
+      <div class="flex justify-end">
+        <button
+          type="button"
+          class="border border-border px-3 py-2 text-xs text-foreground hover:bg-elevated"
+          disabled={mappings.length >= 64}
+          onclick={() =>
+            (mappings = [...mappings, { id: crypto.randomUUID(), languageId: '', extensions: '' }])}
+          >Add language</button
+        >
+      </div>
+    </fieldset>
     <details class="border border-border p-3">
       <summary class="cursor-pointer text-sm text-foreground">Advanced settings</summary>
       <div class="mt-3 space-y-4">
