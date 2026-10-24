@@ -968,6 +968,54 @@
           "scenario": "Anywhere in the app."
         }
       ]
+    },
+    {
+      "id": "ide",
+      "label": "IDE Mode",
+      "shortcuts": [
+        {
+          "id": "ide-definition",
+          "keys": [],
+          "label": "Go to definition",
+          "description": "Go to definition in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-references",
+          "keys": [],
+          "label": "Find references",
+          "description": "Find references in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-documentation",
+          "keys": [
+            "alt",
+            "enter"
+          ],
+          "label": "Show documentation",
+          "description": "Show documentation in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-grep",
+          "keys": [
+            "mod",
+            "shift",
+            "g"
+          ],
+          "label": "Search project text",
+          "description": "Search project text in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-files",
+          "keys": [],
+          "label": "Find project file",
+          "description": "Find project file in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        }
+      ]
     }
   ]
 }

@@ -1355,6 +1355,10 @@
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
+            {projectId}
+            scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
+            threadId={mountThreadId ?? undefined}
+            ideEnabled={!deletedAtCheckpoint && activeTab.origin === 'working' && !ovenFile}
             value={visibleContent}
             path={activeTab.path}
             readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
@@ -1367,6 +1371,7 @@
             findNonce={editorFind.nonce}
             replaceRequest={editorFind.replaceRequest}
             {editRequest}
+            focusCharacter={activeTab.focusCharacter}
             focusLine={activeTab.focusLine}
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : (matches) => editorFind.setMatches(matches)}
@@ -1724,6 +1729,10 @@
           {:else}
             {#key activeTab.id}
               <ProjectTextEditor
+                {projectId}
+                scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
+                threadId={mountThreadId ?? undefined}
+                ideEnabled={!deletedAtCheckpoint && activeTab.origin === 'working' && !ovenFile}
                 value={visibleContent}
                 path={activeTab.path}
                 readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
@@ -1736,6 +1745,7 @@
                 findNonce={editorFind.nonce}
                 replaceRequest={editorFind.replaceRequest}
                 {editRequest}
+                focusCharacter={activeTab.focusCharacter}
                 focusLine={activeTab.focusLine}
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={(matches) => editorFind.setMatches(matches)}

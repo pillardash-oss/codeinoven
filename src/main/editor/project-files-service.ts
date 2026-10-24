@@ -53,6 +53,11 @@ export class ProjectFilesService {
   ) => Promise<{ size: number; read(offset: number): Promise<Uint8Array> } | null>
 
   private readonly writeQueues = new Map<string, Promise<void>>()
+  /** Resolve editor intelligence against the same authoritative root as file reads. */
+  ideRoot(projectId: string, scopeBucketId?: string, threadId?: string): Promise<string> {
+    return this.roots.projectRoot(projectId, scopeBucketId, threadId)
+  }
+
   private readonly fileIndex = new ProjectFileIndexService()
   private mutationQueue: Promise<void> = Promise.resolve()
   /** Mount-root authority: resolves and caches (project, scope, thread) roots. */

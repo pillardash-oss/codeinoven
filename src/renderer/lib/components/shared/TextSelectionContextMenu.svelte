@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ideContextActions, type IdeMenuAction } from '$lib/editor/ide-context'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
   import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
@@ -30,6 +31,7 @@
   type MenuKind = 'text' | 'editable' | 'terminal'
 
   interface TextMenuTarget {
+    ideActions?: IdeMenuAction[]
     kind: MenuKind
     x: number
     y: number
@@ -235,7 +237,7 @@
     if (!resolved) return
     event.preventDefault()
     event.stopPropagation()
-    target = resolved
+    target = { ...resolved, ideActions: ideContextActions(event) }
     spelling =
       resolved.kind === 'editable' && resolved.editable
         ? editorSpellingAt(event, resolved.editable)
@@ -481,6 +483,17 @@
     role="menu"
     data-layer-above-modal
   >
+    {#each target.ideActions ?? [] as action (action.label)}
+      <button
+        type="button"
+        role="menuitem"
+        class={itemClass}
+        onclick={() => {
+          close()
+          action.run()
+        }}>{action.label}</button
+      >
+    {/each}
     {#if target.kind === 'editable'}
       {#if spelling}
         {#each spelling.suggestions as suggestion (suggestion)}

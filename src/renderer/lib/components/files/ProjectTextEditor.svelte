@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { ideMode } from '$lib/stores/ide-mode.svelte'
+  import IdeEditorTools from './IdeEditorTools.svelte'
   import { onMount } from 'svelte'
 
   import {
@@ -8,6 +10,10 @@
   } from '$lib/editor/codemirror-file-editor'
 
   interface Props {
+    projectId?: string
+    scopeBucketId?: string
+    threadId?: string
+    ideEnabled?: boolean
     value: string
     path: string
     readonly?: boolean
@@ -24,6 +30,7 @@
       query: string
       replacement: string
     } | null
+    focusCharacter?: number
     focusLine?: number | null
     focusLineRequest?: number
     /** Editor command request driven by toolbar buttons (undo/redo); the
@@ -38,6 +45,10 @@
   }
 
   let {
+    projectId = '',
+    scopeBucketId,
+    threadId,
+    ideEnabled = true,
     value,
     path,
     readonly = false,
@@ -49,6 +60,7 @@
     findActiveIndex = 0,
     findNonce = 0,
     replaceRequest = null,
+    focusCharacter,
     focusLine = null,
     focusLineRequest = 0,
     editRequest = null,
@@ -58,6 +70,7 @@
     onHistoryChange = undefined
   }: Props = $props()
 
+  let ideTools = $state<IdeEditorTools>()
   let host = $state<HTMLDivElement | null>(null)
   // The controller is a class-like object with closures; deep reactivity would
   // proxy it and break identity with the instance held by the editor module.
@@ -82,6 +95,10 @@
       showLineNumbers,
       spellcheck,
       ariaLabel,
+      onIdeHoverEnd: () => ideTools?.dismissHover(),
+      isIdeEnabled: () => ideMode.enabled && ideEnabled && Boolean(projectId),
+      onIdeAction: (action, token) => ideTools?.handle(action, token) ?? false,
+      getIdeActions: (token) => ideTools?.actions(token) ?? [],
       onDocChange: (text) => onInput({ currentTarget: { value: text } }),
       onFindMatches,
       onHistoryChange: (history) => onHistoryChange?.(history)
@@ -159,7 +176,7 @@
     if (!controller || !requestedLine || request === 0 || request === handledFocusLineRequest)
       return
     handledFocusLineRequest = request
-    controller.revealLine(requestedLine)
+    controller.revealLine(requestedLine, focusCharacter)
   })
 </script>
 
@@ -169,3 +186,15 @@
   data-editor-codemirror
   data-floating-document
 ></div>
+
+{#if projectId}
+  <IdeEditorTools
+    bind:this={ideTools}
+    {projectId}
+    {scopeBucketId}
+    {threadId}
+    {path}
+    {value}
+    enabled={ideEnabled}
+  />
+{/if}

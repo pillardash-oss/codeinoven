@@ -36,6 +36,7 @@ export interface ProjectFileTab {
   view: ProjectFileView
   checkpointDiff: TurnCheckpointFileDiff | null
   loadingDiff: boolean
+  focusCharacter?: number
   focusLine: number | null
   focusLineRequest: number
   error: string | null
