@@ -63,6 +63,54 @@ export const CODEX_COMPUTER_USE_UNAVAILABLE: CodexComputerUseReadiness = {
  * off, and a disabled entry never reaches the model, so claiming it would
  * suppress the app-owned CUA driver for a turn that has no desktop control at
  * all.
+ *
+ * Spawning Codex costs more than the answer is worth to repeat, so the answer is
+ * cached per Codex home and refreshed in the background: a turn reads the answer
+ * it already has and never waits for the device to be re-measured.
+ */
+export function peekCodexComputerUse(key: string): CodexComputerUseReadiness | null {
+  return cache.get(key)?.value ?? null
+}
+
+/** When the answer in the cache was measured, or null when there is none. */
+export function codexComputerUseAgeMs(key: string): number | null {
+  const entry = cache.get(key)
+  return entry ? Date.now() - entry.readAt : null
+}
+
+/**
+ * Re-measure the device answer, sharing one Codex launch between every caller
+ * that asks while it runs.
+ */
+export function refreshCodexComputerUse(
+  key: string,
+  options: { env: NodeJS.ProcessEnv }
+): Promise<CodexComputerUseReadiness> {
+  const running = inFlight.get(key)
+  if (running) return running
+  const promise = probeCodexComputerUse({ env: options.env, cwd: homedir() })
+    .catch(() => CODEX_COMPUTER_USE_UNAVAILABLE)
+    .then((value) => {
+      cache.set(key, { value, readAt: Date.now() })
+      inFlight.delete(key)
+      return value
+    })
+  inFlight.set(key, promise)
+  return promise
+}
+
+interface CodexComputerUseCacheEntry {
+  value: CodexComputerUseReadiness
+  readAt: number
+}
+
+/** Device answer per Codex home, shared by every driver instance in the process. */
+const cache = new Map<string, CodexComputerUseCacheEntry>()
+const inFlight = new Map<string, Promise<CodexComputerUseReadiness>>()
+
+/**
+ * Ask Codex which MCP servers its homes declare and whether any of them is a
+ * usable computer-use server.
  */
 export async function probeCodexComputerUse(options: {
   env: NodeJS.ProcessEnv
