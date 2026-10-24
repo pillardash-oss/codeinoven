@@ -390,7 +390,8 @@ import type {
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
   RankingJudgeConfig,
-  AssistantAgents
+  AssistantAgents,
+  UtilityKind
 } from '../../lib/types'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -4303,10 +4304,7 @@ export class ChatEngine {
     await this.agentSecrets
       .materializeSecretFiles(threadId)
       .catch((error: unknown) => Logger.dev('Agent secret files could not be written:', error))
-    const nativeCapabilities = Object.entries(driver.capabilities ?? {})
-      .filter(([, supported]) => supported === true)
-      .map(([name]) => name)
-    nativeCapabilities.push(...(driver.capabilities?.nativeUtilities ?? []))
+    const nativeCapabilities = await this.nativeCapabilitiesFor(driver, projectPath)
     // A native bridge owns credentials internally. Other harnesses use their
     // existing MCP runtime; prompt prose is never a transport fallback.
     const useDirectGateway = Boolean(publishUtilityEndpoint)
@@ -4643,10 +4641,7 @@ export class ChatEngine {
     }
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     if (!publishUtilityEndpoint) return
-    const nativeCapabilities = Object.entries(driver.capabilities ?? {})
-      .filter(([, supported]) => supported === true)
-      .map(([name]) => name)
-    nativeCapabilities.push(...(driver.capabilities?.nativeUtilities ?? []))
+    const nativeCapabilities = await this.nativeCapabilitiesFor(driver, projectPath)
     const budgetContext: UtilityTurnBudgetContext = {
       selectedModelInputTokens: 0,
       composedTurnTokens: 0,
@@ -7853,6 +7848,40 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Utility kinds this harness really supplies on this machine for the turn being
+   * assembled.
+   *
+   * The driver's static declaration is the default. A harness whose native
+   * capability is an installed component answers for itself, so the app-owned
+   * equivalent is only suppressed when the native one actually exists.
+   */
+  private async nativeUtilitiesOf(
+    driver: HarnessDriver | undefined,
+    projectPath: string
+  ): Promise<UtilityKind[]> {
+    const declared = driver?.capabilities.nativeUtilities ?? []
+    if (!driver?.resolveNativeUtilities) return declared
+    try {
+      return await driver.resolveNativeUtilities(projectPath)
+    } catch (error) {
+      Logger.dev('Native utility resolution failed:', error)
+      return declared
+    }
+  }
+
+  /** Capability names one utility turn is told the harness already supplies. */
+  private async nativeCapabilitiesFor(
+    driver: HarnessDriver,
+    projectPath: string
+  ): Promise<string[]> {
+    const capabilities = Object.entries(driver.capabilities ?? {})
+      .filter(([, supported]) => supported === true)
+      .map(([name]) => name)
+    capabilities.push(...(await this.nativeUtilitiesOf(driver, projectPath)))
+    return capabilities
+  }
+
   private async getBehaviorPrompt(
     projectId: string,
     threadId: string,
@@ -7886,6 +7915,12 @@ export class ChatEngine {
             : executionScope === 'ephemeral' || threadSettings?.fileSystemMode === true
               ? 'abbreviated'
               : 'omitted'
+      // A native computer-use capability decides whether the prompt carries the
+      // CUA driver clause at all, so it is read from the same device answer the
+      // utility registry uses rather than from the driver's static claim.
+      const nativeComputerUse = (await this.nativeUtilitiesOf(driver, projectPath)).includes(
+        'computer_use'
+      )
       const assembled = await this.promptAssembler.getAssembledPromptWithLayers(
         projectId,
         threadId,
@@ -7894,7 +7929,7 @@ export class ChatEngine {
           ? {
               id: driver.id,
               name: driver.name,
-              nativeComputerUse: driver.capabilities.nativeUtilities?.includes('computer_use')
+              nativeComputerUse
             }
           : null,
         '',
@@ -7936,7 +7971,7 @@ export class ChatEngine {
       return executionScope === 'project-thread'
         ? gateCuaDriverBehaviorPrompt(
             DEFAULT_AGENT_BEHAVIOR_PROMPT,
-            behaviorDriver?.capabilities.nativeUtilities?.includes('computer_use') === true
+            (await this.nativeUtilitiesOf(behaviorDriver, projectPath)).includes('computer_use')
           )
         : ''
     }
