@@ -25,6 +25,7 @@
   import { selectWordAt } from '$lib/terminal/word-select'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { claimSelectionAnnotationMenu } from '$lib/selection-menu'
+  import { editorSpellingAt, type EditorSpelling } from '$lib/editor-spelling'
 
   type MenuKind = 'text' | 'editable' | 'terminal'
 
@@ -41,6 +42,7 @@
   }
 
   let target = $state<TextMenuTarget | null>(null)
+  let spelling = $state.raw<EditorSpelling | null>(null)
   let menuEl: HTMLDivElement | null = null
 
   function captureMenu(element: HTMLDivElement): () => void {
@@ -234,10 +236,15 @@
     event.preventDefault()
     event.stopPropagation()
     target = resolved
+    spelling =
+      resolved.kind === 'editable' && resolved.editable
+        ? editorSpellingAt(event, resolved.editable)
+        : null
   }
 
   function close(): void {
     target = null
+    spelling = null
   }
 
   function dismiss(event: MouseEvent): void {
@@ -460,6 +467,22 @@
     data-layer-above-modal
   >
     {#if target.kind === 'editable'}
+      {#if spelling}
+        {#each spelling.suggestions as suggestion (suggestion)}
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            onclick={() => {
+              spelling?.replace(suggestion)
+              close()
+            }}
+          >
+            {suggestion}
+          </button>
+        {/each}
+        <div role="separator" class="my-1 h-px bg-border"></div>
+      {/if}
       <button
         type="button"
         class={itemClass}
