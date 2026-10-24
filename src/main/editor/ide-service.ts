@@ -7,7 +7,7 @@ import {
 import createWorker from './ide-worker.ts?nodeWorker'
 import type { Worker } from 'node:worker_threads'
 import type { IdeRequest, IdeResponse } from '../../lib/editor-ide'
-import { buildProcessEnvironmentAsync } from '../drivers/cli-environment'
+import { buildProcessEnvironmentAsync, resolvePackageCommand } from '../drivers/cli-environment'
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -147,7 +147,7 @@ export class IdeService {
       const task = this.installQueue.then(async () => {
         if (this.stopping) throw new Error('Application is stopping')
         await mkdir(toolRoot, { recursive: true })
-        // Anchor Bun here so it cannot discover a parent project's manifest.
+        // Anchor package installation here rather than in a parent project.
         await writeFile(
           join(toolRoot, 'package.json'),
           '{"name":"codeinoven-ide-tools","private":true}',
@@ -155,10 +155,21 @@ export class IdeService {
         ).catch((error: unknown) => {
           if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
         })
+        const launch = resolvePackageCommand(
+          'install',
+          packages[0],
+          ['--ignore-scripts', ...packages.slice(1)],
+          env
+        )
         await new Promise<void>((resolve, reject) => {
-          const child = spawn('bun', ['add', '--ignore-scripts', ...packages], {
+          const child = spawn(launch.command, launch.args, {
             cwd: toolRoot,
-            env: { ...env, BUN_INSTALL_CACHE_DIR: join(toolRoot, 'cache') },
+            env: {
+              ...launch.env,
+              BUN_INSTALL_CACHE_DIR: join(toolRoot, 'cache'),
+              npm_config_cache: join(toolRoot, 'cache')
+            },
+            shell: launch.shell,
             stdio: ['ignore', 'ignore', 'pipe'],
             windowsHide: true
           })
@@ -175,11 +186,7 @@ export class IdeService {
           child.once('error', (error) => {
             clearTimeout(timeout)
             this.installer = undefined
-            reject(
-              new Error(
-                `Cannot install language server. Bun must be installed and available on PATH. ${error.message}`
-              )
-            )
+            reject(new Error(`Cannot start the language-server installer. ${error.message}`))
           })
           child.once('exit', (code) => {
             clearTimeout(timeout)

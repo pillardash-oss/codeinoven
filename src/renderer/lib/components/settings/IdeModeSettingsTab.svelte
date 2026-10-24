@@ -60,6 +60,7 @@
     if (!item?.version || !item.latestVersion) return false
     return item.latestVersion.localeCompare(item.version, undefined, { numeric: true }) > 0
   }
+  let adding = $state(false)
   let presetId = $state('typescript')
   let editing = $state<IdeLanguageServer | null>(null)
   let deleting = $state<IdeLanguageServer | null>(null)
@@ -71,7 +72,7 @@
   let installing = $state<Record<string, boolean>>({})
   let status = $state<Record<string, string>>({})
   const buttonClass =
-    'border border-border bg-surface px-3 py-2 text-xs text-foreground hover:bg-elevated disabled:opacity-40'
+    'border border-border bg-surface px-2 py-1 text-xs text-foreground hover:bg-elevated disabled:opacity-40'
   async function persist(next: IdeLanguageServer[]): Promise<void> {
     await updateConfig({ ideLanguageServers: validateIdeLanguageServers(next) })
     status = {}
@@ -112,6 +113,7 @@
   }
   function add(): void {
     const selected = DEFAULT_IDE_LANGUAGE_SERVERS.find((server) => server.id === presetId)
+    adding = false
     editing = selected
       ? structuredClone(
           $state.snapshot(servers.find((server) => server.id === selected.id) ?? selected)
@@ -184,7 +186,7 @@
     if (busy || installing[server.id] || checking[server.id]) return
     installing[server.id] = true
     error = ''
-    status = { ...status, [server.id]: 'Setting up...' }
+    status = { ...status, [server.id]: 'Installing...' }
     try {
       await invoke('projectFiles:ide', '', {
         owner: crypto.randomUUID(),
@@ -233,81 +235,73 @@
       <h1 class="flex items-center gap-2 text-xl font-bold tracking-tight">
         <CioCode size={18} class="text-muted" />IDE Mode
       </h1>
-      <p class="mt-1 max-w-2xl text-sm text-muted">
-        Install a language server once and use it across your projects. When you turn on IDE Mode in
-        a file viewer, servers start in that project's workspace as you open files.
-      </p>
     </div>
     <button type="button" class={buttonClass} disabled={busy} onclick={() => void setupWithAgent()}
       ><span class="flex items-center gap-2"><CioSparkles size={14} />Set up with agent</span
       ></button
     >
   </div>
-  <p class="mb-4 text-xs text-muted">
-    Install downloads the server into the app's tools folder and requires Bun on PATH. Use Edit for
-    an existing executable. Agent setup opens a draft to review and send.
-  </p>
-  <div
-    class="mb-5 flex flex-wrap items-end justify-between gap-3 border border-border bg-surface p-4"
-  >
-    <div class="flex flex-wrap items-end gap-2">
-      <button
-        type="button"
-        class={buttonClass}
-        disabled={checkingUpdates || loadingInstallations}
-        onclick={() => void refreshInstallations(true)}
-        ><span class="flex items-center gap-2"
-          >{#if checkingUpdates}<CioSpinner
-              size={13}
-              class="animate-spin"
-              aria-hidden="true"
-            />{/if}Check for updates</span
-        ></button
+  <div class="mb-3 flex flex-wrap items-center justify-end gap-2">
+    <button
+      type="button"
+      class={buttonClass}
+      disabled={checkingUpdates || loadingInstallations}
+      onclick={() => void refreshInstallations(true)}
+    >
+      <span class="flex items-center gap-2"
+        >{#if checkingUpdates}<CioSpinner
+            size={13}
+            class="animate-spin"
+            aria-hidden="true"
+          />{/if}Check for updates</span
       >
-      <button
-        type="button"
-        class={buttonClass}
-        onclick={() => {
-          error = ''
-          importing = true
-        }}>Import JSON</button
-      >
-      <button
-        type="button"
-        class={buttonClass}
-        onclick={() => void copyText(JSON.stringify(servers, null, 2))}>Copy JSON</button
-      >
-      <select
-        aria-label="Language server preset"
-        class="border border-border bg-app px-3 py-2 text-xs text-foreground"
-        bind:value={presetId}
-        >{#each DEFAULT_IDE_LANGUAGE_SERVERS as preset (preset.id)}<option value={preset.id}
-            >{preset.name}</option
-          >{/each}<option value="custom">Custom server</option></select
-      >
-      <button
-        type="button"
-        class="bg-primary px-3 py-2 text-xs font-medium text-on-primary disabled:opacity-40"
-        disabled={busy ||
-          (servers.length >= 32 && !servers.some((server) => server.id === presetId))}
-        onclick={add}>Set up manually</button
-      >
-    </div>
+    </button>
+    <button
+      type="button"
+      class={buttonClass}
+      onclick={() => {
+        error = ''
+        importing = true
+      }}>Import</button
+    >
+    <button
+      type="button"
+      class={buttonClass}
+      onclick={() => void copyText(JSON.stringify(servers, null, 2))}>Copy JSON</button
+    >
+    <button
+      type="button"
+      class="bg-primary px-2 py-1 text-xs text-on-primary disabled:opacity-40"
+      disabled={busy || servers.length >= 32}
+      onclick={() => {
+        presetId =
+          DEFAULT_IDE_LANGUAGE_SERVERS.find(
+            (preset) => !servers.some((server) => server.id === preset.id)
+          )?.id ?? 'custom'
+        adding = true
+      }}>Add server</button
+    >
   </div>
   {#if error && !importing}<p class="mb-4 text-xs text-danger" role="alert">{error}</p>{/if}
-  <div class="space-y-2">
+  <div class="divide-y divide-border border border-border">
     {#each servers as server (server.id)}
       {@const installation = installations[server.id]}
-      <section class="border border-border bg-surface p-4">
+      <section class="bg-surface px-3 py-2">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
             <h2 class="text-sm font-semibold">{server.name}</h2>
-            <p class="mt-1 truncate font-mono text-xs text-muted">
-              {server.command}
-              {server.args.join(' ')}
-            </p>
-            <p class="mt-1 text-xs text-muted">
-              {server.languages.map((mapping) => mapping.extension).join(', ')}
+            <p class="text-xs text-muted">
+              {loadingInstallations
+                ? 'Checking...'
+                : installation?.source === 'managed'
+                  ? installation.version
+                    ? `Installed v${installation.version}`
+                    : 'Installed'
+                  : installation?.source === 'external'
+                    ? 'External'
+                    : 'Not installed'}
+              {#if hasUpdate(installation)}<span class="ml-2 text-primary">Update available</span
+                >{/if}
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
@@ -325,12 +319,11 @@
                       size={13}
                       class="animate-spin"
                       aria-hidden="true"
-                    />Setting up...{:else if loadingInstallations}Checking...{:else if installation?.source === 'managed'}{hasUpdate(
+                    />Installing...{:else if loadingInstallations}Checking...{:else if installation?.source === 'managed'}{hasUpdate(
                       installation
                     )
                       ? 'Update'
-                      : 'Reinstall'}{:else if installation?.source === 'external'}Install managed
-                    copy{:else}Install{/if}</span
+                      : 'Reinstall'}{:else if installation?.source === 'external'}Install{:else}Install{/if}</span
                 ></button
               >
             {/if}
@@ -350,7 +343,7 @@
                     size={13}
                     class="animate-spin"
                     aria-hidden="true"
-                  />Checking...{:else}Verify installation{/if}</span
+                  />Checking...{:else}Check{/if}</span
               ></button
             ><button
               type="button"
@@ -365,52 +358,60 @@
             >
           </div>
         </div>
-        {#if installation && installation.source !== 'missing'}
-          <div class="mt-2 space-y-1 text-xs text-muted">
-            <p>
-              Installed{installation.version ? ` v${installation.version}` : ''} · {installation.source ===
-              'managed'
-                ? 'Managed by app'
-                : 'External executable'}
-            </p>
-            {#if installation.packageName && installation.source === 'managed'}<p>
-                npm package: {installation.packageName}
+        <details class="mt-1 text-xs text-muted">
+          <summary class="w-fit cursor-pointer">Details</summary>
+          <div class="space-y-1 py-2">
+            <p class="break-all font-mono">{server.command} {server.args.join(' ')}</p>
+            <p>{server.languages.map((mapping) => mapping.extension).join(', ')}</p>
+            {#if installation?.executable}<p class="break-all font-mono">
+                {installation.executable}
               </p>{/if}
-            <p class="break-all font-mono">{installation.executable}</p>
-            {#if hasUpdate(installation)}<p class="text-primary">
-                Update available: {installation.latestVersion}
-              </p>{:else if installation.latestVersion && installation.version}<p>
-                Up to date
-              </p>{:else if installation.latestVersion}<p>
-                Latest version: {installation.latestVersion}
+            {#if installation?.packageName}<p>npm: {installation.packageName}</p>{/if}
+            {#if installation?.latestVersion}<p>Latest: {installation.latestVersion}</p>{/if}
+            {#if installation?.updateError}<p>{installation.updateError}</p>{/if}
+            {#if status[server.id]}<p
+                class="max-h-32 overflow-auto whitespace-pre-wrap break-all"
+                role="status"
+              >
+                {status[server.id]}
               </p>{/if}
-            {#if installation.updateError}<p>{installation.updateError}</p>{/if}
           </div>
-        {/if}
-        <p class="mt-3 text-xs text-muted" role="status">
-          {status[server.id] ??
-            (installation && installation.source !== 'missing'
-              ? 'Installed. Verify installation to check its connection.'
-              : IDE_SERVER_PACKAGES[server.command]
-                ? 'Install here, or verify an existing installation on PATH.'
-                : 'Install this executable on PATH, or choose its path with Edit.')}
-        </p>
-        {#if !busy && !checking[server.id] && !installing[server.id] && status[server.id] && !status[server.id].startsWith('Ready.')}
-          <div class="mt-2 flex justify-end">
-            <button
-              type="button"
-              class={buttonClass}
-              disabled={busy || installing[server.id]}
-              onclick={() => void setupWithAgent(server)}>Set up with agent</button
-            >
-          </div>
+        </details>
+        {#if status[server.id] && !installing[server.id] && !checking[server.id]}
+          <p class="mt-1 text-xs text-muted" role="status">
+            {status[server.id].startsWith('Ready.') ? 'Ready' : 'Check failed. See details.'}
+          </p>
         {/if}
       </section>
     {:else}<p class="text-sm text-muted">
-        No language servers configured. Choose a preset or add a custom server.
+        No language servers. Add a server to get started.
       </p>{/each}
   </div>
 </div>
+<Modal open={adding} title="Add language server" onClose={() => (adding = false)}>
+  <label class="block text-xs text-muted"
+    >Server
+    <select
+      aria-label="Language server preset"
+      class="mt-2 w-full border border-border bg-app px-2 py-2 text-sm text-foreground"
+      bind:value={presetId}
+    >
+      {#each DEFAULT_IDE_LANGUAGE_SERVERS.filter((preset) => !servers.some((server) => server.id === preset.id)) as preset (preset.id)}<option
+          value={preset.id}>{preset.name}</option
+        >{/each}
+      <option value="custom">Custom server</option>
+    </select>
+  </label>
+  {#snippet footer()}
+    <button type="button" class={buttonClass} onclick={() => (adding = false)}>Cancel</button>
+    <button
+      type="button"
+      data-modal-primary
+      class="bg-primary px-3 py-2 text-sm text-on-primary"
+      onclick={add}>Continue</button
+    >
+  {/snippet}
+</Modal>
 {#if editing}<IdeLanguageServerEditor
     server={editing}
     onClose={() => (editing = null)}
