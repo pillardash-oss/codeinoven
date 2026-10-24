@@ -155,18 +155,20 @@ What the app cannot read off the folder is intent, so a design may say so in an 
   "frames": [
     { "entry": "index.html", "title": "Landing page" },
     { "entry": "dashboard.html", "title": "Dashboard, empty", "caption": "No projects yet" },
-    { "entry": "dashboard.html", "title": "Dashboard, phone", "width": 390 },
+    { "entry": "dashboard.html", "title": "Dashboard, menu closed", "width": 390 },
+    { "entry": "dashboard.html", "title": "Dashboard, menu open", "width": 390, "state": { "click": "#account-menu" } },
     { "title": "Invite modal", "note": "Dialog over the dashboard, not built yet" }
   ]
 }
 \`\`\`
 
 - \`frames\` orders and labels the canvas. The frames it lists come first, in its order, and every screen it does not mention follows in listing order, so a screen you write a minute from now is on the canvas without anyone editing this file.
-- A frame with an \`entry\` names a screen file exactly as the screen is spelled. \`width\` and \`height\` size it (1440 by default; 390 for a phone state), \`title\` labels it and \`caption\` adds a line under the label, both in the user's words. Name the same file twice to frame two states of it at different widths.
+- A frame with an \`entry\` names a screen file exactly as the screen is spelled. \`width\` and \`height\` size it (1440 by default; 390 for a phone state), \`title\` labels it and \`caption\` adds a line under the label, both in the user's words. Name the same file twice to frame the same screen twice.
+- A state that lives inside a page is not a second file: it is a second frame of the same file with a \`state\`. \`{"click": "#account-menu"}\` opens the menu in that frame, \`focus\` focuses an input, \`scroll\` is a px offset, \`search\` and \`hash\` load the frame with that query or fragment, and \`wait\` is the delay in ms before the interaction. The canvas runs the interaction inside the frame, so the design's own handler draws the open dropdown and no picture is captured or kept. Frame the state that is worth reviewing: a dropdown open is a state, its animation mid-flight is not, and a control with no visual difference once opened does not need a frame.
 - A frame with no \`entry\` is a sketch: a state the design needs and no file holds yet. The board offers to build every one of them, so write its \`note\` as the state it should become.
 - A frame naming a file that no longer exists is dropped from the canvas, and the board says which. Fix the entry instead of leaving it.
 
-Cover the product, not the happy path: every screen, and for each one the states that matter (empty, loading, error, a dialog open, filled). Build a state as a real screen when it is a real page, and declare it as a sketch only while it is still an idea.
+Cover the product, not the happy path: every screen, and for each one the states that matter (empty, loading, error, a menu open, a dialog up, filled). A state that is a page is a screen file; a state that is one interaction inside a page is a frame with a \`state\`; a state you have not built is a sketch. A canvas of one screen per file shows the folder, not the product, and it is the reader clicking through the design the canvas exists to spare them.
 
 ## Showing the design
 

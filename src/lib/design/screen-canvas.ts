@@ -68,6 +68,36 @@ export const SCREEN_CANVAS_MAX_COLUMNS = 4
 const MAX_DECLARED_FRAMES = 200
 const MAX_DECLARED_SKETCHES = 48
 
+/** Ceiling on a selector a frame may name, and on a query or fragment. */
+const MAX_STATE_SELECTOR_LENGTH = 300
+const MAX_STATE_URL_LENGTH = 512
+const MAX_STATE_WAIT_MS = 10_000
+
+/**
+ * What a frame does to its screen before the reader sees it.
+ *
+ * Most of a design's states are not files: a dropdown is closed or open, a menu
+ * is expanded, a dialog is up. A canvas exists to show those side by side rather
+ * than to make the reader click through them, so a frame may say how to reach
+ * its state: the canvas loads the screen and performs the interaction inside it,
+ * in the frame, before it is shown. Nothing is captured and nothing is written
+ * back, so a state frame follows the design as it changes.
+ */
+export interface ScreenCanvasFrameState {
+  /** Selector the canvas clicks inside the screen, or null. */
+  click: string | null
+  /** Selector the canvas focuses inside the screen, or null. */
+  focus: string | null
+  /** Offset the screen is scrolled to, in px, or null. */
+  scroll: number | null
+  /** Fragment the frame loads with, without its `#`, or null. */
+  hash: string | null
+  /** Query the frame loads with, without its `?`, or null. */
+  search: string | null
+  /** Milliseconds to wait after load before the interactions, or null. */
+  wait: number | null
+}
+
 /** One framed screen, as the canvas shows it. */
 export interface ScreenCanvasFrame {
   /** Screen file the frame shows, project-relative inside the design folder. */
@@ -80,6 +110,8 @@ export interface ScreenCanvasFrame {
   width: number | null
   /** Fixed height, or null to measure the frame's content. */
   height: number | null
+  /** The interaction that reaches this frame's state, or null for the screen as written. */
+  state: ScreenCanvasFrameState | null
 }
 
 /** One state that is still an idea rather than a screen file. */
@@ -145,6 +177,71 @@ export function isScreenCanvasEntry(entry: unknown): boolean {
   return normalized === SCREEN_CANVAS_PATH || normalized === SCREEN_CANVAS_FILE
 }
 
+/** Whether a declared value carries anything a single-line attribute cannot. */
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) < 0x20) return true
+  }
+  return false
+}
+
+/** A selector a frame may name, bounded and single-line, or null. */
+function selectorOf(value: unknown): string | null {
+  const trimmed = textOf(value)
+  if (trimmed === null || trimmed.length > MAX_STATE_SELECTOR_LENGTH) return null
+  return hasControlCharacters(trimmed) ? null : trimmed
+}
+
+/** A query or fragment a frame may load with, or null. */
+function urlPartOf(value: unknown, strip: string): string | null {
+  const trimmed = textOf(value)
+  if (trimmed === null || trimmed.length > MAX_STATE_URL_LENGTH) return null
+  if (hasControlCharacters(trimmed)) return null
+  const bare = trimmed.startsWith(strip) ? trimmed.slice(1) : trimmed
+  return bare === '' ? null : bare
+}
+
+/** One declared frame state, or null when it declares no interaction at all. */
+function stateOf(value: unknown): ScreenCanvasFrameState | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const scroll = dimensionOf(record.scroll)
+  const wait = dimensionOf(record.wait)
+  const state: ScreenCanvasFrameState = {
+    click: selectorOf(record.click),
+    focus: selectorOf(record.focus),
+    scroll,
+    hash: urlPartOf(record.hash, '#'),
+    search: urlPartOf(record.search, '?'),
+    wait: wait === null ? null : Math.min(MAX_STATE_WAIT_MS, wait)
+  }
+  const declared =
+    state.click !== null ||
+    state.focus !== null ||
+    state.scroll !== null ||
+    state.hash !== null ||
+    state.search !== null
+  return declared ? state : null
+}
+
+/**
+ * The attribute a canvas page carries one frame's state in.
+ *
+ * The runtime reads this, so the shape is the contract between the page the app
+ * builds and the script it serves: a JSON object of the same keys, with the
+ * fields that were not declared left out rather than written as null.
+ */
+export function screenCanvasFrameStateAttribute(state: ScreenCanvasFrameState): string | null {
+  const payload: Record<string, string | number> = {}
+  if (state.click !== null) payload.click = state.click
+  if (state.focus !== null) payload.focus = state.focus
+  if (state.scroll !== null) payload.scroll = state.scroll
+  if (state.hash !== null) payload.hash = state.hash
+  if (state.search !== null) payload.search = state.search
+  if (state.wait !== null) payload.wait = state.wait
+  return Object.keys(payload).length === 0 ? null : JSON.stringify(payload)
+}
+
 /** A finite width from a declared number, or null when it declares none. */
 function dimensionOf(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null
@@ -203,7 +300,8 @@ export function readScreenCanvasMetadata(raw: unknown): ScreenCanvasMetadata {
       title: textOf(frame.title),
       caption: textOf(frame.caption),
       width: dimensionOf(frame.width),
-      height: dimensionOf(frame.height)
+      height: dimensionOf(frame.height),
+      state: stateOf(frame.state)
     })
   }
   return { columns: columnsOf(record.columns), frames, sketches }
@@ -244,7 +342,14 @@ export function planScreenCanvas(input: {
   }
   for (const [entry, screen] of listed) {
     if (framed.has(entry)) continue
-    frames.push({ entry, title: screen.name, caption: null, width: null, height: null })
+    frames.push({
+      entry,
+      title: screen.name,
+      caption: null,
+      width: null,
+      height: null,
+      state: null
+    })
   }
   return {
     columns: input.metadata.columns ?? SCREEN_CANVAS_DEFAULT_COLUMNS,

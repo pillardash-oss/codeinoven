@@ -60,9 +60,12 @@ const DESIGN_SESSION_STEPS = `How to run the session:
    several pages and a dashboard is several screens, and the coordinator board
    shows a picture of every screen in that folder. The Screen Canvas is the
    app's own page: it is generated from the folder, so every screen you write is
-   on it without you writing any markup. Never write a \`canvas.html\`; to order
-   or label the canvas, or to declare a state you have not built yet, put a
-   \`canvas.json\` beside the screens.
+   on it without you writing any markup. Never write a \`canvas.html\`; put a
+   \`canvas.json\` beside the screens to order and label them, to declare a state
+   you have not built yet as a sketch, and to show the states inside a page (a
+   menu open, a dialog up) as extra frames with \`"state"\`: \`{"click": "#account-menu"}\`.
+   The canvas is where the user sees the whole product at once, so a state that
+   only exists after a click belongs on it rather than in a sentence.
 4. Check the result yourself before you describe it, in this thread's own in-app
    browser: preview the folder so the tab has its served URL, activate the
    \`cio:browser\` capability, and use its \`screenshot\` for a phone width and a

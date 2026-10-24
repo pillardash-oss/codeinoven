@@ -27,7 +27,8 @@ import {
   SCREEN_CANVAS_PATH,
   isScreenCanvasEntry,
   planScreenCanvas,
-  readScreenCanvasMetadata
+  readScreenCanvasMetadata,
+  screenCanvasFrameStateAttribute
 } from '../../lib/design/screen-canvas'
 import type { ScreenCanvasMetadata, ScreenCanvasPlan } from '../../lib/design/screen-canvas'
 import { listDesignScreens } from './design-screens'
@@ -161,7 +162,8 @@ function attribute(name: string, value: string | number | null): string {
  * links from its own reserved path builds the frames, owns pan and zoom and
  * brings its styles with it, so a canvas written last month and a screen added a
  * minute ago are laid out by the same code. All this page says is which screens
- * the canvas frames, in which order and at what size.
+ * the canvas frames, in which order, at what size, and which interaction reaches
+ * a state of one.
  */
 export function buildScreenCanvasDocument(input: {
   plan: ScreenCanvasPlan
@@ -178,6 +180,10 @@ export function buildScreenCanvasDocument(input: {
         attribute('data-cio-caption', frame.caption),
         attribute('data-cio-width', frame.width),
         attribute('data-cio-height', frame.height),
+        attribute(
+          'data-cio-state',
+          frame.state === null ? null : screenCanvasFrameStateAttribute(frame.state)
+        ),
         '></section>'
       ].join('')
     )
