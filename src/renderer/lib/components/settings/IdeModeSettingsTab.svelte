@@ -2,6 +2,7 @@
   import { DropdownMenu } from 'bits-ui'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
+  import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
   import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import CardNotice from '../shared/CardNotice.svelte'
@@ -70,7 +71,7 @@
   let adding = $state(false)
   let presetId = $state('typescript')
   let editing = $state<IdeLanguageServer | null>(null)
-  let viewing = $state<IdeLanguageServer | null>(null)
+  let expanded = $state<Record<string, boolean>>({})
   let deleting = $state<IdeLanguageServer | null>(null)
   let importing = $state(false)
   let importText = $state('')
@@ -253,10 +254,6 @@
         in a file viewer.
       </p>
     </div>
-    <button type="button" class={buttonClass} disabled={busy} onclick={() => void setupWithAgent()}
-      ><span class="flex items-center gap-2"><CioSparkles size={14} />Set up with agent</span
-      ></button
-    >
   </div>
   <div class="mb-5 flex flex-wrap items-center justify-end gap-2">
     <button
@@ -298,13 +295,17 @@
         adding = true
       }}>Add server</button
     >
+    <button type="button" class={buttonClass} disabled={busy} onclick={() => void setupWithAgent()}
+      ><span class="flex items-center gap-2"><CioSparkles size={14} />Add server with agent</span
+      ></button
+    >
   </div>
   {#if error && !importing}<p class="mb-4 text-xs text-danger" role="alert">{error}</p>{/if}
   <div class="space-y-3">
     {#each servers as server (server.id)}
       {@const installation = installations[server.id]}
       {@const installed = installation && installation.source !== 'missing'}
-      <SettingsEntry>
+      <SettingsEntry expanded={expanded[server.id] ?? false}>
         <div class="grid grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
           <div class="flex min-w-0 items-start gap-3">
             <CioCode size={20} class="mt-1 shrink-0 text-muted" />
@@ -384,10 +385,6 @@
                   sideOffset={5}
                   class="z-90 min-w-48 border border-border bg-surface p-1 text-foreground shadow-lg"
                 >
-                  <DropdownMenu.Item
-                    class="cursor-pointer px-3 py-2 text-xs outline-none data-[highlighted]:bg-elevated"
-                    onSelect={() => (viewing = server)}>Server details</DropdownMenu.Item
-                  >
                   {#if installed}<DropdownMenu.Item
                       disabled={checking[server.id] || installing[server.id]}
                       class="cursor-pointer px-3 py-2 text-xs outline-none data-[highlighted]:bg-elevated"
@@ -418,8 +415,44 @@
                 </DropdownMenu.Content></DropdownMenu.Portal
               >
             </DropdownMenu.Root>
+            <SettingsDisclosure
+              expanded={expanded[server.id] ?? false}
+              title={`${expanded[server.id] ? 'Hide' : 'Show'} ${server.name} details`}
+              onclick={() => (expanded[server.id] = !expanded[server.id])}
+            />
           </div>
         </div>
+        {#if expanded[server.id]}
+          <div class="mt-3 space-y-3 border-t border-border pt-3">
+            <dl class="grid grid-cols-1 gap-4 text-xs sm:grid-cols-2">
+              <div>
+                <dt class="mb-1 font-medium text-muted">Executable</dt>
+                <dd class="break-all font-mono">
+                  {installation?.executable ?? server.command}
+                  {server.args.join(' ')}
+                </dd>
+              </div>
+              <div>
+                <dt class="mb-1 font-medium text-muted">File types</dt>
+                <dd>{server.languages.map((mapping) => mapping.extension).join(', ')}</dd>
+              </div>
+              {#if installation?.packageName}<div>
+                  <dt class="mb-1 font-medium text-muted">Source</dt>
+                  <dd>npm / {installation.packageName}</dd>
+                </div>{/if}
+              {#if installation?.latestVersion}<div>
+                  <dt class="mb-1 font-medium text-muted">Latest version</dt>
+                  <dd>{installation.latestVersion}</dd>
+                </div>{/if}
+            </dl>
+            {#if installation?.source === 'external'}<div class="mt-4">
+                <CardNotice>Updates are managed by your external installation.</CardNotice>
+              </div>{/if}
+            {#if installation?.updateError}<div class="mt-4">
+                <CardNotice tone="warn">{installation.updateError}</CardNotice>
+              </div>{/if}
+          </div>
+        {/if}
         {#if checking[server.id]}<div class="mt-3 flex items-center gap-2 text-xs text-muted">
             <CioSpinner size={13} class="animate-spin" />Checking connection...
           </div>{/if}
@@ -516,44 +549,5 @@
       class="bg-primary px-3 py-2 text-sm text-on-primary disabled:opacity-40"
       disabled={busy}
       onclick={() => void importServers()}>Import servers</button
-    >{/snippet}
-</Modal>
-
-<Modal
-  open={viewing !== null}
-  title={viewing?.name ?? 'Server details'}
-  onClose={() => (viewing = null)}
->
-  {#if viewing}{@const item = installations[viewing.id]}
-    <dl class="space-y-4 text-xs">
-      <div>
-        <dt class="mb-1 font-medium text-muted">Executable</dt>
-        <dd class="break-all font-mono">
-          {item?.executable ?? viewing.command}
-          {viewing.args.join(' ')}
-        </dd>
-      </div>
-      <div>
-        <dt class="mb-1 font-medium text-muted">File types</dt>
-        <dd>{viewing.languages.map((mapping) => mapping.extension).join(', ')}</dd>
-      </div>
-      {#if item?.packageName}<div>
-          <dt class="mb-1 font-medium text-muted">Source</dt>
-          <dd>npm / {item.packageName}</dd>
-        </div>{/if}
-      {#if item?.latestVersion}<div>
-          <dt class="mb-1 font-medium text-muted">Latest version</dt>
-          <dd>{item.latestVersion}</dd>
-        </div>{/if}
-    </dl>
-    {#if item?.source === 'external'}<div class="mt-4">
-        <CardNotice>Updates are managed by your external installation.</CardNotice>
-      </div>{/if}
-    {#if item?.updateError}<div class="mt-4">
-        <CardNotice tone="warn">{item.updateError}</CardNotice>
-      </div>{/if}
-  {/if}
-  {#snippet footer()}<button type="button" class={buttonClass} onclick={() => (viewing = null)}
-      >Close</button
     >{/snippet}
 </Modal>
