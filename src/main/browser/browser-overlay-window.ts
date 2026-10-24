@@ -784,13 +784,8 @@ export class BrowserOverlayWindow {
       // A real focus departure invalidates the borrowed owner. It must not be
       // restored later by a delayed cursor response after another app activates.
       if (!this.hasModalDock()) this.releaseDockHoverFocus()
-      for (const dock of this.docks.values()) {
-        if (dock.modal)
-          sendToRenderer(this.parent.webContents, 'browser:overlay:dockEvent', {
-            id: dock.id,
-            kind: 'dismiss'
-          })
-      }
+      // Losing native focus is not a dismissal gesture. Keep modal docks and
+      // their source state intact while another app or a native picker is active.
       // A focused overlay that no longer holds focus, with no other window of
       // this app focused either, means another application came forward. The
       // parent's own blur handler cannot see this case: taking the keyboard for a
