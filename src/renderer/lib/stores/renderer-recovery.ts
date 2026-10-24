@@ -328,6 +328,7 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.selector !== undefined && typeof value.selector !== 'string') return false
   if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
   if (value.designEntry !== undefined && typeof value.designEntry !== 'string') return false
+  if (value.frame !== undefined && typeof value.frame !== 'string') return false
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
   if (value.seconds !== undefined && typeof value.seconds !== 'number') return false
   if (value.directory !== undefined && typeof value.directory !== 'string') return false

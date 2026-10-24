@@ -15,7 +15,7 @@
  * that no longer knows it was showing one.
  */
 
-import type { ScreenCanvasFrame } from '../design/screen-canvas'
+import type { ScreenCanvasSketch } from '../design/screen-canvas'
 
 /** Which authored-work session a thread is in. */
 export type AuthoredWorkKind = 'design' | 'video'
@@ -342,29 +342,34 @@ export interface DesignHistoryState {
   canRedo: boolean
 }
 
-/** The Screen Canvas of one design folder: the page that shows every screen at once. */
+/**
+ * The Screen Canvas of one design folder: the page that shows every screen at once.
+ *
+ * The canvas is the app's, generated from the folder on every request, so this is
+ * what it is made of rather than a copy of it: the screens it frames in order, the
+ * states still declared as ideas, and anything `canvas.json` names that no longer
+ * exists. Nothing in here can be out of date, because the folder is the source.
+ */
 export interface ScreenCanvasState {
-  /** Project-relative folder the canvas lives in, with forward slashes. */
+  /** Project-relative folder the canvas belongs to, with forward slashes. */
   directory: string
-  /** Entry file of the canvas, always `canvas.html`. */
+  /** Reserved path the app serves the canvas at, always `__cio/canvas.html`. */
   entry: string
-  /** When the canvas file was last written (ms). */
-  updatedAt: number
-  /** Frames the page declares, in the order it declares them. */
-  frames: ScreenCanvasFrame[]
-  /** Screens the folder holds that no live frame shows, in listing order. */
-  missingScreens: string[]
-  /** Screens written after the canvas was, newest first. */
-  changedScreens: string[]
+  /** Frames side by side on the canvas. */
+  columns: number
+  /** Screens the canvas frames, in the order it shows them. */
+  screens: string[]
+  /** States declared in the design's metadata that have no screen file yet. */
+  sketches: ScreenCanvasSketch[]
   /**
-   * Screens the canvas frames that the folder no longer holds.
+   * Entries the design's metadata names that the folder no longer holds.
    *
-   * A frame pointing at a deleted file renders an error page, so the board
-   * reports it instead of treating the canvas as current.
+   * The canvas drops them rather than framing a file that is gone, and the board
+   * says so instead of leaving the metadata silently disagreeing with the folder.
    */
   orphanFrames: string[]
-  /** Titles of sketch frames still waiting for a real screen. */
-  sketchTitles: string[]
+  /** Why the design's `canvas.json` could not be read, or null when it did. */
+  metadataError: string | null
 }
 
 /**

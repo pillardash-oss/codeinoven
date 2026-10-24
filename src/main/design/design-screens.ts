@@ -1,4 +1,5 @@
 import { designScreenName } from '../../lib/design/screens'
+import { isScreenCanvasEntry } from '../../lib/design/screen-canvas'
 import { readdir, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { DesignScreen } from '../../lib/ipc/design'
@@ -96,9 +97,17 @@ export async function listDesignScreens(absoluteFolder: string): Promise<DesignS
   for (const folder of await screenFoldersIn(absoluteFolder)) {
     nested.push(...(await htmlFilesIn(resolve(absoluteFolder, folder), `${folder}/`)))
   }
-  return [...own, ...nested].slice(0, MAX_DESIGN_SCREENS).map(({ entry, updatedAt }) => ({
-    entry,
-    name: designScreenName(entry),
-    updatedAt
-  }))
+  return (
+    [...own, ...nested]
+      // A file named `canvas.html` is the canvas, not a screen of the design: the
+      // app serves the canvas itself now, so a folder that still holds one is
+      // never pictured, framed or exported as a screen.
+      .filter(({ entry }) => !isScreenCanvasEntry(entry))
+      .slice(0, MAX_DESIGN_SCREENS)
+      .map(({ entry, updatedAt }) => ({
+        entry,
+        name: designScreenName(entry),
+        updatedAt
+      }))
+  )
 }

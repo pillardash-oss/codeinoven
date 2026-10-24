@@ -149,7 +149,8 @@ class BrowserInspectorSession {
                 id: reference.id,
                 number: index + 1,
                 comment: reference.comment ?? '',
-                selector: reference.selector ?? ''
+                selector: reference.selector ?? '',
+                ...(reference.frame ? { frame: reference.frame } : {})
               }
             ]
           : []

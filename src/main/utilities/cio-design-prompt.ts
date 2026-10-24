@@ -58,10 +58,11 @@ const DESIGN_SESSION_STEPS = `How to run the session:
    screen, another folder, or another entry file. Keep the product in one design
    folder with one HTML file per screen, linked from \`index.html\`: a website is
    several pages and a dashboard is several screens, and the coordinator board
-   shows a picture of every screen in that folder. A Screen Canvas
-   (\`canvas.html\`) is the page that shows the whole product at once; write it
-   once a few screens exist and keep it in step, because the board shows it and
-   the user reviews the design on it.
+   shows a picture of every screen in that folder. The Screen Canvas is the
+   app's own page: it is generated from the folder, so every screen you write is
+   on it without you writing any markup. Never write a \`canvas.html\`; to order
+   or label the canvas, or to declare a state you have not built yet, put a
+   \`canvas.json\` beside the screens.
 4. Check the result yourself before you describe it, in this thread's own in-app
    browser: preview the folder so the tab has its served URL, activate the
    \`cio:browser\` capability, and use its \`screenshot\` for a phone width and a

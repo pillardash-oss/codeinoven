@@ -5,11 +5,13 @@ import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 import { APP_NAME } from '../../lib/brand'
 import { APP_LOCALE } from '../../lib/date-time-format'
 import {
+  SCREEN_CANVAS_PATH,
   SCREEN_CANVAS_RUNTIME_SCRIPT_PATH,
   SCREEN_CANVAS_RUNTIME_STYLE_PATH
 } from '../../lib/design/screen-canvas'
 import { mimeTypeForPath } from '../../lib/mime-types'
 import { designTweaksRuntimeScript } from '../design/design-tweaks-runtime'
+import { renderScreenCanvasPage } from '../design/screen-canvas-page'
 import {
   screenCanvasRuntimeScript,
   screenCanvasRuntimeStyle
@@ -662,10 +664,18 @@ export class DirectoryPreviewServer {
         sendText(response, 400, 'Malformed request path', method)
         return
       }
-      // The Screen Canvas runtime belongs to the app, not to the served folder,
-      // so its two reserved paths are answered before any filesystem
-      // resolution. They deliberately shadow a real `__cio` directory in a
-      // served folder, and they never reach the change watcher or a listing.
+      // The Screen Canvas belongs to the app, not to the served folder, so its
+      // three reserved paths are answered before any filesystem resolution.
+      // They deliberately shadow a real `__cio` directory in a served folder,
+      // and they never reach the change watcher or a listing.
+      if (parsed.pathname === `/${SCREEN_CANVAS_PATH}`) {
+        // Generated per request rather than cached, because the folder is the
+        // whole input: a screen written a second ago is on the canvas the next
+        // time the page is asked for, and nothing has to notice it changed.
+        const page = await renderScreenCanvasPage(this.root)
+        sendCanvasAsset(response, 'text/html; charset=utf-8', page, head)
+        return
+      }
       if (parsed.pathname === '/__cio/tweaks.js') {
         sendCanvasAsset(
           response,

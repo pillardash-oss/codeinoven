@@ -13,7 +13,6 @@
   import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
   import CioImageOff from '@pdslng/cio-icon/CioImageOff.svelte'
   import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
-  import CioListClock from '@pdslng/cio-icon/CioListClock.svelte'
   import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
   import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
@@ -40,7 +39,6 @@
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
   import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
-  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -62,10 +60,9 @@
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import {
-    SCREEN_CANVAS_FILE,
+    SCREEN_CANVAS_PATH,
     isScreenCanvasEntry,
-    screenCanvasLivePreviewMessage,
-    screenCanvasRequestMessage
+    screenCanvasLivePreviewMessage
   } from '$shared/design/screen-canvas'
   import type {
     AuthoredWorkKind,
@@ -94,9 +91,10 @@
    * in front, all the same size: a picture is a picture of a screen, not the screen
    * itself, and the one in front is marked rather than enlarged.
    *
-   * The canvas is the one entry that can fall behind the design it frames, and that is
-   * the board's warning rather than a line of text: the same banner a stale panel
-   * wears, over the screens, with the one action that fixes it.
+   * The canvas is the app's own page: generated from the folder's screens every
+   * time it is asked for, so a screen written a minute ago is on it, there is
+   * nothing for the board to warn about and nothing for the agent to keep in step.
+   * The board only opens it.
    *
    * It loads its own state rather than receiving it through props, because the work
    * outlives the turn that made it: there is no live turn to hand it anything, and a
@@ -617,27 +615,28 @@
     !canvasRead
       ? 'Reading the canvas…'
       : canvasState === null
-        ? 'No Screen Canvas yet'
+        ? 'No screens yet'
         : 'No preview yet.'
   )
-  /** What the live preview entry says while it has no picture to show. */
-  let liveEntryNote = $derived(liveReady ? 'No preview yet.' : 'No entry page yet')
-
-  /** What the canvas is behind on, in one line, or nothing when it is current. */
-  let canvasDrift = $derived.by(() => {
+  /** What the design's own canvas metadata gets wrong, in one line, or nothing. */
+  let canvasHint = $derived.by(() => {
     const state = canvasState
     if (state === null) return ''
     const parts: string[] = []
-    const missing = state.missingScreens.length
-    const changed = state.changedScreens.length
-    const orphaned = state.orphanFrames.length
-    if (missing > 0) parts.push(`${missing} screen${missing === 1 ? '' : 's'} not on it yet`)
-    if (changed > 0) parts.push(`${changed} changed since it was written`)
-    if (orphaned > 0) {
-      parts.push(`${orphaned} frame${orphaned === 1 ? '' : 's'} with no screen left`)
+    if (state.metadataError !== null) {
+      parts.push(`canvas.json could not be read: ${state.metadataError}`)
+    }
+    if (state.orphanFrames.length > 0) {
+      const count = state.orphanFrames.length
+      parts.push(
+        `canvas.json frames ${count} file${count === 1 ? '' : 's'} that no longer exist: ${state.orphanFrames.join(', ')}`
+      )
     }
     return parts.join(' · ')
   })
+
+  /** What the live preview entry says while it has no picture to show. */
+  let liveEntryNote = $derived(liveReady ? 'No preview yet.' : 'No entry page yet')
 
   let refreshLabel = $derived(video ? 'Refresh the composition preview' : 'Refresh the screens')
   let screensLabel = $derived(
@@ -909,7 +908,7 @@
     if (opening || openingCanvas) return
     openingCanvas = true
     try {
-      await openWork(selected.directory, SCREEN_CANVAS_FILE)
+      await openWork(selected.directory, SCREEN_CANVAS_PATH)
     } finally {
       openingCanvas = false
     }
@@ -944,44 +943,35 @@
   }
 
   /**
-   * Ask the agent for the canvas, or for the change the user just asked for.
+   * Ask the agent for what the design still needs to be live.
+   *
+   * The canvas itself never needs asking: the app generates it from the folder.
+   * What a folder cannot say on its own is an entry page for the preview to open
+   * and the real screens behind the states still declared as sketches, so that is
+   * all this asks for.
    *
    * The request is a message in the thread, sent when the agent is idle and
    * queued behind a running turn when it is not: the menu never steers work in
    * flight, and what happened is said under the header either way.
    */
-  async function requestCanvas(action: 'create' | 'update' | 'live'): Promise<void> {
+  async function requestLivePreview(): Promise<void> {
     if (selected.directory === '' || canvasBusy !== '') return
-    canvasBusy = action
+    canvasBusy = 'live'
     canvasNotice = ''
     try {
-      const text =
-        action === 'live'
-          ? screenCanvasLivePreviewMessage({
-              directory: selected.directory,
-              sketchTitles: canvasState?.sketchTitles ?? [],
-              needsEntry: !liveReady
-            })
-          : screenCanvasRequestMessage({
-              directory: selected.directory,
-              updating: action === 'update',
-              missingScreens: canvasState?.missingScreens ?? [],
-              changedScreens: canvasState?.changedScreens ?? [],
-              orphanFrames: canvasState?.orphanFrames ?? [],
-              sketchTitles: canvasState?.sketchTitles ?? []
-            })
+      const text = screenCanvasLivePreviewMessage({
+        directory: selected.directory,
+        sketchTitles: (canvasState?.sketches ?? []).map((sketch) => sketch.title),
+        needsEntry: !liveReady
+      })
       const delivery = await sendOrQueueThreadMessage(projectId, threadId, { text })
       canvasNotice =
         delivery === 'queued'
           ? 'Queued: it will be built when the current turn ends.'
-          : action === 'live'
-            ? 'Asked the agent to make the design live.'
-            : action === 'create'
-              ? 'Asked the agent to write the canvas.'
-              : 'Asked the agent to sync the canvas.'
+          : 'Asked the agent to make the design live.'
       error = ''
     } catch (failure) {
-      error = failure instanceof Error ? failure.message : 'The canvas request could not be sent.'
+      error = failure instanceof Error ? failure.message : 'The request could not be sent.'
     } finally {
       canvasBusy = ''
     }
@@ -2095,21 +2085,11 @@
                   Browse Open Design prompts</DropdownMenu.Item
                 >
               {/if}
-              {#if !video && canvasRead && canvasState === null}
+              {#if !video && canvasRead && (!liveReady || (canvasState?.sketches.length ?? 0) > 0)}
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestCanvas('create')}
-                >
-                  <CioDisplay size={13} class="shrink-0 text-muted" />
-                  Generate Screen Canvas
-                </DropdownMenu.Item>
-              {/if}
-              {#if !video && canvasRead && !liveReady}
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                  disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestCanvas('live')}
+                  onSelect={() => void requestLivePreview()}
                 >
                   <CioLayers size={13} class="shrink-0 text-muted" />
                   Generate Live Preview
@@ -2177,31 +2157,8 @@
     {/if}
   </header>
 
-  {#if !video && canvasDrift !== ''}
-    <StalePanelNotice
-      stale
-      reason="canvas"
-      wrap
-      message={`The Screen Canvas is behind: ${canvasDrift}.`}
-    >
-      {#snippet action()}
-        <button
-          type="button"
-          class="ml-auto flex shrink-0 items-center gap-1 border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
-          disabled={canvasBusy !== ''}
-          title="Ask the agent to bring the Screen Canvas up to date with the screens"
-          aria-label="Ask the agent to sync the Screen Canvas"
-          onclick={() => void requestCanvas('update')}
-        >
-          {#if canvasBusy === 'update'}
-            <CioSpinner size={12} class="animate-spin" />
-          {:else}
-            <CioListClock size={12} />
-          {/if}
-          Sync
-        </button>
-      {/snippet}
-    </StalePanelNotice>
+  {#if !video && canvasHint !== ''}
+    <p class="shrink-0 px-2.5 pb-1 text-[0.625rem] text-dimmed">{canvasHint}</p>
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col">

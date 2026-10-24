@@ -145,26 +145,28 @@ The board reads a screen as an \`.html\` file in the design's folder or one fold
 
 ## The Screen Canvas
 
-One canvas per design: \`canvas.html\` beside the screens, the single page that shows the whole product at once. Write it once the first few screens exist, and keep it in step: a screen added, removed or reshaped means its frame changes in the same pass. The coordinator board shows the canvas as soon as it exists, and its button asks for one when the design has none, so a canvas you never write is the whole product the user cannot see.
+The canvas is the app's page, not yours. The board opens it at its own reserved path on the design's own origin and the app builds it from the folder every time it is asked for, so it frames every screen you write without a line of markup from you and it can never fall behind the design. Do not write a \`canvas.html\`: a file by that name is not read as a screen, and the app ignores it.
 
-The page stays thin, because the app serves the runtime and its styles:
+What the app cannot read off the folder is intent, so a design may say so in an optional \`canvas.json\` beside its screens:
 
-\`\`\`html
-<main data-cio-canvas>
-  <section data-cio-frame="index.html" data-cio-title="Landing page"></section>
-  <section data-cio-frame="dashboard.html" data-cio-title="Dashboard, empty" data-cio-caption="No projects yet"></section>
-  <section data-cio-frame="dashboard.html" data-cio-title="Dashboard, phone" data-cio-width="390"></section>
-  <section data-cio-sketch data-cio-title="Invite modal">…the drawing of a state that has no file yet…</section>
-</main>
-<script src="/__cio/canvas.js"></script>
+\`\`\`json
+{
+  "columns": 2,
+  "frames": [
+    { "entry": "index.html", "title": "Landing page" },
+    { "entry": "dashboard.html", "title": "Dashboard, empty", "caption": "No projects yet" },
+    { "entry": "dashboard.html", "title": "Dashboard, phone", "width": 390 },
+    { "title": "Invite modal", "note": "Dialog over the dashboard, not built yet" }
+  ]
+}
 \`\`\`
 
-- One \`<section data-cio-frame="…">\` per screen and per state of a screen, in reading order. The file is relative to the design folder, spelled exactly as the screen is. \`data-cio-title\` labels the frame and \`data-cio-caption\` adds a line under it, both in the user's words.
-- \`data-cio-width\` is the width the frame renders at, 1440 by default. Use it for a phone or tablet state of the same screen (390, 768) instead of writing a second file. \`data-cio-height\` fixes a frame's height when measuring its content would be wrong, and \`data-cio-columns\` on the canvas root sets how many frames sit side by side (2 by default, at most 4).
-- A \`<section data-cio-sketch>\` holds a state you have drawn but not built: its markup stays as written, so a canvas can exist before its screens do. The board's Live view action later asks you to build each sketch as a real screen, and its frame becomes a \`data-cio-frame\`.
-- The one script tag is the whole integration: the runtime brings its own styles with it, lays the frames out, and adds pan, zoom and a fit control. Never copy a screen's markup into a live frame: the frame loads the file, so the canvas cannot drift from the design.
+- \`frames\` orders and labels the canvas. The frames it lists come first, in its order, and every screen it does not mention follows in listing order, so a screen you write a minute from now is on the canvas without anyone editing this file.
+- A frame with an \`entry\` names a screen file exactly as the screen is spelled. \`width\` and \`height\` size it (1440 by default; 390 for a phone state), \`title\` labels it and \`caption\` adds a line under the label, both in the user's words. Name the same file twice to frame two states of it at different widths.
+- A frame with no \`entry\` is a sketch: a state the design needs and no file holds yet. The board offers to build every one of them, so write its \`note\` as the state it should become.
+- A frame naming a file that no longer exists is dropped from the canvas, and the board says which. Fix the entry instead of leaving it.
 
-Cover the product, not the happy path: every screen, and for each one the states that matter (empty, loading, error, a dialog open, filled). A canvas that draws one screen at six widths hides the screens that are missing.
+Cover the product, not the happy path: every screen, and for each one the states that matter (empty, loading, error, a dialog open, filled). Build a state as a real screen when it is a real page, and declare it as a sketch only while it is still an idea.
 
 ## Showing the design
 

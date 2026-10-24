@@ -331,6 +331,14 @@ export interface BrowserInspectorTarget {
   html: string
   /** Ancestor names, outermost first, for a breadcrumb. */
   ancestors: string[]
+  /**
+   * The framed screen the element lives in, or null for the page itself.
+   *
+   * A design's Screen Canvas frames each screen in its own document, so a pick
+   * is only findable by source when it says which screen it came from: the
+   * selector is a path inside that document and means nothing without it.
+   */
+  frame: string | null
   /** Viewport rectangle at pick time, in CSS pixels. */
   rect: BrowserInspectorRect
   /**
@@ -368,6 +376,8 @@ export interface BrowserInspectorMarker {
   comment: string
   /** CSS path the page re-resolves the element by after a layout shift. */
   selector: string
+  /** The framed screen that path belongs to, or absent for the page itself. */
+  frame?: string
 }
 
 /**

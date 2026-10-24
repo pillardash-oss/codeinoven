@@ -256,6 +256,14 @@ export function screenCanvasRuntimeScript(): string {
           'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
         document.documentElement.dataset.cioCanvasScale = String(scale);
         if (readout) readout.textContent = Math.round(scale * 100) + '%';
+        // The app's element inspector draws its boxes and pins in this document,
+        // while a frame's elements live in their own: every pan and zoom moves
+        // them, so it is told on the same frame the view changes.
+        try {
+          document.dispatchEvent(new CustomEvent('cio:canvas-view'));
+        } catch {
+          // A document that refuses the event has nothing waiting on it.
+        }
       });
     }
 
@@ -745,6 +753,27 @@ export function screenCanvasRuntimeScript(): string {
       var built = buildScreen(sections[sectionIndex]);
       if (built) records.push(built);
     }
+
+    // A comment the reader picks in the app asks for the screen it was written
+    // on. The canvas is panned rather than scrolled, so the app names the frame
+    // and the view centres it: an element a comment points at is worth seeing
+    // without hunting for the frame it sits in.
+    document.addEventListener('cio:canvas-reveal', function (event) {
+      var detail = event && event.detail ? event.detail : null;
+      var entry = detail && typeof detail.frame === 'string' ? detail.frame : '';
+      if (entry === '') return;
+      var screens = surface.querySelectorAll('[data-cio-screen]');
+      for (var index = 0; index < screens.length; index += 1) {
+        if (screens[index].getAttribute('data-cio-screen') !== entry) continue;
+        var rect = screens[index].getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        panX += viewportWidth() / 2 - (rect.left + rect.width / 2);
+        panY += viewportHeight() / 2 - (rect.top + rect.height / 2);
+        userAdjusted = true;
+        applyTransform();
+        return;
+      }
+    });
 
     surface.addEventListener('wheel', onSurfaceWheel, { passive: false });
     surface.addEventListener('pointerdown', onSurfacePointerDown);

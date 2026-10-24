@@ -115,10 +115,17 @@ function parseEntry(raw: string): ResolvedServedEntry {
  * A named entry must exist, because serving a listing for a file the caller
  * named would hide the mistake. With no entry named, `index.html` is used when
  * the folder has one.
+ *
+ * `virtual` is the paths the server answers without a file behind them, which
+ * the app serves from its own code: a design's Screen Canvas is generated from
+ * the folder on request rather than written into it, so it is openable exactly
+ * like a screen while no such file exists. Only the caller that owns such a path
+ * may pass it, and an entry that is not virtual is checked on disk as before.
  */
 export async function resolveServedEntry(
   directoryAbsolute: string,
-  raw: unknown
+  raw: unknown,
+  virtual: readonly string[] = []
 ): Promise<ResolvedServedEntry | null> {
   if (raw !== undefined && raw !== null && typeof raw !== 'string') {
     throw new Error('entry must be a path inside the served folder')
@@ -134,6 +141,8 @@ export async function resolveServedEntry(
   if (!isInsideProject(directoryAbsolute, absolute)) {
     throw new Error('entry must name a file inside the served folder')
   }
+  const named = parsed.segments.join('/')
+  if (virtual.includes(named)) return { ...parsed, absolute }
   if (!(await existsAsFile(absolute))) {
     throw new Error(`The served folder has no file named "${requested}".`)
   }
