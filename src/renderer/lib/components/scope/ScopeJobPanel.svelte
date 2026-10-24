@@ -69,7 +69,10 @@
     return done ? `“${run.title}” ${outcome.done}` : `“${run.title}” ${outcome.failed}`
   }
 
-  const heading = $derived(headingFor(job))
+  const handoffFailed = $derived(
+    job.kind === 'create' && job.status === 'failed' && active === 'handoff'
+  )
+  const heading = $derived(handoffFailed ? `“${job.title}” needs attention` : headingFor(job))
 
   /** Where one checklist step sits relative to the run. */
   function stateFor(step: ScopeJobStepId): JobStepView['state'] {
@@ -119,13 +122,15 @@
             ? 'The commits are in the target scope and this scope is still here.'
             : 'The commits are in the target scope and this scope is gone.'
           : doneNote
-        : merging
-          ? job.conflictFiles.length > 0
-            ? 'Nothing was deleted. Resolve the conflicts in the Git panel, then run the merge again.'
-            : 'Nothing was deleted. Repair the worktree above if it is flagged, then try again.'
-          : removing
-            ? 'The scope is still there. Fix the problem above and delete it again from the scope menu.'
-            : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'
+        : handoffFailed
+          ? 'The scope exists. Resolve the handoff error above before continuing.'
+          : merging
+            ? job.conflictFiles.length > 0
+              ? 'Nothing was deleted. Resolve the conflicts in the Git panel, then run the merge again.'
+              : 'Nothing was deleted. Repair the worktree above if it is flagged, then try again.'
+            : removing
+              ? 'The scope is still there. Fix the problem above and delete it again from the scope menu.'
+              : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'
   )
 </script>
 

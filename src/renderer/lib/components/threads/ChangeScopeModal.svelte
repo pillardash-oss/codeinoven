@@ -3,7 +3,6 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
-  import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
@@ -92,24 +91,6 @@
     if (event.key !== 'Enter' || event.isComposing || !noMatch) return
     event.preventDefault()
     openCreateModal()
-  }
-
-  /** Apply a freshly created scope to the thread this flow was started for. */
-  async function assignCreatedScope(bucketId: string): Promise<void> {
-    const target = creationTarget
-    if (!target) return
-    creationTarget = null
-    try {
-      await applyScopeToThread(target.projectId, target.threadId, bucketId)
-    } catch (error) {
-      // The dialog is long gone by now: the run reports into the scope dock and
-      // the user has moved on, so the failure has to reach them where they are.
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : 'The thread could not be moved into the created scope'
-      )
-    }
   }
 
   /**
@@ -223,11 +204,11 @@
 {#if createModalOpen}
   <ScopeCreateModal
     open={createModalOpen}
-    {projectId}
+    projectId={creationTarget?.projectId ?? projectId}
     targetThreadId={creationTarget?.threadId ?? threadId}
+    assignToThread
     initialName={query.trim()}
     onStarted={handleCreateStarted}
-    onCreated={(bucketId) => void assignCreatedScope(bucketId)}
     onClose={() => (createModalOpen = false)}
   />
 {/if}

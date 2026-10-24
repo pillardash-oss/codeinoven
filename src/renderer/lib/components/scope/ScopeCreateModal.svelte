@@ -18,6 +18,8 @@
     existingBucketId?: string | null
     /** Thread that started the run; forwarded so sends can queue behind it. */
     targetThreadId?: string | null
+    /** The app-owned job moves the initiating thread after creation succeeds. */
+    assignToThread?: boolean
     /** Pre-fills the display name — e.g. from a failed scope search. */
     initialName?: string
     onCreated?: (bucketId: string) => void
@@ -33,6 +35,7 @@
     onClose,
     existingBucketId = null,
     targetThreadId = null,
+    assignToThread = false,
     initialName = '',
     onCreated,
     onStarted
@@ -140,15 +143,17 @@
     const targetProjectId = projectId
     const targetBucketId = existingBucketId
     const targetThread = targetThreadId
+    const assignTarget = assignToThread
     const handleCreated = onCreated
     const handleStarted = onStarted
-    onClose()
-    handleStarted?.()
     scopeJobs.create(targetProjectId, input, {
       existingBucketId: targetBucketId,
       targetThreadId: targetThread,
+      assignToThread: assignTarget,
       onCreated: handleCreated
     })
+    onClose()
+    handleStarted?.()
   }
 </script>
 
