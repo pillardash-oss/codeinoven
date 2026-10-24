@@ -774,6 +774,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       if (!input || typeof input !== 'object') throw new TypeError('Invalid IDE request')
       const value = input as Record<string, unknown>
       const actions = [
+        'install',
         'check',
         'sync',
         'close',
@@ -791,7 +792,11 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       const path = requireString(
         value.path,
         'IDE path',
-        action === 'check' || action === 'grep' || action === 'close' || action === 'cancel'
+        action === 'install' ||
+          action === 'check' ||
+          action === 'grep' ||
+          action === 'close' ||
+          action === 'cancel'
       )
       const text =
         value.text === undefined ? undefined : requireString(value.text, 'IDE text', true)
@@ -810,7 +815,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         return value
       }
       return ide.request(
-        action === 'close' || action === 'cancel'
+        action === 'install' || action === 'check' || action === 'close' || action === 'cancel'
           ? ''
           : await projectFilesService.ideRoot(
               validateEntityId(projectId, 'Project ID'),

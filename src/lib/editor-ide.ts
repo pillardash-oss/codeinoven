@@ -1,5 +1,6 @@
 /** Read-only editor intelligence. Positions use LSP UTF-16 offsets. */
 export type IdeAction =
+  | 'install'
   | 'check'
   | 'sync'
   | 'close'

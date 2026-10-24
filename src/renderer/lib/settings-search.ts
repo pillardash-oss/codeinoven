@@ -2,6 +2,7 @@ import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
 import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
 import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
+import CioCode from '@pdslng/cio-icon/CioCode.svelte'
 import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
 import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
 import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
@@ -264,7 +265,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'definitions',
       'intelephense'
     ],
-    icon: CioServer
+    icon: CioCode
   },
   {
     id: 'cloud-deployments',

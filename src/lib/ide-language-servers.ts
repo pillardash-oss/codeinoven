@@ -39,6 +39,18 @@ function preset(
     settings: {}
   }
 }
+/** Packages installed into the application tool directory, never into a project. */
+export const IDE_SERVER_PACKAGES: Readonly<Record<string, string[]>> = {
+  'typescript-language-server': ['typescript-language-server@latest', 'typescript@^6.0.3'],
+  // Svelte's current server supports the TypeScript 5/6 JavaScript API.
+  svelteserver: ['svelte-language-server@latest', 'typescript@^6.0.3', 'svelte@latest'],
+  'pyright-langserver': ['pyright@latest'],
+  intelephense: ['intelephense@latest'],
+  'vscode-css-language-server': ['vscode-langservers-extracted@latest'],
+  'vscode-html-language-server': ['vscode-langservers-extracted@latest'],
+  'vscode-json-language-server': ['vscode-langservers-extracted@latest']
+}
+
 export const DEFAULT_IDE_LANGUAGE_SERVERS: IdeLanguageServer[] = [
   {
     ...preset(

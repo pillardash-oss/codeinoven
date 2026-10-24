@@ -25,6 +25,8 @@ class Session {
   readonly documents = new Map<string, { text: string; version: number }>()
   capabilities: Record<string, unknown> = {}
   private stopped = false
+  private failure = ''
+  private stderr = ''
   private sequence = 0
   private buffer = Buffer.alloc(0)
   private pending = new Map<
@@ -82,10 +84,18 @@ class Session {
         idle: owners.size === 0 && searches.size === 0
       })
     )
-    this.child.stderr.resume()
+    this.child.stderr.on('data', (chunk: Buffer) => {
+      this.stderr = (this.stderr + chunk.toString()).slice(-2000)
+    })
     this.child.stdin.on('error', () => this.stop())
-    this.child.on('error', () => this.stop())
-    this.child.on('exit', () => this.stop())
+    this.child.on('error', (error) => {
+      this.failure = error.message
+      this.stop()
+    })
+    this.child.on('exit', (code) => {
+      this.failure ||= `Exited with code ${code}. ${this.stderr.trim()}`
+      this.stop()
+    })
   }
   send(message: object): void {
     const body = JSON.stringify({ jsonrpc: '2.0', ...message })
@@ -94,6 +104,15 @@ class Session {
   }
   notify(method: string, params: unknown): void {
     this.send({ method, params })
+  }
+  explainEmptyResult(): void {
+    // Configuration failures belong in the command result, not an empty picker.
+    if (/Cannot find (?:package|module)/u.test(this.stderr)) {
+      const detail = this.stderr.match(/(?:Error[^\n]*|Cannot find (?:package|module)[^\n]*)/u)?.[0]
+      throw new Error(
+        `Project dependencies could not be loaded. ${detail ?? this.stderr.slice(-1000)} Install this project's dependencies, then retry IDE Mode.`
+      )
+    }
   }
   request(method: string, params: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
@@ -173,7 +192,11 @@ class Session {
     this.child.once('exit', () => clearTimeout(killTimer))
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
-      pending.reject(new Error('Language server stopped. Check that its executable is installed.'))
+      pending.reject(
+        new Error(
+          `Language server stopped. ${this.failure || this.stderr || 'Verify its installation in Settings > IDE Mode.'}`
+        )
+      )
     }
     this.pending.clear()
     for (const [key, session] of sessions)
@@ -433,6 +456,7 @@ async function handle(
   env: NodeJS.ProcessEnv,
   servers: IdeLanguageServer[]
 ): Promise<IdeResponse> {
+  if (request.action === 'install') throw new Error('Installation must run through the IDE service')
   if (request.action === 'cancel') {
     searches.get(request.owner)?.kill()
     return {}
@@ -519,6 +543,7 @@ async function handle(
     position: { line: request.line ?? 0, character: request.character ?? 0 },
     ...(request.action === 'references' ? { context: { includeDeclaration: true } } : {})
   })
+  if (!result || (Array.isArray(result) && result.length === 0)) session.explainEmptyResult()
   return request.action === 'hover'
     ? { capabilities, documentation: documentation(record(result).contents).slice(0, 32_000) }
     : { capabilities, locations: await locations(root, result) }

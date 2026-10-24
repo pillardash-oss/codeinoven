@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -10,9 +9,10 @@
   import { copyText } from '$lib/copy-text'
   import { openSetupConversation } from '$lib/utility-setup-thread'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import type { AppConfig, AppConfigPatch, Project } from '$shared/types'
+  import type { AppConfig, AppConfigPatch } from '$shared/types'
   import {
     DEFAULT_IDE_LANGUAGE_SERVERS,
+    IDE_SERVER_PACKAGES,
     validateIdeLanguageServers,
     type IdeLanguageServer
   } from '$shared/ide-language-servers'
@@ -22,8 +22,6 @@
   }
   let { config, updateConfig }: Props = $props()
   let servers = $derived(config.ideLanguageServers ?? DEFAULT_IDE_LANGUAGE_SERVERS)
-  let projects = $state<Project[]>([])
-  let projectId = $state('')
   let presetId = $state('typescript')
   let editing = $state<IdeLanguageServer | null>(null)
   let deleting = $state<IdeLanguageServer | null>(null)
@@ -35,21 +33,6 @@
   let status = $state<Record<string, string>>({})
   const buttonClass =
     'border border-border bg-surface px-3 py-2 text-xs text-foreground hover:bg-elevated disabled:opacity-40'
-  onMount(() => {
-    void invoke('project:list')
-      .then((result) => {
-        projects = result.filter(
-          (project) => project.source === 'local' && !project.hidden && project.path
-        )
-        projectId =
-          projects.find((project) => project.id === workspaceState.activeProject?.id)?.id ??
-          projects[0]?.id ??
-          ''
-      })
-      .catch((reason) => {
-        error = reason instanceof Error ? reason.message : String(reason)
-      })
-  })
   async function persist(next: IdeLanguageServer[]): Promise<void> {
     await updateConfig({ ideLanguageServers: validateIdeLanguageServers(next) })
     status = {}
@@ -124,26 +107,25 @@
     }
   }
   async function check(server: IdeLanguageServer): Promise<void> {
-    if (!projectId || checking) return
+    if (checking) return
     checking = server.id
     try {
-      const result = await invoke(
-        'projectFiles:ide',
-        projectId,
-        {
-          owner: crypto.randomUUID(),
-          action: 'check',
-          path: '',
-          serverId: server.id
-        },
-        workspaceState.activeScopeBucketIdFor(projectId)
-      )
-      const supported = Object.entries(result.capabilities ?? {})
+      const result = await invoke('projectFiles:ide', '', {
+        owner: crypto.randomUUID(),
+        action: 'check',
+        path: '',
+        serverId: server.id
+      })
+      const supported = Object.entries({
+        definitions: result.capabilities?.definition,
+        references: result.capabilities?.references,
+        documentation: result.capabilities?.hover
+      })
         .filter(([, enabled]) => enabled)
         .map(([name]) => name)
       status = {
         ...status,
-        [server.id]: `Connected. ${supported.length ? supported.join(', ') : 'No navigation capabilities advertised'}.`
+        [server.id]: `Ready. ${supported.length ? supported.join(', ') : 'This server does not provide navigation'}.`
       }
     } catch (reason) {
       status = {
@@ -158,12 +140,31 @@
       checking = null
     }
   }
+  async function install(server: IdeLanguageServer): Promise<void> {
+    if (busy || checking) return
+    busy = true
+    error = ''
+    status = { ...status, [server.id]: 'Installing...' }
+    try {
+      await invoke('projectFiles:ide', '', {
+        owner: crypto.randomUUID(),
+        action: 'install',
+        path: '',
+        serverId: server.id
+      })
+      await check(server)
+    } catch (reason) {
+      status = { ...status, [server.id]: reason instanceof Error ? reason.message : String(reason) }
+    } finally {
+      busy = false
+    }
+  }
   async function setupWithAgent(server?: IdeLanguageServer): Promise<void> {
     if (busy) return
     busy = true
     error = ''
     try {
-      const project = projects.find((project) => project.id === projectId) ?? null
+      const project = workspaceState.activeProject ?? null
       await openSetupConversation(
         project,
         server ? `Set up ${server.name} for IDE Mode` : 'Set up IDE Mode language servers',
@@ -189,11 +190,11 @@
   <div class="mb-6 flex flex-wrap items-start justify-between gap-4">
     <div>
       <h1 class="flex items-center gap-2 text-xl font-bold tracking-tight">
-        <CioServer size={18} class="text-muted" />IDE Mode
+        <CioCode size={18} class="text-muted" />IDE Mode
       </h1>
       <p class="mt-1 max-w-2xl text-sm text-muted">
-        Set up language servers for project editing. Turn IDE Mode on separately in each project
-        tree's file viewer menu.
+        Install a language server once and use it across your projects. When you turn on IDE Mode in
+        a file viewer, servers start in that project's workspace as you open files.
       </p>
     </div>
     <button type="button" class={buttonClass} disabled={busy} onclick={() => void setupWithAgent()}
@@ -202,21 +203,12 @@
     >
   </div>
   <p class="mb-4 text-xs text-muted">
-    Agent setup opens a draft to review and send. Import the returned server JSON here.
+    Install downloads the server into the app's tools folder and requires Bun on PATH. Use Edit for
+    an existing executable. Agent setup opens a draft to review and send.
   </p>
   <div
     class="mb-5 flex flex-wrap items-end justify-between gap-3 border border-border bg-surface p-4"
   >
-    <label class="text-xs text-muted"
-      >Check and set up in project<select
-        aria-label="Language server project"
-        class="mt-1 block max-w-xs border border-border bg-app px-3 py-2 text-sm text-foreground"
-        bind:value={projectId}
-        ><option value="">Choose a project</option>{#each projects as project (project.id)}<option
-            value={project.id}>{project.name}</option
-          >{/each}</select
-      ></label
-    >
     <div class="flex flex-wrap items-end gap-2">
       <button
         type="button"
@@ -264,6 +256,14 @@
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            {#if IDE_SERVER_PACKAGES[server.command]}
+              <button
+                type="button"
+                class={buttonClass}
+                disabled={busy || checking !== null}
+                onclick={() => void install(server)}>Install</button
+              >
+            {/if}
             <Switch
               checked={server.enabled}
               disabled={busy}
@@ -273,9 +273,9 @@
             /><button
               type="button"
               class={buttonClass}
-              disabled={!projectId || checking !== null || busy}
+              disabled={checking !== null || busy}
               onclick={() => void check(server)}
-              >{checking === server.id ? 'Checking...' : 'Check setup'}</button
+              >{checking === server.id ? 'Checking...' : 'Verify installation'}</button
             ><button
               type="button"
               class={buttonClass}
@@ -290,9 +290,12 @@
           </div>
         </div>
         <p class="mt-3 text-xs text-muted" role="status">
-          {status[server.id] ?? 'Not checked. Enabling a server does not install it.'}
+          {status[server.id] ??
+            (IDE_SERVER_PACKAGES[server.command]
+              ? 'Install here, or verify an existing installation on PATH.'
+              : 'Install this executable on PATH, or choose its path with Edit.')}
         </p>
-        {#if status[server.id] && !status[server.id].startsWith('Connected.')}
+        {#if !busy && checking === null && status[server.id] && !status[server.id].startsWith('Ready.')}
           <div class="mt-2 flex justify-end">
             <button
               type="button"
@@ -307,11 +310,6 @@
         No language servers configured. Choose a preset or add a custom server.
       </p>{/each}
   </div>
-  <p class="mt-5 text-xs text-muted">
-    Servers must speak LSP over stdio and be installed locally or on PATH. The nearest root marker
-    inside the project selects the workspace. Saving changes stops sessions that use the old
-    configuration.
-  </p>
 </div>
 {#if editing}<IdeLanguageServerEditor
     server={editing}
