@@ -1,4 +1,9 @@
 <script lang="ts">
+  import CardNotice from '../shared/CardNotice.svelte'
+  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
+  import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
+  import type { IdeInstallation } from '$shared/editor-ide'
   import {
     rememberIdeResults,
     recalledIdeResults,
@@ -39,6 +44,8 @@
   }: Props = $props()
   let resolvedProjectName = $state('')
   let connectedServers = $state<IdeResponse['servers']>([])
+  let installations = $state<IdeInstallation[]>([])
+  let infoChecking = $state(false)
   let infoOpen = $state(false)
   let floatingRoot: HTMLDivElement | undefined
   let anchor = $state({ x: 16, y: 80 })
@@ -157,6 +164,7 @@
       )
         .then((result) => {
           if (!cancelled && alive) {
+            installations = result.installations ?? []
             connectedServers = result.servers ?? []
             capabilities = result.capabilities
             failedRetry = -1
@@ -168,7 +176,7 @@
             connecting = false
             capabilities = undefined
             failedRetry = retry
-            serverError = reason instanceof Error ? reason.message : String(reason)
+            serverError = ipcErrorMessage(reason, 'Language server unavailable')
           }
         })
     }, 250)
@@ -557,65 +565,129 @@
 {/if}
 {#if active && infoOpen}
   <aside
-    class="absolute inset-y-0 right-0 z-40 flex w-80 max-w-full flex-col overflow-auto border-l border-border bg-surface text-xs text-foreground"
+    class="absolute inset-y-0 right-0 z-40 flex w-80 max-w-full flex-col border-l border-border bg-surface text-foreground"
     aria-label="Language servers for this file"
+    {@attach () => {
+      let cancelled = false
+      infoChecking = true
+      void invoke(
+        'projectFiles:ide',
+        projectId,
+        {
+          owner,
+          action: 'inventory',
+          path: '',
+          serverId: connectedServers?.[0]?.id,
+          query: connectedServers?.length ? 'updates' : undefined
+        },
+        scopeBucketId,
+        threadId
+      )
+        .then((result) => {
+          if (!cancelled) installations = result.installations ?? []
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!cancelled) infoChecking = false
+        })
+      return () => {
+        cancelled = true
+      }
+    }}
   >
-    <div class="flex items-center justify-between border-b border-border px-2 py-1">
-      <span>LSP info</span><button
+    <div class="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
+      <span class="text-xs font-semibold">LSP info</span>
+      <button
         type="button"
-        class="p-1"
+        class="flex h-7 w-7 items-center justify-center border border-border bg-elevated text-muted hover:bg-overlay hover:text-foreground"
         title="Close LSP info"
         aria-label="Close LSP info"
         onclick={() => (infoOpen = false)}><CioClose size={13} /></button
       >
     </div>
-    <div class="space-y-2 p-2">
-      <p role="status">
-        {serverError
-          ? 'Language server unavailable'
-          : connecting
-            ? 'Starting language server...'
-            : capabilities
-              ? 'Language server connected'
-              : 'No server connected'}
-      </p>
-      <div class="flex items-center justify-between gap-2">
-        {#if serverError}<button
-            type="button"
-            class="px-2 py-1 hover:bg-elevated"
-            onclick={() => {
-              retryVersion++
-            }}>Retry</button
-          >{/if}
-        <button
-          type="button"
-          class="ml-auto px-2 py-1 hover:bg-elevated"
-          onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
-        >
+    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-3 text-xs">
+      <div>
+        <p class="mb-1 text-[0.6875rem] font-medium text-muted">Current file</p>
+        <p class="break-words leading-relaxed">{path}</p>
       </div>
-
-      <p class="break-all font-mono">{path}</p>
-      {#each connectedServers ?? [] as server (server.id)}<section
-          class="space-y-1 border-t border-border py-2"
-        >
-          <p class="font-medium">{server.name}</p>
-          <p>Languages: {(server.languages ?? [server.language]).join(', ')}</p>
-          <p class="break-all font-mono text-muted">{server.executable}</p>
-          <p class="break-all text-muted">Workspace: {server.root}</p>
-          <p>
-            {Object.entries(capabilities ?? {})
-              .filter(([, value]) => value)
-              .map(([name]) => name)
-              .join(', ')}
+      {#if serverError}
+        <section aria-label="Language server error">
+          <CardNotice tone="danger">Language server unavailable.</CardNotice>
+          <details class="border border-t-0 border-danger/30">
+            <summary
+              class="cursor-pointer bg-danger/5 px-3 py-2 font-medium text-danger hover:bg-danger/10"
+              >Error details</summary
+            >
+            <pre
+              class="max-h-48 overflow-auto whitespace-pre-wrap break-words border-t border-danger/30 bg-app px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-muted">{serverError}</pre>
+          </details>
+        </section>
+      {:else if !connectedServers?.length}<CardNotice
+          >{connecting
+            ? 'Starting language server...'
+            : 'No language server is connected. Configure a server in IDE Mode settings.'}</CardNotice
+        >{/if}
+      {#each connectedServers ?? [] as server (server.id)}
+        {@const installation = installations.find((item) => item.serverId === server.id)}
+        <section class="space-y-3 border border-border bg-elevated p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-semibold">{server.name}</span><SettingsStatusBadge
+              label="Connected"
+              classes="border-success/30 bg-success/10 text-success"
+              ><CioCircle size={11} /></SettingsStatusBadge
+            >
+          </div>
+          <p class="leading-relaxed text-muted">
+            {(server.languages ?? [server.language]).join(', ')}
           </p>
-        </section>{:else}<p class="text-muted">
-          {connecting ? 'Connecting...' : 'No server connected to this file.'}
-        </p>{/each}
-      {#if serverError}<details class="min-w-0">
-          <summary class="cursor-pointer text-danger">Error details</summary>
-          <pre
-            class="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono">{serverError}</pre>
-        </details>{/if}
+          {#if installation?.latestVersion && installation.version && installation.latestVersion.localeCompare( installation.version, undefined, { numeric: true } ) > 0}<CardNotice
+              >Update available: {installation.latestVersion}. Open LSP settings to update.</CardNotice
+            >{/if}
+          <details class="border border-border">
+            <summary class="cursor-pointer bg-surface px-2 py-2 font-medium hover:bg-overlay"
+              >Connection details</summary
+            >
+            <dl class="space-y-3 border-t border-border p-2 text-muted">
+              <div>
+                <dt class="mb-1 font-medium">Executable</dt>
+                <dd class="break-all font-mono">{server.executable}</dd>
+              </div>
+              <div>
+                <dt class="mb-1 font-medium">Workspace</dt>
+                <dd class="break-all">{server.root}</dd>
+              </div>
+              <div>
+                <dt class="mb-1 font-medium">Features</dt>
+                <dd>
+                  {Object.entries(capabilities ?? {})
+                    .filter(([, value]) => value)
+                    .map(([name]) => name)
+                    .join(', ')}
+                </dd>
+              </div>
+            </dl>
+          </details>
+        </section>
+      {/each}
+      {#if infoChecking && connectedServers?.length}<p class="flex items-center gap-2 text-muted">
+          <CioSpinner size={12} class="animate-spin" />Checking updates...
+        </p>{/if}
+    </div>
+    <div
+      class="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-elevated p-3"
+    >
+      {#if serverError}<button
+          type="button"
+          class="border border-border bg-surface px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
+          onclick={() => {
+            retryVersion++
+          }}>Retry</button
+        >{/if}
+      <button
+        type="button"
+        class="ml-auto border border-border bg-surface px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
+        onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
+      >
     </div>
   </aside>
 {/if}

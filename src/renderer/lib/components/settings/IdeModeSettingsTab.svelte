@@ -1,4 +1,11 @@
 <script lang="ts">
+  import { DropdownMenu } from 'bits-ui'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
+  import SettingsEntry from '../shared/SettingsEntry.svelte'
+  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
+  import CardNotice from '../shared/CardNotice.svelte'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import { onMount } from 'svelte'
   import type { IdeInstallation } from '$shared/editor-ide'
   import CioCode from '@pdslng/cio-icon/CioCode.svelte'
@@ -54,7 +61,7 @@
     }
   }
   onMount(() => {
-    void refreshInstallations()
+    void refreshInstallations().then(() => refreshInstallations(true))
   })
   function hasUpdate(item: IdeInstallation | undefined): boolean {
     if (!item?.version || !item.latestVersion) return false
@@ -63,6 +70,7 @@
   let adding = $state(false)
   let presetId = $state('typescript')
   let editing = $state<IdeLanguageServer | null>(null)
+  let viewing = $state<IdeLanguageServer | null>(null)
   let deleting = $state<IdeLanguageServer | null>(null)
   let importing = $state(false)
   let importText = $state('')
@@ -151,6 +159,7 @@
   async function check(server: IdeLanguageServer): Promise<void> {
     if (checking[server.id]) return
     checking[server.id] = true
+    status[server.id] = ''
     try {
       const result = await invoke('projectFiles:ide', '', {
         owner: crypto.randomUUID(),
@@ -194,10 +203,14 @@
         path: '',
         serverId: server.id
       })
-      await refreshInstallations()
+      if (installations[server.id]?.source === 'missing' && !server.enabled)
+        await persist(
+          servers.map((item) => (item.id === server.id ? { ...item, enabled: true } : item))
+        )
+      else await refreshInstallations()
       await check(server)
     } catch (reason) {
-      status = { ...status, [server.id]: reason instanceof Error ? reason.message : String(reason) }
+      status = { ...status, [server.id]: ipcErrorMessage(reason, 'Installation failed') }
     } finally {
       installing[server.id] = false
     }
@@ -235,13 +248,17 @@
       <h1 class="flex items-center gap-2 text-xl font-bold tracking-tight">
         <CioCode size={18} class="text-muted" />IDE Mode
       </h1>
+      <p class="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
+        Language servers provide definitions, references, and documentation when IDE Mode is enabled
+        in a file viewer.
+      </p>
     </div>
     <button type="button" class={buttonClass} disabled={busy} onclick={() => void setupWithAgent()}
       ><span class="flex items-center gap-2"><CioSparkles size={14} />Set up with agent</span
       ></button
     >
   </div>
-  <div class="mb-3 flex flex-wrap items-center justify-end gap-2">
+  <div class="mb-5 flex flex-wrap items-center justify-end gap-2">
     <button
       type="button"
       class={buttonClass}
@@ -283,107 +300,152 @@
     >
   </div>
   {#if error && !importing}<p class="mb-4 text-xs text-danger" role="alert">{error}</p>{/if}
-  <div class="divide-y divide-border border border-border">
+  <div class="space-y-3">
     {#each servers as server (server.id)}
       {@const installation = installations[server.id]}
-      <section class="bg-surface px-3 py-2">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="min-w-0">
-            <h2 class="text-sm font-semibold">{server.name}</h2>
-            <p class="text-xs text-muted">
-              {loadingInstallations
-                ? 'Checking...'
-                : installation?.source === 'managed'
-                  ? installation.version
-                    ? `Installed v${installation.version}`
-                    : 'Installed'
-                  : installation?.source === 'external'
-                    ? 'External'
-                    : 'Not installed'}
-              {#if hasUpdate(installation)}<span class="ml-2 text-primary">Update available</span
-                >{/if}
-            </p>
+      {@const installed = installation && installation.source !== 'missing'}
+      <SettingsEntry>
+        <div class="grid grid-cols-1 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <div class="flex min-w-0 items-start gap-3">
+            <CioCode size={20} class="mt-1 shrink-0 text-muted" />
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="text-sm font-semibold">{server.name}</h2>
+                <SettingsStatusBadge
+                  label={loadingInstallations
+                    ? 'Checking'
+                    : installed
+                      ? installation.version
+                        ? `Installed v${installation.version}`
+                        : 'Installed'
+                      : 'Not installed'}
+                  classes={installed && server.enabled
+                    ? 'border-success/30 bg-success/10 text-success'
+                    : 'border-border bg-elevated text-muted'}
+                  ><CioCircle size={12} /></SettingsStatusBadge
+                >
+                {#if installed && !server.enabled}<SettingsStatusBadge
+                    label="Disabled"
+                    classes="border-border bg-elevated text-muted"
+                    ><CioCircle size={12} /></SettingsStatusBadge
+                  >{/if}
+                {#if hasUpdate(installation)}<SettingsStatusBadge
+                    label="Update available"
+                    classes="border-info/30 bg-info/10 text-info"
+                    ><CioCircle size={12} /></SettingsStatusBadge
+                  >{/if}
+              </div>
+              <p class="mt-2 text-xs leading-relaxed text-muted">
+                For {server.languages.map((mapping) => mapping.extension).join(', ')} files.
+              </p>
+            </div>
           </div>
-          <div class="flex flex-wrap items-center gap-2">
-            {#if IDE_SERVER_PACKAGES[server.command]}
+          <div class="flex shrink-0 items-center justify-end gap-3">
+            {#if installing[server.id]}<span class="flex items-center gap-2 text-xs text-muted"
+                ><CioSpinner size={14} class="animate-spin" />Installing...</span
+              >
+            {:else if !loadingInstallations && !installed}
               <button
                 type="button"
-                class={buttonClass}
-                disabled={loadingInstallations ||
-                  busy ||
-                  installing[server.id] ||
-                  checking[server.id]}
-                onclick={() => void install(server)}
-                ><span class="flex items-center gap-2"
-                  >{#if installing[server.id]}<CioSpinner
-                      size={13}
-                      class="animate-spin"
-                      aria-hidden="true"
-                    />Installing...{:else if loadingInstallations}Checking...{:else if installation?.source === 'managed'}{hasUpdate(
-                      installation
-                    )
-                      ? 'Update'
-                      : 'Reinstall'}{:else if installation?.source === 'external'}Install{:else}Install{/if}</span
-                ></button
+                class="border border-primary bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-40"
+                disabled={busy}
+                onclick={() =>
+                  IDE_SERVER_PACKAGES[server.command]
+                    ? void install(server)
+                    : void setupWithAgent(server)}
+                >{IDE_SERVER_PACKAGES[server.command] ? 'Install' : 'Set up'}</button
               >
+            {:else if installed}
+              {#if hasUpdate(installation)}<button
+                  type="button"
+                  class={buttonClass}
+                  disabled={busy}
+                  onclick={() => void install(server)}>Update</button
+                >{/if}
+              <Switch
+                checked={server.enabled}
+                disabled={busy}
+                onchange={(enabled) => void toggle(server, enabled)}
+                title={`Enable ${server.name}`}
+                aria-label={`Enable ${server.name}`}
+              />
             {/if}
-            <Switch
-              checked={server.enabled}
-              disabled={busy || installing[server.id]}
-              onchange={(enabled) => void toggle(server, enabled)}
-              title={`Enable ${server.name}`}
-              aria-label={`Enable ${server.name}`}
-            /><button
-              type="button"
-              class={buttonClass}
-              disabled={checking[server.id] || installing[server.id] || busy}
-              onclick={() => void check(server)}
-              ><span class="flex items-center gap-2"
-                >{#if checking[server.id]}<CioSpinner
-                    size={13}
-                    class="animate-spin"
-                    aria-hidden="true"
-                  />Checking...{:else}Check{/if}</span
-              ></button
-            ><button
-              type="button"
-              class={buttonClass}
-              disabled={busy || installing[server.id]}
-              onclick={() => (editing = structuredClone($state.snapshot(server)))}>Edit</button
-            ><button
-              type="button"
-              class={buttonClass}
-              disabled={busy || installing[server.id]}
-              onclick={() => (deleting = server)}>Remove</button
-            >
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-8 w-8 items-center justify-center border border-border bg-elevated text-muted hover:bg-overlay hover:text-foreground"
+                title={`Actions for ${server.name}`}
+                aria-label={`Actions for ${server.name}`}
+                ><CioEllipsis size={15} /></DropdownMenu.Trigger
+              >
+              <DropdownMenu.Portal
+                ><DropdownMenu.Content
+                  side="bottom"
+                  align="end"
+                  sideOffset={5}
+                  class="z-90 min-w-48 border border-border bg-surface p-1 text-foreground shadow-lg"
+                >
+                  <DropdownMenu.Item
+                    class="cursor-pointer px-3 py-2 text-xs outline-none data-[highlighted]:bg-elevated"
+                    onSelect={() => (viewing = server)}>Server details</DropdownMenu.Item
+                  >
+                  {#if installed}<DropdownMenu.Item
+                      disabled={checking[server.id] || installing[server.id]}
+                      class="cursor-pointer px-3 py-2 text-xs outline-none data-[highlighted]:bg-elevated"
+                      onSelect={() => void check(server)}>Check connection</DropdownMenu.Item
+                    >{/if}
+                  <DropdownMenu.Item
+                    disabled={installing[server.id]}
+                    class="cursor-pointer px-3 py-2 text-xs outline-none data-[highlighted]:bg-elevated"
+                    onSelect={() => (editing = structuredClone($state.snapshot(server)))}
+                    >Edit configuration</DropdownMenu.Item
+                  >
+                  <DropdownMenu.Item
+                    class="cursor-pointer px-3 py-2 text-xs outline-none data-[highlighted]:bg-elevated"
+                    onSelect={() => void setupWithAgent(server)}
+                    >Set up with agent</DropdownMenu.Item
+                  >
+                  {#if installed && IDE_SERVER_PACKAGES[server.command]}<DropdownMenu.Item
+                      disabled={installing[server.id]}
+                      class="cursor-pointer px-3 py-2 text-xs outline-none data-[highlighted]:bg-elevated"
+                      onSelect={() => void install(server)}>Reinstall</DropdownMenu.Item
+                    >{/if}
+                  <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                  <DropdownMenu.Item
+                    disabled={installing[server.id]}
+                    class="cursor-pointer px-3 py-2 text-xs text-danger outline-none data-[highlighted]:bg-danger/10"
+                    onSelect={() => (deleting = server)}>Remove</DropdownMenu.Item
+                  >
+                </DropdownMenu.Content></DropdownMenu.Portal
+              >
+            </DropdownMenu.Root>
           </div>
         </div>
-        <details class="mt-1 text-xs text-muted">
-          <summary class="w-fit cursor-pointer">Details</summary>
-          <div class="space-y-1 py-2">
-            <p class="break-all font-mono">{server.command} {server.args.join(' ')}</p>
-            <p>{server.languages.map((mapping) => mapping.extension).join(', ')}</p>
-            {#if installation?.executable}<p class="break-all font-mono">
-                {installation.executable}
-              </p>{/if}
-            {#if installation?.packageName}<p>npm: {installation.packageName}</p>{/if}
-            {#if installation?.latestVersion}<p>Latest: {installation.latestVersion}</p>{/if}
-            {#if installation?.updateError}<p>{installation.updateError}</p>{/if}
-            {#if status[server.id]}<p
-                class="max-h-32 overflow-auto whitespace-pre-wrap break-all"
-                role="status"
-              >
-                {status[server.id]}
-              </p>{/if}
-          </div>
-        </details>
+        {#if checking[server.id]}<div class="mt-3 flex items-center gap-2 text-xs text-muted">
+            <CioSpinner size={13} class="animate-spin" />Checking connection...
+          </div>{/if}
         {#if status[server.id] && !installing[server.id] && !checking[server.id]}
-          <p class="mt-1 text-xs text-muted" role="status">
-            {status[server.id].startsWith('Ready.') ? 'Ready' : 'Check failed. See details.'}
-          </p>
+          <div class="mt-3">
+            <CardNotice tone={status[server.id].startsWith('Ready.') ? 'default' : 'danger'}
+              >{status[server.id].startsWith('Ready.')
+                ? 'Connection verified.'
+                : 'Server setup failed.'}</CardNotice
+            >
+            {#if !status[server.id].startsWith('Ready.')}<details
+                class="border border-t-0 border-danger/30"
+              >
+                <summary
+                  class="cursor-pointer bg-danger/5 px-3 py-2 text-xs font-medium text-danger hover:bg-danger/10"
+                  >Error details</summary
+                >
+                <pre
+                  class="max-h-40 overflow-auto whitespace-pre-wrap break-words border-t border-danger/30 bg-app px-3 py-2 font-mono text-xs text-muted">{status[
+                    server.id
+                  ]}</pre>
+              </details>{/if}
+          </div>
         {/if}
-      </section>
-    {:else}<p class="text-sm text-muted">
+      </SettingsEntry>
+    {:else}<p class="border border-border bg-surface p-4 text-sm text-muted">
         No language servers. Add a server to get started.
       </p>{/each}
   </div>
@@ -454,5 +516,44 @@
       class="bg-primary px-3 py-2 text-sm text-on-primary disabled:opacity-40"
       disabled={busy}
       onclick={() => void importServers()}>Import servers</button
+    >{/snippet}
+</Modal>
+
+<Modal
+  open={viewing !== null}
+  title={viewing?.name ?? 'Server details'}
+  onClose={() => (viewing = null)}
+>
+  {#if viewing}{@const item = installations[viewing.id]}
+    <dl class="space-y-4 text-xs">
+      <div>
+        <dt class="mb-1 font-medium text-muted">Executable</dt>
+        <dd class="break-all font-mono">
+          {item?.executable ?? viewing.command}
+          {viewing.args.join(' ')}
+        </dd>
+      </div>
+      <div>
+        <dt class="mb-1 font-medium text-muted">File types</dt>
+        <dd>{viewing.languages.map((mapping) => mapping.extension).join(', ')}</dd>
+      </div>
+      {#if item?.packageName}<div>
+          <dt class="mb-1 font-medium text-muted">Source</dt>
+          <dd>npm / {item.packageName}</dd>
+        </div>{/if}
+      {#if item?.latestVersion}<div>
+          <dt class="mb-1 font-medium text-muted">Latest version</dt>
+          <dd>{item.latestVersion}</dd>
+        </div>{/if}
+    </dl>
+    {#if item?.source === 'external'}<div class="mt-4">
+        <CardNotice>Updates are managed by your external installation.</CardNotice>
+      </div>{/if}
+    {#if item?.updateError}<div class="mt-4">
+        <CardNotice tone="warn">{item.updateError}</CardNotice>
+      </div>{/if}
+  {/if}
+  {#snippet footer()}<button type="button" class={buttonClass} onclick={() => (viewing = null)}
+      >Close</button
     >{/snippet}
 </Modal>

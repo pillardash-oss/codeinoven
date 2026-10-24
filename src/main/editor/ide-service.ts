@@ -10,8 +10,7 @@ import type { IdeRequest, IdeResponse } from '../../lib/editor-ide'
 import { buildProcessEnvironmentAsync, resolvePackageCommand } from '../drivers/cli-environment'
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { constants } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 
 /** One lazy broker. Language servers and grep never run in Electron's main thread. */
@@ -55,82 +54,6 @@ export class IdeService {
       ...inherited,
       CODEINOVEN_IDE_BIN: join(toolRoot, 'node_modules', '.bin'),
       PATH: `${join(toolRoot, 'node_modules', '.bin')}${delimiter}${inherited.PATH ?? ''}`
-    }
-    if (request.action === 'inventory') {
-      const installations: NonNullable<IdeResponse['installations']> = []
-      for (const server of servers) {
-        const packageName = IDE_SERVER_PACKAGES[server.command]?.[0].split('@')[0]
-        const managed = join(toolRoot, 'node_modules', '.bin', server.command)
-        const candidates = packageName ? [managed] : []
-        if (server.command.includes('/') || server.command.includes('\\'))
-          candidates.push(server.command)
-        else
-          for (const directory of (inherited.PATH ?? '').split(delimiter).filter(Boolean))
-            candidates.push(join(directory, server.command))
-        let executable: string | undefined
-        for (const candidate of candidates) {
-          try {
-            await access(candidate, constants.X_OK)
-            executable = candidate
-            break
-          } catch {
-            /* Try the next PATH entry. */
-          }
-        }
-        let version: string | undefined
-        if (executable === managed && packageName) {
-          try {
-            const manifest: unknown = JSON.parse(
-              await readFile(join(toolRoot, 'node_modules', packageName, 'package.json'), 'utf8')
-            )
-            if (
-              manifest &&
-              typeof manifest === 'object' &&
-              'version' in manifest &&
-              typeof manifest.version === 'string'
-            )
-              version = manifest.version
-          } catch {
-            /* A partial installation remains distinguishable from a known version. */
-          }
-        }
-        installations.push({
-          serverId: server.id,
-          source: !executable ? 'missing' : executable === managed ? 'managed' : 'external',
-          executable,
-          packageName,
-          version
-        })
-      }
-      if (request.query === 'updates') {
-        const managed = installations.filter(
-          (item) => item.source === 'managed' && item.packageName
-        )
-        for (let offset = 0; offset < managed.length; offset += 3) {
-          await Promise.all(
-            managed.slice(offset, offset + 3).map(async (item) => {
-              try {
-                const response = await fetch(
-                  `https://registry.npmjs.org/${encodeURIComponent(item.packageName!)}/latest`,
-                  { signal: AbortSignal.timeout(8000) }
-                )
-                if (!response.ok) throw new Error(`Registry returned ${response.status}`)
-                const metadata: unknown = await response.json()
-                if (
-                  metadata &&
-                  typeof metadata === 'object' &&
-                  'version' in metadata &&
-                  typeof metadata.version === 'string'
-                )
-                  item.latestVersion = metadata.version
-              } catch {
-                item.updateError = 'Update check unavailable'
-              }
-            })
-          )
-        }
-      }
-      return { installations }
     }
     if (request.action === 'install') {
       const server = servers.find((server) => server.id === request.serverId)
@@ -261,10 +184,13 @@ export class IdeService {
     const worker = this.worker
     return new Promise((resolve, reject) => {
       const id = ++this.sequence
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error('Editor intelligence timed out'))
-      }, 20_000)
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(id)
+          reject(new Error('Editor intelligence timed out'))
+        },
+        request.action === 'inventory' ? 150_000 : 20_000
+      )
       this.pending.set(id, { resolve, reject, timer })
       worker.postMessage({ id, root, request, env, servers })
     })

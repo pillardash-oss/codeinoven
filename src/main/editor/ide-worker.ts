@@ -1,3 +1,4 @@
+import { ideInstallations } from './ide-installations'
 import {
   DEFAULT_IDE_LANGUAGE_SERVERS,
   IDE_SERVER_PACKAGES,
@@ -490,8 +491,15 @@ async function handle(
   env: NodeJS.ProcessEnv,
   servers: IdeLanguageServer[]
 ): Promise<IdeResponse> {
-  if (request.action === 'install' || request.action === 'inventory')
-    throw new Error('Setup must run through the IDE service')
+  if (request.action === 'inventory')
+    return {
+      installations: await ideInstallations(
+        env,
+        request.serverId ? servers.filter((server) => server.id === request.serverId) : servers,
+        request.query === 'updates'
+      )
+    }
+  if (request.action === 'install') throw new Error('Setup must run through the IDE service')
   if (request.action === 'cancel') {
     searches.get(request.owner)?.kill()
     return {}
@@ -526,6 +534,11 @@ async function handle(
   if (currentOwner && currentOwner.session.configurationKey !== JSON.stringify(selected?.server))
     closeOwner(request.owner)
   const { session, language } = await sessionFor(root, path, env, servers)
+  if (
+    selected &&
+    (!currentOwner || currentOwner.session.configurationKey !== JSON.stringify(selected.server))
+  )
+    void ideInstallations(env, [selected.server], true).catch(() => undefined)
   const uri = pathToFileURL(path).href
   const owned = owners.get(request.owner)
   owners.set(request.owner, { session, uri })
@@ -585,7 +598,11 @@ async function handle(
     }
   ]
   if (request.action === 'capabilities' || request.action === 'sync')
-    return { capabilities, servers: connected }
+    return {
+      capabilities,
+      servers: connected,
+      installations: await ideInstallations(env, selected ? [selected.server] : [], false)
+    }
   if (!capabilities[request.action]) return { capabilities, locations: [] }
   const result = await session.request(`textDocument/${request.action}`, {
     textDocument: { uri },
