@@ -4,8 +4,7 @@ import {
   isQuotedMentionPosition
 } from '$shared/mention-context'
 
-const INLINE_CODE_CLASS =
-  'border border-border bg-elevated px-1 py-0.5 font-mono text-[0.9em]'
+const INLINE_CODE_CLASS = 'border border-border bg-elevated px-1 py-0.5 font-mono text-[0.9em]'
 const INLINE_BADGE_CLASS =
   'mx-0.5 inline-flex max-w-48 items-center gap-1 whitespace-nowrap border border-border bg-elevated px-1.5 py-0.5 align-baseline text-[0.85em] font-medium leading-none text-foreground'
 const INLINE_BADGE_ICON_CLASS = 'h-3.5 w-3.5 shrink-0'
@@ -1537,6 +1536,19 @@ export function insertPlainText(root: HTMLElement, text: string): void {
   if (!selection || selection.rangeCount === 0) return
   const range = selection.getRangeAt(0)
   range.deleteContents()
+  const placeholder = root.firstChild
+  if (
+    range.startContainer === root &&
+    root.childNodes.length === 1 &&
+    placeholder instanceof HTMLParagraphElement &&
+    placeholder.childNodes.length === 1 &&
+    placeholder.firstChild instanceof HTMLBRElement
+  ) {
+    // Reuse the empty note's caret placeholder so copying the result does not
+    // pick up an extra empty paragraph on each subsequent paste.
+    range.selectNodeContents(placeholder)
+    range.deleteContents()
+  }
   const fragment = document.createDocumentFragment()
 
   text
@@ -1550,7 +1562,10 @@ export function insertPlainText(root: HTMLElement, text: string): void {
   // The node the caret belongs after, read before the fragment is emptied into
   // the document (a text node tail is what the caret ends up inside of).
   const tail = fragment.lastChild
-  range.insertNode(fragment)
+  // Autofocus and select-all can leave the range on the editor itself. Keep
+  // pasted lines in one paragraph there: bare text nodes would each serialize
+  // as a separate block, doubling single newlines and dropping extra blank lines.
+  range.insertNode(range.startContainer === root ? createParagraph(fragment) : fragment)
   if (!tail) return
   // Keep the caret inside the text it sits in, with the whole run in one node:
   // the markdown rules read the text around the caret, and the backticks a paste
