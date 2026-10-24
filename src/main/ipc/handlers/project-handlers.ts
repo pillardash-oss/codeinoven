@@ -1,4 +1,4 @@
-import { IdeService } from '../../editor/ide-service'
+import { ideService } from '../../editor/ide-service'
 import { dialog } from '../../system/file-dialogs'
 import { app, shell, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -766,7 +766,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       )
     }
   )
-  const ide = new IdeService()
+  const ide = ideService
   app.on('before-quit', () => ide.stop())
   ipcMain.handle(
     'projectFiles:ide',
@@ -774,6 +774,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       if (!input || typeof input !== 'object') throw new TypeError('Invalid IDE request')
       const value = input as Record<string, unknown>
       const actions = [
+        'check',
         'sync',
         'close',
         'cancel',
@@ -790,7 +791,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       const path = requireString(
         value.path,
         'IDE path',
-        action === 'grep' || action === 'close' || action === 'cancel'
+        action === 'check' || action === 'grep' || action === 'close' || action === 'cancel'
       )
       const text =
         value.text === undefined ? undefined : requireString(value.text, 'IDE text', true)
@@ -820,13 +821,18 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
             ),
         {
           owner,
+          serverId:
+            value.serverId === undefined
+              ? undefined
+              : validateEntityId(value.serverId, 'Language server ID'),
           action,
           path,
           text,
           query,
           line: position(value.line),
           character: position(value.character)
-        }
+        },
+        (await storage.getConfig()).ideLanguageServers
       )
     }
   )

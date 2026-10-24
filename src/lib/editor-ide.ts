@@ -1,6 +1,14 @@
 /** Read-only editor intelligence. Positions use LSP UTF-16 offsets. */
 export type IdeAction =
-  'sync' | 'close' | 'cancel' | 'definition' | 'references' | 'hover' | 'capabilities' | 'grep'
+  | 'check'
+  | 'sync'
+  | 'close'
+  | 'cancel'
+  | 'definition'
+  | 'references'
+  | 'hover'
+  | 'capabilities'
+  | 'grep'
 export interface IdeRequest {
   owner: string
   action: IdeAction
@@ -8,6 +16,7 @@ export interface IdeRequest {
   text?: string
   line?: number
   character?: number
+  serverId?: string
   query?: string
 }
 export interface IdeLocation {

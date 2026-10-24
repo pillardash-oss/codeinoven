@@ -401,6 +401,8 @@ export interface AppConfig {
   questionTimeoutMs: number
   /** Maximum questions one structured agent question card can carry (cio_ask_user). */
   agentQuestionCap: number
+  /** Standard stdio LSP configurations shared by project trees. Enabling IDE Mode remains local to each tree. */
+  ideLanguageServers?: import('../ide-language-servers').IdeLanguageServer[]
   keybindings: Record<string, string>
   /** How slash commands are handled: in-app actions or forwarded to the harness. */
   slashCommandMode: SlashCommandMode
@@ -571,6 +573,7 @@ export type AppConfigPatch = Partial<
     | 'questionTimeoutMs'
     | 'agentQuestionCap'
     | 'slashCommandMode'
+    | 'ideLanguageServers'
     | 'preferredEditor'
     | 'memory'
     | 'agentDefaults'

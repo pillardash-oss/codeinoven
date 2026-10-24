@@ -1,3 +1,4 @@
+import { DEFAULT_IDE_LANGUAGE_SERVERS } from '../../lib/ide-language-servers'
 import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
 import { BUNDLED_PI_FILE_POLICY, bundledPiFilePatterns } from '../../lib/bundled-pi-file-protection'
 import { join } from 'path'
@@ -97,6 +98,7 @@ const DEFAULT_CONFIG: AppConfig = {
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
+  ideLanguageServers: DEFAULT_IDE_LANGUAGE_SERVERS,
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},

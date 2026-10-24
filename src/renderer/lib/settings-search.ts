@@ -249,6 +249,24 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioKeyboard
   },
   {
+    id: 'ide-mode',
+    section: 'ide-mode',
+    title: 'IDE Mode',
+    description: 'Configure language servers for project tree editing.',
+    keywords: [
+      'lsp',
+      'language server',
+      'typescript',
+      'javascript',
+      'python',
+      'golang',
+      'php',
+      'definitions',
+      'intelephense'
+    ],
+    icon: CioServer
+  },
+  {
     id: 'cloud-deployments',
     section: 'cloud-deployments',
     title: 'Cloud Deployments',

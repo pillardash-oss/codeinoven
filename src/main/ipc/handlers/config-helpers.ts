@@ -1,3 +1,4 @@
+import { validateIdeLanguageServers } from '../../../lib/ide-language-servers'
 import { APP_FONT_OPTIONS } from '../../../lib/app-fonts'
 import { validateBundledPiFilePatterns } from '../../../lib/bundled-pi-file-protection'
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
@@ -192,6 +193,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'agentQuestionCap',
   'slashCommandMode',
   'preferredEditor',
+  'ideLanguageServers',
   'memory',
   'agentDefaults',
   'auxiliaryAgents',
@@ -1049,6 +1051,9 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     }
     patch.slashCommandMode = value.slashCommandMode as AppConfigPatch['slashCommandMode']
   }
+
+  if ('ideLanguageServers' in value)
+    patch.ideLanguageServers = validateIdeLanguageServers(value.ideLanguageServers)
 
   if ('preferredEditor' in value) {
     if (

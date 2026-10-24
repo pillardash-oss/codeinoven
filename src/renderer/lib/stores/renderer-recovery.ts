@@ -28,6 +28,7 @@ export type SettingsSection =
   | 'sound'
   | 'search'
   | 'keymap'
+  | 'ide-mode'
   | 'cloud-deployments'
   | 'ovens'
   | 'archives'
@@ -55,6 +56,7 @@ export type MainView =
   | 'settings-sound'
   | 'settings-search'
   | 'settings-keymap'
+  | 'settings-ide-mode'
   | 'settings-cloud-deployments'
   | 'settings-ovens'
   | 'settings-archives'
@@ -207,6 +209,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-sound',
   'settings-search',
   'settings-keymap',
+  'settings-ide-mode',
   'settings-archives',
   'settings-about'
 ]
@@ -226,6 +229,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'sound',
   'search',
   'keymap',
+  'ide-mode',
   'cloud-deployments',
   'archives',
   'about'

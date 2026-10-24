@@ -1,8 +1,12 @@
+import {
+  DEFAULT_IDE_LANGUAGE_SERVERS,
+  type IdeLanguageServer
+} from '../../lib/ide-language-servers'
 import { StringDecoder } from 'node:string_decoder'
 import { parentPort } from 'node:worker_threads'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { realpath, readFile } from 'node:fs/promises'
-import { delimiter, extname, join, relative, resolve } from 'node:path'
+import { realpath, readFile, stat } from 'node:fs/promises'
+import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isWithinRoot, validateRelativePath } from './project-files/project-files-paths'
 import type { IdeRequest, IdeResponse, IdeLocation } from '../../lib/editor-ide'
@@ -10,30 +14,12 @@ import type { IdeRequest, IdeResponse, IdeLocation } from '../../lib/editor-ide'
 const port = parentPort!
 const MAX_BYTES = 2 * 1024 * 1024
 const sessions = new Map<string, Promise<Session>>()
+const liveSessions = new Set<Session>()
+let configuredServers: IdeLanguageServer[] | undefined
 const owners = new Map<string, { session: Session; uri: string }>()
 const searches = new Map<string, ReturnType<typeof spawn>>()
 const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
-const presets: Record<string, [string, string, string[]]> = {
-  '.ts': ['typescript', 'typescript-language-server', ['--stdio']],
-  '.mts': ['typescript', 'typescript-language-server', ['--stdio']],
-  '.cts': ['typescript', 'typescript-language-server', ['--stdio']],
-  '.mjs': ['javascript', 'typescript-language-server', ['--stdio']],
-  '.cjs': ['javascript', 'typescript-language-server', ['--stdio']],
-  '.tsx': ['typescriptreact', 'typescript-language-server', ['--stdio']],
-  '.js': ['javascript', 'typescript-language-server', ['--stdio']],
-  '.jsx': ['javascriptreact', 'typescript-language-server', ['--stdio']],
-  '.svelte': ['svelte', 'svelteserver', ['--stdio']],
-  '.py': ['python', 'pyright-langserver', ['--stdio']],
-  '.rs': ['rust', 'rust-analyzer', []],
-  '.go': ['go', 'gopls', []],
-  '.c': ['c', 'clangd', []],
-  '.cpp': ['cpp', 'clangd', []],
-  '.h': ['c', 'clangd', []],
-  '.css': ['css', 'vscode-css-language-server', ['--stdio']],
-  '.html': ['html', 'vscode-html-language-server', ['--stdio']],
-  '.json': ['json', 'vscode-json-language-server', ['--stdio']]
-}
 
 class Session {
   readonly documents = new Map<string, { text: string; version: number }>()
@@ -54,9 +40,13 @@ class Session {
     readonly root: string,
     command: string,
     args: string[],
-    env: NodeJS.ProcessEnv
+    env: NodeJS.ProcessEnv,
+    readonly settings: Record<string, unknown>,
+    readonly configurationKey: string
   ) {
     this.child = spawn(command, args, { cwd: root, env, stdio: 'pipe', windowsHide: true })
+    liveSessions.add(this)
+    this.child.once('exit', () => liveSessions.delete(this))
     this.child.stdout.on('data', (data: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, data])
       if (this.buffer.length > 8 * MAX_BYTES) {
@@ -127,7 +117,23 @@ class Session {
     if (typeof message.method === 'string' && message.id !== undefined) {
       if (message.method === 'workspace/configuration') {
         const items = record(message.params).items
-        this.send({ id: message.id, result: Array.isArray(items) ? items.map(() => ({})) : [] })
+        this.send({
+          id: message.id,
+          result: Array.isArray(items)
+            ? items.map((item) => {
+                const section = record(item).section
+                return typeof section === 'string'
+                  ? section
+                      .split('.')
+                      .reduce<unknown>(
+                        (value, key) =>
+                          Object.hasOwn(record(value), key) ? record(value)[key] : null,
+                        this.settings
+                      )
+                  : this.settings
+              })
+            : []
+        })
       } else if (message.method === 'workspace/workspaceFolders') {
         this.send({
           id: message.id,
@@ -158,6 +164,7 @@ class Session {
   stop(): void {
     if (this.stopped) return
     this.stopped = true
+    liveSessions.delete(this)
     this.child.kill()
     const killTimer = setTimeout(() => {
       if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill('SIGKILL')
@@ -178,39 +185,87 @@ class Session {
   }
 }
 
+function selectDefinition(path: string, servers: IdeLanguageServer[]) {
+  return servers
+    .flatMap((server) =>
+      server.enabled
+        ? server.languages
+            .filter((mapping) => path.toLowerCase().endsWith(mapping.extension))
+            .map((mapping) => ({ server, mapping }))
+        : []
+    )
+    .sort((left, right) => right.mapping.extension.length - left.mapping.extension.length)[0]
+}
+
 async function sessionFor(
   root: string,
   path: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  servers: IdeLanguageServer[]
 ): Promise<{ session: Session; language: string }> {
-  const preset = presets[extname(path)]
-  if (!preset) throw new Error('No language server preset for this file type')
-  const [language, command, args] = preset
-  const key = `${root}\0${command}`
+  const selected = selectDefinition(path, servers)
+  if (!selected)
+    throw new Error(
+      'No enabled language server for this file type. Configure one in Settings > IDE Mode.'
+    )
+  const definition = selected.server
+  const language = selected.mapping.languageId
+  const { command, args } = definition
+  let workspaceRoot = root
+  if (definition.rootMarkers.length) {
+    let candidate = dirname(path)
+    for (let depth = 0; depth < 64 && isWithinRoot(root, candidate); depth++) {
+      const found = await Promise.all(
+        definition.rootMarkers.map((marker) =>
+          stat(join(candidate, marker)).then(
+            () => true,
+            () => false
+          )
+        )
+      )
+      if (found.some(Boolean)) {
+        workspaceRoot = candidate
+        break
+      }
+      if (candidate === root) break
+      candidate = dirname(candidate)
+    }
+  }
+  const key = `${workspaceRoot}\0${JSON.stringify(definition)}`
   let pending = sessions.get(key)
   if (!pending) {
     if (sessions.size >= 4)
       throw new Error('IDE Mode supports four active language servers. Close unused editors first.')
     pending = (async () => {
+      const overrides = Object.fromEntries(
+        Object.entries(definition.env).map(([key, value]) => [
+          key,
+          value.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/gu, (_match: string, name: string) => {
+            if (env[name] === undefined) throw new Error(`Environment variable ${name} is not set`)
+            return env[name]!
+          })
+        ])
+      )
       const localEnv = {
         ...env,
-        PATH: `${join(root, 'node_modules', '.bin')}${delimiter}${env.PATH ?? ''}`
+        ...overrides,
+        PATH: `${join(workspaceRoot, 'node_modules', '.bin')}${delimiter}${join(root, 'node_modules', '.bin')}${delimiter}${overrides.PATH ?? env.PATH ?? ''}`
       }
-      const session = new Session(root, command, args, localEnv)
+      const session = new Session(
+        workspaceRoot,
+        command,
+        args,
+        localEnv,
+        definition.settings,
+        JSON.stringify(definition)
+      )
       try {
         const result = record(
           await session.request('initialize', {
-            initializationOptions:
-              command === 'typescript-language-server'
-                ? {
-                    tsserver: { useSyntaxServer: 'never' },
-                    disableAutomaticTypingAcquisition: true,
-                    maxTsServerMemory: 128
-                  }
-                : {},
+            initializationOptions: definition.initializationOptions,
             processId: process.pid,
-            rootUri: pathToFileURL(root).href,
-            workspaceFolders: [{ uri: pathToFileURL(root).href, name: root }],
+            rootUri: pathToFileURL(workspaceRoot).href,
+            workspaceFolders: [{ uri: pathToFileURL(workspaceRoot).href, name: workspaceRoot }],
             capabilities: {
               general: { positionEncodings: ['utf-16'] },
               workspace: { configuration: true, workspaceFolders: true },
@@ -224,6 +279,7 @@ async function sessionFor(
         )
         session.capabilities = record(result.capabilities)
         session.notify('initialized', {})
+        session.notify('workspace/didChangeConfiguration', { settings: definition.settings })
         return session
       } catch (error) {
         session.stop()
@@ -235,6 +291,9 @@ async function sessionFor(
       }
     })()
     sessions.set(key, pending)
+    void pending.catch(() => {
+      if (sessions.get(key) === pending) sessions.delete(key)
+    })
   }
   return { session: await pending, language }
 }
@@ -371,7 +430,8 @@ const chains = new Map<string, Promise<unknown>>()
 async function handle(
   root: string,
   request: IdeRequest,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  servers: IdeLanguageServer[]
 ): Promise<IdeResponse> {
   if (request.action === 'cancel') {
     searches.get(request.owner)?.kill()
@@ -381,11 +441,32 @@ async function handle(
     closeOwner(request.owner)
     return {}
   }
+  if (request.action === 'check') {
+    const definition = servers.find((server) => server.id === request.serverId)
+    if (!definition) throw new Error('Language server configuration not found')
+    const { session } = await sessionFor(
+      root,
+      join(root, `__ide_check${definition.languages[0].extension}`),
+      env,
+      [{ ...definition, enabled: true }]
+    )
+    const capabilities = {
+      definition: Boolean(session.capabilities.definitionProvider),
+      references: Boolean(session.capabilities.referencesProvider),
+      hover: Boolean(session.capabilities.hoverProvider)
+    }
+    if (![...owners.values()].some((owner) => owner.session === session)) session.stop()
+    return { capabilities }
+  }
   if (request.action === 'grep') return grep(root, request, env)
   validateRelativePath(request.path, false)
   const path = await realpath(resolve(root, request.path))
   if (!isWithinRoot(root, path)) throw new Error('File is outside the project')
-  const { session, language } = await sessionFor(root, path, env)
+  const currentOwner = owners.get(request.owner)
+  const selected = selectDefinition(path, servers)
+  if (currentOwner && currentOwner.session.configurationKey !== JSON.stringify(selected?.server))
+    closeOwner(request.owner)
+  const { session, language } = await sessionFor(root, path, env, servers)
   const uri = pathToFileURL(path).href
   const owned = owners.get(request.owner)
   owners.set(request.owner, { session, uri })
@@ -449,12 +530,23 @@ port.on(
     root: string
     request: IdeRequest
     env: NodeJS.ProcessEnv
+    configure?: IdeLanguageServer[]
+    servers?: IdeLanguageServer[]
     stop?: boolean
   }) => {
+    if (message.configure) {
+      configuredServers = message.configure
+      const allowed = new Set(
+        message.configure.filter((server) => server.enabled).map((server) => JSON.stringify(server))
+      )
+      for (const [owner, owned] of owners)
+        if (!allowed.has(owned.session.configurationKey)) closeOwner(owner)
+      for (const session of liveSessions) if (!allowed.has(session.configurationKey)) session.stop()
+      return
+    }
     if (message.stop) {
       for (const child of searches.values()) child.kill()
-      for (const session of sessions.values())
-        void session.then((value) => value.stop()).catch(() => undefined)
+      for (const session of liveSessions) session.stop()
       return
     }
     const { id, root, request, env } = message
@@ -463,7 +555,14 @@ port.on(
       searches.get(key)?.kill()
     const task = (chains.get(key) ?? Promise.resolve())
       .catch(() => undefined)
-      .then(() => handle(root, request, env))
+      .then(() =>
+        handle(
+          root,
+          request,
+          env,
+          configuredServers ?? message.servers ?? DEFAULT_IDE_LANGUAGE_SERVERS
+        )
+      )
     chains.set(key, task)
     void task
       .then(

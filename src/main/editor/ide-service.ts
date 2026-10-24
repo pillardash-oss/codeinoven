@@ -1,4 +1,8 @@
 /// <reference types="electron-vite/node" />
+import {
+  DEFAULT_IDE_LANGUAGE_SERVERS,
+  type IdeLanguageServer
+} from '../../lib/ide-language-servers'
 import createWorker from './ide-worker.ts?nodeWorker'
 import type { Worker } from 'node:worker_threads'
 import type { IdeRequest, IdeResponse } from '../../lib/editor-ide'
@@ -18,7 +22,11 @@ export class IdeService {
     }
   >()
 
-  async request(root: string, request: IdeRequest): Promise<IdeResponse> {
+  async request(
+    root: string,
+    request: IdeRequest,
+    servers: IdeLanguageServer[] = DEFAULT_IDE_LANGUAGE_SERVERS
+  ): Promise<IdeResponse> {
     if ((request.action === 'close' || request.action === 'cancel') && !this.worker) return {}
     if (this.pending.size >= 32) throw new Error('Editor intelligence is busy. Try again shortly.')
     const env = await buildProcessEnvironmentAsync()
@@ -78,7 +86,7 @@ export class IdeService {
         reject(new Error('Editor intelligence timed out'))
       }, 20_000)
       this.pending.set(id, { resolve, reject, timer })
-      worker.postMessage({ id, root, request, env })
+      worker.postMessage({ id, root, request, env, servers })
     })
   }
 
@@ -93,8 +101,14 @@ export class IdeService {
     this.serverPids.clear()
   }
 
+  configure(servers: IdeLanguageServer[]): void {
+    this.worker?.postMessage({ configure: servers })
+  }
+
   stop(): void {
     this.worker?.postMessage({ stop: true })
     this.killServers()
   }
 }
+
+export const ideService = new IdeService()

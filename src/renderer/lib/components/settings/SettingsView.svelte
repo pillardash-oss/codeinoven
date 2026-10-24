@@ -82,6 +82,7 @@
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
+  import IdeModeSettingsTab from './IdeModeSettingsTab.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import VideoPackagesSettings from './VideoPackagesSettings.svelte'
@@ -1539,6 +1540,8 @@
       <SearchSettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
+    {:else if section === 'ide-mode'}
+      <IdeModeSettingsTab {config} {updateConfig} />
     {:else if section === 'ovens'}
       <OvensSettings
         onOpenHarnessSettings={() => {
