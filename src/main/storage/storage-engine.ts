@@ -1,4 +1,5 @@
 import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
+import { BUNDLED_PI_FILE_POLICY, bundledPiFilePatterns } from '../../lib/bundled-pi-file-protection'
 import { join } from 'path'
 import { randomInt } from 'crypto'
 import { readFile, appendFile, unlink, open, stat, rename, type FileHandle } from 'fs/promises'
@@ -223,6 +224,10 @@ export class StorageEngine {
     if (!existing) {
       await writeJson(configPath, DEFAULT_CONFIG)
     }
+    await writeJson(
+      this.resolve(BUNDLED_PI_FILE_POLICY),
+      bundledPiFilePatterns(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY)))
+    )
 
     // Create default providers file if missing
     const providersPath = this.resolve('providers.json')
@@ -239,10 +244,14 @@ export class StorageEngine {
 
   /** Read the global config (missing fields fall back to defaults). */
   async getConfig(): Promise<AppConfig> {
-    const config = await readJson<Partial<AppConfig>>(this.resolve('config.json'))
+    const [config, filePolicy] = await Promise.all([
+      readJson<Partial<AppConfig>>(this.resolve('config.json')),
+      readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY))
+    ])
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
+      bundledPiSensitiveFilePatterns: bundledPiFilePatterns(filePolicy),
       fontFamily: normalizeAppFontFamily(config?.fontFamily),
       // Analytics is on by default: only an explicit opt-out in the stored
       // config turns it off, and a missing field keeps the default.
@@ -365,8 +374,19 @@ export class StorageEngine {
 
   /** Write the global config */
   async saveConfig(config: AppConfig): Promise<void> {
-    const { agentBehaviorPrompt: _agentBehaviorPrompt, ...persistedConfig } = config
+    const {
+      agentBehaviorPrompt: _agentBehaviorPrompt,
+      bundledPiSensitiveFilePatterns: _bundledPiSensitiveFilePatterns,
+      ...persistedConfig
+    } = config
     await writeJson(this.resolve('config.json'), persistedConfig)
+    // The small policy file is authoritative for both Settings and Pi. Commit
+    // it last: a failed config save must never turn off a protection the UI
+    // still displays as enabled. A failed policy save leaves its old rules.
+    await writeJson(
+      this.resolve(BUNDLED_PI_FILE_POLICY),
+      bundledPiFilePatterns(config.bundledPiSensitiveFilePatterns)
+    )
   }
 
   private async readBehaviorPrompt(): Promise<string> {

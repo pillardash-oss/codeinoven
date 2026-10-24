@@ -53,6 +53,16 @@ export interface SettingsSearchEntry {
 
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
+    id: 'general-bundled-pi-files',
+    section: 'general',
+    title: 'Sensitive files · Bundled Pi only',
+    description:
+      'Protected file block list and per-tool approval for bundled Pi, including Full Access.',
+    keywords: ['sensitive', 'files', 'env', 'pub', 'secrets', 'blocklist', 'permissions', 'pi'],
+    icon: CioShieldCheck,
+    blockId: 'general-bundled-pi-files'
+  },
+  {
     id: 'general',
     section: 'general',
     title: 'General',

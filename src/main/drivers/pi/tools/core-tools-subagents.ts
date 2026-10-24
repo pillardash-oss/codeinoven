@@ -641,6 +641,7 @@ export function piCoreToolsSubagentSource(): string {
         patterns: hit.patterns,
         tool: toolName,
         subagent: true,
+        ...(hit.review === undefined ? {} : { review: hit.review }),
         ...(hit.command === undefined ? {} : { command: hit.command })
       }
       const approved = await parentCtx.ui.confirm(

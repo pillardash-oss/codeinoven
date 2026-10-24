@@ -238,6 +238,16 @@ export class PermissionPolicy {
     const paths = rawPaths.map(normalizeNativePath)
     const scope = this.createScope(paths)
 
+    if (permission === 'bundled-pi-sensitive-files') {
+      return this.createDecision(
+        'ask',
+        false,
+        'Bundled Pi may access protected files through this tool. Approve this invocation once. Full Access, attached files, and scratch access do not bypass this protection.',
+        'critical',
+        scope
+      )
+    }
+
     if (!permission) {
       return this.createDecision('ask', false, 'A permission name is required.', 'low', scope)
     }

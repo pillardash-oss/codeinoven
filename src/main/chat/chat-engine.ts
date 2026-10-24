@@ -27464,7 +27464,8 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     // Only an app-owned browser call may supply this decision. Harness metadata
     // cannot turn an unclassified tool into an automatically approved action.
-    if (settleBrowserAction && browserReview && level === 'auto_review') {
+    const sensitiveFileApproval = request.permission === 'bundled-pi-sensitive-files'
+    if (!sensitiveFileApproval && settleBrowserAction && browserReview && level === 'auto_review') {
       // An assistant runs unattended on the browser pages it opens
       // itself, so a card it cannot answer would only park the run. The
       // capability's own effect review still runs and is recorded, but it never
@@ -27559,7 +27560,7 @@ export class ChatEngine {
       await this.replyPermissionRaw(pending, 'reject', 'policy:filesystem-disabled')
       return
     }
-    if (await this.achievementOwnsDecisions(thread ?? null)) {
+    if (!sensitiveFileApproval && (await this.achievementOwnsDecisions(thread ?? null))) {
       try {
         await this.replyPermissionRaw(
           pending,
@@ -27599,6 +27600,12 @@ export class ChatEngine {
     decidedBy: string,
     alternative?: string
   ): Promise<void> {
+    if (pending.request.permission === 'bundled-pi-sensitive-files') {
+      if (reply !== 'reject' && decidedBy !== 'user') {
+        throw new Error('Protected file access requires a user decision')
+      }
+      if (reply === 'always') throw new Error('Protected file access can only be approved once')
+    }
     if (pending.settleBrowserAction) {
       if (this.pendingPermissions.get(pending.request.id) !== pending) return
       await this.recordPermissionDecision(pending, reply, decidedBy)

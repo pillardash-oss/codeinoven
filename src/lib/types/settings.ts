@@ -369,6 +369,8 @@ export interface InstanceRole {
 }
 
 export interface AppConfig {
+  /** Sensitive-file protection applies exclusively to the app-bundled Pi runtime. */
+  bundledPiSensitiveFilePatterns?: string[]
   theme: ThemePreference
   /** Font family id used across the app UI. */
   fontFamily: string
@@ -554,6 +556,7 @@ export type AppConfigPatch = Partial<
   Pick<
     AppConfig,
     | 'theme'
+    | 'bundledPiSensitiveFilePatterns'
     | 'fontFamily'
     | 'appFontSize'
     | 'fontWeight'

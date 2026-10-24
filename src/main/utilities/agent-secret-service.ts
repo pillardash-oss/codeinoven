@@ -3,10 +3,12 @@ import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UtilityRegistryService } from './utility-registry-service'
 import { Logger } from '../system/logger'
-import { SECRET_ENVIRONMENT_VARIABLE_PATTERN } from '../../lib/secret-request'
+import {
+  AGENT_SECRET_ROOT as SECRET_ROOT,
+  SECRET_ENVIRONMENT_VARIABLE_PATTERN
+} from '../../lib/secret-request'
 
 /** Where a thread's free-standing secrets live inside the app config root. */
-const SECRET_ROOT = 'agent-secrets'
 const SECRET_REGISTRY_DIRECTORY = `${SECRET_ROOT}/threads`
 const SECRET_FILES_DIRECTORY = `${SECRET_ROOT}/files`
 const SECRET_REGISTRY_VERSION = 1

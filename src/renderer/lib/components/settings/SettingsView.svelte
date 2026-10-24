@@ -76,6 +76,7 @@
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import BrowserSettingsTab from './BrowserSettingsTab.svelte'
+  import BundledPiFileProtectionSettings from './BundledPiFileProtectionSettings.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
@@ -1318,6 +1319,7 @@
           </div>
 
           <!-- CIO Cleanup -->
+          <BundledPiFileProtectionSettings {config} {settingsReady} {updateConfig} />
           <div id="settings-block-general-cio-cleanup" class="border bg-surface p-4">
             <h3
               class="mb-1 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"

@@ -99,6 +99,13 @@
           "scenario": "Settings view open."
         },
         {
+          "id": "settings-protected-file-add",
+          "keys": ["mod", "enter"],
+          "label": "Add protected file pattern",
+          "description": "Adds the entered pattern to bundled Pi's sensitive-file block list.",
+          "scenario": "Focus is in General settings' protected-file pattern field."
+        },
+        {
           "id": "nav-find",
           "keys": ["mod", "f"],
           "label": "Find in focused surface",

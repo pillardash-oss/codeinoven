@@ -10,6 +10,9 @@
 
 import type { AgentQuestion } from './types'
 
+/** App-owned directory for secret-tool registries and temporary plaintext files. */
+export const AGENT_SECRET_ROOT = 'agent-secrets'
+
 /** Valid OS environment variable name a collected secret can be exposed under. */
 export const SECRET_ENVIRONMENT_VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u
 
