@@ -1,14 +1,13 @@
+import { resolveIdeExecutable } from './ide-executables'
 import { ideInstallations } from './ide-installations'
 import {
   DEFAULT_IDE_LANGUAGE_SERVERS,
-  IDE_SERVER_PACKAGES,
   type IdeLanguageServer
 } from '../../lib/ide-language-servers'
 import { StringDecoder } from 'node:string_decoder'
 import { parentPort } from 'node:worker_threads'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { access, realpath, readFile, stat } from 'node:fs/promises'
-import { constants } from 'node:fs'
+import { realpath, readFile, stat } from 'node:fs/promises'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isWithinRoot, validateRelativePath } from './project-files/project-files-paths'
@@ -279,35 +278,10 @@ async function sessionFor(
         ...overrides,
         PATH: `${join(workspaceRoot, 'node_modules', '.bin')}${delimiter}${join(root, 'node_modules', '.bin')}${delimiter}${overrides.PATH ?? env.PATH ?? ''}`
       }
-      let executable = command
-      if (IDE_SERVER_PACKAGES[command] && env.CODEINOVEN_IDE_BIN) {
-        const managed = join(env.CODEINOVEN_IDE_BIN, command)
-        try {
-          await access(managed, constants.X_OK)
-          executable = managed
-        } catch {
-          // Fall back to the configured command until a managed copy is installed.
-        }
-      }
-      // Resolve PATH ourselves so non-directory entries cannot make spawn fail with ENOTDIR.
-      if (!executable.includes('/') && !executable.includes('\\')) {
-        for (const directory of (localEnv.PATH ?? '').split(delimiter)) {
-          if (!directory) continue
-          try {
-            if (!(await stat(directory)).isDirectory()) continue
-            const candidate = join(directory, executable)
-            await access(candidate, constants.X_OK)
-            if (!(await stat(candidate)).isFile()) continue
-            executable = candidate
-            break
-          } catch {
-            // Missing or invalid PATH entries do not prevent checking the next entry.
-          }
-        }
-      }
-      if (!executable.includes('/') && !executable.includes('\\'))
+      const executable = await resolveIdeExecutable(command, localEnv, workspaceRoot)
+      if (!executable)
         throw new Error(
-          `Language server ${definition.name} is not installed or its executable is unavailable. Open Settings > IDE Mode and install ${definition.name}, or configure an absolute executable path. Searched managed tools and project/PATH directories.`
+          `Language server ${definition.name} is not installed or its executable is unavailable. Open Settings > IDE Mode and install ${definition.name}, or configure an absolute executable path. Searched managed tools, project/PATH directories and Neovim Mason installations.`
         )
       const session = new Session(
         workspaceRoot,

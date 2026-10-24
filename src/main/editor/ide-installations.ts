@@ -1,6 +1,6 @@
-import { access, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { constants } from 'node:fs'
-import { delimiter, dirname, join } from 'node:path'
+import { resolveIdeExecutable } from './ide-executables'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { IDE_SERVER_PACKAGES, type IdeLanguageServer } from '../../lib/ide-language-servers'
 import type { IdeInstallation } from '../../lib/editor-ide'
 
@@ -88,24 +88,7 @@ export async function ideInstallations(
   for (const server of servers) {
     const packageName = IDE_SERVER_PACKAGES[server.command]?.[0].split('@')[0]
     const managed = join(bin, server.command)
-    const candidates = packageName ? [managed] : []
-    if (server.command.includes('/') || server.command.includes('\\'))
-      candidates.push(server.command)
-    else
-      for (const directory of (env.PATH ?? '').split(delimiter).filter(Boolean))
-        candidates.push(join(directory, server.command))
-    let executable: string | undefined
-    for (const candidate of candidates) {
-      try {
-        await access(candidate, constants.X_OK)
-        if ((await stat(candidate)).isFile()) {
-          executable = candidate
-          break
-        }
-      } catch {
-        /* Try next candidate. */
-      }
-    }
+    const executable = await resolveIdeExecutable(server.command, env)
     let version: string | undefined
     if (executable === managed && packageName) {
       try {
