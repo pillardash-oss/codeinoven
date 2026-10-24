@@ -1,7 +1,16 @@
 import { insertPlainText } from './components/shared/rich-markdown'
+import type { AppBridge } from '../../preload/index'
+
+declare global {
+  interface Window {
+    api: AppBridge
+  }
+}
 
 export interface EditorSpelling {
+  word: string
   suggestions: string[]
+  ignore: (() => void) | null
   replace: (suggestion: string) => void
 }
 
@@ -40,7 +49,11 @@ export function editorSpellingAt(event: MouseEvent, element: HTMLElement): Edito
     const point = doc.caretPositionFromPoint(event.clientX, event.clientY)
     if (!point || !(point.offsetNode instanceof Text) || !element.contains(point.offsetNode))
       return null
-    if (point.offsetNode.parentElement?.closest('[spellcheck="false"], [contenteditable="false"]'))
+    if (
+      point.offsetNode.parentElement?.closest(
+        '[spellcheck="false"], [contenteditable="false"], [data-editor-spelling-ignored]'
+      )
+    )
       return null
     word = wordAt(point.offsetNode.data, point.offset)
     if (!word) return null
@@ -60,12 +73,40 @@ export function editorSpellingAt(event: MouseEvent, element: HTMLElement): Edito
   }
   if (!word) return null
   const { word: original, start, end } = word
+  if (!window.api.spellcheck.isMisspelled(original)) return null
   const suggestions = window.api.spellcheck.suggestions(original)
-  if (!suggestions.length) return null
   const savedRange = range
   const originalValue = field ? element.value : null
   return {
+    word: original,
     suggestions,
+    ignore: savedRange
+      ? () => {
+          if (
+            !element.isConnected ||
+            !element.contains(savedRange.commonAncestorContainer) ||
+            savedRange.startContainer !== savedRange.endContainer ||
+            savedRange.toString() !== original
+          )
+            return
+          // File editors own their DOM and supply a model decoration instead.
+          if (
+            !element.dispatchEvent(
+              new CustomEvent('editor-ignore-spelling', {
+                bubbles: true,
+                cancelable: true,
+                detail: savedRange
+              })
+            )
+          )
+            return
+          const span = doc.createElement('span')
+          span.spellcheck = false
+          span.dataset.editorSpellingIgnored = 'true'
+          savedRange.surroundContents(span)
+          element.focus({ preventScroll: true })
+        }
+      : null,
     replace(suggestion): void {
       if (!suggestions.includes(suggestion) || !element.isConnected) return
       if (field ? element.value !== originalValue : savedRange?.toString() !== original) return

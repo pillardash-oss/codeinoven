@@ -289,6 +289,21 @@
     close()
   }
 
+  async function addSpellingWord(): Promise<void> {
+    const entry = spelling
+    close()
+    if (!entry) return
+    try {
+      if (!(await invoke('spellcheck:addWord', entry.word))) {
+        toast.error('Could not add the word to the dictionary')
+        return
+      }
+      entry.ignore?.()
+    } catch {
+      toast.error('Could not add the word to the dictionary')
+    }
+  }
+
   async function cut(t: TextMenuTarget): Promise<void> {
     const element = t.editable
     if (!element || !t.text) {
@@ -481,6 +496,20 @@
             {suggestion}
           </button>
         {/each}
+        {#if spelling.ignore}
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            onclick={() => {
+              spelling?.ignore?.()
+              close()
+            }}>Ignore</button
+          >
+        {/if}
+        <button type="button" class={itemClass} role="menuitem" onclick={addSpellingWord}>
+          Add to Dictionary
+        </button>
         <div role="separator" class="my-1 h-px bg-border"></div>
       {/if}
       <button

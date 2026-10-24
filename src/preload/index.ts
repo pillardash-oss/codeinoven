@@ -76,6 +76,7 @@ function assertEventChannel(channel: string): asserts channel is EventChannel {
 export interface AppBridge {
   spellcheck: {
     suggestions: (word: string) => string[]
+    isMisspelled: (word: string) => boolean
   }
   invoke: <Channel extends InvokeChannel>(
     channel: Channel,
@@ -128,6 +129,11 @@ function defaultTrafficLight(platform: NodeJS.Platform): TrafficLightInfo {
 
 const bridge: AppBridge = {
   spellcheck: {
+    isMisspelled: (word: string): boolean =>
+      typeof word === 'string' &&
+      word.length > 0 &&
+      word.length <= 128 &&
+      webFrame.isWordMisspelled(word),
     suggestions: (word: string): string[] => {
       if (typeof word !== 'string' || !word || word.length > 128) return []
       return webFrame.getWordSuggestions(word).slice(0, 5)

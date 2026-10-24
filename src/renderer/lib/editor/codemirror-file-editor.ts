@@ -214,6 +214,33 @@ export async function createFileEditor(
   }
 
   const matchMark = api.Decoration.mark({ class: 'cm-file-find-match' })
+  const ignoreSpelling = api.StateEffect.define<{ from: number; to: number; word: string }>()
+  const ignoredSpellingField = api.StateField.define({
+    create: () => api.Decoration.none,
+    update(value, transaction) {
+      let next = value.map(transaction.changes)
+      if (transaction.docChanged) {
+        next = next.update({
+          filter: (from, to, mark) => transaction.newDoc.sliceString(from, to) === mark.spec.word
+        })
+      }
+      for (const effect of transaction.effects) {
+        if (effect.is(ignoreSpelling)) {
+          const { from, to, word } = effect.value
+          next = next.update({
+            add: [
+              api.Decoration.mark({
+                attributes: { spellcheck: 'false', 'data-editor-spelling-ignored': 'true' },
+                word
+              }).range(from, to)
+            ]
+          })
+        }
+      }
+      return next
+    },
+    provide: (field) => api.EditorView.decorations.from(field)
+  })
   const setMatches = api.StateEffect.define<Array<[number, number]>>()
   const findField = api.StateField.define({
     create: () => api.Decoration.none,
@@ -357,6 +384,7 @@ export async function createFileEditor(
     ),
     api.EditorView.contentAttributes.of({ 'aria-label': ariaLabel, 'data-region': 'editor' }),
     findField,
+    ignoredSpellingField,
     flashField,
     conflictField,
     api.invertedEffects.of((transaction) => {
@@ -399,6 +427,23 @@ export async function createFileEditor(
 
   const state = api.EditorState.create({ doc: value, extensions })
   const view = new api.EditorView({ state, parent: host })
+  const handleIgnoreSpelling = (event: Event): void => {
+    if (!(event instanceof CustomEvent)) return
+    const range: unknown = event.detail
+    if (
+      !(range instanceof window.Range) ||
+      !view.contentDOM.contains(range.commonAncestorContainer)
+    )
+      return
+    event.preventDefault()
+    const from = view.posAtDOM(range.startContainer, range.startOffset)
+    const to = view.posAtDOM(range.endContainer, range.endOffset)
+    if (from < to)
+      view.dispatch({
+        effects: ignoreSpelling.of({ from, to, word: view.state.sliceDoc(from, to) })
+      })
+  }
+  view.contentDOM.addEventListener('editor-ignore-spelling', handleIgnoreSpelling)
   // A fresh buffer has nothing to step back through. The report is forced here
   // because the listener only fires on transactions, and a remount over an
   // earlier file would otherwise leave a toolbar showing a stale history.
@@ -602,6 +647,7 @@ export async function createFileEditor(
         ]
       })
       clearFlashTimer()
+      view.contentDOM.removeEventListener('editor-ignore-spelling', handleIgnoreSpelling)
       const paintOutline = (): void => {
         if (destroyed) return
         view.dispatch({ effects: setFlashLine.of(targetLine) })
