@@ -20,6 +20,7 @@
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
   import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
+  import { studioAnnotationChatSelection } from '$lib/annotation-chat'
   import {
     StudioAnnotationOverlay,
     clampPendingPosition,
@@ -481,6 +482,27 @@
     closePendingAnnotation()
   }
 
+  /**
+   * Ask about an annotation that is already attached to the plan.
+   *
+   * The pending popover asks about a passage before it becomes an annotation; this
+   * asks about one that exists, so the descriptor carries both the anchored passage
+   * and the note, and the plan itself rides along as context.
+   */
+  function openAnnotationDetailChat(mode: 'explain' | 'quick'): void {
+    const annotation = editingAnnotation
+    if (!annotation) return
+    const selection = studioAnnotationChatSelection(annotation)
+    const documentContext = exportAssignmentMarkdown({
+      ...assignment,
+      content: $state.snapshot(draft),
+      annotations: $state.snapshot(annotations)
+    })
+    if (mode === 'explain') onExplainSelection?.(selection, documentContext)
+    else onQuickChatSelection?.(selection, documentContext)
+    closeAnnotation()
+  }
+
   async function refreshAnnotationMarkers(): Promise<void> {
     await overlay.refreshMarkers(annotations, {
       scroller: documentScroller,
@@ -779,6 +801,8 @@
     onSave={saveAnnotationEdit}
     onCancelEdit={() => overlay.cancelEdit()}
     onEditClick={() => overlay.startEdit()}
+    onExplain={onExplainSelection ? () => openAnnotationDetailChat('explain') : undefined}
+    onQuickChat={onQuickChatSelection ? () => openAnnotationDetailChat('quick') : undefined}
     onClose={closeAnnotation}
   >
     {#snippet bodyView(annotation)}

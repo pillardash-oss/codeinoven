@@ -31,7 +31,9 @@ All notable changes to CodeInOven are documented here. This project follows
   descriptor as the selection, so nothing is re-derived from pixels, and each
   surface adds only the bounded framing that makes that descriptor readable: the
   artifact source, the design folder and screen, the composition folder, or the
-  document.
+  document. Comments that already exist on a spec, brainstorm, audit report or
+  Assignment offer the same pair from the annotation popover, with the passage
+  the note hangs on and the note itself as one descriptor.
 
 - **A film ships with the app to start from.** The video capability gains a
   `scaffold` operation that copies a finished film into a project folder and

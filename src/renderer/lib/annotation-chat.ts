@@ -49,6 +49,23 @@ export function openAnnotationChat(request: {
   )
 }
 
+/**
+ * The descriptor of an annotation that is already attached to a studio document.
+ *
+ * A pending selection is only its quote. An attached annotation is two things the
+ * user may be asking about at once: the passage it is anchored to and the note
+ * someone wrote on it, so the side chat receives both instead of the note alone.
+ */
+export function studioAnnotationChatSelection(annotation: {
+  quote?: string
+  body: string
+}): string {
+  const note = annotation.body.trim()
+  const quote = annotation.quote?.trim()
+  if (!quote) return `Review note: ${note}`
+  return [`Anchored passage: “${quote}”`, `Review note: ${note}`].join('\n\n')
+}
+
 /** The element inspector of an inline artifact, as context for its picks. */
 export function artifactInspectorChatContext(
   kind: string,

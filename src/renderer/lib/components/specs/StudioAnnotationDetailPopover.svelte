@@ -4,6 +4,7 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import type { Snippet } from 'svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import SelectionChatActions from '../shared/SelectionChatActions.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
@@ -31,6 +32,10 @@
     onCancelEdit?: () => void
     /** Enters edit mode; renders an Edit button when editable and not editing. */
     onEditClick?: () => void
+    /** Asks about this annotation in a read-only side chat, without the comment field. */
+    onExplain?: () => void
+    /** Starts a plain read-only side chat about this annotation. */
+    onQuickChat?: () => void
     onClose: () => void
     /** Optional custom read-only body renderer (e.g. markdown view); receives the annotation. */
     bodyView?: Snippet<[Props['annotation']]>
@@ -50,6 +55,8 @@
     onSave,
     onCancelEdit,
     onEditClick,
+    onExplain,
+    onQuickChat,
     onClose,
     bodyView
   }: Props = $props()
@@ -110,19 +117,22 @@
   <p class="mt-1 text-[0.625rem] text-dimmed">
     {annotation.author} · {formatDateTimeCompact(annotation.createdAt)}
   </p>
-  <div class="mt-3 flex items-center justify-between">
-    {#if canEdit && onResolve}
-      <button
-        class="flex items-center gap-1 px-2.5 py-1.5 text-xs text-success hover:bg-success/10"
-        title="Resolve annotation"
-        onclick={onResolve}
-      >
-        <CioCheck size={12} />
-        Resolve
-      </button>
-    {:else}
-      <span></span>
-    {/if}
+  <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
+    <div class="flex flex-wrap items-center gap-1">
+      {#if onExplain && onQuickChat}
+        <SelectionChatActions subject="annotation" {onExplain} {onQuickChat} />
+      {/if}
+      {#if canEdit && onResolve}
+        <button
+          class="flex items-center gap-1 px-2.5 py-1.5 text-xs text-success hover:bg-success/10"
+          title="Resolve annotation"
+          onclick={onResolve}
+        >
+          <CioCheck size={12} />
+          Resolve
+        </button>
+      {/if}
+    </div>
     <div class="flex gap-1.5">
       {#if editorMode}
         {#if onCancelEdit}
