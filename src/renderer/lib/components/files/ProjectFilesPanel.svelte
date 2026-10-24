@@ -1126,6 +1126,9 @@
 
       {#if activeTab}
         <ProjectFilesPanelToolbar
+          ideModeEnabled={projectState.ideModeEnabled}
+          ideModeDisabled={ovenFile}
+          onIdeModeChange={(enabled) => (projectState.ideModeEnabled = enabled)}
           {activeTab}
           {checkpointDiff}
           {diffStats}
@@ -1358,7 +1361,10 @@
             {projectId}
             scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
             threadId={mountThreadId ?? undefined}
-            ideEnabled={!deletedAtCheckpoint && activeTab.origin === 'working' && !ovenFile}
+            ideEnabled={projectState.ideModeEnabled &&
+              !deletedAtCheckpoint &&
+              activeTab.origin === 'working' &&
+              !ovenFile}
             value={visibleContent}
             path={activeTab.path}
             readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
@@ -1578,6 +1584,9 @@
     <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {#if activeTab && !activeFileInMergeEditor}
         <ProjectFilesPanelToolbar
+          ideModeEnabled={projectState.ideModeEnabled}
+          ideModeDisabled={ovenFile}
+          onIdeModeChange={(enabled) => (projectState.ideModeEnabled = enabled)}
           {activeTab}
           {checkpointDiff}
           {diffStats}
@@ -1732,7 +1741,10 @@
                 {projectId}
                 scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
                 threadId={mountThreadId ?? undefined}
-                ideEnabled={!deletedAtCheckpoint && activeTab.origin === 'working' && !ovenFile}
+                ideEnabled={projectState.ideModeEnabled &&
+                  !deletedAtCheckpoint &&
+                  activeTab.origin === 'working' &&
+                  !ovenFile}
                 value={visibleContent}
                 path={activeTab.path}
                 readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}

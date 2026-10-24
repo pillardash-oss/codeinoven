@@ -50,6 +50,8 @@ export interface ProjectFilesState {
   expandedDirectories: Record<string, boolean>
   tabs: ProjectFileTab[]
   activeTabId: string | null
+  /** Opt-in editor intelligence owned by this project tree, never an app setting. */
+  ideModeEnabled: boolean
   explorerVisible: boolean
   explorerWidth: number
   revealedPath: string | null
@@ -122,6 +124,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     expandedDirectories: {},
     tabs: [],
     activeTabId: null,
+    ideModeEnabled: false,
     explorerVisible: explorer.explorerVisible,
     explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,

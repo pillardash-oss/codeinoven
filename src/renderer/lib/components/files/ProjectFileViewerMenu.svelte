@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Switch from '$lib/components/ui/Switch.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import CioBraces from '@pdslng/cio-icon/CioBraces.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -16,6 +17,9 @@
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { DropdownMenu } from 'bits-ui'
   interface Props {
+    ideModeEnabled: boolean
+    ideModeDisabled: boolean
+    onIdeModeChange: (enabled: boolean) => void
     diffView: boolean
     lineNumbers: boolean
     wrap: boolean
@@ -58,6 +62,9 @@
   }
 
   let {
+    ideModeEnabled,
+    ideModeDisabled,
+    onIdeModeChange,
     diffView,
     lineNumbers,
     wrap,
@@ -165,6 +172,17 @@
       collisionPadding={10}
       class="z-90 min-w-52 border border-border bg-surface p-1 shadow-lg"
     >
+      <div class="px-2.5 py-2">
+        <Switch
+          checked={ideModeEnabled}
+          disabled={ideModeDisabled}
+          onchange={onIdeModeChange}
+          label="IDE Mode"
+          aria-label="IDE Mode"
+          title="Enable search and language navigation for this project tree"
+        />
+      </div>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
       <DropdownMenu.Item
         class={itemClass}
         disabled={findDisabled}

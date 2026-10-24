@@ -18,6 +18,9 @@
   }
 
   interface Props {
+    ideModeEnabled: boolean
+    ideModeDisabled: boolean
+    onIdeModeChange: (enabled: boolean) => void
     activeTab: ProjectFileTab
     checkpointDiff: ProjectFileTab['checkpointDiff']
     diffStats: DiffStats | null
@@ -77,6 +80,9 @@
   }
 
   let {
+    ideModeEnabled,
+    ideModeDisabled,
+    onIdeModeChange,
     activeTab,
     checkpointDiff,
     diffStats,
@@ -219,6 +225,9 @@
   {/if}
   <span class="flex-1"></span>
   <ProjectFileViewerMenu
+    {ideModeEnabled}
+    {ideModeDisabled}
+    {onIdeModeChange}
     diffView={activeTab.view === 'diff'}
     lineNumbers={showLineNumbers}
     wrap={wrapLines}

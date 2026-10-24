@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { ideMode } from '$lib/stores/ide-mode.svelte'
   import IdeEditorTools from './IdeEditorTools.svelte'
   import { onMount } from 'svelte'
 
@@ -48,7 +47,7 @@
     projectId = '',
     scopeBucketId,
     threadId,
-    ideEnabled = true,
+    ideEnabled = false,
     value,
     path,
     readonly = false,
@@ -96,7 +95,7 @@
       spellcheck,
       ariaLabel,
       onIdeHoverEnd: () => ideTools?.dismissHover(),
-      isIdeEnabled: () => ideMode.enabled && ideEnabled && Boolean(projectId),
+      isIdeEnabled: () => ideEnabled && Boolean(projectId),
       onIdeAction: (action, token) => ideTools?.handle(action, token) ?? false,
       getIdeActions: (token) => ideTools?.actions(token) ?? [],
       onDocChange: (text) => onInput({ currentTarget: { value: text } }),

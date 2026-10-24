@@ -1,6 +1,4 @@
 <script lang="ts">
-  import Switch from '$lib/components/ui/Switch.svelte'
-  import { ideMode } from '$lib/stores/ide-mode.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
@@ -69,15 +67,6 @@
       role="menu"
       aria-label="Select default editor"
     >
-      <div class="border-b border-border px-2.5 py-2">
-        <Switch
-          checked={ideMode.enabled}
-          onchange={(enabled) => ideMode.setEnabled(enabled)}
-          label="IDE Mode"
-          title="Enable project search and language navigation"
-          aria-label="IDE Mode"
-        />
-      </div>
       <p
         class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
       >

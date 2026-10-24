@@ -1,7 +1,6 @@
 <script lang="ts">
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { ideMode } from '$lib/stores/ide-mode.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import type { IdeAction, IdeLocation, IdeResponse } from '$shared/editor-ide'
   import type { IdeToken, IdeMenuAction } from '$lib/editor/ide-context'
@@ -14,7 +13,7 @@
     value: string
     enabled?: boolean
   }
-  let { projectId, scopeBucketId, threadId, path, value, enabled = true }: Props = $props()
+  let { projectId, scopeBucketId, threadId, path, value, enabled = false }: Props = $props()
   const owner = crypto.randomUUID()
   let capabilities = $state<IdeResponse['capabilities']>()
   let open = $state(false)
@@ -31,7 +30,7 @@
   let alive = false
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   let searchStarted = false
-  const active = $derived(ideMode.enabled && enabled && Boolean(projectId))
+  const active = $derived(enabled && Boolean(projectId))
 
   async function request(action: IdeAction, token?: IdeToken): Promise<IdeResponse> {
     return invoke(
