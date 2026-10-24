@@ -117,7 +117,13 @@
   <p class="mt-1 text-[0.625rem] text-dimmed">
     {annotation.author} · {formatDateTimeCompact(annotation.createdAt)}
   </p>
-  <AnnotationActionBar subject="annotation" {onExplain} {onQuickChat}>
+  <AnnotationActionBar
+    subject="annotation"
+    {onExplain}
+    {onQuickChat}
+    onCancel={editorMode ? onCancelEdit : undefined}
+    cancelTitle="Cancel editing"
+  >
     {#snippet leading()}
       {#if canEdit && onResolve}
         <button
@@ -132,13 +138,6 @@
     {/snippet}
     {#snippet trailing()}
       {#if editorMode}
-        {#if onCancelEdit}
-          <button
-            class="px-2 py-1.5 text-xs text-muted hover:bg-overlay"
-            title="Cancel editing"
-            onclick={onCancelEdit}>Cancel</button
-          >
-        {/if}
         <VoiceInputButton targetId={speechTargetId} getTarget={speechTarget} {scope} />
         {#if onSave}
           <button

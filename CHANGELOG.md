@@ -37,7 +37,9 @@ All notable changes to CodeInOven are documented here. This project follows
   footer is one component and one row now, so Explain, Quick Chat, Remove or
   Resolve and the commit action never split across two lines: the pair keeps its
   words where the box has room for them and becomes two titled icon buttons
-  where it does not.
+  where it does not. The bar also draws the dismissal action itself, so Cancel
+  always sits at the far bottom left where a falsy action belongs, never beside
+  the commit action.
 
 - **A film ships with the app to start from.** The video capability gains a
   `scaffold` operation that copies a finished film into a project folder and

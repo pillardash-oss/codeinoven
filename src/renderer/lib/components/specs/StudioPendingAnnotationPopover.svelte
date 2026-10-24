@@ -88,13 +88,10 @@
     subject="selection"
     onExplain={showSelectionActions ? onExplain : undefined}
     onQuickChat={showSelectionActions ? onQuickChat : undefined}
+    {onCancel}
+    cancelTitle="Cancel annotation"
   >
     {#snippet trailing()}
-      <button
-        class="px-2 py-1.5 text-xs text-muted hover:bg-overlay"
-        title="Cancel annotation"
-        onclick={onCancel}>Cancel</button
-      >
       {#if canAnnotate}
         <VoiceInputButton
           targetId={speechTargetId}

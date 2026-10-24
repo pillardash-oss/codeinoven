@@ -29,19 +29,45 @@
     /** The side-chat handlers. Both are needed for the pair to be offered. */
     onExplain?: () => void
     onQuickChat?: () => void
-    /** The surface's own annotation actions, drawn first (falsy actions lead). */
+    /**
+     * The dismissal action.
+     *
+     * A falsy action always sits at the far bottom left of an annotation box, which
+     * is the app's footer rule, so the bar draws it itself instead of trusting each
+     * surface to place it: no call site can put Cancel next to the commit action.
+     */
+    onCancel?: () => void
+    /** What cancel dismisses, when "Cancel" alone would not say it ("Cancel editing"). */
+    cancelTitle?: string
+    /** The surface's own annotation actions, drawn after Cancel (falsy actions lead). */
     leading?: Snippet
     /** The surface's commit actions, drawn last and to the right. */
     trailing?: Snippet
   }
 
-  let { subject, onExplain, onQuickChat, leading, trailing }: Props = $props()
+  let {
+    subject,
+    onExplain,
+    onQuickChat,
+    onCancel,
+    cancelTitle = 'Cancel',
+    leading,
+    trailing
+  }: Props = $props()
 
   const explainTitle = $derived(`Explain this ${subject}`)
   const quickChatTitle = $derived(`Quick chat about this ${subject}`)
 </script>
 
 <div class="mt-2 flex items-center gap-1 @container">
+  {#if onCancel}
+    <button
+      type="button"
+      class="shrink-0 px-2 py-1.5 text-xs text-muted transition-colors hover:bg-overlay"
+      title={cancelTitle}
+      onclick={onCancel}>{cancelTitle}</button
+    >
+  {/if}
   {@render leading?.()}
   {#if onExplain && onQuickChat}
     <button
