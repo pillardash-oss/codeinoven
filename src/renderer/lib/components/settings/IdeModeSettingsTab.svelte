@@ -336,9 +336,6 @@
                     ><CioCircle size={12} /></SettingsStatusBadge
                   >{/if}
               </div>
-              <p class="mt-2 text-xs leading-relaxed text-muted">
-                For {server.languages.map((mapping) => mapping.extension).join(', ')} files.
-              </p>
             </div>
           </div>
           <div class="flex shrink-0 items-center justify-end gap-3">
