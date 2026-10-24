@@ -306,7 +306,7 @@ async function sessionFor(
       }
       if (!executable.includes('/') && !executable.includes('\\'))
         throw new Error(
-          `Cannot find executable ${command} in valid PATH directories. Check LSP settings.`
+          `Language server ${definition.name} is not installed or its executable is unavailable. Open Settings > IDE Mode and install ${definition.name}, or configure an absolute executable path. Searched managed tools and project/PATH directories.`
         )
       const session = new Session(
         workspaceRoot,

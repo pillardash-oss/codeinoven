@@ -191,7 +191,7 @@
   data-floating-document
 ></div>
 
-{#if projectId}
+{#if projectId && ideEnabled}
   <IdeEditorTools
     bind:this={ideTools}
     {projectId}

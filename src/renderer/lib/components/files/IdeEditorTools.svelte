@@ -118,6 +118,8 @@
     failedRetry = -1
     return () => {
       alive = false
+      infoOpen = false
+      connectedServers = undefined
       clearTimeout(hoverLeaveTimer)
       capabilities = undefined
       hover = null
@@ -461,8 +463,9 @@
       const fallback = node.parentElement
       statusPortal.registerHost({ host: node, fallback })
       return () => {
-        fallback.appendChild(node)
         statusPortal.unregisterHost(node)
+        // The conditional block may already be removed. Never reinsert its DOM.
+        node.remove()
       }
     }}
     aria-live="polite"
@@ -523,7 +526,7 @@
     </div>
   {/if}
 {/snippet}
-{#if hover || (open && (mode === 'locations' || mode === 'documentation'))}
+{#if active && (hover || (open && (mode === 'locations' || mode === 'documentation')))}
   <div
     popover="manual"
     role="region"
@@ -552,7 +555,7 @@
     {@render resultRows()}
   </div>
 {/if}
-{#if infoOpen}
+{#if active && infoOpen}
   <aside
     class="absolute inset-y-0 right-0 z-40 flex w-80 max-w-full flex-col overflow-auto border-l border-border bg-surface text-xs text-foreground"
     aria-label="Language servers for this file"
@@ -617,7 +620,7 @@
   </aside>
 {/if}
 <Modal
-  open={open && (mode === 'grep' || mode === 'files')}
+  open={active && open && (mode === 'grep' || mode === 'files')}
   onClose={() => closeModal()}
   title={mode === 'grep'
     ? `Search ${projectName || resolvedProjectName} text`
