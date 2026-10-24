@@ -5,6 +5,20 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ## Unreleased
 
+### Fixed
+
+- **A design element commented on a tab the app was already showing can be
+  edited again.** The browser's inspection session only learned what a tab was
+  serving from the state report that tab broadcasts as it loads, so a tab that
+  loaded before the session started was unknown: a pick on it wrote a comment
+  without the design folder that comment needs to bring its page back, and
+  clicking that comment in the composer answered "the design this comment was
+  made on is no longer open" while the pins and the bubble stayed away until the
+  page was reloaded. The session now reads the state of every open tab once when
+  it starts, reads a tab before writing a pick on it, and reads the tab once more
+  before an edit action declares a page gone, which is the reload the reader was
+  doing by hand.
+
 ### Added
 
 - **Every comment you write can be asked about first.** The studio selection

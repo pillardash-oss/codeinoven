@@ -101,6 +101,13 @@ class BrowserInspectorSession {
     this.started = true
     subscribe('browser:state', (state) => this.notePageState(state.tabId, state.design))
     subscribe('browser:inspector', (tabId, event) => this.onPageEvent(tabId, event))
+    // A tab reports its state when it loads, and a restored or preloaded tab can
+    // load before this session was started (the browser is lazy, and this is the
+    // seam that starts it). A tab the session never heard of is neither
+    // inspectable nor reopenable, and a pick made on it carries no folder, so the
+    // state every open tab already has is read once here instead of waiting for a
+    // page reload to report it again.
+    this.readOpenTabs()
     // Pins and the open comment are consequences of the reference list, which is
     // written by the page, the composer and the panel alike, so the session
     // follows the list rather than being told by each writer.
@@ -194,12 +201,42 @@ class BrowserInspectorSession {
    * does, and it is the mirror of the document annotation's jump to its passage.
    */
   focusComment(tabId: string, referenceId: string): void {
-    void this.restoreAndFocus(tabId, referenceId, this.ownerOf(tabId)).catch(
-      (failure: unknown) => {
-        logRendererError('The design annotation could not be focused.', failure)
-        toast.error('Could not focus this design annotation. Try opening its browser tab again.')
-      }
-    )
+    void this.restoreAndFocus(tabId, referenceId, this.ownerOf(tabId)).catch((failure: unknown) => {
+      logRendererError('The design annotation could not be focused.', failure)
+      toast.error('Could not focus this design annotation. Try opening its browser tab again.')
+    })
+  }
+
+  /**
+   * Read the page state of every browser tab that is already open.
+   *
+   * Bounded by the number of open tabs (a handful), and each read is one IPC
+   * round trip, so this costs nothing at a seam that runs once per renderer.
+   */
+  private readOpenTabs(): void {
+    for (const tab of contextSidebarState.browserTabs) {
+      if (tab.kind !== 'browser') continue
+      void this.readPageState(tab.id)
+    }
+  }
+
+  /**
+   * Ask main what one tab is serving, and mirror it.
+   *
+   * The answer is the same report `browser:state` carries, read on demand rather
+   * than waited for: that report is a broadcast, and a listener that starts after
+   * the page loaded never receives it.
+   */
+  private async readPageState(tabId: string): Promise<BrowserDesignTab | null> {
+    try {
+      const state = await invoke('browser:pageState', tabId)
+      if (!state) return null
+      this.notePageState(state.tabId, state.design)
+      return state.design
+    } catch (failure: unknown) {
+      logRendererError("A browser tab's page state could not be read.", failure)
+      return null
+    }
   }
 
   /**
@@ -214,16 +251,35 @@ class BrowserInspectorSession {
    * project cannot be reopened, and that is reported rather than opened onto a
    * different page.
    */
-  revealComment(
-    projectId: string,
-    threadId: string,
-    reference: ResponseReferenceAnchor
-  ): void {
+  revealComment(projectId: string, threadId: string, reference: ResponseReferenceAnchor): void {
     const tabId = reference.tabId
     if (tabId && this.isOpenDesignTab(tabId)) {
       this.focusComment(tabId, reference.id)
       return
     }
+    // The tab can still be open and serving the design even though this session
+    // does not know it yet (its report arrived before the session was started),
+    // so an unknown tab is read before the comment is declared unrecoverable.
+    if (tabId && !reference.directory && this.isOpenBrowserTab(tabId)) {
+      void this.readPageState(tabId).then(() => {
+        if (tabId && this.isOpenDesignTab(tabId)) {
+          this.focusComment(tabId, reference.id)
+          return
+        }
+        this.revealOnStoredDesign(projectId, threadId, this.withDesignFolder(tabId, reference))
+      })
+      return
+    }
+    this.revealOnStoredDesign(projectId, threadId, reference)
+  }
+
+  /** The part of {@link revealComment} that needs a known design folder. */
+  private revealOnStoredDesign(
+    projectId: string,
+    threadId: string,
+    reference: ResponseReferenceAnchor
+  ): void {
+    const tabId = reference.tabId
     const directory = reference.directory
     if (!directory) {
       // A reference written before a design comment carried its folder cannot be
@@ -252,6 +308,35 @@ class BrowserInspectorSession {
         })
       }
     )
+  }
+
+  /**
+   * A reference that gained the folder of the design its tab is serving.
+   *
+   * A pick writes the folder it knows at the time. A tab this session learned
+   * about late answers with its own folder, which is what lets a comment made on
+   * it be reopened afterwards.
+   */
+  private withDesignFolder(
+    tabId: string,
+    reference: ResponseReferenceAnchor
+  ): ResponseReferenceAnchor {
+    const design = this.designs.get(tabId)
+    if (!design) return reference
+    const entry = designEntryFromUrl(
+      contextSidebarState.browserTabs.find((tab) => tab.id === tabId)?.url ?? '',
+      design.origin
+    )
+    return {
+      ...reference,
+      directory: design.directory,
+      ...(reference.designEntry || !entry ? {} : { designEntry: entry })
+    }
+  }
+
+  /** Whether a tab is open in the browser, whatever it is serving. */
+  private isOpenBrowserTab(tabId: string): boolean {
+    return contextSidebarState.browserTabs.some((tab) => tab.id === tabId && tab.kind === 'browser')
   }
 
   /**
@@ -375,9 +460,17 @@ class BrowserInspectorSession {
    * comment where it is. The bubble is the app's own component, so the comment
    * text never travels through the page at all.
    */
-  private onPageEvent(tabId: string, event: BrowserInspectorEvent): void {
+  private onPageEvent(tabId: string, event: BrowserInspectorEvent, read: boolean = false): void {
     if (event.kind === 'closed') {
       this.armed.delete(tabId)
+      return
+    }
+    // A pick is written into a composer reference that names the design folder it
+    // came from, so that the comment can bring its page back afterwards. A tab
+    // this session has not heard about is read once before the reference is
+    // built, rather than writing a pick that cannot be reopened.
+    if (!read && !this.designs.has(tabId)) {
+      void this.readPageState(tabId).then(() => this.onPageEvent(tabId, event, true))
       return
     }
     const owner = this.ownerOf(tabId)
