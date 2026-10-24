@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fileTabLabels } from '$lib/file-tab-labels'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
@@ -1003,6 +1004,10 @@
     )
   )
 
+  let fullscreenFileLabels = $derived(
+    fileTabLabels(fullscreenFileTabs.flatMap((tab) => (tab.path ? [tab.path] : [])))
+  )
+
   function closeFullscreenFileTab(sidebarId: string, fileTabId: string): void {
     const fileTab = projectState.tabs.find((candidate) => candidate.id === fileTabId)
     const session = fileTab ? projectState.sessions[fileTab.path] : undefined
@@ -1467,7 +1472,10 @@
                 class={[
                   'max-w-40 truncate text-[0.6875rem] font-medium',
                   fileTab.preview ? 'italic' : ''
-                ]}>{fileTab.title}</span
+                ]}
+                >{fileTab.path
+                  ? (fullscreenFileLabels.get(fileTab.path) ?? fileTab.title)
+                  : fileTab.title}</span
               >
               {#if fileDirty}
                 <span class="h-1.5 w-1.5 shrink-0 bg-accent" title="Unsaved changes"></span>
