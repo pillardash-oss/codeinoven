@@ -26,6 +26,8 @@ export interface CodexComputerUseReadiness {
 /** One MCP server from `codex mcp list --json`, narrowed to the fields we read. */
 interface CodexMcpServerListing {
   name: string
+  /** Whether Codex is configured to load this server at all. */
+  enabled: boolean
   transport: {
     type: string
     command?: string
@@ -55,6 +57,12 @@ export const CODEX_COMPUTER_USE_UNAVAILABLE: CodexComputerUseReadiness = {
  * Codex TOML, so a config shape we do not model still answers correctly, and a
  * resolved command is then checked on disk: an entry pointing at an uninstalled
  * helper is not a capability.
+ *
+ * A server Codex is told not to load is not a capability either. The Codex
+ * desktop app writes the entry and leaves it disabled whenever computer use is
+ * off, and a disabled entry never reaches the model, so claiming it would
+ * suppress the app-owned CUA driver for a turn that has no desktop control at
+ * all.
  */
 export async function probeCodexComputerUse(options: {
   env: NodeJS.ProcessEnv
@@ -68,6 +76,10 @@ export async function probeCodexComputerUse(options: {
       reason = `Codex has no computer-use server configured in ${home.label}`
       continue
     }
+    if (!server.enabled) {
+      reason = `Codex computer use is turned off in ${home.label}`
+      continue
+    }
     const resolved = await resolveHelper(server, home.path)
     if (!resolved) {
       reason = `Codex's computer-use server in ${home.label} points at a helper that is not installed`
@@ -75,7 +87,7 @@ export async function probeCodexComputerUse(options: {
     }
     return {
       available: true,
-      reason: `Codex computer use is installed in ${home.label}`,
+      reason: `Codex computer use is enabled in ${home.label}`,
       configOverrides: [
         `mcp_servers.${serverKey(server.name)}.enabled=true`,
         `mcp_servers.${serverKey(server.name)}.command=${tomlString(resolved.command)}`,
@@ -126,6 +138,7 @@ async function listComputerUseServer(
     if (typeof listing.name !== 'string' || !COMPUTER_USE_NAME.test(listing.name)) continue
     return {
       name: listing.name,
+      enabled: listing.enabled === true,
       transport:
         listing.transport && typeof listing.transport === 'object' ? listing.transport : null
     }
