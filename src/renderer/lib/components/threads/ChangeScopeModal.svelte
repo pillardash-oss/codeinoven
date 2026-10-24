@@ -24,7 +24,6 @@
   let { open, onClose, threadId, projectId, currentBucketId }: Props = $props()
 
   let query = $state('')
-  let searchInput: HTMLInputElement | undefined = $state(undefined)
   let loadError = $state('')
   /** Seed for the canonical scope creation modal when the query is a miss. */
   let createModalOpen = $state(false)
@@ -128,12 +127,11 @@
 <!-- The shared Modal is the bits-ui Dialog wrapper: it owns the overlay, the
      backdrop, Escape handling, and the initial focus, which lands on the first
      input field   this modal's search bar   so typing can start immediately. -->
-<Modal {open} title="Change Scope" {onClose}>
+<Modal open={open && !createModalOpen} title="Change Scope" {onClose}>
   <div class="space-y-3">
     <div class="flex items-center gap-2 border bg-elevated px-3 py-2">
       <CioSearch size={14} class="shrink-0 text-dimmed" />
       <input
-        bind:this={searchInput}
         bind:value={query}
         onkeydown={handleSearchKeydown}
         type="text"
@@ -157,9 +155,9 @@
           class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Clear search"
           title="Clear search"
-          onclick={() => {
+          onclick={(event) => {
             query = ''
-            searchInput?.focus()
+            event.currentTarget.parentElement?.querySelector('input')?.focus()
           }}
         >
           <CioClose size={12} />
@@ -217,10 +215,9 @@
 
 <!-- Mounted only while open so the typed query seeds the New Scope form on
      every launch   a persistent instance would freeze `initialName` at its
-     first (empty) mount and force a retype. It is a sibling of the shared
-     Modal, which is safe: bits-ui keeps one global layer stack, so the nested
-     dialog owns Escape and outside interaction while it is up and this modal
-     keeps the typed query. Cancelling the form returns here with that query
+     first (empty) mount and force a retype. Hide the change-scope presentation
+     while creating: its native window would otherwise cover a create form
+     presented in the app document. Cancelling returns here with the query
      intact; creating dismisses the whole flow, because the run it starts reports
      in the scope dock instead of in this dialog. -->
 {#if createModalOpen}
