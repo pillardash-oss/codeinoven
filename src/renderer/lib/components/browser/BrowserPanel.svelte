@@ -9,6 +9,7 @@
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { designElementChatContext, openAnnotationChat } from '$lib/annotation-chat'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
   import { designScreenEntryFromUrl } from '$shared/design/screens'
@@ -481,6 +482,32 @@
     browserInspector.closeComment(tabId)
   }
 
+  /**
+   * Ask about the element whose comment is open, before writing the comment.
+   *
+   * The one comment bubble carries the read-only chat pair every annotation
+   * offers, so the user can question an element they already picked. The
+   * element's own descriptor is the selection, and the design folder it was
+   * picked from is the context the answer is read from; the bubble then closes
+   * the way its Cancel does, keeping the reference and its draft.
+   */
+  function openDesignElementChat(mode: 'elaborate' | 'quick'): void {
+    const open = designComment
+    if (!open) return
+    const reference = responseReferencesState
+      .forThread(tabProjectId, tabThreadId)
+      .find((candidate) => candidate.id === open.referenceId)
+    if (!reference) return
+    openAnnotationChat({
+      projectId: tabProjectId,
+      threadId: tabThreadId,
+      mode,
+      selection: reference.text,
+      context: designElementChatContext(reference.directory, reference.designEntry)
+    })
+    browserInspector.closeComment(tabId)
+  }
+
   // Publish the pin set whenever the reference list changes, so a pick, a
   // finished comment, or a removal made from the composer moves the pins on the
   // page. The store notifies on every write rather than an effect watching it:
@@ -798,5 +825,7 @@
     onDone={commitDesignComment}
     onRemove={removeDesignComment}
     onClose={() => browserInspector.closeComment(tabId)}
+    onExplain={() => openDesignElementChat('elaborate')}
+    onQuickChat={() => openDesignElementChat('quick')}
   />
 </div>

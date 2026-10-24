@@ -7,6 +7,18 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Added
 
+- **Every comment you write can be asked about first.** The studio selection
+  popover already offered Explain and Quick Chat on its feedback comment; that
+  pair now sits on every comment field in the app, in one shared component: an
+  element picked inside an online HTML or SVG artifact, a mark drawn on a
+  published picture or video frame, a moment noted in the video editor, an
+  element picked by the design inspector, and a passage annotated in a project
+  document. Both open the existing read-only side chat with the annotation's own
+  descriptor as the selection, so nothing is re-derived from pixels, and each
+  surface adds only the bounded framing that makes that descriptor readable: the
+  artifact source, the design folder and screen, the composition folder, or the
+  document.
+
 - **A film ships with the app to start from.** The video capability gains a
   `scaffold` operation that copies a finished film into a project folder and
   installs the composition runtime beside it, so the first frame of the work is a

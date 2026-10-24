@@ -6,6 +6,7 @@
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import { Popover } from 'bits-ui'
   import { onMount, tick, type Snippet } from 'svelte'
+  import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
@@ -551,6 +552,29 @@
     if (note && (note.comment ?? '').trim() === '') removeNote(current.id)
   }
 
+  /**
+   * Ask about the moment the open note describes, before changing its comment.
+   *
+   * A saved note offers the same read-only chat a quoted selection does, so the
+   * user can question a moment without writing a second note: the note's own
+   * descriptor is the selection, and the composition's folder is the context
+   * the answer is read from.
+   */
+  function openMomentChat(mode: 'elaborate' | 'quick'): void {
+    const current = editing
+    if (!current) return
+    const note = notes.find((entry) => entry.reference.id === current.id)?.reference
+    if (!note) return
+    openAnnotationChat({
+      projectId,
+      threadId,
+      mode,
+      selection: note.text,
+      context: videoMomentChatContext(directory)
+    })
+    closeEditor()
+  }
+
   function saveComment(id: string, comment: string): void {
     const current = editing
     writeNote(id, current?.seconds ?? shown, comment)
@@ -976,6 +1000,9 @@
     onDone={(comment) => saveComment(editing?.id ?? '', comment)}
     onRemove={() => removeNote(editing?.id ?? '')}
     onClose={closeEditor}
+    chatSubject="moment"
+    onExplain={() => openMomentChat('elaborate')}
+    onQuickChat={() => openMomentChat('quick')}
   />
 {/if}
 

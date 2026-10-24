@@ -36,10 +36,23 @@
     onDone: (referenceId: string, comment: string) => void
     onRemove: (referenceId: string) => void
     onClose: () => void
+    /** Ask about the element in a read-only chat, when the caller knows it. */
+    onExplain?: () => void
+    onQuickChat?: () => void
   }
 
-  let { hostId, comment, targetId, scope, onDraftChange, onDone, onRemove, onClose }: Props =
-    $props()
+  let {
+    hostId,
+    comment,
+    targetId,
+    scope,
+    onDraftChange,
+    onDone,
+    onRemove,
+    onClose,
+    onExplain = undefined,
+    onQuickChat = undefined
+  }: Props = $props()
 
   /** As wide as the app's other comment bubble, which the heading is sized for. */
   const WIDTH = 400
@@ -167,6 +180,9 @@
         onDone={(text) => onDone(comment.referenceId, text)}
         onRemove={() => onRemove(comment.referenceId)}
         {onClose}
+        {onExplain}
+        {onQuickChat}
+        chatSubject="design element"
         attach={attachBubble}
       />
     {/if}

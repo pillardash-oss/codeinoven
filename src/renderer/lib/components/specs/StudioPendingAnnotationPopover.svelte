@@ -2,7 +2,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
-  import StudioSelectionActions from './StudioSelectionActions.svelte'
+  import SelectionChatActions from '../shared/SelectionChatActions.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { draggablePopover } from '$lib/draggable-popover.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -81,12 +81,12 @@
       bind:value={body}
       placeholder="Leave your review note…"
       ariaLabel={editorLabel}
-      onSubmit={onSubmit}
+      {onSubmit}
     />
   {/if}
   <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
     {#if showSelectionActions && onExplain && onQuickChat}
-      <StudioSelectionActions {onExplain} {onQuickChat} />
+      <SelectionChatActions subject="selection" {onExplain} {onQuickChat} />
     {/if}
     <div class="ml-auto flex items-center gap-1.5">
       <button
