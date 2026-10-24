@@ -495,12 +495,18 @@
     contextSidebarState.focus(tab.id)
   }
 
-  /** The reader's right side holds one panel at a time, so showing the file
-   *  tree puts the chat away, and the chat, wherever it already is, comes back
-   *  when the tree is asked for again. */
-  function showFullscreenExplorer(): void {
-    if (fullscreenChatOpen) fullscreenChatEnabled = false
-    if (!fullscreenExplorerOpen) projectFilesWorkspace.toggleExplorer(projectId)
+  /** The reader's right side holds one panel at a time, so asking for the file
+   *  tree puts the chat away and reveals the tree as it was left; asking again
+   *  folds it back, exactly like the tree's own button in the sidebar reader. */
+  function toggleFullscreenExplorer(): void {
+    if (fullscreenChatOpen) {
+      fullscreenChatEnabled = false
+      // The chat held this side, so the tree keeps its own remembered state and
+      // only needs opening here if the user had folded it earlier.
+      if (!fullscreenExplorerOpen) projectFilesWorkspace.toggleExplorer(projectId)
+      return
+    }
+    projectFilesWorkspace.toggleExplorer(projectId)
   }
 
   /** The toggle exists only once there is a temporary chat to show, so the
@@ -1549,7 +1555,7 @@
         : 'Show file tree'}
       aria-pressed={fullscreenExplorerOpen && !fullscreenChatOpen}
       title={fullscreenExplorerOpen && !fullscreenChatOpen ? 'Hide file tree' : 'Show file tree'}
-      onclick={showFullscreenExplorer}
+      onclick={toggleFullscreenExplorer}
     >
       <CioFiles size={15} />
     </button>
