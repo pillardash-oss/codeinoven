@@ -1,5 +1,6 @@
 import { ovenRootThread } from '$lib/oven-root-target'
 import { toPosixPath } from '$shared/paths'
+import { PREVIEW_TYPES, previewTypeForPath } from '$shared/preview-types'
 
 const SCHEME = 'appfile'
 
@@ -54,4 +55,13 @@ export function standaloneFilePreviewUrl(
     absolutePath
   )}&name=${encodeURIComponent(name)}`
   return version === undefined ? base : `${base}&v=${version}`
+}
+
+/** A scoped streaming URL for supported local media, or null for blob-only formats. */
+export function localFilePreviewUrl(absolutePath: string, mime?: string): string | null {
+  // Stored attachments may have an opaque ID instead of their original extension.
+  const type =
+    previewTypeForPath(absolutePath) ??
+    Object.values(PREVIEW_TYPES).find((candidate) => candidate.mime === mime)
+  return type ? standaloneFilePreviewUrl(absolutePath, `preview${type.extension}`) : null
 }

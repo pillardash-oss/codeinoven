@@ -1,4 +1,5 @@
 import { fileUrlToPath } from './mime'
+import { localFilePreviewUrl } from './file-preview'
 import type { AppBridge } from '../../preload/index'
 import { SvelteSet } from 'svelte/reactivity'
 
@@ -9,8 +10,8 @@ declare global {
 }
 
 /**
- * Manages conversion of `file://` URLs to `blob:` Object URLs for reliable
- * display in the Electron renderer (file:// URLs are blocked on http:// origins).
+ * Resolves local media to scoped streaming URLs, since file:// URLs are blocked
+ * on HTTP origins. Unsupported active formats such as SVG retain blob isolation.
  *
  * Usage:
  *   const images = new FileBlobUrlManager()
@@ -19,7 +20,7 @@ declare global {
  *   onDestroy(() => images.destroy())
  *
  * Because the read is asynchronous and can fail (a transient error, a missing
- * file, or an `onerror` on the element firing before the blob resolves), every
+ * file, or an `onerror` on the element firing before the URL resolves), every
  * renderer that shows these images must also wire `onerror` to
  * {@link FileBlobUrlManager#bindImage} so the element can be repaired in place.
  */
@@ -39,7 +40,7 @@ export class FileBlobUrlManager {
       return
     this.#pending[url] = true
     try {
-      const objectUrl = await this.#toObjectUrl(url, mime)
+      const objectUrl = await this.#resolveUrl(url, mime)
       this.urls = { ...this.urls, [url]: objectUrl }
     } catch {
       // Missing or unapproved sources stay unavailable until this manager is
@@ -72,7 +73,7 @@ export class FileBlobUrlManager {
     const resolved = this.urls[url]
     if (img.src === resolved) return
     try {
-      const objectUrl = resolved ?? (await this.#toObjectUrl(url, mime))
+      const objectUrl = resolved ?? (await this.#resolveUrl(url, mime))
       this.urls = { ...this.urls, [url]: objectUrl }
       img.src = objectUrl
     } catch {
@@ -82,14 +83,14 @@ export class FileBlobUrlManager {
 
   /**
    * Same repair as {@link bindImage} but for `<video>`/`<audio>` elements
-   * mounted inside a preview modal that opened before the blob load finished.
+   * mounted before their streaming URL was resolved.
    */
   async bindMedia(url: string, mime: string, el: HTMLMediaElement): Promise<void> {
     if (!el || this.#pending[url] || this.#unavailable.has(url)) return
     const resolved = this.urls[url]
     if (el.currentSrc === resolved) return
     try {
-      const objectUrl = resolved ?? (await this.#toObjectUrl(url, mime))
+      const objectUrl = resolved ?? (await this.#resolveUrl(url, mime))
       this.urls = { ...this.urls, [url]: objectUrl }
       el.src = objectUrl
     } catch {
@@ -97,15 +98,17 @@ export class FileBlobUrlManager {
     }
   }
 
-  async #toObjectUrl(url: string, mime: string): Promise<string> {
+  async #resolveUrl(url: string, mime: string): Promise<string> {
     const path = fileUrlToPath(url)
+    const streamingUrl = localFilePreviewUrl(path, mime)
+    if (streamingUrl) return streamingUrl
     const data = await window.api.readFile(path)
     return URL.createObjectURL(new Blob([data], { type: mime }))
   }
 
   destroy(): void {
     for (const objectUrl of Object.values(this.urls)) {
-      URL.revokeObjectURL(objectUrl)
+      if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl)
     }
     this.#unavailable.clear()
   }

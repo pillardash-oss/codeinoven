@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { localFilePreviewUrl } from '$lib/file-preview'
 import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
 import type { PromptAttachment } from '$shared/types'
 
@@ -6,13 +7,13 @@ import type { PromptAttachment } from '$shared/types'
  * Attachment preview cache for the composer, and for the non-media attachments a
  * sent message carries (PDF, document, Markdown, plain text).
  *
- * Binary media are held as blob (object) URLs, Word/ODT/PPTX documents as
+ * Supported binary media use scoped streaming URLs, Word/ODT/PPTX documents use
  * converted HTML, and markdown/plain text as decoded strings. Everything is
  * keyed by the attachment's `file://` URL so one file maps to one cache entry.
  */
 export function createComposerAttachmentPreview() {
   let file = $state<PromptAttachment | null>(null)
-  /** Object URLs for image/PDF/media/document downloads, keyed by attachment file:// URL. */
+  /** Streaming or blob URLs for previews/downloads, keyed by attachment file:// URL. */
   let urls = $state<Record<string, string>>({})
   /** Decoded text content for markdown/plain-text previews, keyed by url. */
   let texts = $state<Record<string, string>>({})
@@ -20,7 +21,7 @@ export function createComposerAttachmentPreview() {
   let documents = $state<Record<string, string>>({})
   let documentLoading = $state<Record<string, boolean>>({})
 
-  /** Loads the preview payload for one attachment: blob URLs for binary media,
+  /** Loads the preview payload for one attachment: streaming URLs for supported media,
    *  converted document HTML (DOCX, DOC, ODT, PPTX), or decoded text. Missing/
    *  undecodable files silently yield no preview so the chip falls back to the
    *  file:// URL or the modal shows its unavailable state. */
@@ -42,6 +43,12 @@ export function createComposerAttachmentPreview() {
           const objectUrl = URL.createObjectURL(new Blob([bytes], { type: attachment.mime }))
           urls = { ...urls, [attachment.url]: objectUrl }
         }
+        return
+      }
+      if (urls[attachment.url]) return
+      const streamingUrl = localFilePreviewUrl(filePath, attachment.mime)
+      if (streamingUrl) {
+        urls = { ...urls, [attachment.url]: streamingUrl }
         return
       }
       const bytes = await window.api.readFile(filePath)
@@ -85,7 +92,7 @@ export function createComposerAttachmentPreview() {
   function clear(url: string): void {
     const objectUrl = urls[url]
     if (objectUrl) {
-      URL.revokeObjectURL(objectUrl)
+      if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl)
       const rest = { ...urls }
       delete rest[url]
       urls = rest
@@ -103,7 +110,7 @@ export function createComposerAttachmentPreview() {
 
   function revokeAll(): void {
     for (const objectUrl of Object.values(urls)) {
-      URL.revokeObjectURL(objectUrl)
+      if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl)
     }
   }
 
