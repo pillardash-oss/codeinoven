@@ -2,7 +2,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
-  import SelectionChatActions from '../shared/SelectionChatActions.svelte'
+  import AnnotationActionBar from '../shared/AnnotationActionBar.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { draggablePopover } from '$lib/draggable-popover.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -54,7 +54,7 @@
 </script>
 
 <div
-  class="fixed z-50 w-96 border border-border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+  class="fixed z-50 w-[26rem] border border-border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
   role="dialog"
   aria-label={dialogLabel}
   {@attach draggablePopover({
@@ -84,13 +84,14 @@
       {onSubmit}
     />
   {/if}
-  <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
-    {#if showSelectionActions && onExplain && onQuickChat}
-      <SelectionChatActions subject="selection" {onExplain} {onQuickChat} />
-    {/if}
-    <div class="ml-auto flex items-center gap-1.5">
+  <AnnotationActionBar
+    subject="selection"
+    onExplain={showSelectionActions ? onExplain : undefined}
+    onQuickChat={showSelectionActions ? onQuickChat : undefined}
+  >
+    {#snippet trailing()}
       <button
-        class="px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
+        class="px-2 py-1.5 text-xs text-muted hover:bg-overlay"
         title="Cancel annotation"
         onclick={onCancel}>Cancel</button
       >
@@ -108,6 +109,6 @@
           onclick={onSubmit}>Comment</button
         >
       {/if}
-    </div>
-  </div>
+    {/snippet}
+  </AnnotationActionBar>
 </div>

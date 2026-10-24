@@ -33,7 +33,11 @@ All notable changes to CodeInOven are documented here. This project follows
   artifact source, the design folder and screen, the composition folder, or the
   document. Comments that already exist on a spec, brainstorm, audit report or
   Assignment offer the same pair from the annotation popover, with the passage
-  the note hangs on and the note itself as one descriptor.
+  the note hangs on and the note itself as one descriptor. Every annotation
+  footer is one component and one row now, so Explain, Quick Chat, Remove or
+  Resolve and the commit action never split across two lines: the pair keeps its
+  words where the box has room for them and becomes two titled icon buttons
+  where it does not.
 
 - **A film ships with the app to start from.** The video capability gains a
   `scaffold` operation that copies a finished film into a project folder and

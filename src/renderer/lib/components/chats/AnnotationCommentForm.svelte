@@ -3,7 +3,7 @@
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
-  import SelectionChatActions from '../shared/SelectionChatActions.svelte'
+  import AnnotationActionBar from '../shared/AnnotationActionBar.svelte'
   import { plainTextEditorTarget } from '../../speech/editor-target'
   import { speechController } from '../../speech/speech-controller.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -130,31 +130,28 @@
   {placeholder}
   oninput={updateDraft}
   onkeydown={onKeydown}></textarea>
-<div class="mt-2 flex items-center justify-between gap-1.5">
-  <div class="flex min-w-0 items-center gap-1">
+<AnnotationActionBar subject={chatSubject} {onExplain} {onQuickChat}>
+  {#snippet leading()}
     <button
       type="button"
-      class="flex h-8 shrink-0 items-center gap-1.5 px-2.5 text-xs text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
+      class="flex h-8 shrink-0 items-center gap-1 px-2 text-[0.6875rem] text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
       title={removeTitle}
       onclick={onRemove}
     >
       <CioTrash size={12} />
       Remove
     </button>
-    {#if onExplain && onQuickChat}
-      <SelectionChatActions subject={chatSubject} {onExplain} {onQuickChat} />
-    {/if}
-  </div>
-  <div class="flex shrink-0 items-center gap-1.5">
+  {/snippet}
+  {#snippet trailing()}
     <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} triggerPriority={6} />
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="flex h-8 items-center gap-1 bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
       title={doneTitle}
       onclick={submit}
     >
       <CioCheck size={12} />
       Done
     </button>
-  </div>
-</div>
+  {/snippet}
+</AnnotationActionBar>
