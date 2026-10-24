@@ -1,12 +1,13 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { readFile, readdir, stat, realpath, mkdir, writeFile } from 'node:fs/promises'
-import { join, dirname, relative, resolve, isAbsolute } from 'node:path'
+import { basename, join, dirname, relative, resolve, isAbsolute } from 'node:path'
 import JSZip from 'jszip'
 import { mimeTypeForPath } from '../../lib/mime-types'
 import type { DesignExportFormat } from '../../lib/design/design-export'
 import { screenCanvasRuntimeScript, screenCanvasRuntimeStyle } from './screen-canvas-runtime'
 import { designTweaksRuntimeScript } from './design-tweaks-runtime'
 import { isScreenCanvasEntry } from '../../lib/design/screen-canvas'
+import { buildScreenCanvasDocument, readScreenCanvas } from './screen-canvas-page'
 
 export interface ExportWorkerRequest {
   root: string
@@ -172,6 +173,17 @@ export async function exportDesignFiles(request: ExportWorkerRequest): Promise<s
       }
     }
     await walk(root)
+    // The canvas belongs to the app rather than to the folder, so the archive
+    // carries the one the app would serve: generated from the screens that went
+    // in, it shows the exported design whole instead of leaving the recipient of
+    // a ZIP with a set of pages and no way to see them together.
+    const canvas = await readScreenCanvas({ folderAbsolute: root }).catch(() => null)
+    if (canvas !== null && canvas.plan.frames.length + canvas.plan.sketches.length > 0) {
+      archive.file(
+        'canvas.html',
+        buildScreenCanvasDocument({ plan: canvas.plan, title: `Screen Canvas · ${basename(root)}` })
+      )
+    }
     archive.file('__cio/canvas.js', screenCanvasRuntimeScript())
     archive.file('__cio/canvas.css', screenCanvasRuntimeStyle())
     archive.file('__cio/tweaks.js', designTweaksRuntimeScript())

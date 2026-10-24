@@ -23,6 +23,9 @@ export interface ResponseReferenceAnchor extends PromptReference {
   /** Design references: the CSS path the page re-resolves the element by after
    *  a layout shift, so its pin stays on the element. */
   selector?: string
+  /** Design references: the framed screen the selector belongs to, when the
+   *  element was picked inside a canvas frame rather than in the page itself. */
+  frame?: string
   /** Design references: the browser tab the element was picked from, so the
    *  panel knows which tab a reference's pin belongs to. */
   tabId?: string

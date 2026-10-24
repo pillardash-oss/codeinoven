@@ -14,7 +14,8 @@ import type {
   PromptAttachment,
   ProviderCatalog,
   ProviderModel,
-  ThreadSettings
+  ThreadSettings,
+  UtilityKind
 } from '../../lib/types'
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { classifyProviderIssue } from '../../lib/provider-issue'
@@ -100,6 +101,12 @@ import {
   utilityKey
 } from './codex/codex-tools'
 import {
+  codexComputerUseAgeMs,
+  peekCodexComputerUse,
+  refreshCodexComputerUse,
+  type CodexComputerUseReadiness
+} from './codex/codex-computer-use'
+import {
   codexRetryIssue,
   codexUsageLimitIssue,
   isCodexRetryRecoveryActivity
@@ -159,8 +166,14 @@ export class CodexDriver extends PersistentCliDriver {
     contextUsage: true,
     compaction: true,
     subagents: true,
-    nativeUtilities: ['web_search', 'web_fetch', 'computer_use']
+    // The app-server does not guarantee desktop tools for every model/session.
+    // Keep the app-managed computer-use fallback available.
+    nativeUtilities: ['web_search', 'web_fetch']
   }
+  /** How old a computer-use answer may be before it is re-measured. The refresh
+   *  runs in the background, so a turn never waits for it. */
+  private static readonly COMPUTER_USE_STALE_MS = 60_000
+  private computerUseLogged?: boolean
   private activeTurns = new Map<string, CodexAppServerTurn>()
   private utilityEndpoints = new Map<string, UtilityGatewayEndpoint>()
   private modelsWithoutReasoningSummaries = new Set<string>()
@@ -202,6 +215,10 @@ export class CodexDriver extends PersistentCliDriver {
       const detail = error instanceof Error ? error.message : 'unknown error'
       throw new Error(`Codex CLI is unavailable: ${detail}`, { cause: error })
     }
+    // Measure the device once, off the turn path: the answer decides whether the
+    // app-owned CUA driver has to stand in for Codex's own computer use, and
+    // starting a turn is the wrong moment to launch Codex a second time.
+    void this.refreshComputerUse(this.codexHomeKey()).catch(() => undefined)
   }
 
   constructor(
@@ -383,6 +400,69 @@ export class CodexDriver extends PersistentCliDriver {
   ): Promise<void> {
     if (endpoint) this.utilityEndpoints.set(sessionId, endpoint)
     else this.utilityEndpoints.delete(sessionId)
+  }
+
+  /**
+   * The native utilities this machine really supplies.
+   *
+   * Codex's computer use is an MCP server its desktop app installs into the Codex
+   * home, and it is absent from an app-managed home and often disabled in the
+   * device one. Claiming it unconditionally made the utility registry suppress the
+   * app-owned CUA driver for every Codex turn, so a thread had neither: the claim
+   * now follows the device.
+   */
+  async resolveNativeUtilities(projectPath: string): Promise<UtilityKind[]> {
+    void projectPath
+    const declared = this.capabilities.nativeUtilities ?? []
+    if (!declared.includes('computer_use')) return declared
+    const readiness = await this.codexComputerUse()
+    return readiness.available ? declared : declared.filter((kind) => kind !== 'computer_use')
+  }
+
+  /**
+   * Codex's own computer-use availability, from the process-wide cache.
+   *
+   * The answer is a device fact, so it is shared by every driver instance and
+   * every turn. A turn that already has an answer gets it immediately and the
+   * device is re-measured in the background; only the first turn of a process
+   * pays for a Codex launch, and that launch is not on the path to the first
+   * token of any later turn.
+   */
+  private async codexComputerUse(): Promise<CodexComputerUseReadiness> {
+    const key = this.codexHomeKey()
+    const cached = peekCodexComputerUse(key)
+    if (cached) {
+      const age = codexComputerUseAgeMs(key) ?? 0
+      if (age > CodexDriver.COMPUTER_USE_STALE_MS) void this.refreshComputerUse(key)
+      this.noteComputerUse(cached)
+      return cached
+    }
+    return this.refreshComputerUse(key)
+  }
+
+  private refreshComputerUse(key: string): Promise<CodexComputerUseReadiness> {
+    return refreshCodexComputerUse(key, {
+      env: { ...process.env, ...this.accountEnvironment }
+    }).then((value) => {
+      this.noteComputerUse(value)
+      return value
+    })
+  }
+
+  /** Report the device answer once per driver, so a support report can read it. */
+  private noteComputerUse(readiness: CodexComputerUseReadiness): void {
+    if (this.computerUseLogged !== readiness.available) {
+      this.computerUseLogged = readiness.available
+      Logger.info(
+        `Codex computer use ${readiness.available ? 'enabled' : 'unavailable'}: ${readiness.reason}`
+      )
+    }
+  }
+
+  /** `-c` pairs that turn Codex's own computer use on for one launch. */
+  private async computerUseConfigArgs(): Promise<string[]> {
+    const readiness = await this.codexComputerUse()
+    return readiness.configOverrides.flatMap((override) => ['-c', override])
   }
 
   /** Start a Codex turn through app-server so the same native turn can be steered. */
@@ -1223,9 +1303,20 @@ export class CodexDriver extends PersistentCliDriver {
 
   private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
+    // Decided before the host starts: an app-server is shared for the life of a
+    // project, so computer use has to be on the one launch that serves its turns.
+    const computerUseArgs = await this.computerUseConfigArgs()
     const prepared = await prepareHarnessInvocation(
       'codex',
-      [...providerArgs, 'app-server', '-c', CODEX_DEFAULT_QUESTION_CONFIG, '--listen', 'stdio://'],
+      [
+        ...providerArgs,
+        'app-server',
+        '-c',
+        CODEX_DEFAULT_QUESTION_CONFIG,
+        ...computerUseArgs,
+        '--listen',
+        'stdio://'
+      ],
       {
         cwd: projectPath,
         env: {
@@ -2555,11 +2646,10 @@ export class CodexDriver extends PersistentCliDriver {
 
   /** Fast inference enables Codex's `service_tier = "fast"` mode via config override. */
   protected async buildTurnCommand(
-    _projectPath: string,
+    projectPath: string,
     session: PersistentCliSession,
     options: Parameters<PersistentCliDriver['sendPrompt']>[1]
   ): Promise<CliTurnCommand> {
-    void _projectPath
     const nativeSessionId = session.nativeSessionId
     const fullAccess =
       options.settings.permissionLevel === 'full_access' && options.readOnly !== true
@@ -2596,9 +2686,12 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)
+    // A one-shot turn never shares the resident host, so it carries the same
+    // computer-use config the host launch decides.
+    args.push(...(await this.computerUseConfigArgs()))
     args.push('-c', 'tool_output_token_limit=3000')
     if (options.minimalContext) {
-      const config = await codexAuxiliaryConfig(_projectPath)
+      const config = await codexAuxiliaryConfig(projectPath)
       for (const [key, value] of Object.entries(config))
         args.push('-c', `${key}=${JSON.stringify(value)}`)
     }

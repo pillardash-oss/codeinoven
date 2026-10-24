@@ -21,6 +21,7 @@
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import SpecStudioDocument from './SpecStudioDocument.svelte'
   import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
+  import { studioAnnotationChatSelection } from '$lib/annotation-chat'
   import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type { PendingOverlayAnchor } from './studio-annotation-overlay.svelte'
@@ -666,6 +667,23 @@
     closePendingAnnotation()
   }
 
+  /**
+   * Ask about an annotation that is already attached to the document.
+   *
+   * The pending popover asks about a passage before it becomes an annotation; this
+   * asks about one that exists, so the descriptor carries both the anchored passage
+   * and the note, and the same document context rides along.
+   */
+  function openAnnotationDetailChat(mode: 'explain' | 'quick'): void {
+    const annotation = editingAnnotation
+    if (!annotation) return
+    const documentContext = exportEngineeringSpecMarkdown(draft)
+    const selection = studioAnnotationChatSelection(annotation)
+    if (mode === 'explain') onExplainSelection?.(selection, documentContext)
+    else onQuickChatSelection?.(selection, documentContext)
+    closeAnnotation()
+  }
+
   async function saveAnnotationEdit(): Promise<void> {
     const annotation = editingAnnotation
     const body = editingAnnotationBody.trim()
@@ -1098,6 +1116,8 @@
     onSave={saveAnnotationEdit}
     onCancelEdit={() => overlay.cancelEdit()}
     onEditClick={() => overlay.startEdit()}
+    onExplain={onExplainSelection ? () => openAnnotationDetailChat('explain') : undefined}
+    onQuickChat={onQuickChatSelection ? () => openAnnotationDetailChat('quick') : undefined}
     onClose={closeAnnotation}
   >
     {#snippet bodyView(annotation: { body: string })}

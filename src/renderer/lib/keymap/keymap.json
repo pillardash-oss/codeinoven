@@ -99,6 +99,13 @@
           "scenario": "Settings view open."
         },
         {
+          "id": "settings-protected-file-add",
+          "keys": ["mod", "enter"],
+          "label": "Add protected file pattern",
+          "description": "Adds the entered pattern to bundled Pi's sensitive-file block list.",
+          "scenario": "Focus is in General settings' protected-file pattern field."
+        },
+        {
           "id": "nav-find",
           "keys": ["mod", "f"],
           "label": "Find in focused surface",
@@ -959,6 +966,75 @@
           "label": "Quit CodeInOven",
           "description": "Quits the app for real, bypassing background mode's park to the menu bar. A turn still running settles as a deliberate close on the next launch.",
           "scenario": "Anywhere in the app."
+        }
+      ]
+    },
+    {
+      "id": "ide",
+      "label": "IDE Mode",
+      "shortcuts": [
+        {
+          "id": "ide-definition",
+          "keys": [],
+          "label": "Go to definition",
+          "description": "Go to definition in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-references",
+          "keys": [],
+          "label": "Find references",
+          "description": "Find references in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-documentation",
+          "keys": ["alt", "enter"],
+          "label": "Show documentation",
+          "description": "Show documentation in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-grep",
+          "keys": ["mod", "shift", "g"],
+          "label": "Search project text",
+          "description": "Search project text in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-files",
+          "keys": [],
+          "label": "Find project file",
+          "description": "Find project file in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-info-close",
+          "keys": ["escape"],
+          "label": "Close code information",
+          "description": "Dismisses floating documentation and code locations.",
+          "scenario": "IDE code information is open."
+        },
+        {
+          "id": "ide-result-next",
+          "keys": ["arrowdown"],
+          "label": "Next IDE result",
+          "description": "Select the next code location or project search result.",
+          "scenario": "IDE Mode results open."
+        },
+        {
+          "id": "ide-result-previous",
+          "keys": ["arrowup"],
+          "label": "Previous IDE result",
+          "description": "Select the previous code location or project search result.",
+          "scenario": "IDE Mode results open."
+        },
+        {
+          "id": "ide-result-open",
+          "keys": ["enter"],
+          "label": "Open IDE result",
+          "description": "Open the selected code location or project search result.",
+          "scenario": "IDE Mode results open."
         }
       ]
     }

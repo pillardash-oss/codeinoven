@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import {
   BUILD_ENVIRONMENT_ARG_PREFIX,
   DEFAULT_BUILD_ENVIRONMENT,
@@ -74,6 +74,10 @@ function assertEventChannel(channel: string): asserts channel is EventChannel {
 }
 
 export interface AppBridge {
+  spellcheck: {
+    suggestions: (word: string) => string[]
+    isMisspelled: (word: string) => boolean
+  }
   invoke: <Channel extends InvokeChannel>(
     channel: Channel,
     ...args: InvokeArgs<Channel>
@@ -124,6 +128,17 @@ function defaultTrafficLight(platform: NodeJS.Platform): TrafficLightInfo {
 }
 
 const bridge: AppBridge = {
+  spellcheck: {
+    isMisspelled: (word: string): boolean =>
+      typeof word === 'string' &&
+      word.length > 0 &&
+      word.length <= 128 &&
+      webFrame.isWordMisspelled(word),
+    suggestions: (word: string): string[] => {
+      if (typeof word !== 'string' || !word || word.length > 128) return []
+      return webFrame.getWordSuggestions(word).slice(0, 5)
+    }
+  },
   invoke: <Channel extends InvokeChannel>(
     channel: Channel,
     ...args: InvokeArgs<Channel>

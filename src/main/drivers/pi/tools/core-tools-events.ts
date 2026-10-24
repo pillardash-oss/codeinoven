@@ -313,7 +313,10 @@ export function piCoreToolsEventsSource(): string {
     // opens a permission card for it. Without this, a read-only temporary chat
     // (whose allowlist already names read/find/grep/ls) falls through to the
     // outside-the-project gate and blocks on a card just to load a skill.
-    if (isIntrinsicSkillRead(event.toolName, input, ctx.cwd)) return undefined
+    if (
+      hit?.permission !== 'bundled-pi-sensitive-files' &&
+      isIntrinsicSkillRead(event.toolName, input, ctx.cwd)
+    ) return undefined
     // Chat exposes local tools for its own workspace. Route every local call
     // through the app policy even when listed, so external paths stay gated.
     // Other restricted sessions retain their ordinary tool allowlist.
@@ -353,6 +356,7 @@ export function piCoreToolsEventsSource(): string {
       patterns: hit.patterns,
       tool: event.toolName,
       ...(hit.command === undefined ? {} : { command: hit.command }),
+      ...(hit.review === undefined ? {} : { review: hit.review }),
       ...(hit.surface === undefined ? {} : { surface: hit.surface })
     }
     const approved = await ctx.ui.confirm(

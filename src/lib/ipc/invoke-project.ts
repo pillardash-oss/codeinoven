@@ -33,6 +33,15 @@ import type { Contract } from './contract-helpers'
 import type { CustomIconImage } from '../custom-icon'
 
 export const invokeProjectContract = {
+  'projectFiles:ide': {} as Contract<
+    [
+      projectId: string,
+      request: import('../editor-ide').IdeRequest,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
+    import('../editor-ide').IdeResponse
+  >,
   'archive:list': {} as Contract<
     [tab: import('../archives').ArchiveTab, offset?: number],
     import('../archives').ArchiveEntry[]

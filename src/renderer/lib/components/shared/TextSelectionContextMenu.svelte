@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ideContextActions, type IdeMenuAction } from '$lib/editor/ide-context'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
   import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
@@ -25,10 +26,12 @@
   import { selectWordAt } from '$lib/terminal/word-select'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { claimSelectionAnnotationMenu } from '$lib/selection-menu'
+  import { editorSpellingAt, type EditorSpelling } from '$lib/editor-spelling'
 
   type MenuKind = 'text' | 'editable' | 'terminal'
 
   interface TextMenuTarget {
+    ideActions?: IdeMenuAction[]
     kind: MenuKind
     x: number
     y: number
@@ -41,6 +44,7 @@
   }
 
   let target = $state<TextMenuTarget | null>(null)
+  let spelling = $state.raw<EditorSpelling | null>(null)
   let menuEl: HTMLDivElement | null = null
 
   function captureMenu(element: HTMLDivElement): () => void {
@@ -233,11 +237,16 @@
     if (!resolved) return
     event.preventDefault()
     event.stopPropagation()
-    target = resolved
+    target = { ...resolved, ideActions: ideContextActions(event) }
+    spelling =
+      resolved.kind === 'editable' && resolved.editable
+        ? editorSpellingAt(event, resolved.editable)
+        : null
   }
 
   function close(): void {
     target = null
+    spelling = null
   }
 
   function dismiss(event: MouseEvent): void {
@@ -280,6 +289,21 @@
       toast.error(`Failed to copy ${label}`)
     }
     close()
+  }
+
+  async function addSpellingWord(): Promise<void> {
+    const entry = spelling
+    close()
+    if (!entry) return
+    try {
+      if (!(await invoke('spellcheck:addWord', entry.word))) {
+        toast.error('Could not add the word to the dictionary')
+        return
+      }
+      entry.ignore?.()
+    } catch {
+      toast.error('Could not add the word to the dictionary')
+    }
   }
 
   async function cut(t: TextMenuTarget): Promise<void> {
@@ -459,7 +483,48 @@
     role="menu"
     data-layer-above-modal
   >
+    {#each target.ideActions ?? [] as action (action.label)}
+      <button
+        type="button"
+        role="menuitem"
+        class={itemClass}
+        onclick={() => {
+          close()
+          action.run()
+        }}>{action.label}</button
+      >
+    {/each}
     {#if target.kind === 'editable'}
+      {#if spelling}
+        {#each spelling.suggestions as suggestion (suggestion)}
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            onclick={() => {
+              spelling?.replace(suggestion)
+              close()
+            }}
+          >
+            {suggestion}
+          </button>
+        {/each}
+        {#if spelling.ignore}
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            onclick={() => {
+              spelling?.ignore?.()
+              close()
+            }}>Ignore</button
+          >
+        {/if}
+        <button type="button" class={itemClass} role="menuitem" onclick={addSpellingWord}>
+          Add to Dictionary
+        </button>
+        <div role="separator" class="my-1 h-px bg-border"></div>
+      {/if}
       <button
         type="button"
         class={itemClass}

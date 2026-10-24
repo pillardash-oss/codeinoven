@@ -349,6 +349,31 @@
     if (fullscreen) onOpenTemporaryChat?.()
   }
 
+  /**
+   * Ask about a passage that is already annotated.
+   *
+   * A saved annotation offers the same read-only chat its selection menu did,
+   * so the user can question a passage they already attached without writing a
+   * second note. The passage is the selection and the document is the context,
+   * exactly as the selection menu opens it.
+   */
+  function openSavedPassageChat(mode: 'elaborate' | 'quick'): void {
+    const reference = editingReference
+    if (!reference) return
+    contextSidebarState.openTemporaryChat(
+      projectId,
+      threadId,
+      mode,
+      reference.text,
+      documentAnnotationChatContext(path, content),
+      threadSettings.lastUsed,
+      true,
+      mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
+    )
+    editingId = null
+    if (fullscreen) onOpenTemporaryChat?.()
+  }
+
   /** Spin the selected passage into a thread of its own, seeded as its draft. */
   function openPassageThread(): void {
     const candidate = pendingSelection
@@ -486,5 +511,8 @@
     onDone={(comment) => saveComment(editingReference.id, comment)}
     onRemove={() => removeAnnotation(editingReference.id)}
     onClose={() => (editingId = null)}
+    chatSubject="passage"
+    onExplain={() => openSavedPassageChat('elaborate')}
+    onQuickChat={() => openSavedPassageChat('quick')}
   />
 {/if}

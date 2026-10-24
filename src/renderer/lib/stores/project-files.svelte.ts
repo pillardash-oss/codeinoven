@@ -344,6 +344,7 @@ class ProjectFilesWorkspace {
     state.activeTabId = fileTab.id
     if (focusLine !== undefined && fileTab.origin === 'working') {
       fileTab.view = 'source'
+      fileTab.focusCharacter = undefined
       fileTab.focusLine = Math.max(1, Math.floor(focusLine))
       fileTab.focusLineRequest += 1
     }
@@ -503,12 +504,27 @@ class ProjectFilesWorkspace {
     if (state.tabs.some((tab) => tab.id === tabId)) state.activeTabId = tabId
   }
 
-  focusLine(projectId: string, tabId: string, line: number): void {
+  focusLine(projectId: string, tabId: string, line: number, character?: number): void {
     const tab = this.ensureState(projectId).tabs.find((candidate) => candidate.id === tabId)
     if (!tab) return
     tab.view = 'source'
+    tab.focusCharacter = character
     tab.focusLine = Math.max(1, Math.floor(line))
     tab.focusLineRequest += 1
+  }
+
+  async openLocation(
+    projectId: string,
+    path: string,
+    line: number,
+    character: number
+  ): Promise<void> {
+    await this.openFile(projectId, path, 'source', line)
+    const state = this.ensureState(projectId)
+    const tab = state.tabs.find((tab) => tab.id === state.activeTabId)
+    if (tab?.origin === 'working' && tab.path === path) {
+      this.focusLine(projectId, tab.id, line, Math.max(0, Math.floor(character)))
+    }
   }
 
   async swapFile(projectId: string, currentPath: string, nextPath: string): Promise<void> {
@@ -529,6 +545,7 @@ class ProjectFilesWorkspace {
 
     tab.id = nextTabId
     tab.path = nextPath
+    tab.focusCharacter = undefined
     tab.focusLine = null
     tab.focusLineRequest += 1
     tab.error = null
@@ -568,6 +585,7 @@ class ProjectFilesWorkspace {
 
     tab.id = nextTabId
     tab.path = nextPath
+    tab.focusCharacter = undefined
     tab.focusLine = null
     tab.focusLineRequest += 1
     tab.error = null
@@ -855,6 +873,7 @@ class ProjectFilesWorkspace {
     tab.id = nextTabId
     tab.path = nextPath
     tab.preview = preview
+    tab.focusCharacter = undefined
     tab.focusLine = null
     tab.focusLineRequest += 1
     tab.error = null

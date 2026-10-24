@@ -137,14 +137,13 @@ export const invokeDesignContract = {
     DesignScreenShot[]
   >,
   /**
-   * Whether one design folder has a Screen Canvas, what it frames, and which of
-   * its screens are missing from it or newer than it.
+   * What one design folder's Screen Canvas is made of, as the board reads it.
    *
-   * The board asks before it offers a canvas: a design without one gets "Create
-   * Screen Canvas", and one whose canvas is missing a screen or older than one
-   * gets "Update Screen Canvas", with the reason it does. Answered from the
-   * folder's own file, so it stays true across a restart and an edit outside the
-   * app.
+   * The canvas belongs to the app and is generated from the folder on every
+   * request, so this is the folder's screens in canvas order, the states the
+   * design declares but has not built, and anything its metadata names that no
+   * longer exists. Nothing here can fall behind the design, because the folder is
+   * the only source.
    */
   'design:canvas': {} as Contract<
     [projectId: string, threadId: string, directory: string],

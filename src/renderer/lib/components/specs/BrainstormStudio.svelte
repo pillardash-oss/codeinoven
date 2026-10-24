@@ -18,6 +18,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
+  import { studioAnnotationChatSelection } from '$lib/annotation-chat'
   import {
     StudioAnnotationOverlay,
     clampPendingPosition,
@@ -454,6 +455,23 @@
     if (mode === 'explain') onExplainSelection?.(selection.quote, documentContext)
     else onQuickChatSelection?.(selection.quote, documentContext)
     closePendingAnnotation()
+  }
+
+  /**
+   * Ask about an annotation that is already attached to the document.
+   *
+   * The pending popover asks about a passage before it becomes an annotation; this
+   * asks about one that exists, so the descriptor carries both the anchored passage
+   * and the note, and the same document context rides along.
+   */
+  function openAnnotationDetailChat(mode: 'explain' | 'quick'): void {
+    const annotation = editingAnnotation
+    if (!annotation) return
+    const selection = studioAnnotationChatSelection(annotation)
+    const documentContext = exportMarkdown()
+    if (mode === 'explain') onExplainSelection?.(selection, documentContext)
+    else onQuickChatSelection?.(selection, documentContext)
+    closeAnnotation()
   }
 
   function sectionElementFor(annotation: BrainstormAnnotation): HTMLElement | null {
@@ -982,6 +1000,8 @@
     onSave={saveAnnotationEdit}
     onCancelEdit={() => overlay.cancelEdit()}
     onEditClick={() => overlay.startEdit()}
+    onExplain={onExplainSelection ? () => openAnnotationDetailChat('explain') : undefined}
+    onQuickChat={onQuickChatSelection ? () => openAnnotationDetailChat('quick') : undefined}
     onClose={closeAnnotation}
   />
 {/if}

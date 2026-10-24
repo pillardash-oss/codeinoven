@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { AppPanelPortal } from '$lib/app-panel-portal'
   import CioCode from '@pdslng/cio-icon/CioCode.svelte'
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
@@ -18,6 +19,10 @@
   }
 
   interface Props {
+    ideStatusPortal?: AppPanelPortal
+    ideModeEnabled: boolean
+    ideModeDisabled: boolean
+    onIdeModeChange: (enabled: boolean) => void
     activeTab: ProjectFileTab
     checkpointDiff: ProjectFileTab['checkpointDiff']
     diffStats: DiffStats | null
@@ -77,6 +82,10 @@
   }
 
   let {
+    ideStatusPortal,
+    ideModeEnabled,
+    ideModeDisabled,
+    onIdeModeChange,
     activeTab,
     checkpointDiff,
     diffStats,
@@ -218,7 +227,19 @@
     <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
   {/if}
   <span class="flex-1"></span>
+  {#if ideStatusPortal}
+    <div
+      class="mx-1 min-w-0 shrink-0"
+      {@attach (node) => {
+        ideStatusPortal.registerSlot(node)
+        return () => ideStatusPortal.unregisterSlot(node)
+      }}
+    ></div>
+  {/if}
   <ProjectFileViewerMenu
+    {ideModeEnabled}
+    {ideModeDisabled}
+    {onIdeModeChange}
     diffView={activeTab.view === 'diff'}
     lineNumbers={showLineNumbers}
     wrap={wrapLines}

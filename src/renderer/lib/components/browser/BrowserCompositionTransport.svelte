@@ -11,6 +11,7 @@
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
+  import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
   import { VideoFrameSeeker } from '$lib/video-frame-seeker'
   import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
@@ -380,6 +381,34 @@
     if (note && (note.comment ?? '').trim() === '') removeNote(current.id)
   }
 
+  /**
+   * Ask about the moment whose comment is open, before writing the comment.
+   *
+   * The one comment bubble carries the read-only chat pair every annotation
+   * offers, so the user can question a moment before committing to a note. The
+   * note's own descriptor is the selection, and the composition folder it was
+   * noted in is the context the answer is read from; the bubble then closes the
+   * way its Cancel does.
+   */
+  function openMomentChat(mode: 'elaborate' | 'quick'): void {
+    const current = editing
+    const project = projectId
+    const thread = threadId
+    if (!current || !project || !thread) return
+    const note = responseReferencesState
+      .forThread(project, thread)
+      .find((entry) => entry.id === current.id)
+    if (!note) return
+    openAnnotationChat({
+      projectId: project,
+      threadId: thread,
+      mode,
+      selection: note.text,
+      context: videoMomentChatContext(note.directory ?? composition.directory)
+    })
+    closeEditor()
+  }
+
   function saveComment(id: string, comment: string): void {
     if (!projectId || !threadId) return
     writeNote(projectId, threadId, id, editing?.seconds ?? shown, comment, studio)
@@ -586,6 +615,8 @@
     onDone={(id, comment) => saveComment(id, comment)}
     onRemove={(id) => removeNote(id)}
     onClose={closeEditor}
+    onExplain={() => openMomentChat('elaborate')}
+    onQuickChat={() => openMomentChat('quick')}
   />
 {/if}
 {#if captureError}

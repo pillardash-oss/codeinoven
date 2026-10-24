@@ -30,6 +30,7 @@
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
   import { referenceLabelNumber } from '$lib/reference-labels'
+  import { mediaMarkChatContext, openAnnotationChat } from '$lib/annotation-chat'
   import { videoTimecode } from '$shared/video/timeline'
 
   /**
@@ -254,6 +255,29 @@
 
   function draftComment(id: string, comment: string): void {
     responseReferencesState.updateCommentDraft(projectId, threadId, id, comment)
+  }
+
+  /**
+   * Ask about the open mark from its own comment bubble.
+   *
+   * The side chat asks about the same descriptor the composer chip carries: which
+   * part of the picture the mark was drawn on, and for a frame the second it
+   * belongs to. The mark is captured before the editor closes, because closing
+   * drops the derived mark the request is built from.
+   */
+  function openChatAboutEditingMark(mode: 'elaborate' | 'quick'): void {
+    const mark = editingMark
+    if (!mark) return
+    openAnnotationChat({
+      projectId,
+      threadId,
+      mode,
+      selection: mark.text,
+      context: mediaMarkChatContext(
+        mark.markSeconds !== undefined ? 'video frame' : 'still picture'
+      )
+    })
+    closeEditor()
   }
 
   function removeMark(id: string): void {
@@ -517,5 +541,8 @@
     onDone={(comment) => saveComment(editingMark.id, comment)}
     onRemove={() => removeMark(editingMark.id)}
     onClose={closeEditor}
+    chatSubject="mark"
+    onExplain={() => openChatAboutEditingMark('elaborate')}
+    onQuickChat={() => openChatAboutEditingMark('quick')}
   />
 {/if}

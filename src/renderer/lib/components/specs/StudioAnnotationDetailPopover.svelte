@@ -4,6 +4,7 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import type { Snippet } from 'svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import AnnotationActionBar from '../shared/AnnotationActionBar.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
@@ -31,6 +32,10 @@
     onCancelEdit?: () => void
     /** Enters edit mode; renders an Edit button when editable and not editing. */
     onEditClick?: () => void
+    /** Asks about this annotation in a read-only side chat, without the comment field. */
+    onExplain?: () => void
+    /** Starts a plain read-only side chat about this annotation. */
+    onQuickChat?: () => void
     onClose: () => void
     /** Optional custom read-only body renderer (e.g. markdown view); receives the annotation. */
     bodyView?: Snippet<[Props['annotation']]>
@@ -50,6 +55,8 @@
     onSave,
     onCancelEdit,
     onEditClick,
+    onExplain,
+    onQuickChat,
     onClose,
     bodyView
   }: Props = $props()
@@ -62,7 +69,7 @@
 </script>
 
 <div
-  class="fixed z-50 w-80 border border-border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
+  class="fixed z-50 w-[22rem] border border-border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
   role="dialog"
   aria-label={dialogLabel}
   {@attach draggablePopover({
@@ -110,28 +117,27 @@
   <p class="mt-1 text-[0.625rem] text-dimmed">
     {annotation.author} · {formatDateTimeCompact(annotation.createdAt)}
   </p>
-  <div class="mt-3 flex items-center justify-between">
-    {#if canEdit && onResolve}
-      <button
-        class="flex items-center gap-1 px-2.5 py-1.5 text-xs text-success hover:bg-success/10"
-        title="Resolve annotation"
-        onclick={onResolve}
-      >
-        <CioCheck size={12} />
-        Resolve
-      </button>
-    {:else}
-      <span></span>
-    {/if}
-    <div class="flex gap-1.5">
+  <AnnotationActionBar
+    subject="annotation"
+    {onExplain}
+    {onQuickChat}
+    onCancel={editorMode ? onCancelEdit : undefined}
+    cancelTitle="Cancel editing"
+  >
+    {#snippet leading()}
+      {#if canEdit && onResolve}
+        <button
+          class="flex shrink-0 items-center gap-1 px-2 py-1.5 text-xs text-success hover:bg-success/10"
+          title="Resolve annotation"
+          onclick={onResolve}
+        >
+          <CioCheck size={12} />
+          Resolve
+        </button>
+      {/if}
+    {/snippet}
+    {#snippet trailing()}
       {#if editorMode}
-        {#if onCancelEdit}
-          <button
-            class="px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-            title="Cancel editing"
-            onclick={onCancelEdit}>Cancel</button
-          >
-        {/if}
         <VoiceInputButton targetId={speechTargetId} getTarget={speechTarget} {scope} />
         {#if onSave}
           <button
@@ -148,6 +154,6 @@
           onclick={onEditClick}><CioPencil size={12} /> Edit</button
         >
       {/if}
-    </div>
-  </div>
+    {/snippet}
+  </AnnotationActionBar>
 </div>

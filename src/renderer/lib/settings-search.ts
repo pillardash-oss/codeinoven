@@ -2,6 +2,7 @@ import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
 import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
 import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
+import CioCode from '@pdslng/cio-icon/CioCode.svelte'
 import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
 import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
 import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
@@ -52,6 +53,16 @@ export interface SettingsSearchEntry {
 }
 
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
+  {
+    id: 'general-bundled-pi-files',
+    section: 'general',
+    title: 'Sensitive files · Bundled Pi only',
+    description:
+      'Protected file block list and per-tool approval for bundled Pi, including Full Access.',
+    keywords: ['sensitive', 'files', 'env', 'pub', 'secrets', 'blocklist', 'permissions', 'pi'],
+    icon: CioShieldCheck,
+    blockId: 'general-bundled-pi-files'
+  },
   {
     id: 'general',
     section: 'general',
@@ -237,6 +248,24 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Keyboard shortcuts for every app action.',
     keywords: ['shortcuts', 'hotkeys', 'keyboard'],
     icon: CioKeyboard
+  },
+  {
+    id: 'ide-mode',
+    section: 'ide-mode',
+    title: 'IDE Mode',
+    description: 'Configure language servers for project tree editing.',
+    keywords: [
+      'lsp',
+      'language server',
+      'typescript',
+      'javascript',
+      'python',
+      'golang',
+      'php',
+      'definitions',
+      'intelephense'
+    ],
+    icon: CioCode
   },
   {
     id: 'cloud-deployments',

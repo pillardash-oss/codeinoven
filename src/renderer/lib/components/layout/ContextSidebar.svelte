@@ -17,6 +17,7 @@
 </script>
 
 <script lang="ts">
+  import { fileTabLabels } from '$lib/file-tab-labels'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioActions from '@pdslng/cio-icon/CioActions.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
@@ -141,6 +142,10 @@
   let resizing = $state(false)
   let activeTab = $derived(tabs.find((tab) => tab.id === activeTabId) ?? null)
 
+  let fileLabels = $derived(
+    fileTabLabels(tabs.flatMap((tab) => (tab.kind === 'files' && tab.path ? [tab.path] : [])))
+  )
+
   /** A tab's own presentation, when the rail that owns it resolves one. */
   function presentationFor(tab: ContextSidebarTab): ContextSidebarTabPresentation | null {
     return tabPresentation?.(tab) ?? null
@@ -148,7 +153,11 @@
 
   /** The name a tab shows: its own resolved title, else the stored one. */
   function titleFor(tab: ContextSidebarTab): string {
-    return presentationFor(tab)?.title ?? tab.title
+    return (
+      (tab.kind === 'files' && tab.path ? fileLabels.get(tab.path) : undefined) ??
+      presentationFor(tab)?.title ??
+      tab.title
+    )
   }
 
   // Resolve favicons for browser tab URLs so the strip can show the site's icon

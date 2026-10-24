@@ -103,6 +103,18 @@ jobs:
             arch: --x64
             artifact: linux-x64
             app_dir: dist/linux-unpacked
+          - name: Linux (arm64)
+            # GitHub's own arm64 Ubuntu 22.04 image. The architecture has to be
+            # native: node-pty has no Linux prebuilds, so it is compiled by
+            # node-gyp during install, and a cross-compiled Electron tree would
+            # ship the x64 helper. Same 22.04 image as the x64 leg so both Linux
+            # artifacts hold the same GLIBC_2.35 floor.
+            os: ubuntu-22.04-arm
+            target: linux
+            arch: --arm64
+            artifact: linux-arm64
+            app_dir: dist/linux-arm64-unpacked
+            artifact_name: ${name}-${version}-${arch}.${ext}
 
     steps:
       - name: Check out repository
@@ -118,6 +130,7 @@ jobs:
           arch: ${{ matrix.arch }}
           artifact: ${{ matrix.artifact }}
           app-dir: ${{ matrix.app_dir }}
+          linux-artifact-name: ${{ matrix.artifact_name }}
           # The Microsoft Store package is built on every stable release, and
           # submitted to the Store when the submission credentials exist. A
           # Store-installed app cannot update itself (see

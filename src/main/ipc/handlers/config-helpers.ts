@@ -1,4 +1,6 @@
+import { validateIdeLanguageServers } from '../../../lib/ide-language-servers'
 import { APP_FONT_OPTIONS } from '../../../lib/app-fonts'
+import { validateBundledPiFilePatterns } from '../../../lib/bundled-pi-file-protection'
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../../lib/agent-behavior'
 import {
@@ -191,6 +193,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'agentQuestionCap',
   'slashCommandMode',
   'preferredEditor',
+  'ideLanguageServers',
   'memory',
   'agentDefaults',
   'auxiliaryAgents',
@@ -225,6 +228,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'browserCustomSearchEngines',
   'allowPrototypeExternalCdn',
   'prototypeCdnAllowlist',
+  'bundledPiSensitiveFilePatterns',
   'inAppNotificationSound',
   'sound',
   'cioCleanupRetentionDays',
@@ -662,6 +666,12 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   const patch: AppConfigPatch = {}
 
+  if ('bundledPiSensitiveFilePatterns' in value) {
+    patch.bundledPiSensitiveFilePatterns = validateBundledPiFilePatterns(
+      value.bundledPiSensitiveFilePatterns
+    )
+  }
+
   if ('theme' in value) {
     if (typeof value.theme !== 'string' || !THEMES.has(value.theme)) {
       throw new TypeError('Invalid theme')
@@ -1041,6 +1051,9 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     }
     patch.slashCommandMode = value.slashCommandMode as AppConfigPatch['slashCommandMode']
   }
+
+  if ('ideLanguageServers' in value)
+    patch.ideLanguageServers = validateIdeLanguageServers(value.ideLanguageServers)
 
   if ('preferredEditor' in value) {
     if (

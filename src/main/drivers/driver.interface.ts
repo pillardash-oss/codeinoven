@@ -792,6 +792,17 @@ export interface HarnessDriver {
   ): Promise<void>
 
   /**
+   * Resolve the utility kinds this harness actually supplies on this machine.
+   *
+   * `capabilities.nativeUtilities` is a static declaration and stays the default
+   * answer. A harness whose native capability is an installed optional component
+   * answers here instead, so a capability this machine does not have can never
+   * suppress the app-owned equivalent: the utility registry drops its own version
+   * of any capability a harness claims natively.
+   */
+  resolveNativeUtilities?(projectPath: string): Promise<UtilityKind[]>
+
+  /**
    * Publish a turn-scoped endpoint for harness bridges that cannot receive a
    * per-turn launch overlay (shared or extension-backed harnesses). The payload
    * is written session-keyed by the driver; `null` clears any active endpoint

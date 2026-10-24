@@ -498,6 +498,16 @@ export class NativeDockController {
         .join(' ')
       if (style.trim()) attributes.style = style.trim()
     }
+    if (node instanceof SVGElement) {
+      // Icons can paint solid strokes through inline CSS. Resolve only those
+      // explicit paints, then carry safe colours as SVG attributes so stripping
+      // inline styles cannot turn a plus into a minus.
+      for (const property of ['fill', 'stroke'] as const) {
+        if (!node.style.getPropertyValue(property)) continue
+        const paint = nativeDockColor(getComputedStyle(node).getPropertyValue(property))
+        if (paint && nativeDockStyleAllowed(`color: ${paint};`)) attributes[property] = paint
+      }
+    }
     if (this.modalOptions && node instanceof HTMLElement && this.isScrollHost(node)) {
       let id = this.scrollIds.get(node)
       if (!id) {

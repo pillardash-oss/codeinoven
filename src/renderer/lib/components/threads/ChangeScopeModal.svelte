@@ -3,7 +3,6 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
-  import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
@@ -24,7 +23,6 @@
   let { open, onClose, threadId, projectId, currentBucketId }: Props = $props()
 
   let query = $state('')
-  let searchInput: HTMLInputElement | undefined = $state(undefined)
   let loadError = $state('')
   /** Seed for the canonical scope creation modal when the query is a miss. */
   let createModalOpen = $state(false)
@@ -95,24 +93,6 @@
     openCreateModal()
   }
 
-  /** Apply a freshly created scope to the thread this flow was started for. */
-  async function assignCreatedScope(bucketId: string): Promise<void> {
-    const target = creationTarget
-    if (!target) return
-    creationTarget = null
-    try {
-      await applyScopeToThread(target.projectId, target.threadId, bucketId)
-    } catch (error) {
-      // The dialog is long gone by now: the run reports into the scope dock and
-      // the user has moved on, so the failure has to reach them where they are.
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : 'The thread could not be moved into the created scope'
-      )
-    }
-  }
-
   /**
    * Creating a scope is a dock job, so launching it dismisses this dialog along
    * with the form that started it: the run reports its stages in the scope dock
@@ -128,12 +108,11 @@
 <!-- The shared Modal is the bits-ui Dialog wrapper: it owns the overlay, the
      backdrop, Escape handling, and the initial focus, which lands on the first
      input field   this modal's search bar   so typing can start immediately. -->
-<Modal {open} title="Change Scope" {onClose}>
+<Modal open={open && !createModalOpen} title="Change Scope" {onClose}>
   <div class="space-y-3">
     <div class="flex items-center gap-2 border bg-elevated px-3 py-2">
       <CioSearch size={14} class="shrink-0 text-dimmed" />
       <input
-        bind:this={searchInput}
         bind:value={query}
         onkeydown={handleSearchKeydown}
         type="text"
@@ -157,9 +136,9 @@
           class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Clear search"
           title="Clear search"
-          onclick={() => {
+          onclick={(event) => {
             query = ''
-            searchInput?.focus()
+            event.currentTarget.parentElement?.querySelector('input')?.focus()
           }}
         >
           <CioClose size={12} />
@@ -217,20 +196,19 @@
 
 <!-- Mounted only while open so the typed query seeds the New Scope form on
      every launch   a persistent instance would freeze `initialName` at its
-     first (empty) mount and force a retype. It is a sibling of the shared
-     Modal, which is safe: bits-ui keeps one global layer stack, so the nested
-     dialog owns Escape and outside interaction while it is up and this modal
-     keeps the typed query. Cancelling the form returns here with that query
+     first (empty) mount and force a retype. Hide the change-scope presentation
+     while creating: its native window would otherwise cover a create form
+     presented in the app document. Cancelling returns here with the query
      intact; creating dismisses the whole flow, because the run it starts reports
      in the scope dock instead of in this dialog. -->
 {#if createModalOpen}
   <ScopeCreateModal
     open={createModalOpen}
-    {projectId}
+    projectId={creationTarget?.projectId ?? projectId}
     targetThreadId={creationTarget?.threadId ?? threadId}
+    assignToThread
     initialName={query.trim()}
     onStarted={handleCreateStarted}
-    onCreated={(bucketId) => void assignCreatedScope(bucketId)}
     onClose={() => (createModalOpen = false)}
   />
 {/if}

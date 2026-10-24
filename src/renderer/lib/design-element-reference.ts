@@ -60,6 +60,9 @@ export function designElementDescriptor(
   const context = target.ancestors.length > 0 ? `${target.ancestors.join(' > ')} > ${short}` : null
   const lines = [
     `Design element: ${short}`,
+    // The screen an element lives on, because a canvas frames several of them
+    // and a selector alone does not say which file to open to find it.
+    target.frame ? `screen: ${target.frame}` : null,
     `selector: ${target.selector}`,
     context ? `context: ${context}` : null,
     `size: ${target.rect.width}x${target.rect.height}`,
@@ -126,6 +129,7 @@ export function designElementReference(
     text: designElementDescriptor(target, design),
     selector: target.selector,
     tabId: tab.id,
+    ...(target.frame ? { frame: target.frame } : {}),
     ...(design ? { directory: design.directory } : {}),
     ...(entry ? { designEntry: entry } : {})
   }

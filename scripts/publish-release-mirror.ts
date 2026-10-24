@@ -127,14 +127,19 @@ const ARTIFACT_PATTERN =
   /^codeinoven-(\d+\.\d+\.\d+(?:-nightly[.-]\d+)?)(?:-(arm64|x64|setup))?\.(dmg|zip|exe|appimage|deb)$/i
 
 /**
- * Release feed asset name per platform, exactly as electron-builder writes it:
- * the channel prefixes the platform name (`latest-mac.yml` / `nightly-mac.yml`),
- * except Windows, where the channel *is* the name (`latest.yml` / `nightly.yml`).
+ * The update feeds a release carries for one platform, as release asset name
+ * (`source`) and mirror key (`key`), in publishing order. Every platform's first
+ * feed is the one every release has always had; Linux's second is the arm64
+ * feed, which only exists once the arm64 leg ships.
  */
-const FEED_SOURCE_NAMES: Readonly<Record<MirrorFeedPlatform, Record<ReleaseChannel, string>>> = {
-  darwin: { stable: 'latest-mac.yml', nightly: 'nightly-mac.yml' },
-  win32: { stable: 'latest.yml', nightly: 'nightly.yml' },
-  linux: { stable: 'latest-linux.yml', nightly: 'nightly-linux.yml' }
+export function feedSourceNames(
+  platform: MirrorFeedPlatform,
+  channel: ReleaseChannel
+): { source: string; key: string }[] {
+  return MIRROR_FEED_FILES[platform].map((feed) => ({
+    source: channel === 'nightly' ? feed.nightly : feed.stable,
+    key: feed.stable
+  }))
 }
 
 const EXTENSION_KINDS: Readonly<
@@ -425,11 +430,6 @@ export function contentTypeFor(name: string): string {
   return CONTENT_TYPES[extension] ?? 'application/octet-stream'
 }
 
-/** Feed asset name in the release, per platform and channel. */
-export function feedSourceName(platform: MirrorFeedPlatform, channel: ReleaseChannel): string {
-  return FEED_SOURCE_NAMES[platform][channel]
-}
-
 /** Parse `sha256sum` output (`<digest>  ./<name>`) into name -> digest. */
 export function parseChecksums(text: string): Map<string, string> {
   const checksums = new Map<string, string>()
@@ -526,7 +526,9 @@ export function sweepTargets(keys: readonly string[], publishedKeys: readonly st
  */
 export function unrecognizedKeys(keys: readonly string[], channel: ReleaseChannel): string[] {
   const ownKeys = new Set([
-    ...Object.values(MIRROR_FEED_FILES).map((name) => `${channel}/${name}`),
+    ...Object.values(MIRROR_FEED_FILES)
+      .flat()
+      .map((feed) => `${channel}/${feed.stable}`),
     `${channel}/${MIRROR_CHECKSUMS_FILE}`,
     `${channel}/${MIRROR_MANIFEST_FILE}`
   ])
@@ -898,13 +900,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     .join('\n')}\n`
 
   // --- feeds ---------------------------------------------------------------
+  // A feed the release must carry (index 0 for every platform) fails the run when
+  // missing; the extra Linux arm64 feed is published when the release has it, so
+  // a release built before the arm64 leg still mirrors its own set.
   const feeds: { source: string; key: string }[] = []
   for (const platform of Object.keys(MIRROR_FEED_FILES) as MirrorFeedPlatform[]) {
-    const source = feedSourceName(platform, channel)
-    if (!files.includes(source)) {
-      return fail(`Release ${release.tag} has no ${source} update feed`)
+    for (const [index, feed] of feedSourceNames(platform, channel).entries()) {
+      if (!files.includes(feed.source)) {
+        if (index === 0) return fail(`Release ${release.tag} has no ${feed.source} update feed`)
+        continue
+      }
+      feeds.push({ source: feed.source, key: `${channel}/${feed.key}` })
     }
-    feeds.push({ source, key: `${channel}/${MIRROR_FEED_FILES[platform]}` })
   }
 
   const manifest = buildManifest({
