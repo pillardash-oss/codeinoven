@@ -1,11 +1,13 @@
 import {
   DEFAULT_IDE_LANGUAGE_SERVERS,
+  IDE_SERVER_PACKAGES,
   type IdeLanguageServer
 } from '../../lib/ide-language-servers'
 import { StringDecoder } from 'node:string_decoder'
 import { parentPort } from 'node:worker_threads'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { realpath, readFile, stat } from 'node:fs/promises'
+import { access, realpath, readFile, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isWithinRoot, validateRelativePath } from './project-files/project-files-paths'
@@ -274,9 +276,19 @@ async function sessionFor(
         ...overrides,
         PATH: `${join(workspaceRoot, 'node_modules', '.bin')}${delimiter}${join(root, 'node_modules', '.bin')}${delimiter}${overrides.PATH ?? env.PATH ?? ''}`
       }
+      let executable = command
+      if (IDE_SERVER_PACKAGES[command] && env.CODEINOVEN_IDE_BIN) {
+        const managed = join(env.CODEINOVEN_IDE_BIN, command)
+        try {
+          await access(managed, constants.X_OK)
+          executable = managed
+        } catch {
+          // Fall back to the configured command until a managed copy is installed.
+        }
+      }
       const session = new Session(
         workspaceRoot,
-        command,
+        executable,
         args,
         localEnv,
         definition.settings,

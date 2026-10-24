@@ -3,6 +3,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import type { IdeAction, IdeLocation, IdeResponse } from '$shared/editor-ide'
@@ -352,34 +353,44 @@
 
 {#if active}
   <div
-    class="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-surface px-3 py-1 text-xs text-muted"
+    class="max-h-[30vh] shrink-0 overflow-y-auto overscroll-contain border-t border-border bg-surface px-3 py-1 text-xs text-muted"
     aria-live="polite"
   >
-    <span class="min-w-0 flex-1 break-words"
-      >{serverError
-        ? serverError.includes('ENOENT')
-          ? 'Language server executable not found. Install it or choose its executable in LSP settings.'
-          : `Language server unavailable: ${serverError}`
-        : connecting
-          ? 'Starting language server...'
-          : capabilities
-            ? 'Language server connected'
-            : 'IDE Mode: connecting...'}</span
-    >
-    {#if serverError}
+    <div class="flex min-w-0 flex-wrap items-center gap-2">
+      {#if connecting}<CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />{/if}
+      <span class="min-w-0 flex-1"
+        >{serverError
+          ? serverError.includes('ENOENT')
+            ? 'Language server executable not found. Install it or choose its executable in LSP settings.'
+            : 'Language server unavailable. Check its installation in LSP settings.'
+          : connecting
+            ? 'Starting language server...'
+            : capabilities
+              ? 'Language server connected'
+              : 'IDE Mode: connecting...'}</span
+      >
+      {#if serverError}
+        <button
+          type="button"
+          class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
+          onclick={() => {
+            retryVersion++
+          }}>Retry</button
+        >
+      {/if}
       <button
         type="button"
         class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
-        onclick={() => {
-          retryVersion++
-        }}>Retry</button
+        onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
       >
+    </div>
+    {#if serverError}
+      <details class="min-w-0">
+        <summary class="cursor-pointer py-1 text-foreground">Error details</summary>
+        <pre
+          class="max-h-24 overflow-auto overscroll-contain whitespace-pre-wrap break-all py-2 font-mono text-xs">{serverError}</pre>
+      </details>
     {/if}
-    <button
-      type="button"
-      class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
-      onclick={() => void navigateTo('settings-ide-mode')}>LSP settings</button
-    >
   </div>
 {/if}
 

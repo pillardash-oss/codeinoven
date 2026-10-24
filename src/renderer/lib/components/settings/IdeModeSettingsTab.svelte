@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -29,7 +30,8 @@
   let importText = $state('')
   let error = $state('')
   let busy = $state(false)
-  let checking = $state<string | null>(null)
+  let checking = $state<Record<string, boolean>>({})
+  let installing = $state<Record<string, boolean>>({})
   let status = $state<Record<string, string>>({})
   const buttonClass =
     'border border-border bg-surface px-3 py-2 text-xs text-foreground hover:bg-elevated disabled:opacity-40'
@@ -107,8 +109,8 @@
     }
   }
   async function check(server: IdeLanguageServer): Promise<void> {
-    if (checking) return
-    checking = server.id
+    if (checking[server.id]) return
+    checking[server.id] = true
     try {
       const result = await invoke('projectFiles:ide', '', {
         owner: crypto.randomUUID(),
@@ -137,14 +139,14 @@
             : String(reason)
       }
     } finally {
-      checking = null
+      checking[server.id] = false
     }
   }
   async function install(server: IdeLanguageServer): Promise<void> {
-    if (busy || checking) return
-    busy = true
+    if (busy || installing[server.id] || checking[server.id]) return
+    installing[server.id] = true
     error = ''
-    status = { ...status, [server.id]: 'Installing...' }
+    status = { ...status, [server.id]: 'Setting up...' }
     try {
       await invoke('projectFiles:ide', '', {
         owner: crypto.randomUUID(),
@@ -156,7 +158,7 @@
     } catch (reason) {
       status = { ...status, [server.id]: reason instanceof Error ? reason.message : String(reason) }
     } finally {
-      busy = false
+      installing[server.id] = false
     }
   }
   async function setupWithAgent(server?: IdeLanguageServer): Promise<void> {
@@ -260,31 +262,44 @@
               <button
                 type="button"
                 class={buttonClass}
-                disabled={busy || checking !== null}
-                onclick={() => void install(server)}>Install</button
+                disabled={busy || installing[server.id] || checking[server.id]}
+                onclick={() => void install(server)}
+                ><span class="flex items-center gap-2"
+                  >{#if installing[server.id]}<CioSpinner
+                      size={13}
+                      class="animate-spin"
+                      aria-hidden="true"
+                    />Setting up...{:else}Install{/if}</span
+                ></button
               >
             {/if}
             <Switch
               checked={server.enabled}
-              disabled={busy}
+              disabled={busy || installing[server.id]}
               onchange={(enabled) => void toggle(server, enabled)}
               title={`Enable ${server.name}`}
               aria-label={`Enable ${server.name}`}
             /><button
               type="button"
               class={buttonClass}
-              disabled={checking !== null || busy}
+              disabled={checking[server.id] || installing[server.id] || busy}
               onclick={() => void check(server)}
-              >{checking === server.id ? 'Checking...' : 'Verify installation'}</button
+              ><span class="flex items-center gap-2"
+                >{#if checking[server.id]}<CioSpinner
+                    size={13}
+                    class="animate-spin"
+                    aria-hidden="true"
+                  />Checking...{:else}Verify installation{/if}</span
+              ></button
             ><button
               type="button"
               class={buttonClass}
-              disabled={busy}
+              disabled={busy || installing[server.id]}
               onclick={() => (editing = structuredClone($state.snapshot(server)))}>Edit</button
             ><button
               type="button"
               class={buttonClass}
-              disabled={busy}
+              disabled={busy || installing[server.id]}
               onclick={() => (deleting = server)}>Remove</button
             >
           </div>
@@ -295,12 +310,12 @@
               ? 'Install here, or verify an existing installation on PATH.'
               : 'Install this executable on PATH, or choose its path with Edit.')}
         </p>
-        {#if !busy && checking === null && status[server.id] && !status[server.id].startsWith('Ready.')}
+        {#if !busy && !checking[server.id] && !installing[server.id] && status[server.id] && !status[server.id].startsWith('Ready.')}
           <div class="mt-2 flex justify-end">
             <button
               type="button"
               class={buttonClass}
-              disabled={busy}
+              disabled={busy || installing[server.id]}
               onclick={() => void setupWithAgent(server)}>Set up with agent</button
             >
           </div>

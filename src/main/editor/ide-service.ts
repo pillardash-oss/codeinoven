@@ -19,7 +19,9 @@ export class IdeService {
   private readonly serverPids = new Set<number>()
   private sequence = 0
   private installer?: ChildProcess
-  private installing = false
+  private installQueue: Promise<void> = Promise.resolve()
+  private installs = new Map<string, Promise<void>>()
+  private stopping = false
   private pending = new Map<
     number,
     {
@@ -40,6 +42,7 @@ export class IdeService {
     const inherited = await buildProcessEnvironmentAsync()
     const env = {
       ...inherited,
+      CODEINOVEN_IDE_BIN: join(toolRoot, 'node_modules', '.bin'),
       PATH: `${join(toolRoot, 'node_modules', '.bin')}${delimiter}${inherited.PATH ?? ''}`
     }
     if (request.action === 'install') {
@@ -47,10 +50,15 @@ export class IdeService {
       const packages = server && IDE_SERVER_PACKAGES[server.command]
       if (!packages)
         throw new Error('Install this custom executable manually, then choose its path.')
-      if (this.installing)
-        throw new Error('Another language server is being installed. Wait for it to finish.')
-      this.installing = true
-      try {
+      const existing = this.installs.get(server.id)
+      if (existing) {
+        await existing
+        return {}
+      }
+      if (this.installs.size >= 8)
+        throw new Error('Eight language servers are already queued for installation.')
+      const task = this.installQueue.then(async () => {
+        if (this.stopping) throw new Error('Application is stopping')
         await mkdir(toolRoot, { recursive: true })
         // Anchor Bun here so it cannot discover a parent project's manifest.
         await writeFile(
@@ -69,12 +77,13 @@ export class IdeService {
           })
           this.installer = child
           let detail = ''
+          let timedOut = false
           child.stderr?.on('data', (chunk: Buffer) => {
             detail = (detail + chunk.toString()).slice(-4000)
           })
           const timeout = setTimeout(() => {
+            timedOut = true
             child.kill('SIGKILL')
-            reject(new Error('Language server installation timed out. Try again.'))
           }, 120_000)
           child.once('error', (error) => {
             clearTimeout(timeout)
@@ -88,12 +97,18 @@ export class IdeService {
           child.once('exit', (code) => {
             clearTimeout(timeout)
             this.installer = undefined
-            if (code === 0) resolve()
+            if (timedOut) reject(new Error('Language server installation timed out. Try again.'))
+            else if (code === 0) resolve()
             else reject(new Error(`Language server installation failed. ${detail}`))
           })
         })
+      })
+      this.installs.set(server.id, task)
+      this.installQueue = task.catch(() => undefined)
+      try {
+        await task
       } finally {
-        this.installing = false
+        this.installs.delete(server.id)
       }
       return {}
     }
@@ -177,6 +192,7 @@ export class IdeService {
   }
 
   stop(): void {
+    this.stopping = true
     this.installer?.kill()
     this.worker?.postMessage({ stop: true })
     this.killServers()
