@@ -36,6 +36,7 @@ export const invokeAppContract = {
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,
   'clipboard:writeText': {} as Contract<[text: string], void>,
   'clipboard:readText': {} as Contract<[], string>,
+  'spellcheck:addWord': {} as Contract<[word: string], boolean>,
   'dialog:pickFile': {} as Contract<[scope?: AttachmentStorageScope], string | null>,
   'dialog:saveFile': {} as Contract<[input: SaveFileInput], string | null>,
   'dialog:pickFiles': {} as Contract<[scope?: AttachmentStorageScope], string[]>,

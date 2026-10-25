@@ -18,6 +18,8 @@ import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
+import { BUNDLED_PI_FILE_POLICY } from '../../lib/bundled-pi-file-protection'
+import { AGENT_SECRET_ROOT } from '../../lib/secret-request'
 import { buildProcessEnvironmentAsync, OWNED_SESSION_MARKER } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
@@ -1603,7 +1605,8 @@ export class PiDriver extends PersistentCliDriver {
           ])
         )
       : {}
-    if (!(await resolveHarnessRuntime('pi', projectPath))) {
+    const resolvedRuntime = await resolveHarnessRuntime('pi', projectPath)
+    if (!resolvedRuntime) {
       throw new Error(
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
       )
@@ -1612,7 +1615,10 @@ export class PiDriver extends PersistentCliDriver {
     // utility gateway, and core tools into ONE module loaded through ONE
     // `--extension` flag, so pi's process boot pays a single extension load
     // instead of four. The checkpoint policy is required for every session.
-    const cioCoreToolsExtensionPath = await this.materializeCioCoreToolsExtension(sessionId)
+    const cioCoreToolsExtensionPath = await this.materializeCioCoreToolsExtension(
+      sessionId,
+      resolvedRuntime.target.kind === 'bundled'
+    )
     if (!cioCoreToolsExtensionPath) {
       throw new Error(
         'Cannot start Pi without the CodeInOven compaction extension. Retry after resolving the extension materialization error.'
@@ -1644,6 +1650,15 @@ export class PiDriver extends PersistentCliDriver {
         }
       }
     )
+    // Account environments can resolve a different executable than discovery.
+    // Use the prepared invocation as the authority before starting the process.
+    if (invocation.runtime.target.kind !== resolvedRuntime.target.kind) {
+      const rematerialized = await this.materializeCioCoreToolsExtension(
+        sessionId,
+        invocation.runtime.target.kind === 'bundled'
+      )
+      if (!rematerialized) throw new Error('Cannot start Pi without its file-access policy')
+    }
     const client = new PiRpcClient({
       invocation,
       onEvent: (record) => {
@@ -2908,6 +2923,7 @@ export class PiDriver extends PersistentCliDriver {
           metadata: {
             ...(permissionPayload.tool ? { tool: permissionPayload.tool } : {}),
             ...(permissionPayload.command ? { command: permissionPayload.command } : {}),
+            ...(permissionPayload.review ? { arguments: permissionPayload.review } : {}),
             ...(permissionPayload.surface ? { surface: permissionPayload.surface } : {}),
             reason: stringValue(record['title']) ?? 'Destructive action requires approval'
           }
@@ -2962,6 +2978,12 @@ export class PiDriver extends PersistentCliDriver {
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.method !== 'cio-permission') {
       throw new PermissionRequestGoneError(sessionId, requestId, this.name)
+    }
+    if (
+      reply === 'always' &&
+      permissionMarkerPayload(request.request)?.permission === 'bundled-pi-sensitive-files'
+    ) {
+      throw new Error('Protected file access can only be approved once')
     }
     const rawId = request.request['id']
     if (typeof rawId !== 'string' && typeof rawId !== 'number') {
@@ -3150,9 +3172,13 @@ export class PiDriver extends PersistentCliDriver {
    * Startup rejects a failed materialization: running without this module
    * would silently restore Pi's default compaction policy.
    */
-  private async materializeCioCoreToolsExtension(sessionId: string): Promise<string | null> {
+  private async materializeCioCoreToolsExtension(
+    sessionId: string,
+    bundledRuntime: boolean
+  ): Promise<string | null> {
+    // Rebuild on process startup. A restarted session can switch between the
+    // bundled and external executables, so a cached module cannot decide scope.
     const existing = this.cioCoreToolsExtensionPaths.get(sessionId)
-    if (existing) return existing
     try {
       const questionCap = (await this.storage.getConfig()).agentQuestionCap
       const directory = cioCoreToolsDirectory(sessionId)
@@ -3167,13 +3193,15 @@ export class PiDriver extends PersistentCliDriver {
       const extensionRelative = join(directory, 'cio-core-tools.ts')
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
-      await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
-      await this.storage.writeRaw(systemPromptRelative, '')
-      await this.storage.writeRaw(historyRecapRelative, '')
-      await this.storage.writeRaw(allowedToolsRelative, '[]')
-      await this.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
-      await this.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
-      await this.storage.writeRaw(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
+      if (!existing) {
+        await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
+        await this.storage.writeRaw(systemPromptRelative, '')
+        await this.storage.writeRaw(historyRecapRelative, '')
+        await this.storage.writeRaw(allowedToolsRelative, '[]')
+        await this.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
+        await this.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
+        await this.storage.writeRaw(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
+      }
       await this.storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
@@ -3183,6 +3211,12 @@ export class PiDriver extends PersistentCliDriver {
           // tool calls. Status/usage/compaction stay for every session.
           oneShot: this.isTitleSession(sessionId),
           questionCap,
+          ...(bundledRuntime
+            ? {
+                sensitiveFilePolicyPath: this.storage.resolve(BUNDLED_PI_FILE_POLICY),
+                sensitiveSecretRoot: this.storage.resolve(AGENT_SECRET_ROOT)
+              }
+            : {}),
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           historyRecapPath: this.storage.resolve(historyRecapRelative),

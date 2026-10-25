@@ -29,6 +29,12 @@
     dragHandleTitle?: string
     closeLabel?: string
     removeTitle?: string
+    /** The read-only chat pair on the comment field, when the caller has a
+     *  reference (an element, a mark, a moment) the user can ask about. */
+    onExplain?: () => void
+    onQuickChat?: () => void
+    /** What the pair is about, so both titles name it. */
+    chatSubject?: string
   }
 
   let {
@@ -44,7 +50,10 @@
     title = 'Comment on selection',
     dragHandleTitle = 'Move selection comment',
     closeLabel = 'Close selection comment',
-    removeTitle
+    removeTitle,
+    onExplain,
+    onQuickChat,
+    chatSubject
   }: Props = $props()
 
   const POPOVER_WIDTH = 400
@@ -76,5 +85,8 @@
     {onRemove}
     {onClose}
     {removeTitle}
+    {onExplain}
+    {onQuickChat}
+    {chatSubject}
   />
 </div>

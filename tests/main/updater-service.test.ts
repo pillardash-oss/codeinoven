@@ -16,6 +16,11 @@ import {
   UpdaterService,
   type SessionActivitySource
 } from '../../src/main/notifications/updater-service'
+import {
+  baseVersion,
+  isRunningNewestBuild,
+  selectNightlyChannelRelease
+} from '../../src/main/notifications/updater-install-recovery'
 
 interface MockAutoUpdater {
   isUpdaterActive: () => boolean
@@ -512,5 +517,40 @@ describe('UpdaterService update channel', () => {
     await flush()
 
     expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Nightly channel stable crossover', () => {
+  it('reads the base a nightly is a preview of', () => {
+    expect(baseVersion('0.5.66-nightly.5')).toBe('0.5.66')
+    expect(baseVersion('0.5.66')).toBe('0.5.66')
+  })
+
+  it('stays on the nightly feed while stable only reaches the nightly base', () => {
+    // The reported case: 0.5.66-nightly.5 installed, 0.5.66 published. Both are
+    // the same release, so the feed must not offer a "new" stable build.
+    const nightly = { version: '0.5.66-nightly.5' }
+    const stable = { version: '0.5.66' }
+    expect(selectNightlyChannelRelease(nightly, stable)).toBe(nightly)
+  })
+
+  it('stays on the nightly feed when the nightly base is ahead of stable', () => {
+    const nightly = { version: '0.5.67-nightly.2' }
+    const stable = { version: '0.5.66' }
+    expect(selectNightlyChannelRelease(nightly, stable)).toBe(nightly)
+  })
+
+  it('crosses over to stable once its base is newer than the nightly feed', () => {
+    const nightly = { version: '0.5.65-nightly.2' }
+    const stable = { version: '0.5.66' }
+    expect(selectNightlyChannelRelease(nightly, stable)).toBe(stable)
+  })
+
+  it('treats a bare release of the running nightly base as already installed', () => {
+    expect(isRunningNewestBuild('0.5.66-nightly.5', '0.5.66')).toBe(true)
+    expect(isRunningNewestBuild('0.5.66-nightly.5', '0.5.67')).toBe(false)
+    expect(isRunningNewestBuild('0.5.65-nightly.2', '0.5.66')).toBe(false)
+    expect(isRunningNewestBuild('0.5.66-nightly.5', '0.5.66-nightly.4')).toBe(true)
+    expect(isRunningNewestBuild('0.5.66', '0.5.66-nightly.5')).toBe(true)
   })
 })

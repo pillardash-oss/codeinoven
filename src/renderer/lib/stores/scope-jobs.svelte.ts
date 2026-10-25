@@ -158,6 +158,8 @@ export interface ScopeCreateJobOptions {
   existingBucketId?: string | null
   /** Thread that started the run; scope assignment lands here even after a thread switch. */
   targetThreadId?: string | null
+  /** Assign the initiating thread before this job can report success. */
+  assignToThread?: boolean
   onCreated?: (bucketId: string) => void
   /** Complete the scoped handoff before reporting the job ready. */
   prepare?: (bucketId: string) => Promise<{ label: string; run: () => void }>
@@ -295,8 +297,15 @@ class ScopeJobStore {
       // isolated run reaches the worktree, environment and setup steps.
       steps: [
         ...(input.isolated ? worktreeSteps(input.runSetup) : SHARED_SCOPE_STEPS),
-        ...(options.prepare
-          ? [{ id: 'handoff' as const, label: 'Preparing the agent thread' }]
+        ...(options.prepare || options.assignToThread
+          ? [
+              {
+                id: 'handoff' as const,
+                label: options.prepare
+                  ? 'Preparing the agent thread'
+                  : 'Moving the thread into scope'
+              }
+            ]
           : [])
       ],
       setupCommandCount: input.setupCommands?.length ?? 0
@@ -480,6 +489,21 @@ class ScopeJobStore {
       if (options.prepare) {
         this.#patch(id, { activeStepId: 'handoff', stage: null })
         this.#patch(id, { action: await options.prepare(bucketId) })
+      }
+      if (options.assignToThread && options.targetThreadId) {
+        this.#patch(id, { activeStepId: 'handoff', stage: null })
+        try {
+          const thread = await invoke('thread:update', projectId, options.targetThreadId, {
+            scopeBucketId: bucketId
+          })
+          workspaceState.updateThread(thread)
+          scopeState.updateThread(thread)
+        } catch (cause) {
+          const detail = cause instanceof Error ? ` ${cause.message}` : ''
+          throw new Error(`The scope was created, but the thread could not be moved.${detail}`, {
+            cause
+          })
+        }
       }
       this.#finish(id, 'succeeded')
       // Handing the finished scope to the caller (select it, move a thread into

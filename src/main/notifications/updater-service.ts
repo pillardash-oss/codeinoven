@@ -105,6 +105,10 @@ interface PendingInstallState {
 }
 
 export class UpdaterService {
+  private editorIsActive: (() => boolean) | undefined
+  setEditorActivitySource(source: () => boolean): void {
+    this.editorIsActive = source
+  }
   private storage: StorageEngine
   private chatEngine: SessionActivitySource | null = null
   /** How to name the working threads behind the engine's count, for the modal. */
@@ -211,9 +215,10 @@ export class UpdaterService {
 
     autoUpdater.on('update-available', (info) => {
       // A stale channel can make the feed offer a build the app already has, or
-      // even an older one (a nightly of the release that is already installed).
-      // Handing that to the installer re-downloads and re-runs it on every
-      // launch, so it is dropped before any download is started. See
+      // even an older one (a nightly of the release that is already installed),
+      // and a bare release of the running nightly's own base is the same release
+      // it previews. Handing either to the installer re-downloads and re-runs it
+      // on every launch, so it is dropped before any download is started. See
       // `isRunningNewestBuild`.
       if (isRunningNewestBuild(app.getVersion(), info.version)) {
         Logger.dev('Updater: offered update is not newer than the running build; ignoring', {
@@ -225,8 +230,10 @@ export class UpdaterService {
         return
       }
       Logger.dev('Updater: update available', info)
-      // A nightly preference may select its stable promotion. Download from
-      // that release's mirror directory, rather than the preference's channel.
+      // A nightly preference may select the stable release its cycle was
+      // promoted to (a newer base than the nightly feed still offers). Download
+      // from that release's mirror directory, rather than the preference's
+      // channel.
       this.activeChannel = info.version.includes('-nightly') ? 'nightly' : 'stable'
       this.pendingUpdateInfo = {
         version: info.version,
@@ -983,6 +990,16 @@ export class UpdaterService {
       // Fetching the feed can run ahead of disk recovery, but unattended
       // installation must still observe the previous failed-install guard.
       // An explicit recovery install can proceed even if that disk read hangs.
+      if (!this.installApproved && this.editorIsActive?.()) {
+        this.installPending = false
+        this.clearDeferredInstall()
+        this.updateState({
+          state: 'downloaded',
+          blockedReason: 'IDE Mode is open. Restart to install when you have finished editing.'
+        })
+        await this.persistPendingInstall()
+        return
+      }
       const activeCount =
         this.activeSessionCount() +
         (this.installRecoveryPending && !this.installApproved && !this.forceUpdateInBackground

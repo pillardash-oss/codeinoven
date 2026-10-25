@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { fileTabLabels } from '$lib/file-tab-labels'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
+
+  let labels = $derived(fileTabLabels(standaloneFiles.files.map((file) => file.path)))
 
   /**
    * The file tab strip shared by both surfaces an OS-opened file can take: the
@@ -38,7 +41,7 @@
             title="Unsaved changes"
           ></span>
         {/if}
-        <span class="truncate">{file.name}</span>
+        <span class="truncate">{labels.get(file.path) ?? file.name}</span>
       </button>
       <button
         type="button"

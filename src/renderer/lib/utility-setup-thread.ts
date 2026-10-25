@@ -213,3 +213,39 @@ function openSeededSetupThread(thread: Thread, project: Project, request?: strin
   rendererRecovery.setDraft(thread.projectId, thread.id, utilitySetupDraft(request))
   workspaceState.openThreadInOwningView(thread, project)
 }
+
+/** Open a reviewable setup draft without utility-specific tags or auto-sending. */
+export async function openSetupConversation(
+  project: Project | null,
+  title: string,
+  draft: string
+): Promise<Thread> {
+  let target = project
+  let thread: Thread
+  if (target) {
+    const selected = workspaceState.selectedThread
+    const sibling = selected?.projectId === target.id ? selected : null
+    thread = await createSetupThread({
+      project: target,
+      title,
+      settings: withProjectOven(
+        settingsForNewThread(sibling, threadSettings.lastUsed),
+        target,
+        sibling !== null
+      ),
+      scopeBucketId: workspaceState.activeScopeBucketIdFor(target.id)
+    })
+  } else {
+    target = await invoke('project:ensureInbox')
+    thread = await invoke('thread:create', {
+      projectId: target.id,
+      providerId: DEFAULT_HARNESS,
+      title,
+      workingDirectory: '',
+      settings: chatEffectiveSettings(threadSettings.lastUsed)
+    })
+  }
+  rendererRecovery.setDraft(thread.projectId, thread.id, draft)
+  workspaceState.openThreadInOwningView(thread, target)
+  return thread
+}

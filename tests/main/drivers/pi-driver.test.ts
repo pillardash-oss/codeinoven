@@ -171,8 +171,24 @@ vi.mock('../../../src/main/drivers/harness-runtime', async () => {
   )
   return {
     ...actual,
-    resolveHarnessRuntime: vi.fn(async () => ({ command: 'pi', args: [] })),
-    prepareHarnessInvocation: vi.fn(async () => ({ command: 'pi', args: [] })),
+    resolveHarnessRuntime: vi.fn(async () => ({
+      command: 'pi',
+      executable: 'pi',
+      resolvedPath: '/usr/local/bin/pi',
+      target: { kind: 'native' }
+    })),
+    prepareHarnessInvocation: vi.fn(async () => ({
+      command: 'pi',
+      args: [],
+      env: {},
+      shell: false,
+      runtime: {
+        command: 'pi',
+        executable: 'pi',
+        resolvedPath: '/usr/local/bin/pi',
+        target: { kind: 'native' }
+      }
+    })),
     runHarnessCommand: actual.runHarnessCommand
   }
 })

@@ -76,11 +76,13 @@
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import BrowserSettingsTab from './BrowserSettingsTab.svelte'
+  import BundledPiFileProtectionSettings from './BundledPiFileProtectionSettings.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
+  import IdeModeSettingsTab from './IdeModeSettingsTab.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import VideoPackagesSettings from './VideoPackagesSettings.svelte'
@@ -1318,6 +1320,7 @@
           </div>
 
           <!-- CIO Cleanup -->
+          <BundledPiFileProtectionSettings {config} {settingsReady} {updateConfig} />
           <div id="settings-block-general-cio-cleanup" class="border bg-surface p-4">
             <h3
               class="mb-1 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
@@ -1537,6 +1540,8 @@
       <SearchSettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
+    {:else if section === 'ide-mode'}
+      <IdeModeSettingsTab {config} {updateConfig} />
     {:else if section === 'ovens'}
       <OvensSettings
         onOpenHarnessSettings={() => {

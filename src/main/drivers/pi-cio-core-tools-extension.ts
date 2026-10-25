@@ -47,6 +47,9 @@ interface GeneratedImport {
 }
 
 export interface CioCoreToolsExtensionOptions {
+  /** Present exclusively for the app-bundled Pi runtime. */
+  sensitiveFilePolicyPath?: string
+  sensitiveSecretRoot?: string
   /** One-shot sessions (title generation, grading, lessons) run pure text
    *  prompts: the extension then registers no gateway or interactive tools
    *  and skips the permission gate entirely, so the model request carries
@@ -185,7 +188,11 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     },
     {
       factory: '__cioCoreToolsExtension',
-      source: piCoreToolsExtension({ questionCap: options.questionCap })
+      source: piCoreToolsExtension({
+        questionCap: options.questionCap,
+        sensitiveFilePolicyPath: options.sensitiveFilePolicyPath,
+        sensitiveSecretRoot: options.sensitiveSecretRoot
+      })
     },
     { factory: '__cioCompactionExtension', source: piCompactionExtension() }
   ]

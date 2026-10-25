@@ -37,7 +37,7 @@ Control who can merge, what must pass, and what runs automatically.
   - [x] Require linear history (good default for reviewability).
 - [x] **Restrict write access**   only the maintainers team gets `write`/`maintain` on the OSS repo; everyone else contributes via fork + PR.
 - [x] **Add a release workflow** (`.github/workflows/release.yml`):
-  - [x] Build macOS (signed + notarized), Windows, and Linux installers.
+  - [x] Build macOS (signed + notarized), Windows, and Linux installers (Linux on both x64 and arm64 runners).
   - [x] Publish to GitHub Releases via `electron-builder --publish always` (already configured as the publish provider).
   - [x] Only trigger on version tags (`v*`).
   - [x] Upload checksums (`.yml`/`.sha256`) alongside installers.
@@ -110,7 +110,7 @@ The public-facing cutover.
 - [x] **Publish the Oven CLI from its own script.** `bun run oven:cli:publish` builds the service bundle, bumps the package version, checks the tarball, publishes, and waits for the registry to serve it. Runbook: `docs/OVEN-CLI-RELEASE.md`.
 - [ ] **Tag and release `v0.5.0`** (next after current version) via the release workflow with signed installers, checksums, and release notes from `CHANGELOG.md`.
 - [x] **Verify the auto-update feed** points at the OSS GitHub Releases (README/`electron-builder.yml` now reference `pillardash-oss`). Resolution of `latest.yml`/`latest-mac.yml` is only testable after the first release is published   pending.
-- [ ] **Test the release artifacts** on a clean macOS/Windows/Linux machine (fresh install + update path) before announcing.
+- [ ] **Test the release artifacts** on a clean macOS/Windows/Linux machine (fresh install + update path) before announcing. The Linux arm64 `.AppImage` and `.deb` only run on that architecture, so exercise them on an arm64 machine (a UTM/VM guest is enough).
 - [ ] **Verify the download mirror** after a release: `curl -fsS https://dl.codeinoven.com/stable/RELEASE.json | jq .version` reports the version just released, the versionless artifact URLs (`stable/codeinoven-arm64.dmg`, `stable/codeinoven-arm64.zip` and friends) serve the new bytes, and an artifact downloaded from the mirror hashes to the `sha256` in that manifest (commands in `docs/DOWNLOAD-MIRROR.md`).
 - [ ] **Post-launch hygiene**: enable discussions, announce on X/Twitter and relevant communities, and pin a "first contribution" issue.
 - [x] **Document the security model publicly** (README privacy section already covers data & privacy; add a short "Security" note pointing to `SECURITY.md`).

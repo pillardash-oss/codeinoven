@@ -7,6 +7,16 @@ import {
   resolveServedFolder,
   servedFileUrl
 } from '../preview/served-folder'
+import { SCREEN_CANVAS_PATH } from '../../lib/design/screen-canvas'
+
+/**
+ * The entries a design folder is served although no such file exists.
+ *
+ * The Screen Canvas is generated from the folder on every request, so it is
+ * reached at a reserved path instead of a file: it opens like a screen, it is
+ * pictured like a screen, and the design folder stays exactly the agent's files.
+ */
+const DESIGN_VIRTUAL_ENTRIES = [SCREEN_CANVAS_PATH] as const
 
 /**
  * One way to put a design on screen.
@@ -96,7 +106,7 @@ export async function openDesignPreview(
       `The design folder "${directory.display}" is not there yet. Write the design into it first, or name a folder that exists. Underlying error: ${error instanceof Error ? error.message : String(error)}`
     )
   })
-  const entry = await resolveServedEntry(directory.absolute, request.entry)
+  const entry = await resolveServedEntry(directory.absolute, request.entry, DESIGN_VIRTUAL_ENTRIES)
   const url = servedFileUrl(registration.url, entry)
   const origin = new URL(registration.url).origin
   const design: BrowserDesignTab = { directory: directory.display, origin }

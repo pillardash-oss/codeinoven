@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { AppPanelPortal } from '$lib/app-panel-portal'
+  const sidebarIdeStatusPortal = new AppPanelPortal()
+  const fullscreenIdeStatusPortal = new AppPanelPortal()
+  import { fileTabLabels } from '$lib/file-tab-labels'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
@@ -494,12 +498,18 @@
     contextSidebarState.focus(tab.id)
   }
 
-  /** The reader's right side holds one panel at a time, so showing the file
-   *  tree puts the chat away, and the chat, wherever it already is, comes back
-   *  when the tree is asked for again. */
-  function showFullscreenExplorer(): void {
-    if (fullscreenChatOpen) fullscreenChatEnabled = false
-    if (!fullscreenExplorerOpen) projectFilesWorkspace.toggleExplorer(projectId)
+  /** The reader's right side holds one panel at a time, so asking for the file
+   *  tree puts the chat away and reveals the tree as it was left; asking again
+   *  folds it back, exactly like the tree's own button in the sidebar reader. */
+  function toggleFullscreenExplorer(): void {
+    if (fullscreenChatOpen) {
+      fullscreenChatEnabled = false
+      // The chat held this side, so the tree keeps its own remembered state and
+      // only needs opening here if the user had folded it earlier.
+      if (!fullscreenExplorerOpen) projectFilesWorkspace.toggleExplorer(projectId)
+      return
+    }
+    projectFilesWorkspace.toggleExplorer(projectId)
   }
 
   /** The toggle exists only once there is a temporary chat to show, so the
@@ -1003,6 +1013,10 @@
     )
   )
 
+  let fullscreenFileLabels = $derived(
+    fileTabLabels(fullscreenFileTabs.flatMap((tab) => (tab.path ? [tab.path] : [])))
+  )
+
   function closeFullscreenFileTab(sidebarId: string, fileTabId: string): void {
     const fileTab = projectState.tabs.find((candidate) => candidate.id === fileTabId)
     const session = fileTab ? projectState.sessions[fileTab.path] : undefined
@@ -1115,6 +1129,10 @@
 
       {#if activeTab}
         <ProjectFilesPanelToolbar
+          ideStatusPortal={sidebarIdeStatusPortal}
+          ideModeEnabled={projectState.ideModeEnabled}
+          ideModeDisabled={ovenFile}
+          onIdeModeChange={(enabled) => (projectState.ideModeEnabled = enabled)}
           {activeTab}
           {checkpointDiff}
           {diffStats}
@@ -1344,6 +1362,15 @@
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
+            ideStatusPortal={sidebarIdeStatusPortal}
+            {projectName}
+            {projectId}
+            scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
+            threadId={mountThreadId ?? undefined}
+            ideEnabled={projectState.ideModeEnabled &&
+              !deletedAtCheckpoint &&
+              activeTab.origin === 'working' &&
+              !ovenFile}
             value={visibleContent}
             path={activeTab.path}
             readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
@@ -1356,6 +1383,7 @@
             findNonce={editorFind.nonce}
             replaceRequest={editorFind.replaceRequest}
             {editRequest}
+            focusCharacter={activeTab.focusCharacter}
             focusLine={activeTab.focusLine}
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : (matches) => editorFind.setMatches(matches)}
@@ -1467,7 +1495,10 @@
                 class={[
                   'max-w-40 truncate text-[0.6875rem] font-medium',
                   fileTab.preview ? 'italic' : ''
-                ]}>{fileTab.title}</span
+                ]}
+                >{fileTab.path
+                  ? (fullscreenFileLabels.get(fileTab.path) ?? fileTab.title)
+                  : fileTab.title}</span
               >
               {#if fileDirty}
                 <span class="h-1.5 w-1.5 shrink-0 bg-accent" title="Unsaved changes"></span>
@@ -1541,7 +1572,7 @@
         : 'Show file tree'}
       aria-pressed={fullscreenExplorerOpen && !fullscreenChatOpen}
       title={fullscreenExplorerOpen && !fullscreenChatOpen ? 'Hide file tree' : 'Show file tree'}
-      onclick={showFullscreenExplorer}
+      onclick={toggleFullscreenExplorer}
     >
       <CioFiles size={15} />
     </button>
@@ -1559,6 +1590,9 @@
     <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {#if activeTab && !activeFileInMergeEditor}
         <ProjectFilesPanelToolbar
+          ideModeEnabled={projectState.ideModeEnabled}
+          ideModeDisabled={ovenFile}
+          onIdeModeChange={(enabled) => (projectState.ideModeEnabled = enabled)}
           {activeTab}
           {checkpointDiff}
           {diffStats}
@@ -1581,6 +1615,7 @@
           saving={false}
           saveLabel=""
           fullscreen
+          ideStatusPortal={fullscreenIdeStatusPortal}
           findDisabled={!editorFindAvailable && !documentFindAvailable}
           replaceDisabled={!editorFindAvailable}
           onSearch={() => openReaderFind(false)}
@@ -1710,6 +1745,15 @@
           {:else}
             {#key activeTab.id}
               <ProjectTextEditor
+                {projectName}
+                ideStatusPortal={fullscreenIdeStatusPortal}
+                {projectId}
+                scopeBucketId={workspaceState.activeScopeBucketIdFor(projectId)}
+                threadId={mountThreadId ?? undefined}
+                ideEnabled={projectState.ideModeEnabled &&
+                  !deletedAtCheckpoint &&
+                  activeTab.origin === 'working' &&
+                  !ovenFile}
                 value={visibleContent}
                 path={activeTab.path}
                 readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
@@ -1722,6 +1766,7 @@
                 findNonce={editorFind.nonce}
                 replaceRequest={editorFind.replaceRequest}
                 {editRequest}
+                focusCharacter={activeTab.focusCharacter}
                 focusLine={activeTab.focusLine}
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={(matches) => editorFind.setMatches(matches)}

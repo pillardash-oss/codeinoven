@@ -8,7 +8,7 @@ interface AssetCount {
   id: number
   name: string
   release: string
-  platform: 'macOS' | 'Windows' | 'Linux'
+  platform: 'macOS' | 'Windows' | 'Linux' | 'Linux arm64'
   downloads: number
 }
 interface Snapshot {
@@ -28,7 +28,7 @@ await mkdir(directory, { recursive: true })
 const previousFile = Bun.file(resolve(directory, 'previous/snapshot.json'))
 const previous = (await previousFile.exists()) ? ((await previousFile.json()) as Snapshot) : null
 const assets: AssetCount[] = []
-const platforms: Record<string, number> = { macOS: 0, Windows: 0, Linux: 0 }
+const platforms: Record<string, number> = { macOS: 0, Windows: 0, Linux: 0, 'Linux arm64': 0 }
 
 async function github(path: string): Promise<unknown> {
   const response = await fetch(`https://api.github.com/repos/${repository}/${path}`, {
@@ -65,12 +65,16 @@ for (let page = 1; page <= 100; page++) {
         const asset = record(value)
         if (typeof asset.name !== 'string') throw new Error('Invalid asset name')
         // ZIPs are macOS auto-update payloads. Metadata and blockmaps are excluded.
+        // Linux is the one platform that ships two architectures, and only the arm64
+        // leg carries `-arm64` in the asset name, so the suffix is the whole test.
         const platform = /\.dmg$/iu.test(asset.name)
           ? 'macOS'
           : /\.exe$/iu.test(asset.name)
             ? 'Windows'
             : /\.(?:AppImage|deb)$/iu.test(asset.name)
-              ? 'Linux'
+              ? /-arm64\./iu.test(asset.name)
+                ? 'Linux arm64'
+                : 'Linux'
               : null
         if (!platform) continue
         if (
@@ -156,6 +160,7 @@ if (process.env.CODEINOVEN_POSTHOG_TOKEN) {
             macos_downloads: platforms.macOS,
             windows_downloads: platforms.Windows,
             linux_downloads: platforms.Linux,
+            linux_arm64_downloads: platforms['Linux arm64'],
             downloads_since_previous: snapshot.downloadsSincePrevious,
             previous_snapshot_at: snapshot.previousTimestamp
           }

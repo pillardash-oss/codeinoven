@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.66",
+  "version": "0.5.67",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.4.3",
@@ -28,10 +28,10 @@
     "@xmldom/xmldom": "0.9.12",
     "plist": "3.1.1",
     "qs": "6.16.0",
-    "fast-uri": "3.1.8",
+    "fast-uri": "3.1.9",
     "@codemirror/state": "^6.7.2",
     "@codemirror/view": "^6.43.10",
-    "undici": "6.28.1",
+    "undici": "6.29.1",
     "hono": "^4.13.13",
     "js-yaml": "^4.3.2",
     "lodash-es": "^4.18.1",
@@ -70,6 +70,7 @@
     "package": "bun run harness:build-pi && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun run build:production && electron-builder --dir -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "package:mac": "bun run harness:build-pi && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun run build:production && electron-builder --mac -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "package:linux": "bun run harness:build-pi && bun run build:production && electron-builder --linux -c.forceCodeSigning=false",
+    "package:linux:arm64": "bun run harness:build-pi && bun run build:production && electron-builder --linux --arm64 -c.forceCodeSigning=false -c.linux.artifactName='${name}-${version}-${arch}.${ext}'",
     "package:win": "bun run harness:build-pi && bun run build:production && electron-builder --win --x64 -c.forceCodeSigning=false -c.npmRebuild=false",
     "release:mac": "bun run harness:build-pi && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun run verify:release && electron-builder --mac",
     "deploy:nightly": "bash scripts/deploy-nightly.sh",
@@ -77,7 +78,8 @@
     "release:mirror": "bun scripts/publish-release-mirror.ts",
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
-    "msix:build": "bun scripts/msix.ts"
+    "msix:build": "bun scripts/msix.ts",
+    "msix:submit": "bun scripts/store-submission.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

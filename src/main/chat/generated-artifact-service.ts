@@ -54,7 +54,6 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 }
 const MAX_SCAN_FILES = 4_000
 const MAX_SCAN_DEPTH = 8
-const RECENT_IMAGE_WINDOW_MS = 10 * 60 * 1_000
 const SKIPPED_DIRECTORIES = new Set([
   '.cio',
   '.git',
@@ -65,8 +64,21 @@ const SKIPPED_DIRECTORIES = new Set([
   'out'
 ])
 const MARKDOWN_IMAGE_PATTERN = /!\[[^\]]*\]\(([^)\s]+)\)/gu
-const IMAGE_REFERENCE_PATTERN =
-  /(?:data:image\/[a-z0-9.+-]+;[^\s<>'")]+|file:\/\/[^\s<>'")]+|(?:[A-Za-z]:[\\/]|\/|\.\.?[\\/])[^\s<>'")]+\.(?:avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)(?:[?#][^\s<>'")]*)?|[\w.-]+\.(?:avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp))/giu
+const IMAGE_EXTENSION_PATTERN = 'avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp'
+/** A reference the writer meant as an image: a data or file URL, an absolute
+ *  path, or a path naming the image through its own filename. */
+const IMAGE_REFERENCE_PATTERN = new RegExp(
+  `(?:data:image\\/[a-z0-9.+-]+;[^\\s<>'")]+|file:\\/\\/[^\\s<>'")]+|(?:[A-Za-z]:[\\\\/]|\\/|\\.\\.?[\\\\/])[^\\s<>'")]+\\.(?:${IMAGE_EXTENSION_PATTERN})(?:[?#][^\\s<>'")]*)?|[\\w.-]+(?:[\\\\/][\\w.-]+)+\\.(?:${IMAGE_EXTENSION_PATTERN})|[\\w.-]+\\.(?:${IMAGE_EXTENSION_PATTERN}))`,
+  'giu'
+)
+/** The subset a command's own output can only mean literally: a data or file
+ *  URL, an absolute path, or an explicitly cwd-relative path. A bare or
+ *  project-relative filename in shell output is a listing entry (`git status`,
+ *  `ls`, `rg --files`), never an image the tool produced. */
+const PRODUCED_IMAGE_REFERENCE_PATTERN = new RegExp(
+  `(?:data:image\\/[a-z0-9.+-]+;[^\\s<>'")]+|file:\\/\\/[^\\s<>'")]+|(?:[A-Za-z]:[\\\\/]|\\/|\\.\\.?[\\\\/])[^\\s<>'")]+\\.(?:${IMAGE_EXTENSION_PATTERN})(?:[?#][^\\s<>'")]*)?)`,
+  'giu'
+)
 
 interface ArtifactContext {
   scope: 'chat' | 'project'
@@ -103,6 +115,15 @@ interface SynchronizationResult {
 interface ScannedImage {
   path: string
   modifiedAt: number
+}
+
+/** Resolve a reference against the surface it was written on, the same way
+ *  `materialize` does, so a part and its reference compare by one path. */
+function referencePath(source: string, context: ArtifactContext): string | null {
+  if (source.startsWith('data:')) return null
+  const rawPath = filePathFromUrl(source)
+  if (!rawPath) return null
+  return isAbsolute(rawPath) ? resolve(rawPath) : resolve(context.sourceRoot, rawPath)
 }
 
 type ProjectArtifactThread = Pick<Thread, 'id' | 'title' | 'featureSlug'>
@@ -164,7 +185,7 @@ function safeFilename(value: string, fallback: string): string {
   return normalized || fallback
 }
 
-function imageReferences(value: string): ImageCandidate[] {
+function imageReferences(value: string, surface: 'prose' | 'tool'): ImageCandidate[] {
   const candidates = new Map<string, ImageCandidate>()
   const add = (source: string, filename?: string): void => {
     const cleaned = trimReference(source)
@@ -174,7 +195,8 @@ function imageReferences(value: string): ImageCandidate[] {
   }
 
   for (const match of value.matchAll(MARKDOWN_IMAGE_PATTERN)) add(match[1] ?? '')
-  for (const match of value.matchAll(IMAGE_REFERENCE_PATTERN)) add(match[0])
+  const pattern = surface === 'tool' ? PRODUCED_IMAGE_REFERENCE_PATTERN : IMAGE_REFERENCE_PATTERN
+  for (const match of value.matchAll(pattern)) add(match[0])
   return [...candidates.values()]
 }
 
@@ -193,6 +215,30 @@ function isStaleProjectImage(value: string, context: ArtifactContext): boolean {
   return (
     isWithinRoot(projectDataRoot, absolutePath) && !isWithinRoot(context.artifactRoot, absolutePath)
   )
+}
+
+/** A file part this service injected into an assistant answer, as opposed to one
+ *  a provider or a user attachment delivered. */
+function isInjectedImagePart(part: Extract<AgentPart, { type: 'file' }>): boolean {
+  return part.id.includes(':generated-image:')
+}
+
+/** An injected project image the answer no longer refers to. Only this
+ *  service's own parts qualify, and only while they point at a plain project
+ *  file outside the thread's artifact directory: those were adopted by the
+ *  retired project-wide scan, not produced for the reader. */
+function isOrphanedProjectImage(
+  part: Extract<AgentPart, { type: 'file' }>,
+  context: ArtifactContext,
+  referencedPaths: Set<string>
+): boolean {
+  if (context.scope !== 'project' || !isInjectedImagePart(part)) return false
+  const sourcePath = filePathFromUrl(part.url)
+  if (!sourcePath || !isAbsolute(sourcePath)) return false
+  const absolutePath = resolve(sourcePath)
+  if (isWithinRoot(context.artifactRoot, absolutePath)) return false
+  if (!isWithinRoot(context.projectPath, absolutePath)) return false
+  return !referencedPaths.has(absolutePath)
 }
 
 function projectArtifactDirectory(thread: ProjectArtifactThread): string {
@@ -285,8 +331,16 @@ export class GeneratedArtifactService {
     if (assistantMessages.length === 0) return { messages: inputMessages, changed: false }
 
     const knownIdentities = new Set<string>()
+    const candidatesByMessage = new Map<string, ImageCandidate[]>()
     let changed = false
     for (const message of assistantMessages) {
+      const candidates = this.candidatesFromMessage(message)
+      candidatesByMessage.set(message.id, candidates)
+      const referencedPaths = new Set<string>()
+      for (const candidate of candidates) {
+        const referencedPath = referencePath(candidate.source, context)
+        if (referencedPath) referencedPaths.add(referencedPath)
+      }
       const nextParts: AgentPart[] = []
       for (const part of message.parts) {
         if (!imagePart(part)) {
@@ -298,6 +352,14 @@ export class GeneratedArtifactService {
         // this thread's explicitly assigned artifact root. Remove stale parts
         // written by the old project-wide scanner before rendering them again.
         if (isStaleProjectImage(part.url, context)) {
+          changed = true
+          continue
+        }
+        // The scanner once attached every image it found in the project to the
+        // latest answer, which turned an icon set the agent merely touched into
+        // transcript attachments. An injected part survives only while the
+        // message still mentions the image it points at.
+        if (isOrphanedProjectImage(part, context, referencedPaths)) {
           changed = true
           continue
         }
@@ -323,7 +385,7 @@ export class GeneratedArtifactService {
     }
 
     for (const message of assistantMessages) {
-      const candidates = this.candidatesFromMessage(message)
+      const candidates = candidatesByMessage.get(message.id) ?? []
       for (const candidate of candidates) {
         const materialized = await this.materialize(candidate, context, message)
         if (!materialized || knownIdentities.has(materialized.identity)) continue
@@ -342,17 +404,12 @@ export class GeneratedArtifactService {
 
     const latestAssistant = assistantMessages.at(-1)
     if (latestAssistant) {
-      const recentAfter = latestAssistant.createdAt - RECENT_IMAGE_WINDOW_MS
-      // A chat's workspace root is also where its images are kept, so the two
-      // scans would walk one directory. The unfiltered scan is a superset of
-      // the recent-window scan, so that case scans once.
-      const scanned =
-        context.sourceRoot === context.artifactRoot
-          ? await this.scanImages(context.artifactRoot)
-          : [
-              ...(await this.scanImages(context.artifactRoot)),
-              ...(await this.scanImages(context.sourceRoot, recentAfter))
-            ]
+      // Only this thread's own artifact directory is scanned. The project root
+      // is not: a file being edited there is not an output of this turn, and
+      // adopting one put unrelated icons and screenshots in the conversation.
+      // Images an agent saves elsewhere in the project arrive through the
+      // message's own references instead.
+      const scanned = await this.scanImages(context.artifactRoot)
       for (const image of scanned) {
         const identity = resolve(image.path)
         if (knownIdentities.has(identity)) continue
@@ -420,11 +477,13 @@ export class GeneratedArtifactService {
 
     for (const part of message.parts) {
       if (part.type === 'text') {
-        for (const candidate of imageReferences(part.text)) add(candidate)
+        for (const candidate of imageReferences(part.text, 'prose')) add(candidate)
       } else if (part.type === 'tool') {
         const output = part.state.output ?? ''
-        for (const candidate of imageReferences(output)) add(candidate)
-        for (const candidate of imageReferences(JSON.stringify(part.state.input))) add(candidate)
+        for (const candidate of imageReferences(output, 'tool')) add(candidate)
+        for (const candidate of imageReferences(JSON.stringify(part.state.input), 'tool')) {
+          add(candidate)
+        }
       }
     }
     return [...candidates.values()]
@@ -512,7 +571,7 @@ export class GeneratedArtifactService {
     return extension ?? '.png'
   }
 
-  private async scanImages(rootPath: string, modifiedAfter = 0): Promise<ScannedImage[]> {
+  private async scanImages(rootPath: string): Promise<ScannedImage[]> {
     const results: ScannedImage[] = []
     const visit = async (directory: string, depth: number): Promise<void> => {
       if (depth > MAX_SCAN_DEPTH || results.length >= MAX_SCAN_FILES) return
@@ -533,8 +592,7 @@ export class GeneratedArtifactService {
         const path = join(directory, entry.name)
         try {
           const metadata = await lstat(path)
-          if (metadata.mtimeMs >= modifiedAfter)
-            results.push({ path, modifiedAt: metadata.mtimeMs })
+          results.push({ path, modifiedAt: metadata.mtimeMs })
         } catch {
           // A file can disappear while an agent is still writing its output.
         }

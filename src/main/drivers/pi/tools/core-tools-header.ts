@@ -11,8 +11,16 @@ import {
   CIO_SPAWN_AGENT_TOOL_NAME
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
+import { unmanagedCuaShellReason } from '../../../../lib/agent-control-policy'
+import {
+  DEFAULT_BUNDLED_PI_FILE_PATTERNS,
+  PERMANENT_BUNDLED_PI_FILE_PATTERNS
+} from '../../../../lib/bundled-pi-file-protection'
 
-export function piCoreToolsHeaderSource(): string {
+export function piCoreToolsHeaderSource(
+  sensitiveFilePolicyPath?: string,
+  sensitiveSecretRoot?: string
+): string {
   return `import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { open, readdir, rm, stat } from 'node:fs/promises'
@@ -37,6 +45,59 @@ const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 const CIO_HISTORY_RECAP_PATH = '__CIO_HISTORY_RECAP_PATH__'
 const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
+
+// This path is injected only after the driver resolves the app-bundled runtime.
+// External Pi installations retain their existing permission behavior.
+const CIO_SENSITIVE_FILE_POLICY_PATH = ${JSON.stringify(sensitiveFilePolicyPath ?? '')}
+const CIO_DEFAULT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(DEFAULT_BUNDLED_PI_FILE_PATTERNS)}
+const CIO_PERMANENT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(
+    sensitiveSecretRoot
+      ? [`${sensitiveSecretRoot.replaceAll('\\', '/')}/**`]
+      : PERMANENT_BUNDLED_PI_FILE_PATTERNS
+  )}
+
+function bundledPiSensitiveFileGate(toolName, input) {
+  if (!CIO_SENSITIVE_FILE_POLICY_PATH) return null
+  // These app-owned tools only collect a question or update/read in-memory
+  // task state. Everything else, including read-only MCP annotations, is
+  // untrusted for filesystem access. An outer script never authorizes its
+  // inner tools, which continue through this same gate.
+  if (['cio_ask_user', 'cio_todo_write', 'cio_agent_status', 'cio_agent_output'].includes(toolName)) return null
+  let patterns = CIO_DEFAULT_SENSITIVE_FILE_PATTERNS
+  try {
+    if (statSync(CIO_SENSITIVE_FILE_POLICY_PATH).size > 262144) throw new Error('Oversized file policy')
+    const stored = JSON.parse(readFileSync(CIO_SENSITIVE_FILE_POLICY_PATH, 'utf8'))
+    if (!Array.isArray(stored) || stored.length > 128 || stored.some(function (entry) {
+      return typeof entry !== 'string' || !entry.trim() || entry.length > 256 || Array.from(entry).some(function (character) {
+        const code = character.charCodeAt(0)
+        return code < 32 || code === 127
+      })
+    })) throw new Error('Invalid file policy')
+    patterns = stored
+  } catch {
+    // Missing, corrupt, oversized, or unreadable policies restore defaults.
+  }
+  // This root covers every secret file, including future files materialized
+  // or rotated after startup. It never comes from the editable policy file.
+  patterns = [...CIO_PERMANENT_SENSITIVE_FILE_PATTERNS, ...patterns]
+  const command = typeof input.command === 'string' ? input.command : undefined
+  const hit = gateHit(
+    'bundled-pi-sensitive-files',
+    'bundled Pi tool access may reach protected files; approve this invocation only',
+    patterns,
+    command,
+    toolName
+  )
+  const serializedInput = JSON.stringify(input)
+  return {
+    ...hit,
+    review: serializedInput.length > 12000
+      ? serializedInput.slice(0, 12000) + '\\n[Arguments truncated; review the tool call before approving.]'
+      : serializedInput
+  }
+}
+
+const unmanagedCuaShellReason = ${unmanagedCuaShellReason.toString()}
 
 // The tools pi bundles itself. When the driver hands this session a tool
 // allowlist (File-System-OFF chat threads), every call to one of these that
@@ -420,6 +481,8 @@ function findContaminatedToolArg(input) {
 }
 
 function evaluateGate(toolName, input, cwd) {
+  const sensitiveFileHit = bundledPiSensitiveFileGate(toolName, input)
+  if (sensitiveFileHit) return sensitiveFileHit
   if (typeof toolName !== 'string' || toolName.startsWith('cio_')) return null
   if (toolName === 'bash' || toolName === 'powershell' || toolName === 'cmd') {
     const command = typeof input['command'] === 'string' ? input['command'] : ''

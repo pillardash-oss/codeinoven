@@ -166,9 +166,10 @@ export function inspectorInstallScript(key: string): string {
     // stylesheet hands every element the pick cursor while the attribute is
     // there, which is what makes the whole page answer as one pickable surface
     // and goes away in a single attribute removal.
+    const CURSOR_CSS = 'html[data-cio-inspecting] *{cursor:pointer !important}';
     const cursorStyle = document.createElement('style');
     cursorStyle.setAttribute('data-cio-inspector-cursor', '');
-    cursorStyle.textContent = 'html[data-cio-inspecting] *{cursor:pointer !important}';
+    cursorStyle.textContent = CURSOR_CSS;
     (document.head || document.documentElement).appendChild(cursorStyle);
 
     const hoverBox = document.createElement('div');
@@ -204,6 +205,97 @@ export function inspectorInstallScript(key: string): string {
     const text = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
     const escapeId = (value) => (globalThis.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
 
+    /**
+     * The same-origin frames of this document, in document order.
+     *
+     * A design's Screen Canvas frames every screen in an iframe on the same
+     * origin, so the elements a reader wants to inspect or comment on are one
+     * document away rather than in the page itself. A frame whose document this
+     * script cannot read is skipped: the inspector must never throw over a page it
+     * was not allowed to look at.
+     */
+    function frameTargets() {
+      const frames = document.querySelectorAll('iframe');
+      const targets = [];
+      for (let index = 0; index < frames.length; index += 1) {
+        const frame = frames[index];
+        let doc = null;
+        try {
+          doc = frame.contentDocument;
+        } catch (error) {
+          doc = null;
+        }
+        if (!doc || !doc.documentElement) continue;
+        targets.push({ frame: frame, document: doc, entry: frameEntryOf(doc) });
+      }
+      return targets;
+    }
+
+    /** The entry path a frame document was served from, or null for this document. */
+    function frameEntryOf(doc) {
+      if (!doc || doc === document) return null;
+      try {
+        const path = doc.location && doc.location.pathname;
+        if (!path) return null;
+        return decodeURIComponent(path.replace(/^\/+/, ''));
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function documentOf(element) {
+      return (element && element.ownerDocument) || document;
+    }
+
+    function viewOf(doc) {
+      return (doc && doc.defaultView) || globalThis;
+    }
+
+    /**
+     * One element's rectangle in this document's viewport, whatever frame it is in.
+     *
+     * An element inside a canvas frame reports its rectangle in that frame's own
+     * CSS pixels, and the canvas scales the frame as a whole. The overlay is drawn
+     * in the outer document, so the rectangle walks out one frame at a time: each
+     * step adds the frame's own place and multiplies by the scale between the
+     * frame's layout width and the width it is drawn at. An element in this
+     * document is answered exactly as the browser reports it.
+     */
+    function viewportRect(element) {
+      const box = element.getBoundingClientRect();
+      let x = box.x;
+      let y = box.y;
+      let width = box.width;
+      let height = box.height;
+      let doc = element.ownerDocument;
+      let steps = 0;
+      while (doc && doc !== document && steps < 8) {
+        steps += 1;
+        const view = viewOf(doc);
+        const frame = view ? view.frameElement : null;
+        if (!frame) break;
+        const outer = frame.getBoundingClientRect();
+        const layoutWidth = view.innerWidth || outer.width || 1;
+        const scale = outer.width / layoutWidth;
+        x = outer.x + x * scale;
+        y = outer.y + y * scale;
+        width = width * scale;
+        height = height * scale;
+        doc = frame.ownerDocument;
+      }
+      return { x: x, y: y, width: width, height: height };
+    }
+
+    /** The inspect cursor in one document: the page's, or a framed screen's. */
+    function ensureCursorStyle(doc) {
+      if (!doc || !doc.documentElement) return;
+      if (doc.querySelector('style[data-cio-inspector-cursor]')) return;
+      const style = doc.createElement('style');
+      style.setAttribute('data-cio-inspector-cursor', '');
+      style.textContent = CURSOR_CSS;
+      (doc.head || doc.documentElement).appendChild(style);
+    }
+
     function applyTheme(tokens) {
       if (!tokens || typeof tokens !== 'object') return;
       for (const name of ['surface', 'elevated', 'border', 'foreground', 'muted', 'accent', 'font']) {
@@ -235,7 +327,7 @@ export function inspectorInstallScript(key: string): string {
         if (node.id) {
           const id = escapeId(node.id);
           try {
-            if (document.querySelectorAll('#' + id).length === 1) {
+            if (documentOf(element).querySelectorAll('#' + id).length === 1) {
               parts.unshift(part + '#' + id);
               break;
             }
@@ -263,10 +355,10 @@ export function inspectorInstallScript(key: string): string {
       return name;
     }
 
-    /** One element's viewport rectangle, rounded, in the page's CSS pixels. */
+    /** One element's viewport rectangle, rounded, in this document's CSS pixels. */
     function elementRect(element) {
       if (!element) return { x: 0, y: 0, width: 0, height: 0 };
-      const rect = element.getBoundingClientRect();
+      const rect = viewportRect(element);
       return {
         x: Math.round(rect.x),
         y: Math.round(rect.y),
@@ -278,22 +370,26 @@ export function inspectorInstallScript(key: string): string {
     /**
      * The page's viewport, rounded, in the page's CSS pixels.
      *
-     * Read at pick time from the live window rather than from a rectangle: the
-     * element's own size says nothing about the layout that sized it, and a
-     * comment about a narrow column only makes sense next to the width it was
-     * narrow at.
+     * Read at pick time from the live window of the document the element lives
+     * in rather than from a rectangle: the element's own size says nothing about
+     * the layout that sized it, and a comment about a narrow column only makes
+     * sense next to the width it was narrow at. An element inside a canvas frame
+     * therefore reports the framed screen's own layout width, not the canvas
+     * viewport it is drawn inside.
      */
-    function pageViewport() {
+    function pageViewport(element) {
+      const view = viewOf(documentOf(element));
       return {
-        width: Math.round(globalThis.innerWidth || 0),
-        height: Math.round(globalThis.innerHeight || 0)
+        width: Math.round(view.innerWidth || 0),
+        height: Math.round(view.innerHeight || 0)
       };
     }
 
     function describe(element) {
+      const doc = documentOf(element);
       const ancestors = [];
       let parent = element.parentElement;
-      while (parent && parent !== document.documentElement && ancestors.length < config.maxAncestors) {
+      while (parent && parent !== doc.documentElement && ancestors.length < config.maxAncestors) {
         ancestors.unshift(shortName(parent));
         parent = parent.parentElement;
       }
@@ -306,21 +402,62 @@ export function inspectorInstallScript(key: string): string {
         text: text(element.innerText || element.textContent, config.maxText),
         html: text(element.outerHTML, config.maxHtml),
         ancestors: ancestors,
+        frame: frameEntryOf(doc),
         rect: elementRect(element),
-        viewport: pageViewport()
+        viewport: pageViewport(element)
       };
     }
 
-    function resolveElement(marker) {
-      if (marker.element && marker.element.isConnected) return marker.element;
-      if (!marker.selector) return null;
+    function findElementIn(doc, selector) {
+      if (!doc || !selector) return null;
       try {
-        const found = document.querySelector(marker.selector);
-        if (found) marker.element = found;
-        return found;
+        return doc.querySelector(selector);
       } catch (error) {
         return null;
       }
+    }
+
+    /**
+     * The element a marker belongs to, wherever the reader can see it.
+     *
+     * A marker remembers the element it was made on while that element is still
+     * in a document on screen, which is what makes a pin follow a re-render. It
+     * falls back to the element's own document first, because a selector only
+     * means something inside the document it was written in: a pin made inside a
+     * canvas frame belongs to that screen, and resolving it in the outer page
+     * would attach the comment to whatever happens to match there.
+     */
+    function resolveElement(marker) {
+      const remembered = marker.element;
+      if (remembered && remembered.isConnected) {
+        const doc = remembered.ownerDocument;
+        const frame = doc && doc !== document ? doc.defaultView && doc.defaultView.frameElement : null;
+        if (doc === document || (frame && frame.isConnected)) return remembered;
+      }
+      const targets = frameTargets();
+      if (marker.frame) {
+        for (let index = 0; index < targets.length; index += 1) {
+          if (targets[index].entry !== marker.frame) continue;
+          const found = findElementIn(targets[index].document, marker.selector);
+          if (found) {
+            marker.element = found;
+            return found;
+          }
+        }
+      }
+      const own = findElementIn(document, marker.selector);
+      if (own) {
+        marker.element = own;
+        return own;
+      }
+      for (let index = 0; index < targets.length; index += 1) {
+        const found = findElementIn(targets[index].document, marker.selector);
+        if (found) {
+          marker.element = found;
+          return found;
+        }
+      }
+      return null;
     }
 
     function emit(event) {
@@ -329,8 +466,7 @@ export function inspectorInstallScript(key: string): string {
       else if (state.queued.length < 32) state.queued.push(event);
     }
 
-    function place(element, box) {
-      const rect = element.getBoundingClientRect();
+    function place(rect, box) {
       box.style.left = rect.x + 'px';
       box.style.top = rect.y + 'px';
       box.style.width = Math.max(0, rect.width) + 'px';
@@ -339,7 +475,7 @@ export function inspectorInstallScript(key: string): string {
     }
 
     function renderLabel(element) {
-      const rect = element.getBoundingClientRect();
+      const rect = viewportRect(element);
       labelEl.textContent = '';
       const name = document.createElement('span');
       name.textContent = shortName(element);
@@ -363,7 +499,8 @@ export function inspectorInstallScript(key: string): string {
      * is.
      */
     function isDocumentLevel(element) {
-      return element === document.documentElement || element === document.body;
+      const doc = documentOf(element);
+      return element === doc.documentElement || element === doc.body;
     }
 
     function onScreen(rect) {
@@ -390,9 +527,9 @@ export function inspectorInstallScript(key: string): string {
           marker.pin.style.display = 'none';
           continue;
         }
-        const rect = element.getBoundingClientRect();
+        const rect = viewportRect(element);
         const shown = onScreen(rect);
-        place(element, marker.box);
+        place(rect, marker.box);
         marker.box.style.display = shown ? 'block' : 'none';
         // A pin belongs to the part of the page its element is in: it is drawn
         // at the element and hidden once that part is off screen, rather than
@@ -428,8 +565,18 @@ export function inspectorInstallScript(key: string): string {
      * a page the reader is browsing normally again.
      */
     function setPickCursor(on) {
-      if (on) document.documentElement.setAttribute('data-cio-inspecting', '');
-      else document.documentElement.removeAttribute('data-cio-inspecting');
+      // Every document the reader can point at carries the mode, because a framed
+      // screen answers the pointer with its own cursor: a canvas frame that kept
+      // a text cursor would look like a place the pick mode does not reach.
+      const targets = frameTargets();
+      const documents = [document];
+      for (let index = 0; index < targets.length; index += 1) documents.push(targets[index].document);
+      for (let index = 0; index < documents.length; index += 1) {
+        const doc = documents[index];
+        if (!doc || !doc.documentElement) continue;
+        if (on) doc.documentElement.setAttribute('data-cio-inspecting', '');
+        else doc.documentElement.removeAttribute('data-cio-inspecting');
+      }
     }
 
     function syncCursor() {
@@ -444,7 +591,7 @@ export function inspectorInstallScript(key: string): string {
         labelEl.style.display = 'none';
         return;
       }
-      place(element, hoverBox);
+      place(viewportRect(element), hoverBox);
       renderLabel(element);
     }
 
@@ -472,8 +619,12 @@ export function inspectorInstallScript(key: string): string {
     }
 
     function onPointerMove(event) {
+      // A framed document keeps its listeners for as long as it lives, so the
+      // quiet case is answered here rather than in a listener that comes and
+      // goes: with nothing armed and nothing pinned there is nothing to track.
+      if (!state.armed && state.markers.size === 0) return;
       if (ourNode(event)) return;
-      const raw = event.target instanceof Element ? event.target : null;
+      const raw = event.target && event.target.nodeType === 1 ? event.target : null;
       const element = raw && !isDocumentLevel(raw) ? raw : null;
       const hover = raw ? markerForHover(raw) : null;
       const hoverId = hover ? hover.id : null;
@@ -511,10 +662,11 @@ export function inspectorInstallScript(key: string): string {
         if (resolveElement(marker) === element) return marker;
       }
       if (!selector) return null;
+      const doc = documentOf(element);
       for (const marker of state.markers.values()) {
         if (marker.selector !== selector) continue;
         try {
-          if (document.querySelectorAll(selector).length === 1) return marker;
+          if (doc.querySelectorAll(selector).length === 1) return marker;
         } catch (error) {
           return null;
         }
@@ -525,7 +677,7 @@ export function inspectorInstallScript(key: string): string {
     function onClick(event) {
       if (!state.armed) return;
       if (ourNode(event)) return;
-      const element = event.target instanceof Element ? event.target : null;
+      const element = event.target && event.target.nodeType === 1 ? event.target : null;
       if (!element || isDocumentLevel(element)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -541,7 +693,12 @@ export function inspectorInstallScript(key: string): string {
         return;
       }
       const id = crypto.randomUUID();
-      addMarker({ id: id, number: state.markers.size + 1, comment: '' }, element, target.selector);
+      addMarker(
+        { id: id, number: state.markers.size + 1, comment: '' },
+        element,
+        target.selector,
+        target.frame
+      );
       emit({ kind: 'pick', id: id, target: target });
     }
 
@@ -562,14 +719,67 @@ export function inspectorInstallScript(key: string): string {
       emit({ kind: 'closed' });
     }
 
+    /**
+     * Wire one document so its elements answer the pointer like this page's do.
+     *
+     * A canvas frame is a document of its own, so the listeners that make an
+     * element pickable have to live in it. It is installed once per document and
+     * the flag is set on the document itself, which is what makes a reloaded
+     * frame get a fresh install instead of a second set of listeners.
+     */
+    function installDocument(doc) {
+      if (!doc || !doc.documentElement) return false;
+      const flag = config.key + ':listeners';
+      if (doc.documentElement[flag]) return true;
+      doc.documentElement[flag] = true;
+      ensureCursorStyle(doc);
+      doc.addEventListener('pointermove', onPointerMove, true);
+      doc.addEventListener('click', onClick, true);
+      doc.addEventListener('keydown', onKeyDown, true);
+      doc.addEventListener('load', onFrameLoad, true);
+      const view = viewOf(doc);
+      if (view) {
+        view.addEventListener('scroll', onViewportChange, true);
+        view.addEventListener('resize', onViewportChange);
+      }
+      if (state.armed) doc.documentElement.setAttribute('data-cio-inspecting', '');
+      return true;
+    }
+
+    function installFrames() {
+      const targets = frameTargets();
+      for (let index = 0; index < targets.length; index += 1) {
+        installDocument(targets[index].document);
+      }
+    }
+
+    /**
+     * A frame that has just loaded, or a nested one inside it.
+     *
+     * Frames arrive late: a canvas sets a frame's source when it scrolls near the
+     * viewport, and its document replaces the empty one that was there. The
+     * install therefore has to run on every frame load, not only when the canvas
+     * was first read.
+     */
+    function onFrameLoad() {
+      installFrames();
+      scheduleHoverFrame();
+    }
+
     function addListener() {
       if (state.listeners) return;
       document.addEventListener('pointermove', onPointerMove, true);
       document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKeyDown, true);
+      document.addEventListener('load', onFrameLoad, true);
+      // The canvas reports that it panned, zoomed or refitted, which changes
+      // every framed element's place without a scroll or a resize: the pins and
+      // the hover box are re-placed on the news rather than on a poll.
+      document.addEventListener('cio:canvas-view', scheduleHoverFrame);
       addEventListener('scroll', onViewportChange, true);
       addEventListener('resize', onViewportChange);
       state.listeners = true;
+      installFrames();
     }
 
     function removeListener() {
@@ -577,6 +787,8 @@ export function inspectorInstallScript(key: string): string {
       document.removeEventListener('pointermove', onPointerMove, true);
       document.removeEventListener('click', onClick, true);
       document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('load', onFrameLoad, true);
+      document.removeEventListener('cio:canvas-view', scheduleHoverFrame);
       removeEventListener('scroll', onViewportChange, true);
       removeEventListener('resize', onViewportChange);
       state.listeners = false;
@@ -602,12 +814,16 @@ export function inspectorInstallScript(key: string): string {
     function startScan() {
       if (state.scanTimer) return;
       state.scanTimer = setInterval(() => {
-        if (state.markers.size === 0) {
+        if (!state.armed && state.markers.size === 0) {
           clearInterval(state.scanTimer);
           state.scanTimer = 0;
           syncListeners();
           return;
         }
+        // A frame that appeared since the last tick is pickable on this one, and
+        // the canvas settling moves every framed element, so the re-place runs on
+        // the same beat.
+        installFrames();
         layout();
       }, 400);
     }
@@ -681,7 +897,7 @@ export function inspectorInstallScript(key: string): string {
       pin.addEventListener('lostpointercapture', endDrag);
     }
 
-    function addMarker(input, element, selector) {
+    function addMarker(input, element, selector, frame) {
       let marker = state.markers.get(input.id);
       if (!marker) {
         if (state.markers.size >= config.maxMarkers) return null;
@@ -703,6 +919,8 @@ export function inspectorInstallScript(key: string): string {
           label: (element && shortName(element)) || 'element',
           element: element || null,
           selector: selector || '',
+          /** The framed screen this pin belongs to, or null for the page itself. */
+          frame: typeof frame === 'string' ? frame : null,
           /** Where the reader dragged this pin, relative to the element. */
           offset: { x: 0, y: 0 },
           box: box,
@@ -733,6 +951,7 @@ export function inspectorInstallScript(key: string): string {
         marker.label = shortName(element);
       }
       if (input.selector) marker.selector = input.selector;
+      if (typeof input.frame === 'string') marker.frame = input.frame;
       if (typeof input.comment === 'string') marker.comment = input.comment;
       if (input.number) marker.number = input.number;
       renderPin(marker);
@@ -766,6 +985,16 @@ export function inspectorInstallScript(key: string): string {
         if (element && element.scrollIntoView) {
           element.scrollIntoView({ block: 'center', inline: 'nearest' });
         }
+        // An element inside a canvas frame is centered inside that frame, which
+        // can be panned out of the canvas: the screen is asked for by name so the
+        // canvas brings it back into view instead of leaving the reader to find
+        // it. A page that is not a canvas answers nobody.
+        const frame = element ? frameEntryOf(documentOf(element)) : null;
+        if (frame) {
+          try {
+            document.dispatchEvent(new CustomEvent('cio:canvas-reveal', { detail: { frame: frame } }));
+          } catch (error) {}
+        }
       }
       state.activeId = marker.id;
       layout();
@@ -781,8 +1010,12 @@ export function inspectorInstallScript(key: string): string {
       if (command.type === 'arm') {
         if (!state.armed) {
           state.armed = true;
+          state.hovered = null;
+          state.hoverId = null;
+          installFrames();
           setPickCursor(true);
           syncListeners();
+          startScan();
         }
         return true;
       }
@@ -811,7 +1044,7 @@ export function inspectorInstallScript(key: string): string {
         const keep = new Set();
         for (const input of incoming) {
           keep.add(input.id);
-          addMarker(input, null, input.selector);
+          addMarker(input, null, input.selector, input.frame);
         }
         for (const id of Array.from(state.markers.keys())) {
           if (!keep.has(id)) removeMarker(id);

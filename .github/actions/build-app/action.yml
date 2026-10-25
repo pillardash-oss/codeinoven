@@ -40,6 +40,15 @@ inputs:
       package identity `scripts/msix.ts` requires.
     required: false
     default: ''
+  linux-artifact-name:
+    description: >-
+      Overrides `linux.artifactName` for this build. The x64 Linux leg leaves it
+      empty so its published mirror links stay `codeinoven.AppImage` and
+      `codeinoven.deb`; the arm64 leg passes `${name}-${version}-${arch}.${ext}`
+      so both architectures can sit in one release without overwriting each
+      other (`package:linux:arm64` does the same locally).
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -95,6 +104,7 @@ runs:
         BUILD_TARGET: ${{ inputs.target }}
         PUBLISH_CHANNEL: ${{ inputs.publish-channel }}
         BUILD_VERSION: ${{ inputs.build-version }}
+        LINUX_ARTIFACT_NAME: ${{ inputs.linux-artifact-name }}
       run: |
         if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
           echo "::error::Missing signing credentials: CSC_LINK and CSC_KEY_PASSWORD are required"
@@ -115,6 +125,9 @@ runs:
         fi
         if [ -n "$BUILD_VERSION" ]; then
           extra+=(-c.extraMetadata.version="$BUILD_VERSION")
+        fi
+        if [ -n "$LINUX_ARTIFACT_NAME" ]; then
+          extra+=(-c.linux.artifactName="$LINUX_ARTIFACT_NAME")
         fi
         bunx electron-builder --"$BUILD_TARGET" ${{ inputs.arch }} --publish never "${extra[@]}"
 

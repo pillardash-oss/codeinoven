@@ -1,3 +1,6 @@
+import { registerIdeContext, type IdeToken, type IdeMenuAction } from './ide-context'
+import { isMacPlatform } from '../keymap/keymap'
+import { keymapState } from '../keymap/keymap-state.svelte'
 import type { EditorState, Extension, Range } from '@codemirror/state'
 import type { Decoration as ViewDecoration, EditorView } from '@codemirror/view'
 
@@ -74,7 +77,7 @@ export interface FileEditorController {
   scrollToLine(line: number): void
   /** Centre the view on a line and outline it for a moment, so a jump from a
    *  citation link or Go to line is easy to spot once the scroll settles. */
-  revealLine(line: number): void
+  revealLine(line: number, character?: number): void
   focus(): void
   destroy(): void
 }
@@ -95,6 +98,13 @@ export interface CreateFileEditorOptions {
   spellcheck?: boolean
   ariaLabel?: string
   conflictRanges?: FileEditorConflictRange[]
+  onIdeHoverEnd?: () => void
+  isIdeEnabled?: () => boolean
+  onIdeAction?: (
+    action: 'definition' | 'references' | 'hover' | 'documentation' | 'grep' | 'files',
+    token: IdeToken
+  ) => boolean
+  getIdeActions?: (token: IdeToken) => IdeMenuAction[]
   onDocChange: (text: string, changes: FileEditorDocumentChange[], userEvent: string | null) => void
   onConflictRangesChange?: (ranges: FileEditorConflictRange[]) => void
   onFindMatches?: (count: number) => void
@@ -214,6 +224,33 @@ export async function createFileEditor(
   }
 
   const matchMark = api.Decoration.mark({ class: 'cm-file-find-match' })
+  const ignoreSpelling = api.StateEffect.define<{ from: number; to: number; word: string }>()
+  const ignoredSpellingField = api.StateField.define({
+    create: () => api.Decoration.none,
+    update(value, transaction) {
+      let next = value.map(transaction.changes)
+      if (transaction.docChanged) {
+        next = next.update({
+          filter: (from, to, mark) => transaction.newDoc.sliceString(from, to) === mark.spec.word
+        })
+      }
+      for (const effect of transaction.effects) {
+        if (effect.is(ignoreSpelling)) {
+          const { from, to, word } = effect.value
+          next = next.update({
+            add: [
+              api.Decoration.mark({
+                attributes: { spellcheck: 'false', 'data-editor-spelling-ignored': 'true' },
+                word
+              }).range(from, to)
+            ]
+          })
+        }
+      }
+      return next
+    },
+    provide: (field) => api.EditorView.decorations.from(field)
+  })
   const setMatches = api.StateEffect.define<Array<[number, number]>>()
   const findField = api.StateField.define({
     create: () => api.Decoration.none,
@@ -357,6 +394,7 @@ export async function createFileEditor(
     ),
     api.EditorView.contentAttributes.of({ 'aria-label': ariaLabel, 'data-region': 'editor' }),
     findField,
+    ignoredSpellingField,
     flashField,
     conflictField,
     api.invertedEffects.of((transaction) => {
@@ -397,8 +435,96 @@ export async function createFileEditor(
     api.EditorView.domEventHandlers({ scroll: () => onScroll?.() })
   ]
 
+  function tokenAt(view: EditorView, position: number, x = 0, y = 0): IdeToken | null {
+    const word = view.state.wordAt(position)
+    if (!word) return null
+    const line = view.state.doc.lineAt(position)
+    const coords = view.coordsAtPos(position)
+    return {
+      line: line.number - 1,
+      character: position - line.from,
+      word: view.state.sliceDoc(word.from, word.to),
+      text: view.state.doc.toString(),
+      x: x || coords?.left || 0,
+      y: y || coords?.bottom || 0
+    }
+  }
+  extensions.push(
+    api.EditorView.domEventHandlers({
+      click(event, view) {
+        if (!options.isIdeEnabled?.()) return false
+        if (!(isMacPlatform() ? event.metaKey : event.ctrlKey) || event.button !== 0) return false
+        const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
+        const token =
+          position === null ? null : tokenAt(view, position, event.clientX, event.clientY)
+        return token ? (options.onIdeAction?.('definition', token) ?? false) : false
+      },
+      keydown(event, view) {
+        if (!options.isIdeEnabled?.()) return false
+        const commands = ['definition', 'references', 'documentation', 'grep', 'files'] as const
+        const command = commands.find((action) => keymapState.matches(`ide-${action}`, event))
+        if (!command) return false
+        const token = tokenAt(view, view.state.selection.main.head) ?? {
+          line: 0,
+          character: 0,
+          word: '',
+          text: view.state.doc.toString(),
+          x: 0,
+          y: 0
+        }
+        return options.onIdeAction?.(command, token) ?? false
+      },
+      mousemove(event, view) {
+        if (!options.isIdeEnabled?.()) return false
+        const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
+        const word = position === null ? null : view.state.wordAt(position)
+        const key = word ? `${word.from}:${word.to}` : null
+        if (key === hoverWord) return false
+        hoverWord = key
+        clearTimeout(hoverTimer)
+        options.onIdeHoverEnd?.()
+        if (word && position !== null && options.onIdeAction)
+          hoverTimer = setTimeout(() => {
+            const token = tokenAt(view, position, event.clientX, event.clientY)
+            if (token) options.onIdeAction?.('hover', token)
+          }, 650)
+        return false
+      },
+      mouseleave() {
+        hoverWord = null
+        clearTimeout(hoverTimer)
+        options.onIdeHoverEnd?.()
+        return false
+      }
+    })
+  )
+  let hoverWord: string | null = null
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined
   const state = api.EditorState.create({ doc: value, extensions })
   const view = new api.EditorView({ state, parent: host })
+  const unregisterIde = registerIdeContext(host, (event) => {
+    if (!options.isIdeEnabled?.()) return []
+    const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
+    const token = position === null ? null : tokenAt(view, position, event.clientX, event.clientY)
+    return token ? (options.getIdeActions?.(token) ?? []) : []
+  })
+  const handleIgnoreSpelling = (event: Event): void => {
+    if (!(event instanceof CustomEvent)) return
+    const range: unknown = event.detail
+    if (
+      !(range instanceof window.Range) ||
+      !view.contentDOM.contains(range.commonAncestorContainer)
+    )
+      return
+    event.preventDefault()
+    const from = view.posAtDOM(range.startContainer, range.startOffset)
+    const to = view.posAtDOM(range.endContainer, range.endOffset)
+    if (from < to)
+      view.dispatch({
+        effects: ignoreSpelling.of({ from, to, word: view.state.sliceDoc(from, to) })
+      })
+  }
+  view.contentDOM.addEventListener('editor-ignore-spelling', handleIgnoreSpelling)
   // A fresh buffer has nothing to step back through. The report is forced here
   // because the listener only fires on transactions, and a remount over an
   // earlier file would otherwise leave a toolbar showing a stale history.
@@ -587,7 +713,7 @@ export async function createFileEditor(
         effects: api.EditorView.scrollIntoView(doc.line(targetLine).from, { y: 'center' })
       })
     },
-    revealLine(line: number): void {
+    revealLine(line: number, character?: number): void {
       const requested = Math.max(1, Math.floor(line))
       const doc = view.state.doc
       const targetLine = Math.min(requested, doc.lines)
@@ -595,13 +721,20 @@ export async function createFileEditor(
       // must restart the flash animation, which only happens when the class
       // leaves the line for at least one painted frame.
       const cleared = view.state.field(flashField) !== null
+      const target = doc.line(targetLine)
       view.dispatch({
+        ...(character === undefined
+          ? {}
+          : {
+              selection: { anchor: target.from + Math.min(Math.max(0, character), target.length) }
+            }),
         effects: [
           ...(cleared ? [setFlashLine.of(null)] : []),
           api.EditorView.scrollIntoView(doc.line(targetLine).from, { y: 'center' })
         ]
       })
       clearFlashTimer()
+      view.contentDOM.removeEventListener('editor-ignore-spelling', handleIgnoreSpelling)
       const paintOutline = (): void => {
         if (destroyed) return
         view.dispatch({ effects: setFlashLine.of(targetLine) })
@@ -612,6 +745,7 @@ export async function createFileEditor(
           }
         }, LINE_FLASH_DURATION)
       }
+      if (character !== undefined) view.focus()
       if (cleared) requestAnimationFrame(paintOutline)
       else paintOutline()
     },
@@ -619,6 +753,8 @@ export async function createFileEditor(
       view.focus()
     },
     destroy(): void {
+      clearTimeout(hoverTimer)
+      unregisterIde()
       destroyed = true
       clearFlashTimer()
       view.destroy()

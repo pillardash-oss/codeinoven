@@ -3,6 +3,7 @@
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import AnnotationActionBar from '../shared/AnnotationActionBar.svelte'
   import { plainTextEditorTarget } from '../../speech/editor-target'
   import { speechController } from '../../speech/speech-controller.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -37,6 +38,19 @@
     fieldClass?: string
     removeTitle?: string
     doneTitle?: string
+    /**
+     * The read-only chat pair, offered on the comment itself.
+     *
+     * A user reading a comment field often needs to ask about the thing they are
+     * commenting on before they can write a useful note, so the same Explain and
+     * Quick Chat the studio selection popover offers sit in this footer. Absent
+     * on a surface that has nothing to ask about (a resumed draft with no
+     * reference behind it), which is why both handlers are optional.
+     */
+    onExplain?: () => void
+    onQuickChat?: () => void
+    /** What the pair is about, so both titles name it. */
+    chatSubject?: string
   }
 
   let {
@@ -50,7 +64,10 @@
     placeholder = 'Add a comment for the agent…',
     fieldClass = 'h-20 min-h-20',
     removeTitle = 'Remove this comment and the reference it belongs to',
-    doneTitle = 'Done: attach this comment'
+    doneTitle = 'Done: attach this comment',
+    onExplain,
+    onQuickChat,
+    chatSubject = 'annotation'
   }: Props = $props()
 
   // The editor is remounted fresh each time it opens, so the initial text is
@@ -113,24 +130,28 @@
   {placeholder}
   oninput={updateDraft}
   onkeydown={onKeydown}></textarea>
-<div class="mt-2 flex items-center justify-between gap-1.5">
-  <button
-    type="button"
-    class="flex h-8 items-center gap-1.5 px-2.5 text-xs text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
-    title={removeTitle}
-    onclick={onRemove}
-  >
-    <CioTrash size={12} />
-    Remove
-  </button>
-  <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} triggerPriority={6} />
-  <button
-    type="button"
-    class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-    title={doneTitle}
-    onclick={submit}
-  >
-    <CioCheck size={12} />
-    Done
-  </button>
-</div>
+<AnnotationActionBar subject={chatSubject} {onExplain} {onQuickChat}>
+  {#snippet leading()}
+    <button
+      type="button"
+      class="flex h-8 shrink-0 items-center gap-1 px-2 text-[0.6875rem] text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
+      title={removeTitle}
+      onclick={onRemove}
+    >
+      <CioTrash size={12} />
+      Remove
+    </button>
+  {/snippet}
+  {#snippet trailing()}
+    <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} triggerPriority={6} />
+    <button
+      type="button"
+      class="flex h-8 items-center gap-1 bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      title={doneTitle}
+      onclick={submit}
+    >
+      <CioCheck size={12} />
+      Done
+    </button>
+  {/snippet}
+</AnnotationActionBar>

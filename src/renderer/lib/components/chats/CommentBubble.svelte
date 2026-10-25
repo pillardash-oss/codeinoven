@@ -45,6 +45,12 @@
     placeholder?: string
     removeTitle?: string
     doneTitle?: string
+    /** The read-only chat pair on the comment field, when the surface has a
+     *  reference the user can ask about. */
+    onExplain?: () => void
+    onQuickChat?: () => void
+    /** What the pair is about, so both titles name it. */
+    chatSubject?: string
   }
 
   let {
@@ -62,7 +68,10 @@
     attach,
     placeholder,
     removeTitle,
-    doneTitle
+    doneTitle,
+    onExplain,
+    onQuickChat,
+    chatSubject
   }: Props = $props()
 </script>
 
@@ -102,5 +111,8 @@
     {placeholder}
     {removeTitle}
     {doneTitle}
+    {onExplain}
+    {onQuickChat}
+    {chatSubject}
   />
 </div>

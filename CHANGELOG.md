@@ -5,7 +5,41 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ## Unreleased
 
+### Fixed
+
+- **A design element commented on a tab the app was already showing can be
+  edited again.** The browser's inspection session only learned what a tab was
+  serving from the state report that tab broadcasts as it loads, so a tab that
+  loaded before the session started was unknown: a pick on it wrote a comment
+  without the design folder that comment needs to bring its page back, and
+  clicking that comment in the composer answered "the design this comment was
+  made on is no longer open" while the pins and the bubble stayed away until the
+  page was reloaded. The session now reads the state of every open tab once when
+  it starts, reads a tab before writing a pick on it, and reads the tab once more
+  before an edit action declares a page gone, which is the reload the reader was
+  doing by hand.
+
 ### Added
+
+- **Every comment you write can be asked about first.** The studio selection
+  popover already offered Explain and Quick Chat on its feedback comment; that
+  pair now sits on every comment field in the app, in one shared component: an
+  element picked inside an online HTML or SVG artifact, a mark drawn on a
+  published picture or video frame, a moment noted in the video editor, an
+  element picked by the design inspector, and a passage annotated in a project
+  document. Both open the existing read-only side chat with the annotation's own
+  descriptor as the selection, so nothing is re-derived from pixels, and each
+  surface adds only the bounded framing that makes that descriptor readable: the
+  artifact source, the design folder and screen, the composition folder, or the
+  document. Comments that already exist on a spec, brainstorm, audit report or
+  Assignment offer the same pair from the annotation popover, with the passage
+  the note hangs on and the note itself as one descriptor. Every annotation
+  footer is one component and one row now, so Explain, Quick Chat, Remove or
+  Resolve and the commit action never split across two lines: the pair keeps its
+  words where the box has room for them and becomes two titled icon buttons
+  where it does not. The bar also draws the dismissal action itself, so Cancel
+  always sits at the far bottom left where a falsy action belongs, never beside
+  the commit action.
 
 - **A film ships with the app to start from.** The video capability gains a
   `scaffold` operation that copies a finished film into a project folder and

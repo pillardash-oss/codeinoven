@@ -32,6 +32,8 @@ import {
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
 import { designSessionBriefing, type DesignSessionMode } from './cio-design-prompt'
 import { videoSessionBriefing, type VideoSessionMode } from './cio-video-prompt'
+import { CUA_PLAYBOOK } from './cio-cua-prompt'
+import { mcpCatalogPayload } from './mcp-tool-catalog'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
@@ -2439,9 +2441,16 @@ export class UtilityOrchestrationService {
         tools: videoUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
+    if (resolved.utility.id === CUA_UTILITY_ID) {
+      // The driver's catalog is a list of single actions, so the activation hands
+      // the batching contract with it: a desktop task that takes one script must
+      // not be driven one gateway call per keystroke.
+      const client = await this.ensureMcpClient(state, resolved)
+      return { instructions: CUA_PLAYBOOK, tools: mcpCatalogPayload(await client.listTools()) }
+    }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
-      return { tools: await client.listTools() }
+      return { tools: mcpCatalogPayload(await client.listTools()) }
     }
     if (resolved.utility.kind === 'skill') {
       // Skills hand back their instructions: the full contract, only now, and
@@ -2547,7 +2556,14 @@ export class UtilityOrchestrationService {
             .map((tool) => tool.name)
         )
       )
-      await this.prepareComputerUseSession(state, utilityId, client)
+      try {
+        await this.prepareComputerUseSession(state, utilityId, client)
+      } catch (error) {
+        // A failed setup must not leave an uncached transport behind on every
+        // retry, or fall through to the driver's implicit cursor session.
+        await client.close().catch(() => undefined)
+        throw error
+      }
     }
     return client
   }
@@ -2805,6 +2821,19 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+      if (
+        this.isComputerUseUtility(resolved) &&
+        [
+          'start_session',
+          'end_session',
+          'set_agent_cursor_enabled',
+          'set_agent_cursor_motion'
+        ].includes(operation)
+      ) {
+        throw new Error(
+          'The app owns the computer-use session and cursor lifecycle. Invoke actions directly without starting, ending, or reconfiguring sessions.'
+        )
+      }
       const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
       if (this.isComputerUseUtility(resolved)) {
@@ -2957,10 +2986,22 @@ export class UtilityOrchestrationService {
   ): Promise<void> {
     const sessionId = buildCuaSessionId(state.request.threadTitle, state.id)
     try {
-      await client.callTool('start_session', { session: sessionId })
+      const result: unknown = await client.callTool('start_session', { session: sessionId })
+      if (
+        result &&
+        typeof result === 'object' &&
+        (result as Record<string, unknown>)['isError'] === true
+      ) {
+        throw new Error('The driver refused the managed computer-use session.')
+      }
     } catch (error) {
       Logger.dev('Cua cursor session could not be started:', error)
-      return
+      throw new Error(
+        'The managed computer-use session could not be started. No action was executed.',
+        {
+          cause: error
+        }
+      )
     }
     state.cuaSessionIds.set(utilityId, sessionId)
     try {

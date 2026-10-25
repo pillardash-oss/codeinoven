@@ -40,7 +40,7 @@ import { openVideoPreview } from '../video/video-preview-session'
 import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { listDesignScreens } from './design-screens'
-import { readScreenCanvasState } from './screen-canvas-state'
+import { readScreenCanvasState, readScreenCanvas, screenCanvasScreen } from './screen-canvas-page'
 import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
 import { openDesignPreview } from './design-preview-session'
 import {
@@ -961,11 +961,19 @@ export class DesignService {
       directory,
       currentWorkRoot('design', projectId)
     )
-    // The Screen Canvas is pictured with the screens: the board shows it as the
-    // first entry of its screens grid, and that entry is a picture like the rest.
-    // It is one more load in the sweep, cached against the file like every other
-    // screen until the canvas is written again.
-    const screens = await listDesignScreens(folder.absolute)
+    // The Screen Canvas is pictured with the screens, because the board shows it
+    // as the canvas itself rather than as a screen inside it. It is generated
+    // from the folder, so it is listed as one more entry stamped with the newest
+    // screen it frames: its picture therefore goes stale exactly when the canvas
+    // it pictures would have changed, with no stamp of its own to keep.
+    const listed = await listDesignScreens(folder.absolute)
+    const canvas =
+      listed.length === 0
+        ? null
+        : screenCanvasScreen(
+            await readScreenCanvas({ folderAbsolute: folder.absolute, screens: listed })
+          )
+    const screens = canvas === null ? listed : [canvas, ...listed]
     const shotWidth = Math.min(
       MAX_THUMBNAIL_WIDTH,
       Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width))
@@ -1038,13 +1046,13 @@ export class DesignService {
   }
 
   /**
-   * The Screen Canvas of one design folder, if it has one.
+   * The Screen Canvas of one design folder, as the board reads it.
    *
-   * The board asks before it offers to create or update a canvas: the answer
-   * says whether the folder has one, and if so which of its screens are missing
-   * from it or newer than it. The canvas is a file in the folder rather than a
-   * per-thread record, so `threadId` is accepted for symmetry with the other
-   * handlers and read no further.
+   * The canvas belongs to the app: it is generated from the folder's screens on
+   * every request, so this is a read of what the folder holds and of the optional
+   * `canvas.json` that arranges it. Nothing here can fall behind the design,
+   * because there is no second copy of the canvas to fall behind it. `threadId`
+   * is accepted for symmetry with the other handlers and read no further.
    */
   async screenCanvas(
     projectId: string,

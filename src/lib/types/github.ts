@@ -297,7 +297,7 @@ export type PrAuthorAssociation =
  * An account whose picture the UI wants.
  *
  * The declared URL is authoritative and the login is the fallback. That order
- * matters for app accounts: asking the avatar CDN for `pullfrog[bot]` by login
+ * matters for app accounts: asking the avatar CDN for `dependabot[bot]` by login
  * alone answers with GitHub's meaningless generated identicon, while the URL the
  * provider returned for the same comment is the picture the app itself published,
  * the one github.com shows next to that comment.

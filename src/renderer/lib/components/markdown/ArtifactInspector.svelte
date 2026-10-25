@@ -16,6 +16,7 @@
     type ArtifactInspectorTarget
   } from '$lib/artifact-element-reference'
   import { referenceLabelNumber } from '$lib/reference-labels'
+  import { artifactInspectorChatContext, openAnnotationChat } from '$lib/annotation-chat'
   import { MARK_TAP_SLOP_PX } from '$lib/annotation-marks'
   import type { PanZoom } from '$lib/pan-zoom.svelte'
 
@@ -454,6 +455,28 @@
     responseReferencesState.updateCommentDraft(projectId, threadId, id, comment)
   }
 
+  /**
+   * Ask about the open pick from its own comment bubble.
+   *
+   * The side chat asks about the same descriptor the composer chip carries, so a
+   * user can have the element explained, or talk it through, before committing a
+   * word of the comment. The pick is captured before the editor closes, because
+   * closing drops the derived pick the request is built from, and the artifact's
+   * own source rides along so the chat reads the element where it actually lives.
+   */
+  function openChatAboutEditingPick(mode: 'elaborate' | 'quick'): void {
+    const pick = editingPick
+    if (!pick) return
+    openAnnotationChat({
+      projectId,
+      threadId,
+      mode,
+      selection: pick.text,
+      context: artifactInspectorChatContext(kind, code, surface)
+    })
+    closeEditor()
+  }
+
   function removePick(id: string): void {
     const current = responseReferencesState.forThread(projectId, threadId)
     responseReferencesState.setForThread(
@@ -679,5 +702,8 @@
     onDone={(comment) => saveComment(editingPick.id, comment)}
     onRemove={() => removePick(editingPick.id)}
     onClose={closeEditor}
+    chatSubject="artifact element"
+    onExplain={() => openChatAboutEditingPick('elaborate')}
+    onQuickChat={() => openChatAboutEditingPick('quick')}
   />
 {/if}

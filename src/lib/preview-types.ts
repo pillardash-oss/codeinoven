@@ -37,16 +37,16 @@ export interface PreviewType {
 const MIB = 1024 * 1024
 
 /**
- * Per-kind ceilings. A still must arrive quickly; a recording is the one file a
- * user may reasonably wait for, and the byte ceiling is what keeps a mistaken or
- * hostile file from filling the disk. A document with its own viewer sits
- * between them.
+ * Images and documents retain decode/viewer limits. Audio and video stay on
+ * disk and stream on demand, so their duration and total file size must not
+ * impose an in-memory transfer limit. The safe-integer ceiling preserves exact
+ * byte offsets for range requests.
  */
 const KIND_MAX_BYTES: Readonly<Record<PreviewKind, number>> = {
   image: 32 * MIB,
   document: 64 * MIB,
-  audio: 512 * MIB,
-  video: 512 * MIB
+  audio: Number.MAX_SAFE_INTEGER,
+  video: Number.MAX_SAFE_INTEGER
 }
 
 /**

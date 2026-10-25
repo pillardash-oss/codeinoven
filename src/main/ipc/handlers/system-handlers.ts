@@ -108,6 +108,14 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('clipboard:readText', () => clipboard.readText())
 
+  ipcMain.handle('spellcheck:addWord', (event, rawWord: unknown) => {
+    const word = requireString(rawWord, 'word')
+    if (!word || word.length > 128 || /\s/u.test(word) || word.includes('\0')) {
+      throw new TypeError('Dictionary entries must be a single word of at most 128 characters')
+    }
+    return event.sender.session.addWordToSpellCheckerDictionary(word)
+  })
+
   ipcMain.handle(
     'attachment:saveText',
     async (_event, rawScope: unknown, rawText: unknown, rawExistingPath: unknown) => {

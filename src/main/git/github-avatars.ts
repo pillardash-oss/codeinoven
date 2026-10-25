@@ -13,7 +13,7 @@ import type { GitHubAvatarRequest } from '../../lib/types'
  *
  * The URL the provider declared always wins over the login. Deriving the URL from
  * the login alone is right for people and wrong for apps: GitHub answers
- * `pullfrog[bot]` with a generated identicon, while the `avatar_url` on the very
+ * `dependabot[bot]` with a generated identicon, while the `avatar_url` on the very
  * same comment is the app's real picture   the one github.com shows. Accounts
  * arrive without a declared URL in some payloads (mention candidates for one), so
  * the login fallback stays.

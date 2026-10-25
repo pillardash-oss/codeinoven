@@ -53,6 +53,8 @@ export function screenCanvasRuntimeScript(): string {
   var ZOOM_STEP = 1.25;
   var WHEEL_ZOOM_RATE = 0.002;
   var SETTLE_MS = 3000;
+  var STATE_RETRY_MS = 120;
+  var STATE_RETRY_LIMIT = 16;
 
   // A single backslash, built from its code point rather than written as a
   // string escape: the whole runtime is itself a JavaScript string, and an
@@ -211,7 +213,7 @@ export function screenCanvasRuntimeScript(): string {
             record.frame.removeAttribute('src');
             finishLoad(record);
           }, 15000);
-          record.frame.setAttribute('src', record.entry);
+          record.frame.setAttribute('src', record.source);
           break;
         }
         if (records.some(function (record) { return record.visible && !record.started; })) {
@@ -256,6 +258,14 @@ export function screenCanvasRuntimeScript(): string {
           'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
         document.documentElement.dataset.cioCanvasScale = String(scale);
         if (readout) readout.textContent = Math.round(scale * 100) + '%';
+        // The app's element inspector draws its boxes and pins in this document,
+        // while a frame's elements live in their own: every pan and zoom moves
+        // them, so it is told on the same frame the view changes.
+        try {
+          document.dispatchEvent(new CustomEvent('cio:canvas-view'));
+        } catch {
+          // A document that refuses the event has nothing waiting on it.
+        }
       });
     }
 
@@ -567,6 +577,92 @@ export function screenCanvasRuntimeScript(): string {
       }, RESIZE_DELAY);
     }
 
+    // The query and fragment a frame loads with, so a state the screen reads
+    // from its own URL is reached by loading it that way rather than by script.
+    function frameSource(entry, state) {
+      var source = entry;
+      if (!state) return source;
+      if (typeof state.search === 'string' && state.search !== '') {
+        source += (source.indexOf('?') === -1 ? '?' : '&') + state.search;
+      }
+      if (typeof state.hash === 'string' && state.hash !== '') {
+        source += '#' + state.hash;
+      }
+      return source;
+    }
+
+    /**
+     * Reach one frame's declared state inside the frame itself.
+     *
+     * The interaction is the design's own: clicking the menu button runs the
+     * screen's handler, so the frame shows the state a reader would reach rather
+     * than a picture of it, and it follows the design as the design changes. A
+     * target that is not rendered yet is retried for a moment, because a screen
+     * that builds its menu in script has nothing to click at load.
+     */
+    function applyFrameState(record, attempt) {
+      var state = record.state;
+      if (!state) return;
+      var hasWork =
+        typeof state.click === 'string' ||
+        typeof state.focus === 'string' ||
+        (typeof state.scroll === 'number' && state.scroll > 0);
+      if (!hasWork) return;
+      var tries = attempt || 0;
+      var apply = function () {
+        var doc = null;
+        try {
+          doc = record.frame.contentDocument;
+        } catch {
+          doc = null;
+        }
+        if (!doc) return;
+        var pending = false;
+        if (typeof state.click === 'string' && !record.stateClicked) {
+          var clickTarget = null;
+          try {
+            clickTarget = doc.querySelector(state.click);
+          } catch {
+            clickTarget = null;
+          }
+          if (!clickTarget) {
+            pending = true;
+          } else {
+            // The state is clicked once per document: a retry for a later
+            // selector must not toggle the menu back shut.
+            record.stateClicked = true;
+            if (typeof clickTarget.click === 'function') clickTarget.click();
+          }
+        }
+        if (typeof state.focus === 'string') {
+          var focusTarget = null;
+          try {
+            focusTarget = doc.querySelector(state.focus);
+          } catch {
+            focusTarget = null;
+          }
+          if (!focusTarget) pending = true;
+          else if (typeof focusTarget.focus === 'function') focusTarget.focus();
+        }
+        if (typeof state.scroll === 'number' && state.scroll > 0) {
+          var scroller = doc.scrollingElement || doc.documentElement;
+          if (scroller) scroller.scrollTop = state.scroll;
+        }
+        if (pending && tries < STATE_RETRY_LIMIT) {
+          tries += 1;
+          setTimeout(function () {
+            applyFrameState(record, tries);
+          }, STATE_RETRY_MS);
+          return;
+        }
+        measureFrame(record);
+        fitIfUntouched();
+      };
+      var wait = integerFrom(state.wait, 0);
+      if (wait > 0) setTimeout(apply, wait);
+      else requestAnimationFrame(apply);
+    }
+
     function buildScreen(section) {
       var frameValue = section.getAttribute('data-cio-frame');
       var entry = trim(frameValue === null ? '' : frameValue);
@@ -575,6 +671,17 @@ export function screenCanvasRuntimeScript(): string {
       // screen, so it contributes no frame instead of an empty iframe.
       if (entry === '' && !sketch) return null;
 
+      var stateValue = section.getAttribute('data-cio-state');
+      var state = null;
+      if (stateValue) {
+        try {
+          state = JSON.parse(stateValue);
+        } catch {
+          state = null;
+        }
+        if (!state || typeof state !== 'object') state = null;
+      }
+      var source = frameSource(entry, state);
       var declaredTitle = trim(section.getAttribute('data-cio-title'));
       var caption = trim(section.getAttribute('data-cio-caption'));
       var width = Math.round(
@@ -635,7 +742,7 @@ export function screenCanvasRuntimeScript(): string {
 
       var open = document.createElement('a');
       open.className = 'cio-canvas-bar-action';
-      open.href = entry;
+      open.href = source;
       open.target = '_blank';
       open.rel = 'noopener';
       open.textContent = 'Open';
@@ -660,6 +767,9 @@ export function screenCanvasRuntimeScript(): string {
         frame: frame,
         body: body,
         entry: entry,
+        source: source,
+        state: state,
+        stateClicked: false,
         visible: false,
         started: false,
         loaded: false,
@@ -677,9 +787,14 @@ export function screenCanvasRuntimeScript(): string {
           // Cross-origin screens still release their navigation slot.
         }
         record.loaded = true;
+        // Every load is a new document, so the state is reached again on it.
+        record.stateClicked = false;
         finishLoad(record);
         measureFrame(record);
         attachFrameWindow(record);
+        // The state is applied before the measure that follows it, so a menu that
+        // opens and grows the page is pictured at the height it actually has.
+        applyFrameState(record);
         fitIfUntouched();
       });
       frameRecords.set(body, record);
@@ -745,6 +860,27 @@ export function screenCanvasRuntimeScript(): string {
       var built = buildScreen(sections[sectionIndex]);
       if (built) records.push(built);
     }
+
+    // A comment the reader picks in the app asks for the screen it was written
+    // on. The canvas is panned rather than scrolled, so the app names the frame
+    // and the view centres it: an element a comment points at is worth seeing
+    // without hunting for the frame it sits in.
+    document.addEventListener('cio:canvas-reveal', function (event) {
+      var detail = event && event.detail ? event.detail : null;
+      var entry = detail && typeof detail.frame === 'string' ? detail.frame : '';
+      if (entry === '') return;
+      var screens = surface.querySelectorAll('[data-cio-screen]');
+      for (var index = 0; index < screens.length; index += 1) {
+        if (screens[index].getAttribute('data-cio-screen') !== entry) continue;
+        var rect = screens[index].getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        panX += viewportWidth() / 2 - (rect.left + rect.width / 2);
+        panY += viewportHeight() / 2 - (rect.top + rect.height / 2);
+        userAdjusted = true;
+        applyTransform();
+        return;
+      }
+    });
 
     surface.addEventListener('wheel', onSurfaceWheel, { passive: false });
     surface.addEventListener('pointerdown', onSurfacePointerDown);

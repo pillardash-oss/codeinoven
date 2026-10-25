@@ -1,3 +1,4 @@
+import { ideService } from '../../editor/ide-service'
 import { usageAnalytics } from '../../system/usage-analytics'
 import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -358,6 +359,7 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     const previous = await storage.getConfig()
     const config = { ...previous, ...patch }
     await storage.saveConfig(config)
+    if (patch.ideLanguageServers !== undefined) ideService.configure(patch.ideLanguageServers)
     if (patch.shareAnonymousUsage !== undefined) {
       void usageAnalytics.setConsent(config.shareAnonymousUsage === true)
     }

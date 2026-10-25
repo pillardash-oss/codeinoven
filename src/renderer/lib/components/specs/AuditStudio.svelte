@@ -36,6 +36,7 @@
     type PendingOverlayAnchor
   } from './studio-annotation-overlay.svelte'
   import { offsetsForQuote as offsetsForQuoteIn, offsetsForRange } from '$lib/selection-anchors'
+  import { studioAnnotationChatSelection } from '$lib/annotation-chat'
   import { onDestroy, onMount, tick } from 'svelte'
 
   type CallbackResult = void | Promise<void>
@@ -508,6 +509,23 @@
     if (mode === 'explain') onExplainSelection?.(selection.quote, documentContext)
     else onQuickChatSelection?.(selection.quote, documentContext)
     closePendingAnnotation()
+  }
+
+  /**
+   * Ask about an annotation that is already attached to the report.
+   *
+   * The pending popover asks about a passage before it becomes an annotation; this
+   * asks about one that exists, so the descriptor carries both the anchored passage
+   * and the note, and the report itself rides along as context.
+   */
+  function openAnnotationDetailChat(mode: 'explain' | 'quick'): void {
+    const annotation = editingAnnotation
+    if (!annotation) return
+    const selection = studioAnnotationChatSelection(annotation)
+    const documentContext = exportAuditReportMarkdown(draft)
+    if (mode === 'explain') onExplainSelection?.(selection, documentContext)
+    else onQuickChatSelection?.(selection, documentContext)
+    closeAnnotation()
   }
 
   function sectionElementFor(annotation: AuditAnnotation): HTMLElement | null {
@@ -1131,6 +1149,8 @@
     onSave={saveAnnotationEdit}
     onCancelEdit={() => overlay.cancelEdit()}
     onEditClick={() => overlay.startEdit()}
+    onExplain={onExplainSelection ? () => openAnnotationDetailChat('explain') : undefined}
+    onQuickChat={onQuickChatSelection ? () => openAnnotationDetailChat('quick') : undefined}
     onClose={closeAnnotation}
   />
 {/if}

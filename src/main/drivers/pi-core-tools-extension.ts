@@ -88,9 +88,13 @@ export const CIO_QUESTION_MARKER = 'cio-question:'
  * emitted source is byte-for-byte identical to the original single template.
  * `questionCap` feeds the app-configured cio_ask_user question cap.
  */
-export function piCoreToolsExtension(options: { questionCap: number }): string {
+export function piCoreToolsExtension(options: {
+  questionCap: number
+  sensitiveFilePolicyPath?: string
+  sensitiveSecretRoot?: string
+}): string {
   return [
-    piCoreToolsHeaderSource(),
+    piCoreToolsHeaderSource(options.sensitiveFilePolicyPath, options.sensitiveSecretRoot),
     piCoreToolsWindowsShellSource(),
     piCoreToolsInteractiveSource(options.questionCap),
     piCoreToolsSubagentSource(),

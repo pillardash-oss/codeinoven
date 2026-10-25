@@ -9,19 +9,26 @@
  *
  * Bucket keys, served from {@link DOWNLOAD_MIRROR_URL}:
  *
- *   <channel>/codeinoven-arm64.dmg   the artifacts, named without a version:
- *   <channel>/codeinoven-arm64.zip   the installers a user downloads by hand,
- *   <channel>/codeinoven-setup.exe   plus the macOS `.zip`, which is the payload
- *   <channel>/codeinoven.AppImage    electron-updater installs an update from.
- *   <channel>/codeinoven.deb         A channel serves one release, so its file
- *                                    names are the channel's names and a link
- *                                    to the mirror never rots
- *   <channel>/latest-mac.yml         the release's own update feeds, per platform
- *   <channel>/latest.yml
- *   <channel>/latest-linux.yml
- *   <channel>/SHA256SUMS.txt         checksums of the artifacts, for the names
- *                                    the mirror actually serves
- *   <channel>/RELEASE.json           machine-readable manifest of that release
+ *   <channel>/codeinoven-arm64.dmg        the artifacts, named without a
+ *   <channel>/codeinoven-arm64.zip        version: the installers a user
+ *   <channel>/codeinoven-setup.exe        downloads by hand, plus the macOS
+ *   <channel>/codeinoven.AppImage         `.zip`, which is the payload
+ *   <channel>/codeinoven.deb              electron-updater installs an update
+ *   <channel>/codeinoven-arm64.AppImage   from. A channel serves one release,
+ *   <channel>/codeinoven-arm64.deb        so its file names are the channel's
+ *                                         names and a link never rots. The
+ *                                         Linux arm64 pair appears only once
+ *                                         the arm64 leg has shipped; the x64
+ *                                         names stay suffix-free because they
+ *                                         are published download links
+ *   <channel>/latest-mac.yml              the release's own update feeds, per
+ *   <channel>/latest.yml                  platform, with Linux carrying one per
+ *   <channel>/latest-linux.yml            architecture
+ *   <channel>/latest-linux-arm64.yml
+ *   <channel>/SHA256SUMS.txt              checksums of the artifacts, for the
+ *                                         names the mirror actually serves
+ *   <channel>/RELEASE.json                machine-readable manifest of that
+ *                                         release
  *
  * macOS therefore carries two artifacts in a channel, `.dmg` and `.zip`: a
  * consumer of `RELEASE.json` selects by `kind`, never by `platform` alone.
@@ -50,13 +57,33 @@ export function isReleaseChannel(value: string): value is ReleaseChannel {
   return (RELEASE_CHANNELS as readonly string[]).includes(value)
 }
 
-/** Update feed file name inside a channel directory, per platform. */
+/** Platform whose update feed the mirror serves. */
 export type MirrorFeedPlatform = 'darwin' | 'win32' | 'linux'
 
-export const MIRROR_FEED_FILES: Readonly<Record<MirrorFeedPlatform, string>> = {
-  darwin: 'latest-mac.yml',
-  win32: 'latest.yml',
-  linux: 'latest-linux.yml'
+/** Update feed file names for one platform, one per release channel. */
+export interface MirrorFeedFile {
+  /** Release asset name in a stable release, e.g. `latest-mac.yml`. */
+  stable: string
+  /** Release asset name in a nightly release, e.g. `nightly-mac.yml`. */
+  nightly: string
+}
+
+/**
+ * Every update feed a release carries, per platform.
+ *
+ * A platform publishes one feed, except Linux, which publishes one per
+ * architecture: electron-builder appends the target architecture to the feed of
+ * every non-x64 Linux target (`latest-linux-arm64.yml`), so an arm64 install is
+ * offered the arm64 artifact instead of the x64 one. `stable` is also the mirror
+ * key, because the channel is the directory and a link never rotates.
+ */
+export const MIRROR_FEED_FILES: Readonly<Record<MirrorFeedPlatform, readonly MirrorFeedFile[]>> = {
+  darwin: [{ stable: 'latest-mac.yml', nightly: 'nightly-mac.yml' }],
+  win32: [{ stable: 'latest.yml', nightly: 'nightly.yml' }],
+  linux: [
+    { stable: 'latest-linux.yml', nightly: 'nightly-linux.yml' },
+    { stable: 'latest-linux-arm64.yml', nightly: 'nightly-linux-arm64.yml' }
+  ]
 }
 
 /** Checksums of the newest release in a channel directory. */

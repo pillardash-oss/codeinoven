@@ -4,6 +4,12 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { simpleGit } from 'simple-git'
 
+// electron-vite supplies the IDE worker factory in the app build. This suite
+// exercises IPC handlers without starting language servers or worker threads.
+vi.mock('../../src/main/editor/ide-service', () => ({
+  ideService: { configure: vi.fn() }
+}))
+
 const { handlers, listeners, showOpenDialog, showSaveDialog, safeStorage } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => unknown>(),
@@ -23,6 +29,7 @@ vi.mock('electron', () => ({
   app: {
     getName: vi.fn(() => 'CodeInOven'),
     getVersion: vi.fn(() => '0.1.0'),
+    on: vi.fn(),
     once: vi.fn()
   },
   BrowserWindow: {

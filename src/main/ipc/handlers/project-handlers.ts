@@ -1,3 +1,4 @@
+import { ideService } from '../../editor/ide-service'
 import { dialog } from '../../system/file-dialogs'
 import { app, shell, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -762,6 +763,88 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
           ? undefined
           : validateEntityId(scopeBucketId, 'Scope bucket ID'),
         threadIdArg(threadId)
+      )
+    }
+  )
+  const ide = ideService
+  ctx.updaterService?.setEditorActivitySource(() => ide.hasOpenDocuments)
+  app.on('before-quit', () => ide.stop())
+  ipcMain.handle(
+    'projectFiles:ide',
+    async (_, projectId: unknown, input: unknown, scopeBucketId?: unknown, threadId?: unknown) => {
+      if (!input || typeof input !== 'object') throw new TypeError('Invalid IDE request')
+      const value = input as Record<string, unknown>
+      const actions = [
+        'inventory',
+        'install',
+        'check',
+        'sync',
+        'close',
+        'cancel',
+        'definition',
+        'references',
+        'hover',
+        'capabilities',
+        'grep'
+      ] as const
+      const action = actions.find((action) => action === value.action)
+      if (!action) throw new TypeError('Invalid IDE action')
+      const owner = requireString(value.owner, 'IDE owner')
+      if (owner.length > 100) throw new TypeError('Invalid IDE owner')
+      const path = requireString(
+        value.path,
+        'IDE path',
+        action === 'install' ||
+          action === 'inventory' ||
+          action === 'check' ||
+          action === 'grep' ||
+          action === 'close' ||
+          action === 'cancel'
+      )
+      const text =
+        value.text === undefined ? undefined : requireString(value.text, 'IDE text', true)
+      const query =
+        value.query === undefined ? undefined : requireString(value.query, 'IDE query', true)
+      if (
+        (text?.length ?? 0) > 2 * 1024 * 1024 ||
+        (query?.length ?? 0) > 1000 ||
+        path.length > 4096
+      )
+        throw new TypeError('IDE request exceeds limits')
+      const position = (value: unknown): number | undefined => {
+        if (value === undefined) return undefined
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
+          throw new TypeError('Invalid IDE position')
+        return value
+      }
+      return ide.request(
+        action === 'inventory' ||
+          action === 'install' ||
+          action === 'check' ||
+          action === 'close' ||
+          action === 'cancel'
+          ? ''
+          : await projectFilesService.ideRoot(
+              validateEntityId(projectId, 'Project ID'),
+              scopeBucketId === undefined
+                ? undefined
+                : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+              threadIdArg(threadId)
+            ),
+        {
+          owner,
+          serverId:
+            value.serverId === undefined
+              ? undefined
+              : validateEntityId(value.serverId, 'Language server ID'),
+          action,
+          path,
+          text,
+          query,
+          line: position(value.line),
+          character: position(value.character)
+        },
+        (await storage.getConfig()).ideLanguageServers
       )
     }
   )

@@ -382,6 +382,15 @@ export function validateInspectorMarkers(value: unknown): BrowserInspectorMarker
     if (typeof selector !== 'string' || selector.length > MAX_INSPECTOR_SELECTOR_LENGTH) {
       throw new TypeError('Inspector marker selector is invalid')
     }
+    // The framed screen a pin was made in, so a pin inside a canvas frame is
+    // resolved in that screen rather than in whatever matches in the page.
+    const frame = record['frame']
+    if (frame !== undefined && frame !== null) {
+      if (typeof frame !== 'string' || frame.length > MAX_INSPECTOR_SELECTOR_LENGTH) {
+        throw new TypeError('Inspector marker frame is invalid')
+      }
+    }
+    if (typeof frame === 'string') return { id, number, comment, selector, frame }
     return { id, number, comment, selector }
   })
 }

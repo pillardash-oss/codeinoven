@@ -34,11 +34,14 @@ yet) means download from GitHub.
 One directory per channel, served from the bucket root:
 
 ```
-https://dl.codeinoven.com/stable/    latest-mac.yml, latest.yml, latest-linux.yml
+https://dl.codeinoven.com/stable/    latest-mac.yml, latest.yml, latest-linux.yml,
+                                     latest-linux-arm64.yml
                                      codeinoven-arm64.dmg        macOS (download)
                                      codeinoven-arm64.zip        macOS (in-app update)
                                      codeinoven-setup.exe        Windows
-                                     codeinoven.AppImage | .deb  Linux
+                                     codeinoven.AppImage | .deb  Linux x64
+                                     codeinoven-arm64.AppImage   Linux arm64
+                                       | codeinoven-arm64.deb
                                      SHA256SUMS.txt, RELEASE.json
 https://dl.codeinoven.com/nightly/   same names, the newest nightly
 ```
@@ -64,9 +67,17 @@ since macOS carries two artifacts (`.dmg` and `.zip`), a consumer of `RELEASE.js
 
 Each directory is a self-contained update-feed root: the feed and the artifacts it points at
 sit side by side, and both describe the same, single release. Nightly feed assets
-(`nightly-mac.yml`, `nightly.yml`, `nightly-linux.yml`) are stored as `latest-*.yml`,
-because the channel is the directory. `RELEASE.json` records that mapping in its `feeds`
-array.
+(`nightly-mac.yml`, `nightly.yml`, `nightly-linux.yml`, `nightly-linux-arm64.yml`) are stored as
+`latest-*.yml`, because the channel is the directory. `RELEASE.json` records that mapping in its
+`feeds` array.
+
+Linux publishes one feed per architecture, because electron-builder appends the target
+architecture to the feed of every non-x64 Linux target: `latest-linux.yml` points at the x64
+`.AppImage`, `latest-linux-arm64.yml` at the arm64 one. The arm64 pair only appears in a release
+built by the arm64 leg, so a mirror published before that leg existed carries the x64 files
+alone. The x64 Linux artifact names stay suffix-free on purpose: `stable/codeinoven.AppImage` and
+`stable/codeinoven.deb` are published download links and must keep resolving, which is why the
+arm64 leg overrides `linux.artifactName` instead of the default carrying `${arch}`.
 
 `SHA256SUMS.txt` is the release's own checksum list rewritten for the names the mirror serves
 (the digests are unchanged, and they are verified against the release's file before anything is
@@ -292,8 +303,10 @@ Every link is versionless, so the same command works until you decide to upgrade
 
 ```bash
 curl -fL -O https://dl.codeinoven.com/stable/codeinoven-arm64.dmg   # macOS (Apple silicon)
-curl -fL -O https://dl.codeinoven.com/stable/codeinoven.AppImage     # Linux
-curl -fL -O https://dl.codeinoven.com/stable/codeinoven.deb          # Debian / Ubuntu
+curl -fL -O https://dl.codeinoven.com/stable/codeinoven.AppImage     # Linux x64
+curl -fL -O https://dl.codeinoven.com/stable/codeinoven.deb          # Debian / Ubuntu x64
+curl -fL -O https://dl.codeinoven.com/stable/codeinoven-arm64.AppImage  # Linux arm64
+curl -fL -O https://dl.codeinoven.com/stable/codeinoven-arm64.deb       # Debian / Ubuntu arm64
 curl -fL -O https://dl.codeinoven.com/stable/codeinoven-setup.exe    # Windows
 ```
 
