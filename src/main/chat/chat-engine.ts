@@ -31476,7 +31476,6 @@ export class ChatEngine {
     const MAX_LIVE_PATHS = 200
     const changedPaths = session.changedPaths ?? new Set<string>()
     const rawPaths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
-    const turnStart = checkpoint.before.createdAt
     const ownThreadIds = await this.selfFamilyThreadIds(projectId, threadId)
     const foreign = await this.checkpointManager.foreignClaimedPathsForLive(
       checkpoint,
@@ -31498,14 +31497,12 @@ export class ChatEngine {
       const batch = rawPaths.slice(i, i + BATCH)
       const results = await Promise.all(
         batch.map(async (path) => {
-          // Foreign dedup: another thread demonstrably edited this path during
-          // this turn and this thread didn't precisely claim it   skip. Window
-          // proof alone does not exempt, so a fork can't steal a file via its
-          // shell window.
-          const claimedAt = foreign.get(path)
-          if (claimedAt !== undefined && claimedAt >= turnStart && !precise.has(path)) {
-            return null
-          }
+          // Foreign dedup: another thread demonstrably claimed this path and
+          // this thread didn't precisely claim it: skip. Window proof alone does
+          // not exempt, so a fork can't steal a file via its shell window. A
+          // live claim is current by construction (the other thread's claims
+          // reset per turn), so its timestamp is never compared to turnStart.
+          if (foreign.claimed.has(path) && !precise.has(path)) return null
           // The user's own in-app editor saves are never the thread's changes.
           if (userTouched?.has(path)) return null
           const before = checkpoint.before.files[path]

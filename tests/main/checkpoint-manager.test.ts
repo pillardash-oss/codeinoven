@@ -518,10 +518,55 @@ describe('CheckpointManager', () => {
       'reader',
       mine.id,
       projectRoot,
-      'completed'
+      'completed',
+      undefined,
+      undefined,
+      // This turn wrote borrowed.txt through a shell window, which is how a
+      // harness that edits from an inline script records its own evidence.
+      { changeSources: new Map([['borrowed.txt', [claimedSource('borrowed.txt')]]]) }
     )
 
     expect(completed.changes.map((change) => change.path)).toEqual(['borrowed.txt'])
+  })
+
+  // The other half of the same rule: a borrowed path this turn cannot prove it
+  // wrote must stay off its card, or the card lists a third turn's files.
+  it('keeps a borrowed path off a turn that cannot show it wrote the file', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    await writeFile(join(projectRoot, 'theirs.txt'), 'before', 'utf-8')
+
+    const mine = await manager.beginTurn('project1', 'reader', projectRoot, 'Reading turn', false)
+    const other = await manager.beginTurn('project1', 'other', projectRoot, 'Other turn', false)
+    await writeFile(join(projectRoot, 'theirs.txt'), 'third turn mid-write', 'utf-8')
+    const otherDone = await manager.completeTurn(
+      'project1',
+      'other',
+      other.id,
+      projectRoot,
+      'completed'
+    )
+    database.run(
+      'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
+      JSON.stringify({
+        ...otherDone,
+        changes: [{ path: 'theirs.txt', kind: 'modified', binary: false }],
+        changeSourceRefs: { 'theirs.txt': [] }
+      }),
+      otherDone.id
+    )
+
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      mine.id,
+      projectRoot,
+      'completed'
+    )
+
+    expect(completed.changes).toEqual([])
   })
 
   it('bounds the failure text written to a checkpoint', async () => {
