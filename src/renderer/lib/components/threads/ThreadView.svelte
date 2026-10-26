@@ -174,6 +174,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { modelRuntime } from '$lib/stores/model-runtime.svelte'
   import {
     FIRST_RUN_PROVIDER_SEARCH,
     providerConnectFlow
@@ -192,7 +193,9 @@
   } from '$lib/components/assistant/assistant-view'
   import {
     latestAssistantRecap,
-    assistantSetupRecapIssue
+    assistantSetupRecapIssue,
+    assistantKnowledgeLoss,
+    type AssistantKnowledgeLoss
   } from '$lib/components/assistant/assistant-recap'
   import { assistantResultText } from '$shared/assistant-result'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
@@ -211,11 +214,13 @@
   import {
     rendererRecovery,
     publishDraftActivity,
+    onRemoteDraftCleared,
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
   import { playHistoryArrive, promptArrive } from '$lib/motion'
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadTraceCache } from '$lib/stores/thread-trace-cache.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -251,6 +256,7 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { appConfirm } from '$lib/stores/app-confirm.svelte'
   import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
   import {
     ASSISTANT_PLACEHOLDER_NAME,
@@ -266,6 +272,7 @@
     COMPLETED_TURN_PAGE_SIZE
   } from '$shared/types'
   import type {
+    Assistant,
     Thread,
     ThreadMessageCursor,
     ThreadSettings,
@@ -278,7 +285,6 @@
     AgentEvent,
     AgentContextUsage,
     AgentHarnessUsage,
-    ProviderModel,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -1398,49 +1404,36 @@
    *  render page so a scroll gesture reveals a useful run of steps, small enough
    *  that mounting them never stalls a frame; the main process clamps it. */
   const STREAM_OLDER_PAGE_SIZE = 60
-  /** Durable working-trace parts loaded from the SSE log. They fill gaps in
-   *  the live mirror and restore the latest trace after an app refresh. A trace
-   *  that is on screen pages older entries in as the reader scrolls its top, one
-   *  page per gesture; a trace nobody is watching holds only the newest page. */
-  let streamParts = $state<AgentPart[]>([])
-  /** True when the durable log still folds entries older than `streamParts[0]`. */
-  let streamHasOlder = $state(false)
-  /** Thinking and tool steps the whole turn holds, from the durable fold. The
-   *  trace header shows this while only a bounded window of steps is mounted,
-   *  so the count states the turn's real size instead of climbing as older
-   *  pages load. */
-  let streamTotalSteps = $state(0)
-  /** Newest durable task-list parts for the turn. They never render in the
-   *  trace, so they ride beside the trace window and keep the task card correct
-   *  no matter which page of the trace is mounted. */
-  let streamTodoParts = $state<AgentPart[]>([])
-  /** Start time of the turn `streamTodoParts` was folded for. Null when the log
-   *  had no prompt to bound against (or nothing has been read yet). */
-  let streamTodoTurnStart = $state<number | null>(null)
-  /** Stream events the durable log has consumed for this fold: the live poll's
-   *  change cursor. `null` until a read lands, so the first poll falls back to
-   *  a window read. */
-  let streamCursor = $state<number | null>(null)
+  /**
+   * Durable working-trace parts loaded from the SSE log. They fill gaps in the
+   * live mirror and restore the latest trace after an app refresh. A trace that
+   * is on screen pages older entries in as the reader scrolls its top, one page
+   * per gesture; a trace nobody is watching holds only the newest page.
+   *
+   * The fold lives in a thread-keyed cache, never in this component. This view
+   * is keyed by thread id, so component-local trace state was discarded on every
+   * switch and rebuilt over IPC (`thread:loadStreamParts`): reopening a live
+   * thread painted its header with only the parts the message mirror had
+   * persisted and the real tail arrived seconds later. The cache paints the
+   * trace it last showed on the first frame, and every durable read merges into
+   * it additively, so the tail never blanks and never waits on a round trip.
+   */
+  // Intentional initial-value capture: Workspace keys this view by thread ID,
+  // so the scope this mount owns can never change under it.
+  // svelte-ignore state_referenced_locally
+  const streamTrace = threadTraceCache.scope(thread.projectId, conversationId)
+  /** True while a durable read for this mount is current. A late page from a
+   *  superseded read must not touch the (shared) cached fold. */
   let streamPartsLoadGeneration = 0
   /** Bumped whenever the durable fold is dropped (a steer, a new local turn).
    *  An older-page read started before it must not resurrect entries from the
    *  turn the reader has left. */
   let streamFoldVersion = 0
-  /** Which logical turn the mounted fold belongs to, from the page that
-   *  delivered it. The boundary moves when the harness takes a steer, and that
-   *  move is the signal that the turn on screen is over and a new one opened. */
-  let streamTurnStartTs = $state<number | null>(null)
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
     streamFoldVersion += 1
-    streamParts = []
-    streamHasOlder = false
-    streamTotalSteps = 0
-    streamTodoParts = []
-    streamTodoTurnStart = null
-    streamCursor = null
-    streamTurnStartTs = null
+    streamTrace.reset()
     completedTurns = []
     completedTurnsGeneration += 1
   }
@@ -1449,8 +1442,8 @@
    *  the harness took a steer, and the boundary moved with it. */
   function foldBoundaryMoved(page: TurnStreamPartsPage | TurnStreamPartsChange): boolean {
     if (typeof page.turnStartTs !== 'number') return false
-    if (streamTurnStartTs === null) return false
-    return page.turnStartTs !== streamTurnStartTs
+    if (streamTrace.turnStartTs === null) return false
+    return page.turnStartTs !== streamTrace.turnStartTs
   }
 
   /**
@@ -1465,7 +1458,7 @@
     nextTurnStartTs: number,
     generation: number
   ): Promise<void> {
-    streamTurnStartTs = nextTurnStartTs
+    streamTrace.turnStartTs = nextTurnStartTs
     void loadCompletedTurns()
     await remountNewestStreamParts(generation)
   }
@@ -1570,8 +1563,8 @@
   /** Adopt a durable read's task-list snapshot together with the turn it was
    *  folded for, so the card can reject it once the transcript moves on. */
   function applyTodoSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
-    streamTodoParts = page.todoParts
-    streamTodoTurnStart = page.turnStartTs
+    streamTrace.todoParts = page.todoParts
+    streamTrace.todoTurnStart = page.turnStartTs
   }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
@@ -1655,15 +1648,15 @@
    * highlight, on screen.
    */
   let todoSnapshotIsCurrent = $derived.by(() => {
-    if (streamTodoParts.length === 0) return false
-    return todoSnapshotMatchesTurn(streamTodoTurnStart, turnAnchorCreatedAt())
+    if (streamTrace.todoParts.length === 0) return false
+    return todoSnapshotMatchesTurn(streamTrace.todoTurnStart, turnAnchorCreatedAt())
   })
   let todoMessages = $derived.by(() => {
     if (!todoSnapshotIsCurrent) return messages
     const streamMessage: AgentMessage = {
       id: `${thread.id}:todo-stream`,
       role: 'assistant',
-      parts: streamTodoParts,
+      parts: streamTrace.todoParts,
       createdAt: Number.MAX_SAFE_INTEGER
     }
     return [...messages, streamMessage]
@@ -2248,36 +2241,57 @@
 
     return actions
   })
-  /** The model currently selected for the thread, resolved from the catalog. */
-  const selectedModel = $derived.by((): ProviderModel | undefined => {
-    const provider =
-      providers.find(
-        (candidate) =>
-          candidate.id === settings.providerId && candidate.harnessId === settings.harnessId
-      ) ?? providers.find((candidate) => candidate.id === settings.providerId)
-    return provider?.models.find((candidate) => candidate.id === settings.modelId)
+  /**
+   * The selected model's own properties, read through the shared runtime store
+   * for the thread's account.
+   *
+   * Codex states a model's context windows per account (`codex debug models`
+   * answers from that account's `CODEX_HOME`), so the account-agnostic catalog
+   * cannot describe this thread: it carries whichever account was probed last,
+   * which is how a thread whose account states a 500k window rendered a 272k
+   * one. The store resolves the account's answer, and a stored window survives
+   * only while that answer offers it.
+   */
+  const modelRuntimeSelection = $derived({
+    projectId: thread.projectId,
+    harnessId: settings.harnessId,
+    providerId: settings.providerId,
+    modelId: settings.modelId,
+    accountId: settings.accountId
+  })
+  const threadModel = $derived(
+    modelRuntime.resolve(modelRuntimeSelection, providers, settings.contextWindow)
+  )
+  /**
+   * The window the meter must show: the account's own window for the selected
+   * model. The harness-reported window stays the fallback for models whose
+   * window the harness does not state.
+   */
+  const configuredContextWindow = $derived(threadModel.contextWindow)
+  /**
+   * Read the account's properties as soon as the selection lands, so the meter
+   * and the context dropdown never render a window another account stated.
+   */
+  $effect(() => {
+    modelRuntime.ensure(modelRuntimeSelection)
   })
   /**
-   * The context window the app has configured for a model: the thread's runtime
-   * override when the model advertises it, otherwise the catalog's window
-   * (which, for a custom base-URL provider, is the window the user authored).
-   *
-   * This is the window the meter must show. It deliberately outranks the window
-   * a harness reported on its latest turn, because a live harness session keeps
-   * reporting the window it started with: after a custom model's window (or a
-   * thread's runtime window) is edited, the old reading would otherwise keep
-   * driving the battery until the session restarts. The harness-reported window
-   * stays the fallback for models whose window the catalog does not state.
+   * Drop a stored window the account's model no longer offers, so the dropdown's
+   * selected value, the meter, and the turn's budget cannot disagree. The guard
+   * keeps one write per stale value instead of repeating it on every flush.
    */
-  function configuredContextWindowFor(model: ProviderModel | undefined): number | undefined {
-    const runtimeWindow =
-      settings.contextWindow !== undefined &&
-      model?.contextWindows?.includes(settings.contextWindow)
-        ? settings.contextWindow
-        : undefined
-    return runtimeWindow ?? model?.contextWindow
-  }
-  const configuredContextWindow = $derived(configuredContextWindowFor(selectedModel))
+  let reconciledContextWindow = ''
+  $effect(() => {
+    if (!threadModel.model) return
+    if (threadModel.contextWindows.length === 0) return
+    const stored = settings.contextWindow
+    if (stored === undefined) return
+    if (threadModel.contextWindowOverride !== undefined) return
+    const key = `${settings.harnessId}:${settings.providerId}:${settings.modelId}:${stored}`
+    if (reconciledContextWindow === key) return
+    reconciledContextWindow = key
+    updateSettings({ ...settings, contextWindow: undefined })
+  })
   const contextUsage = $derived.by((): AgentContextUsage | undefined => {
     let latestMessage: AgentMessage | undefined
     let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
@@ -2381,15 +2395,11 @@
     }
 
     if (!latestMessage) return undefined
-    const providerId = latestMessage?.providerId ?? settings.providerId
-    const modelId = latestMessage?.modelId ?? settings.modelId
-    const harnessId = latestMessage?.harnessId ?? settings.harnessId
-    const model = (
-      providers.find(
-        (provider) => provider.id === providerId && provider.harnessId === harnessId
-      ) ?? providers.find((provider) => provider.id === providerId)
-    )?.models.find((candidate) => candidate.id === modelId)
-    const contextWindow = configuredContextWindowFor(model) ?? latestMessage?.contextWindow
+    // The selected model's account-accurate window outranks whatever the latest
+    // turn reported: a live harness session keeps reporting the window it
+    // started with, so a model (or account) switch would otherwise keep driving
+    // the meter with the previous window.
+    const contextWindow = configuredContextWindow ?? latestMessage.contextWindow
     // Only the explicit composed-request estimate is an estimate. Falling back
     // to the harness's own reported token total is a provider reading   the
     // last request's prompt plus completion is the occupancy the provider
@@ -5884,6 +5894,31 @@
     return readySessionId
   }
 
+  /**
+   * Read the newest durable trace window and adopt it into the shared fold.
+   *
+   * Fired at the top of the mount path so the request is in flight while the
+   * session handshake runs, instead of queued behind the status, permission and
+   * question reads. The fold is additive, so a hover preload that already
+   * filled it only refreshes entries in place, and the cached fold keeps
+   * painting while this read is in flight. Only the newest page crosses IPC;
+   * older entries page in from the trace's own inner scroll.
+   */
+  async function loadLatestTraceWindow(): Promise<TurnStreamPartsPage | null> {
+    const generation = ++streamPartsLoadGeneration
+    try {
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        limit: WORKING_TRACE_PAGE_SIZE
+      })
+      if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return null
+      streamTrace.adoptWindow(page)
+      return page
+    } catch {
+      // A missing fold is not a failed open: the mirror still paints.
+      return null
+    }
+  }
+
   /** Restore app-owned session state without contacting native harness transport. */
   async function connectSession(): Promise<void> {
     // Controller-driven conversations own their own session handshake.
@@ -5893,6 +5928,13 @@
     // Independent extras   each lands as it resolves, none block the paint.
     void refreshCheckpoints()
     void loadProjectContext()
+    // The durable fold is the one read the open path cannot answer from the
+    // message mirror, and the session handshake below is a chain of round
+    // trips of its own. Its request leaves first, so it is already in flight
+    // while the status, permission, and question reads run. A hover preload has
+    // usually warmed the fold and the main process's log reader, which makes
+    // this a refresh rather than the first read.
+    const latestTraceWindow = loadLatestTraceWindow()
 
     if (shouldHydrateEngineeringState()) {
       try {
@@ -5970,43 +6012,34 @@
       // and a finished thread still needs the same complete trace after a
       // refresh or thread switch. Only the newest page is read here; older
       // entries page in on the trace's own inner scroll.
-      const generation = ++streamPartsLoadGeneration
       void loadCompletedTurns()
-      void invoke('thread:loadStreamParts', projectId, id, {
-        limit: WORKING_TRACE_PAGE_SIZE
-      })
-        .then((page) => {
-          if (!alive || generation !== streamPartsLoadGeneration) return
-          if (page.kind !== 'window') return
-          streamParts = mergeWorkingParts(streamParts, page.parts)
-          streamHasOlder = page.hasOlder
-          applyTodoSnapshot(page)
-          streamCursor = page.cursor
-          if (
-            providerStatus === null &&
-            thread.status !== 'working-paused' &&
-            !restoredBusy &&
-            hasRenderableWorkingParts(page.parts)
-          ) {
-            // Only a saved run that is still the newest work may claim the
-            // restored-trace state. Once the user has sent a newer message
-            // (locally submitted turn, or a pending user message after the
-            // last assistant turn), that stale trace is history: it must stay
-            // folded with frozen durations while the new run gets its own
-            // live trace.
-            const latestStart = latestTurnInfo.startIndex
-            let turnEnd = latestStart
-            while (turnEnd + 1 < messages.length && messages[turnEnd + 1]?.role !== 'user') {
-              turnEnd += 1
-            }
-            const hasNewerUserWork =
-              latestStart === -1 ||
-              locallySubmittedTurnId !== null ||
-              messages.slice(turnEnd + 1).some((message) => message.role === 'user')
-            restoredBusy = !hasNewerUserWork && !isLatestTurnCompleted()
+      const page = await latestTraceWindow
+      if (!alive) return
+      if (page) {
+        if (
+          providerStatus === null &&
+          thread.status !== 'working-paused' &&
+          !restoredBusy &&
+          hasRenderableWorkingParts(page.parts)
+        ) {
+          // Only a saved run that is still the newest work may claim the
+          // restored-trace state. Once the user has sent a newer message
+          // (locally submitted turn, or a pending user message after the
+          // last assistant turn), that stale trace is history: it must stay
+          // folded with frozen durations while the new run gets its own
+          // live trace.
+          const latestStart = latestTurnInfo.startIndex
+          let turnEnd = latestStart
+          while (turnEnd + 1 < messages.length && messages[turnEnd + 1]?.role !== 'user') {
+            turnEnd += 1
           }
-        })
-        .catch(() => {})
+          const hasNewerUserWork =
+            latestStart === -1 ||
+            locallySubmittedTurnId !== null ||
+            messages.slice(turnEnd + 1).some((message) => message.role === 'user')
+          restoredBusy = !hasNewerUserWork && !isLatestTurnCompleted()
+        }
+      }
       if (!liveSessionWorking && providerStatus === null) setIdleFromRestore()
       // Never pull the full live harness transcript while mounting a thread.
       // `agent:loadMessages` is intentionally unbounded: a long-running agent
@@ -6395,13 +6428,14 @@
       case 'message.part.updated': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
-        const streamPartIndex = streamParts.findLastIndex((part) => part.id === event.part.id)
-        streamParts =
+        const streamPartIndex = streamTrace.parts.findLastIndex((part) => part.id === event.part.id)
+        streamTrace.setParts(
           streamPartIndex === -1
-            ? [...streamParts, event.part]
-            : streamParts.map((part, index) =>
+            ? [...streamTrace.parts, event.part]
+            : streamTrace.parts.map((part, index) =>
                 index === streamPartIndex ? mergeStreamedPart(part, event.part) : part
               )
+        )
         // Every harness publishes its output as part snapshots, so the text
         // length is the one progress signal available everywhere. Snapshots
         // repeat the whole text, so only growth counts.
@@ -7157,6 +7191,23 @@
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
+
+  /**
+   * A draft cleared in another window or instance leaves this conversation too.
+   *
+   * The draft store drops its mirror of the commit, but the mounted composer
+   * holds those words in its own editor and would keep them on screen, so the
+   * composer is remounted from the (now empty) restored draft and the selection
+   * pins the sent message carried are dropped with it. This is the same path a
+   * send takes, just triggered by whoever else sent it.
+   */
+  $effect(() => {
+    return onRemoteDraftCleared((projectId, threadId) => {
+      if (thread.projectId !== projectId || thread.id !== threadId) return
+      clearResponseReferences()
+      composerRestoreKey += 1
+    })
+  })
   /** Baseline captured at mount. A focus request that was issued *before* this
    *  conversation mounted is already satisfied by the composer's own autofocus,
    *  so only requests that arrive afterwards may remount the composer. Starting
@@ -7763,6 +7814,22 @@
    *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
+  /**
+   * Whether this conversation is authoring the assistant, so its text carries the
+   * app's own draft payload: the knowledge block and the plan block. Both belong
+   * to the recap card, so every text the transcript draws in this conversation is
+   * filtered before it reaches the reader   the turn's closing statement and each
+   * step of its working trace alike. A run thread of a saved assistant is not an
+   * authoring conversation, so its text is never rewritten here.
+   */
+  const assistantAuthoringThread = $derived(
+    assistantMode && (!assistantKnowledgeComplete || assistantSetupThread)
+  )
+  /** The trace's own output filter, or nothing when the text is plain conversation. */
+  const assistantAuthoringOutput = $derived(
+    assistantAuthoringThread ? assistantDisplayText : undefined
+  )
+
   const assistantBehaviorSession = $derived(settings.assistantBehaviorSession)
   const assistantSessionReady = $derived(
     !busy &&
@@ -7913,11 +7980,29 @@
   /** The draft revision the user chose to keep editing; empty means none. */
   let assistantRecapDismissed = $state('')
   let assistantSaving = $state(false)
+  /** One replacement confirmation at a time, so a second Save cannot queue another. */
+  let assistantKnowledgeGate = $state(false)
 
   const assistantRecapVisible = $derived(
     assistantDraft !== null &&
       !assistantSaving &&
       assistantRecapDismissed !== assistantDraftSignature
+  )
+
+  /**
+   * Whether the recap card stands in for the agent's own confirmation question.
+   *
+   * The card is the go-ahead: it states the whole draft and carries the Save
+   * button. An agent that still asks "does this capture how you want it to work?"
+   * after presenting the draft is asking the same question a second time, in a
+   * card with a clock running on it, so that question is not drawn while the recap
+   * is up. A secret request is never superseded: that one is asking for something
+   * only the user can supply.
+   */
+  const assistantRecapSupersedesQuestion = $derived(
+    assistantRecapVisible &&
+      pendingQuestionRequests.length > 0 &&
+      !pendingQuestionRequests[0]?.questions.some((question) => question.secretRequest === true)
   )
 
   const assistantComposerCovered = $derived(
@@ -7981,6 +8066,13 @@
    */
   async function confirmAssistantSave(): Promise<void> {
     if (!assistantId) return
+    // The card is the answer to any confirmation question the agent asked beside
+    // it, so that question is retired here rather than left pending: a session
+    // sitting on an unanswered question cannot take the turn that follows the save.
+    for (const request of pendingQuestionRequests) {
+      if (request.questions.some((question) => question.secretRequest === true)) continue
+      await handleQuestionDismiss(request.requestId).catch(() => undefined)
+    }
     const firstSave = !assistantKnowledgeComplete
     const saved = await saveAssistantKnowledge()
     if (saved && !firstSave && assistantBehaviorSession) {
@@ -7990,6 +8082,38 @@
       })
     }
     if (saved && firstSave) await assistants.postSetup(assistantId).catch(() => undefined)
+  }
+
+  /**
+   * The gate on a revision that would delete most of the instructions it replaces.
+   *
+   * The agent presents the whole revised document, so a model that loses its place
+   * writes a short block and calls it the replacement, and the recap card then
+   * offers that block as an ordinary Save. The ask is a line, the thing at stake is
+   * the instruction set the assistant follows on every run, and the two are only
+   * comparable by reading the document end to end. A save that drops a quarter of
+   * the saved knowledge therefore asks here first, with the lines it would delete in
+   * front of the user.
+   */
+  async function confirmKnowledgeReplacement(
+    assistant: Assistant,
+    loss: AssistantKnowledgeLoss
+  ): Promise<boolean> {
+    const shown = loss.removed.slice(0, 6)
+    const remaining = loss.removed.length - shown.length
+    return appConfirm.request({
+      title: `Replace ${assistant.name}'s instructions?`,
+      body: [
+        `This revision keeps ${loss.nextLines} lines of the ${loss.previousLines} saved now, and removes ${loss.removed.length}.`,
+        ...shown.map((line) => `Removed: ${line}`),
+        remaining > 0
+          ? `Another ${remaining} ${remaining === 1 ? 'saved line is' : 'saved lines are'} not carried over.`
+          : ''
+      ].filter((line) => line.length > 0),
+      note: 'Saving replaces the instructions this assistant follows. A line removed here is gone from the next run onwards.',
+      confirmLabel: 'Replace instructions',
+      cancelLabel: 'Keep editing'
+    })
   }
 
   /**
@@ -8007,6 +8131,18 @@
     if (!draft) {
       errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
       return false
+    }
+    // A revision is compared with what is saved, because the draft carries the
+    // whole document and nothing else checks that it still contains one.
+    const replacing = assistants.assistants.find((entry) => entry.id === assistantId) ?? null
+    const loss = replacing ? assistantKnowledgeLoss(replacing.knowledge, draft.knowledge) : null
+    if (replacing && loss) {
+      if (assistantKnowledgeGate) return false
+      assistantKnowledgeGate = true
+      const approved = await confirmKnowledgeReplacement(replacing, loss).finally(() => {
+        assistantKnowledgeGate = false
+      })
+      if (!approved) return false
     }
     const setupIssue = assistantKnowledgeComplete
       ? null
@@ -8030,7 +8166,7 @@
     assistantSaving = true
     try {
       const plan = draft.plan
-      const assistant = assistants.assistants.find((entry) => entry.id === assistantId) ?? null
+      const assistant = replacing
       const wasScheduled = assistant ? assistantIsScheduled(assistant) : true
       const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
       // A conversation settles who the assistant is as well as what it does, so a
@@ -12720,14 +12856,32 @@
     const prompt = pendingLiveTurn ? structureMessages[pendingLiveTurn.userMessageIndex] : undefined
     // Delivery and the durable poll arrive separately. Until the fold catches
     // up, its parts still belong above the new prompt, never below it.
-    if (prompt && (streamTurnStartTs === null || streamTurnStartTs < prompt.createdAt)) return []
-    return streamParts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
+    if (prompt && (streamTrace.turnStartTs === null || streamTrace.turnStartTs < prompt.createdAt))
+      return []
+    return streamTrace.parts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
   }
 
   function withoutPendingLiveParts(parts: AgentPart[]): AgentPart[] {
     if (!pendingLiveTurn || pendingLiveTurnParts.length === 0) return parts
     const pendingPartIds = new SvelteSet(pendingLiveTurnParts.map((part) => part.id))
     return parts.filter((part) => !pendingPartIds.has(part.id))
+  }
+
+  /**
+   * Whether the cached fold belongs to the turn starting at `startIndex`.
+   *
+   * The fold is cached per thread and painted on the first frame, before the
+   * durable read for this mount lands. A fold that belongs to an earlier turn
+   * must never render under a newer prompt in that window: the fold's boundary
+   * is the prompt that opened its turn, so it has to sit at or after this
+   * turn's own start. A fold with no boundary yet is not evidence of anything
+   * and stays permissive.
+   */
+  function foldBelongsToTurn(startIndex: number): boolean {
+    const boundary = streamTrace.turnStartTs
+    if (boundary === null) return true
+    const turnStart = structureMessages[startIndex]
+    return turnStart === undefined || boundary >= turnStart.createdAt
   }
 
   /**
@@ -12753,11 +12907,17 @@
       holdsClosingText,
       isTransparentTurnMessage
     )
-    const durable = pendingLiveTurn
-      ? []
-      : streamWorkingPartsForTurn(streamParts, transcriptIndex, startIndex, holdsClosingText)
+    const durable =
+      pendingLiveTurn || !foldBelongsToTurn(startIndex)
+        ? []
+        : streamWorkingPartsForTurn(
+            streamTrace.parts,
+            transcriptIndex,
+            startIndex,
+            holdsClosingText
+          )
     const collected =
-      streamParts.length > 0 && collectsDurable
+      streamTrace.parts.length > 0 && collectsDurable
         ? // The durable log is the turn's stream order, so it orders the body;
           // entries that streamed before this view mounted only exist there. The
           // leading context is not in the durable fold, so it stays in front.
@@ -12846,7 +13006,7 @@
   async function pollStreamParts(): Promise<void> {
     const { projectId, id } = thread
     const generation = ++streamPartsLoadGeneration
-    const cursor = streamCursor
+    const cursor = streamTrace.cursor
     try {
       const page = await invoke(
         'thread:loadStreamParts',
@@ -12861,12 +13021,12 @@
           return
         }
         // No cursor yet (a mount read that has not landed): adopt the window.
-        streamTurnStartTs = page.turnStartTs ?? null
-        streamParts = mergeWorkingParts(streamParts, page.parts)
-        streamHasOlder = page.hasOlder
-        streamTotalSteps = page.totalSteps
+        streamTrace.turnStartTs = page.turnStartTs ?? null
+        streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
+        streamTrace.hasOlder = page.hasOlder
+        streamTrace.totalSteps = page.totalSteps
         applyTodoSnapshot(page)
-        streamCursor = page.cursor
+        streamTrace.cursor = page.cursor
         return
       }
       // A completed-turn read is a different request shape; the poll never asks
@@ -12876,18 +13036,19 @@
         await handleFoldBoundaryMove(page.turnStartTs as number, generation)
         return
       }
-      streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
-      streamCursor = page.cursor
-      streamTotalSteps = page.totalSteps
+      streamTrace.turnStartTs = page.turnStartTs ?? streamTrace.turnStartTs
+      streamTrace.cursor = page.cursor
+      streamTrace.totalSteps = page.totalSteps
       applyTodoSnapshot(page)
       // A fold that shrank under us with the same boundary belongs to a log
       // rewritten after the fact: remount the newest page instead of keeping
       // entries that no longer belong here.
-      if (page.total < streamParts.length) {
+      if (page.total < streamTrace.parts.length) {
         await remountNewestStreamParts(generation)
         return
       }
-      if (page.parts.length > 0) streamParts = mergeWorkingParts(streamParts, page.parts)
+      if (page.parts.length > 0)
+        streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
     } catch {
       // Transient read failure   keep what we have and try again next tick.
     }
@@ -12917,12 +13078,12 @@
         await handleFoldBoundaryMove(page.turnStartTs as number, streamPartsLoadGeneration)
         return
       }
-      streamTurnStartTs = page.turnStartTs ?? null
-      streamParts = mergeWorkingParts(streamParts, page.parts)
-      streamHasOlder = page.hasOlder
-      streamTotalSteps = page.totalSteps
+      streamTrace.turnStartTs = page.turnStartTs ?? null
+      streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
+      streamTrace.hasOlder = page.hasOlder
+      streamTrace.totalSteps = page.totalSteps
       applyTodoSnapshot(page)
-      streamCursor = page.cursor
+      streamTrace.cursor = page.cursor
     } catch {
       // Best-effort: the message cache still carries the checkoffs, and the
       // next turn's poll or mount read rebuilds the fold again.
@@ -12935,12 +13096,12 @@
       limit: WORKING_TRACE_PAGE_SIZE
     })
     if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
-    streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
-    streamParts = page.parts
-    streamHasOlder = page.hasOlder
-    streamTotalSteps = page.totalSteps
+    streamTrace.turnStartTs = page.turnStartTs ?? streamTrace.turnStartTs
+    streamTrace.setParts(page.parts)
+    streamTrace.hasOlder = page.hasOlder
+    streamTrace.totalSteps = page.totalSteps
     applyTodoSnapshot(page)
-    streamCursor = page.cursor
+    streamTrace.cursor = page.cursor
   }
 
   /** Pull the next older durable page for the trace's own inner-scroll paging,
@@ -12952,8 +13113,8 @@
    *  already appended out of place (a part older than the mounted window that kept
    *  updating) adopts its real position instead of staying stuck at the tail. */
   async function loadOlderStreamParts(): Promise<void> {
-    const oldest = streamParts[0]
-    if (!oldest || !streamHasOlder) return
+    const oldest = streamTrace.parts[0]
+    if (!oldest || !streamTrace.hasOlder) return
     const foldVersion = streamFoldVersion
     const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
       beforeId: oldest.id,
@@ -12961,15 +13122,18 @@
     })
     if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
     if (page.parts.length === 0) {
-      streamHasOlder = false
+      streamTrace.hasOlder = false
       return
     }
     const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
-    const mountedBefore = streamParts.length
-    streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
-    streamHasOlder = page.hasOlder
-    streamTotalSteps = page.totalSteps
-    if (streamParts.length === mountedBefore) streamHasOlder = false
+    const mountedBefore = streamTrace.parts.length
+    streamTrace.setParts([
+      ...page.parts,
+      ...streamTrace.parts.filter((part) => !pagedIds.has(part.id))
+    ])
+    streamTrace.hasOlder = page.hasOlder
+    streamTrace.totalSteps = page.totalSteps
+    if (streamTrace.parts.length === mountedBefore) streamTrace.hasOlder = false
   }
 
   /** Thread whose foreign run this view marked working, so the same view clears
@@ -13024,12 +13188,12 @@
   // rest of its own fold in the background instead of streaming steps in as the
   // reader scrolls. One page per frame and bounded, so nothing blocks a frame.
   $effect(() => {
-    void streamParts.length
-    void streamHasOlder
+    void streamTrace.parts.length
+    void streamTrace.hasOlder
     void streamFoldVersion
     if (!active || appQuitState.quitting) return
-    if (!streamHasOlder) return
-    if (streamParts.length >= EAGER_STREAM_PARTS_CAP) return
+    if (!streamTrace.hasOlder) return
+    if (streamTrace.parts.length >= EAGER_STREAM_PARTS_CAP) return
     const foldVersion = streamFoldVersion
     const frame = requestAnimationFrame(() => {
       if (!alive || foldVersion !== streamFoldVersion) return
@@ -13069,9 +13233,11 @@
   // there on return.
   $effect(() => {
     if (active) return
-    if (streamParts.length <= WORKING_TRACE_PAGE_SIZE) return
-    streamHasOlder = true
-    streamParts = streamParts.slice(streamParts.length - WORKING_TRACE_PAGE_SIZE)
+    if (streamTrace.parts.length <= WORKING_TRACE_PAGE_SIZE) return
+    streamTrace.hasOlder = true
+    streamTrace.setParts(
+      streamTrace.parts.slice(streamTrace.parts.length - WORKING_TRACE_PAGE_SIZE)
+    )
   })
 
   onDestroy(() => {
@@ -13639,9 +13805,9 @@
               busy={traceBusy}
               note={traceBusy ? workingStatusNote : null}
               {active}
-              olderPartsAvailable={streamHasOlder}
+              olderPartsAvailable={streamTrace.hasOlder}
               onLoadOlderParts={loadOlderStreamParts}
-              totalSteps={streamTotalSteps}
+              totalSteps={streamTrace.totalSteps}
               startTime={unmirroredTraceStartTime}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
@@ -13670,6 +13836,7 @@
                 )}
               onOpenSubagent={openSubagent}
               onCiteFile={openFileCitation}
+              formatOutput={assistantAuthoringOutput}
             />
           {/snippet}
           <!-- A turn a prompt closed whose work the transcript never mirrored:
@@ -13702,6 +13869,7 @@
               isFast={currentWorkingTraceAttribution.isFast}
               onOpenSubagent={openSubagent}
               onCiteFile={openFileCitation}
+              formatOutput={assistantAuthoringOutput}
             />
           {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
@@ -14118,9 +14286,9 @@
                         rehydrated={traceIsRestored}
                         foreignRun={traceRunIsForeign}
                         {active}
-                        olderPartsAvailable={isCurrentAssistantTurn && streamHasOlder}
+                        olderPartsAvailable={isCurrentAssistantTurn && streamTrace.hasOlder}
                         onLoadOlderParts={isCurrentAssistantTurn ? loadOlderStreamParts : undefined}
-                        totalSteps={isCurrentAssistantTurn ? streamTotalSteps : undefined}
+                        totalSteps={isCurrentAssistantTurn ? streamTrace.totalSteps : undefined}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}
@@ -14224,7 +14392,7 @@
                       )}
                       {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
                       {@const deliveredClosingText = assistantMode
-                        ? assistantSetupThread
+                        ? assistantAuthoringThread
                           ? assistantDisplayText(turnClosingText?.text ?? messageText(msg))
                           : assistantResultText(
                               turnClosingText?.text ?? messageText(msg),
@@ -14902,6 +15070,7 @@
                   knowledge={assistantDraft.knowledge}
                   plan={assistantDraft.plan}
                   update={assistantKnowledgeComplete}
+                  previousKnowledge={assistant?.knowledge ?? ''}
                   scheduled={assistant ? assistantIsScheduled(assistant) : true}
                   existingConnections={existingAssistantConnections}
                   saving={assistantSaving}
@@ -14992,7 +15161,7 @@
                   onAlternative={providePermissionAlternative}
                 />
               {/key}
-            {:else if pendingQuestionRequests.length > 0 && (!achievementAutonomous || pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
+            {:else if pendingQuestionRequests.length > 0 && !assistantRecapSupersedesQuestion && (!achievementAutonomous || pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
               {@const pendingRequest = pendingQuestionRequests[0]}
               {#key pendingRequest.requestId}
                 {#if pendingRequest.questions.some((question) => question.secretRequest === true)}

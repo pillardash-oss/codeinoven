@@ -13,6 +13,7 @@ import { toast } from 'svelte-sonner'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 import { showToastError } from '$lib/stores/app-errors.svelte'
+import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import type { ForeignRunNotice, ThreadTransferResult } from '$shared/types'
 
 /**
@@ -43,6 +44,9 @@ function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>): boolea
 class ForeignRunsStore {
   #keys = new Set<string>()
   #workflowKeys = new Set<string>()
+  /** The threads of the last published snapshot, kept as pairs so a departing
+   *  notice can clear the run state this window holds for that thread. */
+  #threads = new Map<string, { projectId: string; threadId: string }>()
   /** Bumped by every push, so a hydration response that arrives after a newer
    *  event can never overwrite it. */
   #revision = 0
@@ -171,6 +175,24 @@ class ForeignRunsStore {
     this.#workflowKeys = workflowKeys
     this.runs = new Set(keys)
     this.workflows = new Set(workflowKeys)
+    // A turn that stops being foreign is the one moment this window is provably
+    // holding run state for a run it never owned. That entry was fed by the
+    // sibling's stream, and the stream ends with its turn, so a terminal event
+    // that never arrived would leave a finished foreign thread reading as work in
+    // progress on every rail, strip and row that asks the live-working rule. The
+    // shared row was already re-read and pushed by the main process, so dropping
+    // the projection here is what lets the row speak alone.
+    for (const [key, thread] of this.#threads) {
+      if (keys.has(key)) continue
+      if (!agentRuns.hasSettled(thread.projectId, thread.threadId)) continue
+      agentRuns.completeSession(thread.projectId, thread.threadId)
+    }
+    this.#threads = new Map(
+      notices.map((notice) => [
+        threadKey(notice.projectId, notice.threadId),
+        { projectId: notice.projectId, threadId: notice.threadId }
+      ])
+    )
     // A thread that is no longer foreign (this instance took it over, or it
     // settled) has no card left to show a transfer verdict on.
     for (const key of [...this.transferStates.keys()]) {

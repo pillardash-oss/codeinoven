@@ -7,6 +7,7 @@ import {
 } from '$shared/types'
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
 import type { ActionStatusBadge } from '$lib/actions/types'
 
 /**
@@ -33,12 +34,23 @@ import type { ActionStatusBadge } from '$lib/actions/types'
  * persisted status is the only signal and stands in for genuinely in-flight
  * work. Every status surface reads this one rule so a thread never looks
  * working on one surface and idle on another.
+ *
+ * A turn another instance owns is the exception, and it is the one case this
+ * window cannot settle from its own run state: it never sees that process's
+ * harness, so the entry it holds is only a projection of the shared stream. That
+ * stream stops when the owner ends the turn or the owner dies, and an earlier
+ * local run leaves an entry behind too, so outvoting the shared row with it kept
+ * a rail badge counting a finished foreign turn as working and hid a live one as
+ * idle. The shared row is the one source both instances write, so for a foreign
+ * turn it decides, and the stream only refines what that window renders.
  */
 export function isThreadLiveWorking(thread: Thread): boolean {
   if (isThreadAwaitingUser(thread) || isThreadRetryPaused(thread)) return false
+  const rowWorking = Boolean(thread.sessionId) && isThreadWorking(thread)
+  if (foreignRuns.isForeign(thread.projectId, thread.id)) return rowWorking
   return agentRuns.hasSettled(thread.projectId, thread.id)
     ? agentRuns.isBusy(thread.projectId, thread.id)
-    : Boolean(thread.sessionId) && isThreadWorking(thread)
+    : rowWorking
 }
 
 /**

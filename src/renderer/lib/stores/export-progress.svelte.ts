@@ -103,11 +103,12 @@ class ExportProgressState {
   /** Start a design export and report it in the panel. */
   startDesign(
     projectId: string,
+    threadId: string,
     directory: string,
     entry: string | null,
     format: DesignExportFormat
   ): void {
-    void this.runDesign(projectId, directory, entry, format)
+    void this.runDesign(projectId, threadId, directory, entry, format)
   }
 
   /** Start a video MP4 export and report it in the panel. */
@@ -117,6 +118,7 @@ class ExportProgressState {
 
   private async runDesign(
     projectId: string,
+    threadId: string,
     directory: string,
     entry: string | null,
     format: DesignExportFormat
@@ -133,7 +135,7 @@ class ExportProgressState {
     const generation = ++this.generation
     this.begin('design', `${entry ?? 'Whole design'} as ${format.toUpperCase()}`, projectId)
     try {
-      const exported = await invoke('design:export', projectId, directory, entry, format)
+      const exported = await invoke('design:export', projectId, threadId, directory, entry, format)
       if (this.generation !== generation) return
       this.result = { directory: exported.directory, files: exported.files }
     } catch (failure: unknown) {

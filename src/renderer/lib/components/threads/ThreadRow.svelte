@@ -67,7 +67,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { ovens } from '$lib/stores/ovens.svelte'
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { preloadThreadConversation } from '$lib/stores/thread-preload'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
@@ -251,11 +251,12 @@
   /** Warm the thread's message cache so a click opens without the "Loading
    *  conversation…" spinner. The bounded load is non-destructive and skipped
    *  once the thread has messages (the currently selected row is already
-   *  loading through the open view, so it never needs this). */
-  function preloadMessages(): void {
+   *  loading through the open view, so it never needs this). The working trace
+   *  is warmed in the same pass: a live thread's tail is the only part of its
+   *  conversation that is not in the message mirror. */
+  function preloadThread(): void {
     if (picker || selected) return
-    if (threadMessages.loaded(thread.projectId, thread.id)) return
-    void threadMessages.preload(thread.projectId, thread.id)
+    preloadThreadConversation(thread)
   }
 
   /** Distinct harnesses used in this thread's session, newest first. */
@@ -950,7 +951,7 @@
     // Warm the cache early   before the popover (550ms)   so the click path
     // into the thread is already fast by the time the user acts.
     clearTimeout(preloadTimer)
-    preloadTimer = setTimeout(preloadMessages, PRELOAD_DEBOUNCE_MS)
+    preloadTimer = setTimeout(preloadThread, PRELOAD_DEBOUNCE_MS)
   }
 
   function onRowLeave(): void {
@@ -1287,7 +1288,7 @@
     style={rowTintStyle}
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
-    onpointerdown={() => preloadMessages()}
+    onpointerdown={() => preloadThread()}
     onclick={() => {
       popover.hide()
       onOpen(thread)

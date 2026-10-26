@@ -2,7 +2,7 @@ import { ipcMain, app, BrowserWindow } from 'electron'
 import { join, relative, extname } from 'node:path'
 import { mkdir, rm, readFile, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
+import { authoredWorkRoot } from '../design/authored-work-root'
 import {
   validateVideoStudio,
   videoText,
@@ -90,14 +90,24 @@ export class VideoStudioService {
   constructor(private readonly options: VideoStudioOptions) {
     void this.packages.initialize()
   }
+  /**
+   * The absolute root of one composition's scope, and the composition folder
+   * inside it.
+   *
+   * The thread is part of the question rather than optional: a project thread's
+   * work sits in its checkout, while an assistant task's, a chat's and a browser
+   * tab's work sits in the workspace that conversation runs in, and only the
+   * thread can say which of those workspaces that is.
+   */
   private async folder(
     projectId: string,
+    threadId: string,
     directory: unknown
   ): Promise<{ root: string; folder: string }> {
-    const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
     return {
-      root: project.path,
-      folder: await videoFolder(project.path, directory ?? currentWorkRoot('video', projectId))
+      root: scope.path,
+      folder: await videoFolder(scope.path, directory ?? currentWorkRoot('video', projectId))
     }
   }
   /**
@@ -109,20 +119,25 @@ export class VideoStudioService {
    * composition that produced it. A composition that has never been exported
    * answers null, and the board falls back to what it has.
    */
-  async latestExport(projectId: string, directory: unknown): Promise<string | null> {
-    const { root, folder } = await this.folder(projectId, directory)
+  async latestExport(
+    projectId: string,
+    threadId: string,
+    directory: unknown
+  ): Promise<string | null> {
+    const { root, folder } = await this.folder(projectId, threadId, directory)
     const file = await videoExportFile(root, relative(root, folder))
     return file === null ? null : relative(root, file)
   }
   async read(
     projectId: string,
+    threadId: string,
     directory: unknown
   ): Promise<{
     document: VideoStudioDocument
     revision: string
     manifest: VideoProjectManifest | null
   }> {
-    const { folder } = await this.folder(projectId, directory)
+    const { folder } = await this.folder(projectId, threadId, directory)
     const document = await readVideoStudio(folder)
     // The manifest comes along because a timeline is drawn from it: its duration
     // is the ruler and its rate is the frame step, and neither is in studio.json.
@@ -136,6 +151,7 @@ export class VideoStudioService {
   }
   async save(
     projectId: string,
+    threadId: string,
     directory: unknown,
     raw: unknown,
     expected: unknown
@@ -144,7 +160,7 @@ export class VideoStudioService {
     revision: string
     manifest: VideoProjectManifest | null
   }> {
-    const { root, folder } = await this.folder(projectId, directory)
+    const { root, folder } = await this.folder(projectId, threadId, directory)
     const previous = this.writes.get(folder) ?? Promise.resolve()
     const task = previous
       .catch(() => undefined)
@@ -181,12 +197,13 @@ export class VideoStudioService {
    */
   async waveform(
     projectId: string,
+    threadId: string,
     directory: unknown,
     source: unknown,
     offset: unknown,
     duration: unknown
   ): Promise<string | null> {
-    const { root, folder } = await this.folder(projectId, directory)
+    const { root, folder } = await this.folder(projectId, threadId, directory)
     const file = await videoFile(folder, source)
     // Clamped rather than validated: a track's `duration` may legally be as long
     // as the document allows, and a lane that cannot be pictured is a plain band
@@ -197,12 +214,19 @@ export class VideoStudioService {
   }
 
   readonly execute: VideoCapabilityExecutor = async (operation, input, context) => {
-    const project = await requireLocalProjectViaWorker(this.options.database, context.projectId)
-    const root = project.path
+    const scope = await authoredWorkRoot(this.options.database, context.projectId, context.threadId)
+    const root = scope.path
     if (operation === 'jobs') return this.jobs.list(context.projectId, context.threadId)
     if (operation === 'studio') {
-      if (input.document === undefined) return this.read(context.projectId, input.directory)
-      return this.save(context.projectId, input.directory, input.document, input.revision)
+      if (input.document === undefined)
+        return this.read(context.projectId, context.threadId, input.directory)
+      return this.save(
+        context.projectId,
+        context.threadId,
+        input.directory,
+        input.document,
+        input.revision
+      )
     }
     if (operation === 'scaffold') {
       const target = await videoTargetFolder(root, input.directory)
@@ -228,7 +252,7 @@ export class VideoStudioService {
       return installVideoRuntime(root, await videoFolder(root, input.directory))
     if (operation === 'captions') {
       const folder = await videoFolder(root, input.directory)
-      const state = await this.read(context.projectId, input.directory)
+      const state = await this.read(context.projectId, context.threadId, input.directory)
       let captions = state.document.captions
       if (input.source !== undefined) {
         const file = await videoFile(root, input.source)
@@ -254,6 +278,7 @@ export class VideoStudioService {
       }
       const saved = await this.save(
         context.projectId,
+        context.threadId,
         input.directory,
         { ...state.document, captions, captionStyle: input.style ?? state.document.captionStyle },
         state.revision
@@ -408,40 +433,43 @@ export class VideoStudioService {
     })
   }
   registerIpc(): void {
-    ipcMain.handle('video:frameStrip', async (_event, projectId, directory, times: unknown) => {
-      if (
-        !Array.isArray(times) ||
-        times.length > 24 ||
-        times.some(
-          (time: unknown) => typeof time !== 'number' || !Number.isFinite(time) || time < 0
+    ipcMain.handle(
+      'video:frameStrip',
+      async (_event, projectId, threadId, directory, times: unknown) => {
+        if (
+          !Array.isArray(times) ||
+          times.length > 24 ||
+          times.some(
+            (time: unknown) => typeof time !== 'number' || !Number.isFinite(time) || time < 0
+          )
         )
-      )
-        throw new Error('Frame previews require up to 24 valid times')
-      if (!times.length) return []
-      const { folder } = await this.folder(id(projectId), directory)
-      const manifest = await readCompositionManifest(folder)
-      if (
-        !manifest ||
-        manifest.width > 8192 ||
-        manifest.height > 8192 ||
-        manifest.width * manifest.height > 3840 * 2160
-      )
-        return []
-      const entry = await resolveServedEntry(folder, 'index.html')
-      if (!entry) return []
-      const registration = await this.options.previews.open(folder)
-      return this.framePreviews.render(servedFileUrl(registration.url, entry), manifest, [
-        ...new Set(
-          (times as number[]).map((time) => snapVideoFrame(time, manifest.duration, manifest.fps))
+          throw new Error('Frame previews require up to 24 valid times')
+        if (!times.length) return []
+        const { folder } = await this.folder(id(projectId), id(threadId), directory)
+        const manifest = await readCompositionManifest(folder)
+        if (
+          !manifest ||
+          manifest.width > 8192 ||
+          manifest.height > 8192 ||
+          manifest.width * manifest.height > 3840 * 2160
         )
-      ])
-    })
-    const id = (value: unknown): string => videoText(value, 'identifier', 128)
-    ipcMain.handle('video:studio', (_event, projectId, directory) =>
-      this.read(id(projectId), directory)
+          return []
+        const entry = await resolveServedEntry(folder, 'index.html')
+        if (!entry) return []
+        const registration = await this.options.previews.open(folder)
+        return this.framePreviews.render(servedFileUrl(registration.url, entry), manifest, [
+          ...new Set(
+            (times as number[]).map((time) => snapVideoFrame(time, manifest.duration, manifest.fps))
+          )
+        ])
+      }
     )
-    ipcMain.handle('video:save', (_event, projectId, directory, document, expected) =>
-      this.save(id(projectId), directory, document, expected)
+    const id = (value: unknown): string => videoText(value, 'identifier', 128)
+    ipcMain.handle('video:studio', (_event, projectId, threadId, directory) =>
+      this.read(id(projectId), id(threadId), directory)
+    )
+    ipcMain.handle('video:save', (_event, projectId, threadId, directory, document, expected) =>
+      this.save(id(projectId), id(threadId), directory, document, expected)
     )
     ipcMain.handle('video:jobs', (_event, projectId, threadId) =>
       this.jobs.list(id(projectId), id(threadId))
@@ -452,11 +480,13 @@ export class VideoStudioService {
     ipcMain.handle('video:export', (_event, projectId, threadId, directory) =>
       this.execute('export', { directory }, { projectId: id(projectId), threadId: id(threadId) })
     )
-    ipcMain.handle('video:latestExport', (_event, projectId, directory) =>
-      this.latestExport(id(projectId), directory)
+    ipcMain.handle('video:latestExport', (_event, projectId, threadId, directory) =>
+      this.latestExport(id(projectId), id(threadId), directory)
     )
-    ipcMain.handle('video:waveform', (_event, projectId, directory, source, offset, duration) =>
-      this.waveform(id(projectId), directory, source, offset, duration)
+    ipcMain.handle(
+      'video:waveform',
+      (_event, projectId, threadId, directory, source, offset, duration) =>
+        this.waveform(id(projectId), id(threadId), directory, source, offset, duration)
     )
     const stopPackProgress = this.packages.onProgress((state) => {
       for (const window of BrowserWindow.getAllWindows()) {

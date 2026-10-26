@@ -594,6 +594,8 @@ function frameFolderName(directory: string): string {
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
+  /** Native child tabs and the page that opened them. */
+  private readonly childTabOpeners = new Map<string, string>()
   private readonly compositionArming = new WeakMap<
     BrowserTab,
     { generation: number; promise: Promise<void> }
@@ -1272,7 +1274,10 @@ export class BrowserService {
         const threadId = validateThreadId(rawThreadId)
         const boxId = validateOptionalBoxId(rawBoxId)
         const initialUrl =
-          rawInitialUrl === undefined || rawInitialUrl === null || rawInitialUrl === ''
+          rawInitialUrl === undefined ||
+          rawInitialUrl === null ||
+          rawInitialUrl === '' ||
+          (rawInitialUrl === 'about:blank' && this.childTabOpeners.has(tabId))
             ? ''
             : this.validateTabNavigationUrl(projectId, boxId, rawInitialUrl)
         const bounds = validateBounds(rawBounds)
@@ -2022,13 +2027,30 @@ export class BrowserService {
     void this.tabHistory.flush()
   }
 
-  relocateWorkFolder(projectId: string, from: string, to: string): void {
+  relocateWorkFolder(
+    projectId: string,
+    from: string,
+    to: string,
+    /**
+     * The assistant that owns the moved folder, when the project id is the shared
+     * assistant container.
+     *
+     * Every assistant task reports the same container id, so without this a rename
+     * in one assistant would re-point a tab in another that happened to show a
+     * folder of the same relative name.
+     */
+    assistantId?: string | null
+  ): void {
     for (const [tabId, tab] of this.tabs) {
       if (
         tab.projectId !== projectId ||
         (tab.design?.directory !== from && tab.composition?.directory !== from)
       )
         continue
+      if (assistantId !== undefined) {
+        const owner = this.threads.get(tab.threadId)?.assistantId ?? null
+        if (owner !== assistantId) continue
+      }
       if (tab.design?.directory === from) tab.design = { ...tab.design, directory: to }
       if (tab.composition?.directory === from)
         tab.composition = { ...tab.composition, directory: to }
@@ -3745,7 +3767,8 @@ export class BrowserService {
     tabId: string,
     projectId: string,
     threadId: string,
-    boxId: string | null = null
+    boxId: string | null = null,
+    childContents?: WebContents
   ): BrowserTab {
     const existing = this.tabs.get(tabId)
     if (existing) {
@@ -3767,16 +3790,18 @@ export class BrowserService {
     // is single-flight per jar, so a burst of shows loads each extension once.
     void this.extensions.ensureJarLoaded(projectId, boxId)
 
-    const view = new WebContentsView({
-      webPreferences: {
-        session: browserSession,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        webSecurity: true,
-        devTools: true
-      }
-    })
+    const view = childContents
+      ? new WebContentsView({ webContents: childContents })
+      : new WebContentsView({
+          webPreferences: {
+            session: browserSession,
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            webSecurity: true,
+            devTools: true
+          }
+        })
     // The tab carries no document yet, so nothing of the page's own surface is
     // painted over the app until one commits.
     applyBrowserPageBackground(view)
@@ -4227,16 +4252,14 @@ export class BrowserService {
    *
    * Two answers, by what the page asked for:
    *
-   * - a popup window   Chromium reports `new-window`, which is what a `features`
-   *   string produces   is hosted by the app, so a sign-in or a checkout happens
-   *   inside the browser instead of in an operating-system window of its own;
-   * - anything else, such as a link that asks for its own tab, keeps the app's
-   *   tabs: a safe https address becomes a background tab.
+   * - foreground window requests, including featureless windows and POST forms,
+   *   use the existing popup host to preserve Chromium's opener and submission;
+   * - explicit background-tab gestures keep opening a background tab, unless
+   *   they carry a POST body that must be submitted by Chromium.
    *
-   * A popup window is only hosted for the global browser, which is the one with a
-   * rail to show it in. A project's browser   and every page an agent drives   keeps
-   * the tab behaviour it had, where an opened window is a tab with an address the
-   * user can see and steer.
+   * The global browser hosts foreground children in its popup rail. Thread and
+   * agent browsers adopt Chromium's child contents into regular tabs, preserving
+   * the same opener, session, POST submission and script-close lifecycle.
    *
    * Shared by tabs and popup windows, because a popup may open a popup (a
    * sign-in that takes a second step) and both must land the same way.
@@ -4248,25 +4271,33 @@ export class BrowserService {
     // A `window.open` aimed at an external scheme is the same handoff a link
     // click is, and never becomes a tab: the address is not a page.
     if (this.offerExternalNavigation(owner, details.url)) return { action: 'deny' }
+    // Disposition and feature strings describe presentation, not whether the
+    // child needs its opener. Featureless window.open and targeted POST forms
+    // also participate in verification callbacks. Cancelling them and loading
+    // their URL ourselves loses WindowProxy, postMessage and the POST body.
     if (
-      details.disposition === 'new-window' &&
-      !details.features &&
-      !details.postBody &&
-      owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+      owner.projectId === GLOBAL_BROWSER_PROJECT_ID &&
+      (details.disposition !== 'background-tab' || details.postBody)
     ) {
-      try {
-        this.openPeekFromWindowRequest(
-          owner,
-          this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
-        )
-      } catch (error: unknown) {
-        Logger.error('Browser Peek rejected unsafe URL:', error)
-      }
-      return { action: 'deny' }
-    }
-    if (details.disposition === 'new-window' && owner.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
+    }
+    if (owner.projectId !== GLOBAL_BROWSER_PROJECT_ID) {
+      const url = details.url || 'about:blank'
+      if (!isAllowedPopupWindowUrl(url)) return { action: 'deny' }
+      let children = 0
+      for (const opener of this.childTabOpeners.values()) {
+        if (opener === owner.tabId) children++
+      }
+      if (children >= MAX_POPUP_WINDOWS_PER_TAB) return { action: 'deny' }
+      return {
+        action: 'allow',
+        createWindow: (options) => {
+          const contents = popupWindowContents(options)
+          if (!contents) throw new Error('Browser child tab was offered no web contents')
+          return this.openNewTabFor(owner, url, false, null, contents)
+        }
+      }
     }
     try {
       this.openNewTabFor(
@@ -6514,8 +6545,9 @@ export class BrowserService {
     owner: BrowserPageOwner,
     url: string,
     peek = false,
-    origin: BrowserViewBounds | null = null
-  ): void {
+    origin: BrowserViewBounds | null = null,
+    childContents?: WebContents
+  ): WebContents {
     const sourceTabId = this.peekTabs.get(owner.tabId) ?? owner.tabId
     if (peek) {
       for (const [peekId, sourceId] of this.peekTabs) {
@@ -6526,10 +6558,21 @@ export class BrowserService {
     if (peek) this.peekTabs.set(tabId, sourceTabId)
     // A new sibling inherits the box it was opened from: a popup or a link
     // belongs beside the page that produced it, in the same jar.
-    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
+    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId, childContents)
     tab.initialNavigationStarted = true
+    if (childContents) {
+      this.childTabOpeners.set(tabId, owner.tabId)
+      childContents.once('destroyed', () => {
+        // Manual close removes the relationship first. Only script/native close
+        // needs to remove the surviving tab-strip entry here.
+        if (!this.childTabOpeners.has(tabId)) return
+        this.destroy(tabId, 'closed')
+        this.requestPanelShortcut(tabId, 'close-tab')
+      })
+    }
     this.parkTab(tabId)
-    this.load(tabId, url)
+    // Electron navigates adopted children, including their original POST body.
+    if (!childContents) this.load(tabId, url)
     sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
       projectId: owner.projectId,
       threadId: owner.threadId,
@@ -6540,6 +6583,7 @@ export class BrowserService {
       boxId: owner.boxId,
       origin
     })
+    return tab.view.webContents
   }
 
   /**
@@ -6572,24 +6616,6 @@ export class BrowserService {
         Logger.error('Browser Peek refused a link:', error)
       }
     })
-  }
-
-  /**
-   * Open a peek for a page that asked for a window of its own.
-   *
-   * Chromium reports no point for this gesture, but the pointer is the click: a
-   * shift-click on a link is exactly this request, and the pointer is still on
-   * the link when it arrives.
-   */
-  private openPeekFromWindowRequest(owner: BrowserPageOwner, url: string): void {
-    const frame = this.frameForTab(owner.tabId)
-    const source = this.tabs.get(owner.tabId)
-    if (!frame || !source || source.view.webContents.isDestroyed()) {
-      this.openNewTabFor(owner, url, true)
-      return
-    }
-    const point = peekPointInFrame(this.pointerViewPoint(frame), frame)
-    this.openPeekFrom(owner, source.view.webContents, url, frame, point)
   }
 
   /** Where the pointer is, in a page view's own pixels. */
@@ -7418,6 +7444,12 @@ export class BrowserService {
   }
 
   private destroy(tabId: string, reason: BrowserTabDestroyReason): void {
+    this.childTabOpeners.delete(tabId)
+    for (const [childId, openerId] of this.childTabOpeners) {
+      if (openerId !== tabId) continue
+      this.destroy(childId, 'closed')
+      this.requestPanelShortcut(childId, 'close-tab')
+    }
     if (this.pendingShow?.tabId === tabId) this.pendingShow = null
     // A hide that is still inside its grace window must not park a tab that is
     // about to be gone: the view would be handed to the stage window only to be

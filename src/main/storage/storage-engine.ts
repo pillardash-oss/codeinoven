@@ -1,6 +1,10 @@
 import { DEFAULT_IDE_LANGUAGE_SERVERS } from '../../lib/ide-language-servers'
 import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
-import { BUNDLED_PI_FILE_POLICY, bundledPiFilePatterns } from '../../lib/bundled-pi-file-protection'
+import {
+  BUNDLED_PI_FILE_POLICY,
+  bundledPiFilePatterns,
+  bundledPiFilePolicy
+} from '../../lib/bundled-pi-file-protection'
 import { join } from 'path'
 import { randomInt } from 'crypto'
 import { readFile, appendFile, unlink, open, stat, rename, type FileHandle } from 'fs/promises'
@@ -228,7 +232,7 @@ export class StorageEngine {
     }
     await writeJson(
       this.resolve(BUNDLED_PI_FILE_POLICY),
-      bundledPiFilePatterns(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY)))
+      bundledPiFilePolicy(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY)))
     )
 
     // Create default providers file if missing
@@ -250,10 +254,12 @@ export class StorageEngine {
       readJson<Partial<AppConfig>>(this.resolve('config.json')),
       readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY))
     ])
+    const sensitiveFilePolicy = bundledPiFilePolicy(filePolicy)
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
-      bundledPiSensitiveFilePatterns: bundledPiFilePatterns(filePolicy),
+      bundledPiSensitiveFilePatterns: sensitiveFilePolicy.patterns,
+      bundledPiSensitiveFileProtectionEnabled: sensitiveFilePolicy.enabled,
       fontFamily: normalizeAppFontFamily(config?.fontFamily),
       // Analytics is on by default: only an explicit opt-out in the stored
       // config turns it off, and a missing field keeps the default.
@@ -376,19 +382,23 @@ export class StorageEngine {
 
   /** Write the global config */
   async saveConfig(config: AppConfig): Promise<void> {
+    const sensitiveFileProtectionEnabled =
+      config.bundledPiSensitiveFileProtectionEnabled ??
+      bundledPiFilePolicy(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY))).enabled
     const {
       agentBehaviorPrompt: _agentBehaviorPrompt,
       bundledPiSensitiveFilePatterns: _bundledPiSensitiveFilePatterns,
+      bundledPiSensitiveFileProtectionEnabled: _bundledPiSensitiveFileProtectionEnabled,
       ...persistedConfig
     } = config
     await writeJson(this.resolve('config.json'), persistedConfig)
     // The small policy file is authoritative for both Settings and Pi. Commit
     // it last: a failed config save must never turn off a protection the UI
     // still displays as enabled. A failed policy save leaves its old rules.
-    await writeJson(
-      this.resolve(BUNDLED_PI_FILE_POLICY),
-      bundledPiFilePatterns(config.bundledPiSensitiveFilePatterns)
-    )
+    await writeJson(this.resolve(BUNDLED_PI_FILE_POLICY), {
+      enabled: sensitiveFileProtectionEnabled,
+      patterns: bundledPiFilePatterns(config.bundledPiSensitiveFilePatterns)
+    })
   }
 
   private async readBehaviorPrompt(): Promise<string> {

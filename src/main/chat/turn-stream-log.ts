@@ -1,3 +1,4 @@
+import { open, type FileHandle } from 'node:fs/promises'
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { TurnStreamEvent } from './turn-stream'
@@ -34,7 +35,72 @@ import type { TurnStreamEvent } from './turn-stream'
 /** Bytes read per chunk. Large enough that a big log is few syscalls, small
  *  enough that one chunk's decode and parse is a few milliseconds. */
 const READ_CHUNK_BYTES = 2 * 1024 * 1024
+/** Bytes read per chunk when walking a log backwards from its end. The newest
+ *  turn is usually a few hundred kilobytes, so one chunk settles it. */
+const TAIL_CHUNK_BYTES = 512 * 1024
+/** How far past the newest turn's boundary the backward walk keeps reading: a
+ *  straggler appended a moment out of timestamp order must still land in the
+ *  turn it belongs to. */
+const TAIL_LOOKBACK_BYTES = 64 * 1024
 const NEWLINE = 0x0a
+
+/**
+ * A window onto one append-only log, read a chunk at a time.
+ *
+ * The main process and the background I/O worker read the same file through
+ * different handles (the storage engine's rooted resolve, and a plain absolute
+ * path), so the reader takes bytes instead of a storage engine and the heavy
+ * walk can run off the main thread without changing its rules.
+ */
+export interface TurnStreamChunkSource {
+  /** Read up to `length` bytes at `fromByte`. Null when the file is gone. */
+  readChunk(fromByte: number, length: number): Promise<{ buffer: Buffer; nextByte: number } | null>
+}
+
+/** Read a thread's log through the app's rooted storage engine. */
+export function storageTurnStreamSource(
+  storage: StorageEngine,
+  relativePath: string
+): TurnStreamChunkSource {
+  return {
+    async readChunk(fromByte, length) {
+      const chunk = await storage.readRawChunk(relativePath, fromByte, length)
+      return chunk ? { buffer: chunk.buffer, nextByte: chunk.nextByte } : null
+    }
+  }
+}
+
+/** Read a thread's log from an absolute path, for the background worker. */
+export function fileTurnStreamSource(path: string): TurnStreamChunkSource {
+  return {
+    async readChunk(fromByte, length) {
+      let handle: FileHandle
+      try {
+        handle = await open(path, 'r')
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+        throw error
+      }
+      try {
+        const { size } = await handle.stat()
+        if (length <= 0 || fromByte >= size) {
+          return { buffer: Buffer.alloc(0), nextByte: fromByte }
+        }
+        const requested = Math.min(length, size - fromByte)
+        const buffer = Buffer.allocUnsafe(requested)
+        let read = 0
+        while (read < requested) {
+          const chunk = await handle.read(buffer, read, requested - read, fromByte + read)
+          if (chunk.bytesRead === 0) break
+          read += chunk.bytesRead
+        }
+        return { buffer: buffer.subarray(0, read), nextByte: fromByte + read }
+      } finally {
+        await handle.close()
+      }
+    }
+  }
+}
 
 export interface TurnStreamLogRead {
   /** The window's events plus the pre-window snapshots that seed them. */
@@ -94,8 +160,7 @@ function parseEvent(line: string): TurnStreamEvent | null {
  * supplied, closes the window: events at or after it belong to the next turn.
  */
 export async function readTurnStreamLog(
-  storage: StorageEngine,
-  relativePath: string,
+  source: TurnStreamChunkSource,
   fromByte: number,
   size: number,
   windowStartTs: number | undefined,
@@ -150,8 +215,8 @@ export async function readTurnStreamLog(
   }
 
   while (offset < size) {
-    const chunk = await storage.readRawChunk(relativePath, offset, READ_CHUNK_BYTES)
-    if (!chunk || chunk.bytesRead === 0) break
+    const chunk = await source.readChunk(offset, READ_CHUNK_BYTES)
+    if (!chunk || chunk.buffer.length === 0) break
     offset = chunk.nextByte
     const combined = carry.length === 0 ? chunk.buffer : Buffer.concat([carry, chunk.buffer])
     const lastNewline = combined.lastIndexOf(NEWLINE)
@@ -189,4 +254,140 @@ export async function readTurnStreamLog(
   // `compactTurnStreamEvents` leaves it too, so the fold's first-seen order is
   // unchanged.
   return { events: [...retained, ...events], latestTurnId, nextByte: offset - carry.length }
+}
+
+/**
+ * Rebuild the newest turn's retained events by walking the log backwards from
+ * its end.
+ *
+ * The forward walk above has to read every byte the log ever held before it
+ * reaches the newest turn, and on a long-lived thread that file is hundreds of
+ * megabytes: the tail a reader wants sits at the end, behind all of it. Walking
+ * backwards stops at the turn boundary instead, so the work is proportional to
+ * the turn being shown, never to the thread's whole history. Only that portion
+ * is loaded; older entries page in on their own (`beforeId`) as the reader
+ * scrolls the trace, and older turns are read only when the transcript is
+ * missing them.
+ *
+ * The retained set is the same one the forward walk produces, minus the
+ * pre-boundary snapshots of parts that already carry a snapshot inside the
+ * turn: a snapshot is the part's complete state, so only a part continued by
+ * deltas with no snapshot after the boundary needs its baseline from before.
+ * That is the one case the backwards walk keeps looking for, and it never
+ * needs to walk past the file's start for anything else.
+ */
+export async function readTurnStreamTail(
+  source: TurnStreamChunkSource,
+  size: number,
+  windowStartTs: number | undefined
+): Promise<TurnStreamLogRead> {
+  if (size <= 0) return { events: [], latestTurnId: '', nextByte: 0 }
+  if (windowStartTs === undefined) {
+    // No prompt has opened a turn yet, so the whole log belongs to the window.
+    // There is no boundary to stop at, and a thread in this state has no trace
+    // to speak of; the forward walk stays the honest reader.
+    return readTurnStreamLog(source, 0, size, undefined)
+  }
+
+  const eventsRev: TurnStreamEvent[] = []
+  const seedsRev: TurnStreamEvent[] = []
+  const seeded = new Set<string>()
+  /** Parts that streamed deltas in this turn but no snapshot, so the fold needs
+   *  their newest pre-boundary snapshot to reconstruct their text. */
+  const needsSeed = new Set<string>()
+  const snapshotted = new Set<string>()
+  let latestTurnId = ''
+  let cursor = size
+  /** Bytes of the previous chunk whose line continues into the next read. */
+  let carry = Buffer.alloc(0)
+  /** Bytes read below the turn boundary, so the walk can stop once it has the
+   *  seeds it needs and has looked just far enough for a straggler. */
+  let pastBoundaryBytes = 0
+
+  const collectSeed = (event: TurnStreamEvent): void => {
+    if (event.kind !== 'part.updated') return
+    const id = event.part.id
+    if (!needsSeed.has(id) || seeded.has(id)) return
+    seeded.add(id)
+    seedsRev.push(event)
+  }
+
+  const absorb = (line: string): void => {
+    const cheap = cheapTs(line)
+    if (cheap !== null && cheap < windowStartTs) {
+      pastBoundaryBytes += line.length + 1
+      if (needsSeed.size > 0 && line.includes('"kind":"part.updated"')) {
+        const event = parseEvent(line)
+        if (event) collectSeed(event)
+      }
+      return
+    }
+    const event = parseEvent(line)
+    if (!event) return
+    if (event.ts < windowStartTs) {
+      pastBoundaryBytes += line.length + 1
+      collectSeed(event)
+      return
+    }
+    const id = event.kind === 'part.updated' ? event.part.id : event.partId
+    if (event.kind === 'part.updated') {
+      snapshotted.add(id)
+      needsSeed.delete(id)
+    } else if (!snapshotted.has(id)) {
+      needsSeed.add(id)
+    }
+    eventsRev.push(event)
+    // The walk reads newest first, so the first non-empty anchor it meets is
+    // the newest one, exactly what the forward walk's last assignment leaves.
+    if (event.turnId && !latestTurnId) latestTurnId = event.turnId
+  }
+
+  /** Decode complete lines and feed them oldest-last, the order a backward
+   *  walk reads them in. */
+  const absorbLines = (bytes: Buffer): void => {
+    const lines = bytes.toString('utf8').split('\n')
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]
+      if (line) absorb(line)
+    }
+  }
+
+  while (cursor > 0) {
+    const start = Math.max(0, cursor - TAIL_CHUNK_BYTES)
+    const chunk = await source.readChunk(start, cursor - start)
+    if (!chunk || chunk.buffer.length === 0) {
+      cursor = start
+      continue
+    }
+    // `carry` holds the beginning of a line whose end was in the chunk already
+    // read, so the two halves are joined before any line is decoded.
+    const combined = carry.length === 0 ? chunk.buffer : Buffer.concat([chunk.buffer, carry])
+    if (start > 0) {
+      const newline = combined.indexOf(NEWLINE)
+      if (newline === -1) {
+        carry = Buffer.from(combined)
+        cursor = start
+        continue
+      }
+      carry = Buffer.from(combined.subarray(0, newline))
+      absorbLines(combined.subarray(newline + 1))
+    } else {
+      carry = Buffer.alloc(0)
+      absorbLines(combined)
+    }
+    cursor = start
+    // A turn that has streamed nothing yet needs no more history read.
+    if (pastBoundaryBytes > 0 && eventsRev.length === 0) break
+    // Every continued part has its baseline and the walk has looked past the
+    // boundary long enough to catch a straggler: the turn is fully rebuilt.
+    if (pastBoundaryBytes >= TAIL_LOOKBACK_BYTES && needsSeed.size === 0) break
+  }
+
+  const events = eventsRev.reverse()
+  const seeds = seedsRev.reverse()
+  return {
+    events: seeds.length === 0 ? events : [...seeds, ...events],
+    latestTurnId,
+    nextByte: size
+  }
 }

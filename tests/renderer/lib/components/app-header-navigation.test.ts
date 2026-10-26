@@ -45,11 +45,17 @@ const hoisted = vi.hoisted(() => {
     openThread: vi.fn(),
     clearThread: vi.fn()
   }
-  const threadMessages = { preload: vi.fn(async () => {}) }
+  const threadMessages = { loaded: vi.fn(() => false), preload: vi.fn(async () => {}) }
   return { scopeState, workspaceState, threadMessages }
 })
 
-vi.mock('$lib/ipc.svelte', () => ({ invoke: vi.fn(async () => []) }))
+// `subscribe` is kept real-adjacent rather than omitted: the status badge reaches
+// the foreign-runs store, which subscribes at module init, so a mock without it
+// fails the whole suite before a single test runs.
+vi.mock('$lib/ipc.svelte', () => ({
+  invoke: vi.fn(async () => []),
+  subscribe: vi.fn(() => () => {})
+}))
 vi.mock('$lib/keymap/keymap-state.svelte', () => ({ keymapState: { keysFor: () => [] } }))
 vi.mock('$lib/stores/thread-messages.svelte', () => ({ threadMessages: hoisted.threadMessages }))
 vi.mock('$lib/stores/scope.svelte', () => ({ scopeState: hoisted.scopeState }))
@@ -210,7 +216,7 @@ describe('Scoped hover warm-up', () => {
   it('warms the dock without changing the view', () => {
     hoisted.workspaceState.selectedThread = makeThread('t1', 'p1')
     hoisted.workspaceState.contentViewThreadRef.mockReturnValue({ projectId: 'p1', threadId: 't1' })
-    hoisted.scopeState.allScopeThreads = [{ id: 't1', projectId: 'p1', archived: false }]
+    hoisted.scopeState.allScopeThreads = [makeThread('t1', 'p1')]
     const { controller, navigated } = makeController('projects')
 
     controller.preloadScopedThreads()

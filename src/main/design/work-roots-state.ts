@@ -1,4 +1,5 @@
 import { DEFAULT_WORK_ROOTS, workRootForKind, type WorkRoots } from '../../lib/design/work-roots'
+import { usesThreadWorkspaceMount } from '../../lib/types'
 import { normalizeWorkRoot } from '../../lib/design/work-roots'
 import type { Database } from '../database/database'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
@@ -73,6 +74,12 @@ export async function saveProjectWorkRoot(
   kind: AuthoredWorkKind,
   root: string
 ): Promise<void> {
+  // A conversation container is not a project that can record a save root: every
+  // assistant task shares the same id, so one record would move every assistant's
+  // work. Their root is the workspace they run in, and it is not a setting.
+  if (usesThreadWorkspaceMount(projectId)) {
+    throw new Error('A conversation workspace writes its work into the folder it runs in')
+  }
   const current = currentWorkRoots(projectId)
   const previous = projectRoots.get(projectId)?.previous ?? { design: [], video: [] }
   const value: ProjectRoots = {

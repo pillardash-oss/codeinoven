@@ -4,6 +4,7 @@ import type { AgentEvent, BaseUrlProvider, ProviderCatalog } from '$shared/types
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { APP_SLUG } from '$shared/brand'
+import { modelPropertiesAreAccountScoped } from '$shared/model-runtime-settings'
 import { harnessAccountCache } from '$lib/stores/harness-accounts'
 
 /**
@@ -247,21 +248,30 @@ class ProviderCatalogStore {
     )
   }
 
-  /** Refresh only the selected model, retaining its options while the read runs. */
+  /**
+   * Read the account's own properties for one model.
+   *
+   * The answer is kept per account and never written into the shared catalog:
+   * Codex states different windows for the same model slug per account, so
+   * publishing one account's numbers would hand them to every other account.
+   * `maxAgeMs` is the freshness the caller needs (a menu the user just opened
+   * wants a fresh read; a thread mounting wants the cheap cached answer).
+   */
   refreshModelContext(
     projectId: string,
     harnessId: string,
     providerId: string,
     modelId: string,
-    accountId?: string
+    accountId?: string,
+    maxAgeMs = RETRY_MIN_INTERVAL_MS
   ): Promise<void> {
-    if (harnessId !== 'codex' || providerId !== 'openai' || !modelId) return Promise.resolve()
+    if (!modelPropertiesAreAccountScoped(harnessId, providerId) || !modelId)
+      return Promise.resolve()
     const key = JSON.stringify([projectId, harnessId, providerId, modelId, accountId])
     const pending = this.contextReads.get(key)
     if (pending) return pending
     const readAt = this.contextReadAt.get(key)
-    if (readAt !== undefined && Date.now() - readAt < RETRY_MIN_INTERVAL_MS)
-      return Promise.resolve()
+    if (readAt !== undefined && Date.now() - readAt < maxAgeMs) return Promise.resolve()
     const request = invoke(
       'agent:refreshModelContext',
       projectId,
@@ -271,26 +281,11 @@ class ProviderCatalogStore {
       accountId
     )
       .then((metadata) => {
+        // A model the account does not describe keeps whatever was known: an
+        // empty answer must not erase windows another read already reported.
+        this.contextReadAt.set(key, Date.now())
         if (!metadata) return
         this.contextMetadata.set(key, metadata)
-        this.contextReadAt.set(key, Date.now())
-        const catalogs = this.cache.get(projectId)
-        if (catalogs) {
-          this.cache.set(
-            projectId,
-            catalogs.map((catalog) =>
-              catalog.harnessId === harnessId && catalog.id === providerId
-                ? {
-                    ...catalog,
-                    models: catalog.models.map((model) =>
-                      model.id === modelId ? { ...model, ...metadata } : model
-                    )
-                  }
-                : catalog
-            )
-          )
-          this.persistMirror()
-        }
       })
       .catch(() => {
         // Keep the last known options; retry on the next user interaction.

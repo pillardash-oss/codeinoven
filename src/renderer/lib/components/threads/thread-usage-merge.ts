@@ -38,22 +38,31 @@ export function composerContextUsage(
   }
   source ??= snapshot
   contextUsed ??= source?.contextUsed ?? source?.tokens?.total
-  if (contextUsed === undefined) return displayed
   const sameProvider =
     source?.harnessId === selection.harnessId && source?.providerId === selection.providerId
-  // Keep the normal settled reading once the selected harness has reported.
-  if (sameProvider && displayed?.contextUsed !== undefined) return displayed
+  /**
+   * The selected model's window outranks anything recorded earlier. A snapshot
+   * or an older turn describes whatever model (and account) wrote it, which is
+   * how a thread on a 500k model rendered 100% over a 272k window. A recorded
+   * window only stands in for a model whose harness states none.
+   */
   const contextWindow =
     selection.contextWindow ?? (sameProvider ? source?.contextWindow : undefined)
+  // A settled reading keeps its occupancy but not its window: the resolved
+  // window, and a percent recomputed from it, are what the meter must show.
+  const settled = sameProvider && displayed?.contextUsed !== undefined
+  const used = settled ? displayed.contextUsed : (contextUsed ?? displayed?.contextUsed)
+  if (used === undefined && contextWindow === undefined) return displayed
   return {
     ...(displayed ?? { costUsd: 0, rateLimits: [] }),
-    contextUsed,
-    contextWindow,
-    contextEstimated: !sameProvider || source?.contextEstimated === true,
-    contextPercent:
-      contextWindow !== undefined && contextWindow > 0
-        ? (contextUsed / contextWindow) * 100
-        : undefined
+    ...(used === undefined ? {} : { contextUsed: used }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    contextEstimated: settled
+      ? displayed.contextEstimated === true
+      : !sameProvider || source?.contextEstimated === true,
+    ...(used !== undefined && contextWindow !== undefined && contextWindow > 0
+      ? { contextPercent: (used / contextWindow) * 100 }
+      : {})
   }
 }
 

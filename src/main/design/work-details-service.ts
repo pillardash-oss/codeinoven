@@ -56,6 +56,16 @@ export async function updateWorkDetails(input: {
   projectId: string
   projectPath: string
   details: UpdateWorkDetails
+  /**
+   * Whether this scope records one save root for all of its work.
+   *
+   * A project does, and the dialog's "move every design" is that setting. A
+   * conversation workspace does not: its root is the directory it runs in, and
+   * every assistant task shares one project id, so a stored root there would
+   * repoint every assistant's work at one folder. A single move is still allowed;
+   * the project-wide one is refused.
+   */
+  projectScope?: boolean
   list: () => Promise<DesignEntry[]>
   relocate: (from: string, to: string) => Promise<void>
   onRelocated?: (moves: Array<{ from: string; to: string }>) => void
@@ -93,6 +103,11 @@ async function moveDetails(
   }
   if (details.scope === 'project' && root === undefined) {
     throw new Error('Choose the project save folder')
+  }
+  if (details.scope === 'project' && input.projectScope === false) {
+    throw new Error(
+      'This conversation writes its designs and videos into its own workspace, so move one at a time instead'
+    )
   }
   if (details.name !== undefined && (typeof details.name !== 'string' || details.name.length > 240))
     throw new Error('Invalid name')

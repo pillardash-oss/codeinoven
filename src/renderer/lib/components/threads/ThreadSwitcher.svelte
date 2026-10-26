@@ -7,7 +7,7 @@
   import { contentFamilyIcon } from '$lib/content-view-icons'
   import ThreadRow from './ThreadRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { preloadThreadConversation } from '$lib/stores/thread-preload'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -320,15 +320,14 @@
     resolveHighlighted()
   }
 
-  /** Warm the highlighted thread's message cache so releasing Ctrl (or
-   *  clicking) opens it without the loading spinner. */
+  /** Warm the highlighted thread's conversation so releasing Ctrl (or
+   *  clicking) opens it without the loading spinner and with its live trace
+   *  tail already folded. */
   $effect(() => {
     if (!open) return
     const entry = entries[highlightedIndex]
     if (!entry || entry.kind !== 'thread') return
-    const { thread } = entry
-    if (threadMessages.loaded(thread.projectId, thread.id)) return
-    void threadMessages.preload(thread.projectId, thread.id)
+    preloadThreadConversation(entry.thread)
   })
 
   /**

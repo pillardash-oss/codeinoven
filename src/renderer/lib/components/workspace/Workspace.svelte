@@ -48,7 +48,8 @@
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import {
     AUTHORED_WORK_ICON_BY_KIND,
-    AUTHORED_WORK_NAME_BY_KIND
+    AUTHORED_WORK_NAME_BY_KIND,
+    authoredWorkOwnerLabel
   } from '$lib/authored-work-presentation'
   import { gitState } from '$lib/stores/git.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
@@ -895,8 +896,8 @@
     // The project's own design and video folders are a project-level fact the rail
     // shows on any thread: read once when this thread comes up, and again as it
     // settles so work the agent just wrote appears. The store coalesces the reads.
-    void projectWorkState.ensure(thread.projectId)
-    if (!isThreadBusy(thread)) void projectWorkState.refresh(thread.projectId)
+    void projectWorkState.ensure(thread.projectId, thread.id)
+    if (!isThreadBusy(thread)) void projectWorkState.refresh(thread.projectId, thread.id)
   })
 
   /**
@@ -1375,14 +1376,14 @@
     // board for the kind it names.
     const authoredWork: ContextDockItem[] = []
     if (selectedThread) {
-      const work = projectWorkState.stateFor(selectedThread.projectId)
+      const work = projectWorkState.stateFor(selectedThread.projectId, selectedThread.id)
       for (const kind of ['design', 'video'] as const) {
         const session = designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
         const sessionKind = session?.active ? session.kind : undefined
         if ((work?.[kind].length ?? 0) === 0 && sessionKind !== kind) continue
         authoredWork.push({
           id: `authored-work-${kind}`,
-          label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in this project`,
+          label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in ${authoredWorkOwnerLabel(selectedThread.projectId)}`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
           active: authoredWorkActive(kind),
           playing: kind === 'video' && browserAudio.videoIsPlaying(selectedThread.id),
@@ -2360,7 +2361,9 @@
 
   /** Live draft-state updates pushed from the main process (this window's own
    *  commits plus other windows/instances): merge the drafting flag into every
-   *  thread list and seed the local draft when this window does not have it. */
+   *  thread list and apply the committed draft locally   seeding a draft this
+   *  window does not have, and dropping one it still shows after the commit that
+   *  cleared it. */
   $effect(() => {
     return subscribe('thread:draftUpdated', (...args: unknown[]) => {
       const [projectId, threadId, drafting, draftJson] = args as [
@@ -2369,7 +2372,7 @@
         boolean,
         string | null
       ]
-      rendererRecovery.importDbDraft(projectId, threadId, draftJson)
+      rendererRecovery.applyCommittedDraft(projectId, threadId, draftJson)
       const withDraftState = (thread: Thread): Thread =>
         thread.id === threadId && thread.projectId === projectId
           ? { ...thread, drafting: drafting || undefined, draftJson }

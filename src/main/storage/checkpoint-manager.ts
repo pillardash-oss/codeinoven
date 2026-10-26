@@ -345,10 +345,10 @@ export class CheckpointManager {
 
   /**
    * Paths another thread demonstrably edited while this turn ran, path → when
-   * the other thread touched it (ms). Merges live precise-tool claims with
-   * checkpoints other threads completed inside this turn's window. Only claims
-   * made after this turn started count: a stale claim from an earlier turn must
-   * not hide this thread's own shell-driven edit.
+   * the other thread touched it (ms). Merges live claims from turns that are
+   * still running with checkpoints other threads completed inside this turn's
+   * window. A live claim is always current: the other thread's claim map is
+   * reset per turn, so it can only describe work happening now.
    */
   async foreignClaimedPathsForLive(
     checkpoint: TurnCheckpoint,
@@ -365,8 +365,17 @@ export class CheckpointManager {
   ): Promise<Map<string, number>> {
     const foreign = new Map<string, number>()
     const turnStart = checkpoint.before.createdAt
+    // A live claim comes from a turn that is still running, so its presence is
+    // the evidence and its first-claim time is not. Two long turns overlap: the
+    // older one claimed a file before this turn started and rewrote it again
+    // afterwards (a formatter run over that file), so no fresh claim timestamp
+    // existed for the write that landed inside this window. Dropping the claim
+    // for being older than turnStart credited that write to whichever turn
+    // finished first, and a read-only answer card reported four files it never
+    // touched. This turn's own precise claim still exempts its path in
+    // completeTurn, so a shared edit stays on the card of the turn that made it.
     for (const [path, claimedAt] of options.foreignClaimedPaths ?? []) {
-      if (claimedAt >= turnStart) foreign.set(path, claimedAt)
+      foreign.set(path, claimedAt)
     }
     // Extract only (threadId, completedAt, path) in SQL. Shipping full checkpoint JSON
     // blobs across the worker port just to read two fields crashed the process

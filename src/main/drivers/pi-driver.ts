@@ -142,6 +142,16 @@ const PI_ABORT_ENFORCE_INTERVAL_MS = 500
 /** Bound on the post-abort `get_state` probe so a busy process cannot stall the
  *  stop behind the RPC client's full request timeout. */
 const PI_ABORT_PROBE_TIMEOUT_MS = 1_500
+/**
+ * How long the `abort` RPC itself may take before the process is terminated.
+ *
+ * Pi answers an abort as soon as its run unwinds, so a missing answer means the
+ * run cannot unwind (a dialog it is parked on that nothing will ever answer) or
+ * the transport is wedged. Waiting for the RPC client's own request timeout
+ * instead kept the caller (the permission card the user just rejected, the
+ * thread status behind it) frozen for a full two minutes.
+ */
+const PI_ABORT_RPC_TIMEOUT_MS = 5_000
 /** Hard cap on the explicit `pi update --models` catalog refresh. Pi aborts its
  *  own refresh after 15s and reports the failure, so this only bounds a process
  *  that never exits. */
@@ -310,12 +320,24 @@ export class PiDriver extends PersistentCliDriver {
     scheduledRetry: true,
     // The core-tools extension reconciles the task list on `agent_settled`
     // (src/main/drivers/pi/tools/core-tools-events.ts), so the chat engine's
-    // generic guard must not nudge the same turn again.
+    // generic guard must not nudge the same turn again. The driver reads the
+    // answer that nudge must not replace back out of the record stream, so the
+    // engine can keep it as the turn's answer.
     handlesTaskReconcile: true,
+    reportsTaskReconcileAnswer: true,
     nativeUtilities: []
   }
 
   private turnStates = new Map<string, PiTurnState>()
+  /**
+   * Per session, the message that owns the answer the last task-list reconcile
+   * nudge must not replace (see `taskReconcileAnswerId`).
+   *
+   * Written when the extension's nudge crosses the record stream and read once at
+   * finalization, then cleared by the next prompt: a mark left over from an
+   * earlier turn can only mislead a transcript read that reaches back before it.
+   */
+  private reconcileAnswers = new Map<string, string>()
   private rpcClients = new Map<string, PiRpcClient>()
   /**
    * In-flight session bootstraps, keyed by session id.
@@ -933,6 +955,7 @@ export class PiDriver extends PersistentCliDriver {
     )
     this.appendUserMessage(session, options)
     this.silentContinues.delete(session.id)
+    this.reconcileAnswers.delete(session.id)
     this.activeTurns.add(session.id)
 
     const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
@@ -1113,13 +1136,22 @@ export class PiDriver extends PersistentCliDriver {
     // settles the aborted run with `agent_settled`, and the continuation would
     // then start a fresh run seconds after the stop.
     this.silentContinues.delete(sessionId)
+    // A stop closes every card this session owns, so the dialog pi is parked on
+    // has no one left to answer it. Pi cannot unwind the run it is blocked on
+    // until that dialog is settled, so cancelling first is what lets the abort
+    // land at all. Without it the abort waits for the RPC client's full request
+    // timeout, leaving the thread reading as working for two minutes.
+    this.cancelPendingDialogs(sessionId)
     // Published before the abort so the extension already sees it when the
     // run's own settle hook fires.
     await this.publishStopRequest(sessionId)
     const session = await this.requireSession(projectPath, sessionId).catch(() => null)
     const client = this.rpcClients.get(sessionId)
     if (!session || !client) {
-      // No live process to abort: nothing can still be running under it.
+      // No live process to abort: nothing can still be running under it, so a
+      // registration left behind is stale and must not keep the engine
+      // ignoring this session's idles as if a turn were still live.
+      this.activeTurns.delete(sessionId)
       this.settleChildStreams(sessionId, 'aborted')
       return
     }
@@ -1127,7 +1159,19 @@ export class PiDriver extends PersistentCliDriver {
       Logger.dev('Pi auto-retry disarm after stop failed:', error)
     })
     try {
-      await client.abort()
+      const answered = await withTimeout(
+        client.abort().then(() => true),
+        PI_ABORT_RPC_TIMEOUT_MS
+      )
+      if (answered === null) {
+        // Pi never acknowledged the abort: it is wedged or parked on a run it
+        // cannot unwind. Terminate the process (the exit event finalizes the
+        // session state) instead of holding the caller for the RPC timeout.
+        Logger.info('Pi did not answer the abort request; terminating the session process', {
+          sessionId
+        })
+        client.dispose()
+      }
     } catch {
       // The abort RPC failed   the pi process is wedged or already gone, so a
       // graceful abort can never land. Kill the process so the run actually
@@ -1142,6 +1186,30 @@ export class PiDriver extends PersistentCliDriver {
     // the stop instead of spinning until the last transcript lands.
     this.settleChildStreams(sessionId, 'aborted')
     void this.enforceStoppedSession(projectPath, sessionId)
+  }
+
+  /**
+   * Cancel every dialog pi still holds open for this session.
+   *
+   * The app never leaves a dialog unanswered: a card that disappears (a stop, a
+   * rejected permission, a retired session) would otherwise leave pi waiting on
+   * `ctx.ui.confirm` for an answer that cannot come, and the run behind it can
+   * neither continue nor abort. Answering with `cancelled` is the same outcome a
+   * dismissed card already produces, so the harness resumes with the blocked
+   * call denied instead of hanging on it.
+   */
+  private cancelPendingDialogs(sessionId: string): void {
+    for (const [requestId, request] of [...this.pendingUiRequests]) {
+      if (request.sessionId !== sessionId) continue
+      this.pendingUiRequests.delete(requestId)
+      const rawId = request.request['id']
+      if (typeof rawId !== 'string' && typeof rawId !== 'number') continue
+      try {
+        request.client.respondToExtensionUiRequest(rawId, { cancelled: true })
+      } catch (error) {
+        Logger.dev('Pi dialog cancellation failed:', error)
+      }
+    }
   }
 
   /**
@@ -1237,6 +1305,7 @@ export class PiDriver extends PersistentCliDriver {
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
+    this.reconcileAnswers.delete(sessionId)
     await this.removeGatewayHandoff(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
@@ -1256,6 +1325,7 @@ export class PiDriver extends PersistentCliDriver {
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
+    this.reconcileAnswers.delete(sessionId)
     await this.removeGatewayHandoff(sessionId)
     await super.parkThreadSession(projectPath, threadId, sessionId)
   }
@@ -1426,7 +1496,18 @@ export class PiDriver extends PersistentCliDriver {
       turnIndex: 0
     }
     this.turnStates.set(context.sessionId, state)
-    return mapPiRecord(value, context, state)
+    const result = mapPiRecord(value, context, state)
+    // The record mapper stores the task-list reconcile nudge's boundary on the
+    // turn state; keep it per session so the chat engine can read it back at
+    // finalization, once the whole turn is in hand.
+    if (state.reconcileAnswerMessageId !== undefined) {
+      this.reconcileAnswers.set(context.sessionId, state.reconcileAnswerMessageId)
+    }
+    return result
+  }
+
+  taskReconcileAnswerId(sessionId: string): string | undefined {
+    return this.reconcileAnswers.get(sessionId)
   }
 
   dispose(): void {
@@ -1434,6 +1515,7 @@ export class PiDriver extends PersistentCliDriver {
     this.rpcClients.clear()
     this.activeTurns.clear()
     this.turnStates.clear()
+    this.reconcileAnswers.clear()
     this.childStreams.clear()
     this.silentContinues.clear()
     this.cioStopFlagPaths.clear()

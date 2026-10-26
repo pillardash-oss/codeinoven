@@ -10,6 +10,8 @@ import {
   type Project,
   type Assistant,
   type AssistantDeletionResult,
+  type AssistantKnowledgeRevision,
+  type AssistantKnowledgeRevisionDetail,
   type AssistantSchedule,
   type SkippedRun,
   type Thread,
@@ -394,6 +396,34 @@ class AssistantsState {
    */
   gettingStartedCheckpoint(assistantId: string): Promise<string | null> {
     return invoke('assistant:gettingStartedCheckpoint', assistantId)
+  }
+
+  /**
+   * Every saved version of an assistant's instructions, newest first, without the
+   * documents. The knowledge is replaced whole on each save, so this is what makes
+   * an earlier version reachable after the fact.
+   */
+  listKnowledgeRevisions(assistantId: string): Promise<AssistantKnowledgeRevision[]> {
+    return invoke('assistant:listKnowledgeRevisions', assistantId)
+  }
+
+  /** One saved version with its text, read when the user opens it. */
+  getKnowledgeRevision(
+    assistantId: string,
+    revisionId: string
+  ): Promise<AssistantKnowledgeRevisionDetail | null> {
+    return invoke('assistant:getKnowledgeRevision', assistantId, revisionId)
+  }
+
+  /**
+   * Put a saved version back as the current instructions. The version it replaces
+   * is kept, so a restore is itself a version in the history and can be undone by
+   * restoring what it replaced.
+   */
+  async restoreKnowledgeRevision(assistantId: string, revisionId: string): Promise<Assistant> {
+    const assistant = await invoke('assistant:restoreKnowledgeRevision', assistantId, revisionId)
+    await this.refresh()
+    return assistant
   }
 
   /**

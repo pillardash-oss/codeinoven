@@ -274,11 +274,18 @@ export class CodexDriver extends PersistentCliDriver {
     return catalogs
   }
 
+  /**
+   * The windows Codex states for this account's copy of one model.
+   *
+   * The read honors the per-home catalog TTL instead of forcing a fresh CLI
+   * dump: the renderer asks for this the moment a thread's model lands, so a
+   * forced read would spawn `codex debug models` on every thread open.
+   */
   async modelContext(
     projectPath: string,
     modelId: string
   ): Promise<Pick<ProviderModel, 'contextWindow' | 'contextWindows'> | null> {
-    const windows = await this.codexWindowCatalog(projectPath, true)
+    const windows = await this.codexWindowCatalog(projectPath)
     const window = windows.get(modelId)
     return window
       ? { contextWindow: window.defaultWindow, contextWindows: codexContextWindowOptions(window) }

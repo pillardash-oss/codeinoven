@@ -7,6 +7,7 @@
   import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
+  import { offeredContextWindow } from '$shared/model-runtime-settings'
   import type { InferenceMode } from '$shared/types'
 
   interface Props {
@@ -57,9 +58,8 @@
     return tokens >= 1_000_000 ? `${tokens / 1_000_000}m` : `${tokens / 1_000}k`
   }
   let displayedContextWindow = $derived(
-    contextWindow !== undefined && contextWindows.includes(contextWindow)
-      ? contextWindow
-      : defaultContextWindow
+    offeredContextWindow({ contextWindow: defaultContextWindow, contextWindows }, contextWindow) ??
+      defaultContextWindow
   )
   let summary = $derived(
     `${currentSpeed.label}${displayedContextWindow ? ` · ${contextLabel(displayedContextWindow)}${contextWindow === undefined ? ' (default)' : ''}` : ''}`

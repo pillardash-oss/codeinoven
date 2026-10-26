@@ -107,6 +107,45 @@ export function threadAttachmentDirectory(
 }
 
 /**
+ * Absolute directory a thread's authored work is written under.
+ *
+ * A design session and a video session both write folders of HTML into one root,
+ * and that root is whatever directory the conversation actually runs in: a
+ * project thread writes into the project's checkout, while a conversation with
+ * no checkout of its own (an assistant task, a standalone chat, a browser tab)
+ * writes into the app-owned workspace it mounts. Authored work is a first-class
+ * artifact rather than scratch, so it lives beside the work in both cases and
+ * never in `.cio/tmp`.
+ *
+ * Null for a project that is neither local nor a conversation container: a
+ * remote project has no folder here to write into, and the caller reports that
+ * rather than inventing one.
+ */
+export function threadAuthoredWorkRoot(
+  project: ScratchProject,
+  scope: { projectId: string; threadId?: string; assistantId?: string | null }
+): string | null {
+  if (project?.source === 'local' && project.path) return project.path
+  // A conversation container always names the thread it belongs to, because its
+  // workspace is that thread's (or its assistant's): the container id alone
+  // covers every assistant at once and cannot name one folder.
+  if (!scope.threadId) return null
+  if (scope.projectId === ASSISTANT_SPACE_ID) {
+    return join(
+      getConfigRoot(),
+      assistantThreadWorkspaceDirectory(scope.threadId, scope.assistantId)
+    )
+  }
+  if (scope.projectId === INBOX_PROJECT_ID) {
+    return join(getConfigRoot(), chatThreadWorkspaceDirectory(scope.threadId))
+  }
+  if (scope.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+    return join(getConfigRoot(), browserThreadWorkspaceDirectory(scope.threadId))
+  }
+  return null
+}
+
+/**
  * Absolute directory holding every utility installed for one thread: a
  * thread-scoped skill or MCP server is installed here and nowhere else, so the
  * install is private to that conversation and goes when the thread goes.

@@ -1,4 +1,4 @@
-import { requireLocalProject } from '../../lib/project-artifacts'
+import { authoredWorkRootSync } from '../design/authored-work-root'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
@@ -67,12 +67,12 @@ export function createVideoPreviewExecutor(
         `The video capability's "preview" executor received the operation "${operation}".`
       )
     }
-    const project = requireLocalProject(options.database, context.projectId)
+    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
     const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openVideoPreview(
       { previews: options.previews, browser: options.browser },
       {
-        projectPath: project.path,
+        projectPath: scope.path,
         projectId: context.projectId,
         threadId: context.threadId,
         directory:

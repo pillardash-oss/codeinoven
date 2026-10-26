@@ -1,6 +1,6 @@
 import { relative, sep } from 'node:path'
 import { EXPERT_FALLBACK_GUIDANCE } from '../../lib/experts'
-import { requireLocalProject } from '../../lib/project-artifacts'
+import { authoredWorkRootSync } from '../design/authored-work-root'
 import { resolveServedFolder } from '../preview/served-folder'
 import { currentWorkRoot } from '../design/work-roots-state'
 import { saveDesignMedia } from '../design/design-media-service'
@@ -137,10 +137,10 @@ export function createMediaGenerationExecutor(
       )
     }
 
-    const project = requireLocalProject(options.database, context.projectId)
+    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
     const sessionKind = (await options.sessionKind(context.projectId, context.threadId)) ?? 'design'
     const directory = resolveServedFolder(
-      project.path,
+      scope.path,
       input['directory'],
       currentWorkRoot(sessionKind, context.projectId)
     )
@@ -160,7 +160,7 @@ export function createMediaGenerationExecutor(
       source: result.url,
       name: name ?? assigned.model.replace(/[^a-z0-9]+/giu, '-')
     })
-    const file = relative(project.path, saved.path).split(sep).join('/')
+    const file = relative(scope.path, saved.path).split(sep).join('/')
     const provider = mediaProviderLabel(result.providerId)
     return {
       file,

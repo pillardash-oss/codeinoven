@@ -15,6 +15,12 @@ export const CIO_AGENT_OUTPUT_TOOL_NAME = 'cio_agent_output'
 /** Custom-message type that announces a finished background sub-agent to the driver. */
 export const CIO_SUBAGENT_DONE_MESSAGE_TYPE = 'cio-subagent-done'
 /**
+ * Custom-message type of the task-list reconcile nudge the core-tools extension
+ * injects before a run settles on a lagging list. The driver reads it back out
+ * of the transcript so the app knows which answer that nudge must not replace.
+ */
+export const CIO_TODO_RECONCILE_MESSAGE_TYPE = 'cio-todo-reconcile'
+/**
  * `ctx.ui.setStatus` key the core-tools extension uses to stream a live sub-agent
  * (child pi session) event feed to the driver. The payload is a JSON envelope
  * `{ childSessionId, records: [...pi records] }`, and the driver maps each record

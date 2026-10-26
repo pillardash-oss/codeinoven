@@ -14,6 +14,7 @@ import { assistantOwnedDirectories } from '../thread-storage-paths'
 import { Logger } from '../../main/system/logger'
 import type { Database } from '../../main/database/database'
 import { AssistantRepo } from '../../main/database/repositories/assistant-repo'
+import { AssistantKnowledgeRevisionRepo } from '../../main/database/repositories/assistant-knowledge-revision-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import {
   assistantFirstKnowledgeSave,
@@ -22,6 +23,9 @@ import {
   type Assistant,
   type AssistantAgents,
   type AssistantDeletionResult,
+  type AssistantKnowledgeRevision,
+  type AssistantKnowledgeRevisionCause,
+  type AssistantKnowledgeRevisionDetail,
   type AssistantSchedule,
   type Thread,
   type UpdateAssistantInput
@@ -48,6 +52,7 @@ function schedulesEqual(
  */
 export class AssistantManager {
   private assistantRepo: AssistantRepo
+  private knowledgeRevisionRepo: AssistantKnowledgeRevisionRepo
   private threadRepo: ThreadRepo
   /**
    * Removes a thread through the canonical path (session teardown, DB cleanup,
@@ -62,6 +67,7 @@ export class AssistantManager {
     private now: () => number = () => Date.now()
   ) {
     this.assistantRepo = new AssistantRepo(database)
+    this.knowledgeRevisionRepo = new AssistantKnowledgeRevisionRepo(database)
     this.threadRepo = new ThreadRepo(database)
   }
 
@@ -133,10 +139,31 @@ export class AssistantManager {
       updatedAt: now
     }
     this.assistantRepo.upsert(assistant)
+    // An assistant created with its instructions already written (a manual setup,
+    // an import) starts its history at that document, so the first edit after it
+    // has a version to go back to instead of becoming the oldest one on record.
+    if (assistant.knowledge.trim().length > 0) {
+      this.knowledgeRevisionRepo.append({
+        id: generateId(),
+        assistantId: assistant.id,
+        knowledge: assistant.knowledge,
+        cause: 'setup',
+        createdAt: now
+      })
+    }
     return assistant
   }
 
-  updateAssistant(assistantId: string, input: UpdateAssistantInput): Assistant {
+  updateAssistant(
+    assistantId: string,
+    input: UpdateAssistantInput,
+    /**
+     * How this save is recorded in the instruction history. A restore names
+     * itself so the timeline reads as one; every other save is an edit, and the
+     * save that gives an assistant its first knowledge is a setup.
+     */
+    history: { cause?: AssistantKnowledgeRevisionCause; label?: string } = {}
+  ): Assistant {
     const existing = this.assistantRepo.get(assistantId)
     if (!existing) throw new Error(`Assistant not found: ${assistantId}`)
     const now = this.now()
@@ -194,7 +221,81 @@ export class AssistantManager {
       updatedAt: now
     }
     this.assistantRepo.upsert(updated)
+    if (knowledgeChanged) this.recordKnowledgeRevision(existing, updated, history)
     return updated
+  }
+
+  /**
+   * Keep every version of an assistant's instructions.
+   *
+   * The document is replaced whole on each save, so the version being overwritten
+   * is the only thing that makes a bad save recoverable. It is written here, at the
+   * moment it stops being current, together with the version that replaces it: the
+   * timeline then reads as the assistant's own history rather than as a log of
+   * edits, and a restore is one more entry in it.
+   *
+   * An assistant saved before this history existed has no versions at all, so the
+   * current document is written first. Without that, the first edit after an
+   * upgrade would be the oldest version on record and leave nothing to go back to.
+   */
+  private recordKnowledgeRevision(
+    previous: Assistant,
+    next: Assistant,
+    history: { cause?: AssistantKnowledgeRevisionCause; label?: string }
+  ): void {
+    const hadKnowledge = previous.knowledge.trim().length > 0
+    if (hadKnowledge && this.knowledgeRevisionRepo.count(previous.id) === 0) {
+      this.knowledgeRevisionRepo.append({
+        id: generateId(),
+        assistantId: previous.id,
+        knowledge: previous.knowledge,
+        cause: 'setup',
+        label: 'Kept from before this history was recorded',
+        createdAt: previous.knowledgeUpdatedAt ?? previous.createdAt
+      })
+    }
+    this.knowledgeRevisionRepo.append({
+      id: generateId(),
+      assistantId: next.id,
+      knowledge: next.knowledge,
+      cause: history.cause ?? (hadKnowledge ? 'edit' : 'setup'),
+      label: history.label,
+      createdAt: next.knowledgeUpdatedAt ?? next.updatedAt
+    })
+  }
+
+  /** Every version of an assistant's instructions, newest first. */
+  listKnowledgeRevisions(assistantId: string): Promise<AssistantKnowledgeRevision[]> {
+    return this.knowledgeRevisionRepo.listViaWorker(assistantId)
+  }
+
+  /** One saved version with its text, or null when the id is not this assistant's. */
+  getKnowledgeRevision(
+    assistantId: string,
+    revisionId: string
+  ): Promise<AssistantKnowledgeRevisionDetail | null> {
+    return this.knowledgeRevisionRepo.getViaWorker(assistantId, revisionId)
+  }
+
+  /**
+   * Put an earlier version of the instructions back.
+   *
+   * The restore is an ordinary save of that document, so it lands in the timeline
+   * as a new version: whatever was current is kept as the version before it, and
+   * the history cannot be rewritten by restoring. The reason is recorded on the
+   * entry, which is what lets the timeline say where a version came from.
+   */
+  restoreKnowledgeRevision(assistantId: string, revisionId: string): Promise<Assistant> {
+    // The version is read on the worker, the way any interaction-path read is, and
+    // the write that follows is the ordinary save of that document.
+    return this.knowledgeRevisionRepo.getViaWorker(assistantId, revisionId).then((revision) => {
+      if (!revision) throw new Error(`Knowledge version not found: ${revisionId}`)
+      return this.updateAssistant(
+        assistantId,
+        { knowledge: revision.knowledge },
+        { cause: 'restore', label: `Restored version ${revision.sequence}` }
+      )
+    })
   }
 
   /**

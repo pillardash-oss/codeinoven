@@ -13,13 +13,15 @@ import type { StorageEngine } from '../storage/storage-engine'
 export interface AssistantReportInput {
   /** The settled assistant thread (a run or the user's own task turn). */
   thread: Thread
-  /** The task the run belongs to, for the report's heading. */
+  /** The title the run chose for its own report. */
+  title: string
+  /** The task the run belongs to, for the report's header. */
   taskTitle: string
   /** The assistant's name, when the task is grouped. */
   assistantName?: string
   /** The assistant's agreed urgency default, when it has one. */
   priority?: AssistantPriority
-  /** The turn's final answer, verbatim. */
+  /** The report body: what the run wrote, or the answer it delivered. */
   report: string
   /** How the turn settled. */
   status: ThreadStatus
@@ -28,14 +30,16 @@ export interface AssistantReportInput {
 }
 
 /**
- * Copy one settled assistant run's report to a durable Markdown file under
- * `reports/` in the assistant's own workspace.
+ * Write one run's declared report to a durable Markdown file under `reports/` in
+ * the assistant's own workspace.
  *
- * Written from the turn's final answer in the main process, not handed to the
- * agent as a file-writing step, so the durable copy exists even when the model
- * forgets to write it, and it is always exactly what the user read. Returns the
- * storage-relative path that was written, or null when this turn leaves nothing
- * (a Getting started turn, a non-terminal settle, or an empty report).
+ * Only a run that declared a report reaches this: the app never derives a report
+ * from an ordinary answer, so an ordinary answer leaves no file behind. Written
+ * from the main process rather than handed to the agent as a file-writing step,
+ * so the path, the file name and the header stay app-owned and the file always
+ * lands where the Workspace files panel mounts it. Returns the storage-relative
+ * path that was written, or null when this turn leaves nothing (a Getting started
+ * turn, a non-terminal settle, or an empty report).
  */
 export async function writeAssistantReport(
   storage: StorageEngine,
@@ -54,6 +58,7 @@ export async function writeAssistantReport(
     assistantReportFileName(input.at, input.thread.id)
   )
   const document = buildAssistantReportDocument({
+    title: input.title,
     taskTitle: input.taskTitle,
     assistantName: input.assistantName,
     priority: input.priority,

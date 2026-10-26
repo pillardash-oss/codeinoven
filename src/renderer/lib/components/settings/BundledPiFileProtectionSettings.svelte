@@ -13,6 +13,7 @@
   import type { AppConfig, AppConfigPatch } from '$shared/types'
   import { appConfirm } from '../../stores/app-confirm.svelte'
   import { keymapState } from '../../keymap/keymap-state.svelte'
+  import Switch from '../ui/Switch.svelte'
 
   interface Props {
     config: AppConfig
@@ -23,11 +24,36 @@
   let { config, settingsReady, updateConfig }: Props = $props()
   let candidate = $state('')
   let saving = $state(false)
+  let toggling = $state(false)
   let adding = $state(false)
   let candidateInput = $state<HTMLInputElement>()
   let patternList = $state<HTMLUListElement>()
   const patterns = $derived(bundledPiFilePatterns(config.bundledPiSensitiveFilePatterns))
   const atCapacity = $derived(patterns.length >= MAX_BUNDLED_PI_FILE_PATTERNS)
+  const enabled = $derived(config.bundledPiSensitiveFileProtectionEnabled !== false)
+
+  async function toggleProtection(next: boolean): Promise<void> {
+    if (!settingsReady || saving || toggling) return
+    toggling = true
+    try {
+      if (!next) {
+        const approved = await appConfirm.request({
+          title: 'Disable sensitive-file checks?',
+          body: [
+            'Secrets could leak into AI agents when files are accessed outside the defined tools. This also disables secret-tool file checks.'
+          ],
+          confirmLabel: 'Disable checks',
+          tone: 'danger'
+        })
+        if (!approved) return
+      }
+      await updateConfig({ bundledPiSensitiveFileProtectionEnabled: next })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not change file protection.')
+    } finally {
+      toggling = false
+    }
+  }
 
   async function save(next: string[]): Promise<boolean> {
     saving = true
@@ -81,7 +107,7 @@
       body: [
         `Remove ${pattern} from bundled Pi's block list?`,
         patterns.length === 1
-          ? 'Secret-tool files remain permanently protected. File-capable tools will still require approval, including in Full Access.'
+          ? 'Secret-tool files stay listed.'
           : 'Other entries remain protected. Removing a pattern does not remove any files.'
       ],
       confirmLabel: 'Remove pattern',
@@ -106,19 +132,30 @@
     <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
       Sensitive files · Bundled Pi only
     </h3>
-    <button
-      type="button"
-      class="inline-flex shrink-0 items-center gap-1.5 border border-border px-2 py-1 text-xs hover:bg-elevated disabled:opacity-40"
-      title="Add protected file pattern"
-      disabled={!settingsReady || saving || atCapacity || adding}
-      onclick={() => void openEditor()}
-    >
-      <CioPlus size={14} />
-      Add
-    </button>
+    <div class="flex shrink-0 items-center gap-3">
+      <Switch
+        checked={enabled}
+        onchange={(next) => void toggleProtection(next)}
+        disabled={!settingsReady || saving || toggling}
+        title="Enable sensitive-file checks"
+        aria-label="Enable sensitive-file checks"
+      />
+      <button
+        type="button"
+        class="inline-flex shrink-0 items-center gap-1.5 border border-border px-2 py-1 text-xs hover:bg-elevated disabled:opacity-40"
+        title="Add protected file pattern"
+        disabled={!settingsReady || saving || toggling || atCapacity || adding}
+        onclick={() => void openEditor()}
+      >
+        <CioPlus size={14} />
+        Add
+      </button>
+    </div>
   </div>
   <p class="text-xs leading-relaxed text-dimmed">
-    Every file tool needs approval, even in Full Access. Secret-tool files stay protected.
+    {enabled
+      ? 'Listed files require approval, even in Full Access.'
+      : 'Protection off. Listed files can be accessed without this check.'}
   </p>
 
   <ul
@@ -176,7 +213,7 @@
           <code class="break-all text-xs">{pattern}</code>
           <p class="text-xs text-dimmed">Secret-tool files in app data</p>
         </div>
-        <span class="shrink-0 text-xs font-medium text-muted">Always protected</span>
+        <span class="shrink-0 text-xs font-medium text-muted">Permanent</span>
       </li>
     {/each}
     {#each patterns as pattern (pattern)}

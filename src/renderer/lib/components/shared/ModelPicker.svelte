@@ -18,6 +18,7 @@
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { modelRuntime } from '$lib/stores/model-runtime.svelte'
   import {
     FIRST_RUN_PROVIDER_SEARCH,
     providerConnectFlow
@@ -234,14 +235,21 @@
     selectedProvider?.models.find((model) => model.id === modelId) ??
       displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
   )
-  let runtimeModel = $derived.by(() => {
-    const model = displayProviders
-      .find((provider) => provider.id === providerId && provider.harnessId === harnessId)
-      ?.models.find((model) => model.id === modelId)
-    const metadata = projectId
-      ? providerCatalog.modelContext(projectId, harnessId, providerId, modelId, accountId)
-      : undefined
-    return model && metadata ? { ...model, ...metadata } : model
+  /**
+   * The selected model's own properties, resolved through the shared store for
+   * the selected account.
+   *
+   * Codex states a model's context windows per account, so the account belongs
+   * to the selection: the merged catalog only holds whichever account was
+   * probed last, and the dropdown must offer this account's windows.
+   */
+  let modelRuntimeSelection = $derived({ projectId, harnessId, providerId, modelId, accountId })
+  let runtime = $derived(
+    modelRuntime.resolve(modelRuntimeSelection, displayProviders, runtimeSettings?.contextWindow)
+  )
+  let runtimeModel = $derived(runtime.model)
+  $effect(() => {
+    modelRuntime.ensure(modelRuntimeSelection)
   })
 
   function refreshSelectedContext(): void {
@@ -253,7 +261,7 @@
   let ultrafastSupported = $derived(
     harnessId === 'codex' && providerId === 'openai' && runtimeModel?.ultrafastSupported === true
   )
-  let contextWindows = $derived(runtimeModel?.contextWindows ?? [])
+  let contextWindows = $derived(runtime.contextWindows)
   let showRuntimeSettings = $derived(
     !multiSelect && Boolean(modelId) && hasModelRuntimeSettings(runtimeModel, harnessId, providerId)
   )
@@ -827,8 +835,8 @@
           {ultrafastSupported}
           fastMultiplier={fastMultiplierFor(modelId)}
           {contextWindows}
-          contextWindow={runtimeSettings?.contextWindow}
-          defaultContextWindow={runtimeModel?.contextWindow ?? contextWindows[0]}
+          contextWindow={runtime.contextWindowOverride}
+          defaultContextWindow={runtime.defaultContextWindow}
           bind:menuOpen={
             () => runtimeMenuOpen,
             (value) => {

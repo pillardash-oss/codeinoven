@@ -1063,6 +1063,40 @@ CREATE TABLE IF NOT EXISTS assistants (
 CREATE INDEX IF NOT EXISTS idx_assistants_listing ON assistants(pinned DESC, sort_order, updated_at DESC);`
 
 /**
+ * Every version of an assistant's instructions.
+ *
+ * Knowledge is replaced whole on each save, so recovering from a save that threw
+ * the document away used to depend on the agent still holding the old text in its
+ * context. Each save appends a row here, which makes the previous version
+ * addressable afterwards: the timeline lists what was saved and when, and a
+ * restore writes an old snapshot back as a new version rather than rewriting
+ * history.
+ *
+ * The counted columns are written with the text so the timeline query never
+ * touches a document body: `characters`, `lines` and `excerpt` are what a row
+ * shows, and `knowledge` is read only for the one version a user opens.
+ *
+ * The foreign key keeps the history attached to its assistant, so deleting an
+ * assistant removes every version of instructions that no longer exists.
+ */
+const ASSISTANT_KNOWLEDGE_REVISIONS_SQL = `
+CREATE TABLE IF NOT EXISTS assistant_knowledge_revisions (
+  id           TEXT PRIMARY KEY NOT NULL,
+  assistant_id TEXT NOT NULL REFERENCES assistants(id) ON DELETE CASCADE,
+  sequence     INTEGER NOT NULL,
+  cause        TEXT NOT NULL CHECK(cause IN ('setup','edit','restore')),
+  label        TEXT,
+  knowledge    TEXT NOT NULL,
+  characters   INTEGER NOT NULL,
+  lines        INTEGER NOT NULL,
+  excerpt      TEXT NOT NULL,
+  created_at   INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_knowledge_revisions_sequence
+  ON assistant_knowledge_revisions(assistant_id, sequence);`
+
+/**
  * Which folder of authored work a thread is working on, and which kind it holds.
  *
  * A session is user-started (the `@cio-design` or `@cio-video` tag, which lives in
@@ -1277,6 +1311,7 @@ export const DATABASE_SCHEMA_SQL = [
   DESIGN_REVISIONS_SQL,
   DESIGN_HISTORY_HEADS_SQL,
   ASSISTANTS_SQL,
+  ASSISTANT_KNOWLEDGE_REVISIONS_SQL,
   `CREATE TABLE IF NOT EXISTS archives (
     kind TEXT NOT NULL CHECK(kind IN ('project','thread','assistant')),
     entity_id TEXT NOT NULL,

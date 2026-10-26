@@ -3,6 +3,20 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { AuthoredWorkKind, ProjectWorkState } from '$shared/ipc-contract'
 import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
 import { APP_SLUG } from '$shared/brand'
+import { usesThreadWorkspaceMount } from '$shared/types'
+
+/**
+ * The cache key one read belongs to.
+ *
+ * A project's designs are the project's: every thread of it lists the same
+ * folders, so the project id is the whole key. An assistant task, a chat and a
+ * browser tab are the opposite case, because each runs in a workspace of its own
+ * while sharing one container id, so the thread has to be part of the key or two
+ * assistants would read each other's board.
+ */
+function workScopeKey(projectId: string, threadId?: string): string {
+  return threadId && usesThreadWorkspaceMount(projectId) ? `${projectId}:${threadId}` : projectId
+}
 
 /**
  * The designs and videos a project holds, read without a thread.
@@ -49,14 +63,18 @@ class ProjectWorkStore {
   /** Projects whose roots are being read, so an explorer asks once per project. */
   #rootsPending = new Map<string, Promise<void>>()
 
-  /** The last answer for a project, or null before the first one arrives. */
-  stateFor(projectId: string): ProjectWorkState | null {
-    return this.#states.get(projectId) ?? null
+  /** The last answer for a scope, or null before the first one arrives. */
+  stateFor(projectId: string, threadId?: string): ProjectWorkState | null {
+    return this.#states.get(workScopeKey(projectId, threadId)) ?? null
   }
 
-  /** The folders of one kind a project holds, or an empty list before the read. */
-  itemsFor(projectId: string, kind: AuthoredWorkKind): ProjectWorkState[AuthoredWorkKind] {
-    return this.#states.get(projectId)?.[kind] ?? []
+  /** The folders of one kind a scope holds, or an empty list before the read. */
+  itemsFor(
+    projectId: string,
+    kind: AuthoredWorkKind,
+    threadId?: string
+  ): ProjectWorkState[AuthoredWorkKind] {
+    return this.#states.get(workScopeKey(projectId, threadId))?.[kind] ?? []
   }
 
   /** The folders a project writes new work into, or the app default before the read. */
@@ -139,31 +157,33 @@ class ProjectWorkStore {
   }
 
   /** Opening a panel discards its cached listing before checking recorded folders. */
-  invalidate(projectId: string): void {
-    this.#states.delete(projectId)
+  invalidate(projectId: string, threadId?: string): void {
+    this.#states.delete(workScopeKey(projectId, threadId))
   }
 
-  /** Read a project's work once, unless a read is already in flight. */
-  ensure(projectId: string): Promise<void> {
-    return this.#states.has(projectId) ? Promise.resolve() : this.refresh(projectId)
+  /** Read a scope's work once, unless a read is already in flight. */
+  ensure(projectId: string, threadId?: string): Promise<void> {
+    const key = workScopeKey(projectId, threadId)
+    return this.#states.has(key) ? Promise.resolve() : this.refresh(projectId, threadId)
   }
 
-  /** Read a project's work again, whether or not it was read before. */
-  refresh(projectId: string): Promise<void> {
-    const pending = this.#pending.get(projectId)
+  /** Read a scope's work again, whether or not it was read before. */
+  refresh(projectId: string, threadId?: string): Promise<void> {
+    const key = workScopeKey(projectId, threadId)
+    const pending = this.#pending.get(key)
     if (pending) return pending
-    const task = invoke('design:projectWork', projectId)
+    const task = invoke('design:projectWork', projectId, threadId)
       .then((state) => {
-        this.#states.set(projectId, state)
+        this.#states.set(key, state)
       })
       .catch(() => {
-        // A project that cannot be read keeps the last answer rather than
-        // blanking the rail entries the user is looking at.
+        // A scope that cannot be read keeps the last answer rather than blanking
+        // the rail entries the user is looking at.
       })
       .finally(() => {
-        this.#pending.delete(projectId)
+        this.#pending.delete(key)
       })
-    this.#pending.set(projectId, task)
+    this.#pending.set(key, task)
     return task
   }
 
@@ -182,8 +202,12 @@ class ProjectWorkStore {
     }
     this.#focused.delete(`${projectId}:design`)
     this.#focused.delete(`${projectId}:video`)
-    this.#states.delete(projectId)
-    this.#pending.delete(projectId)
+    for (const key of [...this.#states.keys()]) {
+      if (key === projectId || key.startsWith(`${projectId}:`)) this.#states.delete(key)
+    }
+    for (const key of [...this.#pending.keys()]) {
+      if (key === projectId || key.startsWith(`${projectId}:`)) this.#pending.delete(key)
+    }
     this.#roots.delete(projectId)
     this.#rootsPending.delete(projectId)
   }
