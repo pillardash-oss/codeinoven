@@ -27543,6 +27543,7 @@ export class ChatEngine {
   private async chatPermissionScope(info: SessionInfo): Promise<{
     allowedPaths: string[]
     scratchPaths: string[]
+    workspaceRoots: string[]
     restrictToAllowed: boolean
   }> {
     const isChat =
@@ -27559,6 +27560,11 @@ export class ChatEngine {
       : info.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? [info.projectPath]
         : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
+    // An assistant owns its own `assistant-cwd/<assistantId>/` workspace, so the
+    // sensitive-file block list never asks about a file inside it: that name is
+    // the assistant's own work, not a secret it is reaching for. The card still
+    // covers everything that leaves the workspace.
+    const workspaceRoots = isAssistant ? [resolve(info.projectPath)] : []
     // A thread in a real project also owns that project's `.cio` scratch folder:
     // it is where the agent stages its own work, so deletes and confined shell
     // commands there never prompt. `.cio/specs` and `.cio/git` stay gated inside
@@ -27578,6 +27584,7 @@ export class ChatEngine {
       return {
         allowedPaths: [...attachmentPaths, ...skillPaths],
         scratchPaths,
+        workspaceRoots,
         restrictToAllowed: false
       }
     }
@@ -27587,6 +27594,7 @@ export class ChatEngine {
     return {
       allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
       scratchPaths,
+      workspaceRoots,
       restrictToAllowed: !fileSystemMode
     }
   }
@@ -27683,13 +27691,15 @@ export class ChatEngine {
     const sensitiveFileProtectionEnabled =
       request.permission !== 'bundled-pi-sensitive-files' ||
       (await this.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false
-    const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
+    const { allowedPaths, scratchPaths, workspaceRoots, restrictToAllowed } =
+      await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: restrictToAllowed ? 'auto_review' : level,
       sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
+      ...(workspaceRoots.length > 0 ? { workspaceRoots } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
       permission: request.permission,
