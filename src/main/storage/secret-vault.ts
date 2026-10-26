@@ -1,5 +1,6 @@
 import { safeStorage } from 'electron'
 import { uuidv7 } from '../../lib/id'
+import { skipsOsKeyring } from '../../lib/utils'
 import { Logger } from '../system/logger'
 import { clearRepeatedFailure, reportRepeatedFailure } from '../system/repeated-failure-log'
 import {
@@ -31,6 +32,16 @@ const vaultWriteTails = new WeakMap<StorageEngine, Promise<unknown>>()
 let encryptionAvailable = false
 
 async function probeEncryption(): Promise<boolean> {
+  // A launch the build starts by itself proves that the artifact boots, and it
+  // runs unattended. Asking `safeStorage` for anything initializes its keyring
+  // item, which macOS answers with a password prompt for a bundle whose ad-hoc
+  // signature is not the one that stored the item, so every freshly packaged
+  // build would stop and wait for a human to unlock the keychain. Reporting the
+  // keyring as unavailable keeps that launch non-interactive.
+  if (skipsOsKeyring()) {
+    encryptionAvailable = false
+    return false
+  }
   try {
     encryptionAvailable = await safeStorage.isAsyncEncryptionAvailable()
   } catch (error: unknown) {

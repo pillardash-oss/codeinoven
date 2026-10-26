@@ -98,14 +98,16 @@
   )
 
   /** What the agent reads about the moment, in the same shape a video note uses. */
-  const detail = [
-    `Composition: ${snapshot.directory}`,
-    `timecode: ${snapshot.timecode}`,
-    `seconds: ${snapshot.seconds.toFixed(3)}`,
-    `frame: ${snapshot.frame} (at ${snapshot.fps} fps)`,
-    `duration: ${snapshot.duration}`,
-    `frame picture: ${snapshot.path}`
-  ].join('\n')
+  const detail = $derived(
+    [
+      `Composition: ${snapshot.directory}`,
+      `timecode: ${snapshot.timecode}`,
+      `seconds: ${snapshot.seconds.toFixed(3)}`,
+      `frame: ${snapshot.frame} (at ${snapshot.fps} fps)`,
+      `duration: ${snapshot.duration}`,
+      `frame picture: ${snapshot.path}`
+    ].join('\n')
+  )
 </script>
 
 <Modal

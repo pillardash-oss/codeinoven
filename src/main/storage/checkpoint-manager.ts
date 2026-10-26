@@ -400,7 +400,11 @@ export class CheckpointManager {
    */
   async foreignClaimedPathsForLive(
     checkpoint: TurnCheckpoint,
-    foreignLive: ForeignPaths,
+    // A live claim can only be precise or windowed: another running turn's file
+    // tool or its shell window. A borrowed path is a finished checkpoint's
+    // project-wide diff, which only the durable scan below can find, so a live
+    // caller is never asked for one.
+    foreignLive: Pick<ForeignPaths, 'claimed' | 'window'>,
     ownThreadIds?: ReadonlySet<string>
   ): Promise<ForeignPaths> {
     const opts: TurnCompletionOptions = {
@@ -527,11 +531,17 @@ export class CheckpointManager {
    */
   async activeTurnThreadIds(projectId: string): Promise<Set<string>> {
     assertId(projectId)
-    const rows = this.db.all<{ thread_id: string }>(
+    // Callers reconcile live claims on the turn path (the live change summary
+    // runs on every scanner tick), so this read stays on the maintenance worker
+    // like the foreign-checkpoint scan beside it.
+    const rows = await this.queryRows(
       'SELECT thread_id FROM active_turns WHERE project_id = ?',
-      projectId
+      [projectId],
+      ABANDONED_CHECKPOINT_SCAN_LIMIT
     )
-    return new Set(rows.map((row) => row.thread_id))
+    return new Set(
+      rows.map((row) => row['thread_id']).filter((id): id is string => typeof id === 'string')
+    )
   }
 
   /**

@@ -1,6 +1,7 @@
 import { safeStorage, type Cookie, type Session } from 'electron'
 import { readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { skipsOsKeyring } from '../../../lib/utils'
 import { Logger } from '../../system/logger'
 
 interface CookieSession {
@@ -21,6 +22,10 @@ const MAX_SNAPSHOT_BYTES = 1024 * 1024
  * jar is never written to it.
  */
 async function encryptionAvailable(): Promise<boolean> {
+  // A verification launch never asks the keyring: `safeStorage` initializes its
+  // keyring item on first use, and macOS answers that with a password prompt for
+  // an ad-hoc-signed build.
+  if (skipsOsKeyring()) return false
   if (!(await safeStorage.isAsyncEncryptionAvailable())) return false
   return process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text'
 }
