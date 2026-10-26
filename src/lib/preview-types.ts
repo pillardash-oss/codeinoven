@@ -1,6 +1,6 @@
 /**
- * Extensions the app serves inline: the media type each is served as, how it is
- * presented, and the size ceiling its transfer is held to.
+ * Media classification for previews. Extension mappings supply default MIME
+ * types; any audio/video MIME type can stream without appearing in the table.
  *
  * One table with two callers, because they must never disagree:
  *
@@ -50,8 +50,8 @@ const KIND_MAX_BYTES: Readonly<Record<PreviewKind, number>> = {
 }
 
 /**
- * Extension to kind and canonical type. Anything absent here has no inline
- * presentation at all. Two deliberate omissions:
+ * Default MIME types by extension, not an audio/video streaming allowlist.
+ * Explicit audio/video MIME metadata works independently. Two deliberate omissions:
  *
  * - `.svg` is `image/svg+xml` and is never served through the privileged
  *   `appfile://` scheme, because project-controlled active XML must not run in a
@@ -109,7 +109,18 @@ export const PREVIEW_TYPES: Readonly<Record<string, PreviewType>> = Object.freez
  * directory segment is never an extension, so `dist.v2/README` resolves to
  * nothing rather than to `.v2`, the same rule `mimeTypeForPath` follows.
  */
-export function previewTypeForPath(path: string): PreviewType | null {
+export function previewTypeForPath(path: string, mime?: string): PreviewType | null {
+  // MIME metadata identifies media even for new formats and opaque stored IDs.
+  // Only passive audio/video types may bypass extension classification.
+  const mediaMime = mime?.split(';', 1)[0]?.trim().toLowerCase()
+  if (mediaMime && /^(audio|video)\/[a-z0-9!#$&^_.+-]+$/u.test(mediaMime)) {
+    return {
+      extension: '.media',
+      kind: mediaMime.startsWith('audio/') ? 'audio' : 'video',
+      mime: mediaMime,
+      maxBytes: Number.MAX_SAFE_INTEGER
+    }
+  }
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   const dot = path.lastIndexOf('.')
   if (dot <= slash || dot === path.length - 1) return null
