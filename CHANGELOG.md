@@ -8,7 +8,8 @@ All notable changes to CodeInOven are documented here. This project follows
 ### Fixed
 
 - **An element marked on an HTML or SVG artifact can be dragged off the element
-  it names.** Every other place a reader can comment on something (a passage in a
+  it names, and the picks on an artifact no longer crash the artifact.
+  Every other place a reader can comment on something (a passage in a
   conversation, a mark on a picture, a note in the file viewer, a passage of a
   specification) shows the app's one annotation indicator, which is draggable so
   a comment can be moved off whatever it points at. The artifact inspector drew a
@@ -16,7 +17,13 @@ All notable changes to CodeInOven are documented here. This project follows
   the same gesture did nothing there. The pick now renders the shared
   `AnnotationIndicator`, which also gives it the app's number badge, the active
   state while its comment is open, and drags that outlive a re-measure of the
-  artifact.
+  artifact. Registering the pin's element is now the indicator's own job: every
+  surface that anchors a comment box to its pin used to repeat the same fixture
+  (a reactive element map, a cached attachment per comment, a lookup), and the
+  artifact's copy of it wrote that map from a template expression, which Svelte
+  refuses with `state_unsafe_mutation` and which took the whole card down. One
+  copy of the fixture now lives in `lib/annotation-indicator.svelte.ts`, and the
+  picture annotator, which carried the other copy, uses it too.
 
 - **The inspect toggle in an artifact viewer responds to a click again.** The
   button lived in the viewer's canonical header, and a fullscreen `Modal` header

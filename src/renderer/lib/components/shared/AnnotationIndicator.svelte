@@ -3,7 +3,9 @@
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import {
+    annotationIndicatorKey,
     annotationIndicatorOffset,
+    registerAnnotationIndicatorElement,
     setAnnotationIndicatorOffset
   } from '$lib/annotation-indicator.svelte'
 
@@ -22,6 +24,11 @@
    * The reader owns the drag, so it is reported to the shared offset store and
    * outlives re-renders. A press that does not travel is the click that opens the
    * comment, which is the same gesture with a different ending.
+   *
+   * The component also registers the element it drew, so a surface that anchors
+   * its comment box to this pin asks for it (`annotationIndicatorElement`) rather
+   * than keeping a map of its own. `attach` is left for work only a surface can
+   * do with that element, such as marking it for its own lookup in the DOM.
    */
   interface Props {
     /** Stable identity of the comment, so a moved indicator stays moved. */
@@ -45,7 +52,8 @@
     title: string
     /** Extra layout classes a surface needs to place it in its own layer. */
     class?: string
-    /** Work the surface has to do with the button itself, such as tracking it. */
+    /** Work the surface has to do with the button itself, such as marking it for
+     *  its own DOM lookup. Registering the element is this component's own job. */
     attach?: Attachment<HTMLButtonElement>
     onOpen: () => void
   }
@@ -66,7 +74,7 @@
     onOpen
   }: Props = $props()
 
-  const key = $derived(`${surface}:${id}`)
+  const key = $derived(annotationIndicatorKey(surface, id))
   const offset = $derived(annotationIndicatorOffset(key))
 
   /** How far a press must travel before it is a drag instead of a click. */
@@ -130,9 +138,16 @@
     onOpen()
   }
 
-  // One stable attachment, so a surface's own work is bound once and not rebuilt
-  // on every update of this component.
-  const indicatorAttachment: Attachment<HTMLButtonElement> = (node) => attach?.(node)
+  // One stable attachment, so the registration and the surface's own work happen
+  // once at mount and are released with the element.
+  const indicatorAttachment: Attachment<HTMLButtonElement> = (node) => {
+    const release = registerAnnotationIndicatorElement(key, node)
+    const downstream = attach?.(node)
+    return () => {
+      release()
+      if (typeof downstream === 'function') downstream()
+    }
+  }
 </script>
 
 <button
