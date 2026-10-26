@@ -126,11 +126,7 @@
       label: 'Connections',
       title: 'The utilities the assistant needs',
       value:
-        connectionNames.length > 0
-          ? connectionNames.join(', ')
-          : update
-            ? 'Kept as saved'
-            : 'None'
+        connectionNames.length > 0 ? connectionNames.join(', ') : update ? 'Kept as saved' : 'None'
     })
     if (reportLabel) {
       entries.push({
@@ -191,8 +187,8 @@
         class="border-b border-danger/30 bg-danger/10 px-3 py-1.5 text-[0.6875rem] leading-relaxed text-danger"
         role="note"
       >
-        Removes {loss.removed.length} of the {loss.previousLines} saved lines. Saving replaces
-        these instructions instead of merging with them.
+        Removes {loss.removed.length} of the {loss.previousLines} saved lines. Saving replaces these instructions
+        instead of merging with them.
       </p>
     {/if}
     <ol class="flex flex-col">

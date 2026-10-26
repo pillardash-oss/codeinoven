@@ -72,6 +72,7 @@
     knowledge,
     plan,
     update = false,
+    previousKnowledge = '',
     scheduled = true,
     existingConnections = [],
     saving,
@@ -114,7 +115,7 @@
 
   const saveTitle = $derived(
     (update ? "Save the assistant's revised " : "Save the assistant's ") +
-      (plan?.scheduled ?? scheduled
+      ((plan?.scheduled ?? scheduled)
         ? 'instructions, schedule, and connections'
         : 'instructions and connections')
   )
