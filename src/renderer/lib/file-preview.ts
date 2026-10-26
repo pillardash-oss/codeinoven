@@ -57,11 +57,16 @@ export function standaloneFilePreviewUrl(
   return version === undefined ? base : `${base}&v=${version}`
 }
 
-/** A scoped streaming URL for supported local media, or null for blob-only formats. */
+/** Stream every audio/video MIME type; retain isolated rendering for active formats. */
 export function localFilePreviewUrl(absolutePath: string, mime?: string): string | null {
   // Stored attachments may have an opaque ID instead of their original extension.
+  const canonicalMime = mime === 'video/matroska' ? 'video/x-matroska' : mime
   const type =
-    previewTypeForPath(absolutePath) ??
-    Object.values(PREVIEW_TYPES).find((candidate) => candidate.mime === mime)
-  return type ? standaloneFilePreviewUrl(absolutePath, `preview${type.extension}`) : null
+    previewTypeForPath(absolutePath, canonicalMime) ??
+    Object.values(PREVIEW_TYPES).find((candidate) => candidate.mime === canonicalMime)
+  if (!type) return null
+  const url = standaloneFilePreviewUrl(absolutePath, `preview${type.extension}`)
+  return type.kind === 'audio' || type.kind === 'video'
+    ? `${url}&mime=${encodeURIComponent(type.mime)}`
+    : url
 }

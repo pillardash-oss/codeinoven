@@ -195,6 +195,11 @@ class ScopeState {
     this.threads.setThreads(threads)
   }
 
+  /** Forget every thread in memory (the boot pass could not read any). */
+  clearThreads(): void {
+    this.threads.clearThreads()
+  }
+
   setSelectedThreadDraftState(threadId: string | null, hasDraft: boolean): void {
     this.draftThreadId = hasDraft ? threadId : null
   }

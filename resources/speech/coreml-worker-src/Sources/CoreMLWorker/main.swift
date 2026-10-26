@@ -123,6 +123,10 @@ private actor ModelCache {
         _ = try await manager(for: modelPath)
     }
 
+    /// A chunk with no speech is a normal answer, never a broken install:
+    /// footage is full of silence, and the caller decides what an empty
+    /// transcript means. Reporting it as an incomplete model sent the agent
+    /// chasing a reinstall of a model that is perfectly fine.
     func transcribe(modelPath: String, audioPath: String) async throws -> String {
         let manager = try await manager(for: modelPath)
         var decoderState = TdtDecoderState.make(decoderLayers: 2)
@@ -130,12 +134,10 @@ private actor ModelCache {
             URL(fileURLWithPath: audioPath),
             decoderState: &decoderState
         )
-        let transcript = result.text
+        return result.text
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !transcript.isEmpty else { throw WorkerError.invalidModel("empty transcript") }
-        return transcript
     }
 
     private func manager(for modelPath: String) async throws -> AsrManager {

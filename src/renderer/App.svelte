@@ -1200,7 +1200,7 @@
         .catch(() => undefined)
     } catch {
       scopeState.setScopesFromProjects([], new Map())
-      scopeState.setThreads([])
+      scopeState.clearThreads()
       notificationPanelState.hydrateFromThreads([])
     }
   }

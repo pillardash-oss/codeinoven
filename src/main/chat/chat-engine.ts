@@ -27543,6 +27543,7 @@ export class ChatEngine {
   private async chatPermissionScope(info: SessionInfo): Promise<{
     allowedPaths: string[]
     scratchPaths: string[]
+    workspaceRoots: string[]
     restrictToAllowed: boolean
   }> {
     const isChat =
@@ -27559,6 +27560,14 @@ export class ChatEngine {
       : info.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? [info.projectPath]
         : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
+    // An assistant, a standalone chat, and a browser tab's agent chat each own
+    // the directory their session runs in (`assistant-cwd/<assistantId>`,
+    // `chats-cwd/<threadId>`, `browser-cwd/<threadId>`), so the sensitive-file
+    // block list never asks about a file inside it: that name is the session's
+    // own work, not a secret it is reaching for. The card still covers
+    // everything that leaves the workspace, and a project thread keeps the list
+    // everywhere because its cwd holds the project's real secrets.
+    const workspaceRoots = isAssistant ? [resolve(info.projectPath)] : []
     // A thread in a real project also owns that project's `.cio` scratch folder:
     // it is where the agent stages its own work, so deletes and confined shell
     // commands there never prompt. `.cio/specs` and `.cio/git` stay gated inside
@@ -27578,6 +27587,7 @@ export class ChatEngine {
       return {
         allowedPaths: [...attachmentPaths, ...skillPaths],
         scratchPaths,
+        workspaceRoots,
         restrictToAllowed: false
       }
     }
@@ -27587,6 +27597,10 @@ export class ChatEngine {
     return {
       allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
       scratchPaths,
+      // A chat owns its workspace only once it may write there: with File
+      // System off it is restricted to the attached files, so the workspace
+      // earns no exemption from the sensitive-file list either.
+      workspaceRoots: fileSystemMode ? [resolve(info.projectPath)] : [],
       restrictToAllowed: !fileSystemMode
     }
   }
@@ -27683,13 +27697,15 @@ export class ChatEngine {
     const sensitiveFileProtectionEnabled =
       request.permission !== 'bundled-pi-sensitive-files' ||
       (await this.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false
-    const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
+    const { allowedPaths, scratchPaths, workspaceRoots, restrictToAllowed } =
+      await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: restrictToAllowed ? 'auto_review' : level,
       sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
+      ...(workspaceRoots.length > 0 ? { workspaceRoots } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
       permission: request.permission,

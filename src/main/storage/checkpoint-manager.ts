@@ -346,9 +346,9 @@ export class CheckpointManager {
   /**
    * Paths another thread demonstrably edited while this turn ran, path → when
    * the other thread touched it (ms). Merges live claims from turns that are
-   * still running with checkpoints other threads completed inside this turn's
-   * window. A live claim is always current: the other thread's claim map is
-   * reset per turn, so it can only describe work happening now.
+   * still running with the paths other threads completed inside this turn's
+   * window actually claimed. A live claim is always current: the other thread's
+   * claim map is reset per turn, so it can only describe work happening now.
    */
   async foreignClaimedPathsForLive(
     checkpoint: TurnCheckpoint,
@@ -380,14 +380,22 @@ export class CheckpointManager {
     // Extract only (threadId, completedAt, path) in SQL. Shipping full checkpoint JSON
     // blobs across the worker port just to read two fields crashed the process
     // on large projects and spiked memory on every turn completion.
+    //
+    // Read `changeSourceRefs`, never `changes`. A checkpoint's change list is a
+    // project-wide diff, so it also carries files another turn was editing while
+    // it ran: that turn had not claimed them (its refs for those paths are
+    // empty), it only swept them in. Trusting the list turned that mistake into
+    // a revocation, because the turn that actually owned the files finished
+    // second and lost every path to the first turn's borrow.
     const rows = await this.queryRows(
       `SELECT json_extract(tc.data, '$.threadId') AS tid,
               json_extract(tc.data, '$.completedAt') AS completed_at,
-              json_extract(je.value, '$.path') AS path
-       FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je
+              je.key AS path
+       FROM turn_checkpoints tc, json_each(json_extract(tc.data, '$.changeSourceRefs')) je
        WHERE tc.project_id = ? AND tc.thread_id != ?
          AND json_extract(tc.data, '$.status') = 'completed'
-         AND json_extract(tc.data, '$.completedAt') >= ?`,
+         AND json_extract(tc.data, '$.completedAt') >= ?
+         AND json_array_length(je.value) > 0`,
       [checkpoint.projectId, checkpoint.threadId, turnStart],
       FOREIGN_CHECKPOINT_SCAN_LIMIT
     )

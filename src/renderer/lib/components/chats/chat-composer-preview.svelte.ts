@@ -51,6 +51,8 @@ export function createComposerAttachmentPreview() {
         urls = { ...urls, [attachment.url]: streamingUrl }
         return
       }
+      // Unsupported media must never fall back to a full-file IPC/blob read.
+      if (kind === 'video' || kind === 'audio') return
       const bytes = await window.api.readFile(filePath)
       if (kind === 'markdown' || kind === 'text') {
         if (texts[attachment.url] !== undefined) return
