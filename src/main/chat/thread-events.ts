@@ -318,6 +318,27 @@ function deliverCrossInstanceAgentEvent(payload: RemoteAgentEventPayload): void 
 instanceEventBus.onRemoteEvent(deliverCrossInstanceAgentEvent)
 
 /**
+ * Carry this process's shared-thread batches over that same link.
+ *
+ * The registry entry stays the durable half of every announcement   it reaches a
+ * sibling before any socket exists, and it is the only path a peer built before
+ * this channel understands   while the link is the immediate half. Both carry the
+ * same batch id and the registry dedupes by it, so a sibling that receives both
+ * applies one, and losing either copy costs freshness and never state.
+ */
+instanceRegistry.onLocalThreadChanged((batch) => instanceEventBus.publishThreadChange(batch))
+
+/**
+ * Apply a sibling's thread batch that arrived over the live link.
+ *
+ * Deliberately the same entry point the registry file uses: one dedupe, one
+ * staleness rule and one listener fan-out, so a consumer like
+ * `CrossInstanceThreadService` cannot tell which path delivered a batch and
+ * every surface behind it works identically either way.
+ */
+instanceEventBus.onRemoteThreadChange((batch) => instanceRegistry.deliverRemoteThreadBatch(batch))
+
+/**
  * Pipe a temporary chat (side chat) completion through the parent thread's
  * notification channel so the user learns their side chat is done even when
  * they are not on that thread.

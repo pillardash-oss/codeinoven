@@ -3,7 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, RemoteAgentEventPayload } from '../../src/lib/types'
-import { InstanceEventBus } from '../../src/main/system/instance-event-bus'
+import {
+  InstanceEventBus,
+  type InstanceEventBusOptions
+} from '../../src/main/system/instance-event-bus'
+import type { CrossInstanceThreadEvent } from '../../src/main/system/instance-registry'
 
 /**
  * Two peers, one directory: the shape two running apps share, without starting a
@@ -51,7 +55,12 @@ function membership(...pids: number[]): Membership {
 }
 
 /** One peer whose membership is decided by the test, not by the real registry. */
-function peer(directory: string, pid: number, live: Membership): InstanceEventBus {
+function peer(
+  directory: string,
+  pid: number,
+  live: Membership,
+  options: InstanceEventBusOptions = {}
+): InstanceEventBus {
   const bus = new InstanceEventBus({
     directory,
     localPid: pid,
@@ -59,11 +68,24 @@ function peer(directory: string, pid: number, live: Membership): InstanceEventBu
     subscribeToMembership: (listener) => {
       live.listeners.add(listener)
       return () => live.listeners.delete(listener)
-    }
+    },
+    ...options
   })
   directories.push(directory)
   buses.push(bus)
   return bus
+}
+
+/** A thread invalidation batch, the shape the registry publishes. */
+function threadBatch(threadId = THREAD_ID): CrossInstanceThreadEvent {
+  return {
+    id: `peer:${threadId}:${Math.random()}`,
+    emittedAt: Date.now(),
+    rows: [{ projectId: PROJECT_ID, threadId }],
+    drafts: [],
+    messages: [],
+    deleted: []
+  }
 }
 
 function deltaEvent(sessionId = 'session1'): AgentEvent {
@@ -194,5 +216,49 @@ describe('InstanceEventBus', () => {
     live.announce()
     expect(alone.isServing).toBe(false)
     expect(alone.hasConnectedPeers).toBe(false)
+  })
+
+  it('carries shared-thread invalidations over the same link as the stream', async () => {
+    const directory = await busDirectory()
+    const live = membership(PEER_A, PEER_B)
+    const receiver = peer(directory, PEER_A, live)
+    const sender = peer(directory, PEER_B, live)
+    const received: CrossInstanceThreadEvent[] = []
+    receiver.onRemoteThreadChange((batch) => received.push(batch))
+    receiver.start()
+    sender.start()
+
+    await waitFor(() => sender.hasConnectedPeers)
+    const batch = threadBatch()
+    sender.publishThreadChange(batch)
+
+    await waitFor(() => received.length > 0)
+    expect(received[0]).toEqual(batch)
+  })
+
+  it('links a peer whose endpoint appears only after a slow boot', async () => {
+    const directory = await busDirectory()
+    // Both instances already know about each other, but only the dialer is up:
+    // the sibling's feature boot is still running, exactly the shape that used
+    // to leave two windows listening and never connected.
+    const live = membership(PEER_A, PEER_B)
+    const receiver = peer(directory, PEER_A, live, {
+      redial: { baseDelayMs: 5, maxDelayMs: 5 }
+    })
+    const sender = peer(directory, PEER_B, live, {
+      redial: { baseDelayMs: 5, maxDelayMs: 5 }
+    })
+    const received: RemoteAgentEventPayload[] = []
+    receiver.onRemoteEvent((payload) => received.push(payload))
+    receiver.start()
+    expect(receiver.hasConnectedPeers).toBe(false)
+
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    sender.start()
+
+    await waitFor(() => receiver.hasConnectedPeers && sender.hasConnectedPeers)
+    sender.publishAgentEvent(deltaEvent())
+    await waitFor(() => received.length > 0)
+    expect(received[0]?.event).toEqual(deltaEvent())
   })
 })

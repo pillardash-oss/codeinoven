@@ -38,6 +38,12 @@ const THREAD_CHANGE_BATCH_LIMIT = 64
  * still running (which would silently bypass the working-thread close gate).
  */
 const HEARTBEAT_STALE_MS = HEARTBEAT_MS * 3
+/**
+ * How long to wait before recreating the directory watch after the platform
+ * refused or dropped it. A watch that died used to stay dead for the life of the
+ * process, which left every sibling invalidation to the 30s heartbeat replay.
+ */
+const WATCHER_RESTART_MS = 5_000
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
 
@@ -165,10 +171,14 @@ export class InstanceRegistry {
   private checkpointEventSequence = 0
   private readonly checkpointListeners = new Set<(event: CheckpointUpdatedEvent) => void>()
   private readonly threadChangeListeners = new Set<(event: CrossInstanceThreadEvent) => void>()
+  /** Consumers of the batches this process published, so a live link can carry them too. */
+  private readonly localThreadChangeListeners = new Set<(event: CrossInstanceThreadEvent) => void>()
   private readonly liveInstanceListeners = new Set<() => void>()
   private readonly liveSetListeners = new Set<() => void>()
   /** Local consumers of this process's turn-activity announcements. */
   private readonly turnActivityListeners = new Set<() => void>()
+  /** Armed restart for a directory watch the platform dropped, so one failure never outlives the process. */
+  private watcherRestartTimer: ReturnType<typeof setTimeout> | null = null
   private readonly seenCheckpointEvents = new Set<string>()
   private readonly seenThreadEvents = new Set<string>()
   private threadEventSequence = 0
@@ -235,6 +245,10 @@ export class InstanceRegistry {
     }
     this.watcher?.close()
     this.watcher = null
+    if (this.watcherRestartTimer) {
+      clearTimeout(this.watcherRestartTimer)
+      this.watcherRestartTimer = null
+    }
     try {
       rmSync(join(this.dir, `${this.selfEntry.pid}.json`), { force: true })
     } catch {
@@ -315,6 +329,30 @@ export class InstanceRegistry {
   }
 
   /**
+   * Subscribe to the shared-thread batches this process publishes.
+   *
+   * The registry entry is the durable half of an announcement; this is the
+   * immediate half, so a live link to a sibling can carry the same batch without
+   * waiting for a filesystem notification. Nothing is inferred here: the listener
+   * receives exactly the batch that was written to the entry.
+   */
+  onLocalThreadChanged(listener: (event: CrossInstanceThreadEvent) => void): () => void {
+    this.localThreadChangeListeners.add(listener)
+    return () => this.localThreadChangeListeners.delete(listener)
+  }
+
+  /**
+   * Apply a batch a sibling sent over the live link.
+   *
+   * The same validation, staleness check and id dedupe the registry-entry path
+   * uses, so a batch that arrives over the socket and again through the file is
+   * applied once, and a listener can never tell which path delivered it.
+   */
+  deliverRemoteThreadBatch(batch: CrossInstanceThreadEvent): void {
+    this.deliverThreadEvent(batch)
+  }
+
+  /**
    * Publish the pending batch, then re-arm for whatever did not fit in it.
    *
    * A failure to write is not fatal: the local renderers were already told, and
@@ -328,7 +366,7 @@ export class InstanceRegistry {
     if (rows.length === 0 && drafts.length === 0 && messages.length === 0 && deleted.length === 0)
       return
     this.threadEventSequence += 1
-    this.selfEntry.threadEvent = {
+    const batch: CrossInstanceThreadEvent = {
       id: `${this.selfEntry.pid}:${this.selfEntry.startedAt}:${this.threadEventSequence}`,
       emittedAt: Date.now(),
       rows,
@@ -336,14 +374,20 @@ export class InstanceRegistry {
       messages,
       deleted
     }
-    this.selfEntry.threadEvents = [
-      ...(this.selfEntry.threadEvents ?? []).slice(-63),
-      this.selfEntry.threadEvent
-    ]
+    this.selfEntry.threadEvent = batch
+    this.selfEntry.threadEvents = [...(this.selfEntry.threadEvents ?? []).slice(-63), batch]
     try {
       this.writeEntry()
     } catch {
       // Cross-instance delivery is best effort; a later change re-announces it.
+    }
+    for (const listener of this.localThreadChangeListeners) {
+      try {
+        listener(batch)
+      } catch {
+        // One consumer failing must not prevent the others, and the entry above
+        // already carries the same batch to a sibling.
+      }
     }
     if (
       this.pendingRowChanges.size > 0 ||
@@ -611,6 +655,9 @@ export class InstanceRegistry {
       this.writeEntry()
     } finally {
       this.checkLiveInstanceSet()
+      // A watch the platform dropped must not stay dropped: recreate it here so
+      // that losing one costs a restart interval, never the rest of the process.
+      if (!this.watcher) this.startWatcher()
       // Filesystem watches may coalesce or drop the final write. Reuse the
       // existing heartbeat to replay retained peer invalidations, with no
       // additional timer or database polling.
@@ -814,12 +861,25 @@ export class InstanceRegistry {
       this.watcher.on('error', () => {
         this.watcher?.close()
         this.watcher = null
+        this.scheduleWatcherRestart()
       })
     } catch {
       // Cross-instance invalidation is supplementary. The shared database
       // remains authoritative and thread mount still hydrates from it.
       this.watcher = null
+      this.scheduleWatcherRestart()
     }
+  }
+
+  /** Try to recreate a watch the platform refused or dropped, once it is gone. */
+  private scheduleWatcherRestart(): void {
+    if (this.watcherRestartTimer) return
+    if (!this.heartbeatTimer) return
+    this.watcherRestartTimer = setTimeout(() => {
+      this.watcherRestartTimer = null
+      this.startWatcher()
+    }, WATCHER_RESTART_MS)
+    this.watcherRestartTimer.unref?.()
   }
 
   private consumeCheckpointEvent(entry: InstanceEntry): void {
