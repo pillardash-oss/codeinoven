@@ -303,6 +303,7 @@ import type {
   AgentArtifact,
   AgentEvent,
   AgentMessage,
+  ThreadMessageCursor,
   AgentModelSelection,
   AgentPart,
   AgentQuestionRequest,
@@ -711,8 +712,7 @@ import {
   changedPathsFromTool,
   fileChangeSource,
   normalizedToolName,
-  projectRelativePath,
-  toolWriteTargets
+  projectRelativePath
 } from './chat-engine/chat-engine-changes'
 import {
   apiFollowUpTask,
@@ -1457,14 +1457,6 @@ export class ChatEngine {
   /** Steered messages held back from the harness while its active turn has a
    *  tool call in flight   the undo window. Keyed by sessionId. */
   private heldSteers = new Map<string, HeldSteer>()
-
-  /** User messages the live turn already absorbed as a mid-turn steer, keyed by
-   *  sessionId. A steer is not a turn opener: folding the durable turn stream at
-   *  one sliced the live turn into an answerless "completed turn" that ended the
-   *  moment the next message was sent, so the reader saw their steered prompt
-   *  marked complete with no answer. Keeping the steer out of every turn
-   *  boundary keeps the harness turn whole until its session is retired. */
-  private absorbedSteers = new Map<string, { threadId: string; ids: Set<string> }>()
 
   /**
    * Per-session watchdog timers. Each timer is set after a prompt is sent and
@@ -3608,23 +3600,53 @@ export class ChatEngine {
   }
 
   /**
-   * The current turn's messages from the driver's own transcript, or none when
-   * the driver cannot be resolved or its transcript is unavailable.
+   * Reconcile the driver's transcript with bounded pages of the durable mirror.
+   * Either source can recover tool evidence missing from the other.
    */
   private async turnTranscriptMessages(session: SessionInfo): Promise<AgentMessage[]> {
+    const messages: AgentMessage[] = []
     const driver = this.driverForRuntime(session.driverId, session.accountId)
-    if (!driver) return []
+    if (driver) {
+      try {
+        messages.push(
+          ...(session.activeTurnUserMessageId && driver.loadMessagesSince
+            ? await driver.loadMessagesSince(
+                session.projectPath,
+                session.sessionId,
+                session.activeTurnUserMessageId
+              )
+            : await driver.loadMessages(session.projectPath, session.sessionId))
+        )
+      } catch (error) {
+        Logger.dev('turn transcript re-read failed:', error)
+      }
+    }
+    // The shared mirror can contain tool calls absent from the harness's final
+    // response. Read bounded worker-backed pages, stopping at this turn's prompt.
     try {
-      return session.activeTurnUserMessageId && driver.loadMessagesSince
-        ? await driver.loadMessagesSince(
-            session.projectPath,
-            session.sessionId,
-            session.activeTurnUserMessageId
-          )
-        : await driver.loadMessages(session.projectPath, session.sessionId)
+      const mirror: AgentMessage[] = []
+      let cursor: ThreadMessageCursor | undefined
+      for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
+        const page = await this.threadManager.loadMessagePage(
+          session.projectId,
+          session.threadId,
+          cursor,
+          100
+        )
+        mirror.unshift(...page.messages)
+        if (
+          !page.hasOlder ||
+          page.messages.some((message) => message.id === session.activeTurnUserMessageId)
+        )
+          break
+        const oldest = page.messages[0]
+        if (!oldest) break
+        cursor = { createdAt: oldest.createdAt, id: oldest.id }
+      }
+      return mergeAgentMessages(mirror, messages)
     } catch (error) {
-      Logger.dev('turn transcript re-read failed:', error)
-      return []
+      Logger.dev('turn mirror re-read failed:', error)
+      return messages
     }
   }
 
@@ -6264,7 +6286,6 @@ export class ChatEngine {
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
-    this.absorbedSteers.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.engineeringImplementationSessions.delete(sessionId)
@@ -8857,7 +8878,6 @@ export class ChatEngine {
         this.toolTimes.delete(sessionId)
         this.handledIdleSessions.delete(sessionId)
         this.outboundMessageIdsBySession.delete(sessionId)
-        this.absorbedSteers.delete(sessionId)
       }
     }
 
@@ -8989,7 +9009,6 @@ export class ChatEngine {
       this.planningSessions.delete(thread.sessionId)
       this.preparedImplementationSessions.delete(thread.sessionId)
       this.outboundMessageIdsBySession.delete(thread.sessionId)
-      this.absorbedSteers.delete(thread.sessionId)
       await this.threadManager.clearSessionId(projectId, threadId)
       // Destroy the stale driver record   and with it the native transcript
       // binding   so the pre-edit conversation can never be restored onto a
@@ -9483,9 +9502,6 @@ export class ChatEngine {
             await steer(projectPath, options)
           }
         })
-        // The live turn absorbed this message: it steers that turn instead of
-        // opening one, so it must never become a turn boundary.
-        this.markSteerAbsorbedMidTurn(activeSessionId, threadId, messageId)
       } catch (error) {
         if (error instanceof SteerDeliveryFailedError) throw error
         // The turn can settle inside the race window between the working check
@@ -10460,9 +10476,6 @@ export class ChatEngine {
             userMessageId: messageId
           })
         })
-        // An accidental regular send that the live turn absorbed is a steer, not
-        // a turn opener, so it stays out of every turn boundary.
-        this.markSteerAbsorbedMidTurn(sessionId, threadId, messageId)
       }
       // Same undo window as steerPrompt: hold while a tool call is in flight.
       if (this.hasInFlightTool(sessionId)) {
@@ -12091,7 +12104,6 @@ export class ChatEngine {
     this.temporaryChats.delete(temporaryChatId)
     this.temporaryChatDisplayMessages.delete(temporaryChatId)
     this.outboundMessageIdsBySession.delete(temporary.sessionId)
-    this.absorbedSteers.delete(temporary.sessionId)
     // A closed side chat can never receive a reply for its blocking request, so
     // drop the gate instead of leaving an unanswerable request behind.
     this.clearPendingPermissionsForSession(temporary.sessionId)
@@ -24627,10 +24639,10 @@ export class ChatEngine {
           }
         }
         if (session?.activeTurnId) {
-          if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
-            session.unboundedToolObserved = true
-            this.trackUnboundedToolWindow(session, part)
-          }
+          // Every tool can hide a write, including code-mode wrappers. Filesystem
+          // evidence must not depend on recognizing its name or command syntax.
+          session.unboundedToolObserved = true
+          this.trackUnboundedToolWindow(session, part)
           const precisePaths = this.recordToolChangeSources(session, part)
           if (precisePaths.length > 0) {
             session.changedPaths ??= new Set()
@@ -25785,7 +25797,7 @@ export class ChatEngine {
   ): Promise<Array<{ startTs: number; endTs: number }>> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 120)
     const messages = page.messages
-    const heldSteerIds = this.turnBoundaryExcludedMessageIds(threadId)
+    const heldSteerIds = this.heldSteerMessageIds(threadId)
     const prompts: Array<{ index: number; ts: number }> = []
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index]
@@ -26032,7 +26044,7 @@ export class ChatEngine {
   ): Promise<number | undefined> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 80)
     const messages = page.messages
-    const heldSteerIds = this.turnBoundaryExcludedMessageIds(threadId)
+    const heldSteerIds = this.heldSteerMessageIds(threadId)
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i]
       if (!message || message.role !== 'user') continue
@@ -26043,32 +26055,13 @@ export class ChatEngine {
     return undefined
   }
 
-  /** User-message ids for steers this thread is still holding for their undo
-   *  window, across whichever session is carrying them. */
+  /** Only held steers are excluded from display boundaries. Once delivered,
+   *  subsequent work renders below their message even though the native run
+   *  keeps its original execution and checkpoint anchor. */
   private heldSteerMessageIds(threadId: string): Set<string> {
     const ids = new Set<string>()
     for (const steer of this.heldSteers.values()) {
       if (steer.conversationId === threadId) ids.add(steer.userMessageId)
-    }
-    return ids
-  }
-
-  /** Record that the live turn absorbed this message as a mid-turn steer. */
-  private markSteerAbsorbedMidTurn(sessionId: string, threadId: string, messageId: string): void {
-    const entry = this.absorbedSteers.get(sessionId) ?? { threadId, ids: new Set<string>() }
-    entry.threadId = threadId
-    entry.ids.add(messageId)
-    this.absorbedSteers.set(sessionId, entry)
-  }
-
-  /** User-message ids this thread must never treat as a turn boundary: steers
-   *  still held for their undo window, and steers the live turn has already
-   *  absorbed. Neither has opened a turn of its own. */
-  private turnBoundaryExcludedMessageIds(threadId: string): Set<string> {
-    const ids = this.heldSteerMessageIds(threadId)
-    for (const entry of this.absorbedSteers.values()) {
-      if (entry.threadId !== threadId) continue
-      for (const id of entry.ids) ids.add(id)
     }
     return ids
   }
@@ -30705,11 +30698,9 @@ export class ChatEngine {
   }
 
   /**
-   * Shell-like tools can write anywhere, so their edits cannot be read off the
-   * tool input. Instead of giving up on attribution for the whole turn   which
-   * lets a concurrent thread's edits leak into this turn's card   bracket the
-   * time those tools are in flight with stat-only fingerprints and attribute
-   * only the paths that moved inside that window.
+   * Every tool can hide writes. Bracket in-flight tools with asynchronous
+   * stat fingerprints, then verify candidate paths against captured content.
+   * Final completion reconciles the full diff against user and foreign work.
    */
   private trackUnboundedToolWindow(
     session: SessionInfo,
@@ -30720,9 +30711,9 @@ export class ChatEngine {
     const openTools = (session.openUnboundedTools ??= new Set())
     if (status === 'pending' || status === 'running') {
       if (openTools.has(toolPartId)) return
-      // Read commands and opaque scripts have no attributable targets. Do not
-      // scan the project for them or start timers that cannot prove ownership.
-      if (toolWriteTargets(session.projectPath, part).length === 0) return
+      // Keep at most one scan in flight per session. Completion's content
+      // snapshot catches tools that finish while the previous scan is pending.
+      if ((session.pendingWindowScans?.size ?? 0) > 0) return
       if (openTools.size === 0) {
         session.unboundedWindowStart = this.checkpointManager
           .fingerprint(session.projectId, session.projectPath)
@@ -30822,10 +30813,10 @@ export class ChatEngine {
         }
         for (const path of moved) {
           if (userMoved?.has(path)) continue
-          // A timing window alone cannot identify the author. Require an
-          // explicit write target from this turn's recorded tool calls too.
-          const sources = session.changeSources?.get(path)
-          if (!sources?.length) continue
+          if (session.userTouchedPaths?.has(path)) continue
+          // Tool provenance enriches the card when available. A measured file
+          // change survives even when the tool's write syntax is opaque.
+          const sources = session.changeSources?.get(path) ?? []
           session.changeSources?.set(
             path,
             sources.map((source) =>
@@ -30844,14 +30835,15 @@ export class ChatEngine {
         Logger.error('turn change window scan failed:', error)
       }
     })()
-    pendingScans.add(scan)
-    void scan
-      .then(() =>
-        this.scanLivePathsAfterTool(session).catch((error) =>
-          Logger.dev('live scan after window failed:', error)
-        )
+    // Completion must wait for content verification too, before clearing the
+    // session's live paths. Track the entire chain, not just the stat scan.
+    const verified = scan.then(() =>
+      this.scanLivePathsAfterTool(session).catch((error) =>
+        Logger.dev('live scan after window failed:', error)
       )
-      .finally(() => pendingScans.delete(scan))
+    )
+    pendingScans.add(verified)
+    void verified.finally(() => pendingScans.delete(verified))
   }
 
   /**
@@ -30861,11 +30853,8 @@ export class ChatEngine {
    * tool still excludes the user's shell edits from its final checkpoint.
    */
   private async userTerminalChangedPaths(session: SessionInfo): Promise<Set<string>> {
-    // No active turn means nothing to attribute at all; the empty set keeps
-    // completion's project-wide snapshot behavior. The whole scan is also
-    // skipped unless a shell tool ran (only then does completion use the
-    // full-turn diff that exclusions apply to) and a window is open at all.
-    if (!session.activeTurnId || !session.unboundedToolObserved) return new Set()
+    // Only scan when an active turn overlaps actual user-terminal activity.
+    if (!session.activeTurnId) return new Set()
     if (!this.userTerminalWindows.get(session.projectId)?.size) return new Set()
     const after = await this.checkpointManager
       .fingerprint(session.projectId, session.projectPath)
@@ -30973,6 +30962,12 @@ export class ChatEngine {
     failure?: string
   ): Promise<void> {
     if (!info?.activeTurnId) return
+    const turnId = info.activeTurnId
+    // Re-read the durable harness transcript on every completion path, including
+    // failures and interrupts. Live tool events can arrive late or be dropped.
+    const messages = await this.turnTranscriptMessages(info)
+    if (info.activeTurnId !== turnId) return
+    this.reassertTurnToolEvidence(info, messages)
     // A shell tool still in flight (interrupted turn) never emitted a terminal
     // state, so close its window here before the after-snapshot is taken.
     if (info.unboundedWindowStart) this.closeUnboundedToolWindow(info)
@@ -30982,6 +30977,7 @@ export class ChatEngine {
     // user's work, not the thread's: exclude them from the final checkpoint
     // just like in-app editor saves.
     const userTerminalPaths = await this.userTerminalChangedPaths(info)
+    if (info.activeTurnId !== turnId) return
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -30990,9 +30986,10 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // A shell invocation is not evidence of ownership. Only paths tied to
-        // actual mutating tool calls may survive content-diff verification.
-        new Set([...(info.changedPaths ?? [])].filter((path) => info.changeSources?.has(path))),
+        // The final content snapshot is authoritative, including writes hidden
+        // in scripts, nested tools, commits, and missed stream events. Reconcile
+        // user and foreign-thread edits below instead of requiring parsed paths.
+        undefined,
         {
           changeSources: info.changeSources,
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
@@ -31122,10 +31119,7 @@ export class ChatEngine {
     // mirrors completeTurn so a fork never claims a file it didn't touch.
     const MAX_LIVE_PATHS = 200
     const changedPaths = session.changedPaths ?? new Set<string>()
-    const rawPaths = [...changedPaths]
-      .filter((path) => session.changeSources?.has(path))
-      .sort()
-      .slice(0, MAX_LIVE_PATHS)
+    const rawPaths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
     const turnStart = checkpoint.before.createdAt
     const ownThreadIds = await this.selfFamilyThreadIds(projectId, threadId)
     const foreign = await this.checkpointManager.foreignClaimedPathsForLive(

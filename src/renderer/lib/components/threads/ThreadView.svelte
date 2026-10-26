@@ -799,12 +799,13 @@
       }
       break
     }
-    const trailingUserOnly =
-      endIndex < structureMessages.length - 1 &&
-      structureMessages.slice(endIndex + 1).every((message) => message.role === 'user')
-    const turnCompleted = structureMessages[endIndex]?.completedAt !== undefined
-    const threadBusy = brainstormReportRefreshing ? delegatedWorkBusy : threadWorking
-    return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
+    const hasNewPrompt = structureMessages
+      .slice(endIndex + 1)
+      .some((message) => message.role === 'user' && !isTransparentTurnMessage(message))
+    const awaitingLocalPrompt =
+      locallySubmittedTurnId !== null &&
+      !structureMessages.some((message) => message.id === locallySubmittedTurnId)
+    return { startIndex, active: !hasNewPrompt && !awaitingLocalPrompt }
   })
   let olderMessagesAvailable = $state(false)
   let loadingNewerMessages = $state(false)
@@ -857,7 +858,8 @@
    *  instead of treating the preceding assistant trace as the active one. */
   let pendingLiveTurn = $derived.by(() => {
     if (!conversationBusy || brainstormReportRefreshing) return null
-    const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
+    const pendingIndex = pendingTurnAnchorIndex(structureMessages)
+    const userMessageId = structureMessages[pendingIndex]?.id
     if (!userMessageId) return null
     // A steer still held for its undo window has not reached the harness yet, so
     // it must not open a pending turn of its own. Whatever streams while it is
@@ -12715,6 +12717,10 @@
    *  a resumed Pi process may restart its local message counter, so an old and
    *  current part can temporarily carry the same provider-generated ID. */
   function streamWorkingPartsForPendingTurn(): AgentPart[] {
+    const prompt = pendingLiveTurn ? structureMessages[pendingLiveTurn.userMessageIndex] : undefined
+    // Delivery and the durable poll arrive separately. Until the fold catches
+    // up, its parts still belong above the new prompt, never below it.
+    if (prompt && (streamTurnStartTs === null || streamTurnStartTs < prompt.createdAt)) return []
     return streamParts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
   }
 
@@ -14059,7 +14065,7 @@
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = resolveMessageHarnessId(msg, messageHarnessFallback)}
               {@const harnessName = messageHarnessName(msg, messageHarnessFallback)}
-              {@const useLiveAttribution = isLatestTurn && liveBusy}
+              {@const useLiveAttribution = isLatestTurn && latestTurnInfo.active && liveBusy}
               {@const isLatest = absIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
@@ -14075,11 +14081,12 @@
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
                     {@const turnDone = transcriptIndex.turnCompleted[absIndex] ?? false}
-                    {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
+                    {@const isCurrentAssistantTurn =
+                      isLatestTurn && latestTurnInfo.active && !pendingLiveTurn}
                     {@const traceIsLive =
                       threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
-                      restoredBusy && isLatestTurn && !liveBusy && !turnDone}
+                      restoredBusy && isCurrentAssistantTurn && !liveBusy && !turnDone}
                     {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
                     {@const turnEndIndex = transcriptIndex.turnEnd[absIndex] ?? absIndex}
                     {@const turnClosingText = getTurnFinalText(
@@ -14494,7 +14501,7 @@
             />
           {/if}
 
-          {#if brainstormReportRefreshing || delegatedWorkBusy || assignmentFormulating || (!pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
+          {#if brainstormReportRefreshing || delegatedWorkBusy || assignmentFormulating || (heldSteerAbsIndex === -1 && !pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <ThinkingOrb size={20} label={activityLabel} />
               <span>

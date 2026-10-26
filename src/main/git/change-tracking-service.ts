@@ -262,7 +262,8 @@ export class ChangeTrackingService {
       if (!metadata.isFile()) continue
       const relativePath = relative(projectRoot, absolutePath)
       if (!relativePath || relativePath.startsWith(`..${sep}`)) continue
-      files[relativePath] = `${metadata.mtimeMs}:${metadata.size}`
+      files[relativePath] =
+        `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`
     }
     return { projectRoot, capturedAt: Date.now(), files }
   }
