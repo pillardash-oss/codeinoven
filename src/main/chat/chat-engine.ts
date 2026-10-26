@@ -14863,16 +14863,29 @@ export class ChatEngine {
     pending: PendingPermissionInfo,
     driver: HarnessDriver
   ): Promise<void> {
+    const { sessionId } = pending.request
+    // The decision is final the moment the user makes it, so everything that
+    // answers the user to it settles before the harness is asked to stop: the
+    // rejected card closes, every other card this session owned closes, and the
+    // thread stops reading as working. Only then is the abort awaited, because a
+    // harness that is slow to stop (or wedged on a dialog) must never keep the
+    // card on screen or the thread stuck on `working` while it decides.
+    //
     // The abort emits `session.idle`, finalizing the interrupted checkpoint.
     // This must also run when the driver's dialog disappeared before the
     // renderer reply arrived, otherwise the blocked tool turn remains active.
-    this.userAbortedSessions.add(pending.request.sessionId)
-    await driver.abort(pending.session.projectPath, pending.request.sessionId)
-    this.clearPendingQuestionsForSession(pending.request.sessionId)
-    this.clearPendingPermissionsForSession(pending.request.sessionId)
+    this.userAbortedSessions.add(sessionId)
+    this.broadcast({
+      type: 'permission.replied',
+      sessionId,
+      requestId: pending.request.id,
+      reply: 'reject'
+    })
+    this.clearPendingQuestionsForSession(sessionId)
+    this.clearPendingPermissionsForSession(sessionId)
     // A rejected side chat request interrupts only the side chat's turn; the
     // parent thread keeps whatever status it owned before the request.
-    if (!this.temporaryChatForSession(pending.request.sessionId)) {
+    if (!this.temporaryChatForSession(sessionId)) {
       await this.threadManager.setStatus(
         pending.session.projectId,
         pending.session.threadId,
@@ -14880,6 +14893,7 @@ export class ChatEngine {
         { read: true }
       )
     }
+    await driver.abort(pending.session.projectPath, sessionId)
   }
 
   /** List unresolved permission requests for renderer reconnect recovery. */

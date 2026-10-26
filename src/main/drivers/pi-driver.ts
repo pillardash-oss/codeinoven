@@ -142,6 +142,16 @@ const PI_ABORT_ENFORCE_INTERVAL_MS = 500
 /** Bound on the post-abort `get_state` probe so a busy process cannot stall the
  *  stop behind the RPC client's full request timeout. */
 const PI_ABORT_PROBE_TIMEOUT_MS = 1_500
+/**
+ * How long the `abort` RPC itself may take before the process is terminated.
+ *
+ * Pi answers an abort as soon as its run unwinds, so a missing answer means the
+ * run cannot unwind (a dialog it is parked on that nothing will ever answer) or
+ * the transport is wedged. Waiting for the RPC client's own request timeout
+ * instead kept the caller (the permission card the user just rejected, the
+ * thread status behind it) frozen for a full two minutes.
+ */
+const PI_ABORT_RPC_TIMEOUT_MS = 5_000
 /** Hard cap on the explicit `pi update --models` catalog refresh. Pi aborts its
  *  own refresh after 15s and reports the failure, so this only bounds a process
  *  that never exits. */
@@ -1113,13 +1123,22 @@ export class PiDriver extends PersistentCliDriver {
     // settles the aborted run with `agent_settled`, and the continuation would
     // then start a fresh run seconds after the stop.
     this.silentContinues.delete(sessionId)
+    // A stop closes every card this session owns, so the dialog pi is parked on
+    // has no one left to answer it. Pi cannot unwind the run it is blocked on
+    // until that dialog is settled, so cancelling first is what lets the abort
+    // land at all. Without it the abort waits for the RPC client's full request
+    // timeout, leaving the thread reading as working for two minutes.
+    this.cancelPendingDialogs(sessionId)
     // Published before the abort so the extension already sees it when the
     // run's own settle hook fires.
     await this.publishStopRequest(sessionId)
     const session = await this.requireSession(projectPath, sessionId).catch(() => null)
     const client = this.rpcClients.get(sessionId)
     if (!session || !client) {
-      // No live process to abort: nothing can still be running under it.
+      // No live process to abort: nothing can still be running under it, so a
+      // registration left behind is stale and must not keep the engine
+      // ignoring this session's idles as if a turn were still live.
+      this.activeTurns.delete(sessionId)
       this.settleChildStreams(sessionId, 'aborted')
       return
     }
@@ -1127,7 +1146,19 @@ export class PiDriver extends PersistentCliDriver {
       Logger.dev('Pi auto-retry disarm after stop failed:', error)
     })
     try {
-      await client.abort()
+      const answered = await withTimeout(
+        client.abort().then(() => true),
+        PI_ABORT_RPC_TIMEOUT_MS
+      )
+      if (answered === null) {
+        // Pi never acknowledged the abort: it is wedged or parked on a run it
+        // cannot unwind. Terminate the process (the exit event finalizes the
+        // session state) instead of holding the caller for the RPC timeout.
+        Logger.info('Pi did not answer the abort request; terminating the session process', {
+          sessionId
+        })
+        client.dispose()
+      }
     } catch {
       // The abort RPC failed   the pi process is wedged or already gone, so a
       // graceful abort can never land. Kill the process so the run actually
@@ -1142,6 +1173,30 @@ export class PiDriver extends PersistentCliDriver {
     // the stop instead of spinning until the last transcript lands.
     this.settleChildStreams(sessionId, 'aborted')
     void this.enforceStoppedSession(projectPath, sessionId)
+  }
+
+  /**
+   * Cancel every dialog pi still holds open for this session.
+   *
+   * The app never leaves a dialog unanswered: a card that disappears (a stop, a
+   * rejected permission, a retired session) would otherwise leave pi waiting on
+   * `ctx.ui.confirm` for an answer that cannot come, and the run behind it can
+   * neither continue nor abort. Answering with `cancelled` is the same outcome a
+   * dismissed card already produces, so the harness resumes with the blocked
+   * call denied instead of hanging on it.
+   */
+  private cancelPendingDialogs(sessionId: string): void {
+    for (const [requestId, request] of [...this.pendingUiRequests]) {
+      if (request.sessionId !== sessionId) continue
+      this.pendingUiRequests.delete(requestId)
+      const rawId = request.request['id']
+      if (typeof rawId !== 'string' && typeof rawId !== 'number') continue
+      try {
+        request.client.respondToExtensionUiRequest(rawId, { cancelled: true })
+      } catch (error) {
+        Logger.dev('Pi dialog cancellation failed:', error)
+      }
+    }
   }
 
   /**
