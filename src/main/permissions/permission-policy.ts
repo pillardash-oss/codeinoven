@@ -53,6 +53,7 @@ export interface PermissionDecisionResult {
 export interface PermissionPolicyOptions {
   projectRoot: string
   mode: PermissionPolicyMode
+  sensitiveFileProtectionEnabled?: boolean
   approvalTtlMs?: number
   protectedPathPatterns?: readonly string[]
   /** Absolute paths the user explicitly provided for this turn (attachments).
@@ -239,6 +240,15 @@ export class PermissionPolicy {
     const scope = this.createScope(paths)
 
     if (permission === 'bundled-pi-sensitive-files') {
+      if (this.options.sensitiveFileProtectionEnabled === false) {
+        return this.createDecision(
+          this.options.mode,
+          true,
+          'Sensitive-file checks are disabled in settings.',
+          'low',
+          scope
+        )
+      }
       return this.createDecision(
         'ask',
         false,

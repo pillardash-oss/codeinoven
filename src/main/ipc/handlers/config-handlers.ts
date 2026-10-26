@@ -359,6 +359,9 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     const previous = await storage.getConfig()
     const config = { ...previous, ...patch }
     await storage.saveConfig(config)
+    if (patch.bundledPiSensitiveFileProtectionEnabled === false) {
+      await chatEngine?.refreshSensitiveFilePermissions?.()
+    }
     if (patch.ideLanguageServers !== undefined) ideService.configure(patch.ideLanguageServers)
     if (patch.shareAnonymousUsage !== undefined) {
       void usageAnalytics.setConsent(config.shareAnonymousUsage === true)

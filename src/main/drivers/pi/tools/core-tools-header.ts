@@ -68,13 +68,15 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
   try {
     if (statSync(CIO_SENSITIVE_FILE_POLICY_PATH).size > 262144) throw new Error('Oversized file policy')
     const stored = JSON.parse(readFileSync(CIO_SENSITIVE_FILE_POLICY_PATH, 'utf8'))
-    if (!Array.isArray(stored) || stored.length > 128 || stored.some(function (entry) {
+    const policy = Array.isArray(stored) ? { enabled: true, patterns: stored } : stored
+    if (!policy || typeof policy.enabled !== 'boolean' || !Array.isArray(policy.patterns) || policy.patterns.length > 128 || policy.patterns.some(function (entry) {
       return typeof entry !== 'string' || !entry.trim() || entry.length > 256 || Array.from(entry).some(function (character) {
         const code = character.charCodeAt(0)
         return code < 32 || code === 127
       })
     })) throw new Error('Invalid file policy')
-    patterns = stored
+    if (!policy.enabled) return null
+    patterns = policy.patterns
   } catch {
     // Missing, corrupt, oversized, or unreadable policies restore defaults.
   }
@@ -498,8 +500,8 @@ function findContaminatedToolArg(input) {
   return null
 }
 
-function evaluateGate(toolName, input, cwd) {
-  const sensitiveFileHit = bundledPiSensitiveFileGate(toolName, input, cwd)
+function evaluateGate(toolName, input, cwd, includeSensitive = true) {
+  const sensitiveFileHit = includeSensitive ? bundledPiSensitiveFileGate(toolName, input, cwd) : null
   if (sensitiveFileHit) return sensitiveFileHit
   if (typeof toolName !== 'string' || toolName.startsWith('cio_')) return null
   if (toolName === 'bash' || toolName === 'powershell' || toolName === 'cmd') {

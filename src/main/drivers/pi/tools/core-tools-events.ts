@@ -268,7 +268,7 @@ export function piCoreToolsEventsSource(): string {
   // the shared marker; the CodeInOven driver upgrades it into a real
   // permission request. In full-access mode the app auto-approves, so gating
   // stays transparent there.
-  pi.on('tool_call', async (event, ctx) => {
+  async function gateToolCall(event, ctx, skipSensitive = false) {
     const input = recordValue(event.input) ?? {}
     // Session ownership is an invariant, including in Full Access. Never route
     // this through a permission card that could auto-approve the bypass.
@@ -307,7 +307,7 @@ export function piCoreToolsEventsSource(): string {
           'Sub-agent tools are not available in this session: it runs with a restricted tool scope, and a session with a restricted scope does every step itself. Perform this step directly with the tools you have.'
       }
     }
-    const hit = evaluateGate(event.toolName, input, ctx.cwd)
+    const hit = evaluateGate(event.toolName, input, ctx.cwd, !skipSensitive)
     // Shared and Pi-native skill roots are harness runtime, not user file
     // access: a skill read resolves before every gate below, so no session mode
     // opens a permission card for it. Without this, a read-only temporary chat
@@ -363,7 +363,12 @@ export function piCoreToolsEventsSource(): string {
       'Permission needed: ' + hit.reason,
       CIO_PERMISSION_MARKER + JSON.stringify(payload)
     )
-    if (approved) return undefined
+    if (approved) {
+      // Disabling or approving this file check must not skip the tool's
+      // ordinary scope and destructive-action checks.
+      if (!skipSensitive && hit.permission === 'bundled-pi-sensitive-files') return gateToolCall(event, ctx, true)
+      return undefined
+    }
     return {
       block: true,
       reason:
@@ -371,7 +376,8 @@ export function piCoreToolsEventsSource(): string {
         hit.reason +
         '). Do not retry it as-is; continue the turn with a safe alternative.'
     }
-  })
+  }
+  pi.on('tool_call', gateToolCall)
 }
 `
 }

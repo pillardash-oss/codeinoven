@@ -229,6 +229,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'allowPrototypeExternalCdn',
   'prototypeCdnAllowlist',
   'bundledPiSensitiveFilePatterns',
+  'bundledPiSensitiveFileProtectionEnabled',
   'inAppNotificationSound',
   'sound',
   'cioCleanupRetentionDays',
@@ -665,6 +666,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
   }
 
   const patch: AppConfigPatch = {}
+
+  if ('bundledPiSensitiveFileProtectionEnabled' in value) {
+    if (typeof value.bundledPiSensitiveFileProtectionEnabled !== 'boolean') {
+      throw new TypeError('Sensitive-file protection enabled must be a boolean')
+    }
+    patch.bundledPiSensitiveFileProtectionEnabled = value.bundledPiSensitiveFileProtectionEnabled
+  }
 
   if ('bundledPiSensitiveFilePatterns' in value) {
     patch.bundledPiSensitiveFilePatterns = validateBundledPiFilePatterns(

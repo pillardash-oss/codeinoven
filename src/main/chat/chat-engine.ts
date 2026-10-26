@@ -27456,6 +27456,48 @@ export class ChatEngine {
     return [...paths]
   }
 
+  /** Release only this check's waiting cards after the user disables it. */
+  async refreshSensitiveFilePermissions(): Promise<void> {
+    if ((await this.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false) return
+    const pending = [...this.pendingPermissions.values()].filter(
+      (entry) => entry.request.permission === 'bundled-pi-sensitive-files'
+    )
+    for (let index = 0; index < pending.length; index++) {
+      if (index > 0 && index % 8 === 0) await new Promise<void>((done) => setImmediate(done))
+      const entry = pending[index]
+      if (!entry || this.pendingPermissions.get(entry.request.id) !== entry) continue
+      entry.policy = new PermissionPolicy({
+        projectRoot: entry.session.projectPath,
+        mode: entry.session.permissionLevel ?? 'auto_review',
+        sensitiveFileProtectionEnabled: false
+      }).evaluate({ permission: entry.request.permission, paths: entry.request.patterns })
+      try {
+        await this.replyPermissionRaw(entry, 'once', 'settings:sensitive-files-disabled')
+      } catch (error) {
+        if (!(error instanceof PermissionRequestGoneError)) {
+          Logger.error('Could not release a disabled sensitive-file check:', error)
+          continue
+        }
+        this.pendingPermissions.delete(entry.request.id)
+      }
+      if (this.pendingPermissions.has(entry.request.id)) continue
+      this.broadcast({
+        type: 'permission.replied',
+        sessionId: entry.request.sessionId,
+        requestId: entry.request.id,
+        reply: 'once'
+      })
+      const remaining = [...this.pendingPermissions.values()].some(
+        (other) => other.request.sessionId === entry.request.sessionId
+      )
+      if (!remaining && !this.temporaryChatForSession(entry.request.sessionId)) {
+        await this.threadManager
+          .setStatus(entry.session.projectId, entry.session.threadId, entry.resumeStatus)
+          .catch((error: unknown) => Logger.error('Could not resume a released file check:', error))
+      }
+    }
+  }
+
   /** Resolve a permission request per the thread's permission level. */
   private async handlePermissionAsked(
     driverId: string,
@@ -27474,10 +27516,14 @@ export class ChatEngine {
 
     const commands = permissionCommands(request.metadata)
     const unclassifiedTool = request.metadata['surface']
+    const sensitiveFileProtectionEnabled =
+      request.permission !== 'bundled-pi-sensitive-files' ||
+      (await this.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false
     const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: restrictToAllowed ? 'auto_review' : level,
+      sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
@@ -27629,7 +27675,7 @@ export class ChatEngine {
     alternative?: string
   ): Promise<void> {
     if (pending.request.permission === 'bundled-pi-sensitive-files') {
-      if (reply !== 'reject' && decidedBy !== 'user') {
+      if (reply !== 'reject' && decidedBy !== 'user' && !pending.policy.approved) {
         throw new Error('Protected file access requires a user decision')
       }
       if (reply === 'always') throw new Error('Protected file access can only be approved once')
