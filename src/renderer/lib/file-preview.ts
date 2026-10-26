@@ -60,8 +60,9 @@ export function standaloneFilePreviewUrl(
 /** A scoped streaming URL for supported local media, or null for blob-only formats. */
 export function localFilePreviewUrl(absolutePath: string, mime?: string): string | null {
   // Stored attachments may have an opaque ID instead of their original extension.
+  const canonicalMime = mime === 'video/matroska' ? 'video/x-matroska' : mime
   const type =
     previewTypeForPath(absolutePath) ??
-    Object.values(PREVIEW_TYPES).find((candidate) => candidate.mime === mime)
+    Object.values(PREVIEW_TYPES).find((candidate) => candidate.mime === canonicalMime)
   return type ? standaloneFilePreviewUrl(absolutePath, `preview${type.extension}`) : null
 }

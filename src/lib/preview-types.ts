@@ -84,6 +84,8 @@ const PREVIEW_MEDIA: Readonly<Record<string, { kind: PreviewKind; mime: string }
   '.weba': { kind: 'audio', mime: 'audio/webm' },
   // Video
   '.mp4': { kind: 'video', mime: 'video/mp4' },
+  '.mkv': { kind: 'video', mime: 'video/x-matroska' },
+  '.avi': { kind: 'video', mime: 'video/x-msvideo' },
   '.m4v': { kind: 'video', mime: 'video/x-m4v' },
   '.webm': { kind: 'video', mime: 'video/webm' },
   '.mov': { kind: 'video', mime: 'video/quicktime' },
