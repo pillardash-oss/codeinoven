@@ -530,12 +530,12 @@ import {
   searchNudgePromptForProse,
   searchNudgePromptForToolCall
 } from './not-available-detector'
+import { visualDeliverableRepairPrompt, visualDeliverableRequest } from './visual-deliverable-guard'
 import type {
   ActiveAssignmentDraftSession,
   ActiveBrainstormConversationTurn,
   ActiveBrainstormSession,
   ActiveInitialSpecSession,
-import { visualDeliverableRepairPrompt, visualDeliverableRequest } from './visual-deliverable-guard'
   AgentMemoryProposalInput,
   AssignmentApiCapability,
   AssignmentAuditRepairManifest,
@@ -620,12 +620,12 @@ import {
   hasTerminalSpecContractMarker,
   mermaidValidationFailureMessage,
   mermaidValidationNotice,
+  rejectedAnswerMessage,
   rejectedMermaidMessage,
   terminalAssistantMessage,
   textForMessage,
   titleAttemptsFromDriver
 } from './chat-engine/chat-engine-message-text'
-  rejectedAnswerMessage,
 import {
   demoteTaskReconcileAnswer,
   taskReconcileAnswer,
@@ -1091,11 +1091,6 @@ export class ChatEngine {
   private searchNudgeAttempts = new Map<string, number>()
 
   /**
-   * One app-issued task-list reconcile turn per user prompt, per session. The
-   * guard fires when a turn settles while the list it published still shows
-   * unfinished work, so the app's task card never freezes mid-run. Resetting
-   * only on a genuine user prompt (like the other nudges) is what caps it at
-  /**
    * Sessions that rendered an inline artifact during the live turn.
    *
    * The visual-deliverable guard needs one fact the transcript cannot fake
@@ -1108,6 +1103,11 @@ export class ChatEngine {
   /** One visual-deliverable correction round per user prompt, per session. */
   private visualDeliverableNudges = new Map<string, number>()
 
+  /**
+   * One app-issued task-list reconcile turn per user prompt, per session. The
+   * guard fires when a turn settles while the list it published still shows
+   * unfinished work, so the app's task card never freezes mid-run. Resetting
+   * only on a genuine user prompt (like the other nudges) is what caps it at
    * one extra turn and keeps it from looping.
    */
   private todoReconcileAttempts = new Map<string, number>()
@@ -1870,6 +1870,9 @@ export class ChatEngine {
       if (!thread) throw new Error('Artifact thread no longer exists')
       const root = await this.resolveThreadPath(context.projectId, context.threadId)
       const message = await inlineArtifactMessage(input, { ...context, root })
+      // The guard reads this, so a published artifact is the only thing that can
+      // satisfy a visual request: prose cannot mark the turn as delivered.
+      if (thread.sessionId) this.artifactRenderedSessions.add(thread.sessionId)
       await this.threadManager.upsertMessages(context.projectId, context.threadId, [message])
       this.broadcast({
         type: 'artifact.rendered',
@@ -1885,9 +1888,6 @@ export class ChatEngine {
       this.executeImageDescriptor(request)
     )
     // The diagnostics tool is the one app capability every turn carries, so the
-      // The guard reads this, so a published artifact is the only thing that can
-      // satisfy a visual request: prose cannot mark the turn as delivered.
-      if (thread.sessionId) this.artifactRenderedSessions.add(thread.sessionId)
     // hybrid thread search hangs off it: an agent gathering context searches the
     // user's conversation history by meaning, not only by the words it guessed.
     this.utilityOrchestration.setThreadSearchProvider(async (query) => {
@@ -6354,6 +6354,8 @@ export class ChatEngine {
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.engineeringImplementationSessions.delete(sessionId)
     this.searchNudgeAttempts.delete(sessionId)
+    this.visualDeliverableNudges.delete(sessionId)
+    this.artifactRenderedSessions.delete(sessionId)
     this.todoReconcileAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
     this.parkedSessionReplay.delete(sessionId)
@@ -6384,8 +6386,6 @@ export class ChatEngine {
     this.retireSessionState(previousSessionId)
     const previousDriver = await this.driverForAccount(previousHarnessId, previousAccountId).catch(
       () => undefined
-    this.visualDeliverableNudges.delete(sessionId)
-    this.artifactRenderedSessions.delete(sessionId)
     )
     // The orphaned session's transcript must land in the app mirror before its
     // native session is destroyed, so the user never loses the old harness's
@@ -10472,6 +10472,10 @@ export class ChatEngine {
       this.searchNudgeAttempts.delete(sessionId)
       this.todoReconcileAttempts.delete(sessionId)
       this.taskReconcileTurns.delete(sessionId)
+      // A new user prompt starts a fresh delivery accounting: an artifact the
+      // previous turn rendered must not satisfy this turn's visual request.
+      this.visualDeliverableNudges.delete(sessionId)
+      this.artifactRenderedSessions.delete(sessionId)
     }
     // A new turn resolves any pending auto-resume for this session   the user
     // (or a previous scheduled retry) is driving it again.
@@ -10502,10 +10506,6 @@ export class ChatEngine {
     if (
       origin === 'internal' &&
       isCoordinatorThread(targetThread) &&
-      // A new user prompt starts a fresh delivery accounting: an artifact the
-      // previous turn rendered must not satisfy this turn's visual request.
-      this.visualDeliverableNudges.delete(sessionId)
-      this.artifactRenderedSessions.delete(sessionId)
       (activeSessionState === 'working' || activeSessionState === 'waiting')
     ) {
       await this.enqueueCoordinatorHandoff(coordinatorHandoff(userMessage.createdAt))
@@ -10775,6 +10775,10 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
+    // The standalone workspace of this conversation, resolved by scope. An
+    // assistant task owns `assistant-cwd/<assistantId>`, a chat owns
+    // `chats-cwd/<threadId>`; resolving a chat path for an assistant thread put
+    // a directory the session never runs in into its prompt.
     const chatWorkspaceRoot = this.storage.resolve(
       projectId === GLOBAL_BROWSER_PROJECT_ID
         ? browserThreadWorkspaceDirectory(threadId)
@@ -28493,6 +28497,85 @@ export class ChatEngine {
           return
         }
       }
+      // A turn that only described the asset it was asked to produce.
+      //
+      // An assistant thread once answered a logo request with "I've made the
+      // first logo direction as a clean SVG wordmark ... The full name sits
+      // beneath it" and delivered nothing: no file, no render call, no artifact.
+      // Prose describing an asset is indistinguishable from prose reporting a
+      // real one, so this guard never reads the answer for intent. It reads the
+      // two things that can be checked: a conversation scope whose turn asked
+      // for a visual deliverable, and the app's own record that nothing was
+      // rendered. The rejected answer keeps its tool calls but loses its prose,
+      // so a fabricated claim is never read as the turn's answer, and one
+      // correction round supplies the authoring and render path. It never fires
+      // twice for the same prompt: a second answer is accepted as it stands,
+      // because a genuine blocker (missing input, a bitmap the agent cannot
+      // draw) must still be able to reach the user.
+      const conversationalScope =
+        info.projectId === INBOX_PROJECT_ID ||
+        info.projectId === ASSISTANT_SPACE_ID ||
+        info.projectId === GLOBAL_BROWSER_PROJECT_ID
+      if (
+        conversationalScope &&
+        !failure &&
+        !userAborted &&
+        !awaitingUser &&
+        !suppressTerminalAnswer &&
+        terminalAssistant &&
+        liveThread?.settings &&
+        !this.artifactRenderedSessions.has(sessionId) &&
+        !merged.some((message) => message.inlineArtifact === true) &&
+        (this.visualDeliverableNudges.get(sessionId) ?? 0) < 1 &&
+        latestUserIndex >= 0
+      ) {
+        const requestedAsset = visualDeliverableRequest(textForMessage(messages[latestUserIndex]))
+        if (requestedAsset) {
+          const reason = `The reply described a ${requestedAsset.noun} without rendering one: no artifact was delivered.`
+          this.visualDeliverableNudges.set(sessionId, 1)
+          const rejected = rejectedAnswerMessage(terminalAssistant, reason)
+          classifiedMessages = classifiedMessages.map((message) =>
+            message.id === rejected.id ? rejected : message
+          )
+          merged = restoreMirrorAccount(
+            restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
+            mirror
+          )
+          await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
+          await this.finishCheckpoint(sessionId, info, 'failed', reason)
+          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
+          turnUtilitiesCleaned = true
+          if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+          try {
+            await this.sendPrompt(
+              info.projectId,
+              info.threadId,
+              liveThread.settings,
+              visualDeliverableRepairPrompt(requestedAsset),
+              [],
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              'internal'
+            )
+          } catch (error) {
+            this.pendingMemoryDecisions.delete(sessionId)
+            const issue = this.fallbackProviderIssue(
+              info.driverId,
+              rawErrorMessage(error),
+              rawErrorDetail(error)
+            )
+            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+              error: issue.message,
+              errorDetail: issue.rawError
+            })
+            await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+          }
+          return
+        }
+      }
       // A live usage-reset wait (the harness's turn ended because the limit
       // hit, not because it silently dropped output) already has a scheduled
       // resume via `enterRetryWait`/`scheduleAutomaticRetry`. Auto-continuing
@@ -28577,85 +28660,6 @@ export class ChatEngine {
       const persistedRevision = this.pendingSpecRevisions.has(sessionId)
         ? null
         : await this.readPendingSpecRevision(info.projectId, info.threadId)
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              'internal'
-            )
-          } catch (error) {
-            this.pendingMemoryDecisions.delete(sessionId)
-            const issue = this.fallbackProviderIssue(
-              info.driverId,
-              rawErrorMessage(error),
-              rawErrorDetail(error)
-            )
-            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
-              error: issue.message,
-              errorDetail: issue.rawError
-            })
-            await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
-          }
-          return
-        }
-      }
-      // A turn that only described the asset it was asked to produce.
-      //
-      // An assistant thread once answered a logo request with "I've made the
-      // first logo direction as a clean SVG wordmark ... The full name sits
-      // beneath it" and delivered nothing: no file, no render call, no artifact.
-      // Prose describing an asset is indistinguishable from prose reporting a
-      // real one, so this guard never reads the answer for intent. It reads the
-      // two things that can be checked: a conversation scope whose turn asked
-      // for a visual deliverable, and the app's own record that nothing was
-      // rendered. The rejected answer keeps its tool calls but loses its prose,
-      // so a fabricated claim is never read as the turn's answer, and one
-      // correction round supplies the authoring and render path. It never fires
-      // twice for the same prompt: a second answer is accepted as it stands,
-      // because a genuine blocker (missing input, a bitmap the agent cannot
-      // draw) must still be able to reach the user.
-      const conversationalScope =
-        info.projectId === INBOX_PROJECT_ID ||
-        info.projectId === ASSISTANT_SPACE_ID ||
-        info.projectId === GLOBAL_BROWSER_PROJECT_ID
-      if (
-        conversationalScope &&
-        !failure &&
-        !userAborted &&
-        !awaitingUser &&
-        !suppressTerminalAnswer &&
-        terminalAssistant &&
-        liveThread?.settings &&
-        !this.artifactRenderedSessions.has(sessionId) &&
-        !merged.some((message) => message.inlineArtifact === true) &&
-        (this.visualDeliverableNudges.get(sessionId) ?? 0) < 1 &&
-        latestUserIndex >= 0
-      ) {
-        const requestedAsset = visualDeliverableRequest(textForMessage(messages[latestUserIndex]))
-        if (requestedAsset) {
-          const reason = `The reply described a ${requestedAsset.noun} without rendering one: no artifact was delivered.`
-          this.visualDeliverableNudges.set(sessionId, 1)
-          const rejected = rejectedAnswerMessage(terminalAssistant, reason)
-          classifiedMessages = classifiedMessages.map((message) =>
-            message.id === rejected.id ? rejected : message
-          )
-          merged = restoreMirrorAccount(
-            restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
-            mirror
-          )
-          await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
-          await this.finishCheckpoint(sessionId, info, 'failed', reason)
-          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
-          turnUtilitiesCleaned = true
-          if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
-          try {
-            await this.sendPrompt(
-              info.projectId,
-              info.threadId,
-              liveThread.settings,
-              visualDeliverableRepairPrompt(requestedAsset),
-              [],
-              undefined,
       const hasPendingRevision =
         this.pendingSpecRevisions.has(sessionId) || persistedRevision?.sessionId === sessionId
       // Claim the pending entry up front: a duplicate idle finalization for the
