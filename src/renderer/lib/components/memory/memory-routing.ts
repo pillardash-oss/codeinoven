@@ -31,6 +31,8 @@ export interface MemoryScopeOption {
   needsProject: boolean
   /** The entry stores a chosen thread on itself. */
   needsThread: boolean
+  /** The entry stores a chosen assistant on itself. */
+  needsAssistant: boolean
 }
 
 /** Audience choices are separate from Global, which uses an empty scope set. */
@@ -41,22 +43,32 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       label: 'Projects',
       located: false,
       needsProject: false,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: false
     },
-    { value: 'chat', label: 'Chats', located: false, needsProject: false, needsThread: false },
+    {
+      value: 'chat',
+      label: 'Chats',
+      located: false,
+      needsProject: false,
+      needsThread: false,
+      needsAssistant: false
+    },
     {
       value: 'assistant',
       label: 'Assistant',
       located: false,
       needsProject: false,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: false
     },
     {
       value: 'browser',
       label: 'Browser chats',
       located: false,
       needsProject: false,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: false
     }
   ],
   'sidebar-projects': [
@@ -65,20 +77,43 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       label: 'All projects',
       located: false,
       needsProject: false,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: false
     },
     {
       value: 'project',
       label: 'Specific project',
       located: true,
       needsProject: true,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: false
     },
-    { value: 'thread', label: 'Thread', located: true, needsProject: true, needsThread: true }
+    {
+      value: 'thread',
+      label: 'Thread',
+      located: true,
+      needsProject: true,
+      needsThread: true,
+      needsAssistant: false
+    }
   ],
   'sidebar-chats': [
-    { value: 'chat', label: 'All chats', located: false, needsProject: false, needsThread: false },
-    { value: 'thread', label: 'This chat', located: true, needsProject: false, needsThread: false }
+    {
+      value: 'chat',
+      label: 'All chats',
+      located: false,
+      needsProject: false,
+      needsThread: false,
+      needsAssistant: false
+    },
+    {
+      value: 'thread',
+      label: 'This chat',
+      located: true,
+      needsProject: false,
+      needsThread: false,
+      needsAssistant: false
+    }
   ],
   'sidebar-browser': [
     {
@@ -86,9 +121,17 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       label: 'All browser chats',
       located: false,
       needsProject: false,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: false
     },
-    { value: 'thread', label: 'This chat', located: true, needsProject: false, needsThread: false }
+    {
+      value: 'thread',
+      label: 'This chat',
+      located: true,
+      needsProject: false,
+      needsThread: false,
+      needsAssistant: false
+    }
   ],
   'sidebar-assistant': [
     {
@@ -96,16 +139,25 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       label: 'All assistants',
       located: false,
       needsProject: false,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: false
     },
     {
       value: 'routine',
       label: 'One assistant',
       located: true,
       needsProject: false,
-      needsThread: false
+      needsThread: false,
+      needsAssistant: true
     },
-    { value: 'task', label: 'Task', located: true, needsProject: false, needsThread: false }
+    {
+      value: 'task',
+      label: 'Task',
+      located: true,
+      needsProject: false,
+      needsThread: false,
+      needsAssistant: false
+    }
   ]
 }
 

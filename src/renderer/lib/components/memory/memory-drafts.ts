@@ -31,10 +31,12 @@ export function readMemoryDraft(key: string): MemoryDraft | undefined {
       return undefined
     if (!parsed.entries.every(isDraftEntry) || !parsed.baseline.every(isDraftEntry))
       return undefined
+    const entries = parsed.entries.filter(isDraftEntry).filter(isMeaningfulDraftEntry)
+    const baseline = parsed.baseline.filter(isDraftEntry)
     const draft: MemoryDraft = {
       revision: parsed.revision,
-      entries: parsed.entries,
-      baseline: parsed.baseline,
+      entries,
+      baseline,
       expandedId: typeof parsed.expandedId === 'string' ? parsed.expandedId : null
     }
     return draft
@@ -105,6 +107,10 @@ export function clearMemoryDraft(key: string): void {
   } catch {
     // The in-memory draft has already been cleared.
   }
+}
+
+function isMeaningfulDraftEntry(entry: MemoryEntry): boolean {
+  return Boolean(entry.label.trim() || entry.content.trim())
 }
 
 function isDraftEntry(value: unknown): value is MemoryEntry {

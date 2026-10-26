@@ -383,15 +383,24 @@
     if (saving || loading || !hasUnsavedChanges) return
     const saveContextKey = loadedContextKey
     const submittedDraft = readMemoryDraft(saveContextKey)
-    const saveEntries = $state.snapshot(entries)
+    // A staged entry the user never typed into is an abandoned Add, not a
+    // memory: drop it instead of failing the save on it.
+    const saveEntries = $state.snapshot(entries).filter((entry) => !isBlankStagedEntry(entry))
     const saveBaseline = $state.snapshot(loadedEntries)
     const saveContext = { ...surfaceContext }
+    if (!memoryEntriesHaveChanges(saveEntries, saveBaseline)) {
+      // The only pending change was an abandoned Add, so drop it without a write.
+      entries = saveEntries
+      clearMemoryDraft(saveContextKey)
+      return
+    }
     saving = true
     error = ''
     saved = false
     try {
       if (variant === 'settings' || (projectId && threadId)) {
         const fallback: MemoryLocation = variant === 'sidebar' ? saveContext : {}
+        assertEntriesAreSavable(saveEntries)
         await saveGrouped(saveEntries, saveBaseline, fallback, saveContext)
         const remainingDraft = readMemoryDraft(saveContextKey)
         if (remainingDraft?.revision === submittedDraft?.revision) {
@@ -459,51 +468,37 @@
     }
   }
 
-  async function addEntry(): Promise<void> {
+  function addEntry(): void {
     if (saving || loading) return
-    // Add is append-only: single-entry path, not bulk rewrite.
-    // Generates a valid placeholder via the main-process addEntry (read + push + save),
-    // then inserts the persisted entry at the top and expands it.
+    // Add is a staged edit, not a disk write: the entry only reaches memory.md
+    // when the user saves, so an abandoned click never leaves "Untitled memory"
+    // behind. The panel's draft cache keeps it across navigation.
     if (variant === 'settings') settingsSection = 'active'
     else activeSection = 'active'
-    const addContextKey = loadedContextKey
     const entryScopes = defaultScopesForSurface(surface)
     const location = locationForScopeChange(entryScopes, {}, surfaceContext)
-    const placeholderSuffix = Math.random().toString(36).slice(2, 6)
-    const label = 'Untitled memory'
-    const content = `New memory   ${Date.now()}-${placeholderSuffix}`
-    error = ''
-    saving = true
-    try {
-      const created = await invoke('memory:addEntry', label, content, {
-        category: 'preference',
-        priority: 'medium',
-        scopes: entryScopes,
-        source: 'manual',
-        projectId: location.projectId,
-        threadId: location.threadId,
-        assistantId: location.assistantId
-      })
-      // Prepend and keep load baseline in sync so a following bulk Save
-      // treats this as already-known (not newSinceLoad/duplicate).
-      if (currentContextKey() !== addContextKey) {
-        const draft = readMemoryDraft(addContextKey)
-        cacheMemoryDraft(addContextKey, {
-          entries: [created, ...(draft?.entries ?? [])],
-          baseline: [created, ...(draft?.baseline ?? [])],
-          expandedId: created.id
-        })
-        return
-      }
-      lastAddedId = created.id
-      entries = [created, ...entries]
-      loadedEntries = [created, ...loadedEntries]
-      cacheDraft()
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to add memory.'
-    } finally {
-      saving = false
+    const now = Date.now()
+    const staged: MemoryEntry = {
+      id: `memory-staged-${now}-${Math.random().toString(36).slice(2, 6)}`,
+      label: '',
+      content: '',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+      category: 'preference',
+      priority: 'medium',
+      scopes: entryScopes,
+      source: 'manual',
+      frequency: 1,
+      lastReinforced: now,
+      projectId: location.projectId,
+      threadId: location.threadId,
+      assistantId: location.assistantId
     }
+    error = ''
+    lastAddedId = staged.id
+    entries = [staged, ...entries]
+    cacheDraft()
   }
 
   async function setProjectMemoryEnabled(enabled: boolean): Promise<void> {
@@ -622,6 +617,22 @@
     })
   }
 
+  /** A staged "Add Memory" entry that was never filled in. */
+  function isBlankStagedEntry(entry: MemoryEntry): boolean {
+    return !entry.label.trim() && !entry.content.trim()
+  }
+
+  /** Name the entry that still needs typing, instead of failing on the main
+   *  process's index-based validation message. */
+  function assertEntriesAreSavable(candidates: readonly MemoryEntry[]): void {
+    const incomplete = candidates.find((entry) => !entry.label.trim() || !entry.content.trim())
+    if (!incomplete) return
+    const missing = !incomplete.label.trim() ? 'a label' : 'content'
+    throw new Error(
+      `Add ${missing} to “${incomplete.label.trim() || 'Untitled memory'}” before saving.`
+    )
+  }
+
   /** The project whose threads the Thread picker should offer for an entry. */
   function entryThreadProjectId(entry: MemoryEntry): string | undefined {
     return entry.projectId ?? (surface === 'sidebar-chats' ? INBOX_PROJECT_ID : projectId)
@@ -716,6 +727,14 @@
   }
 
   $effect(warmThreadPickers)
+
+  /** Keep the Assistant picker's list warm where an entry can name one. */
+  function warmAssistantPicker(): void {
+    if (surface !== 'sidebar-assistant') return
+    memoryScopeOptions.ensureAssistants()
+  }
+
+  $effect(warmAssistantPicker)
 </script>
 
 <div
@@ -1019,6 +1038,8 @@
             projects={pickerProjects}
             threads={threadsForEntry(entry)}
             threadsLoading={threadsLoadingForEntry(entry)}
+            assistants={memoryScopeOptions.assistants}
+            assistantIconUrls={memoryScopeOptions.assistantIconUrls}
             initiallyExpanded={entry.id === lastAddedId}
             onUpdate={updateEntry}
             onRemove={requestRemoveEntry}
