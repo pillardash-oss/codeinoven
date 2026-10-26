@@ -37,13 +37,19 @@ export class ThreadMessagesEvents {
         const lastUser = [...entry.messages].reverse().find((m) => m.role === 'user')
         if (lastUser && messageText(lastUser) === part.text) return
       }
+      // A tool may emit the turn's first assistant row after a steer was held.
+      // That work still precedes the held prompt, including after reconciliation.
+      const heldIndex = entry.messages.findIndex((message) => entry.heldSteerIds.has(message.id))
+      const heldMessage = entry.messages[heldIndex]
       const newMsg: AgentMessage = {
         id: msgId,
         role: 'assistant',
         parts: [part],
-        createdAt: Date.now()
+        createdAt: heldMessage ? Math.min(Date.now(), heldMessage.createdAt - 1) : Date.now()
       }
-      entry.messages = [...entry.messages, newMsg]
+      entry.messages = heldMessage
+        ? [...entry.messages.slice(0, heldIndex), newMsg, ...entry.messages.slice(heldIndex)]
+        : [...entry.messages, newMsg]
     } else {
       const msg = entry.messages[msgIndex]
       // Providers overwhelmingly update the active tail part. Search backward
