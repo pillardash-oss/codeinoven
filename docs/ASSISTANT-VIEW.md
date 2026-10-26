@@ -915,12 +915,28 @@ create flow had to store (`ASSISTANT_PLACEHOLDER_NAME`).
   only from the thread. The main process broadcasts `assistant:checkpointChanged`
   (assistant id only; the body is read on demand by `assistant:gettingStartedCheckpoint`)
   so an open panel follows the interview.
-- The agent then asks the user to confirm it never saves the assistant itself
-  and never tells the user to run a command. Confirming is one click on the
-  **recap card** (`AssistantRecapCard.svelte`) that appears above the composer
-  with the schedule, the connections, and the instruction section count; a plain
+- The agent then ends its turn on the draft and never saves the assistant itself
+  and never tells the user to run a command. The go-ahead is the **recap card**
+  (`AssistantRecapCard.svelte`) that appears above the composer, and the card is
+  the only gate: the agent is told not to ask a confirmation question beside it,
+  and a question it asks anyway is not drawn while the card is up, because the
+  same decision asked twice (once as a card with a clock running on it) reads as
+  two separate approvals. Saving from the card retires that question, so the
+  session is never left waiting on an answer the user already gave. A plain
   typed "yes" commits the same pending draft. The card's **Keep editing** hides
   it for that draft revision only, so a revised draft brings it back.
+- **The card is the draft's presentation, and the transcript never shows the wire
+  format.** The recap card reads like the Assignment card: a ledger of the
+  settings the save writes (name, personality, schedule, connections, reporting),
+  then the instruction document itself section by section as prose
+  (`AssistantRecapContent.svelte`), a scrollable body, a **Full screen** review,
+  and the save on the right. Nothing about it is on a clock, so it carries a
+  `Draft` stamp rather than a timer. The two fenced blocks are the card's payload
+  and are stripped from every text the transcript draws in an authoring
+  conversation   the turn's closing statement (`assistantDisplayText`) and each
+  step of its working trace (`WorkingTrace`'s `formatOutput`)   so the reader
+  never receives the knowledge as a monospaced wall or the plan as raw JSON under
+  an `ASSISTANT` fence label.
 - The app commits all three together: the instructions, the schedule, and the
   connections. `/save-knowledge` remains only as a fallback: it is offered only
   while a complete draft is waiting to be committed, and it disappears for good

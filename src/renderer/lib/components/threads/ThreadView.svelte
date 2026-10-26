@@ -7781,6 +7781,22 @@
    *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
+  /**
+   * Whether this conversation is authoring the assistant, so its text carries the
+   * app's own draft payload: the knowledge block and the plan block. Both belong
+   * to the recap card, so every text the transcript draws in this conversation is
+   * filtered before it reaches the reader   the turn's closing statement and each
+   * step of its working trace alike. A run thread of a saved assistant is not an
+   * authoring conversation, so its text is never rewritten here.
+   */
+  const assistantAuthoringThread = $derived(
+    assistantMode && (!assistantKnowledgeComplete || assistantSetupThread)
+  )
+  /** The trace's own output filter, or nothing when the text is plain conversation. */
+  const assistantAuthoringOutput = $derived(
+    assistantAuthoringThread ? assistantDisplayText : undefined
+  )
+
   const assistantBehaviorSession = $derived(settings.assistantBehaviorSession)
   const assistantSessionReady = $derived(
     !busy &&
@@ -7938,6 +7954,22 @@
       assistantRecapDismissed !== assistantDraftSignature
   )
 
+  /**
+   * Whether the recap card stands in for the agent's own confirmation question.
+   *
+   * The card is the go-ahead: it states the whole draft and carries the Save
+   * button. An agent that still asks "does this capture how you want it to work?"
+   * after presenting the draft is asking the same question a second time, in a
+   * card with a clock running on it, so that question is not drawn while the recap
+   * is up. A secret request is never superseded: that one is asking for something
+   * only the user can supply.
+   */
+  const assistantRecapSupersedesQuestion = $derived(
+    assistantRecapVisible &&
+      pendingQuestionRequests.length > 0 &&
+      !pendingQuestionRequests[0]?.questions.some((question) => question.secretRequest === true)
+  )
+
   const assistantComposerCovered = $derived(
     assistantSetupThread &&
       assistantKnowledgeComplete &&
@@ -7999,6 +8031,13 @@
    */
   async function confirmAssistantSave(): Promise<void> {
     if (!assistantId) return
+    // The card is the answer to any confirmation question the agent asked beside
+    // it, so that question is retired here rather than left pending: a session
+    // sitting on an unanswered question cannot take the turn that follows the save.
+    for (const request of pendingQuestionRequests) {
+      if (request.questions.some((question) => question.secretRequest === true)) continue
+      await handleQuestionDismiss(request.requestId).catch(() => undefined)
+    }
     const firstSave = !assistantKnowledgeComplete
     const saved = await saveAssistantKnowledge()
     if (saved && !firstSave && assistantBehaviorSession) {
@@ -13688,6 +13727,7 @@
                 )}
               onOpenSubagent={openSubagent}
               onCiteFile={openFileCitation}
+              formatOutput={assistantAuthoringOutput}
             />
           {/snippet}
           <!-- A turn a prompt closed whose work the transcript never mirrored:
@@ -13720,6 +13760,7 @@
               isFast={currentWorkingTraceAttribution.isFast}
               onOpenSubagent={openSubagent}
               onCiteFile={openFileCitation}
+              formatOutput={assistantAuthoringOutput}
             />
           {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
@@ -14242,7 +14283,7 @@
                       )}
                       {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
                       {@const deliveredClosingText = assistantMode
-                        ? assistantSetupThread
+                        ? assistantAuthoringThread
                           ? assistantDisplayText(turnClosingText?.text ?? messageText(msg))
                           : assistantResultText(
                               turnClosingText?.text ?? messageText(msg),
@@ -15010,7 +15051,7 @@
                   onAlternative={providePermissionAlternative}
                 />
               {/key}
-            {:else if pendingQuestionRequests.length > 0 && (!achievementAutonomous || pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
+            {:else if pendingQuestionRequests.length > 0 && !assistantRecapSupersedesQuestion && (!achievementAutonomous || pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
               {@const pendingRequest = pendingQuestionRequests[0]}
               {#key pendingRequest.requestId}
                 {#if pendingRequest.questions.some((question) => question.secretRequest === true)}

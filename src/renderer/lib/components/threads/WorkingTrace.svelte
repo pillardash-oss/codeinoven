@@ -89,6 +89,10 @@
     onToggle?: (open: boolean, userOpened: boolean, userFolded: boolean) => void
     onOpenSubagent?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
     onCiteFile?: (path: string, line?: number) => void
+    /** Rewrites a chain's output before it is drawn. A conversation whose text
+     *  carries app machinery (an assistant authoring turn) hands its own
+     *  filter here, so a step's text reads like the turn's answer does. */
+    formatOutput?: (text: string) => string
   }
 
   let {
@@ -124,7 +128,8 @@
     checkpointPaths = [],
     onToggle,
     onOpenSubagent,
-    onCiteFile
+    onCiteFile,
+    formatOutput
   }: Props = $props()
 
   // Intentional initial-value capture   props are only used to seed local state.
@@ -465,6 +470,7 @@
       {#each chains as chain, index (chain.id)}
         <WorkingTraceChain
           {chain}
+          {formatOutput}
           active={liveActivity && index === chains.length - 1}
           showHeader={chains.length > 1 || chain.output !== null}
           {busy}
