@@ -11,7 +11,7 @@ import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
-import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { preloadThreadConversation } from '$lib/stores/thread-preload'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { type Project, type Thread } from '$shared/types'
 import { type Component } from 'svelte'
@@ -129,7 +129,7 @@ export class AppHeaderNavigationController {
       if (!threadId || seen.has(threadId)) continue
       seen.add(threadId)
       const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
-      if (thread && !thread.archived) void threadMessages.preload(thread.projectId, thread.id)
+      if (thread && !thread.archived) preloadThreadConversation(thread)
     }
   }
 

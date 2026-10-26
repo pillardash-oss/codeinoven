@@ -1,4 +1,5 @@
-import type { AgentPart } from '$shared/types'
+import type { AgentPart, TurnStreamPartsPage } from '$shared/types'
+import { mergeWorkingParts } from '$lib/working-trace-parts'
 
 /**
  * Navigation-safe cache for a thread's live working trace.
@@ -44,6 +45,34 @@ export class ThreadTraceState {
   cursor = $state<number | null>(null)
   /** Which logical turn this fold belongs to, from the page that delivered it. */
   turnStartTs = $state<number | null>(null)
+  /** When a durable window last fed this fold, as a wall clock reading. A hover
+   *  preload reads the same window again once this is stale, so a fold warmed a
+   *  moment ago is reused instead of re-read on every pointer pass. */
+  windowReadAt: number | null = null
+
+  /**
+   * Adopt one durable window read: parts, fold boundary, cursor and the
+   * task-list snapshot travel together, so a hover preload and a read from the
+   * mounted view leave the cache in exactly the same state.
+   *
+   * A window that belongs to a newer logical turn replaces the fold instead of
+   * merging into the previous turn's entries: a steer opens a turn of its own,
+   * and the work before it must not trail into the new turn's trace.
+   */
+  adoptWindow(page: TurnStreamPartsPage): void {
+    const boundary = page.turnStartTs ?? null
+    if (boundary !== null && this.turnStartTs !== null && boundary !== this.turnStartTs) {
+      this.reset()
+    }
+    this.turnStartTs = boundary ?? this.turnStartTs
+    this.setParts(mergeWorkingParts(this.parts, page.parts))
+    this.hasOlder = page.hasOlder
+    this.totalSteps = page.totalSteps
+    this.todoParts = page.todoParts
+    this.todoTurnStart = boundary
+    this.cursor = page.cursor
+    this.windowReadAt = Date.now()
+  }
 
   /** Replace the mounted parts, keeping the cache bounded from the old end. */
   setParts(next: AgentPart[]): void {
@@ -65,6 +94,7 @@ export class ThreadTraceState {
     this.todoTurnStart = null
     this.cursor = null
     this.turnStartTs = null
+    this.windowReadAt = null
   }
 }
 
@@ -93,6 +123,11 @@ class ThreadTraceCache {
       this.#states.delete(oldest)
     }
     return created
+  }
+
+  /** The cached trace for a conversation, without creating or touching one. */
+  peek(projectId: string, conversationId: string): ThreadTraceState | undefined {
+    return this.#states.get(`${projectId}:${conversationId}`)
   }
 
   /** Drop a thread's trace (thread deleted, or its turn reset). */

@@ -5894,6 +5894,31 @@
     return readySessionId
   }
 
+  /**
+   * Read the newest durable trace window and adopt it into the shared fold.
+   *
+   * Fired at the top of the mount path so the request is in flight while the
+   * session handshake runs, instead of queued behind the status, permission and
+   * question reads. The fold is additive, so a hover preload that already
+   * filled it only refreshes entries in place, and the cached fold keeps
+   * painting while this read is in flight. Only the newest page crosses IPC;
+   * older entries page in from the trace's own inner scroll.
+   */
+  async function loadLatestTraceWindow(): Promise<TurnStreamPartsPage | null> {
+    const generation = ++streamPartsLoadGeneration
+    try {
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        limit: WORKING_TRACE_PAGE_SIZE
+      })
+      if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return null
+      streamTrace.adoptWindow(page)
+      return page
+    } catch {
+      // A missing fold is not a failed open: the mirror still paints.
+      return null
+    }
+  }
+
   /** Restore app-owned session state without contacting native harness transport. */
   async function connectSession(): Promise<void> {
     // Controller-driven conversations own their own session handshake.
@@ -5903,6 +5928,13 @@
     // Independent extras   each lands as it resolves, none block the paint.
     void refreshCheckpoints()
     void loadProjectContext()
+    // The durable fold is the one read the open path cannot answer from the
+    // message mirror, and the session handshake below is a chain of round
+    // trips of its own. Its request leaves first, so it is already in flight
+    // while the status, permission, and question reads run. A hover preload has
+    // usually warmed the fold and the main process's log reader, which makes
+    // this a refresh rather than the first read.
+    const latestTraceWindow = loadLatestTraceWindow()
 
     if (shouldHydrateEngineeringState()) {
       try {
@@ -5980,43 +6012,34 @@
       // and a finished thread still needs the same complete trace after a
       // refresh or thread switch. Only the newest page is read here; older
       // entries page in on the trace's own inner scroll.
-      const generation = ++streamPartsLoadGeneration
       void loadCompletedTurns()
-      void invoke('thread:loadStreamParts', projectId, id, {
-        limit: WORKING_TRACE_PAGE_SIZE
-      })
-        .then((page) => {
-          if (!alive || generation !== streamPartsLoadGeneration) return
-          if (page.kind !== 'window') return
-          streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
-          streamTrace.hasOlder = page.hasOlder
-          applyTodoSnapshot(page)
-          streamTrace.cursor = page.cursor
-          if (
-            providerStatus === null &&
-            thread.status !== 'working-paused' &&
-            !restoredBusy &&
-            hasRenderableWorkingParts(page.parts)
-          ) {
-            // Only a saved run that is still the newest work may claim the
-            // restored-trace state. Once the user has sent a newer message
-            // (locally submitted turn, or a pending user message after the
-            // last assistant turn), that stale trace is history: it must stay
-            // folded with frozen durations while the new run gets its own
-            // live trace.
-            const latestStart = latestTurnInfo.startIndex
-            let turnEnd = latestStart
-            while (turnEnd + 1 < messages.length && messages[turnEnd + 1]?.role !== 'user') {
-              turnEnd += 1
-            }
-            const hasNewerUserWork =
-              latestStart === -1 ||
-              locallySubmittedTurnId !== null ||
-              messages.slice(turnEnd + 1).some((message) => message.role === 'user')
-            restoredBusy = !hasNewerUserWork && !isLatestTurnCompleted()
+      const page = await latestTraceWindow
+      if (!alive) return
+      if (page) {
+        if (
+          providerStatus === null &&
+          thread.status !== 'working-paused' &&
+          !restoredBusy &&
+          hasRenderableWorkingParts(page.parts)
+        ) {
+          // Only a saved run that is still the newest work may claim the
+          // restored-trace state. Once the user has sent a newer message
+          // (locally submitted turn, or a pending user message after the
+          // last assistant turn), that stale trace is history: it must stay
+          // folded with frozen durations while the new run gets its own
+          // live trace.
+          const latestStart = latestTurnInfo.startIndex
+          let turnEnd = latestStart
+          while (turnEnd + 1 < messages.length && messages[turnEnd + 1]?.role !== 'user') {
+            turnEnd += 1
           }
-        })
-        .catch(() => {})
+          const hasNewerUserWork =
+            latestStart === -1 ||
+            locallySubmittedTurnId !== null ||
+            messages.slice(turnEnd + 1).some((message) => message.role === 'user')
+          restoredBusy = !hasNewerUserWork && !isLatestTurnCompleted()
+        }
+      }
       if (!liveSessionWorking && providerStatus === null) setIdleFromRestore()
       // Never pull the full live harness transcript while mounting a thread.
       // `agent:loadMessages` is intentionally unbounded: a long-running agent

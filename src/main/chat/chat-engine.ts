@@ -419,7 +419,12 @@ import {
   groupStreamPartsIntoMessages,
   type FoldedTurnStream
 } from './turn-stream'
-import { readTurnStreamLog } from './turn-stream-log'
+import {
+  readTurnStreamLog,
+  storageTurnStreamSource,
+  type TurnStreamLogRead
+} from './turn-stream-log'
+import { backgroundIo } from '../system/background-io'
 import type { BrowserActionReview } from '../browser/browser-service/browser-action-policy'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts, completedTurnWindow } from './turn-stream-page'
@@ -25658,14 +25663,14 @@ export class ChatEngine {
     }
 
     if (entry.consumedBytes === 0) {
-      // First hydration for this thread, or right after a rewrite: walk the log
-      // in bounded chunks that yield to the event loop instead of reading it
-      // whole, and retain only what the current turn's fold needs. The log is
-      // thread-wide and append-only, so a long-lived thread reaches hundreds of
-      // megabytes; reading that in one allocation blocked the main process and
-      // spiked memory past a gigabyte, which is what froze the app on a machine
-      // under pressure. This costs latency for a big log, never a frozen app.
-      const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, turnStartTs)
+      // First hydration for this thread, or right after a rewrite: read the
+      // log in the background I/O worker, walking backwards from its end so
+      // only the newest turn is loaded and the thread's older history is never
+      // touched. The log is thread-wide and append-only, so a long-lived thread
+      // reaches hundreds of megabytes; reading it forwards on the main process
+      // put every open behind it. The page a reader mounts is still bounded
+      // (`WORKING_TRACE_PAGE_SIZE`), and older entries page in on demand.
+      const hydrated = await this.readTurnStreamOffThread(streamPath, 0, size, turnStartTs)
       entry.events = hydrated.events
       entry.latestTurnId = hydrated.latestTurnId
       entry.consumedBytes = hydrated.nextByte
@@ -25844,7 +25849,7 @@ export class ChatEngine {
 
     const size = await this.storage.rawSize(streamPath)
     if (size === null || size === 0) return []
-    const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, oldest, newest)
+    const hydrated = await this.readTurnStreamOffThread(streamPath, 0, size, oldest, newest)
     if (hydrated.events.length === 0) return []
     const folded = foldTurnStreamDetailed(hydrated.events, undefined, oldest)
     if (folded.parts.length === 0) return []
@@ -26015,9 +26020,58 @@ export class ChatEngine {
     const streamPath = turnStreamPath(projectId, threadId)
     const size = await this.storage.rawSize(streamPath)
     if (size === null || size === 0) return empty
-    const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, turnStartTs)
+    const hydrated = await this.readTurnStreamOffThread(streamPath, 0, size, turnStartTs)
     if (hydrated.events.length === 0) return empty
     return foldTurnStreamDetailed(hydrated.events, hydrated.latestTurnId || undefined, turnStartTs)
+  }
+
+  /**
+   * Read a thread's durable working-trace log off the main process.
+   *
+   * The walk decodes and parses an append-only file that grows with the whole
+   * thread. Even chunked, doing that on the main process put every thread open
+   * behind it and competed with the IPC, permission, and stream writes landing
+   * at the same moment. The background I/O worker owns the walk now; the main
+   * process only receives what the fold needs. The newest turn is read backwards
+   * from the end of the log, so the cost follows that turn instead of the
+   * thread's entire history, and a closed span is read only when a caller asks
+   * for one.
+   */
+  private async readTurnStreamOffThread(
+    streamPath: string,
+    fromByte: number,
+    size: number,
+    windowStartTs: number | undefined,
+    windowEndTs?: number
+  ): Promise<TurnStreamLogRead> {
+    try {
+      if (windowStartTs !== undefined && windowEndTs === undefined) {
+        return await backgroundIo<TurnStreamLogRead>({
+          kind: 'turn-stream-tail',
+          path: this.storage.resolve(streamPath),
+          size,
+          windowStartTs
+        })
+      }
+      return await backgroundIo<TurnStreamLogRead>({
+        kind: 'turn-stream-range',
+        path: this.storage.resolve(streamPath),
+        fromByte,
+        size,
+        ...(windowStartTs === undefined ? {} : { windowStartTs }),
+        ...(windowEndTs === undefined ? {} : { windowEndTs })
+      })
+    } catch {
+      // A worker that cannot start must never make a trace unreadable: the walk
+      // itself is chunked and yields, so the fallback is slower, not blocked.
+      return readTurnStreamLog(
+        storageTurnStreamSource(this.storage, streamPath),
+        fromByte,
+        size,
+        windowStartTs,
+        windowEndTs
+      )
+    }
   }
 
   /**
