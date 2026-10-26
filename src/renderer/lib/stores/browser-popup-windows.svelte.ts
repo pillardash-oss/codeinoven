@@ -36,6 +36,8 @@ class BrowserPopupWindowsState {
    */
   private started = false
 
+  fullscreenId = $state<string | null>(null)
+
   /** Register the runtime's one subscription. Idempotent. */
   start(): void {
     if (this.started) return
@@ -44,11 +46,57 @@ class BrowserPopupWindowsState {
     // closed still has to be there when the user opens it, and one that closes
     // itself while the rail is showing another tool must still leave the list.
     subscribe('browser:popupWindows', (popups) => this.apply(popups))
+    subscribe('browser:popupWindowAction', (id, action, boxId) => {
+      void this.performAction(id, action, boxId).catch((error: unknown) => {
+        reportError(error, 'The popup action could not be completed.')
+      })
+    })
+  }
+
+  private async performAction(
+    id: string,
+    action: 'open' | 'duplicate' | 'moveBox' | 'duplicateBox' | 'fullscreen',
+    boxId: string | null
+  ): Promise<void> {
+    const popup = this.find(id)
+    if (!popup) return
+    if (action === 'fullscreen') {
+      this.select(id)
+      this.fullscreenId = id
+      return
+    }
+    const inBox = action === 'moveBox' || action === 'duplicateBox'
+    let targetBoxId = inBox ? boxId : undefined
+    if (inBox && targetBoxId === null) {
+      const { globalBrowser } = await import('./global-browser.svelte')
+      targetBoxId = globalBrowser.createBox(popup.title || 'Popup window')
+      if (!globalBrowser.boxes.some((box) => box.id === targetBoxId)) {
+        throw new Error('The browser box limit has been reached.')
+      }
+    }
+    await invoke(
+      'browser:openPopupAsTab',
+      id,
+      action === 'duplicate' || action === 'duplicateBox',
+      targetBoxId
+    )
+  }
+
+  openMenu(id: string, event: MouseEvent): void {
+    event.preventDefault()
+    event.stopPropagation()
+    void invoke(
+      'browser:popupWindowMenu',
+      id,
+      Math.round(event.clientX),
+      Math.round(event.clientY)
+    ).catch((error: unknown) => reportError(error, 'The popup menu could not be opened.'))
   }
 
   /** Apply main's whole list: entries it no longer holds are dropped. */
   private apply(popups: BrowserPopupWindow[]): void {
     const live = new Set(popups.map((popup) => popup.id))
+    if (this.fullscreenId !== null && !live.has(this.fullscreenId)) this.fullscreenId = null
     for (const id of [...this.popups.keys()]) {
       if (!live.has(id)) this.popups.delete(id)
     }

@@ -333,6 +333,11 @@ export const IPC_EVENT_CONTRACT = {
    * draws one tab per entry, and the list is short, so it is published whole
    * rather than as add/remove/update deltas.
    */
+  'browser:popupWindowAction': [] as unknown as [
+    popupId: string,
+    action: 'open' | 'duplicate' | 'moveBox' | 'duplicateBox' | 'fullscreen',
+    boxId: string | null
+  ],
   'browser:popupWindows': [] as unknown as [popups: BrowserPopupWindow[]],
   /**
    * Every extension side panel the rail is hosting, whole, after any change to

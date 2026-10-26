@@ -59,13 +59,14 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
-  import { publicAssetUrl } from '$lib/static-assets'
+  import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
 
-  const defaultPopupIconUrl = publicAssetUrl('icon-mono.svg')
+  const failedPopupIcons = new SvelteSet<string>()
 
   interface Props {
     tabs: ContextSidebarTab[]
@@ -503,15 +504,19 @@
       {@const ThreadNoteIcon = feature('thread-note').icon}
       <ThreadNoteIcon size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'popup-window'}
-      {#if tab.favicon}
-        <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
-      {:else}
+      {#if tab.favicon && !failedPopupIcons.has(tab.favicon)}
         <img
-          src={defaultPopupIconUrl}
+          src={tab.favicon}
           alt=""
-          class="h-3 w-3 shrink-0 object-contain"
+          class="h-3 w-3 shrink-0"
           aria-hidden="true"
+          onerror={() => {
+            if (failedPopupIcons.size >= 128) failedPopupIcons.clear()
+            if (tab.favicon) failedPopupIcons.add(tab.favicon)
+          }}
         />
+      {:else}
+        <CioWindow size={ICON_SIZE.row} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'boxes'}
       <CioTabBoxes size={ICON_SIZE.row} class="shrink-0" />
