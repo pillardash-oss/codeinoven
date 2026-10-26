@@ -61,7 +61,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'transcribe',
-      'Transcribe footage with the installed ASR selected in Sounds. Caption timing uses measured audio chunks, not inferred word timestamps.' +
+      'Transcribe footage with the installed ASR selected in Sounds. Caption timing uses measured audio chunks, not inferred word timestamps. Silent stretches are normal: a chunk with no speech yields no caption, and the result reports spokenChunks and silentChunks.' +
         jobNote,
       {
         source,
