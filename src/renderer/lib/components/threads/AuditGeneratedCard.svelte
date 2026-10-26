@@ -233,7 +233,7 @@
           {/if}
         </div>
 
-        <CardFoot>
+        <CardFoot yields="right">
           {#snippet right()}
             <ModelPicker
               {providers}

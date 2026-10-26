@@ -113,7 +113,7 @@
           </p>
         </div>
 
-        <CardFoot>
+        <CardFoot yields="right">
           {#snippet left()}
             <CardButton
               label="Cancel"
