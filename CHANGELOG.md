@@ -7,6 +7,22 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **Downloading an inline artifact now opens the save dialog and copies the file
+  where you choose.** The preview's download control was a plain link to the
+  artifact's served `appfile://` URL, and the renderer's session guard refuses
+  every download that is not the window's own `blob:` URL, so the control did
+  nothing at all: no dialog, no file. The bytes were never the problem. An
+  artifact lives in a workspace the app is free to clean up, so a download is a
+  copy of that file to a destination the user names, and the main process now
+  takes it (`dialog:saveCopy`): it resolves the file from the served URL through
+  the project mount that serves it, asks for the destination, writes the copy
+  and confirms it. One shared helper (`lib/download-shown-file.ts`) makes that
+  decision for every surface that offers a download, so a `blob:` source keeps
+  Chromium's own save assistant (now with the real file name registered for it)
+  and a served source never falls through to a route that is refused. The
+  attachment preview, which downloaded served files the same dead way, uses it
+  too.
+
 - **An element marked on an HTML or SVG artifact can be dragged off the element
   it names, and the picks on an artifact no longer crash the artifact.
   Every other place a reader can comment on something (a passage in a

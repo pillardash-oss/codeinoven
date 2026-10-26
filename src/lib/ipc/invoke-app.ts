@@ -21,6 +21,22 @@ export interface SaveFileInput {
   filters?: { name: string; extensions: string[] }[]
 }
 
+/**
+ * One file the app is already showing, copied where the user chooses.
+ *
+ * A rendered artifact is drawn from a served `appfile://` URL and lives in a
+ * directory the app is free to clean up, so "download" is a copy of that file to
+ * a destination the user picks. The main process owns the path, the save dialog
+ * and the write, because the renderer cannot read a chosen destination and its
+ * own downloads of anything but its `blob:` URLs are refused.
+ */
+export interface SaveCopyInput {
+  /** The `appfile://` URL the surface is showing. */
+  url: string
+  /** The name the save dialog suggests. */
+  suggestedName: string
+}
+
 export const invokeAppContract = {
   'network:restored': {} as Contract<[], void>,
   'network:lost': {} as Contract<[], void>,
@@ -39,6 +55,7 @@ export const invokeAppContract = {
   'spellcheck:addWord': {} as Contract<[word: string], boolean>,
   'dialog:pickFile': {} as Contract<[scope?: AttachmentStorageScope], string | null>,
   'dialog:saveFile': {} as Contract<[input: SaveFileInput], string | null>,
+  'dialog:saveCopy': {} as Contract<[input: SaveCopyInput], string | null>,
   'dialog:pickFiles': {} as Contract<[scope?: AttachmentStorageScope], string[]>,
   'dialog:pickImage': {} as Contract<[], string | null>,
   /** Store a picked appearance image (a browser tab, group, box, bookmark or
