@@ -217,6 +217,7 @@
   import { modelKey, parseModelKey } from '$lib/model-keys'
   import { playHistoryArrive, promptArrive } from '$lib/motion'
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadTraceCache } from '$lib/stores/thread-trace-cache.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -1399,49 +1400,36 @@
    *  render page so a scroll gesture reveals a useful run of steps, small enough
    *  that mounting them never stalls a frame; the main process clamps it. */
   const STREAM_OLDER_PAGE_SIZE = 60
-  /** Durable working-trace parts loaded from the SSE log. They fill gaps in
-   *  the live mirror and restore the latest trace after an app refresh. A trace
-   *  that is on screen pages older entries in as the reader scrolls its top, one
-   *  page per gesture; a trace nobody is watching holds only the newest page. */
-  let streamParts = $state<AgentPart[]>([])
-  /** True when the durable log still folds entries older than `streamParts[0]`. */
-  let streamHasOlder = $state(false)
-  /** Thinking and tool steps the whole turn holds, from the durable fold. The
-   *  trace header shows this while only a bounded window of steps is mounted,
-   *  so the count states the turn's real size instead of climbing as older
-   *  pages load. */
-  let streamTotalSteps = $state(0)
-  /** Newest durable task-list parts for the turn. They never render in the
-   *  trace, so they ride beside the trace window and keep the task card correct
-   *  no matter which page of the trace is mounted. */
-  let streamTodoParts = $state<AgentPart[]>([])
-  /** Start time of the turn `streamTodoParts` was folded for. Null when the log
-   *  had no prompt to bound against (or nothing has been read yet). */
-  let streamTodoTurnStart = $state<number | null>(null)
-  /** Stream events the durable log has consumed for this fold: the live poll's
-   *  change cursor. `null` until a read lands, so the first poll falls back to
-   *  a window read. */
-  let streamCursor = $state<number | null>(null)
+  /**
+   * Durable working-trace parts loaded from the SSE log. They fill gaps in the
+   * live mirror and restore the latest trace after an app refresh. A trace that
+   * is on screen pages older entries in as the reader scrolls its top, one page
+   * per gesture; a trace nobody is watching holds only the newest page.
+   *
+   * The fold lives in a thread-keyed cache, never in this component. This view
+   * is keyed by thread id, so component-local trace state was discarded on every
+   * switch and rebuilt over IPC (`thread:loadStreamParts`): reopening a live
+   * thread painted its header with only the parts the message mirror had
+   * persisted and the real tail arrived seconds later. The cache paints the
+   * trace it last showed on the first frame, and every durable read merges into
+   * it additively, so the tail never blanks and never waits on a round trip.
+   */
+  // Intentional initial-value capture: Workspace keys this view by thread ID,
+  // so the scope this mount owns can never change under it.
+  // svelte-ignore state_referenced_locally
+  const streamTrace = threadTraceCache.scope(thread.projectId, conversationId)
+  /** True while a durable read for this mount is current. A late page from a
+   *  superseded read must not touch the (shared) cached fold. */
   let streamPartsLoadGeneration = 0
   /** Bumped whenever the durable fold is dropped (a steer, a new local turn).
    *  An older-page read started before it must not resurrect entries from the
    *  turn the reader has left. */
   let streamFoldVersion = 0
-  /** Which logical turn the mounted fold belongs to, from the page that
-   *  delivered it. The boundary moves when the harness takes a steer, and that
-   *  move is the signal that the turn on screen is over and a new one opened. */
-  let streamTurnStartTs = $state<number | null>(null)
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
     streamFoldVersion += 1
-    streamParts = []
-    streamHasOlder = false
-    streamTotalSteps = 0
-    streamTodoParts = []
-    streamTodoTurnStart = null
-    streamCursor = null
-    streamTurnStartTs = null
+    streamTrace.reset()
     completedTurns = []
     completedTurnsGeneration += 1
   }
@@ -1450,8 +1438,8 @@
    *  the harness took a steer, and the boundary moved with it. */
   function foldBoundaryMoved(page: TurnStreamPartsPage | TurnStreamPartsChange): boolean {
     if (typeof page.turnStartTs !== 'number') return false
-    if (streamTurnStartTs === null) return false
-    return page.turnStartTs !== streamTurnStartTs
+    if (streamTrace.turnStartTs === null) return false
+    return page.turnStartTs !== streamTrace.turnStartTs
   }
 
   /**
@@ -1466,7 +1454,7 @@
     nextTurnStartTs: number,
     generation: number
   ): Promise<void> {
-    streamTurnStartTs = nextTurnStartTs
+    streamTrace.turnStartTs = nextTurnStartTs
     void loadCompletedTurns()
     await remountNewestStreamParts(generation)
   }
@@ -1571,8 +1559,8 @@
   /** Adopt a durable read's task-list snapshot together with the turn it was
    *  folded for, so the card can reject it once the transcript moves on. */
   function applyTodoSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
-    streamTodoParts = page.todoParts
-    streamTodoTurnStart = page.turnStartTs
+    streamTrace.todoParts = page.todoParts
+    streamTrace.todoTurnStart = page.turnStartTs
   }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
@@ -1656,15 +1644,15 @@
    * highlight, on screen.
    */
   let todoSnapshotIsCurrent = $derived.by(() => {
-    if (streamTodoParts.length === 0) return false
-    return todoSnapshotMatchesTurn(streamTodoTurnStart, turnAnchorCreatedAt())
+    if (streamTrace.todoParts.length === 0) return false
+    return todoSnapshotMatchesTurn(streamTrace.todoTurnStart, turnAnchorCreatedAt())
   })
   let todoMessages = $derived.by(() => {
     if (!todoSnapshotIsCurrent) return messages
     const streamMessage: AgentMessage = {
       id: `${thread.id}:todo-stream`,
       role: 'assistant',
-      parts: streamTodoParts,
+      parts: streamTrace.todoParts,
       createdAt: Number.MAX_SAFE_INTEGER
     }
     return [...messages, streamMessage]
@@ -5979,10 +5967,10 @@
         .then((page) => {
           if (!alive || generation !== streamPartsLoadGeneration) return
           if (page.kind !== 'window') return
-          streamParts = mergeWorkingParts(streamParts, page.parts)
-          streamHasOlder = page.hasOlder
+          streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
+          streamTrace.hasOlder = page.hasOlder
           applyTodoSnapshot(page)
-          streamCursor = page.cursor
+          streamTrace.cursor = page.cursor
           if (
             providerStatus === null &&
             thread.status !== 'working-paused' &&
@@ -6396,13 +6384,14 @@
       case 'message.part.updated': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
-        const streamPartIndex = streamParts.findLastIndex((part) => part.id === event.part.id)
-        streamParts =
+        const streamPartIndex = streamTrace.parts.findLastIndex((part) => part.id === event.part.id)
+        streamTrace.setParts(
           streamPartIndex === -1
-            ? [...streamParts, event.part]
-            : streamParts.map((part, index) =>
+            ? [...streamTrace.parts, event.part]
+            : streamTrace.parts.map((part, index) =>
                 index === streamPartIndex ? mergeStreamedPart(part, event.part) : part
               )
+        )
         // Every harness publishes its output as part snapshots, so the text
         // length is the one progress signal available everywhere. Snapshots
         // repeat the whole text, so only growth counts.
@@ -12777,14 +12766,31 @@
     const prompt = pendingLiveTurn ? structureMessages[pendingLiveTurn.userMessageIndex] : undefined
     // Delivery and the durable poll arrive separately. Until the fold catches
     // up, its parts still belong above the new prompt, never below it.
-    if (prompt && (streamTurnStartTs === null || streamTurnStartTs < prompt.createdAt)) return []
-    return streamParts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
+    if (prompt && (streamTrace.turnStartTs === null || streamTrace.turnStartTs < prompt.createdAt)) return []
+    return streamTrace.parts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
   }
 
   function withoutPendingLiveParts(parts: AgentPart[]): AgentPart[] {
     if (!pendingLiveTurn || pendingLiveTurnParts.length === 0) return parts
     const pendingPartIds = new SvelteSet(pendingLiveTurnParts.map((part) => part.id))
     return parts.filter((part) => !pendingPartIds.has(part.id))
+  }
+
+  /**
+   * Whether the cached fold belongs to the turn starting at `startIndex`.
+   *
+   * The fold is cached per thread and painted on the first frame, before the
+   * durable read for this mount lands. A fold that belongs to an earlier turn
+   * must never render under a newer prompt in that window: the fold's boundary
+   * is the prompt that opened its turn, so it has to sit at or after this
+   * turn's own start. A fold with no boundary yet is not evidence of anything
+   * and stays permissive.
+   */
+  function foldBelongsToTurn(startIndex: number): boolean {
+    const boundary = streamTrace.turnStartTs
+    if (boundary === null) return true
+    const turnStart = structureMessages[startIndex]
+    return turnStart === undefined || boundary >= turnStart.createdAt
   }
 
   /**
@@ -12810,11 +12816,17 @@
       holdsClosingText,
       isTransparentTurnMessage
     )
-    const durable = pendingLiveTurn
-      ? []
-      : streamWorkingPartsForTurn(streamParts, transcriptIndex, startIndex, holdsClosingText)
+    const durable =
+      pendingLiveTurn || !foldBelongsToTurn(startIndex)
+        ? []
+        : streamWorkingPartsForTurn(
+            streamTrace.parts,
+            transcriptIndex,
+            startIndex,
+            holdsClosingText
+          )
     const collected =
-      streamParts.length > 0 && collectsDurable
+      streamTrace.parts.length > 0 && collectsDurable
         ? // The durable log is the turn's stream order, so it orders the body;
           // entries that streamed before this view mounted only exist there. The
           // leading context is not in the durable fold, so it stays in front.
@@ -12903,7 +12915,7 @@
   async function pollStreamParts(): Promise<void> {
     const { projectId, id } = thread
     const generation = ++streamPartsLoadGeneration
-    const cursor = streamCursor
+    const cursor = streamTrace.cursor
     try {
       const page = await invoke(
         'thread:loadStreamParts',
@@ -12918,12 +12930,12 @@
           return
         }
         // No cursor yet (a mount read that has not landed): adopt the window.
-        streamTurnStartTs = page.turnStartTs ?? null
-        streamParts = mergeWorkingParts(streamParts, page.parts)
-        streamHasOlder = page.hasOlder
-        streamTotalSteps = page.totalSteps
+        streamTrace.turnStartTs = page.turnStartTs ?? null
+        streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
+        streamTrace.hasOlder = page.hasOlder
+        streamTrace.totalSteps = page.totalSteps
         applyTodoSnapshot(page)
-        streamCursor = page.cursor
+        streamTrace.cursor = page.cursor
         return
       }
       // A completed-turn read is a different request shape; the poll never asks
@@ -12933,18 +12945,18 @@
         await handleFoldBoundaryMove(page.turnStartTs as number, generation)
         return
       }
-      streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
-      streamCursor = page.cursor
-      streamTotalSteps = page.totalSteps
+      streamTrace.turnStartTs = page.turnStartTs ?? streamTrace.turnStartTs
+      streamTrace.cursor = page.cursor
+      streamTrace.totalSteps = page.totalSteps
       applyTodoSnapshot(page)
       // A fold that shrank under us with the same boundary belongs to a log
       // rewritten after the fact: remount the newest page instead of keeping
       // entries that no longer belong here.
-      if (page.total < streamParts.length) {
+      if (page.total < streamTrace.parts.length) {
         await remountNewestStreamParts(generation)
         return
       }
-      if (page.parts.length > 0) streamParts = mergeWorkingParts(streamParts, page.parts)
+      if (page.parts.length > 0) streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
     } catch {
       // Transient read failure   keep what we have and try again next tick.
     }
@@ -12974,12 +12986,12 @@
         await handleFoldBoundaryMove(page.turnStartTs as number, streamPartsLoadGeneration)
         return
       }
-      streamTurnStartTs = page.turnStartTs ?? null
-      streamParts = mergeWorkingParts(streamParts, page.parts)
-      streamHasOlder = page.hasOlder
-      streamTotalSteps = page.totalSteps
+      streamTrace.turnStartTs = page.turnStartTs ?? null
+      streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
+      streamTrace.hasOlder = page.hasOlder
+      streamTrace.totalSteps = page.totalSteps
       applyTodoSnapshot(page)
-      streamCursor = page.cursor
+      streamTrace.cursor = page.cursor
     } catch {
       // Best-effort: the message cache still carries the checkoffs, and the
       // next turn's poll or mount read rebuilds the fold again.
@@ -12992,12 +13004,12 @@
       limit: WORKING_TRACE_PAGE_SIZE
     })
     if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
-    streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
-    streamParts = page.parts
-    streamHasOlder = page.hasOlder
-    streamTotalSteps = page.totalSteps
+    streamTrace.turnStartTs = page.turnStartTs ?? streamTrace.turnStartTs
+    streamTrace.setParts(page.parts)
+    streamTrace.hasOlder = page.hasOlder
+    streamTrace.totalSteps = page.totalSteps
     applyTodoSnapshot(page)
-    streamCursor = page.cursor
+    streamTrace.cursor = page.cursor
   }
 
   /** Pull the next older durable page for the trace's own inner-scroll paging,
@@ -13009,8 +13021,8 @@
    *  already appended out of place (a part older than the mounted window that kept
    *  updating) adopts its real position instead of staying stuck at the tail. */
   async function loadOlderStreamParts(): Promise<void> {
-    const oldest = streamParts[0]
-    if (!oldest || !streamHasOlder) return
+    const oldest = streamTrace.parts[0]
+    if (!oldest || !streamTrace.hasOlder) return
     const foldVersion = streamFoldVersion
     const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
       beforeId: oldest.id,
@@ -13018,15 +13030,15 @@
     })
     if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
     if (page.parts.length === 0) {
-      streamHasOlder = false
+      streamTrace.hasOlder = false
       return
     }
     const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
-    const mountedBefore = streamParts.length
-    streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
-    streamHasOlder = page.hasOlder
-    streamTotalSteps = page.totalSteps
-    if (streamParts.length === mountedBefore) streamHasOlder = false
+    const mountedBefore = streamTrace.parts.length
+    streamTrace.setParts([...page.parts, ...streamTrace.parts.filter((part) => !pagedIds.has(part.id))])
+    streamTrace.hasOlder = page.hasOlder
+    streamTrace.totalSteps = page.totalSteps
+    if (streamTrace.parts.length === mountedBefore) streamTrace.hasOlder = false
   }
 
   /** Thread whose foreign run this view marked working, so the same view clears
@@ -13081,12 +13093,12 @@
   // rest of its own fold in the background instead of streaming steps in as the
   // reader scrolls. One page per frame and bounded, so nothing blocks a frame.
   $effect(() => {
-    void streamParts.length
-    void streamHasOlder
+    void streamTrace.parts.length
+    void streamTrace.hasOlder
     void streamFoldVersion
     if (!active || appQuitState.quitting) return
-    if (!streamHasOlder) return
-    if (streamParts.length >= EAGER_STREAM_PARTS_CAP) return
+    if (!streamTrace.hasOlder) return
+    if (streamTrace.parts.length >= EAGER_STREAM_PARTS_CAP) return
     const foldVersion = streamFoldVersion
     const frame = requestAnimationFrame(() => {
       if (!alive || foldVersion !== streamFoldVersion) return
@@ -13126,9 +13138,9 @@
   // there on return.
   $effect(() => {
     if (active) return
-    if (streamParts.length <= WORKING_TRACE_PAGE_SIZE) return
-    streamHasOlder = true
-    streamParts = streamParts.slice(streamParts.length - WORKING_TRACE_PAGE_SIZE)
+    if (streamTrace.parts.length <= WORKING_TRACE_PAGE_SIZE) return
+    streamTrace.hasOlder = true
+    streamTrace.setParts(streamTrace.parts.slice(streamTrace.parts.length - WORKING_TRACE_PAGE_SIZE))
   })
 
   onDestroy(() => {
@@ -13696,9 +13708,9 @@
               busy={traceBusy}
               note={traceBusy ? workingStatusNote : null}
               {active}
-              olderPartsAvailable={streamHasOlder}
+              olderPartsAvailable={streamTrace.hasOlder}
               onLoadOlderParts={loadOlderStreamParts}
-              totalSteps={streamTotalSteps}
+              totalSteps={streamTrace.totalSteps}
               startTime={unmirroredTraceStartTime}
               modelLabel={currentWorkingTraceAttribution.modelLabel}
               thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
@@ -14177,9 +14189,9 @@
                         rehydrated={traceIsRestored}
                         foreignRun={traceRunIsForeign}
                         {active}
-                        olderPartsAvailable={isCurrentAssistantTurn && streamHasOlder}
+                        olderPartsAvailable={isCurrentAssistantTurn && streamTrace.hasOlder}
                         onLoadOlderParts={isCurrentAssistantTurn ? loadOlderStreamParts : undefined}
-                        totalSteps={isCurrentAssistantTurn ? streamTotalSteps : undefined}
+                        totalSteps={isCurrentAssistantTurn ? streamTrace.totalSteps : undefined}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}
