@@ -7,6 +7,17 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **An element marked on an HTML or SVG artifact can be dragged off the element
+  it names.** Every other place a reader can comment on something (a passage in a
+  conversation, a mark on a picture, a note in the file viewer, a passage of a
+  specification) shows the app's one annotation indicator, which is draggable so
+  a comment can be moved off whatever it points at. The artifact inspector drew a
+  pin of its own instead, a bare numbered button that could only be clicked, so
+  the same gesture did nothing there. The pick now renders the shared
+  `AnnotationIndicator`, which also gives it the app's number badge, the active
+  state while its comment is open, and drags that outlive a re-measure of the
+  artifact.
+
 - **The inspect toggle in an artifact viewer responds to a click again.** The
   button lived in the viewer's canonical header, and a fullscreen `Modal` header
   is drawn in the same band the app header reserves for dragging the window.

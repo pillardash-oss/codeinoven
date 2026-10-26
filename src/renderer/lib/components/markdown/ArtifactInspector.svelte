@@ -3,6 +3,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import type { Attachment } from 'svelte/attachments'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import { artifactThemeStyles } from './artifact-theme'
   import { sanitizedHtmlArtifactDocument, sanitizedSvgArtifact } from './artifact'
   import { ARTIFACT_STAGE_CLASS, ARTIFACT_STAGE_ID, type ArtifactKind } from './artifact'
@@ -654,25 +655,28 @@
   {/if}
 
   <!-- The pins live in app DOM rather than inside the artifact: they are app
-       controls (focusable, labelled, clickable), and the host never scrolls, so
-       an app-space position stays on the element it points at. -->
+       controls (focusable, draggable, clickable), and the host never scrolls, so
+       an app-space position stays on the element it points at. They are the
+       app's one annotation indicator rather than a pin of their own, so a pick
+       made here can be dragged off the element it marks exactly like a pick made
+       on a picture, a document passage or a specification. -->
   {#each pins as pin (pin.id)}
-    <button
-      type="button"
-      class="absolute z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
-      style:left={`${pin.x}px`}
-      style:top={`${pin.y}px`}
+    <AnnotationIndicator
+      id={pin.id}
+      surface={`artifact:${threadId}:${artifactKey}`}
+      left={`${pin.x}px`}
+      top={`${pin.y}px`}
+      centre
+      number={pin.number}
+      hasComment={pin.hasComment}
+      active={activeEditingId === pin.id}
       title={pin.hasComment
-        ? `Edit comment on ${pin.label}`
-        : `Comment on ${pin.label} (${pin.number})`}
-      aria-label={pin.hasComment
-        ? `Edit comment on ${pin.label}`
-        : `Comment on ${pin.label} (${pin.number})`}
-      onclick={() => requestEdit(pin.id)}
-      {@attach pinAttachment(pin.id)}
-    >
-      {pin.number}
-    </button>
+        ? `Edit the comment on ${pin.label}. Drag to move it, click to edit.`
+        : `Comment on ${pin.label} (${pin.number}). Drag to move it, click to write.`}
+      class="z-20"
+      attach={pinAttachment(pin.id)}
+      onOpen={() => requestEdit(pin.id)}
+    />
   {/each}
 
   {#if enabled}
