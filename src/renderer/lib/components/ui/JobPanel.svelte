@@ -36,10 +36,11 @@
     /** One sentence: what happens next, or that the user may leave. */
     note: string
     /**
-     * Optional primary action a settled run offers in its footer ("Try again"),
+     * Optional primary action a run offers in its footer ("Try again"),
      * so a failure the user can act on is never a dead end. When set, the
      * closing button becomes secondary and this one owns Cmd/Ctrl+Enter.
      */
+    actionWhileRunning?: boolean
     actionLabel?: string
     onAction?: () => void
     minimized: boolean
@@ -59,6 +60,7 @@
     error = null,
     details,
     note,
+    actionWhileRunning = false,
     actionLabel,
     onAction,
     minimized,
@@ -158,8 +160,6 @@
     {#if details}
       {@render details()}
     {/if}
-
-    <p class="text-[0.6875rem] text-dimmed">{note}</p>
   </div>
 
   <!--
@@ -169,29 +169,27 @@
   {#snippet dock()}{/snippet}
 
   {#snippet footer()}
+    <p class="w-full pb-1 text-[0.6875rem] text-dimmed">{note}</p>
     {#if running}
       <button
         type="button"
-        class="px-3 py-2 text-sm text-muted hover:bg-elevated"
+        class="mr-auto px-3 py-2 text-sm text-muted hover:bg-elevated"
         data-modal-dismiss
         onclick={onMinimize}
       >
         Run in background
       </button>
     {:else if actionLabel && onAction}
-      <!--
-        A failure with a way forward: the closing button steps aside and the
-        run's own action becomes the panel's primary action, so Cmd/Ctrl+Enter
-        retries instead of dismissing the panel the user still has to act on.
-      -->
       <button
         type="button"
-        class="px-3 py-2 text-sm text-muted hover:bg-elevated"
+        class="mr-auto px-3 py-2 text-sm text-muted hover:bg-elevated"
         data-modal-dismiss
         onclick={onClose}
       >
         Done
       </button>
+    {/if}
+    {#if actionLabel && onAction && (!running || actionWhileRunning)}
       <button
         type="button"
         class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
@@ -199,7 +197,7 @@
       >
         {actionLabel}
       </button>
-    {:else}
+    {:else if !running && !(actionLabel && onAction)}
       <button
         type="button"
         class="bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
