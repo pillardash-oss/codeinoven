@@ -12,6 +12,7 @@ import {
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 import { unmanagedCuaShellReason } from '../../../../lib/agent-control-policy'
+import { sensitiveFileTargets } from '../../../../lib/sensitive-file-targets'
 import {
   DEFAULT_BUNDLED_PI_FILE_PATTERNS,
   PERMANENT_BUNDLED_PI_FILE_PATTERNS
@@ -22,7 +23,7 @@ export function piCoreToolsHeaderSource(
   sensitiveSecretRoot?: string
 ): string {
   return `import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { open, readdir, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -56,12 +57,12 @@ const CIO_PERMANENT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(
       : PERMANENT_BUNDLED_PI_FILE_PATTERNS
   )}
 
-function bundledPiSensitiveFileGate(toolName, input) {
+const sensitiveFileTargets = ${sensitiveFileTargets.toString()}
+
+function bundledPiSensitiveFileGate(toolName, input, cwd) {
   if (!CIO_SENSITIVE_FILE_POLICY_PATH) return null
-  // These app-owned tools only collect a question or update/read in-memory
-  // task state. Everything else, including read-only MCP annotations, is
-  // untrusted for filesystem access. An outer script never authorizes its
-  // inner tools, which continue through this same gate.
+  // Code-mode orchestration is not itself a file read. Its inner tools reach
+  // this gate with their actual arguments, like tools called directly.
   if (['cio_ask_user', 'cio_todo_write', 'cio_agent_status', 'cio_agent_output'].includes(toolName)) return null
   let patterns = CIO_DEFAULT_SENSITIVE_FILE_PATTERNS
   try {
@@ -80,11 +81,24 @@ function bundledPiSensitiveFileGate(toolName, input) {
   // This root covers every secret file, including future files materialized
   // or rotated after startup. It never comes from the editable policy file.
   patterns = [...CIO_PERMANENT_SENSITIVE_FILE_PATTERNS, ...patterns]
+  const targets = sensitiveFileTargets(toolName, input, cwd, patterns, function (candidate) {
+    const expanded = candidate.startsWith('~/') ? join(homedir(), candidate.slice(2)) : candidate
+    const absolute = resolve(cwd, expanded)
+    let parent = absolute
+    for (let depth = 0; depth < 16; depth++) {
+      try { return resolve(realpathSync(parent), relative(parent, absolute)) } catch {}
+      const next = dirname(parent)
+      if (next === parent) break
+      parent = next
+    }
+    return absolute
+  })
+  if (targets.length === 0) return null
   const command = typeof input.command === 'string' ? input.command : undefined
   const hit = gateHit(
     'bundled-pi-sensitive-files',
-    'bundled Pi tool access may reach protected files; approve this invocation only',
-    patterns,
+    'access to a file matching the sensitive-file block list',
+    targets,
     command,
     toolName
   )
@@ -321,10 +335,13 @@ const PIPED_SHELL_RULES: DenyRule[] = [
 
 const PROTECTED_PATH_PATTERNS: RegExp[] = [
   /(^|\\/)(\\.git|\\.hg|\\.svn)(\\/|$)/i,
-  /(^|\\/)\\.env(\\..+)?$/i,
-  /(^|\\/)secrets?(\\/|$)/i,
   /(^|\\/)[^/]*\\.lock$/i,
   /(^|\\/)(package-lock|pnpm-lock|yarn\\.lock|bun\\.lock|bun\\.lockb|cargo\\.lock|gemfile\\.lock|composer\\.lock|poetry\\.lock|Pipfile\\.lock)$/i
+]
+
+const LEGACY_SENSITIVE_PATH_PATTERNS = [
+  /(^|\\/)\\.env(\\..+)?$/i,
+  /(^|\\/)secrets?(\\/|$)/i
 ]
 
 function firstString(...values) {
@@ -413,7 +430,8 @@ function isSafeNetworkCurl(toolName, input) {
 }
 
 function isProtectedPath(candidatePath) {
-  return PROTECTED_PATH_PATTERNS.some((pattern) => pattern.test(candidatePath))
+  return PROTECTED_PATH_PATTERNS.some((pattern) => pattern.test(candidatePath)) ||
+    (!CIO_SENSITIVE_FILE_POLICY_PATH && LEGACY_SENSITIVE_PATH_PATTERNS.some((pattern) => pattern.test(candidatePath)))
 }
 
 /** Absolute delete targets outside the project directory, if any. */
@@ -481,7 +499,7 @@ function findContaminatedToolArg(input) {
 }
 
 function evaluateGate(toolName, input, cwd) {
-  const sensitiveFileHit = bundledPiSensitiveFileGate(toolName, input)
+  const sensitiveFileHit = bundledPiSensitiveFileGate(toolName, input, cwd)
   if (sensitiveFileHit) return sensitiveFileHit
   if (typeof toolName !== 'string' || toolName.startsWith('cio_')) return null
   if (toolName === 'bash' || toolName === 'powershell' || toolName === 'cmd') {

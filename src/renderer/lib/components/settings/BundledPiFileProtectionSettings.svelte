@@ -81,7 +81,7 @@
       body: [
         `Remove ${pattern} from bundled Pi's block list?`,
         patterns.length === 1
-          ? 'Secret-tool files remain permanently protected. File-capable tools will still require approval, including in Full Access.'
+          ? 'Secret-tool files remain permanently protected.'
           : 'Other entries remain protected. Removing a pattern does not remove any files.'
       ],
       confirmLabel: 'Remove pattern',
@@ -118,7 +118,7 @@
     </button>
   </div>
   <p class="text-xs leading-relaxed text-dimmed">
-    Every file tool needs approval, even in Full Access. Secret-tool files stay protected.
+    Listed files require approval, even in Full Access. Secret-tool files stay protected.
   </p>
 
   <ul

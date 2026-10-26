@@ -242,7 +242,7 @@ export class PermissionPolicy {
       return this.createDecision(
         'ask',
         false,
-        'Bundled Pi may access protected files through this tool. Approve this invocation once. Full Access, attached files, and scratch access do not bypass this protection.',
+        'This action targets a file in your sensitive-file block list. Approval is required for this invocation.',
         'critical',
         scope
       )
