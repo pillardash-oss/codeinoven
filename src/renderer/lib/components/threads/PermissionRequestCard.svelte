@@ -35,7 +35,16 @@
   let alternativeEditor = $state<RichMarkdownEditor>()
   const alternativeSpeechTargetId = $derived(`permission-alternative-${request.id}`)
 
-  let metadataEntries = $derived(Object.entries(request.metadata))
+  let metadataEntries = $derived(
+    Object.entries(request.metadata).filter(([key]) => key !== 'matchedPatterns')
+  )
+  // The gate reports which block-list entries caught the call, so the card
+  // answers why a path is protected instead of only naming it.
+  let matchedPatterns = $derived.by((): string[] => {
+    const value = request.metadata['matchedPatterns']
+    if (!Array.isArray(value)) return []
+    return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+  })
   let canSubmitAlternative = $derived(alternative.trim().length > 0 && !working)
   // The main process refuses a permanent grant for a critical permission, so the
   // card must not offer one: leaving it clickable only fails after the click.
@@ -157,6 +166,22 @@
                 >
                   {pattern}
                 </p>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        {#if matchedPatterns.length > 0}
+          <div>
+            <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
+              Blocked by
+            </p>
+            <div class="flex flex-wrap gap-1.5">
+              {#each matchedPatterns as pattern (pattern)}
+                <code
+                  class="break-all bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground"
+                  >{pattern}</code
+                >
               {/each}
             </div>
           </div>

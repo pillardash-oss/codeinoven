@@ -1,3 +1,9 @@
+/** A file the tool call would reach, with the block-list entry that caught it. */
+export interface SensitiveFileTarget {
+  path: string
+  pattern: string
+}
+
 /**
  * Inspect file operands, not arbitrary prose or tool capabilities. Kept
  * self-contained because bundled Pi embeds this function in its extension.
@@ -8,8 +14,8 @@ export function sensitiveFileTargets(
   cwd: string,
   patterns: readonly string[],
   canonicalize?: (path: string) => string
-): string[] {
-  const targets = new Set<string>()
+): SensitiveFileTarget[] {
+  const targets = new Map<string, string>()
   const fields = new Set([
     'path',
     'paths',
@@ -111,8 +117,17 @@ export function sensitiveFileTargets(
     } catch {
       /* Match lexical paths too. */
     }
-    if (patterns.some((pattern) => matches(absolute, pattern))) targets.add(absolute)
-    else if (patterns.some((pattern) => matches(canonical, pattern))) targets.add(canonical)
+    // A `~` operand never resolves against the working directory, so the
+    // canonicalizer's home-expanded path is the only truthful target.
+    const homeRelative = candidate.startsWith('~') && canonical !== absolute
+    const ordered = homeRelative ? [canonical, absolute] : [absolute, canonical]
+    for (const target of ordered) {
+      const pattern = patterns.find((entry) => matches(target, entry))
+      if (pattern === undefined) continue
+      // Report the path that matched, so an alias shows the secret it reaches.
+      if (!targets.has(target)) targets.set(target, pattern)
+      return
+    }
   }
 
   function commandTargets(command: string, depth = 0): void {
@@ -309,5 +324,5 @@ export function sensitiveFileTargets(
     }
   }
   inspect(input)
-  return [...targets]
+  return [...targets].map(([path, pattern]) => ({ path, pattern }))
 }

@@ -83,7 +83,7 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
   // This root covers every secret file, including future files materialized
   // or rotated after startup. It never comes from the editable policy file.
   patterns = [...CIO_PERMANENT_SENSITIVE_FILE_PATTERNS, ...patterns]
-  const targets = sensitiveFileTargets(toolName, input, cwd, patterns, function (candidate) {
+  const matches = sensitiveFileTargets(toolName, input, cwd, patterns, function (candidate) {
     const expanded = candidate.startsWith('~/') ? join(homedir(), candidate.slice(2)) : candidate
     const absolute = resolve(cwd, expanded)
     let parent = absolute
@@ -95,7 +95,12 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
     }
     return absolute
   })
-  if (targets.length === 0) return null
+  if (matches.length === 0) return null
+  const targets = matches.map(function (match) { return match.path })
+  const matchedPatterns = []
+  for (const match of matches) {
+    if (!matchedPatterns.includes(match.pattern)) matchedPatterns.push(match.pattern)
+  }
   const command = typeof input.command === 'string' ? input.command : undefined
   const hit = gateHit(
     'bundled-pi-sensitive-files',
@@ -107,6 +112,7 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
   const serializedInput = JSON.stringify(input)
   return {
     ...hit,
+    matchedPatterns: matchedPatterns.slice(0, 8),
     review: serializedInput.length > 12000
       ? serializedInput.slice(0, 12000) + '\\n[Arguments truncated; review the tool call before approving.]'
       : serializedInput

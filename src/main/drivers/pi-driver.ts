@@ -3007,6 +3007,9 @@ export class PiDriver extends PersistentCliDriver {
             ...(permissionPayload.command ? { command: permissionPayload.command } : {}),
             ...(permissionPayload.review ? { arguments: permissionPayload.review } : {}),
             ...(permissionPayload.surface ? { surface: permissionPayload.surface } : {}),
+            ...(permissionPayload.matchedPatterns
+              ? { matchedPatterns: permissionPayload.matchedPatterns }
+              : {}),
             reason: stringValue(record['title']) ?? 'Destructive action requires approval'
           }
         }
