@@ -10,6 +10,7 @@ import type {
   WebToolProviderId
 } from '$shared/types'
 import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
+import type { ImportedMcpServer } from '$shared/mcp-config-import'
 import { skillFrontmatterName } from '$shared/skill-frontmatter'
 import { utilityInstallFolderName } from '$shared/utility-scope-paths'
 
@@ -320,6 +321,42 @@ export function buildMcpConnectionConfig(draft: UtilityDraft): McpUtilityConfig 
     ...(environment ? { environment } : {}),
     ...(headers ? { headers } : {})
   }
+}
+
+/**
+ * Fill the editor's MCP fields from a server read out of pasted JSON. Only the
+ * connection is replaced, which is what the paste means, and the fields the new
+ * transport cannot carry are cleared so a stdio server never saves a leftover
+ * URL or a remote one a leftover launch line. A name and description the user
+ * already typed are theirs, so they are kept; an empty one is filled in.
+ */
+export function applyMcpImport(
+  draft: UtilityDraft,
+  server: ImportedMcpServer,
+  allowSse: boolean
+): void {
+  const transport = server.transport === 'sse' && !allowSse ? 'http' : server.transport
+  draft.transport = transport
+  if (transport === 'stdio') {
+    draft.command = server.command
+    draft.args = server.args.join('\n')
+    draft.url = ''
+    draft.headers = ''
+  } else {
+    draft.url = server.url
+    draft.headers = recordDraftValue(server.headers)
+    draft.command = ''
+    draft.args = ''
+  }
+  draft.environment = recordDraftValue(server.environment)
+  if (!draft.name.trim()) draft.name = server.name
+  if (!draft.description.trim()) draft.description = server.description
+  draft.enabled = server.enabled
+}
+
+/** A record as the editor's JSON textarea shows it, or blank when empty. */
+function recordDraftValue(record: Record<string, string>): string {
+  return Object.keys(record).length > 0 ? JSON.stringify(record, null, 2) : ''
 }
 
 export function buildBindings(

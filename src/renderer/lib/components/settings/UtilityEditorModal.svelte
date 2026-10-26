@@ -41,9 +41,11 @@
   import UtilityEditorModalMcpAuth from './UtilityEditorModalMcpAuth.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
+  import type { ImportedMcpServer } from '$shared/mcp-config-import'
   import { utilityInstallFolderNameFor } from '$shared/utility-scope-paths'
   import {
     allHarnessBinding,
+    applyMcpImport,
     buildBindings,
     buildConfig,
     buildCredential,
@@ -422,6 +424,16 @@
       draft.kind = 'mcp'
       draft.bindings = allHarnessBinding('mcp', '', 'custom-mcp')
     }
+  }
+
+  /**
+   * Start an MCP utility from a server read out of a pasted configuration: the
+   * paste picks the kind, and the connection fields arrive filled rather than
+   * waiting for the user to copy each value across by hand.
+   */
+  function importMcpServer(server: ImportedMcpServer): void {
+    chooseCreate('mcp')
+    applyMcpImport(draft, server, allowSse)
   }
 
   function openRegistryEdit(utility: UtilityDefinition): void {
@@ -806,6 +818,7 @@
         error={editorError}
         busy={saving}
         onChooseCreate={chooseCreate}
+        onImportMcp={importMcpServer}
         onStartSetupThread={() => void startSetupThread()}
       />
     {:else if !isNative && draft.id === null && setupPreset === 'plugin-bundle'}

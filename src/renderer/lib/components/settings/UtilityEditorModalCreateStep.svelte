@@ -3,8 +3,12 @@
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
+  import type { ImportedMcpServer } from '$shared/mcp-config-import'
+  import UtilityEditorModalMcpPaste from './UtilityEditorModalMcpPaste.svelte'
   interface Props {
     onChooseCreate: (id: 'skill' | 'mcp' | 'plugin') => void
+    /** Starts an MCP utility from a server read out of a pasted config. */
+    onImportMcp: (server: ImportedMcpServer) => void
     onStartSetupThread: () => void
     /** Why the assisted path did not open a thread, when it could not. */
     error?: string
@@ -12,7 +16,13 @@
     busy?: boolean
   }
 
-  let { onChooseCreate, onStartSetupThread, error = '', busy = false }: Props = $props()
+  let {
+    onChooseCreate,
+    onImportMcp,
+    onStartSetupThread,
+    error = '',
+    busy = false
+  }: Props = $props()
 
   const createChoices: Array<{
     id: 'skill' | 'mcp' | 'plugin'
@@ -70,6 +80,9 @@
         <span class="mt-1 block text-xs leading-relaxed text-muted">{choice.description}</span>
       </button>
     {/each}
+  </div>
+  <div class="mt-3">
+    <UtilityEditorModalMcpPaste onImport={onImportMcp} />
   </div>
   <div
     class="mt-4 flex flex-wrap items-center justify-between gap-3 border border-dashed bg-elevated p-4"
