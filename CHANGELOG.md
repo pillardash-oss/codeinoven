@@ -7,6 +7,19 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **The inspect toggle in an artifact viewer responds to a click again.** The
+  button lived in the viewer's canonical header, and a fullscreen `Modal` header
+  is drawn in the same band the app header reserves for dragging the window.
+  A drag rectangle is computed from layout rather than paint order, so the press
+  aimed at the toggle was turned into a window drag and no click was ever
+  delivered: the mode never armed, and nothing on screen changed. Only a control
+  that happened to sit over a hole in the app header's own controls (the close
+  button) still worked. The canonical fullscreen header now states the same
+  contract every other full screen surface in the app states: the band carries
+  `titlebar-drag` and the header's action cluster carries `titlebar-no-drag`, so
+  a header action is pressable no matter where the app header's own controls
+  leave the strip.
+
 - **A design element commented on a tab the app was already showing can be
   edited again.** The browser's inspection session only learned what a tab was
   serving from the state report that tab broadcasts as it loads, so a tab that
