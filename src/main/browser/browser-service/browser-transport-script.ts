@@ -381,6 +381,21 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   function syncMedia(playing) {
     for (const element of mediaElements()) {
       try {
+        const declared = element.dataset ? element.dataset.cioTrackStart : undefined;
+        if (declared === undefined) {
+          // Media the page draws itself moves with the page's own seek, so the
+          // transport only starts and stops it along with the picture. It never
+          // writes currentTime here: a picture element sits on a timeline of its
+          // own (a source clip can start minutes into its file), so the playhead is
+          // not its clock and a coarse re-time would yank a decoded frame from
+          // seconds away.
+          if (!playing) element.pause();
+          else if (element.paused) {
+            const started = element.play();
+            if (started && typeof started.catch === 'function') started.catch(() => {});
+          }
+          continue;
+        }
         const trackStart = Number(element.dataset && element.dataset.cioTrackStart || 0);
         const trackTrim = Number(element.dataset && element.dataset.cioTrackTrim || 0);
         const trackDuration = Number(element.dataset && element.dataset.cioTrackDuration || Infinity);
