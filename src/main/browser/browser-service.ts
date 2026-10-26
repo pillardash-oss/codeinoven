@@ -2027,13 +2027,30 @@ export class BrowserService {
     void this.tabHistory.flush()
   }
 
-  relocateWorkFolder(projectId: string, from: string, to: string): void {
+  relocateWorkFolder(
+    projectId: string,
+    from: string,
+    to: string,
+    /**
+     * The assistant that owns the moved folder, when the project id is the shared
+     * assistant container.
+     *
+     * Every assistant task reports the same container id, so without this a rename
+     * in one assistant would re-point a tab in another that happened to show a
+     * folder of the same relative name.
+     */
+    assistantId?: string | null
+  ): void {
     for (const [tabId, tab] of this.tabs) {
       if (
         tab.projectId !== projectId ||
         (tab.design?.directory !== from && tab.composition?.directory !== from)
       )
         continue
+      if (assistantId !== undefined) {
+        const owner = this.threads.get(tab.threadId)?.assistantId ?? null
+        if (owner !== assistantId) continue
+      }
       if (tab.design?.directory === from) tab.design = { ...tab.design, directory: to }
       if (tab.composition?.directory === from)
         tab.composition = { ...tab.composition, directory: to }

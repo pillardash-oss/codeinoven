@@ -32,6 +32,14 @@
    */
   interface Props {
     projectId: string
+    /**
+     * The thread whose scope holds this composition.
+     *
+     * A project thread's composition sits in its checkout, but an assistant
+     * task's, a chat's and a browser tab's sit in the workspace that conversation
+     * runs in, and only the thread can name that workspace.
+     */
+    threadId: string
     directory: string
     /** Which section is open, owned by the timeline's tab strip. */
     section: EditorSection
@@ -74,6 +82,7 @@
   }
   let {
     projectId,
+    threadId,
     directory,
     section,
     jobs,
@@ -154,7 +163,7 @@
   async function load(): Promise<void> {
     busy = true
     try {
-      const result = await invoke('video:studio', projectId, directory)
+      const result = await invoke('video:studio', projectId, threadId, directory)
       if (!mounted) return
       studio = result.document
       revision = result.revision
@@ -194,6 +203,7 @@
       const result = await invoke(
         'video:save',
         projectId,
+        threadId,
         directory,
         $state.snapshot(studio),
         revision

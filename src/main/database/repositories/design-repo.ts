@@ -4,6 +4,7 @@ import { projectWorkRootPaths } from '../../design/work-roots-state'
 import { dirname } from 'node:path'
 import type { Database } from '../database'
 import type { AuthoredWorkKind, ThreadDesignCurrent } from '../../../lib/ipc/design'
+import { usesThreadWorkspaceMount } from '../../../lib/types'
 
 /**
  * The durable record of which folder a thread is working in.
@@ -76,6 +77,11 @@ export class DesignRepo {
 
   /** Indexed redirect lookup for navigation callbacks completing during a move. */
   resolveDirectory(projectId: string, directory: string): string {
+    // A conversation workspace lists what is on disk and moves folders itself, so
+    // it has no record to consult. Following one here would also redirect another
+    // assistant's same-named folder, because every assistant task shares one
+    // project id.
+    if (usesThreadWorkspaceMount(projectId)) return directory
     return (
       this.db.get<{ destination: string }>(
         'SELECT destination FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
@@ -267,21 +273,26 @@ export class DesignRepo {
         )
       )
     }
-    statements.push(
-      {
-        sql: 'DELETE FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
-        params: [input.projectId, input.to]
-      },
-      {
-        sql: 'UPDATE work_folder_relocations SET destination = ? WHERE project_id = ? AND destination = ?',
-        params: [input.to, input.projectId, input.from]
-      },
-      {
-        sql: `INSERT INTO work_folder_relocations (project_id, directory, destination) VALUES (?, ?, ?)
+    // A conversation workspace is not a project with a folder record: it lists
+    // disk, and writing a relocation under the shared container id would move
+    // another assistant's same-named folder on paper.
+    if (!usesThreadWorkspaceMount(input.projectId)) {
+      statements.push(
+        {
+          sql: 'DELETE FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+          params: [input.projectId, input.to]
+        },
+        {
+          sql: 'UPDATE work_folder_relocations SET destination = ? WHERE project_id = ? AND destination = ?',
+          params: [input.to, input.projectId, input.from]
+        },
+        {
+          sql: `INSERT INTO work_folder_relocations (project_id, directory, destination) VALUES (?, ?, ?)
           ON CONFLICT(project_id, directory) DO UPDATE SET destination = excluded.destination`,
-        params: [input.projectId, input.from, input.to]
-      }
-    )
+          params: [input.projectId, input.from, input.to]
+        }
+      )
+    }
     statements.push({
       sql: `UPDATE design_origins SET directory = ? || SUBSTR(directory, ?)
         WHERE project_id = ? AND (directory = ? OR directory LIKE ? ESCAPE '\\')`,

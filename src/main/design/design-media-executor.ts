@@ -1,5 +1,5 @@
 import { relative, sep } from 'node:path'
-import { requireLocalProject } from '../../lib/project-artifacts'
+import { authoredWorkRootSync } from './authored-work-root'
 import {
   MAX_DESIGN_MEDIA_NAME_LENGTH,
   MAX_DESIGN_MEDIA_SOURCE_LENGTH
@@ -59,9 +59,9 @@ export function createDesignMediaExecutor(
     }
     const source = requiredString(input['source'], 'source', MAX_DESIGN_MEDIA_SOURCE_LENGTH)
     const name = optionalMediaName(input['name'])
-    const project = requireLocalProject(options.database, context.projectId)
+    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
     const directory = resolveServedFolder(
-      project.path,
+      scope.path,
       input['directory'],
       currentWorkRoot('design', context.projectId)
     )
@@ -71,7 +71,7 @@ export function createDesignMediaExecutor(
       source,
       name
     })
-    const file = relative(project.path, saved.path).split(sep).join('/')
+    const file = relative(scope.path, saved.path).split(sep).join('/')
     return {
       file,
       directory: directory.display,

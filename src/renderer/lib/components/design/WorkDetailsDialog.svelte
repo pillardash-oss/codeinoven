@@ -8,18 +8,30 @@
 
   let {
     projectId,
+    threadId,
     directory,
     kind,
     root,
     mode,
+    projectScope = true,
     onClose,
     onUpdated
   }: {
     projectId: string
+    /** The thread whose scope holds this folder; its workspace is the root. */
+    threadId: string
     directory: string
     kind: AuthoredWorkKind
     root: string
     mode: 'this' | 'all' | 'rename'
+    /**
+     * Whether this scope stores one save folder for all of its work.
+     *
+     * A project does. An assistant's, a chat's and a browser tab's work lives in
+     * a workspace that is its own root, so there is no project-wide move to offer:
+     * the dialog moves the one folder and leaves the rest alone.
+     */
+    projectScope?: boolean
     onClose: () => void
     onUpdated: (directory: string, moved: number) => Promise<void>
   } = $props()
@@ -47,7 +59,9 @@
    * A rename changes one folder's name and nothing else, so it is a single-work
    * change however the switch is left.
    */
-  const scopeOfChange = $derived<WorkDetailsScope>(renaming || thisOnly ? 'work' : 'project')
+  const scopeOfChange = $derived<WorkDetailsScope>(
+    renaming || thisOnly || !projectScope ? 'work' : 'project'
+  )
   const target = $derived(
     renaming
       ? `${directory.split('/').slice(0, -1).join('/')}/${slug}`
@@ -57,7 +71,7 @@
   onMount(() => {
     rootDraft = directory.split('/').slice(0, -1).join('/') || root
     nameDraft = name
-    thisOnly = mode !== 'all'
+    thisOnly = mode !== 'all' || !projectScope
   })
 
   async function save(): Promise<void> {
@@ -65,7 +79,7 @@
     busy = true
     error = ''
     try {
-      const result = await invoke('design:updateDetails', projectId, {
+      const result = await invoke('design:updateDetails', projectId, threadId, {
         kind,
         directory,
         scope: scopeOfChange,
@@ -92,7 +106,7 @@
   <div class="space-y-4 p-4">
     {#if !renaming}
       <label class="block space-y-2 text-sm">
-        <span>Save folder relative to this project</span>
+        <span>Save folder relative to {projectScope ? 'this project' : 'this workspace'}</span>
         <input
           class="w-full border border-border bg-elevated px-2 py-1.5 font-mono text-sm text-foreground outline-none focus:border-primary"
           bind:value={rootDraft}
@@ -109,7 +123,7 @@
       />
     </label>
     <p class="text-xs text-muted">The folder name is automatically made URL friendly.</p>
-    {#if !renaming}
+    {#if !renaming && projectScope}
       <Switch
         bind:checked={thisOnly}
         disabled={busy}
@@ -120,6 +134,10 @@
         {thisOnly
           ? `Moves only this ${noun}. The project's folder for new ${noun}s is left where it is.`
           : `Sets this project's save folder for new ${noun}s and moves all ${noun}s in it there.`}
+      </p>
+    {:else if !renaming}
+      <p class="text-xs text-muted">
+        Moves only this {noun}, inside the workspace it was written in.
       </p>
     {/if}
     <p class="break-all font-mono text-xs text-muted">{target}</p>

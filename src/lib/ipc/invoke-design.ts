@@ -24,7 +24,7 @@ import type { VideoFrameThumbnail } from '../video/frame-grid'
 
 export const invokeDesignContract = {
   'video:frameStrip': {} as Contract<
-    [projectId: string, directory: string, times: number[]],
+    [projectId: string, threadId: string, directory: string, times: number[]],
     VideoFrameThumbnail[]
   >,
   /**
@@ -33,11 +33,17 @@ export const invokeDesignContract = {
    * those is part of the editable document.
    */
   'video:studio': {} as Contract<
-    [projectId: string, directory: string],
+    [projectId: string, threadId: string, directory: string],
     { document: VideoStudioDocument; revision: string; manifest: VideoProjectManifest | null }
   >,
   'video:save': {} as Contract<
-    [projectId: string, directory: string, document: VideoStudioDocument, revision: string],
+    [
+      projectId: string,
+      threadId: string,
+      directory: string,
+      document: VideoStudioDocument,
+      revision: string
+    ],
     { document: VideoStudioDocument; revision: string; manifest: VideoProjectManifest | null }
   >,
   'video:jobs': {} as Contract<[projectId: string, threadId: string], VideoJob[]>,
@@ -51,7 +57,10 @@ export const invokeDesignContract = {
    * an export made in another thread of the same project, or before a restart,
    * still answers for the composition that produced it.
    */
-  'video:latestExport': {} as Contract<[projectId: string, directory: string], string | null>,
+  'video:latestExport': {} as Contract<
+    [projectId: string, threadId: string, directory: string],
+    string | null
+  >,
   /**
    * A waveform picture for one audio source's used range, as a data URL.
    *
@@ -62,7 +71,14 @@ export const invokeDesignContract = {
    * draw, which is a plain band rather than a failure.
    */
   'video:waveform': {} as Contract<
-    [projectId: string, directory: string, source: string, offset: number, duration: number],
+    [
+      projectId: string,
+      threadId: string,
+      directory: string,
+      source: string,
+      offset: number,
+      duration: number
+    ],
     string | null
   >,
   /**
@@ -76,7 +92,13 @@ export const invokeDesignContract = {
   'video:packages:cancel': {} as Contract<[], boolean>,
   'design:rankings': {} as Contract<[startAt: number, endAt: number], DesignModelRanking[]>,
   'design:export': {} as Contract<
-    [projectId: string, directory: string, entry: string | null, format: DesignExportFormat],
+    [
+      projectId: string,
+      threadId: string,
+      directory: string,
+      entry: string | null,
+      format: DesignExportFormat
+    ],
     DesignExportResult
   >,
   /**
@@ -158,9 +180,12 @@ export const invokeDesignContract = {
    * behind it.
    */
   'design:workRoots': {} as Contract<[projectId?: string], WorkRoots>,
-  'design:removeMissing': {} as Contract<[projectId: string, directory: string], void>,
+  'design:removeMissing': {} as Contract<
+    [projectId: string, threadId: string, directory: string],
+    void
+  >,
   'design:updateDetails': {} as Contract<
-    [projectId: string, details: UpdateWorkDetails],
+    [projectId: string, threadId: string, details: UpdateWorkDetails],
     UpdateWorkDetailsResult
   >,
   /**
@@ -212,5 +237,13 @@ export const invokeDesignContract = {
    * whether or not the thread on screen has anything to do with the work. The
    * two roots are read straight, so this needs no thread and no session.
    */
-  'design:projectWork': {} as Contract<[projectId: string], ProjectWorkState>
+  /**
+   * Every design and composition a scope holds, by kind.
+   *
+   * `threadId` is what names the workspace of a conversation that is not a
+   * project: an assistant task, a chat and a browser tab each write into their own
+   * directory, and the container id alone cannot say which one. A project answers
+   * without it.
+   */
+  'design:projectWork': {} as Contract<[projectId: string, threadId?: string], ProjectWorkState>
 }

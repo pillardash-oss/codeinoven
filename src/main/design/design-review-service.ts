@@ -5,7 +5,7 @@ import { relative, isAbsolute, join } from 'node:path'
 import createReviewWorker from './design-review-worker.ts?nodeWorker'
 import { currentWorkRoot } from './work-roots-state'
 import type { Database } from '../database/database'
-import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
+import { authoredWorkRoot } from './authored-work-root'
 import { resolveServedFolder, resolveServedEntry } from '../preview/served-folder'
 import {
   DESIGN_REVIEW_DIMENSIONS,
@@ -25,14 +25,14 @@ export async function runDesignReview(
   critique: boolean,
   kind: 'design' | 'video' = 'design'
 ): Promise<unknown> {
-  const project = await requireLocalProjectViaWorker(database, context.projectId)
+  const scope = await authoredWorkRoot(database, context.projectId, context.threadId)
   const folder = resolveServedFolder(
-    project.path,
+    scope.path,
     input['directory'],
     currentWorkRoot(kind, context.projectId)
   )
   const canonicalFolder = await realpath(folder.absolute)
-  const canonicalProject = await realpath(project.path)
+  const canonicalProject = await realpath(scope.path)
   const within = relative(canonicalProject, canonicalFolder)
   if (within.startsWith('..') || isAbsolute(within))
     throw new Error('Review folder escapes the project')

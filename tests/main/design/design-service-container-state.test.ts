@@ -14,7 +14,7 @@ describe('DesignService conversation container state', () => {
     database = undefined
   })
 
-  it('returns an empty state for assistant projects without a local folder', async () => {
+  it("lists an assistant task's own workspace, which starts empty", async () => {
     database = await createTestDb()
     new ProjectRepo(database).upsert({
       id: ASSISTANT_SPACE_ID,
@@ -37,12 +37,18 @@ describe('DesignService conversation container state', () => {
       browser: () => null
     })
 
+    // The container has no folder of its own, but an assistant task runs in
+    // `assistant-cwd/<assistant>`, so its board reads that workspace instead of
+    // refusing: the root is the constant design folder inside it, and a task that
+    // has designed nothing yet lists nothing.
     await expect(service.stateFor(ASSISTANT_SPACE_ID, 'assistant-thread')).resolves.toMatchObject({
       projectId: ASSISTANT_SPACE_ID,
       threadId: 'assistant-thread',
+      kind: 'design',
       active: false,
       current: null,
-      items: []
+      items: [],
+      root: '.cio/designs'
     })
     await expect(service.authoredWorkKindFor('assistant-thread')).resolves.toBeNull()
   })

@@ -127,8 +127,13 @@
   let thumbnails = $state.raw<Record<number, string>>({})
   let thumbnailOwner = ''
   let thumbnailBusy = false
-  let thumbnailPending: { owner: string; project: string; folder: string; times: number[] } | null =
-    null
+  let thumbnailPending: {
+    owner: string
+    project: string
+    thread: string
+    folder: string
+    times: number[]
+  } | null = null
   let waveforms = $state.raw<Record<string, string | null>>({})
   /** True while the user holds the band area, so a poll cannot yank the playhead. */
   let scrubbing = $state(false)
@@ -245,7 +250,7 @@
 
   async function load(): Promise<void> {
     try {
-      const result = await invoke('video:studio', projectId, directory)
+      const result = await invoke('video:studio', projectId, threadId, directory)
       if (!mounted) return
       studio = result.document
       manifest = result.manifest
@@ -276,6 +281,7 @@
         const picture = await invoke(
           'video:waveform',
           projectId,
+          threadId,
           directory,
           lane.source,
           lane.trim,
@@ -436,7 +442,13 @@
         thumbnailPending = null
         const missing = request.times.filter((time) => !thumbnails[Math.round(time * fps)])
         if (!missing.length) continue
-        const result = await invoke('video:frameStrip', request.project, request.folder, missing)
+        const result = await invoke(
+          'video:frameStrip',
+          request.project,
+          request.thread,
+          request.folder,
+          missing
+        )
         if (!mounted || request.owner !== thumbnailOwner) continue
         if (!result.length) continue
         const next = { ...thumbnails }
@@ -472,7 +484,7 @@
     if (!onScreen || !pageVisible || section !== 'timeline' || !tab || tab.loading) return
     const times = frameCells.filter((cell) => !thumbnails[cell.frame]).map((cell) => cell.time)
     if (!times.length) return
-    const request = { owner, project: projectId, folder: directory, times }
+    const request = { owner, project: projectId, thread: threadId, folder: directory, times }
     const timer = setTimeout(() => {
       thumbnailPending = request
       void readThumbnails()

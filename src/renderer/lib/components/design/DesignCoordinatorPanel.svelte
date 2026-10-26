@@ -41,6 +41,8 @@
   import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
+  import { authoredWorkOwnerLabel } from '$lib/authored-work-presentation'
+  import { usesThreadWorkspaceMount } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
@@ -357,7 +359,9 @@
   })
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
-  let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
+  /** What to call the place this scope's work lives: a project, an assistant, a chat. */
+  let ownerLabel = $derived(authoredWorkOwnerLabel(projectId))
+  let listLabel = $derived(`${video ? 'Compositions' : 'Designs'} in ${ownerLabel}`)
   let WorkIcon = $derived(video ? CioClapper : CioFrame)
 
   /** Project defaults are separate from the current design or video's own folder. */
@@ -395,18 +399,18 @@
    */
   let items = $derived.by(() => {
     if (video) {
-      const project = projectWorkState.itemsFor(projectId, 'video')
+      const project = projectWorkState.itemsFor(projectId, 'video', threadId)
       return project.length > 0 ? project : (designState?.items ?? [])
     }
     return forcedKind !== undefined
-      ? projectWorkState.itemsFor(projectId, forcedKind)
+      ? projectWorkState.itemsFor(projectId, forcedKind, threadId)
       : (designState?.items ?? [])
   })
   /** How many designs sit behind the "Others" trigger. */
   let otherCount = $derived(Math.max(0, items.length - 1))
   /** What the trigger and its menu are called, in this board's own words. */
   let switchLabel = $derived(
-    `Switch ${noun}, ${otherCount} other ${otherCount === 1 ? noun : `${noun}s`} in this project`
+    `Switch ${noun}, ${otherCount} other ${otherCount === 1 ? noun : `${noun}s`} in ${ownerLabel}`
   )
   /** The folder this thread last previewed, when it belongs to the kind on screen.
    *  A rail-opened board ignores a record that describes the other kind. */
@@ -657,10 +661,10 @@
     if (!target || removeBusy) return
     removeBusy = true
     try {
-      await invoke('design:removeMissing', projectId, target.directory)
+      await invoke('design:removeMissing', projectId, threadId, target.directory)
       removeRequested = null
       projectWorkState.selectDirectory(projectId, kind, selectionThreadId, '')
-      await projectWorkState.refresh(projectId)
+      await projectWorkState.refresh(projectId, threadId)
       await loadState()
       await loadGallery()
       await loadCanvas()
@@ -675,7 +679,7 @@
     projectWorkState.selectDirectory(projectId, kind, selectionThreadId, directory)
     await projectWorkState.refreshRoots(projectId)
     await loadState()
-    await projectWorkState.refresh(projectId)
+    await projectWorkState.refresh(projectId, threadId)
     await loadGallery()
     await loadCanvas()
     toast.success(`${moved} ${noun}${moved === 1 ? '' : 's'} updated`)
@@ -1046,7 +1050,7 @@
     const exportProjectId = projectId
     void import('$lib/stores/export-progress.svelte')
       .then(({ exportProgressState }) =>
-        exportProgressState.startDesign(exportProjectId, directory, entry, format)
+        exportProgressState.startDesign(exportProjectId, threadId, directory, entry, format)
       )
       .catch((failure: unknown) => {
         error = failure instanceof Error ? failure.message : 'Could not start export.'
@@ -1081,7 +1085,7 @@
    * remount discards unsaved control edits, so those are confirmed first.
    */
   async function refreshBoard(): Promise<void> {
-    await projectWorkState.refresh(projectId)
+    await projectWorkState.refresh(projectId, threadId)
     await loadState()
     if (video) {
       if (studioDirty) {
@@ -1131,7 +1135,7 @@
       return
     }
     try {
-      const path = await invoke('video:latestExport', projectId, directory)
+      const path = await invoke('video:latestExport', projectId, threadId, directory)
       if (selected.directory === directory) savedExport = path
     } catch (failure) {
       logRendererError('The export this composition has could not be read.', failure)
@@ -1305,11 +1309,11 @@
   })
 
   onMount(() => {
-    projectWorkState.invalidate(projectId)
+    projectWorkState.invalidate(projectId, threadId)
     // The board is one of the surfaces that watches the optional video pack, so
     // installing it from Settings turns on live editing here without a reload.
     void videoPackagesStore.load()
-    void projectWorkState.refresh(projectId).then(async () => {
+    void projectWorkState.refresh(projectId, threadId).then(async () => {
       await loadState()
       if (selectedItem)
         projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
@@ -1327,7 +1331,7 @@
   onMount(() =>
     subscribe('design:relocated', (changedProjectId) => {
       if (changedProjectId !== projectId) return
-      void projectWorkState.refresh(projectId).then(async () => {
+      void projectWorkState.refresh(projectId, threadId).then(async () => {
         await loadState()
         await loadGallery()
         await loadCanvas()
@@ -2251,6 +2255,7 @@
                 {#if liveEditing}
                   <VideoStudioControls
                     {projectId}
+                    {threadId}
                     {section}
                     directory={selected.directory}
                     jobs={videoJobs}
@@ -2441,9 +2446,11 @@
 {#if detailsMode}
   <WorkDetailsDialog
     {projectId}
+    {threadId}
     directory={selected.directory}
     {kind}
     root={workRoot}
+    projectScope={!usesThreadWorkspaceMount(projectId)}
     mode={detailsMode}
     onClose={() => (detailsMode = null)}
     onUpdated={detailsUpdated}
@@ -2462,7 +2469,7 @@
   onConfirm={removeMissingWork}
 >
   <p>
-    Remove {removeRequested?.name ?? ''} from this project's {noun} panel? This removes its saved folder
+    Remove {removeRequested?.name ?? ''} from {ownerLabel}'s {noun} panel? This removes its saved folder
     record. No files are deleted.
   </p>
 </ConfirmDialog>

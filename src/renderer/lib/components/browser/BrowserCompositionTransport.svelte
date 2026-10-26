@@ -304,7 +304,7 @@
     if (!project || !thread) return
     const seconds = shown
     try {
-      studio = (await invoke('video:studio', project, composition.directory)).document
+      studio = (await invoke('video:studio', project, threadId, composition.directory)).document
     } catch {
       // A composition whose document cannot be read still gets its note: the
       // timecode, the frame and the rate are the parts that place it.

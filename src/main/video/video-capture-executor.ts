@@ -1,4 +1,4 @@
-import { requireLocalProject } from '../../lib/project-artifacts'
+import { authoredWorkRootSync } from '../design/authored-work-root'
 import { videoClampTime } from '../../lib/video/project'
 import { resolveServedFolder } from '../preview/served-folder'
 import { currentWorkRoot } from '../design/work-roots-state'
@@ -59,9 +59,9 @@ export function createVideoCaptureExecutor(
     if (!browser) {
       throw new Error('A frame cannot be captured while the app has no window to render it in.')
     }
-    const project = requireLocalProject(options.database, context.projectId)
+    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
     const directory = resolveServedFolder(
-      project.path,
+      scope.path,
       input['directory'],
       currentWorkRoot('video', context.projectId)
     )
@@ -73,7 +73,7 @@ export function createVideoCaptureExecutor(
     const session = await openVideoPreview(
       { previews: options.previews, browser: options.browser },
       {
-        projectPath: project.path,
+        projectPath: scope.path,
         projectId: context.projectId,
         threadId: context.threadId,
         directory: input['directory'],

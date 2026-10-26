@@ -1,4 +1,4 @@
-import { requireLocalProject, requireLocalProjectViaWorker } from '../../lib/project-artifacts'
+import { authoredWorkRoot, authoredWorkRootSync } from '../design/authored-work-root'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
@@ -67,10 +67,10 @@ export function createDesignPreviewExecutor(
       return runDesignReview(options.database, context, input, operation === 'critique')
     if (operation === 'extract-reference') return extractDesignReference(input['url'])
     if (operation === 'read-contract' || operation === 'write-contract') {
-      const project = await requireLocalProjectViaWorker(options.database, context.projectId)
+      const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
       return operation === 'read-contract'
-        ? readDesignContracts(project.path)
-        : writeDesignContract(project.path, input['markdown'])
+        ? readDesignContracts(scope.path)
+        : writeDesignContract(scope.path, input['markdown'])
     }
     if (operation === 'checkpoint')
       return options.checkpoint(context.projectId, context.threadId, input)
@@ -79,12 +79,12 @@ export function createDesignPreviewExecutor(
         `The design preview executor handles preview and checkpoint, and no operation named "${operation}".`
       )
     }
-    const project = requireLocalProject(options.database, context.projectId)
+    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
     const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openDesignPreview(
       { previews: options.previews, browser: options.browser },
       {
-        projectPath: project.path,
+        projectPath: scope.path,
         projectId: context.projectId,
         threadId: context.threadId,
         directory:

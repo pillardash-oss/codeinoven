@@ -9,7 +9,7 @@ import {
   motionTargetId,
   validateAuthoredMotion
 } from '../../lib/design/motion-policy'
-import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
+import { authoredWorkRoot } from './authored-work-root'
 import {
   isInsideProject,
   resolveServedFolder,
@@ -29,13 +29,13 @@ export async function executeDesignMotion(
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
 ): Promise<unknown> {
-  const project = await requireLocalProjectViaWorker(options.database, context.projectId)
+  const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
   const folder = resolveServedFolder(
-    project.path,
+    scope.path,
     input.directory,
     currentWorkRoot('design', context.projectId)
   )
-  const root = await realpath(project.path)
+  const root = await realpath(scope.path)
   const absolute = await realpath(folder.absolute)
   if (!isInsideProject(root, absolute)) throw new Error('Motion folder escapes the project')
   const entry = await resolveServedEntry(absolute, input.entry)
@@ -152,7 +152,7 @@ export async function executeDesignMotion(
     : await openDesignPreview(
         { previews: options.previews, browser: options.browser },
         {
-          projectPath: project.path,
+          projectPath: scope.path,
           ...context,
           directory: folder.display,
           entry: entry.requested,
