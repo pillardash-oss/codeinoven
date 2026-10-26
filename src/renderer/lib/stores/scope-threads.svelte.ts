@@ -175,34 +175,43 @@ export class ScopeThreads {
     )
   }
 
+  /**
+   * Seed or refresh thread memory from a page of rows.
+   *
+   * A page only ever *adds* to what the store knows and refreshes the rows it
+   * carries; it never removes a row. Every caller hands in a bounded list (the
+   * first-paint recent-per-project window, the workspace's own hydrated list,
+   * one project's page), and replacing memory with one of those dropped every
+   * row the list did not happen to carry. A thread that had been read and had
+   * then gone quiet falls outside the recent window by design, so a view switch
+   * re-seeded the list without it and the view rail's attention badge vanished
+   * while that thread still said the user had to answer it (the sidebar kept
+   * showing the row from the workspace's own list, which is how the two surfaces
+   * came to disagree). Nothing about opening a view answers a gate, so nothing
+   * about opening a view may clear its mark.
+   *
+   * Rows leave only on an event that says they did: `updateThread` with the row
+   * archived, a `thread:deleted` broadcast (`removeThread`), or the project's
+   * removal (`removeThreadsForProject`).
+   *
+   * The page folds through `mergeThreads`, so a caller landing several hundred
+   * rows pays one walk of the list rather than one per row.
+   */
   setThreads(threads: Thread[]): void {
-    // The reserved browser container's per-tab assistant conversations are never
-    // a workspace thread, whatever list a caller hands in (a raw `thread:listAll`
-    // includes them). Drop them here so no scope surface or search can show one.
-    threads = threads.filter((thread) => thread.projectId !== GLOBAL_BROWSER_PROJECT_ID)
-    // Projects already fully hydrated for the scope board must survive this
-    // bounded re-seed: replacing the whole array would empty their custom
-    // scopes even though `fullyHydratedProjects` still marks them complete.
-    const hydrated = this.fullyHydratedProjects
-    if (hydrated.size === 0) {
-      this.allScopeThreads = threads
-      return
-    }
-    const merged: Thread[] = []
-    const seen = new SvelteSet<string>()
-    for (const thread of this.allScopeThreads) {
-      if (hydrated.has(thread.projectId) && !seen.has(thread.id)) {
-        seen.add(thread.id)
-        merged.push(thread)
-      }
-    }
-    for (const thread of threads) {
-      if (!seen.has(thread.id)) {
-        seen.add(thread.id)
-        merged.push(thread)
-      }
-    }
-    this.allScopeThreads = merged
+    this.mergeThreads(threads)
+  }
+
+  /**
+   * Forget every thread in memory.
+   *
+   * Deliberately not what an empty page does: a page is a slice of the truth and
+   * an empty slice only means the slice carried nothing. This is the boot pass
+   * reporting that it could not read a thread at all, where showing a list the
+   * app can no longer confirm would be worse than showing none.
+   */
+  clearThreads(): void {
+    if (this.allScopeThreads.length === 0) return
+    this.allScopeThreads = []
   }
 
   bucketForThread(thread: Thread): string {
