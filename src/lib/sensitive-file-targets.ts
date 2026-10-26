@@ -134,21 +134,40 @@ export function sensitiveFileTargets(
     }
   }
 
+  /** Drop heredoc bodies. Their text is a program's input, so a `.env` or a
+   *  `cat .env` written into a script file is data, not an operand the shell
+   *  resolves. Line-based, so a body is removed before any substitution is
+   *  scanned out of it. */
+  function withoutHeredocBodies(command: string): string {
+    if (!command.includes('<<')) return command
+    const kept: string[] = []
+    const pending: string[] = []
+    for (const line of command.split('\n')) {
+      if (pending.length > 0) {
+        if (line.replace(/^\t+/u, '').trim() === pending[0]) pending.shift()
+        continue
+      }
+      kept.push(line)
+      for (const match of line.matchAll(/(?:^|\s)<<-?\s*(['"]?)([A-Za-z_][\w.-]*)\1/gu)) {
+        if (match[2]) pending.push(match[2])
+      }
+    }
+    return kept.join('\n')
+  }
+
   function commandTargets(command: string, depth = 0): void {
     if (command.length > 65536 || depth > 3) return
+    const script = withoutHeredocBodies(command)
     // Substitutions really execute even when their outer command is echo.
-    for (const match of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/gu)) {
+    for (const match of script.matchAll(/\$\(([^()]*)\)|`([^`]*)`/gu)) {
       commandTargets(match[1] ?? match[2] ?? '', depth + 1)
     }
-    const tokens =
-      command.match(/"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||<<|>>|[;|<>]|[^\s;|<>]+/gu) ?? []
+    const tokens = script.match(/"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||<<|>>|[;|<>]|[^\s;|<>]+/gu) ?? []
     let executable = ''
     let skipPattern = false
     let skipOptionValue = false
     let redirect = false
     let embedded: 'shell' | 'language' | undefined
-    let heredoc = ''
-    let heredocDelimiterNext = false
 
     function languageTargets(code: string): void {
       // Ignore quoted prose and comments inside programs. A string that merely
@@ -186,14 +205,6 @@ export function sensitiveFileTargets(
       }
     }
     for (const raw of tokens) {
-      const bare = raw.replace(/^["']|["']$/gu, '')
-      // A heredoc body is data handed to another program, not an operand this
-      // shell resolves, so source such as `process.env` inside it is not a file
-      // named `process.env`. Skip the body up to its delimiter line.
-      if (heredoc) {
-        if (bare === heredoc) heredoc = ''
-        continue
-      }
       if ([';', '|', '&&', '||'].includes(raw)) {
         executable = ''
         skipPattern = false
@@ -201,13 +212,12 @@ export function sensitiveFileTargets(
         embedded = undefined
         continue
       }
-      const token = bare
+      const token = raw.replace(/^["']|["']$/gu, '')
       if (['>', '>>', '<'].includes(token)) {
         redirect = true
         continue
       }
       if (token === '<<') {
-        heredocDelimiterNext = true
         skipOptionValue = true
         continue
       }
@@ -240,10 +250,6 @@ export function sensitiveFileTargets(
       if (['echo', 'printf'].includes(executable)) continue
       if (skipOptionValue) {
         skipOptionValue = false
-        if (heredocDelimiterNext) {
-          heredocDelimiterNext = false
-          heredoc = token
-        }
         continue
       }
       if (token.startsWith('-')) {
