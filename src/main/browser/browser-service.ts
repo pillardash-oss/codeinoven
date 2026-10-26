@@ -4227,11 +4227,10 @@ export class BrowserService {
    *
    * Two answers, by what the page asked for:
    *
-   * - a popup window   Chromium reports `new-window`, which is what a `features`
-   *   string produces   is hosted by the app, so a sign-in or a checkout happens
-   *   inside the browser instead of in an operating-system window of its own;
-   * - anything else, such as a link that asks for its own tab, keeps the app's
-   *   tabs: a safe https address becomes a background tab.
+   * - foreground window requests, including featureless windows and POST forms,
+   *   use the existing popup host to preserve Chromium's opener and submission;
+   * - explicit background-tab gestures keep opening a background tab, unless
+   *   they carry a POST body that must be submitted by Chromium.
    *
    * A popup window is only hosted for the global browser, which is the one with a
    * rail to show it in. A project's browser   and every page an agent drives   keeps
@@ -4248,23 +4247,14 @@ export class BrowserService {
     // A `window.open` aimed at an external scheme is the same handoff a link
     // click is, and never becomes a tab: the address is not a page.
     if (this.offerExternalNavigation(owner, details.url)) return { action: 'deny' }
+    // Disposition and feature strings describe presentation, not whether the
+    // child needs its opener. Featureless window.open and targeted POST forms
+    // also participate in verification callbacks. Cancelling them and loading
+    // their URL ourselves loses WindowProxy, postMessage and the POST body.
     if (
-      details.disposition === 'new-window' &&
-      !details.features &&
-      !details.postBody &&
-      owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+      owner.projectId === GLOBAL_BROWSER_PROJECT_ID &&
+      (details.disposition !== 'background-tab' || details.postBody)
     ) {
-      try {
-        this.openPeekFromWindowRequest(
-          owner,
-          this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
-        )
-      } catch (error: unknown) {
-        Logger.error('Browser Peek rejected unsafe URL:', error)
-      }
-      return { action: 'deny' }
-    }
-    if (details.disposition === 'new-window' && owner.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
     }
@@ -6572,24 +6562,6 @@ export class BrowserService {
         Logger.error('Browser Peek refused a link:', error)
       }
     })
-  }
-
-  /**
-   * Open a peek for a page that asked for a window of its own.
-   *
-   * Chromium reports no point for this gesture, but the pointer is the click: a
-   * shift-click on a link is exactly this request, and the pointer is still on
-   * the link when it arrives.
-   */
-  private openPeekFromWindowRequest(owner: BrowserPageOwner, url: string): void {
-    const frame = this.frameForTab(owner.tabId)
-    const source = this.tabs.get(owner.tabId)
-    if (!frame || !source || source.view.webContents.isDestroyed()) {
-      this.openNewTabFor(owner, url, true)
-      return
-    }
-    const point = peekPointInFrame(this.pointerViewPoint(frame), frame)
-    this.openPeekFrom(owner, source.view.webContents, url, frame, point)
   }
 
   /** Where the pointer is, in a page view's own pixels. */
