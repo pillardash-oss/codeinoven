@@ -85,15 +85,21 @@ export interface TurnCheckpoint {
  * Optional signals used to reconcile the turn diff against concurrent work.
  * A shell command's stat window cannot tell which process wrote a path, so a
  * path that another thread demonstrably edited during this turn is excluded
- * from this thread's card unless this thread itself claimed it with a precise
- * file tool.
+ * from this thread's card unless this thread itself has write evidence for it.
  */
 export interface TurnCompletionOptions {
   changeSources?: ReadonlyMap<string, FileChangeSource[]>
   /** Paths this thread's precise file tools touched during the turn. */
   precisePaths?: ReadonlySet<string>
-  /** Paths other active sessions' precise file tools touched, path → claimed ms. */
-  foreignClaimedPaths?: ReadonlyMap<string, number>
+  /** Paths another running turn's file tools wrote, path → claimed ms. A precise
+   *  claim outranks this turn's shell-window evidence. */
+  foreignPrecisePaths?: ReadonlyMap<string, number>
+  /** Paths another running turn's shell window merely observed changing. The
+   *  observing command cannot prove it wrote them, so this turn's own write
+   *  evidence outranks it. */
+  foreignWindowPaths?: ReadonlyMap<string, number>
+  /** Which thread claimed each foreign path, for the filtered-card log line. */
+  foreignClaimants?: ReadonlyMap<string, string>
   /**
    * Thread ids owned by this turn   the thread itself plus its orchestration
    * descendants (worker sub-agents). Checkpoints completed by these threads
@@ -111,13 +117,15 @@ const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
 /**
  * What other threads did to paths while this turn ran.
  *
- * `claimed` paths carry the other turn's own write evidence. `borrowed` paths
- * only appeared in another turn's project-wide diff while a third turn was
- * writing them, so they prove nothing and belong to whichever turn can show it
- * wrote the file.
+ * `claimed` paths carry the other turn's own precise file-tool evidence.
+ * `window` paths only moved while another turn's shell command was running, so
+ * nothing proves that command wrote them. `borrowed` paths only appeared in
+ * another turn's project-wide diff while a third turn was writing them, so they
+ * prove nothing either.
  */
 export interface ForeignPaths {
   claimed: Map<string, number>
+  window: Map<string, number>
   borrowed: Map<string, number>
 }
 
@@ -267,14 +275,21 @@ export class CheckpointManager {
       // shell command that measured the file changing is this turn's own work.
       const claimedByThisTurn = (path: string): boolean =>
         (options.changeSources?.get(path)?.length ?? 0) > 0
-      const keepChange = (path: string): boolean =>
-        !(excludedPaths?.has(path) ?? false) &&
-        (foreign === undefined ||
-          ((!foreign.claimed.has(path) || precisePaths.has(path)) &&
-            // A path another turn only swept into its project-wide diff belongs
-            // to whichever turn can prove it wrote the file. Without that proof
-            // the path stays out, so a card never lists files its turn never touched.
-            (!foreign.borrowed.has(path) || claimedByThisTurn(path))))
+      // Strongest first: another turn's file tool beats everything but this
+      // turn's own precise claim. Then a foreign shell window, which only ever
+      // proves the file moved while that command ran: it never outranks this
+      // turn's own content evidence, because the write it saw may well be this
+      // turn's. A borrowed path (neither turn proved it) needs this turn's
+      // evidence to stay.
+      const keepChange = (path: string): boolean => {
+        if (excludedPaths?.has(path) ?? false) return false
+        if (foreign === undefined) return true
+        const precise = precisePaths.has(path)
+        if (foreign.claimed.has(path) && !precise) return false
+        if (foreign.window.has(path) && !precise && !claimedByThisTurn(path)) return false
+        if (foreign.borrowed.has(path) && !claimedByThisTurn(path)) return false
+        return true
+      }
       // `undefined` preserves the project-wide snapshot behavior used by
       // recovery and direct checkpoint callers. A supplied empty set means the
       // owning turn reported no mutations and must record no workspace diff.
@@ -286,12 +301,18 @@ export class CheckpointManager {
       // missing card can be explained from the log instead of a reproduction.
       if (changes.length === 0 && allChanges.length > 0) {
         let claimedElsewhere = 0
+        let windowedElsewhere = 0
         let borrowedElsewhere = 0
         let userOwned = 0
+        const claimants = new Set<string>()
         for (const change of allChanges) {
-          if (excludedPaths?.has(change.path) ?? false) userOwned += 1
-          else if (foreign?.claimed.has(change.path) ?? false) claimedElsewhere += 1
-          else if (foreign?.borrowed.has(change.path) ?? false) borrowedElsewhere += 1
+          const path = change.path
+          if (excludedPaths?.has(path) ?? false) userOwned += 1
+          else if (foreign?.claimed.has(path) ?? false) claimedElsewhere += 1
+          else if (foreign?.window.has(path) ?? false) windowedElsewhere += 1
+          else if (foreign?.borrowed.has(path) ?? false) borrowedElsewhere += 1
+          const claimant = options.foreignClaimants?.get(path)
+          if (claimant) claimants.add(claimant)
         }
         Logger.info('Turn diff was filtered out of the file-changes card', {
           projectId,
@@ -299,9 +320,11 @@ export class CheckpointManager {
           turnId: checkpoint.id,
           changed: allChanges.length,
           foreigned: claimedElsewhere,
+          windowed: windowedElsewhere,
           borrowed: borrowedElsewhere,
           userOwned,
           claimFiltered: changedPaths !== undefined,
+          claimants: [...claimants].slice(0, 3),
           sample: allChanges.slice(0, 3).map((change) => change.path)
         })
       }
@@ -370,16 +393,21 @@ export class CheckpointManager {
 
   /**
    * Paths other threads touched while this turn ran, split by how well they can
-   * be attributed. `claimed` holds paths another turn wrote with evidence it
-   * records per path; `borrowed` holds paths another turn only swept into its
+   * be attributed. `claimed` holds paths another turn wrote with precise file-tool
+   * evidence, `window` holds paths another turn's shell command only observed
+   * changing, and `borrowed` holds paths another turn only swept into its
    * project-wide diff while a different turn was actually writing them.
    */
   async foreignClaimedPathsForLive(
     checkpoint: TurnCheckpoint,
-    foreignLive: ReadonlyMap<string, number>,
+    foreignLive: ForeignPaths,
     ownThreadIds?: ReadonlySet<string>
   ): Promise<ForeignPaths> {
-    const opts: TurnCompletionOptions = { foreignClaimedPaths: foreignLive, ownThreadIds }
+    const opts: TurnCompletionOptions = {
+      foreignPrecisePaths: foreignLive.claimed,
+      foreignWindowPaths: foreignLive.window,
+      ownThreadIds
+    }
     return this.foreignClaimedPaths(checkpoint, opts)
   }
 
@@ -388,6 +416,7 @@ export class CheckpointManager {
     options: TurnCompletionOptions
   ): Promise<ForeignPaths> {
     const claimed = new Map<string, number>()
+    const window = new Map<string, number>()
     const borrowed = new Map<string, number>()
     const turnStart = checkpoint.before.createdAt
     // A live claim comes from a turn that is still running, so its presence is
@@ -399,8 +428,11 @@ export class CheckpointManager {
     // finished first, and a read-only answer card reported four files it never
     // touched. This turn's own precise claim still exempts its path in
     // completeTurn, so a shared edit stays on the card of the turn that made it.
-    for (const [path, claimedAt] of options.foreignClaimedPaths ?? []) {
+    for (const [path, claimedAt] of options.foreignPrecisePaths ?? []) {
       claimed.set(path, claimedAt)
+    }
+    for (const [path, observedAt] of options.foreignWindowPaths ?? []) {
+      window.set(path, observedAt)
     }
     // Extract only the fields the decision needs in SQL. Shipping full checkpoint
     // JSON blobs across the worker port just to read two fields crashed the
@@ -455,7 +487,7 @@ export class CheckpointManager {
     }
     for (const row of rows) record(row, Number(row['refs'] ?? 0) > 0)
     for (const row of legacyRows) record(row, false)
-    return { claimed, borrowed }
+    return { claimed, window, borrowed }
   }
 
   /**
@@ -483,6 +515,23 @@ export class CheckpointManager {
     if (!checkpoint || checkpoint.status !== 'active') return
     if (checkpoint.sourceMessageId === sourceMessageId) return
     await this.save({ ...checkpoint, sourceMessageId })
+  }
+
+  /**
+   * Threads in this project with a turn in flight, whoever owns it. A session
+   * object can outlive its turn (another instance settled the checkpoint, or the
+   * turn ended on a path that skipped the session cleanup), and a stale session
+   * keeps claiming the paths of work that finished long ago. The durable
+   * `active_turns` rows are the only trustworthy answer to "is this still
+   * running", so callers reconcile live claims against them.
+   */
+  async activeTurnThreadIds(projectId: string): Promise<Set<string>> {
+    assertId(projectId)
+    const rows = this.db.all<{ thread_id: string }>(
+      'SELECT thread_id FROM active_turns WHERE project_id = ?',
+      projectId
+    )
+    return new Set(rows.map((row) => row.thread_id))
   }
 
   /**

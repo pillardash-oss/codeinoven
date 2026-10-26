@@ -465,7 +465,7 @@ describe('CheckpointManager', () => {
       undefined,
       {
         precisePaths: new Set(['mine.txt']),
-        foreignClaimedPaths: new Map([['theirs.txt', turn.before.createdAt - 60_000]])
+        foreignPrecisePaths: new Map([['theirs.txt', turn.before.createdAt - 60_000]])
       }
     )
 
@@ -567,6 +567,33 @@ describe('CheckpointManager', () => {
     )
 
     expect(completed.changes).toEqual([])
+  })
+
+  // A foreign shell window only proves the file moved while another turn's
+  // command ran, which is exactly what happens when this turn writes the file.
+  // It must not outrank this turn's own recorded write evidence.
+  it("keeps a path this turn wrote over another turn's shell window", async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'mine.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'writer', projectRoot, 'Writer turn', false)
+    await writeFile(join(projectRoot, 'mine.txt'), 'my fix', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'writer',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        changeSources: new Map([['mine.txt', [claimedSource('mine.txt')]]]),
+        foreignWindowPaths: new Map([['mine.txt', turn.before.createdAt + 1]])
+      }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
   })
 
   it('bounds the failure text written to a checkpoint', async () => {
