@@ -8,8 +8,12 @@
  * has since gained a prompt, an answer or an attachment, with nothing to tell it
  * so. The writer announces the threads it touched (see `instanceRegistry`), and
  * this service is what reacts: it re-reads those rows from the shared database
- * and pushes the corrected snapshots to this instance's renderers, and tells
- * them to re-read the transcripts of the threads whose messages changed.
+ * and pushes the corrected snapshots to this instance's renderers, tells them to
+ * re-read the transcripts of the threads whose messages changed, and hands them
+ * the draft state of the threads whose draft slot moved. That last one is what
+ * keeps a draft from outliving its message: the words another instance just sent
+ * were still sitting in this instance's composer, because nothing ever told it
+ * the shared draft had been cleared.
  *
  * Nothing is inferred from timing and no thread data rides in the announcement
  * itself, so a missed batch costs freshness until the next one, never
@@ -26,7 +30,8 @@ import { Logger } from '../system/logger'
 import {
   broadcastCrossInstanceThreadDeleted,
   broadcastCrossInstanceThreadUpdate,
-  broadcastThreadMessagesChanged
+  broadcastThreadMessagesChanged,
+  sendThreadDraftUpdated
 } from './thread-events'
 
 export interface CrossInstanceThreadServiceOptions {
@@ -36,6 +41,13 @@ export interface CrossInstanceThreadServiceOptions {
   publishThread?: (thread: Thread) => void
   /** Tell this instance's renderers to re-read one thread's transcript. */
   publishMessages?: (projectId: string, threadId: string) => void
+  /** Hand one corrected draft state to this instance's renderers. */
+  publishDraft?: (
+    projectId: string,
+    threadId: string,
+    drafting: boolean,
+    draftJson: string | null
+  ) => void
   /** Drop one thread from this instance's renderers. */
   publishDeleted?: (projectId: string, threadId: string) => void
   /**
@@ -50,6 +62,12 @@ export class CrossInstanceThreadService {
   private readonly readThreads: (ids: readonly string[]) => Promise<Thread[]>
   private readonly publishThread: (thread: Thread) => void
   private readonly publishMessages: (projectId: string, threadId: string) => void
+  private readonly publishDraft: (
+    projectId: string,
+    threadId: string,
+    drafting: boolean,
+    draftJson: string | null
+  ) => void
   private readonly publishDeleted: (projectId: string, threadId: string) => void
   private readonly subscribeToChanges: (
     listener: (event: CrossInstanceThreadEvent) => void
@@ -63,6 +81,7 @@ export class CrossInstanceThreadService {
       options.readThreads ?? ((ids) => new ThreadRepo(this.db).listByIdsViaWorker(ids))
     this.publishThread = options.publishThread ?? broadcastCrossInstanceThreadUpdate
     this.publishMessages = options.publishMessages ?? broadcastThreadMessagesChanged
+    this.publishDraft = options.publishDraft ?? sendThreadDraftUpdated
     this.publishDeleted =
       options.publishDeleted ??
       ((projectId, threadId) => broadcastCrossInstanceThreadDeleted({ projectId, id: threadId }))
@@ -83,12 +102,16 @@ export class CrossInstanceThreadService {
   }
 
   /**
-   * Apply one batch: deletions first, then the transcript notices, then the rows.
+   * Apply one batch: deletions first, then the transcript notices, then the rows
+   * and drafts.
    *
    * Order matters for the surfaces that watch both: a window told to re-read a
    * transcript of a thread that is gone would re-read nothing, and a row that
    * arrives after its own deletion would resurrect it, so the deletion wins by
    * being sent before its row (a batch cannot carry both, but two batches can).
+   * Drafts come last because a draft is the newest thing on the row: a window
+   * that had just been handed that row must end up holding the draft state that
+   * came with it.
    */
   private async apply(event: CrossInstanceThreadEvent): Promise<void> {
     for (const change of event.deleted) {
@@ -97,11 +120,28 @@ export class CrossInstanceThreadService {
     for (const change of event.messages) {
       this.publishMessages(change.projectId, change.threadId)
     }
-    if (event.rows.length === 0) return
+    if (event.rows.length === 0 && event.drafts.length === 0) return
     try {
-      const threads = await this.readThreads(event.rows.map((change) => change.threadId))
-      for (const thread of threads) {
-        this.publishThread(thread)
+      const threads = await this.readThreads(
+        [...new Set([...event.rows, ...event.drafts].map((change) => change.threadId))]
+      )
+      const byId = new Map(threads.map((thread) => [thread.id, thread]))
+      for (const change of event.rows) {
+        const thread = byId.get(change.threadId)
+        if (thread) this.publishThread(thread)
+      }
+      // A draft is one shared slot, so the re-read row is the whole truth: null
+      // means the writer sent or dropped the draft, and this instance's windows
+      // must drop their mirror of it instead of keeping it on screen forever.
+      for (const change of event.drafts) {
+        const thread = byId.get(change.threadId)
+        if (!thread) continue
+        this.publishDraft(
+          thread.projectId,
+          thread.id,
+          thread.drafting === true,
+          thread.draftJson ?? null
+        )
       }
     } catch (error) {
       // Advisory only: a renderer keeps what it was given, and the sibling's next

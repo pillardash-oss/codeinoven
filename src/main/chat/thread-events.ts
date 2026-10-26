@@ -142,13 +142,19 @@ export function publishThreadMessagesChanged(projectId: string, threadId: string
 
 /**
  * Push just a thread's draft state (drafting flag + committed draft content)
- * to every renderer window. Deliberately lighter than `broadcastThreadUpdate`:
- * draft commits happen while the user is actively typing, and the full thread
- * broadcast forces ThreadView's message reconcile to reload and re-merge the
- * whole transcript, which would freeze the composer mid-keystroke on large
- * conversations. Only surfaces that render draft state need this event.
+ * to every renderer window, and nowhere else.
+ *
+ * Deliberately lighter than `broadcastThreadUpdate`: draft commits happen while
+ * the user is actively typing, and the full thread broadcast forces ThreadView's
+ * message reconcile to reload and re-merge the whole transcript, which would
+ * freeze the composer mid-keystroke on large conversations. Only surfaces that
+ * render draft state need this event.
+ *
+ * Split from the announcing variant below because a sibling's draft, applied
+ * here, must never be announced back: two instances would keep re-publishing the
+ * same draft at each other.
  */
-export function broadcastThreadDraftUpdated(
+export function sendThreadDraftUpdated(
   projectId: string,
   threadId: string,
   drafting: boolean,
@@ -158,9 +164,25 @@ export function broadcastThreadDraftUpdated(
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:draftUpdated', projectId, threadId, drafting, draftJson)
   }
-  // Draft state lives on the shared row, so a sibling instance reads it from
-  // there; this announces that the row moved.
-  instanceRegistry.publishThreadChanged(projectId, threadId, 'row')
+}
+
+/**
+ * Push just a thread's draft state to every renderer window, and tell siblings
+ * the shared draft slot moved.
+ *
+ * A draft is one value on the shared row rather than a per-window buffer, so a
+ * sibling mirroring it needs to know about a commit and, above all, about a
+ * clear: a message sent here must not leave its words standing as a draft in
+ * every other instance.
+ */
+export function broadcastThreadDraftUpdated(
+  projectId: string,
+  threadId: string,
+  drafting: boolean,
+  draftJson: string | null
+): void {
+  sendThreadDraftUpdated(projectId, threadId, drafting, draftJson)
+  instanceRegistry.publishThreadChanged(projectId, threadId, 'draft')
 }
 
 /**

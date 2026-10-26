@@ -211,6 +211,7 @@
   import {
     rendererRecovery,
     publishDraftActivity,
+    onRemoteDraftCleared,
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
@@ -7157,6 +7158,23 @@
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
+
+  /**
+   * A draft cleared in another window or instance leaves this conversation too.
+   *
+   * The draft store drops its mirror of the commit, but the mounted composer
+   * holds those words in its own editor and would keep them on screen, so the
+   * composer is remounted from the (now empty) restored draft and the selection
+   * pins the sent message carried are dropped with it. This is the same path a
+   * send takes, just triggered by whoever else sent it.
+   */
+  $effect(() => {
+    return onRemoteDraftCleared((projectId, threadId) => {
+      if (thread.projectId !== projectId || thread.id !== threadId) return
+      clearResponseReferences()
+      composerRestoreKey += 1
+    })
+  })
   /** Baseline captured at mount. A focus request that was issued *before* this
    *  conversation mounted is already satisfied by the composer's own autofocus,
    *  so only requests that arrive afterwards may remount the composer. Starting

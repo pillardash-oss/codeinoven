@@ -59,6 +59,12 @@ export type ThreadChangeKind =
   | 'row'
   /** The mirrored conversation: a message row was written or rewritten. */
   | 'messages'
+  /**
+   * The thread's draft slot: the composer draft was committed, changed, or
+   * cleared. A draft is one shared value rather than a per-window buffer, so a
+   * sibling mirroring it has to hear about the clear, not only about the text.
+   */
+  | 'draft'
   /** The thread itself: its row and mirror are gone. */
   | 'deleted'
 
@@ -67,15 +73,18 @@ export type ThreadChangeKind =
  *
  * The batch is an invalidation, never the data: a sibling that receives it
  * re-reads the thread's row and mirror from the shared database, except for a
- * deletion, which nothing can be re-read for. Losing an intermediate batch is
- * therefore harmless, because what matters is the state, not the history of
- * changes that produced it.
+ * deletion, which nothing can be re-read for, and for a draft, which is read
+ * from the row that holds it. Losing an intermediate batch is therefore
+ * harmless, because what matters is the state, not the history of changes that
+ * produced it.
  */
 export interface CrossInstanceThreadEvent {
   id: string
   emittedAt: number
   /** Threads whose persisted row changed. */
   rows: CrossInstanceThreadChange[]
+  /** Threads whose draft slot was committed, changed or cleared. */
+  drafts: CrossInstanceThreadChange[]
   /** Threads whose mirrored conversation changed. */
   messages: CrossInstanceThreadChange[]
   /** Threads that were deleted, row and mirror together. */
@@ -146,8 +155,8 @@ function oldestEntry(entries: InstanceEntry[]): InstanceEntry | undefined {
  * instance skips destroying harness connections and just lets its window go.
  *
  * Each entry also carries the latest invalidations the process published (a
- * settled checkpoint, changed thread rows and mirror), so a sibling re-reads the
- * shared state it cannot see being written.
+ * settled checkpoint, changed thread rows, mirror and draft slot), so a sibling
+ * re-reads the shared state it cannot see being written.
  */
 export class InstanceRegistry {
   private readonly selfEntry: InstanceEntry
@@ -166,6 +175,7 @@ export class InstanceRegistry {
   private threadChangeTimer: ReturnType<typeof setTimeout> | null = null
   /** Row, mirror and deletion changes waiting to be published as one batch. */
   private readonly pendingRowChanges = new Map<string, CrossInstanceThreadChange>()
+  private readonly pendingDraftChanges = new Map<string, CrossInstanceThreadChange>()
   private readonly pendingMessageChanges = new Map<string, CrossInstanceThreadChange>()
   private readonly pendingDeletedChanges = new Map<string, CrossInstanceThreadChange>()
   /** Live process ids as of the last membership check, to filter heartbeat noise. */
@@ -268,9 +278,9 @@ export class InstanceRegistry {
    *
    * Two instances share one thread table and one mirrored conversation, while a
    * window only ever sees the writes its own process makes. A sibling therefore
-   * holds a row or a transcript that this process has since moved on from, and
-   * this is how it finds out: the announcement names the threads, and the
-   * sibling re-reads them from the shared database. The batch rides on this
+   * holds a row, a transcript or a draft that this process has since moved on
+   * from, and this is how it finds out: the announcement names the threads, and
+   * the sibling re-reads them from the shared database. The batch rides on this
    * process's registry entry, so delivery is event-driven with no port, no
    * second file and no polling, and a burst of writes costs one write.
    */
@@ -283,6 +293,7 @@ export class InstanceRegistry {
   /** Where one kind of change waits for the next published batch. */
   private pendingFor(kind: ThreadChangeKind): Map<string, CrossInstanceThreadChange> {
     if (kind === 'messages') return this.pendingMessageChanges
+    if (kind === 'draft') return this.pendingDraftChanges
     if (kind === 'deleted') return this.pendingDeletedChanges
     return this.pendingRowChanges
   }
@@ -311,14 +322,17 @@ export class InstanceRegistry {
    */
   private flushThreadChanged(): void {
     const rows = takeChanges(this.pendingRowChanges, THREAD_CHANGE_BATCH_LIMIT)
+    const drafts = takeChanges(this.pendingDraftChanges, THREAD_CHANGE_BATCH_LIMIT)
     const messages = takeChanges(this.pendingMessageChanges, THREAD_CHANGE_BATCH_LIMIT)
     const deleted = takeChanges(this.pendingDeletedChanges, THREAD_CHANGE_BATCH_LIMIT)
-    if (rows.length === 0 && messages.length === 0 && deleted.length === 0) return
+    if (rows.length === 0 && drafts.length === 0 && messages.length === 0 && deleted.length === 0)
+      return
     this.threadEventSequence += 1
     this.selfEntry.threadEvent = {
       id: `${this.selfEntry.pid}:${this.selfEntry.startedAt}:${this.threadEventSequence}`,
       emittedAt: Date.now(),
       rows,
+      drafts,
       messages,
       deleted
     }
@@ -333,6 +347,7 @@ export class InstanceRegistry {
     }
     if (
       this.pendingRowChanges.size > 0 ||
+      this.pendingDraftChanges.size > 0 ||
       this.pendingMessageChanges.size > 0 ||
       this.pendingDeletedChanges.size > 0
     ) {
@@ -369,13 +384,16 @@ export class InstanceRegistry {
       if (oldest) this.seenThreadEvents.delete(oldest)
     }
     const rows = threadChanges(batch.rows)
+    const drafts = threadChanges(batch.drafts)
     const messages = threadChanges(batch.messages)
     const deleted = threadChanges(batch.deleted)
-    if (rows.length === 0 && messages.length === 0 && deleted.length === 0) return
+    if (rows.length === 0 && drafts.length === 0 && messages.length === 0 && deleted.length === 0)
+      return
     const event: CrossInstanceThreadEvent = {
       id: batch.id,
       emittedAt: batch.emittedAt,
       rows,
+      drafts,
       messages,
       deleted
     }

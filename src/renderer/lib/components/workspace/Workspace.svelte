@@ -2360,7 +2360,9 @@
 
   /** Live draft-state updates pushed from the main process (this window's own
    *  commits plus other windows/instances): merge the drafting flag into every
-   *  thread list and seed the local draft when this window does not have it. */
+   *  thread list and apply the committed draft locally   seeding a draft this
+   *  window does not have, and dropping one it still shows after the commit that
+   *  cleared it. */
   $effect(() => {
     return subscribe('thread:draftUpdated', (...args: unknown[]) => {
       const [projectId, threadId, drafting, draftJson] = args as [
@@ -2369,7 +2371,7 @@
         boolean,
         string | null
       ]
-      rendererRecovery.importDbDraft(projectId, threadId, draftJson)
+      rendererRecovery.applyCommittedDraft(projectId, threadId, draftJson)
       const withDraftState = (thread: Thread): Thread =>
         thread.id === threadId && thread.projectId === projectId
           ? { ...thread, drafting: drafting || undefined, draftJson }
