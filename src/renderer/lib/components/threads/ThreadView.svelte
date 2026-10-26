@@ -174,6 +174,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { modelRuntime } from '$lib/stores/model-runtime.svelte'
   import {
     FIRST_RUN_PROVIDER_SEARCH,
     providerConnectFlow
@@ -192,7 +193,9 @@
   } from '$lib/components/assistant/assistant-view'
   import {
     latestAssistantRecap,
-    assistantSetupRecapIssue
+    assistantSetupRecapIssue,
+    assistantKnowledgeLoss,
+    type AssistantKnowledgeLoss
   } from '$lib/components/assistant/assistant-recap'
   import { assistantResultText } from '$shared/assistant-result'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
@@ -253,6 +256,7 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { appConfirm } from '$lib/stores/app-confirm.svelte'
   import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
   import {
     ASSISTANT_PLACEHOLDER_NAME,
@@ -268,6 +272,7 @@
     COMPLETED_TURN_PAGE_SIZE
   } from '$shared/types'
   import type {
+    Assistant,
     Thread,
     ThreadMessageCursor,
     ThreadSettings,
@@ -280,7 +285,6 @@
     AgentEvent,
     AgentContextUsage,
     AgentHarnessUsage,
-    ProviderModel,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -2237,36 +2241,57 @@
 
     return actions
   })
-  /** The model currently selected for the thread, resolved from the catalog. */
-  const selectedModel = $derived.by((): ProviderModel | undefined => {
-    const provider =
-      providers.find(
-        (candidate) =>
-          candidate.id === settings.providerId && candidate.harnessId === settings.harnessId
-      ) ?? providers.find((candidate) => candidate.id === settings.providerId)
-    return provider?.models.find((candidate) => candidate.id === settings.modelId)
+  /**
+   * The selected model's own properties, read through the shared runtime store
+   * for the thread's account.
+   *
+   * Codex states a model's context windows per account (`codex debug models`
+   * answers from that account's `CODEX_HOME`), so the account-agnostic catalog
+   * cannot describe this thread: it carries whichever account was probed last,
+   * which is how a thread whose account states a 500k window rendered a 272k
+   * one. The store resolves the account's answer, and a stored window survives
+   * only while that answer offers it.
+   */
+  const modelRuntimeSelection = $derived({
+    projectId: thread.projectId,
+    harnessId: settings.harnessId,
+    providerId: settings.providerId,
+    modelId: settings.modelId,
+    accountId: settings.accountId
+  })
+  const threadModel = $derived(
+    modelRuntime.resolve(modelRuntimeSelection, providers, settings.contextWindow)
+  )
+  /**
+   * The window the meter must show: the account's own window for the selected
+   * model. The harness-reported window stays the fallback for models whose
+   * window the harness does not state.
+   */
+  const configuredContextWindow = $derived(threadModel.contextWindow)
+  /**
+   * Read the account's properties as soon as the selection lands, so the meter
+   * and the context dropdown never render a window another account stated.
+   */
+  $effect(() => {
+    modelRuntime.ensure(modelRuntimeSelection)
   })
   /**
-   * The context window the app has configured for a model: the thread's runtime
-   * override when the model advertises it, otherwise the catalog's window
-   * (which, for a custom base-URL provider, is the window the user authored).
-   *
-   * This is the window the meter must show. It deliberately outranks the window
-   * a harness reported on its latest turn, because a live harness session keeps
-   * reporting the window it started with: after a custom model's window (or a
-   * thread's runtime window) is edited, the old reading would otherwise keep
-   * driving the battery until the session restarts. The harness-reported window
-   * stays the fallback for models whose window the catalog does not state.
+   * Drop a stored window the account's model no longer offers, so the dropdown's
+   * selected value, the meter, and the turn's budget cannot disagree. The guard
+   * keeps one write per stale value instead of repeating it on every flush.
    */
-  function configuredContextWindowFor(model: ProviderModel | undefined): number | undefined {
-    const runtimeWindow =
-      settings.contextWindow !== undefined &&
-      model?.contextWindows?.includes(settings.contextWindow)
-        ? settings.contextWindow
-        : undefined
-    return runtimeWindow ?? model?.contextWindow
-  }
-  const configuredContextWindow = $derived(configuredContextWindowFor(selectedModel))
+  let reconciledContextWindow = ''
+  $effect(() => {
+    if (!threadModel.model) return
+    if (threadModel.contextWindows.length === 0) return
+    const stored = settings.contextWindow
+    if (stored === undefined) return
+    if (threadModel.contextWindowOverride !== undefined) return
+    const key = `${settings.harnessId}:${settings.providerId}:${settings.modelId}:${stored}`
+    if (reconciledContextWindow === key) return
+    reconciledContextWindow = key
+    updateSettings({ ...settings, contextWindow: undefined })
+  })
   const contextUsage = $derived.by((): AgentContextUsage | undefined => {
     let latestMessage: AgentMessage | undefined
     let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
@@ -2370,15 +2395,11 @@
     }
 
     if (!latestMessage) return undefined
-    const providerId = latestMessage?.providerId ?? settings.providerId
-    const modelId = latestMessage?.modelId ?? settings.modelId
-    const harnessId = latestMessage?.harnessId ?? settings.harnessId
-    const model = (
-      providers.find(
-        (provider) => provider.id === providerId && provider.harnessId === harnessId
-      ) ?? providers.find((provider) => provider.id === providerId)
-    )?.models.find((candidate) => candidate.id === modelId)
-    const contextWindow = configuredContextWindowFor(model) ?? latestMessage?.contextWindow
+    // The selected model's account-accurate window outranks whatever the latest
+    // turn reported: a live harness session keeps reporting the window it
+    // started with, so a model (or account) switch would otherwise keep driving
+    // the meter with the previous window.
+    const contextWindow = configuredContextWindow ?? latestMessage.contextWindow
     // Only the explicit composed-request estimate is an estimate. Falling back
     // to the harness's own reported token total is a provider reading   the
     // last request's prompt plus completion is the occupancy the provider
@@ -7936,6 +7957,8 @@
   /** The draft revision the user chose to keep editing; empty means none. */
   let assistantRecapDismissed = $state('')
   let assistantSaving = $state(false)
+  /** One replacement confirmation at a time, so a second Save cannot queue another. */
+  let assistantKnowledgeGate = $state(false)
 
   const assistantRecapVisible = $derived(
     assistantDraft !== null &&
@@ -8039,6 +8062,38 @@
   }
 
   /**
+   * The gate on a revision that would delete most of the instructions it replaces.
+   *
+   * The agent presents the whole revised document, so a model that loses its place
+   * writes a short block and calls it the replacement, and the recap card then
+   * offers that block as an ordinary Save. The ask is a line, the thing at stake is
+   * the instruction set the assistant follows on every run, and the two are only
+   * comparable by reading the document end to end. A save that drops a quarter of
+   * the saved knowledge therefore asks here first, with the lines it would delete in
+   * front of the user.
+   */
+  async function confirmKnowledgeReplacement(
+    assistant: Assistant,
+    loss: AssistantKnowledgeLoss
+  ): Promise<boolean> {
+    const shown = loss.removed.slice(0, 6)
+    const remaining = loss.removed.length - shown.length
+    return appConfirm.request({
+      title: `Replace ${assistant.name}'s instructions?`,
+      body: [
+        `This revision keeps ${loss.nextLines} lines of the ${loss.previousLines} saved now, and removes ${loss.removed.length}.`,
+        ...shown.map((line) => `Removed: ${line}`),
+        remaining > 0
+          ? `Another ${remaining} ${remaining === 1 ? 'saved line is' : 'saved lines are'} not carried over.`
+          : ''
+      ].filter((line) => line.length > 0),
+      note: 'Saving replaces the instructions this assistant follows. A line removed here is gone from the next run onwards.',
+      confirmLabel: 'Replace instructions',
+      cancelLabel: 'Keep editing'
+    })
+  }
+
+  /**
    * Commit the agent-drafted knowledge, schedule, and connections to the assistant
    * once the user agrees. Called by the recap card and by the `/save-knowledge`
    * fallback. Initial setup requires valid settings. A knowledge-only revision
@@ -8053,6 +8108,18 @@
     if (!draft) {
       errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
       return false
+    }
+    // A revision is compared with what is saved, because the draft carries the
+    // whole document and nothing else checks that it still contains one.
+    const replacing = assistants.assistants.find((entry) => entry.id === assistantId) ?? null
+    const loss = replacing ? assistantKnowledgeLoss(replacing.knowledge, draft.knowledge) : null
+    if (replacing && loss) {
+      if (assistantKnowledgeGate) return false
+      assistantKnowledgeGate = true
+      const approved = await confirmKnowledgeReplacement(replacing, loss).finally(() => {
+        assistantKnowledgeGate = false
+      })
+      if (!approved) return false
     }
     const setupIssue = assistantKnowledgeComplete
       ? null
@@ -8076,7 +8143,7 @@
     assistantSaving = true
     try {
       const plan = draft.plan
-      const assistant = assistants.assistants.find((entry) => entry.id === assistantId) ?? null
+      const assistant = replacing
       const wasScheduled = assistant ? assistantIsScheduled(assistant) : true
       const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
       // A conversation settles who the assistant is as well as what it does, so a
@@ -12766,7 +12833,8 @@
     const prompt = pendingLiveTurn ? structureMessages[pendingLiveTurn.userMessageIndex] : undefined
     // Delivery and the durable poll arrive separately. Until the fold catches
     // up, its parts still belong above the new prompt, never below it.
-    if (prompt && (streamTrace.turnStartTs === null || streamTrace.turnStartTs < prompt.createdAt)) return []
+    if (prompt && (streamTrace.turnStartTs === null || streamTrace.turnStartTs < prompt.createdAt))
+      return []
     return streamTrace.parts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
   }
 
@@ -12956,7 +13024,8 @@
         await remountNewestStreamParts(generation)
         return
       }
-      if (page.parts.length > 0) streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
+      if (page.parts.length > 0)
+        streamTrace.setParts(mergeWorkingParts(streamTrace.parts, page.parts))
     } catch {
       // Transient read failure   keep what we have and try again next tick.
     }
@@ -13035,7 +13104,10 @@
     }
     const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
     const mountedBefore = streamTrace.parts.length
-    streamTrace.setParts([...page.parts, ...streamTrace.parts.filter((part) => !pagedIds.has(part.id))])
+    streamTrace.setParts([
+      ...page.parts,
+      ...streamTrace.parts.filter((part) => !pagedIds.has(part.id))
+    ])
     streamTrace.hasOlder = page.hasOlder
     streamTrace.totalSteps = page.totalSteps
     if (streamTrace.parts.length === mountedBefore) streamTrace.hasOlder = false
@@ -13140,7 +13212,9 @@
     if (active) return
     if (streamTrace.parts.length <= WORKING_TRACE_PAGE_SIZE) return
     streamTrace.hasOlder = true
-    streamTrace.setParts(streamTrace.parts.slice(streamTrace.parts.length - WORKING_TRACE_PAGE_SIZE))
+    streamTrace.setParts(
+      streamTrace.parts.slice(streamTrace.parts.length - WORKING_TRACE_PAGE_SIZE)
+    )
   })
 
   onDestroy(() => {
@@ -14973,6 +15047,7 @@
                   knowledge={assistantDraft.knowledge}
                   plan={assistantDraft.plan}
                   update={assistantKnowledgeComplete}
+                  previousKnowledge={assistant?.knowledge ?? ''}
                   scheduled={assistant ? assistantIsScheduled(assistant) : true}
                   existingConnections={existingAssistantConnections}
                   saving={assistantSaving}

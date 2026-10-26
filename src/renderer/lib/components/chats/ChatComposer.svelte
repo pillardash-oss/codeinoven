@@ -89,6 +89,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { modelRuntime } from '$lib/stores/model-runtime.svelte'
   import { ovens } from '$lib/stores/ovens.svelte'
   import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -1017,16 +1018,32 @@
       (provider) => provider.harnessId === resolved.harnessId && provider.id === resolved.providerId
     ) ?? resolvedProviders.find((provider) => provider.id === resolved.providerId)
   )
-  let selectedModel = $derived(
-    selectedProvider?.models.find((model) => model.id === resolved.modelId)
+  /**
+   * The selected model's own properties, resolved through the shared store for
+   * this composer's account.
+   *
+   * A model's context windows are stated by its harness, and Codex states them
+   * per account, so the merged catalog only ever holds one account's answer.
+   * The battery, the context dropdown, and the send path all read this reading,
+   * which also reads the account's own answer as soon as the model lands.
+   */
+  let modelRuntimeSelection = $derived({
+    projectId,
+    harnessId: resolved.harnessId,
+    providerId: resolved.providerId,
+    modelId: resolved.modelId,
+    accountId: resolved.accountId
+  })
+  let runtimeModel = $derived(
+    modelRuntime.resolve(modelRuntimeSelection, resolvedProviders, resolved.contextWindow)
   )
+  let selectedModel = $derived(runtimeModel.model)
+  $effect(() => {
+    modelRuntime.ensure(modelRuntimeSelection)
+  })
   let usageReading = $derived<ComposerUsage>({
     usage: contextUsage,
-    previewContextWindow:
-      resolved.contextWindow !== undefined &&
-      selectedModel?.contextWindows?.includes(resolved.contextWindow)
-        ? resolved.contextWindow
-        : selectedModel?.contextWindow,
+    previewContextWindow: runtimeModel.contextWindow,
     generationRate,
     generationDetails,
     efficiencyKpis,
@@ -1218,16 +1235,7 @@
   let supportsThinking = $derived(thinkingPresets.length > 0)
 
   let modelSettingsVisible = $derived(
-    hasModelRuntimeSettings(
-      resolvedProviders
-        .find(
-          (provider) =>
-            provider.harnessId === resolved.harnessId && provider.id === resolved.providerId
-        )
-        ?.models.find((model) => model.id === resolved.modelId),
-      resolved.harnessId,
-      resolved.providerId
-    )
+    hasModelRuntimeSettings(runtimeModel.model, resolved.harnessId, resolved.providerId)
   )
 
   const slash = createComposerSlashActions({

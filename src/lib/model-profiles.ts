@@ -1,5 +1,6 @@
 import { isCodeInOvenCustomProviderId } from './custom-provider-id'
 import { fastSelectionModelId, supportsFastInference } from './fast-inference'
+import { offeredContextWindow } from './model-runtime-settings'
 import { resolveDefaultThinkingLevel } from './thinking-presets'
 import type {
   InferenceMode,
@@ -236,9 +237,9 @@ export function applyModelProfile<T extends ModelProfileSettings>(
     ...(profile.contextWindow !== undefined || profile.accountId !== undefined
       ? {
           contextWindow:
-            !model || model.contextWindows?.includes(profile.contextWindow ?? 0)
+            model === undefined
               ? (profile.contextWindow ?? undefined)
-              : undefined
+              : offeredContextWindow(model, profile.contextWindow ?? undefined)
         }
       : modelChanged
         ? {
@@ -246,11 +247,7 @@ export function applyModelProfile<T extends ModelProfileSettings>(
             // model actually offers is carried over; anything else is dropped so the
             // picker falls back to that model's own window rather than running a
             // budget belonging to the model the user just left.
-            contextWindow:
-              current.contextWindow !== undefined &&
-              model?.contextWindows?.includes(current.contextWindow)
-                ? current.contextWindow
-                : undefined
+            contextWindow: offeredContextWindow(model, current.contextWindow)
           }
         : {})
   }

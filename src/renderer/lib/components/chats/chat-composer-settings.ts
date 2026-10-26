@@ -1,5 +1,6 @@
 import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
 import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
+import { offeredContextWindow } from '$shared/model-runtime-settings'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
 import { fastSelectionModelId, supportsFastInference } from '$shared/fast-inference'
 import type {
@@ -98,11 +99,7 @@ export function withModelSelection(
       ? {
           // An unset window belongs to the harness. Only carry an explicit
           // user choice forward when the selected model supports it.
-          contextWindow:
-            resolved.contextWindow !== undefined &&
-            model?.contextWindows?.includes(resolved.contextWindow)
-              ? resolved.contextWindow
-              : undefined
+          contextWindow: offeredContextWindow(model, resolved.contextWindow)
         }
       : {})
   }
