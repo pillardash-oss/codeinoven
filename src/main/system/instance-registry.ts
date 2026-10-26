@@ -94,8 +94,12 @@ interface InstanceEntry {
   instanceKey?: string
   /** Latest durable-state invalidation emitted by this process. */
   checkpointEvent?: CrossInstanceCheckpointEvent
+  /** Bounded replay for coalesced filesystem notifications. */
+  checkpointEvents?: CrossInstanceCheckpointEvent[]
   /** Latest batch of shared-thread invalidations emitted by this process. */
   threadEvent?: CrossInstanceThreadEvent
+  /** Bounded replay so another thread's update cannot overwrite a final answer. */
+  threadEvents?: CrossInstanceThreadEvent[]
 }
 
 /**
@@ -241,6 +245,10 @@ export class InstanceRegistry {
       emittedAt: Date.now(),
       event
     }
+    this.selfEntry.checkpointEvents = [
+      ...(this.selfEntry.checkpointEvents ?? []).slice(-63),
+      this.selfEntry.checkpointEvent
+    ]
     try {
       this.writeEntry()
     } catch {
@@ -314,6 +322,10 @@ export class InstanceRegistry {
       messages,
       deleted
     }
+    this.selfEntry.threadEvents = [
+      ...(this.selfEntry.threadEvents ?? []).slice(-63),
+      this.selfEntry.threadEvent
+    ]
     try {
       this.writeEntry()
     } catch {
@@ -336,7 +348,12 @@ export class InstanceRegistry {
    * re-reads it), so ids are remembered and a stale batch is dropped.
    */
   private consumeThreadEvent(entry: InstanceEntry): void {
-    const batch = entry.threadEvent
+    const batches = Array.isArray(entry.threadEvents) ? entry.threadEvents.slice(-64) : []
+    if (entry.threadEvent) batches.push(entry.threadEvent)
+    for (const batch of batches) this.deliverThreadEvent(batch)
+  }
+
+  private deliverThreadEvent(batch: CrossInstanceThreadEvent): void {
     if (
       !batch ||
       typeof batch.id !== 'string' ||
@@ -576,6 +593,18 @@ export class InstanceRegistry {
       this.writeEntry()
     } finally {
       this.checkLiveInstanceSet()
+      // Filesystem watches may coalesce or drop the final write. Reuse the
+      // existing heartbeat to replay retained peer invalidations, with no
+      // additional timer or database polling.
+      try {
+        for (const entry of this.liveEntries()) {
+          if (entry.pid === this.selfEntry.pid) continue
+          this.consumeCheckpointEvent(entry)
+          this.consumeThreadEvent(entry)
+        }
+      } catch {
+        // Advisory refresh must not throw from the heartbeat during shutdown.
+      }
       // A transfer target that died is detected by heartbeat age, not by a file
       // write, so ownership is re-checked on our own heartbeat too.
       this.maybeNotifyOwnershipChanged()
@@ -776,7 +805,12 @@ export class InstanceRegistry {
   }
 
   private consumeCheckpointEvent(entry: InstanceEntry): void {
-    const update = entry.checkpointEvent
+    const updates = Array.isArray(entry.checkpointEvents) ? entry.checkpointEvents.slice(-64) : []
+    if (entry.checkpointEvent) updates.push(entry.checkpointEvent)
+    for (const update of updates) this.deliverCheckpointEvent(update)
+  }
+
+  private deliverCheckpointEvent(update: CrossInstanceCheckpointEvent): void {
     if (
       !update ||
       typeof update.id !== 'string' ||
