@@ -594,6 +594,8 @@ function frameFolderName(directory: string): string {
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
+  /** Native child tabs and the page that opened them. */
+  private readonly childTabOpeners = new Map<string, string>()
   private readonly compositionArming = new WeakMap<
     BrowserTab,
     { generation: number; promise: Promise<void> }
@@ -1272,7 +1274,10 @@ export class BrowserService {
         const threadId = validateThreadId(rawThreadId)
         const boxId = validateOptionalBoxId(rawBoxId)
         const initialUrl =
-          rawInitialUrl === undefined || rawInitialUrl === null || rawInitialUrl === ''
+          rawInitialUrl === undefined ||
+          rawInitialUrl === null ||
+          rawInitialUrl === '' ||
+          (rawInitialUrl === 'about:blank' && this.childTabOpeners.has(tabId))
             ? ''
             : this.validateTabNavigationUrl(projectId, boxId, rawInitialUrl)
         const bounds = validateBounds(rawBounds)
@@ -3745,7 +3750,8 @@ export class BrowserService {
     tabId: string,
     projectId: string,
     threadId: string,
-    boxId: string | null = null
+    boxId: string | null = null,
+    childContents?: WebContents
   ): BrowserTab {
     const existing = this.tabs.get(tabId)
     if (existing) {
@@ -3767,16 +3773,18 @@ export class BrowserService {
     // is single-flight per jar, so a burst of shows loads each extension once.
     void this.extensions.ensureJarLoaded(projectId, boxId)
 
-    const view = new WebContentsView({
-      webPreferences: {
-        session: browserSession,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        webSecurity: true,
-        devTools: true
-      }
-    })
+    const view = childContents
+      ? new WebContentsView({ webContents: childContents })
+      : new WebContentsView({
+          webPreferences: {
+            session: browserSession,
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            webSecurity: true,
+            devTools: true
+          }
+        })
     // The tab carries no document yet, so nothing of the page's own surface is
     // painted over the app until one commits.
     applyBrowserPageBackground(view)
@@ -4232,10 +4240,9 @@ export class BrowserService {
    * - explicit background-tab gestures keep opening a background tab, unless
    *   they carry a POST body that must be submitted by Chromium.
    *
-   * A popup window is only hosted for the global browser, which is the one with a
-   * rail to show it in. A project's browser   and every page an agent drives   keeps
-   * the tab behaviour it had, where an opened window is a tab with an address the
-   * user can see and steer.
+   * The global browser hosts foreground children in its popup rail. Thread and
+   * agent browsers adopt Chromium's child contents into regular tabs, preserving
+   * the same opener, session, POST submission and script-close lifecycle.
    *
    * Shared by tabs and popup windows, because a popup may open a popup (a
    * sign-in that takes a second step) and both must land the same way.
@@ -4257,6 +4264,23 @@ export class BrowserService {
     ) {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
+    }
+    if (owner.projectId !== GLOBAL_BROWSER_PROJECT_ID) {
+      const url = details.url || 'about:blank'
+      if (!isAllowedPopupWindowUrl(url)) return { action: 'deny' }
+      let children = 0
+      for (const opener of this.childTabOpeners.values()) {
+        if (opener === owner.tabId) children++
+      }
+      if (children >= MAX_POPUP_WINDOWS_PER_TAB) return { action: 'deny' }
+      return {
+        action: 'allow',
+        createWindow: (options) => {
+          const contents = popupWindowContents(options)
+          if (!contents) throw new Error('Browser child tab was offered no web contents')
+          return this.openNewTabFor(owner, url, false, null, contents)
+        }
+      }
     }
     try {
       this.openNewTabFor(
@@ -6504,8 +6528,9 @@ export class BrowserService {
     owner: BrowserPageOwner,
     url: string,
     peek = false,
-    origin: BrowserViewBounds | null = null
-  ): void {
+    origin: BrowserViewBounds | null = null,
+    childContents?: WebContents
+  ): WebContents {
     const sourceTabId = this.peekTabs.get(owner.tabId) ?? owner.tabId
     if (peek) {
       for (const [peekId, sourceId] of this.peekTabs) {
@@ -6516,10 +6541,21 @@ export class BrowserService {
     if (peek) this.peekTabs.set(tabId, sourceTabId)
     // A new sibling inherits the box it was opened from: a popup or a link
     // belongs beside the page that produced it, in the same jar.
-    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
+    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId, childContents)
     tab.initialNavigationStarted = true
+    if (childContents) {
+      this.childTabOpeners.set(tabId, owner.tabId)
+      childContents.once('destroyed', () => {
+        // Manual close removes the relationship first. Only script/native close
+        // needs to remove the surviving tab-strip entry here.
+        if (!this.childTabOpeners.has(tabId)) return
+        this.destroy(tabId, 'closed')
+        this.requestPanelShortcut(tabId, 'close-tab')
+      })
+    }
     this.parkTab(tabId)
-    this.load(tabId, url)
+    // Electron navigates adopted children, including their original POST body.
+    if (!childContents) this.load(tabId, url)
     sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
       projectId: owner.projectId,
       threadId: owner.threadId,
@@ -6530,6 +6566,7 @@ export class BrowserService {
       boxId: owner.boxId,
       origin
     })
+    return tab.view.webContents
   }
 
   /**
@@ -7390,6 +7427,12 @@ export class BrowserService {
   }
 
   private destroy(tabId: string, reason: BrowserTabDestroyReason): void {
+    this.childTabOpeners.delete(tabId)
+    for (const [childId, openerId] of this.childTabOpeners) {
+      if (openerId !== tabId) continue
+      this.destroy(childId, 'closed')
+      this.requestPanelShortcut(childId, 'close-tab')
+    }
     if (this.pendingShow?.tabId === tabId) this.pendingShow = null
     // A hide that is still inside its grace window must not park a tab that is
     // about to be gone: the view would be handed to the stage window only to be
