@@ -1,5 +1,5 @@
 import electronUpdater from 'electron-updater'
-import { BrowserWindow, app } from 'electron'
+import { BrowserWindow, app, autoUpdater as nativeAutoUpdater } from 'electron'
 import os from 'node:os'
 import { Logger } from '../system/logger'
 import type {
@@ -163,6 +163,8 @@ export class UpdaterService {
   private installFailure: InstallFailureState | null = null
   /** True between handing the payload to the platform installer and its exit. */
   private installDispatched = false
+  /** One retry of Squirrel's localhost GET per install dispatch. */
+  private localTransferRetried = false
   /** Bounds how long a dispatched install may leave us running; see its arm site. */
   private installQuitWatchdog: ReturnType<typeof setTimeout> | null = null
   private installRecoveryPending = false
@@ -279,6 +281,35 @@ export class UpdaterService {
 
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
+      // Squirrel fetches the already verified ZIP from MacUpdater's localhost
+      // server at install time. A dropped connection here is not a failed
+      // internet download or a rejected build. Retry that GET once, keeping the
+      // existing quit-on-download listener instead of calling quitAndInstall
+      // again and registering another one.
+      const localTransferFailed =
+        process.platform === 'darwin' &&
+        this.installDispatched &&
+        (/network connection was lost/i.test(error.message) ||
+          ('code' in error && error.code === -1005))
+      if (localTransferFailed && !this.localTransferRetried) {
+        this.localTransferRetried = true
+        Logger.info('Updater: retrying the cached update transfer to the macOS installer')
+        queueMicrotask(() => {
+          if (!this.installDispatched) return
+          try {
+            nativeAutoUpdater.checkForUpdates()
+            if (this.installDispatched) {
+              this.armInstallQuitWatchdog(this._status.availableVersion)
+            }
+          } catch (retryError: unknown) {
+            autoUpdater.emit(
+              'error',
+              retryError instanceof Error ? retryError : new Error(String(retryError))
+            )
+          }
+        })
+        return
+      }
       this.forceUpdateInBackground = false
       // An install that fails inside the process never reaches the platform
       // installer, so record it here instead of waiting for the relaunch to
@@ -288,7 +319,15 @@ export class UpdaterService {
       if (failedDispatch) {
         this.installDispatched = false
         this.clearInstallQuitWatchdog()
-        void this.recordInstallFailure(this._status.availableVersion)
+        if (localTransferFailed) {
+          // Preserve the valid payload and failure budget. No build was
+          // installed or rejected, and sweeping staging would race Squirrel.
+          void this.storage.remove(INSTALL_DISPATCH_FILE).catch((cause: unknown) => {
+            Logger.error('Updater: failed to clear the local transfer dispatch', cause)
+          })
+        } else {
+          void this.recordInstallFailure(this._status.availableVersion)
+        }
       }
       // An install that failed before it could quit must not leave the park gate
       // disabled: the app has to stay parkable in the menu bar.
@@ -300,7 +339,9 @@ export class UpdaterService {
       if (failedDispatch) {
         this.updateState({
           state: 'error',
-          errorMessage: `The update could not be installed: ${error.message}`
+          errorMessage: localTransferFailed
+            ? 'The update was downloaded and verified, but the local transfer to the macOS installer failed after retrying. Check for updates to retry the cached update.'
+            : `The update could not be installed: ${error.message}`
         })
         return
       }
@@ -1070,6 +1111,7 @@ export class UpdaterService {
   }
 
   private quitAndInstallNow(): void {
+    this.localTransferRetried = false
     this.installPending = false
     this.installApproved = false
     this.updateState({ state: 'idle' })
