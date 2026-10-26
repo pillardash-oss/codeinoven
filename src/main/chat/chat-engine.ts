@@ -620,6 +620,11 @@ import {
   titleAttemptsFromDriver
 } from './chat-engine/chat-engine-message-text'
 import {
+  demoteTaskReconcileAnswer,
+  taskReconcileAnswer,
+  taskReconcileExchange
+} from './chat-engine/chat-engine-task-reconcile'
+import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
   CONNECTION_LOSS_GRACE_MS,
   CONNECTION_WAIT_MESSAGE,
@@ -1086,6 +1091,17 @@ export class ChatEngine {
    * one extra turn and keeps it from looping.
    */
   private todoReconcileAttempts = new Map<string, number>()
+
+  /**
+   * Sessions whose live turn is the app-issued task-list reconcile prompt.
+   *
+   * A harness that reconciles inside its own turn reports the answer itself (see
+   * `capabilities.reportsTaskReconcileAnswer`), but every other harness answers
+   * this one in a turn the engine issues, so the engine already knows where the
+   * exchange starts: its own prompt. Consumed at finalization and cleared by the
+   * next user prompt, exactly like the attempt budget above.
+   */
+  private taskReconcileTurns = new Set<string>()
 
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
@@ -10405,6 +10421,7 @@ export class ChatEngine {
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
       this.searchNudgeAttempts.delete(sessionId)
       this.todoReconcileAttempts.delete(sessionId)
+      this.taskReconcileTurns.delete(sessionId)
     }
     // A new turn resolves any pending auto-resume for this session   the user
     // (or a previous scheduled retry) is driving it again.
@@ -27882,6 +27899,34 @@ export class ChatEngine {
   }
 
   /**
+   * The message that owns the answer the current turn's task-list reconcile
+   * exchange must not replace, or undefined when this turn had no such exchange.
+   *
+   * Two things can nudge the agent to publish a truth the task card is missing,
+   * and each leaves its own mark:
+   *
+   * - the engine's own reconcile turn (every harness that does not reconcile
+   *   inside its own turn) is a prompt the engine issued, so the exchange starts
+   *   at that prompt;
+   * - a harness that reconciles mid-turn reports the message it is protecting
+   *   through the driver (`capabilities.reportsTaskReconcileAnswer`).
+   *
+   * A harness mark is only read while a turn of this thread owns the session: a
+   * stale mark from an earlier turn would name a message the current transcript
+   * no longer describes as this turn's work.
+   */
+  private taskReconcileAnswerId(
+    driver: HarnessDriver,
+    info: SessionInfo,
+    sessionId: string
+  ): string | undefined {
+    if (this.taskReconcileTurns.delete(sessionId)) return info.activeTurnUserMessageId
+    if (driver.capabilities.reportsTaskReconcileAnswer !== true) return undefined
+    if (info.activeTurnUserMessageId === undefined) return undefined
+    return driver.taskReconcileAnswerId?.(sessionId)
+  }
+
+  /**
    * The thread an idle finalization still owns, or null once a newer turn has
    * superseded it.
    *
@@ -27991,7 +28036,7 @@ export class ChatEngine {
       // A turn whose final assistant message is only a task-list publication (the
       // reconcile continuation that corrects a lagging list and, as instructed,
       // adds no prose) must still be read as the answer the agent gave before it.
-      const terminalAssistant = terminalAssistantMessage(messages, turnAssistant)
+      let terminalAssistant = terminalAssistantMessage(messages, turnAssistant)
       const turnSelection = this.sessionModelIds.get(sessionId)
       const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
@@ -28040,9 +28085,31 @@ export class ChatEngine {
         : []
       const suppressTerminalAnswer =
         this.planningSessions.has(sessionId) || isDedicatedAssignmentAuditorThread(thread)
-      let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer).filter(
+      const classifiedAll = classifyProviderMessages(messages, suppressTerminalAnswer)
+      // A task-list reconcile exchange is bookkeeping, not a new answer. When it
+      // added nothing but the corrected list, its prose must not become the
+      // turn's closing statement: the answer the agent already gave stays the
+      // answer (and therefore the one message the reader can select and
+      // annotate), while the corrected list still renders in the working trace
+      // beside the work it describes. Its tool calls, reasoning and usage are
+      // untouched; only the words that would have replaced the answer are moved
+      // out of the answer slot.
+      const reconcileAnswerId = this.taskReconcileAnswerId(driver, info, sessionId)
+      const reconcileExchange = taskReconcileExchange(classifiedAll, reconcileAnswerId)
+      const reconcileKeepsAnswer = reconcileExchange !== null && !reconcileExchange.addedWork
+      if (reconcileKeepsAnswer) {
+        const keptAnswer = taskReconcileAnswer(classifiedAll, reconcileExchange.boundaryId, mirror)
+        if (keptAnswer) terminalAssistant = keptAnswer
+      }
+      let classifiedMessages = classifiedAll.filter(
         (message) => !(message.role === 'user' && message.visibility === 'hidden')
       )
+      if (reconcileKeepsAnswer) {
+        classifiedMessages = demoteTaskReconcileAnswer(
+          classifiedMessages,
+          reconcileExchange.boundaryId
+        )
+      }
       let merged = restoreMirrorAccount(
         restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
         mirror
@@ -28592,6 +28659,7 @@ export class ChatEngine {
           : []
         if (unfinishedLabels.length > 0) {
           this.todoReconcileAttempts.set(sessionId, 1)
+          this.taskReconcileTurns.add(sessionId)
           await this.finishCheckpoint(
             sessionId,
             info,

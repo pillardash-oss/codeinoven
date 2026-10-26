@@ -112,6 +112,14 @@ export interface HarnessCapabilities {
    * never nudged twice for the same turn.
    */
   handlesTaskReconcile?: boolean
+  /**
+   * The driver reads the answer out of the current turn's task-list reconcile
+   * exchange: `taskReconcileAnswerId` reports the message that owns the answer
+   * the exchange must not replace. Only meaningful with `handlesTaskReconcile`,
+   * where the nudge happens inside the harness and the app has no prompt of its
+   * own to look for.
+   */
+  reportsTaskReconcileAnswer?: boolean
   /** Can force a model response through a validated JSON-schema output tool. */
   structuredOutput?: boolean
   /**
@@ -898,6 +906,18 @@ export interface HarnessDriver {
    * recovered state is persisted before the next turn replays history.
    */
   reconcileSession?(projectPath: string, sessionId: string): Promise<void>
+
+  /**
+   * The message that owns the current turn's answer, as recorded when the
+   * harness itself nudged the agent to reconcile a lagging task list inside the
+   * same turn (see `capabilities.handlesTaskReconcile`).
+   *
+   * The app must not let that exchange pass for a new answer: the nudge only asks
+   * the agent to publish the corrected list. The engine reads this id to decide
+   * whether the text written after it is the turn's answer or a bookkeeping reply
+   * that belongs in the working trace. Undefined when the turn had no such nudge.
+   */
+  taskReconcileAnswerId?(sessionId: string): string | undefined
 
   /**
    * Reply to a pending permission request. When `message` is provided alongside a

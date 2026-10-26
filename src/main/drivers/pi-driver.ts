@@ -320,12 +320,24 @@ export class PiDriver extends PersistentCliDriver {
     scheduledRetry: true,
     // The core-tools extension reconciles the task list on `agent_settled`
     // (src/main/drivers/pi/tools/core-tools-events.ts), so the chat engine's
-    // generic guard must not nudge the same turn again.
+    // generic guard must not nudge the same turn again. The driver reads the
+    // answer that nudge must not replace back out of the record stream, so the
+    // engine can keep it as the turn's answer.
     handlesTaskReconcile: true,
+    reportsTaskReconcileAnswer: true,
     nativeUtilities: []
   }
 
   private turnStates = new Map<string, PiTurnState>()
+  /**
+   * Per session, the message that owns the answer the last task-list reconcile
+   * nudge must not replace (see `taskReconcileAnswerId`).
+   *
+   * Written when the extension's nudge crosses the record stream and read once at
+   * finalization, then cleared by the next prompt: a mark left over from an
+   * earlier turn can only mislead a transcript read that reaches back before it.
+   */
+  private reconcileAnswers = new Map<string, string>()
   private rpcClients = new Map<string, PiRpcClient>()
   /**
    * In-flight session bootstraps, keyed by session id.
@@ -943,6 +955,7 @@ export class PiDriver extends PersistentCliDriver {
     )
     this.appendUserMessage(session, options)
     this.silentContinues.delete(session.id)
+    this.reconcileAnswers.delete(session.id)
     this.activeTurns.add(session.id)
 
     const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
@@ -1292,6 +1305,7 @@ export class PiDriver extends PersistentCliDriver {
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
+    this.reconcileAnswers.delete(sessionId)
     await this.removeGatewayHandoff(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
@@ -1311,6 +1325,7 @@ export class PiDriver extends PersistentCliDriver {
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
+    this.reconcileAnswers.delete(sessionId)
     await this.removeGatewayHandoff(sessionId)
     await super.parkThreadSession(projectPath, threadId, sessionId)
   }
@@ -1481,7 +1496,18 @@ export class PiDriver extends PersistentCliDriver {
       turnIndex: 0
     }
     this.turnStates.set(context.sessionId, state)
-    return mapPiRecord(value, context, state)
+    const result = mapPiRecord(value, context, state)
+    // The record mapper stores the task-list reconcile nudge's boundary on the
+    // turn state; keep it per session so the chat engine can read it back at
+    // finalization, once the whole turn is in hand.
+    if (state.reconcileAnswerMessageId !== undefined) {
+      this.reconcileAnswers.set(context.sessionId, state.reconcileAnswerMessageId)
+    }
+    return result
+  }
+
+  taskReconcileAnswerId(sessionId: string): string | undefined {
+    return this.reconcileAnswers.get(sessionId)
   }
 
   dispose(): void {
@@ -1489,6 +1515,7 @@ export class PiDriver extends PersistentCliDriver {
     this.rpcClients.clear()
     this.activeTurns.clear()
     this.turnStates.clear()
+    this.reconcileAnswers.clear()
     this.childStreams.clear()
     this.silentContinues.clear()
     this.cioStopFlagPaths.clear()

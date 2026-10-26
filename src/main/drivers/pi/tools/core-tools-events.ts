@@ -8,6 +8,7 @@
 import {
   CIO_AGENT_OUTPUT_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
+  CIO_TODO_RECONCILE_MESSAGE_TYPE,
   CIO_TODO_WRITE_TOOL_NAME
 } from '../../../../lib/core-tools'
 
@@ -71,7 +72,9 @@ export function piCoreToolsEventsSource(): string {
       unfinished.join('; ') +
       '. The task card is how the user follows the run, and a run that ends on that list reads as abandoned work. Publish the final list before you finish: call ' +
       '${CIO_TODO_WRITE_TOOL_NAME} once more with the list as it really stands, marking every task you completed as completed and dropping the tasks you no longer intend to do (an empty list clears them). ' +
-      'When the work is truly complete and only the list lagged, make that one ${CIO_TODO_WRITE_TOOL_NAME} call and nothing else: add no prose and no other tool call. The app keeps the final answer you already gave the user and shows it, so any words you add here would only replace that answer with a redundant second version of it. Write text only if something material truly changed since that answer, and never mark a task complete that you did not actually finish. Only end your turn once the list matches what you actually did.'
+      'When the work is truly complete and only the list lagged, make that one ${CIO_TODO_WRITE_TOOL_NAME} call and nothing else: add no prose and no other tool call. The app keeps the final answer you already gave the user and shows it, so text you write here is dropped rather than shown as a second answer. ' +
+      'Write text only if you did something material after that answer   a fix, a commit, a verification that changed the outcome. Then write a complete answer that stands on its own: restate the outcome you already gave the user, and add the new work and its result, because your text replaces that answer and it is the only thing the user can annotate. ' +
+      'Never mark a task complete that you did not actually finish, and only end your turn once the list matches what you actually did.'
     )
   }
 
@@ -129,7 +132,7 @@ export function piCoreToolsEventsSource(): string {
       entries: [
         {
           type: 'custom_message',
-          customType: 'cio-todo-reconcile',
+          customType: '${CIO_TODO_RECONCILE_MESSAGE_TYPE}',
           content: cioTodoReconcilePrompt(unfinished),
           display: false
         }
@@ -194,7 +197,7 @@ export function piCoreToolsEventsSource(): string {
     try {
       void pi.sendMessage(
         {
-          customType: 'cio-todo-reconcile',
+          customType: '${CIO_TODO_RECONCILE_MESSAGE_TYPE}',
           content: cioTodoReconcilePrompt(unfinishedTodos),
           display: false
         },
