@@ -1253,22 +1253,35 @@ inventing a channel.
 ### Durable report files
 
 A run thread is capped and evicted, so a report that only ever lived in the
-transcript would eventually disappear. Every assistant task turn that settles
-with a report therefore also lands one Markdown file under `reports/` in the
-assistant's own workspace (`assistant-cwd/<assistantId>/reports/`), which the
-**Workspace files** panel mounts. `isAssistantReportThread`
-(`src/lib/assistant-reports.ts`) excludes the Getting started authoring thread,
-and `assistantReportIsTerminal` limits the copy to the terminal outcomes
-(`completed`, `failed`); a non-terminal settle (`awaiting_approval`,
-`working-paused`) is still in flight, and an `interrupted` turn was stopped on
-purpose. The file is written in the main process from the turn's final answer
-(`writeAssistantReport`, `src/main/chat/assistant-report-service.ts`, called from
-the chat engine's idle finalization), so it is deterministic and does not depend
-on the model remembering to write a file. `buildAssistantReportDocument` puts a
-short metadata header (run time, status, task, agreed urgency) above the final
-answer, and the file name is the run time plus a short thread suffix so two runs
-that settle in the same second do not collide. The in-app report and its
-notification are unchanged: the file is the copy that outlives the thread.
+transcript would eventually disappear. A run that produced a report therefore
+lands one Markdown file under `reports/` in the assistant's own workspace
+(`assistant-cwd/<assistantId>/reports/`), which the **Workspace files** panel
+mounts.
+
+**The run decides, and only the run.** The app never derives a report from a
+turn's answer. Most turns are not reports: a question, a check-in, a status
+line, an acknowledgement or an ordinary reply. Wrapping one in a report document
+invents a deliverable nobody wrote, which is exactly what a two-sentence answer
+about a logo direction became before this rule existed. So a run that produced a
+document the user will read again on its own declares it through the app-owned,
+thread-bound capability `cio:assistant-report`
+(`src/lib/assistant-reports.ts`): `save_report({ title, markdown? })`. The title
+is required, so every filed report is named; `markdown` is optional and defaults
+to the answer the user is about to read.
+
+The declaration is held for that turn and written at finalization, not at the
+moment of the call, so the file carries the settled status while the path, the
+file name and the header stay app-owned. `isAssistantReportThread` excludes the
+Getting started authoring thread, `assistantReportIsTerminal` limits the write to
+the terminal outcomes (`completed`, `failed`), and a turn that declared nothing
+writes nothing. A new turn clears any stale declaration first, so a report from
+an aborted turn can never be filed by a later one. `writeAssistantReport`
+(`src/main/chat/assistant-report-service.ts`) does the atomic write and
+`buildAssistantReportDocument` puts a short metadata header (run time, status,
+task, agreed urgency) under the run's own title, and the file name is the run
+time plus a short thread suffix so two runs that settle in the same second do not
+collide. The in-app answer and its notification are unchanged: the file is the
+copy that outlives the thread.
 
 ### Priority
 
@@ -1309,7 +1322,10 @@ through its channel and to supply that connection itself rather than drop the
 report, and both are told the agreed brackets and to move them when what they
 found differs. An assistant with a report but no agreed priority is told to decide
 both brackets from what it found. An action-only assistant gets neither line, so
-the reporting contract never leaks into a run that has nothing to report.
+the reporting contract never leaks into a run that has nothing to report. The
+same contract carries the report rule for every run, with or without a delivery:
+calling `save_report` is what files a report, and a question, a check-in, a status
+line, an acknowledgement or a chat reply leaves none.
 
 ### Editing by hand
 

@@ -58,20 +58,23 @@ describe('assistant result delivery', () => {
     expect(assistantResultText('[Whenever · Just me] Both sites are online.')).toBe(
       'Both sites are online.'
     )
-    expect(assistantResultText('<assistant_result>[today · company] Ship it.</assistant_result>')).toBe(
-      'Ship it.'
-    )
+    expect(
+      assistantResultText('<assistant_result>[today · company] Ship it.</assistant_result>')
+    ).toBe('Ship it.')
     // A sentence that merely starts with a bracket-free word stays untouched.
     expect(assistantResultText('Today both sites are online.')).toBe('Today both sites are online.')
     expect(assistantResultText(result)).toBe(result)
   })
   it('archives exactly the same delivered update without model drafting or delimiters', () => {
     const document = buildAssistantReportDocument({
+      title: 'Watch products',
       taskTitle: 'Watch products',
       report: wire,
       status: 'completed',
       at: 0
     })
+    // The heading is the run's own title, not a label the app invented for it.
+    expect(document.startsWith('# Watch products')).toBe(true)
     expect(document).toContain(result)
     expect(document).not.toContain('Let me draft')
     expect(document).not.toContain('translated report')

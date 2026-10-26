@@ -1452,6 +1452,16 @@ export class ChatEngine {
    * which owns the durable attention store; absent means nothing is recorded.
    */
   private autoAnswerRecorder: ((report: AutoAnswerReport) => void) | null = null
+  /**
+   * The report a run declared for its own turn, keyed by thread, held until the
+   * turn settles.
+   *
+   * The file is written at finalization rather than at the moment of the call, so
+   * it carries the settled status and the run time, and a turn that ends without a
+   * final answer leaves no file behind. A new turn clears the entry, so a
+   * declaration from an aborted turn can never be filed by a later one.
+   */
+  private declaredAssistantReports = new Map<string, { title: string; markdown?: string }>()
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
 
@@ -4327,6 +4337,9 @@ export class ChatEngine {
      */
     artifactTools = false
   ): Promise<string> {
+    // A new turn begins, so a report declared by an earlier turn that never settled
+    // must not be filed under this one.
+    this.declaredAssistantReports.delete(threadId)
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
     // has to be able to rebuild its context from them.
@@ -4401,6 +4414,12 @@ export class ChatEngine {
                 this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
+            }
+          : {}),
+        ...(assistantTurn === 'run'
+          ? {
+              saveAssistantReport: (title: string, markdown?: string) =>
+                Promise.resolve(this.declareAssistantReport(threadId, title, markdown))
             }
           : {}),
         budgetContext,
@@ -4739,6 +4758,12 @@ export class ChatEngine {
                 this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
+            }
+          : {}),
+        ...(this.assistantConversation(steeringThread) === 'run'
+          ? {
+              saveAssistantReport: (title: string, markdown?: string) =>
+                Promise.resolve(this.declareAssistantReport(threadId, title, markdown))
             }
           : {}),
         budgetContext,
@@ -26399,6 +26424,10 @@ export class ChatEngine {
    * Publish one settled assistant run's report as a durable Markdown file under
    * `reports/` in the assistant's own workspace.
    *
+   * Only a run that declared a report through the report capability reaches the
+   * write: the app never derives a report from an ordinary answer, so a question,
+   * a check-in or a chat reply leaves no file and is never dressed up as a report.
+   *
    * A thread is capped and evicted, so a report that only ever lived in the run
    * transcript disappears with it. Fire-and-forget and swallowed on error: the
    * durable copy is best-effort bookkeeping and must never block or fail the
@@ -26409,23 +26438,27 @@ export class ChatEngine {
     turnAssistant: AgentMessage | undefined,
     status: ThreadStatus
   ): void {
+    const declared = this.declaredAssistantReports.get(thread.id)
+    this.declaredAssistantReports.delete(thread.id)
+    if (!declared) return
     if (!isAssistantReportThread(thread)) return
     if (!assistantReportIsTerminal(status)) return
     if (!turnAssistant) return
-    const report = assistantText(turnAssistant).trim()
+    const report = (declared.markdown ?? assistantText(turnAssistant)).trim()
     if (report.length === 0) return
-    void this.writeAssistantReportFor(thread, report, status)
+    void this.writeAssistantReportFor(thread, declared.title, report, status)
   }
 
   private async writeAssistantReportFor(
     thread: Thread,
+    title: string,
     report: string,
     status: ThreadStatus
   ): Promise<void> {
     try {
       const assistant = thread.assistantId ? this.assistantRepo.get(thread.assistantId) : null
-      // A run's own title is just its start time, so the report's heading uses
-      // the task it ran for. A turn on the task's own thread is already titled.
+      // A run's own title is just its start time, so the report's header names the
+      // task it ran for. A turn on the task's own thread is already titled.
       let taskTitle = thread.title
       if (thread.assistantTaskId) {
         const task = await this.threadManager.getThread(thread.projectId, thread.assistantTaskId)
@@ -26433,6 +26466,7 @@ export class ChatEngine {
       }
       await writeAssistantReport(this.storage, {
         thread,
+        title,
         taskTitle,
         assistantName: assistant?.name,
         priority: assistant?.priority,
@@ -26446,6 +26480,20 @@ export class ChatEngine {
         error: rawErrorMessage(error)
       })
     }
+  }
+
+  /**
+   * Hold the report a run declared for this turn. The capability that calls this
+   * is bound to the live run turn, so the app owns the path and the file is
+   * written when the turn actually settles.
+   */
+  private declareAssistantReport(
+    threadId: string,
+    title: string,
+    markdown?: string
+  ): { status: 'queued'; title: string } {
+    this.declaredAssistantReports.set(threadId, { title, ...(markdown ? { markdown } : {}) })
+    return { status: 'queued', title }
   }
 
   /**
