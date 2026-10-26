@@ -27560,10 +27560,13 @@ export class ChatEngine {
       : info.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? [info.projectPath]
         : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
-    // An assistant owns its own `assistant-cwd/<assistantId>/` workspace, so the
-    // sensitive-file block list never asks about a file inside it: that name is
-    // the assistant's own work, not a secret it is reaching for. The card still
-    // covers everything that leaves the workspace.
+    // An assistant, a standalone chat, and a browser tab's agent chat each own
+    // the directory their session runs in (`assistant-cwd/<assistantId>`,
+    // `chats-cwd/<threadId>`, `browser-cwd/<threadId>`), so the sensitive-file
+    // block list never asks about a file inside it: that name is the session's
+    // own work, not a secret it is reaching for. The card still covers
+    // everything that leaves the workspace, and a project thread keeps the list
+    // everywhere because its cwd holds the project's real secrets.
     const workspaceRoots = isAssistant ? [resolve(info.projectPath)] : []
     // A thread in a real project also owns that project's `.cio` scratch folder:
     // it is where the agent stages its own work, so deletes and confined shell
@@ -27594,7 +27597,10 @@ export class ChatEngine {
     return {
       allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
       scratchPaths,
-      workspaceRoots,
+      // A chat owns its workspace only once it may write there: with File
+      // System off it is restricted to the attached files, so the workspace
+      // earns no exemption from the sensitive-file list either.
+      workspaceRoots: fileSystemMode ? [resolve(info.projectPath)] : [],
       restrictToAllowed: !fileSystemMode
     }
   }

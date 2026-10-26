@@ -71,10 +71,12 @@ export interface PermissionPolicyOptions {
    *  Anything that cannot be proven confined still asks. */
   scratchPaths?: readonly string[]
   /** Absolute directories this session owns outright: an assistant task's own
-   *  `assistant-cwd/<assistantId ?? threadId>` root. The sensitive-file block
-   *  list exists to protect secrets the session does not own, so a protected
-   *  name inside one of these roots is the session's own business and never
-   *  needs an approval. Targets that leave the roots keep asking. */
+   *  `assistant-cwd/<assistantId ?? threadId>` root, or a chat's own
+   *  `chats-cwd/<threadId>` / `browser-cwd/<threadId>` workspace. The
+   *  sensitive-file block list exists to protect secrets the session does not
+   *  own, so a protected name inside one of these roots is the session's own
+   *  business and never needs an approval. Targets that leave the roots keep
+   *  asking. */
   workspaceRoots?: readonly string[]
   now?: () => number
 }
