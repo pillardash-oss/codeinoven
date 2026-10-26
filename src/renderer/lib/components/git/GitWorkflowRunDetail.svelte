@@ -2,16 +2,12 @@
   import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
   import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
-  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { onMount } from 'svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { formatDurationSeconds } from '$lib/format/duration'
   import { gitState, GitState } from '$lib/stores/git.svelte'
-  import { failedJobStepNames, isFailedJob } from '$shared/github-job-log'
+  import { failedJobStepNames } from '$shared/github-job-log'
   import GitJobLogView from './GitJobLogView.svelte'
-  import CancelRunButton from './CancelRunButton.svelte'
-  import RerunRunMenu from './RerunRunMenu.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import type {
     GitHubDeploymentJob,
@@ -23,20 +19,14 @@
     projectId: string
     identity: { owner: string; repo: string }
     run: GitHubWorkflowRun
-    onAgentDiagnose: (
-      run: GitHubWorkflowRun,
-      job: GitHubDeploymentJob,
-      log: GitHubDeploymentJobLog | null
-    ) => void
   }
 
-  let { projectId, identity, run, onAgentDiagnose }: Props = $props()
+  let { projectId, identity, run }: Props = $props()
 
   let error = $state('')
   let expandedLog = $state<Record<number, boolean>>({})
   let loadingLog = $state<Record<number, boolean>>({})
   let logErrors = $state<Record<number, string>>({})
-  let preparingAgent = $state(false)
 
   /** Detail is served from the store cache so re-entering the view is instant. */
   const cached = $derived(
@@ -44,11 +34,6 @@
   )
   const detail = $derived(cached?.detail ?? null)
   const loading = $derived(gitState.isBusy('deployment-run-detail'))
-
-  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
-
-  /** The run the re-run control targets: the loaded detail's, or the passed one. */
-  const rerunRun = $derived(detail?.run ?? run)
 
   function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
     return (
@@ -123,20 +108,6 @@
     }
   }
 
-  /** Load one failed job's evidence before opening its agent review thread. */
-  async function reviewWithAgent(job: GitHubDeploymentJob): Promise<void> {
-    if (preparingAgent || !isFailedJob(job)) return
-    preparingAgent = true
-    try {
-      await gitState
-        .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
-        .catch(() => null)
-      onAgentDiagnose(detail?.run ?? run, job, cachedLog(job.id))
-    } finally {
-      preparingAgent = false
-    }
-  }
-
   onMount(() => {
     void loadDetail()
   })
@@ -179,45 +150,12 @@
     </div>
   {:else if detail}
     <div class="min-h-0 flex-1 overflow-y-auto">
-      <!-- Jobs -->
+      <!--
+        Jobs only: the run's own controls and job count live in the panel's action
+        row, where the run's state badge already sits. A heading here repeated what
+        that row says and cost the list a row of height.
+      -->
       <section>
-        <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-          <CioTerminal size={11} class="text-dimmed" />
-          <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Jobs</h3>
-          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{detail.jobs.length}</span
-          >
-          {#if failedJob}
-            <button
-              type="button"
-              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
-              title={`Review failed job ${failedJob.name} with an agent`}
-              disabled={preparingAgent || loading}
-              onclick={() => void reviewWithAgent(failedJob)}
-            >
-              {#if preparingAgent}
-                <CioSpinner size={11} class="animate-spin" />
-              {:else}
-                <CioSubagent size={11} />
-              {/if}
-              Review failed job
-            </button>
-          {/if}
-          <RerunRunMenu
-            {projectId}
-            {identity}
-            runId={rerunRun.id}
-            runStatus={rerunRun.status}
-            hasFailedJobs={failedJob !== null}
-            onRerun={() => void loadDetail(true)}
-          />
-          <CancelRunButton
-            {projectId}
-            {identity}
-            runId={rerunRun.id}
-            runStatus={rerunRun.status}
-            onCancelled={() => void loadDetail(true)}
-          />
-        </div>
         {#if detail.jobs.length === 0}
           <p class="px-3 py-5 text-center text-[0.625rem] text-dimmed">
             No job details are available.

@@ -31,11 +31,6 @@
     onSignIn: () => void
     requestedRunId?: number | null
     onRequestedRunOpened?: () => void
-    onAgentDiagnoseRun: (
-      run: GitHubWorkflowRun,
-      job: GitHubDeploymentJob,
-      log: GitHubDeploymentJobLog | null
-    ) => void
     onAgentDiagnoseDeployment: (
       deployment: GitHubDeployment,
       run: GitHubWorkflowRun | null,
@@ -58,7 +53,6 @@
     onSignIn,
     requestedRunId = null,
     onRequestedRunOpened,
-    onAgentDiagnoseRun,
     onAgentDiagnoseDeployment,
     selectedDeployment = $bindable(null),
     selectedRun = $bindable(null)
@@ -409,12 +403,7 @@
       </p>
     </div>
   {:else if selectedRun && identity}
-    <GitWorkflowRunDetail
-      {projectId}
-      {identity}
-      run={selectedRun}
-      onAgentDiagnose={onAgentDiagnoseRun}
-    />
+    <GitWorkflowRunDetail {projectId} {identity} run={selectedRun} />
   {:else if selectedDeployment && identity}
     <GitDeploymentDetail
       {projectId}
