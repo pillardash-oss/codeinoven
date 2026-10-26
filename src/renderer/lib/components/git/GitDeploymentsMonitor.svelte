@@ -146,16 +146,94 @@
     const source = identity
     if (!source || !githubConnected) return
     if (activeView === 'runs') {
-      void gitState.ensureWorkflowRunPage(
-        projectId,
-        source.owner,
-        source.repo,
-        runFilter,
-        runsPage
-      )
+      void gitState.ensureWorkflowRunPage(projectId, source.owner, source.repo, runFilter, runsPage)
       return
     }
     void gitState.ensureDeploymentPage(projectId, source.owner, source.repo, environmentsPage)
+  })
+
+  let pageVisible = $state(!document.hidden)
+
+  const selectedDetailCompleted = $derived.by(() => {
+    if (!identity) return false
+    const { owner, repo } = identity
+    if (selectedRun) {
+      return (
+        gitState.deploymentRunDetails[GitState.workflowRunKey(owner, repo, selectedRun.id)]?.detail
+          .run.status === 'completed'
+      )
+    }
+    if (selectedDeployment) {
+      const state =
+        gitState.deploymentDetails[GitState.deploymentDetailKey(owner, repo, selectedDeployment.id)]
+          ?.detail.deployment.latestStatus?.state
+      return ['success', 'failure', 'error', 'inactive'].includes(state ?? '')
+    }
+    return false
+  })
+
+  /** Refresh only the mounted, visible view, with no overlapping poll requests. */
+  $effect(() => {
+    const source = identity
+    const currentProject = projectId
+    const view = activeView
+    const filter = runFilter
+    const currentPage = view === 'runs' ? runsPage : environmentsPage
+    const runId = selectedRun?.id
+    const deploymentId = selectedDeployment?.id
+    if (!source || !githubConnected || !pageVisible) return
+    const { owner, repo } = source
+    const completed = selectedDetailCompleted
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+
+    async function refresh(): Promise<void> {
+      let pollAgain = true
+      try {
+        if (deploymentId !== undefined) {
+          const detail = await gitState.ensureDeploymentDetail(
+            currentProject,
+            owner,
+            repo,
+            deploymentId,
+            true
+          )
+          pollAgain = !['success', 'failure', 'error', 'inactive'].includes(
+            detail?.deployment.latestStatus?.state ?? ''
+          )
+        } else if (runId !== undefined) {
+          const detail = await gitState.ensureWorkflowRunDetail(
+            currentProject,
+            owner,
+            repo,
+            runId,
+            true
+          )
+          pollAgain = detail?.run.status !== 'completed'
+        } else if (view === 'runs') {
+          await gitState.ensureWorkflowRunPage(
+            currentProject,
+            owner,
+            repo,
+            filter,
+            currentPage,
+            true
+          )
+        } else {
+          await gitState.ensureDeploymentPage(currentProject, owner, repo, currentPage, true)
+        }
+      } catch (reason) {
+        if (!stopped) notice = message(reason)
+      } finally {
+        if (!stopped && pollAgain) timer = setTimeout(() => void refresh(), 10_000)
+      }
+    }
+
+    timer = setTimeout(() => void refresh(), completed ? 1_000 : 500)
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
   })
 
   /**
@@ -233,13 +311,7 @@
       )
       return
     }
-    void gitState.ensureDeploymentPage(
-      projectId,
-      source.owner,
-      source.repo,
-      environmentsPage,
-      true
-    )
+    void gitState.ensureDeploymentPage(projectId, source.owner, source.repo, environmentsPage, true)
   }
 
   /**
@@ -311,6 +383,8 @@
       : 'No GitHub deployments are available.'
   )
 </script>
+
+<svelte:document onvisibilitychange={() => (pageVisible = !document.hidden)} />
 
 <div class="flex h-full min-h-0 flex-col">
   {#if !githubConnected}
@@ -414,7 +488,9 @@
         <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
           <CioCrossCircle size={18} class="text-danger" />
           <div>
-            <p class="text-[0.6875rem] font-medium text-foreground">Deployment activity unavailable</p>
+            <p class="text-[0.6875rem] font-medium text-foreground">
+              Deployment activity unavailable
+            </p>
             <p class="mt-1 max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
               {#if permissionMissing}
                 GitHub refused this sign-in access to the repository's Actions, Deployments, and
