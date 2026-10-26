@@ -293,7 +293,32 @@ async function downloadRange(
     responseTimeoutMs
   )
   if (!response.ok || !response.body) {
+    await response.body?.cancel()
     throw new DownloadSourceError(`Download failed with HTTP ${response.status}.`)
+  }
+  // A rotating mirror can serve the previous release even when its manifest
+  // advertises the new one. Reject it from the headers instead of downloading
+  // almost the whole stale file, resuming into a 416, then starting over.
+  const contentRange = response.headers.get('content-range')
+  const range = contentRange?.match(/^bytes (\d+)-(\d+)\/(\d+)$/)
+  const contentLength = response.headers.get('content-length')
+  const encoding = response.headers.get('content-encoding')
+  const responseBytes =
+    response.status === 206
+      ? range === undefined || range === null
+        ? null
+        : Number(range[3])
+      : contentLength === null || (encoding !== null && encoding !== 'identity')
+        ? null
+        : Number(contentLength)
+  if (
+    (expectedBytes > 0 && responseBytes !== null && responseBytes !== expectedBytes) ||
+    (response.status === 206 && (range == null || Number(range[1]) !== start))
+  ) {
+    await response.body.cancel()
+    throw new PermanentDownloadError(
+      'The download source returned a different artifact size or byte range than requested.'
+    )
   }
   if (resuming && response.status !== 206) {
     // Server ignored the Range request; restart from zero rather than

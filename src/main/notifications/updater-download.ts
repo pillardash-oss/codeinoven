@@ -174,10 +174,11 @@ export async function updateDownloadSources(options: {
     )
     return [github]
   }
-  return [
-    { label: 'download mirror', url: mirrorArtifactUrl(match.name, channel, mirrorBase) },
-    github
-  ]
+  // Mirror paths rotate between releases. Give each verified artifact a distinct
+  // cache key so an edge cannot reuse the previous release's versionless ZIP.
+  const mirrorUrl = new URL(mirrorArtifactUrl(match.name, channel, mirrorBase))
+  mirrorUrl.searchParams.set('sha512', artifact.sha512)
+  return [{ label: 'download mirror', url: mirrorUrl.href }, github]
 }
 
 /**

@@ -262,7 +262,8 @@ export class UpdaterService {
     })
 
     autoUpdater.on('download-progress', (progress) => {
-      const percent = Math.round(progress.percent)
+      // Only update-downloaded confirms validation and publishes completion.
+      const percent = Math.min(99, Math.floor(progress.percent))
       this.updateState({
         state: 'downloading',
         downloadProgress: percent
@@ -751,7 +752,7 @@ export class UpdaterService {
     }
     const seedProgress = (receivedBytes: number, totalBytes: number): void => {
       if (totalBytes <= 0) return
-      const percent = Math.min(100, Math.round((receivedBytes / totalBytes) * 100))
+      const percent = Math.min(99, Math.floor((receivedBytes / totalBytes) * 100))
       if (percent !== this._status.downloadProgress) {
         this.updateState({ state: 'downloading', downloadProgress: percent })
       }
