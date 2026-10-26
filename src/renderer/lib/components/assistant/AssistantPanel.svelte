@@ -16,6 +16,7 @@
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
+  import AssistantKnowledgeHistory from './AssistantKnowledgeHistory.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -243,6 +244,8 @@
   )
   let editingId = $state<string | null>(null)
   let editDraft = $state('')
+  /** Whether the instruction history is up, showing every saved version. */
+  let knowledgeHistoryOpen = $state(false)
 
   function toggleSection(id: string): void {
     if (collapsed.has(id)) collapsed.delete(id)
@@ -1147,9 +1150,20 @@
             <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
               <div class="flex items-center justify-between gap-2">
                 <h2 class="text-[0.875rem] font-semibold text-foreground">Assistant behavior</h2>
-                <span class="text-[0.625rem] text-dimmed"
-                  >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
-                >
+                <div class="flex items-center gap-1.5">
+                  <span class="text-[0.625rem] text-dimmed"
+                    >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
+                  >
+                  <button
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    title="Review earlier versions of these instructions"
+                    aria-label="Review earlier versions of these instructions"
+                    onclick={() => (knowledgeHistoryOpen = true)}
+                  >
+                    <CioUndo size={12} strokeWidth={1.8} />
+                  </button>
+                </div>
               </div>
               <p class="text-[0.6875rem] leading-relaxed text-muted">
                 The instructions this assistant follows on every run. The agent follows them
@@ -1665,3 +1679,15 @@
     The agent will no longer use it when this assistant runs.
   </p>
 </ConfirmDialog>
+
+<!-- The instructions are replaced whole on every save, so the versions behind the
+     current one are the only way back from a save that lost the page. This opens
+     beside the panel rather than inside its sections: it is a reading surface for
+     the document, not another section of it. -->
+{#if knowledgeHistoryOpen && assistant}
+  <AssistantKnowledgeHistory
+    assistantId={assistant.id}
+    assistantName={assistantIsUnnamed(assistant) ? 'your assistant' : assistant.name}
+    onClose={() => (knowledgeHistoryOpen = false)}
+  />
+{/if}

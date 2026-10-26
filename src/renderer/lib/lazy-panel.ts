@@ -74,6 +74,7 @@ export type PanelKey = (typeof PANEL_KEYS)[keyof typeof PANEL_KEYS]
 const RETRY_DELAYS_MS: readonly number[] = [200, 600]
 
 const loads = new Map<string, Promise<{ default: unknown }>>()
+const modules = new Map<string, { default: unknown }>()
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -109,7 +110,10 @@ export function loadPanelModule<T>(
   const cached = loads.get(key)
   if (cached) return cached as Promise<{ default: T }>
 
-  const promise = loadWithRetry(load)
+  const promise = loadWithRetry(load).then((module) => {
+    if (loads.get(key) === entry) modules.set(key, module)
+    return module
+  })
   const entry: Promise<{ default: unknown }> = promise
   loads.set(key, entry)
   void entry.catch(() => {
@@ -120,10 +124,20 @@ export function loadPanelModule<T>(
   return promise
 }
 
+/** Render an already loaded module immediately, without an await pending frame. */
+export function loadCachedPanelModule<T>(
+  key: string,
+  load: () => Promise<{ default: T }>
+): { default: T } | Promise<{ default: T }> {
+  const cached = modules.get(key)
+  return cached ? (cached as { default: T }) : loadPanelModule(key, load)
+}
+
 /**
  * Forget a memoized load so the next `loadPanelModule` fetches again. This is
  * what a "Retry" action calls before it forces its `{#await}` to re-run.
  */
 export function resetPanelModule(key: string): void {
   loads.delete(key)
+  modules.delete(key)
 }

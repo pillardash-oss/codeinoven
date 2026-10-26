@@ -161,8 +161,8 @@ export function queueThreadMessage(
  * its agent is idle, and park it behind the running turn when it is not.
  *
  * This is what a button outside the conversation asks for. A request the app
- * synthesizes on the user's behalf (the coordinator's Screen Canvas button is
- * one) has no business steering work already in flight, so it waits its turn
+ * synthesizes on the user's behalf (the coordinator's design actions are the
+ * ones) has no business steering work already in flight, so it waits its turn
  * instead of interrupting it, and answers which of the two happened so the
  * surface can say so.
  */

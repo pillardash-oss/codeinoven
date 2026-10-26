@@ -42,6 +42,59 @@ export function validateModelRuntimeSettings(
   }
 }
 
+/**
+ * Harnesses that state a model's properties per account rather than app-wide.
+ *
+ * Codex answers `debug models` from the account's own `CODEX_HOME`, so the same
+ * model slug reports different context windows for different accounts. A
+ * catalog merged across accounts therefore cannot describe any one of them, and
+ * every surface has to read the account's own answer instead.
+ */
+export function modelPropertiesAreAccountScoped(harnessId: string, providerId: string): boolean {
+  return harnessId === 'codex' && providerId === 'openai'
+}
+
+/**
+ * Every window a model can run with, its own default first when the harness
+ * states one. `contextWindows` is the harness's option list; a model that only
+ * reports a single window answers with that one.
+ */
+export function modelContextWindowOptions(
+  model: Pick<ProviderModel, 'contextWindow' | 'contextWindows'> | undefined
+): number[] {
+  if (!model) return []
+  if (model.contextWindows && model.contextWindows.length > 0) return model.contextWindows
+  return model.contextWindow === undefined ? [] : [model.contextWindow]
+}
+
+/**
+ * A stored window survives only while the model still offers it. Anything else
+ * belongs to a model (or an account) the user has already left.
+ */
+export function offeredContextWindow(
+  model: Pick<ProviderModel, 'contextWindow' | 'contextWindows'> | undefined,
+  contextWindow: number | undefined
+): number | undefined {
+  if (contextWindow === undefined) return undefined
+  return modelContextWindowOptions(model).includes(contextWindow) ? contextWindow : undefined
+}
+
+/**
+ * The window a turn actually runs with: the offered choice, else the model's own
+ * default. This is the one rule every reader shares   the meter, the context
+ * dropdown, the composer preview, and the send path.
+ */
+export function effectiveModelContextWindow(
+  model: Pick<ProviderModel, 'contextWindow' | 'contextWindows'> | undefined,
+  contextWindow: number | undefined
+): number | undefined {
+  return (
+    offeredContextWindow(model, contextWindow) ??
+    model?.contextWindow ??
+    modelContextWindowOptions(model)[0]
+  )
+}
+
 /** Whether the selected model can render the shared runtime settings menu. */
 export function hasModelRuntimeSettings(
   model: ProviderModel | undefined,
@@ -50,8 +103,9 @@ export function hasModelRuntimeSettings(
 ): boolean {
   return (
     model?.fastSupported === true ||
-    (harnessId === 'codex' && providerId === 'openai' && model?.ultrafastSupported === true) ||
-    (model?.contextWindows?.length ?? 0) > 0
+    (modelPropertiesAreAccountScoped(harnessId, providerId) &&
+      model?.ultrafastSupported === true) ||
+    modelContextWindowOptions(model).length > 0
   )
 }
 
@@ -67,14 +121,9 @@ export function resolveModelRuntimeDefaults(
     speed === 'normal' ||
     (speed === 'fast' && model?.fastSupported === true) ||
     (speed === 'ultrafast' &&
-      harnessId === 'codex' &&
-      providerId === 'openai' &&
+      modelPropertiesAreAccountScoped(harnessId, providerId) &&
       model?.ultrafastSupported === true)
       ? speed
       : 'normal'
-  const contextWindow =
-    defaults.contextWindow !== undefined && model?.contextWindows?.includes(defaults.contextWindow)
-      ? defaults.contextWindow
-      : undefined
-  return { inferenceMode, contextWindow }
+  return { inferenceMode, contextWindow: offeredContextWindow(model, defaults.contextWindow) }
 }

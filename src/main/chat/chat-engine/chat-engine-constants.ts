@@ -121,12 +121,17 @@ export const INCOMPLETE_TURN_CONTINUATION_PROMPT =
  * list as live task progress, so an abandoned list reads as work still running.
  * The instruction only asks the agent to make the list truthful; it never asks
  * it to invent work it did not do.
+ *
+ * It also draws the line the app enforces: the exchange is bookkeeping, so the
+ * answer the agent already gave stays the answer unless this turn did something
+ * material of its own, in which case its text replaces that answer and has to
+ * stand on its own.
  */
 export function taskReconcilePrompt(labels: readonly string[]): string {
   return (
     'Your turn ended, but the task list you published still shows unfinished work: ' +
     labels.join('; ') +
-    '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, publish the final list once more with the same task-list tool you used: mark every task you completed as completed, and drop (or clear) tasks you no longer intend to do. When the work is truly complete and only the list lagged, make that one task-list call and nothing else: add no prose. The app keeps the final answer you already gave the user and shows it, so any words you add here would only replace that answer with a redundant second version of it. Write text only if something material truly changed since that answer, and never mark a task complete that you did not actually finish. Do not start new work just to satisfy the list.'
+    '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, publish the final list once more with the same task-list tool you used: mark every task you completed as completed, and drop (or clear) tasks you no longer intend to do. When the work is truly complete and only the list lagged, make that one task-list call and nothing else: add no prose. The app keeps the final answer you already gave the user and shows it, so prose you add here is dropped instead of being shown as a second answer. Write text only if you did something material after that answer, such as a fix, a commit, or a verification that changed the outcome. Then write a complete answer that stands on its own: restate the outcome you already gave the user, and add the new work and its result, because your text replaces that answer and is the only thing the user can annotate. Never mark a task complete that you did not actually finish, and do not start new work just to satisfy the list.'
   )
 }
 

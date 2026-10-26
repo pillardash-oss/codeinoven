@@ -13,6 +13,7 @@ import {
   isOrchestrationChildThread
 } from '$shared/types'
 import type { ThreadGroup } from '$lib/stores/thread-grouping.svelte'
+import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { threadVisitKey } from '$lib/stores/recent-visits.svelte'
@@ -43,12 +44,14 @@ export function groupThreadsByStatus(
   draftThreadKeys?: ReadonlySet<string> | null,
   typingThreadKeys?: ReadonlySet<string> | null
 ): { label: ThreadGroup; threads: Thread[] }[] {
-  // The literal's order is the display order: the rows below return
-  // `Object.keys` of this record, so a group added here is a group drawn where
-  // it is written. Drafts sits above Unread   unfinished writing of the user's
-  // own asks for them the way an unopened result does, and it is theirs to
-  // finish rather than theirs to read. Attention still leads both, because a gate
-  // on the user stops every other thing.
+  // The record's keys are the canonical membership; the order they are drawn in
+  // comes from `threadGroupingState.order`, which the user arranges by dragging a
+  // status in the inbox menu. Attention leads a fresh install because a gate on the
+  // user stops every other thing, and Drafts sits above Unread because unfinished
+  // writing of the user's own asks for them the way an unopened result does. Neither
+  // is fixed: the reader may decide that the work they are watching should come
+  // first, and every surface reads the same list, so nothing here can disagree with
+  // the sidebar.
   const groups: Record<ThreadGroup, Thread[]> = {
     Attention: [],
     Drafts: [],
@@ -86,9 +89,9 @@ export function groupThreadsByStatus(
     else group = 'Done'
     groups[group].push(thread)
   }
-  return (Object.keys(groups) as ThreadGroup[])
-    .filter((label) => groups[label].length > 0)
+  return threadGroupingState.order
     .map((label) => ({ label, threads: groups[label] }))
+    .filter((group) => group.threads.length > 0)
 }
 
 /**

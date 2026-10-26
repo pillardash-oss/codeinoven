@@ -321,6 +321,47 @@ export function assistantReady(assistant: Pick<Assistant, 'knowledge' | 'agents'
 }
 
 /**
+ * Why a snapshot of an assistant's instructions exists: the save that gave the
+ * assistant its first knowledge, an edit to that knowledge, or a restore of an
+ * earlier snapshot.
+ */
+export type AssistantKnowledgeRevisionCause = 'setup' | 'edit' | 'restore'
+
+/**
+ * One saved version of an assistant's instructions.
+ *
+ * The knowledge is replaced whole on every save, so a bad revision is never a
+ * broken line the user can find and fix: it is the document. Keeping each save
+ * makes the previous document reachable after the fact instead of depending on
+ * the agent still remembering the text it overwrote.
+ *
+ * The timeline carries no body. `characters`, `lines` and `excerpt` are stored
+ * beside the text when it is written, so listing history reads a bounded row per
+ * version and the text itself only travels when the user opens one.
+ */
+export interface AssistantKnowledgeRevision {
+  id: string
+  assistantId: string
+  /** Position in this assistant's history, oldest first, starting at 1. */
+  sequence: number
+  cause: AssistantKnowledgeRevisionCause
+  /** A short note from the caller, such as the version a restore came from. */
+  label?: string
+  /** How many characters the document holds. */
+  characters: number
+  /** How many non-empty lines it holds, which is what a reader compares. */
+  lines: number
+  /** The opening of the document, so a row reads as the version it is. */
+  excerpt: string
+  createdAt: number
+}
+
+/** A saved version with its text, for reading it before restoring it. */
+export interface AssistantKnowledgeRevisionDetail extends AssistantKnowledgeRevision {
+  knowledge: string
+}
+
+/**
  * What removing one assistant swept, so the caller can clear the scheduler's
  * records for it and tell the user what went with the assistant.
  */

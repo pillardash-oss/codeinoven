@@ -33,6 +33,9 @@
     checkpointId?: string | null
     checkpointPaths?: string[]
     onOpenSubagent?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
+    /** Rewrites this chain's output before it is drawn, so a conversation that
+     *  carries app machinery in its text can strip it here too. */
+    formatOutput?: (text: string) => string
   }
 
   let {
@@ -48,7 +51,8 @@
     threadId,
     checkpointId,
     checkpointPaths,
-    onOpenSubagent
+    onOpenSubagent,
+    formatOutput
   }: Props = $props()
 
   /**
@@ -174,8 +178,11 @@
     {/if}
   {/if}
   {#if chain.output}
-    <div class="min-w-0 text-[0.8125rem] text-foreground">
-      <MarkdownView text={chain.output.text} {onCiteFile} />
-    </div>
+    {@const outputText = formatOutput ? formatOutput(chain.output.text) : chain.output.text}
+    {#if outputText.trim() !== ''}
+      <div class="min-w-0 text-[0.8125rem] text-foreground">
+        <MarkdownView text={outputText} {onCiteFile} />
+      </div>
+    {/if}
   {/if}
 </div>

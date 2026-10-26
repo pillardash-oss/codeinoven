@@ -585,12 +585,18 @@ function closingFenceFor(fences: readonly FenceLine[], open: FenceLine): FenceLi
  *
  * The agent drafts in two fenced blocks that are machinery, not conversation:
  * the knowledge it wrote for the assistant, and the plan the app has to act on.
- * Left as they were, the assistant's answer arrived as a wall of markdown inside
- * a code block, which is the one thing the person reading it should never have to
- * parse. So the knowledge block is unwrapped and rendered as the document it is,
- * and the plan block is dropped entirely: the recap card beside the message
- * already states the schedule, the connections and the reporting agreement in
- * plain language.
+ * Both are the recap card's payload, and the card states them properly: the
+ * instructions as the document they are, the plan as the name, the clock, the
+ * connections and the reporting agreement in plain language. So neither block is
+ * conversation, and neither is drawn in the transcript.
+ *
+ * They used to be drawn there. The knowledge arrived as a monospaced wall inside
+ * a horizontally scrolling code block and the plan as a raw JSON dump under a
+ * `ASSISTANT` fence label, so the person reading the thread was handed the app's
+ * own wire format and asked to approve it. This runs on every text the transcript
+ * shows in an authoring conversation   the turn's closing statement and each step
+ * of its working trace   so the two blocks cannot reach the reader through
+ * another path.
  *
  * Everything else, the prose the agent wrote around the blocks, is untouched.
  */
@@ -608,14 +614,13 @@ export function assistantDisplayText(text: string): string {
       index += 1
       continue
     }
-    if (kind === 'knowledge') {
-      const body = lines.slice(fence.index + 1, close.index).join('\n')
-      const content = stripLeadingMarker(body, (line) => KNOWLEDGE_MARKER_LINE.test(line))
-      if (content.trim() !== '') out.push(content)
-    }
+    // The block is the card's, not the transcript's: skip the fence and its body.
     index = close.index + 1
   }
-  return out.join('\n').trim()
+  return out
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 /**

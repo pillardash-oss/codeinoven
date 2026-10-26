@@ -418,6 +418,34 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     return assistant
   })
 
+  // The instruction history. Every save of the knowledge replaces the document
+  // whole, so these three channels are what let the panel show the versions that
+  // came before and put one of them back.
+  ipcMain.handle('assistant:listKnowledgeRevisions', (_, assistantId: unknown) =>
+    assistantManager.listKnowledgeRevisions(validateEntityId(assistantId, 'Assistant ID'))
+  )
+
+  ipcMain.handle('assistant:getKnowledgeRevision', (_, assistantId: unknown, revisionId: unknown) =>
+    assistantManager.getKnowledgeRevision(
+      validateEntityId(assistantId, 'Assistant ID'),
+      validateEntityId(revisionId, 'Knowledge version ID')
+    )
+  )
+
+  ipcMain.handle(
+    'assistant:restoreKnowledgeRevision',
+    async (_, assistantId: unknown, revisionId: unknown) => {
+      const restored = await assistantManager.restoreKnowledgeRevision(
+        validateEntityId(assistantId, 'Assistant ID'),
+        validateEntityId(revisionId, 'Knowledge version ID')
+      )
+      // The restore is an ordinary save under the hood, so every assistant surface
+      // picks the new instructions up the same way it picks up an edit.
+      assistantsChanged()
+      return restored
+    }
+  )
+
   ipcMain.handle('assistant:delete', async (_, assistantId: unknown) => {
     // The assistant's threads   its hidden knowledge thread and each task's runs
     // included   are deleted with it, through the same canonical path as

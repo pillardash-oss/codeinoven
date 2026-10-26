@@ -619,7 +619,7 @@ export function piCoreToolsSubagentSource(): string {
 
   /** Built-in worker tools wrapped with the same permission gate as the primary. */
   function gatedWorkerTools(parentCtx, touchedFiles) {
-    async function gate(toolName, params) {
+    async function gate(toolName, params, skipSensitive = false) {
       const cuaBypass = unmanagedCuaShellReason(toolName, recordValue(params) ?? {})
       if (cuaBypass) return cuaBypass
       if (['bash', 'powershell', 'cmd'].includes(toolName) && recordValue(params) && typeof params['command'] === 'string') {
@@ -634,7 +634,7 @@ export function piCoreToolsSubagentSource(): string {
           )
         }
       }
-      const hit = evaluateGate(toolName, recordValue(params) ?? {}, parentCtx.cwd)
+      const hit = evaluateGate(toolName, recordValue(params) ?? {}, parentCtx.cwd, !skipSensitive)
       if (!hit) return null
       const payload = {
         permission: hit.permission,
@@ -648,7 +648,9 @@ export function piCoreToolsSubagentSource(): string {
         'Sub-agent needs permission: ' + hit.reason,
         CIO_PERMISSION_MARKER + JSON.stringify(payload)
       )
-      if (approved) return null
+      if (approved) {
+        return !skipSensitive && hit.permission === 'bundled-pi-sensitive-files' ? gate(toolName, params, true) : null
+      }
       return (
         'The user denied this sub-agent action in the permission card because it is destructive (' +
         hit.reason +

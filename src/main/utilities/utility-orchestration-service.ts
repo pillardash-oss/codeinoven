@@ -130,6 +130,13 @@ import {
   ASSISTANT_AUTHORING_CHECKPOINT_LIMIT,
   assistantAuthoringUtility
 } from '../../lib/assistant-authoring'
+import {
+  ASSISTANT_REPORT_BODY_LIMIT,
+  ASSISTANT_REPORT_OPERATIONS,
+  ASSISTANT_REPORT_TITLE_LIMIT,
+  ASSISTANT_REPORT_UTILITY_ID,
+  assistantReportUtility
+} from '../../lib/assistant-reports'
 import { ASSISTANT_NAME_LIMIT, ASSISTANT_PERSONALITY_LIMIT } from '../../lib/types'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
@@ -256,6 +263,15 @@ export interface UtilityTurnRequest {
   saveAssistantSchedule?: (scheduled: boolean) => Promise<void>
   /** Persist settled reporting choices during the live setup interview. */
   saveAssistantReporting?: (reporting: AssistantReportingPatch) => Promise<void>
+  /**
+   * Present only on a turn that runs a saved assistant. The callback holds the
+   * report the run declared for this turn; the chat engine files it when the
+   * turn settles, so the app never manufactures one from an ordinary answer.
+   */
+  saveAssistantReport?: (
+    title: string,
+    markdown?: string
+  ) => Promise<{ status: 'queued'; title: string }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -1083,11 +1099,12 @@ export class UtilityOrchestrationService {
       nativeCapabilities: request.nativeCapabilities,
       includeOnDemand: true
     })
-    // These capabilities are bound to the live interview, never installed globally.
+    // These capabilities are bound to the live turn, never installed globally.
     eligible = eligible.filter(
       ({ utility }) =>
         utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID &&
-        utility.id !== ASSISTANT_AUTHORING_UTILITY_ID
+        utility.id !== ASSISTANT_AUTHORING_UTILITY_ID &&
+        utility.id !== ASSISTANT_REPORT_UTILITY_ID
     )
     if (request.saveBrainstormNotes) {
       eligible.push(
@@ -1098,6 +1115,9 @@ export class UtilityOrchestrationService {
       eligible.push(
         assistantAuthoringUtility(request.harnessId, request.projectId, request.threadId)
       )
+    }
+    if (request.saveAssistantReport) {
+      eligible.push(assistantReportUtility(request.harnessId, request.projectId, request.threadId))
     }
     if (this.hasNativeComputerUse(request)) {
       // Existing registries may predate the computer-use capability binding,
@@ -1324,7 +1344,7 @@ export class UtilityOrchestrationService {
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
-      `When a needed capability is missing, load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer its installation card. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
+      `When a needed capability is missing, check first whether your own tools already cover the work: text, code, SVG and HTML are yours to author, and a missing generator is not a missing capability when the request is vector or written work. Only what you genuinely cannot produce yourself earns an installation card: load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer it. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
       `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isPawnTool(name))
         ? [
@@ -1523,7 +1543,8 @@ export class UtilityOrchestrationService {
   /**
    * Record one utility in its thread's bank the first time it is activated.
    * Transient per-turn capabilities (the gateway itself, interview-bound
-   * alignment notes, and the getting-started checkpoint) are never banked.
+   * alignment notes, the getting-started checkpoint, and a run's report) are
+   * never banked.
    */
   private async registerThreadBankEntry(
     state: TurnState,
@@ -1532,7 +1553,8 @@ export class UtilityOrchestrationService {
     if (
       utility.id.startsWith('cio:utility-gateway:') ||
       utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID ||
-      utility.id === ASSISTANT_AUTHORING_UTILITY_ID
+      utility.id === ASSISTANT_AUTHORING_UTILITY_ID ||
+      utility.id === ASSISTANT_REPORT_UTILITY_ID
     ) {
       return
     }
@@ -2391,6 +2413,9 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
       return { tools: ASSISTANT_AUTHORING_OPERATIONS }
     }
+    if (resolved.utility.id === ASSISTANT_REPORT_UTILITY_ID) {
+      return { tools: ASSISTANT_REPORT_OPERATIONS }
+    }
     if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
       return {
         instructions: (resolved.utility.config as { instructions: string }).instructions,
@@ -2731,6 +2756,21 @@ export class UtilityOrchestrationService {
           'The getting-started capability exposes save_checkpoint, save_identity, save_schedule and save_reporting'
         )
       }
+    } else if (resolved.utility.id === ASSISTANT_REPORT_UTILITY_ID) {
+      if (operation !== 'save_report') {
+        throw new Error('The run report capability exposes save_report only')
+      }
+      const saveReport = state.request.saveAssistantReport
+      if (!saveReport) {
+        throw new Error('A report can only be declared on a turn that runs a saved assistant')
+      }
+      const title = requiredString(operationInput['title'], 'title', ASSISTANT_REPORT_TITLE_LIMIT)
+      const body = operationInput['markdown']
+      const markdown =
+        body === undefined
+          ? undefined
+          : requiredString(body, 'markdown', ASSISTANT_REPORT_BODY_LIMIT)
+      result = await saveReport(title, markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')

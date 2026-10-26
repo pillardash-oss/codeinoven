@@ -6,6 +6,8 @@ import type {
   Project,
   Assistant,
   AssistantDeletionResult,
+  AssistantKnowledgeRevision,
+  AssistantKnowledgeRevisionDetail,
   AssistantSchedule,
   SkippedRun,
   Thread,
@@ -51,6 +53,28 @@ export const invokeAssistantContract = {
    * thread list, so the knowledge panel asks for its own assistant's thread here.
    */
   'assistant:knowledgeThread': {} as Contract<[assistantId: string], Thread | null>,
+  /**
+   * Every version of an assistant's instructions, newest first, without the
+   * documents themselves. Each save replaces the knowledge whole, so the history is
+   * what makes a save that lost the page recoverable.
+   */
+  'assistant:listKnowledgeRevisions': {} as Contract<
+    [assistantId: string],
+    AssistantKnowledgeRevision[]
+  >,
+  /** One saved version with its text, so the user can read it before restoring it. */
+  'assistant:getKnowledgeRevision': {} as Contract<
+    [assistantId: string, revisionId: string],
+    AssistantKnowledgeRevisionDetail | null
+  >,
+  /**
+   * Write a saved version back as the current instructions. The version being
+   * replaced is kept, so restoring is itself an entry in the history.
+   */
+  'assistant:restoreKnowledgeRevision': {} as Contract<
+    [assistantId: string, revisionId: string],
+    Assistant
+  >,
   /**
    * The Getting started checkpoint the authoring agent keeps current, or null
    * while the interview has not saved one. The panel shows it so the interview's

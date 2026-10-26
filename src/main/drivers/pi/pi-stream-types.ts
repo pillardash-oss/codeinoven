@@ -58,4 +58,15 @@ export interface PiTurnState {
    * which for a screenshot was two ~50KB base64 records per call.
    */
   publishedToolResults?: Set<string>
+  /**
+   * Id of the message that owns the answer the task-list reconcile nudge must
+   * not replace.
+   *
+   * The core-tools extension stops a run that is about to settle on a lagging
+   * task list and continues the same turn with one instruction to publish the
+   * corrected list. Everything after that nudge is a bookkeeping exchange, not a
+   * new answer, unless it did work of its own. The driver hands this id to the
+   * chat engine so it can tell those two cases apart in the transcript.
+   */
+  reconcileAnswerMessageId?: string
 }

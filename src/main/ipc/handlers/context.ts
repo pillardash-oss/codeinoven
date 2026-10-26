@@ -171,6 +171,7 @@ export type IpcChatEngine = Pick<
       | 'gradeRankingQueueNow'
       | 'cancelRankingGrade'
       | 'rankingGradeRunStatus'
+      | 'refreshSensitiveFilePermissions'
     >
   >
 

@@ -28,6 +28,7 @@ import {
 import { mapPiCost, mapPiNormalizedUsage, mapPiUsage } from './pi-usage'
 import type { PiStreamContext, PiTurnState } from './pi-stream-types'
 import { errorText, messageTimestamp, numberValue, record, stringValue } from './pi-values'
+import { isTaskReconcileNudge, reconcileAnswerMessageId } from './pi-task-reconcile'
 
 /** Maps one documented Pi JSON record into CodeInOven's stable stream shapes. */
 
@@ -411,9 +412,29 @@ export function mapPiRecord(
     return { events: [] }
   }
 
+  if (type === 'entry_appended') {
+    // The settle boundary appends its drafts straight to the session as entries,
+    // so the task-list reconcile nudge arrives here rather than as a custom
+    // message record. Both shapes carry the same custom type, and both have to
+    // record which message owns the answer the exchange must not replace.
+    if (isTaskReconcileNudge(record(entry['entry']))) {
+      turnState.reconcileAnswerMessageId = reconcileAnswerMessageId(context.session.messages)
+    }
+    return { events: [] }
+  }
+
   if (type === 'message_end' && entry['message']) {
     const message = record(entry['message'])
-    if (message?.['role'] === 'custom') return spawnDoneCustomEvent(message, context)
+    if (message?.['role'] === 'custom') {
+      // The task-list reconcile nudge is the one custom message that changes how
+      // the rest of the turn reads: everything after it belongs to the exchange
+      // that must not replace the answer the transcript already holds, so the
+      // driver records which message owns that answer before the exchange starts.
+      if (isTaskReconcileNudge(message)) {
+        turnState.reconcileAnswerMessageId = reconcileAnswerMessageId(context.session.messages)
+      }
+      return spawnDoneCustomEvent(message, context)
+    }
     if (message?.['role'] !== 'assistant') return { events: [] }
     return buildAssistantMessage(message, context.sessionId, turnState)
   }

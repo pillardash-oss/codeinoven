@@ -10,7 +10,9 @@ import { clearDraftLabelCookie, setDraftLabelCookie } from './draft-label'
 import {
   commitDraftStateNow,
   flushAllDraftCommits,
+  hasPendingDraftCommit,
   publishDraftActivity,
+  publishRemoteDraftCleared,
   scheduleDraftCommit
 } from './draft-activity.svelte'
 import {
@@ -53,7 +55,11 @@ export {
   settingsSectionForView,
   settingsViewForSection
 } from './renderer-recovery'
-export { publishDraftActivity, flushAllDraftCommits } from './draft-activity.svelte'
+export {
+  publishDraftActivity,
+  flushAllDraftCommits,
+  onRemoteDraftCleared
+} from './draft-activity.svelte'
 
 /** How long to wait after the last mutation before writing recovery state to
  *  storage. Long enough that bursts of mutations (draft typing, model toggles)
@@ -253,6 +259,56 @@ export class RendererRecoveryStore {
     setDraftLabelCookie(threadId, entry.text)
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+  }
+
+  /**
+   * Apply the draft slot the database now holds for one thread.
+   *
+   * A thread has one draft, shared by every window and instance looking at it,
+   * so both directions of a commit travel this way: content seeds a window that
+   * holds nothing yet, and a clear drops the mirror a window keeps. Without the
+   * clear, sending a message in one window left every sibling showing the words
+   * it had just sent as a draft, indefinitely, because nothing else ever revisits
+   * a draft that is already on screen.
+   *
+   * A commit still waiting out this window's debounce is the single exception:
+   * those words were typed after the snapshot being applied, so they win and
+   * their own commit re-asserts them.
+   */
+  applyCommittedDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
+    if (rawDraftJson !== null) {
+      this.importDbDraft(projectId, threadId, rawDraftJson)
+      return
+    }
+    this.dropCommittedAwayDraft(projectId, threadId)
+  }
+
+  /**
+   * Drop a thread's local draft because the database's slot no longer holds
+   * one.
+   *
+   * Deliberately not routed through `setDraft`/`clearDraft`: those commit, and
+   * a commit here would bounce this clear straight back at the window that made
+   * it. The label cookie is dropped with the draft because the sidebar reads it
+   * for the placeholder title, and surfaces holding the words in a live editor
+   * are told separately, since only they know how to empty themselves.
+   */
+  private dropCommittedAwayDraft(projectId: string, threadId: string): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    if (hasPendingDraftCommit(projectId, threadId)) return
+    const key = recoveryDraftKey(projectId, threadId)
+    if (!this.composerDrafts[key]) {
+      // The store holds nothing, but a cookie written before a restart might:
+      // a clear must not leave the old label standing behind it.
+      clearDraftLabelCookie(threadId)
+      return
+    }
+    const next = { ...this.composerDrafts }
+    delete next[key]
+    this.composerDrafts = next
+    clearDraftLabelCookie(threadId)
+    this.persist()
+    publishRemoteDraftCleared(projectId, threadId)
   }
 
   /**

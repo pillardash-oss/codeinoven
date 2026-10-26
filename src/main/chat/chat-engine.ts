@@ -303,6 +303,7 @@ import type {
   AgentArtifact,
   AgentEvent,
   AgentMessage,
+  ThreadMessageCursor,
   AgentModelSelection,
   AgentPart,
   AgentQuestionRequest,
@@ -418,7 +419,12 @@ import {
   groupStreamPartsIntoMessages,
   type FoldedTurnStream
 } from './turn-stream'
-import { readTurnStreamLog } from './turn-stream-log'
+import {
+  readTurnStreamLog,
+  storageTurnStreamSource,
+  type TurnStreamLogRead
+} from './turn-stream-log'
+import { backgroundIo } from '../system/background-io'
 import type { BrowserActionReview } from '../browser/browser-service/browser-action-policy'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts, completedTurnWindow } from './turn-stream-page'
@@ -524,6 +530,7 @@ import {
   searchNudgePromptForProse,
   searchNudgePromptForToolCall
 } from './not-available-detector'
+import { visualDeliverableRepairPrompt, visualDeliverableRequest } from './visual-deliverable-guard'
 import type {
   ActiveAssignmentDraftSession,
   ActiveBrainstormConversationTurn,
@@ -613,11 +620,17 @@ import {
   hasTerminalSpecContractMarker,
   mermaidValidationFailureMessage,
   mermaidValidationNotice,
+  rejectedAnswerMessage,
   rejectedMermaidMessage,
   terminalAssistantMessage,
   textForMessage,
   titleAttemptsFromDriver
 } from './chat-engine/chat-engine-message-text'
+import {
+  demoteTaskReconcileAnswer,
+  taskReconcileAnswer,
+  taskReconcileExchange
+} from './chat-engine/chat-engine-task-reconcile'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
   CONNECTION_LOSS_GRACE_MS,
@@ -711,8 +724,7 @@ import {
   changedPathsFromTool,
   fileChangeSource,
   normalizedToolName,
-  projectRelativePath,
-  toolWriteTargets
+  projectRelativePath
 } from './chat-engine/chat-engine-changes'
 import {
   apiFollowUpTask,
@@ -1079,6 +1091,19 @@ export class ChatEngine {
   private searchNudgeAttempts = new Map<string, number>()
 
   /**
+   * Sessions that rendered an inline artifact during the live turn.
+   *
+   * The visual-deliverable guard needs one fact the transcript cannot fake
+   * reliably: did this turn actually publish an asset? The render executor owns
+   * that fact, so it records it here and the guard reads it instead of guessing
+   * from prose. Cleared for a session when a new user turn starts.
+   */
+  private artifactRenderedSessions = new Set<string>()
+
+  /** One visual-deliverable correction round per user prompt, per session. */
+  private visualDeliverableNudges = new Map<string, number>()
+
+  /**
    * One app-issued task-list reconcile turn per user prompt, per session. The
    * guard fires when a turn settles while the list it published still shows
    * unfinished work, so the app's task card never freezes mid-run. Resetting
@@ -1086,6 +1111,17 @@ export class ChatEngine {
    * one extra turn and keeps it from looping.
    */
   private todoReconcileAttempts = new Map<string, number>()
+
+  /**
+   * Sessions whose live turn is the app-issued task-list reconcile prompt.
+   *
+   * A harness that reconciles inside its own turn reports the answer itself (see
+   * `capabilities.reportsTaskReconcileAnswer`), but every other harness answers
+   * this one in a turn the engine issues, so the engine already knows where the
+   * exchange starts: its own prompt. Consumed at finalization and cleared by the
+   * next user prompt, exactly like the attempt budget above.
+   */
+  private taskReconcileTurns = new Set<string>()
 
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
@@ -1421,6 +1457,16 @@ export class ChatEngine {
    * which owns the durable attention store; absent means nothing is recorded.
    */
   private autoAnswerRecorder: ((report: AutoAnswerReport) => void) | null = null
+  /**
+   * The report a run declared for its own turn, keyed by thread, held until the
+   * turn settles.
+   *
+   * The file is written at finalization rather than at the moment of the call, so
+   * it carries the settled status and the run time, and a turn that ends without a
+   * final answer leaves no file behind. A new turn clears the entry, so a
+   * declaration from an aborted turn can never be filed by a later one.
+   */
+  private declaredAssistantReports = new Map<string, { title: string; markdown?: string }>()
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
 
@@ -1457,14 +1503,6 @@ export class ChatEngine {
   /** Steered messages held back from the harness while its active turn has a
    *  tool call in flight   the undo window. Keyed by sessionId. */
   private heldSteers = new Map<string, HeldSteer>()
-
-  /** User messages the live turn already absorbed as a mid-turn steer, keyed by
-   *  sessionId. A steer is not a turn opener: folding the durable turn stream at
-   *  one sliced the live turn into an answerless "completed turn" that ended the
-   *  moment the next message was sent, so the reader saw their steered prompt
-   *  marked complete with no answer. Keeping the steer out of every turn
-   *  boundary keeps the harness turn whole until its session is retired. */
-  private absorbedSteers = new Map<string, { threadId: string; ids: Set<string> }>()
 
   /**
    * Per-session watchdog timers. Each timer is set after a prompt is sent and
@@ -1832,6 +1870,9 @@ export class ChatEngine {
       if (!thread) throw new Error('Artifact thread no longer exists')
       const root = await this.resolveThreadPath(context.projectId, context.threadId)
       const message = await inlineArtifactMessage(input, { ...context, root })
+      // The guard reads this, so a published artifact is the only thing that can
+      // satisfy a visual request: prose cannot mark the turn as delivered.
+      if (thread.sessionId) this.artifactRenderedSessions.add(thread.sessionId)
       await this.threadManager.upsertMessages(context.projectId, context.threadId, [message])
       this.broadcast({
         type: 'artifact.rendered',
@@ -3608,23 +3649,53 @@ export class ChatEngine {
   }
 
   /**
-   * The current turn's messages from the driver's own transcript, or none when
-   * the driver cannot be resolved or its transcript is unavailable.
+   * Reconcile the driver's transcript with bounded pages of the durable mirror.
+   * Either source can recover tool evidence missing from the other.
    */
   private async turnTranscriptMessages(session: SessionInfo): Promise<AgentMessage[]> {
+    const messages: AgentMessage[] = []
     const driver = this.driverForRuntime(session.driverId, session.accountId)
-    if (!driver) return []
+    if (driver) {
+      try {
+        messages.push(
+          ...(session.activeTurnUserMessageId && driver.loadMessagesSince
+            ? await driver.loadMessagesSince(
+                session.projectPath,
+                session.sessionId,
+                session.activeTurnUserMessageId
+              )
+            : await driver.loadMessages(session.projectPath, session.sessionId))
+        )
+      } catch (error) {
+        Logger.dev('turn transcript re-read failed:', error)
+      }
+    }
+    // The shared mirror can contain tool calls absent from the harness's final
+    // response. Read bounded worker-backed pages, stopping at this turn's prompt.
     try {
-      return session.activeTurnUserMessageId && driver.loadMessagesSince
-        ? await driver.loadMessagesSince(
-            session.projectPath,
-            session.sessionId,
-            session.activeTurnUserMessageId
-          )
-        : await driver.loadMessages(session.projectPath, session.sessionId)
+      const mirror: AgentMessage[] = []
+      let cursor: ThreadMessageCursor | undefined
+      for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
+        const page = await this.threadManager.loadMessagePage(
+          session.projectId,
+          session.threadId,
+          cursor,
+          100
+        )
+        mirror.unshift(...page.messages)
+        if (
+          !page.hasOlder ||
+          page.messages.some((message) => message.id === session.activeTurnUserMessageId)
+        )
+          break
+        const oldest = page.messages[0]
+        if (!oldest) break
+        cursor = { createdAt: oldest.createdAt, id: oldest.id }
+      }
+      return mergeAgentMessages(mirror, messages)
     } catch (error) {
-      Logger.dev('turn transcript re-read failed:', error)
-      return []
+      Logger.dev('turn mirror re-read failed:', error)
+      return messages
     }
   }
 
@@ -4271,6 +4342,9 @@ export class ChatEngine {
      */
     artifactTools = false
   ): Promise<string> {
+    // A new turn begins, so a report declared by an earlier turn that never settled
+    // must not be filed under this one.
+    this.declaredAssistantReports.delete(threadId)
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
     // has to be able to rebuild its context from them.
@@ -4345,6 +4419,12 @@ export class ChatEngine {
                 this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
+            }
+          : {}),
+        ...(assistantTurn === 'run'
+          ? {
+              saveAssistantReport: (title: string, markdown?: string) =>
+                Promise.resolve(this.declareAssistantReport(threadId, title, markdown))
             }
           : {}),
         budgetContext,
@@ -4683,6 +4763,12 @@ export class ChatEngine {
                 this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
+            }
+          : {}),
+        ...(this.assistantConversation(steeringThread) === 'run'
+          ? {
+              saveAssistantReport: (title: string, markdown?: string) =>
+                Promise.resolve(this.declareAssistantReport(threadId, title, markdown))
             }
           : {}),
         budgetContext,
@@ -6264,11 +6350,12 @@ export class ChatEngine {
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
-    this.absorbedSteers.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.engineeringImplementationSessions.delete(sessionId)
     this.searchNudgeAttempts.delete(sessionId)
+    this.visualDeliverableNudges.delete(sessionId)
+    this.artifactRenderedSessions.delete(sessionId)
     this.todoReconcileAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
     this.parkedSessionReplay.delete(sessionId)
@@ -8857,7 +8944,6 @@ export class ChatEngine {
         this.toolTimes.delete(sessionId)
         this.handledIdleSessions.delete(sessionId)
         this.outboundMessageIdsBySession.delete(sessionId)
-        this.absorbedSteers.delete(sessionId)
       }
     }
 
@@ -8989,7 +9075,6 @@ export class ChatEngine {
       this.planningSessions.delete(thread.sessionId)
       this.preparedImplementationSessions.delete(thread.sessionId)
       this.outboundMessageIdsBySession.delete(thread.sessionId)
-      this.absorbedSteers.delete(thread.sessionId)
       await this.threadManager.clearSessionId(projectId, threadId)
       // Destroy the stale driver record   and with it the native transcript
       // binding   so the pre-edit conversation can never be restored onto a
@@ -9483,9 +9568,6 @@ export class ChatEngine {
             await steer(projectPath, options)
           }
         })
-        // The live turn absorbed this message: it steers that turn instead of
-        // opening one, so it must never become a turn boundary.
-        this.markSteerAbsorbedMidTurn(activeSessionId, threadId, messageId)
       } catch (error) {
         if (error instanceof SteerDeliveryFailedError) throw error
         // The turn can settle inside the race window between the working check
@@ -10389,6 +10471,11 @@ export class ChatEngine {
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
       this.searchNudgeAttempts.delete(sessionId)
       this.todoReconcileAttempts.delete(sessionId)
+      this.taskReconcileTurns.delete(sessionId)
+      // A new user prompt starts a fresh delivery accounting: an artifact the
+      // previous turn rendered must not satisfy this turn's visual request.
+      this.visualDeliverableNudges.delete(sessionId)
+      this.artifactRenderedSessions.delete(sessionId)
     }
     // A new turn resolves any pending auto-resume for this session   the user
     // (or a previous scheduled retry) is driving it again.
@@ -10460,9 +10547,6 @@ export class ChatEngine {
             userMessageId: messageId
           })
         })
-        // An accidental regular send that the live turn absorbed is a steer, not
-        // a turn opener, so it stays out of every turn boundary.
-        this.markSteerAbsorbedMidTurn(sessionId, threadId, messageId)
       }
       // Same undo window as steerPrompt: hold while a tool call is in flight.
       if (this.hasInFlightTool(sessionId)) {
@@ -10691,17 +10775,24 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
+    // The standalone workspace of this conversation, resolved by scope. An
+    // assistant task owns `assistant-cwd/<assistantId>`, a chat owns
+    // `chats-cwd/<threadId>`; resolving a chat path for an assistant thread put
+    // a directory the session never runs in into its prompt.
     const chatWorkspaceRoot = this.storage.resolve(
       projectId === GLOBAL_BROWSER_PROJECT_ID
         ? browserThreadWorkspaceDirectory(threadId)
-        : chatThreadWorkspaceDirectory(threadId)
+        : projectId === ASSISTANT_SPACE_ID
+          ? assistantThreadWorkspaceDirectory(threadId, targetThread?.assistantId)
+          : chatThreadWorkspaceDirectory(threadId)
     )
     const generatedArtifactPrompt = artifactInstruction(
       targetThread ?? {
         projectId,
         id: threadId,
         title: 'current-work',
-        featureSlug: undefined
+        featureSlug: undefined,
+        assistantId: undefined
       },
       {
         chatWorkspaceRoot,
@@ -12091,7 +12182,6 @@ export class ChatEngine {
     this.temporaryChats.delete(temporaryChatId)
     this.temporaryChatDisplayMessages.delete(temporaryChatId)
     this.outboundMessageIdsBySession.delete(temporary.sessionId)
-    this.absorbedSteers.delete(temporary.sessionId)
     // A closed side chat can never receive a reply for its blocking request, so
     // drop the gate instead of leaving an unanswerable request behind.
     this.clearPendingPermissionsForSession(temporary.sessionId)
@@ -14851,16 +14941,29 @@ export class ChatEngine {
     pending: PendingPermissionInfo,
     driver: HarnessDriver
   ): Promise<void> {
+    const { sessionId } = pending.request
+    // The decision is final the moment the user makes it, so everything that
+    // answers the user to it settles before the harness is asked to stop: the
+    // rejected card closes, every other card this session owned closes, and the
+    // thread stops reading as working. Only then is the abort awaited, because a
+    // harness that is slow to stop (or wedged on a dialog) must never keep the
+    // card on screen or the thread stuck on `working` while it decides.
+    //
     // The abort emits `session.idle`, finalizing the interrupted checkpoint.
     // This must also run when the driver's dialog disappeared before the
     // renderer reply arrived, otherwise the blocked tool turn remains active.
-    this.userAbortedSessions.add(pending.request.sessionId)
-    await driver.abort(pending.session.projectPath, pending.request.sessionId)
-    this.clearPendingQuestionsForSession(pending.request.sessionId)
-    this.clearPendingPermissionsForSession(pending.request.sessionId)
+    this.userAbortedSessions.add(sessionId)
+    this.broadcast({
+      type: 'permission.replied',
+      sessionId,
+      requestId: pending.request.id,
+      reply: 'reject'
+    })
+    this.clearPendingQuestionsForSession(sessionId)
+    this.clearPendingPermissionsForSession(sessionId)
     // A rejected side chat request interrupts only the side chat's turn; the
     // parent thread keeps whatever status it owned before the request.
-    if (!this.temporaryChatForSession(pending.request.sessionId)) {
+    if (!this.temporaryChatForSession(sessionId)) {
       await this.threadManager.setStatus(
         pending.session.projectId,
         pending.session.threadId,
@@ -14868,6 +14971,7 @@ export class ChatEngine {
         { read: true }
       )
     }
+    await driver.abort(pending.session.projectPath, sessionId)
   }
 
   /** List unresolved permission requests for renderer reconnect recovery. */
@@ -24627,10 +24731,10 @@ export class ChatEngine {
           }
         }
         if (session?.activeTurnId) {
-          if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
-            session.unboundedToolObserved = true
-            this.trackUnboundedToolWindow(session, part)
-          }
+          // Every tool can hide a write, including code-mode wrappers. Filesystem
+          // evidence must not depend on recognizing its name or command syntax.
+          session.unboundedToolObserved = true
+          this.trackUnboundedToolWindow(session, part)
           const precisePaths = this.recordToolChangeSources(session, part)
           if (precisePaths.length > 0) {
             session.changedPaths ??= new Set()
@@ -25563,14 +25667,14 @@ export class ChatEngine {
     }
 
     if (entry.consumedBytes === 0) {
-      // First hydration for this thread, or right after a rewrite: walk the log
-      // in bounded chunks that yield to the event loop instead of reading it
-      // whole, and retain only what the current turn's fold needs. The log is
-      // thread-wide and append-only, so a long-lived thread reaches hundreds of
-      // megabytes; reading that in one allocation blocked the main process and
-      // spiked memory past a gigabyte, which is what froze the app on a machine
-      // under pressure. This costs latency for a big log, never a frozen app.
-      const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, turnStartTs)
+      // First hydration for this thread, or right after a rewrite: read the
+      // log in the background I/O worker, walking backwards from its end so
+      // only the newest turn is loaded and the thread's older history is never
+      // touched. The log is thread-wide and append-only, so a long-lived thread
+      // reaches hundreds of megabytes; reading it forwards on the main process
+      // put every open behind it. The page a reader mounts is still bounded
+      // (`WORKING_TRACE_PAGE_SIZE`), and older entries page in on demand.
+      const hydrated = await this.readTurnStreamOffThread(streamPath, 0, size, turnStartTs)
       entry.events = hydrated.events
       entry.latestTurnId = hydrated.latestTurnId
       entry.consumedBytes = hydrated.nextByte
@@ -25749,7 +25853,7 @@ export class ChatEngine {
 
     const size = await this.storage.rawSize(streamPath)
     if (size === null || size === 0) return []
-    const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, oldest, newest)
+    const hydrated = await this.readTurnStreamOffThread(streamPath, 0, size, oldest, newest)
     if (hydrated.events.length === 0) return []
     const folded = foldTurnStreamDetailed(hydrated.events, undefined, oldest)
     if (folded.parts.length === 0) return []
@@ -25785,7 +25889,7 @@ export class ChatEngine {
   ): Promise<Array<{ startTs: number; endTs: number }>> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 120)
     const messages = page.messages
-    const heldSteerIds = this.turnBoundaryExcludedMessageIds(threadId)
+    const heldSteerIds = this.heldSteerMessageIds(threadId)
     const prompts: Array<{ index: number; ts: number }> = []
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index]
@@ -25920,9 +26024,58 @@ export class ChatEngine {
     const streamPath = turnStreamPath(projectId, threadId)
     const size = await this.storage.rawSize(streamPath)
     if (size === null || size === 0) return empty
-    const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, turnStartTs)
+    const hydrated = await this.readTurnStreamOffThread(streamPath, 0, size, turnStartTs)
     if (hydrated.events.length === 0) return empty
     return foldTurnStreamDetailed(hydrated.events, hydrated.latestTurnId || undefined, turnStartTs)
+  }
+
+  /**
+   * Read a thread's durable working-trace log off the main process.
+   *
+   * The walk decodes and parses an append-only file that grows with the whole
+   * thread. Even chunked, doing that on the main process put every thread open
+   * behind it and competed with the IPC, permission, and stream writes landing
+   * at the same moment. The background I/O worker owns the walk now; the main
+   * process only receives what the fold needs. The newest turn is read backwards
+   * from the end of the log, so the cost follows that turn instead of the
+   * thread's entire history, and a closed span is read only when a caller asks
+   * for one.
+   */
+  private async readTurnStreamOffThread(
+    streamPath: string,
+    fromByte: number,
+    size: number,
+    windowStartTs: number | undefined,
+    windowEndTs?: number
+  ): Promise<TurnStreamLogRead> {
+    try {
+      if (windowStartTs !== undefined && windowEndTs === undefined) {
+        return await backgroundIo<TurnStreamLogRead>({
+          kind: 'turn-stream-tail',
+          path: this.storage.resolve(streamPath),
+          size,
+          windowStartTs
+        })
+      }
+      return await backgroundIo<TurnStreamLogRead>({
+        kind: 'turn-stream-range',
+        path: this.storage.resolve(streamPath),
+        fromByte,
+        size,
+        ...(windowStartTs === undefined ? {} : { windowStartTs }),
+        ...(windowEndTs === undefined ? {} : { windowEndTs })
+      })
+    } catch {
+      // A worker that cannot start must never make a trace unreadable: the walk
+      // itself is chunked and yields, so the fallback is slower, not blocked.
+      return readTurnStreamLog(
+        storageTurnStreamSource(this.storage, streamPath),
+        fromByte,
+        size,
+        windowStartTs,
+        windowEndTs
+      )
+    }
   }
 
   /**
@@ -26032,7 +26185,7 @@ export class ChatEngine {
   ): Promise<number | undefined> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 80)
     const messages = page.messages
-    const heldSteerIds = this.turnBoundaryExcludedMessageIds(threadId)
+    const heldSteerIds = this.heldSteerMessageIds(threadId)
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i]
       if (!message || message.role !== 'user') continue
@@ -26043,32 +26196,13 @@ export class ChatEngine {
     return undefined
   }
 
-  /** User-message ids for steers this thread is still holding for their undo
-   *  window, across whichever session is carrying them. */
+  /** Only held steers are excluded from display boundaries. Once delivered,
+   *  subsequent work renders below their message even though the native run
+   *  keeps its original execution and checkpoint anchor. */
   private heldSteerMessageIds(threadId: string): Set<string> {
     const ids = new Set<string>()
     for (const steer of this.heldSteers.values()) {
       if (steer.conversationId === threadId) ids.add(steer.userMessageId)
-    }
-    return ids
-  }
-
-  /** Record that the live turn absorbed this message as a mid-turn steer. */
-  private markSteerAbsorbedMidTurn(sessionId: string, threadId: string, messageId: string): void {
-    const entry = this.absorbedSteers.get(sessionId) ?? { threadId, ids: new Set<string>() }
-    entry.threadId = threadId
-    entry.ids.add(messageId)
-    this.absorbedSteers.set(sessionId, entry)
-  }
-
-  /** User-message ids this thread must never treat as a turn boundary: steers
-   *  still held for their undo window, and steers the live turn has already
-   *  absorbed. Neither has opened a turn of its own. */
-  private turnBoundaryExcludedMessageIds(threadId: string): Set<string> {
-    const ids = this.heldSteerMessageIds(threadId)
-    for (const entry of this.absorbedSteers.values()) {
-      if (entry.threadId !== threadId) continue
-      for (const id of entry.ids) ids.add(id)
     }
     return ids
   }
@@ -26348,6 +26482,10 @@ export class ChatEngine {
    * Publish one settled assistant run's report as a durable Markdown file under
    * `reports/` in the assistant's own workspace.
    *
+   * Only a run that declared a report through the report capability reaches the
+   * write: the app never derives a report from an ordinary answer, so a question,
+   * a check-in or a chat reply leaves no file and is never dressed up as a report.
+   *
    * A thread is capped and evicted, so a report that only ever lived in the run
    * transcript disappears with it. Fire-and-forget and swallowed on error: the
    * durable copy is best-effort bookkeeping and must never block or fail the
@@ -26358,23 +26496,27 @@ export class ChatEngine {
     turnAssistant: AgentMessage | undefined,
     status: ThreadStatus
   ): void {
+    const declared = this.declaredAssistantReports.get(thread.id)
+    this.declaredAssistantReports.delete(thread.id)
+    if (!declared) return
     if (!isAssistantReportThread(thread)) return
     if (!assistantReportIsTerminal(status)) return
     if (!turnAssistant) return
-    const report = assistantText(turnAssistant).trim()
+    const report = (declared.markdown ?? assistantText(turnAssistant)).trim()
     if (report.length === 0) return
-    void this.writeAssistantReportFor(thread, report, status)
+    void this.writeAssistantReportFor(thread, declared.title, report, status)
   }
 
   private async writeAssistantReportFor(
     thread: Thread,
+    title: string,
     report: string,
     status: ThreadStatus
   ): Promise<void> {
     try {
       const assistant = thread.assistantId ? this.assistantRepo.get(thread.assistantId) : null
-      // A run's own title is just its start time, so the report's heading uses
-      // the task it ran for. A turn on the task's own thread is already titled.
+      // A run's own title is just its start time, so the report's header names the
+      // task it ran for. A turn on the task's own thread is already titled.
       let taskTitle = thread.title
       if (thread.assistantTaskId) {
         const task = await this.threadManager.getThread(thread.projectId, thread.assistantTaskId)
@@ -26382,6 +26524,7 @@ export class ChatEngine {
       }
       await writeAssistantReport(this.storage, {
         thread,
+        title,
         taskTitle,
         assistantName: assistant?.name,
         priority: assistant?.priority,
@@ -26395,6 +26538,20 @@ export class ChatEngine {
         error: rawErrorMessage(error)
       })
     }
+  }
+
+  /**
+   * Hold the report a run declared for this turn. The capability that calls this
+   * is bound to the live run turn, so the app owns the path and the file is
+   * written when the turn actually settles.
+   */
+  private declareAssistantReport(
+    threadId: string,
+    title: string,
+    markdown?: string
+  ): { status: 'queued'; title: string } {
+    this.declaredAssistantReports.set(threadId, { title, ...(markdown ? { markdown } : {}) })
+    return { status: 'queued', title }
   }
 
   /**
@@ -27463,6 +27620,48 @@ export class ChatEngine {
     return [...paths]
   }
 
+  /** Release only this check's waiting cards after the user disables it. */
+  async refreshSensitiveFilePermissions(): Promise<void> {
+    if ((await this.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false) return
+    const pending = [...this.pendingPermissions.values()].filter(
+      (entry) => entry.request.permission === 'bundled-pi-sensitive-files'
+    )
+    for (let index = 0; index < pending.length; index++) {
+      if (index > 0 && index % 8 === 0) await new Promise<void>((done) => setImmediate(done))
+      const entry = pending[index]
+      if (!entry || this.pendingPermissions.get(entry.request.id) !== entry) continue
+      entry.policy = new PermissionPolicy({
+        projectRoot: entry.session.projectPath,
+        mode: entry.session.permissionLevel ?? 'auto_review',
+        sensitiveFileProtectionEnabled: false
+      }).evaluate({ permission: entry.request.permission, paths: entry.request.patterns })
+      try {
+        await this.replyPermissionRaw(entry, 'once', 'settings:sensitive-files-disabled')
+      } catch (error) {
+        if (!(error instanceof PermissionRequestGoneError)) {
+          Logger.error('Could not release a disabled sensitive-file check:', error)
+          continue
+        }
+        this.pendingPermissions.delete(entry.request.id)
+      }
+      if (this.pendingPermissions.has(entry.request.id)) continue
+      this.broadcast({
+        type: 'permission.replied',
+        sessionId: entry.request.sessionId,
+        requestId: entry.request.id,
+        reply: 'once'
+      })
+      const remaining = [...this.pendingPermissions.values()].some(
+        (other) => other.request.sessionId === entry.request.sessionId
+      )
+      if (!remaining && !this.temporaryChatForSession(entry.request.sessionId)) {
+        await this.threadManager
+          .setStatus(entry.session.projectId, entry.session.threadId, entry.resumeStatus)
+          .catch((error: unknown) => Logger.error('Could not resume a released file check:', error))
+      }
+    }
+  }
+
   /** Resolve a permission request per the thread's permission level. */
   private async handlePermissionAsked(
     driverId: string,
@@ -27481,10 +27680,14 @@ export class ChatEngine {
 
     const commands = permissionCommands(request.metadata)
     const unclassifiedTool = request.metadata['surface']
+    const sensitiveFileProtectionEnabled =
+      request.permission !== 'bundled-pi-sensitive-files' ||
+      (await this.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false
     const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: restrictToAllowed ? 'auto_review' : level,
+      sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
@@ -27636,7 +27839,7 @@ export class ChatEngine {
     alternative?: string
   ): Promise<void> {
     if (pending.request.permission === 'bundled-pi-sensitive-files') {
-      if (reply !== 'reject' && decidedBy !== 'user') {
+      if (reply !== 'reject' && decidedBy !== 'user' && !pending.policy.approved) {
         throw new Error('Protected file access requires a user decision')
       }
       if (reply === 'always') throw new Error('Protected file access can only be approved once')
@@ -27829,6 +28032,34 @@ export class ChatEngine {
   }
 
   /**
+   * The message that owns the answer the current turn's task-list reconcile
+   * exchange must not replace, or undefined when this turn had no such exchange.
+   *
+   * Two things can nudge the agent to publish a truth the task card is missing,
+   * and each leaves its own mark:
+   *
+   * - the engine's own reconcile turn (every harness that does not reconcile
+   *   inside its own turn) is a prompt the engine issued, so the exchange starts
+   *   at that prompt;
+   * - a harness that reconciles mid-turn reports the message it is protecting
+   *   through the driver (`capabilities.reportsTaskReconcileAnswer`).
+   *
+   * A harness mark is only read while a turn of this thread owns the session: a
+   * stale mark from an earlier turn would name a message the current transcript
+   * no longer describes as this turn's work.
+   */
+  private taskReconcileAnswerId(
+    driver: HarnessDriver,
+    info: SessionInfo,
+    sessionId: string
+  ): string | undefined {
+    if (this.taskReconcileTurns.delete(sessionId)) return info.activeTurnUserMessageId
+    if (driver.capabilities.reportsTaskReconcileAnswer !== true) return undefined
+    if (info.activeTurnUserMessageId === undefined) return undefined
+    return driver.taskReconcileAnswerId?.(sessionId)
+  }
+
+  /**
    * The thread an idle finalization still owns, or null once a newer turn has
    * superseded it.
    *
@@ -27938,7 +28169,7 @@ export class ChatEngine {
       // A turn whose final assistant message is only a task-list publication (the
       // reconcile continuation that corrects a lagging list and, as instructed,
       // adds no prose) must still be read as the answer the agent gave before it.
-      const terminalAssistant = terminalAssistantMessage(messages, turnAssistant)
+      let terminalAssistant = terminalAssistantMessage(messages, turnAssistant)
       const turnSelection = this.sessionModelIds.get(sessionId)
       const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
@@ -27987,9 +28218,31 @@ export class ChatEngine {
         : []
       const suppressTerminalAnswer =
         this.planningSessions.has(sessionId) || isDedicatedAssignmentAuditorThread(thread)
-      let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer).filter(
+      const classifiedAll = classifyProviderMessages(messages, suppressTerminalAnswer)
+      // A task-list reconcile exchange is bookkeeping, not a new answer. When it
+      // added nothing but the corrected list, its prose must not become the
+      // turn's closing statement: the answer the agent already gave stays the
+      // answer (and therefore the one message the reader can select and
+      // annotate), while the corrected list still renders in the working trace
+      // beside the work it describes. Its tool calls, reasoning and usage are
+      // untouched; only the words that would have replaced the answer are moved
+      // out of the answer slot.
+      const reconcileAnswerId = this.taskReconcileAnswerId(driver, info, sessionId)
+      const reconcileExchange = taskReconcileExchange(classifiedAll, reconcileAnswerId)
+      const reconcileKeepsAnswer = reconcileExchange !== null && !reconcileExchange.addedWork
+      if (reconcileKeepsAnswer) {
+        const keptAnswer = taskReconcileAnswer(classifiedAll, reconcileExchange.boundaryId, mirror)
+        if (keptAnswer) terminalAssistant = keptAnswer
+      }
+      let classifiedMessages = classifiedAll.filter(
         (message) => !(message.role === 'user' && message.visibility === 'hidden')
       )
+      if (reconcileKeepsAnswer) {
+        classifiedMessages = demoteTaskReconcileAnswer(
+          classifiedMessages,
+          reconcileExchange.boundaryId
+        )
+      }
       let merged = restoreMirrorAccount(
         restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
         mirror
@@ -28220,6 +28473,85 @@ export class ChatEngine {
               info.threadId,
               liveThread.settings,
               searchNudgePromptForProse(claimedUnavailable),
+              [],
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              'internal'
+            )
+          } catch (error) {
+            this.pendingMemoryDecisions.delete(sessionId)
+            const issue = this.fallbackProviderIssue(
+              info.driverId,
+              rawErrorMessage(error),
+              rawErrorDetail(error)
+            )
+            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+              error: issue.message,
+              errorDetail: issue.rawError
+            })
+            await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+          }
+          return
+        }
+      }
+      // A turn that only described the asset it was asked to produce.
+      //
+      // An assistant thread once answered a logo request with "I've made the
+      // first logo direction as a clean SVG wordmark ... The full name sits
+      // beneath it" and delivered nothing: no file, no render call, no artifact.
+      // Prose describing an asset is indistinguishable from prose reporting a
+      // real one, so this guard never reads the answer for intent. It reads the
+      // two things that can be checked: a conversation scope whose turn asked
+      // for a visual deliverable, and the app's own record that nothing was
+      // rendered. The rejected answer keeps its tool calls but loses its prose,
+      // so a fabricated claim is never read as the turn's answer, and one
+      // correction round supplies the authoring and render path. It never fires
+      // twice for the same prompt: a second answer is accepted as it stands,
+      // because a genuine blocker (missing input, a bitmap the agent cannot
+      // draw) must still be able to reach the user.
+      const conversationalScope =
+        info.projectId === INBOX_PROJECT_ID ||
+        info.projectId === ASSISTANT_SPACE_ID ||
+        info.projectId === GLOBAL_BROWSER_PROJECT_ID
+      if (
+        conversationalScope &&
+        !failure &&
+        !userAborted &&
+        !awaitingUser &&
+        !suppressTerminalAnswer &&
+        terminalAssistant &&
+        liveThread?.settings &&
+        !this.artifactRenderedSessions.has(sessionId) &&
+        !merged.some((message) => message.inlineArtifact === true) &&
+        (this.visualDeliverableNudges.get(sessionId) ?? 0) < 1 &&
+        latestUserIndex >= 0
+      ) {
+        const requestedAsset = visualDeliverableRequest(textForMessage(messages[latestUserIndex]))
+        if (requestedAsset) {
+          const reason = `The reply described a ${requestedAsset.noun} without rendering one: no artifact was delivered.`
+          this.visualDeliverableNudges.set(sessionId, 1)
+          const rejected = rejectedAnswerMessage(terminalAssistant, reason)
+          classifiedMessages = classifiedMessages.map((message) =>
+            message.id === rejected.id ? rejected : message
+          )
+          merged = restoreMirrorAccount(
+            restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
+            mirror
+          )
+          await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
+          await this.finishCheckpoint(sessionId, info, 'failed', reason)
+          await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
+          turnUtilitiesCleaned = true
+          if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+          try {
+            await this.sendPrompt(
+              info.projectId,
+              info.threadId,
+              liveThread.settings,
+              visualDeliverableRepairPrompt(requestedAsset),
               [],
               undefined,
               undefined,
@@ -28539,6 +28871,7 @@ export class ChatEngine {
           : []
         if (unfinishedLabels.length > 0) {
           this.todoReconcileAttempts.set(sessionId, 1)
+          this.taskReconcileTurns.add(sessionId)
           await this.finishCheckpoint(
             sessionId,
             info,
@@ -30705,11 +31038,9 @@ export class ChatEngine {
   }
 
   /**
-   * Shell-like tools can write anywhere, so their edits cannot be read off the
-   * tool input. Instead of giving up on attribution for the whole turn   which
-   * lets a concurrent thread's edits leak into this turn's card   bracket the
-   * time those tools are in flight with stat-only fingerprints and attribute
-   * only the paths that moved inside that window.
+   * Every tool can hide writes. Bracket in-flight tools with asynchronous
+   * stat fingerprints, then verify candidate paths against captured content.
+   * Final completion reconciles the full diff against user and foreign work.
    */
   private trackUnboundedToolWindow(
     session: SessionInfo,
@@ -30720,9 +31051,9 @@ export class ChatEngine {
     const openTools = (session.openUnboundedTools ??= new Set())
     if (status === 'pending' || status === 'running') {
       if (openTools.has(toolPartId)) return
-      // Read commands and opaque scripts have no attributable targets. Do not
-      // scan the project for them or start timers that cannot prove ownership.
-      if (toolWriteTargets(session.projectPath, part).length === 0) return
+      // Keep at most one scan in flight per session. Completion's content
+      // snapshot catches tools that finish while the previous scan is pending.
+      if ((session.pendingWindowScans?.size ?? 0) > 0) return
       if (openTools.size === 0) {
         session.unboundedWindowStart = this.checkpointManager
           .fingerprint(session.projectId, session.projectPath)
@@ -30822,10 +31153,10 @@ export class ChatEngine {
         }
         for (const path of moved) {
           if (userMoved?.has(path)) continue
-          // A timing window alone cannot identify the author. Require an
-          // explicit write target from this turn's recorded tool calls too.
-          const sources = session.changeSources?.get(path)
-          if (!sources?.length) continue
+          if (session.userTouchedPaths?.has(path)) continue
+          // Tool provenance enriches the card when available. A measured file
+          // change survives even when the tool's write syntax is opaque.
+          const sources = session.changeSources?.get(path) ?? []
           session.changeSources?.set(
             path,
             sources.map((source) =>
@@ -30844,14 +31175,15 @@ export class ChatEngine {
         Logger.error('turn change window scan failed:', error)
       }
     })()
-    pendingScans.add(scan)
-    void scan
-      .then(() =>
-        this.scanLivePathsAfterTool(session).catch((error) =>
-          Logger.dev('live scan after window failed:', error)
-        )
+    // Completion must wait for content verification too, before clearing the
+    // session's live paths. Track the entire chain, not just the stat scan.
+    const verified = scan.then(() =>
+      this.scanLivePathsAfterTool(session).catch((error) =>
+        Logger.dev('live scan after window failed:', error)
       )
-      .finally(() => pendingScans.delete(scan))
+    )
+    pendingScans.add(verified)
+    void verified.finally(() => pendingScans.delete(verified))
   }
 
   /**
@@ -30861,11 +31193,8 @@ export class ChatEngine {
    * tool still excludes the user's shell edits from its final checkpoint.
    */
   private async userTerminalChangedPaths(session: SessionInfo): Promise<Set<string>> {
-    // No active turn means nothing to attribute at all; the empty set keeps
-    // completion's project-wide snapshot behavior. The whole scan is also
-    // skipped unless a shell tool ran (only then does completion use the
-    // full-turn diff that exclusions apply to) and a window is open at all.
-    if (!session.activeTurnId || !session.unboundedToolObserved) return new Set()
+    // Only scan when an active turn overlaps actual user-terminal activity.
+    if (!session.activeTurnId) return new Set()
     if (!this.userTerminalWindows.get(session.projectId)?.size) return new Set()
     const after = await this.checkpointManager
       .fingerprint(session.projectId, session.projectPath)
@@ -30973,6 +31302,12 @@ export class ChatEngine {
     failure?: string
   ): Promise<void> {
     if (!info?.activeTurnId) return
+    const turnId = info.activeTurnId
+    // Re-read the durable harness transcript on every completion path, including
+    // failures and interrupts. Live tool events can arrive late or be dropped.
+    const messages = await this.turnTranscriptMessages(info)
+    if (info.activeTurnId !== turnId) return
+    this.reassertTurnToolEvidence(info, messages)
     // A shell tool still in flight (interrupted turn) never emitted a terminal
     // state, so close its window here before the after-snapshot is taken.
     if (info.unboundedWindowStart) this.closeUnboundedToolWindow(info)
@@ -30982,6 +31317,7 @@ export class ChatEngine {
     // user's work, not the thread's: exclude them from the final checkpoint
     // just like in-app editor saves.
     const userTerminalPaths = await this.userTerminalChangedPaths(info)
+    if (info.activeTurnId !== turnId) return
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -30990,9 +31326,10 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // A shell invocation is not evidence of ownership. Only paths tied to
-        // actual mutating tool calls may survive content-diff verification.
-        new Set([...(info.changedPaths ?? [])].filter((path) => info.changeSources?.has(path))),
+        // The final content snapshot is authoritative, including writes hidden
+        // in scripts, nested tools, commits, and missed stream events. Reconcile
+        // user and foreign-thread edits below instead of requiring parsed paths.
+        undefined,
         {
           changeSources: info.changeSources,
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
@@ -31122,10 +31459,7 @@ export class ChatEngine {
     // mirrors completeTurn so a fork never claims a file it didn't touch.
     const MAX_LIVE_PATHS = 200
     const changedPaths = session.changedPaths ?? new Set<string>()
-    const rawPaths = [...changedPaths]
-      .filter((path) => session.changeSources?.has(path))
-      .sort()
-      .slice(0, MAX_LIVE_PATHS)
+    const rawPaths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
     const turnStart = checkpoint.before.createdAt
     const ownThreadIds = await this.selfFamilyThreadIds(projectId, threadId)
     const foreign = await this.checkpointManager.foreignClaimedPathsForLive(

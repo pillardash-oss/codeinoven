@@ -1,5 +1,5 @@
 import { assistantResultText } from './assistant-result'
-import type { AssistantPriority, Thread, ThreadStatus } from './types'
+import type { AssistantPriority, ResolvedUtility, Thread, ThreadStatus } from './types'
 import { isAssistantSetupThread, isAssistantThread } from './types'
 import { assistantPriorityLabel } from './assistant-reporting'
 import { formatDateTime } from './date-time-format'
@@ -9,11 +9,16 @@ import { formatDateTime } from './date-time-format'
  *
  * An assistant's report is delivered into its run thread, and a thread is capped
  * and evicted, so a report that only ever existed in the transcript is lost.
- * Every assistant task turn that ends with a report therefore also lands one
- * Markdown file under `reports/` in the assistant's own workspace
+ * A run that produced a report therefore also lands one Markdown file under
+ * `reports/` in the assistant's own workspace
  * (`assistant-cwd/<assistantId>/reports/`), which the Workspace files panel
- * mounts. The in-app notification is unchanged: the run still reports in its
- * thread, and the file is the copy that outlives it.
+ * mounts.
+ *
+ * Deciding what a report is belongs to the run, never to the app. Most turns are
+ * not reports (a question, a check-in, a status line, an acknowledgement, an
+ * ordinary reply), and wrapping one in a report document invents a deliverable
+ * nobody wrote. So the run declares a report through the capability below, and
+ * the app only files what it declared.
  *
  * Pure and dependency-free (apart from the date and priority labels), so the
  * main-process writer and its tests read the same rules.
@@ -22,13 +27,92 @@ import { formatDateTime } from './date-time-format'
 /** Subdirectory of an assistant workspace that holds the durable run reports. */
 export const ASSISTANT_REPORTS_DIRECTORY = 'reports'
 
+/** The app-owned capability a run declares its report through. */
+export const ASSISTANT_REPORT_UTILITY_ID = 'cio:assistant-report'
+
+/** Ceiling for the title a run gives its own report. */
+export const ASSISTANT_REPORT_TITLE_LIMIT = 120
+
+/** Ceiling for a report body the run writes instead of filing its answer. */
+export const ASSISTANT_REPORT_BODY_LIMIT = 200_000
+
 /**
- * Whether a settled turn is one whose report is copied to disk.
+ * The report capability, bound to the live run turn   it is never installed
+ * globally and never appears in the thread's utility bank, exactly like the
+ * Getting started checkpoint.
+ *
+ * The run is the only party that knows whether it just produced a report, so the
+ * capability asks for the decision and nothing else: the title, and optionally a
+ * body when the report is more than the answer the user is about to read. The app
+ * owns the path, the file name and the metadata header, so no run has to know how
+ * the workspace is laid out, and no run can file a report somewhere the Workspace
+ * files panel does not mount.
+ */
+export function assistantReportUtility(
+  harnessId: string,
+  projectId: string,
+  threadId: string
+): ResolvedUtility {
+  const binding = { harnessId, strategy: 'skill' as const }
+  return {
+    binding,
+    utility: {
+      id: ASSISTANT_REPORT_UTILITY_ID,
+      kind: 'skill',
+      name: 'Run report',
+      description:
+        'File this run\u2019s output as a report the user can read again after the thread is gone.',
+      enabled: true,
+      activation: 'on_demand',
+      scope: { level: 'thread', projectId, threadId },
+      config: {
+        instructions:
+          'Use save_report with { title } only when this turn produced a report: a digest, findings, an analysis, or a finished draft the user will want to read again. Never use it for a question, a check-in, a status line, an acknowledgement, or an ordinary reply. The application writes the file when the turn settles, so do not describe the file path or tell the user a report was saved.'
+      },
+      credentials: [],
+      harnessBindings: [binding],
+      appOwned: true,
+      createdAt: 0,
+      updatedAt: 0
+    }
+  }
+}
+
+export const ASSISTANT_REPORT_OPERATIONS = [
+  {
+    name: 'save_report',
+    description:
+      'Declare this turn\u2019s output as a report, and only when it genuinely is one: a digest, findings, an analysis, or a finished draft the user will want to read again. The application files it under reports/ in the assistant\u2019s workspace when the turn settles, with a header naming the run, the task and the agreed urgency. Never call it for a question, a check-in, a status line, an acknowledgement, or an ordinary chat reply: those leave no report.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          minLength: 1,
+          maxLength: ASSISTANT_REPORT_TITLE_LIMIT,
+          description: 'A short title for the report, in the user\u2019s own language.'
+        },
+        markdown: {
+          type: 'string',
+          minLength: 1,
+          maxLength: ASSISTANT_REPORT_BODY_LIMIT,
+          description:
+            'Optional full report body. Omit it to file exactly the answer the user is about to read.'
+        }
+      },
+      required: ['title'],
+      additionalProperties: false
+    }
+  }
+]
+
+/**
+ * Whether a settled turn is one that may file a report at all.
  *
  * The assistant's Getting started thread authors the knowledge; it is an interview,
  * not a run, so nothing about it is a report. Every other assistant-space turn
- * (a scheduled run, a manual run, or the user's own follow-up on a task) leaves
- * a report behind.
+ * (a scheduled run, a manual run, or the user's own follow-up on a task) may
+ * declare one, and files nothing when it does not.
  */
 export function isAssistantReportThread(thread: Thread): boolean {
   return isAssistantThread(thread) && !isAssistantSetupThread(thread)
@@ -69,11 +153,13 @@ export function assistantReportFileName(at: number, threadId: string): string {
 }
 
 export interface AssistantReportDocumentInput {
-  /** The task the run belongs to; the report's heading when there is no assistant. */
+  /** The title the run chose for its own report. */
+  title: string
+  /** The task the run belongs to, named in the header. */
   taskTitle: string
   /** The assistant's name, when the task is grouped. */
   assistantName?: string
-  /** The turn's raw final answer; delivery boundaries are resolved below. */
+  /** The report body, or the turn's raw final answer; boundaries are resolved below. */
   report: string
   /** How the turn settled. */
   status: ThreadStatus
@@ -85,14 +171,15 @@ export interface AssistantReportDocumentInput {
 
 /**
  * The full Markdown document for one report: a small metadata header a reader
- * can scan in the files panel, then the same result delivered in the run thread. The header
+ * can scan in the files panel, then the report the run declared. The header
  * is plain Markdown (no front matter), so the file reads as one document in the
- * app's own preview.
+ * app's own preview. The heading is the run's own title, because a report nobody
+ * named is a report nobody can find again.
  */
 export function buildAssistantReportDocument(input: AssistantReportDocumentInput): string {
+  const title = input.title.trim()
   const taskTitle = input.taskTitle.trim()
   const assistantName = input.assistantName?.trim()
-  const heading = assistantName || taskTitle || 'Assistant report'
 
   const meta = [
     `- Run: ${formatDateTime(input.at)}`,
@@ -104,7 +191,7 @@ export function buildAssistantReportDocument(input: AssistantReportDocumentInput
   if (input.priority) meta.push(`- Agreed urgency: ${assistantPriorityLabel(input.priority)}`)
 
   return [
-    `# Report: ${heading}`,
+    `# ${title || assistantName || taskTitle || 'Report'}`,
     '',
     ...meta,
     '',

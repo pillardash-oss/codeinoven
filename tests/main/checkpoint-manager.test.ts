@@ -425,6 +425,38 @@ describe('CheckpointManager', () => {
     expect(plainDone.changes.map((change) => change.path)).toEqual(['mine.txt'])
   })
 
+  // Regression: two long turns overlap in one project. The older turn claimed a
+  // file long before this turn started and then rewrote it again inside this
+  // window (a formatter run), so the only claim this turn could see was older
+  // than its own start. It was discarded, and the write was credited to a
+  // read-only answer card that never touched the file.
+  it('treats a live claim older than the turn start as foreign while it runs', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'mine.txt'), 'before', 'utf-8')
+    await writeFile(join(projectRoot, 'theirs.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'reader', projectRoot, 'Reader turn', false)
+    await writeFile(join(projectRoot, 'mine.txt'), 'my edit', 'utf-8')
+    await writeFile(join(projectRoot, 'theirs.txt'), 'rewritten by the other turn', 'utf-8')
+
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        precisePaths: new Set(['mine.txt']),
+        foreignClaimedPaths: new Map([['theirs.txt', turn.before.createdAt - 60_000]])
+      }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
+  })
+
   it('bounds the failure text written to a checkpoint', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()
@@ -497,7 +529,13 @@ describe('CheckpointManager', () => {
     testDatabases.push(database)
     const manager = new CheckpointManager(database)
     const projectRoot = await temporaryDirectory('codeinoven-project-')
-    const before = await manager.beginTurn('projectX', 'threadX', projectRoot, 'Poisoned turn', false)
+    const before = await manager.beginTurn(
+      'projectX',
+      'threadX',
+      projectRoot,
+      'Poisoned turn',
+      false
+    )
     await manager.completeTurn('projectX', 'threadX', before.id, projectRoot, 'completed')
     // Simulate a legacy poisoned row saved before the failure bound existed.
     const poisoned: TurnCheckpoint = {
@@ -506,7 +544,13 @@ describe('CheckpointManager', () => {
     }
     database.run(
       'INSERT OR REPLACE INTO turn_checkpoints(turn_id, project_id, thread_id, data, created_at) VALUES(?, ?, ?, ?, ?)',
-      [poisoned.id, poisoned.projectId, poisoned.threadId, JSON.stringify(poisoned), poisoned.createdAt]
+      [
+        poisoned.id,
+        poisoned.projectId,
+        poisoned.threadId,
+        JSON.stringify(poisoned),
+        poisoned.createdAt
+      ]
     )
     const listed = (await manager.list('projectX', 'threadX')).find(
       (checkpoint) => checkpoint.id === before.id

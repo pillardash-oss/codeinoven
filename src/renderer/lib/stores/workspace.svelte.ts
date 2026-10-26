@@ -17,7 +17,7 @@ import { gitState } from './git.svelte'
 import { openComposerFocusWindow } from '$lib/focus/composer-focus'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { relativeTimeClock } from '$lib/relative-time.svelte'
-import { threadMessages } from './thread-messages.svelte'
+import { preloadThreadConversation } from './thread-preload'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { prewarmThreadOven } from '$lib/ovens/oven-prewarm'
@@ -250,13 +250,13 @@ class WorkspaceState {
     // guard window so sidebar tools re-attaching around the switch (terminal
     // panels, action terminals) never steal focus back from the composer.
     openComposerFocusWindow()
-    // Start the message read in the same tick as the selection, before the
+    // Start the conversation read in the same tick as the selection, before the
     // conversation view mounts. Every switch path (sidebar click, Ctrl+Tab,
     // notification, restore) then opens against an in-flight load instead of
     // starting one only after mount, which is what made cold switches show
-    // "Loading conversation…". In-flight loads are shared, so the view's own
-    // load never duplicates this read.
-    void threadMessages.preload(thread.projectId, thread.id)
+    // "Loading conversation…". The bounded trace read is warmed in the same
+    // pass, so a live thread's tail paints instead of arriving seconds later.
+    preloadThreadConversation(thread)
     recentVisits.recordThread(thread)
     // The sidebar rows stamp their last-activity age against the shared clock,
     // so opening a thread re-reads it on the spot: the row the user just entered

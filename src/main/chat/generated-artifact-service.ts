@@ -5,6 +5,7 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { toPosixPath } from '../../lib/paths'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
+  ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
   type AgentArtifact,
   type AgentMessage,
@@ -14,6 +15,7 @@ import {
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   LEGACY_CHATS_ARTIFACTS_DIRECTORY,
+  assistantThreadWorkspaceDirectory,
   chatThreadWorkspaceDirectory,
   browserThreadWorkspaceDirectory,
   featureSlugFromTitle,
@@ -603,26 +605,49 @@ export class GeneratedArtifactService {
   }
 }
 
+/**
+ * The workspace a standalone conversation owns, storage-root-relative, or null
+ * for a real project thread.
+ *
+ * A chat, an assistant task and a browser side chat each own one directory, and
+ * each delivers requested assets through the inline artifact pipeline. A project
+ * thread instead saves generated files into `.cio/work/<feature>/`. Keeping the
+ * three standalone scopes together is what stops an assistant thread from being
+ * handed the project rule ("save the bitmap and include it as a Markdown
+ * image"), which is the exact opposite of the inline render contract the same
+ * turn also carries.
+ */
+function standaloneWorkspaceDirectory(
+  thread: Pick<Thread, 'projectId' | 'id' | 'assistantId'>
+): string | null {
+  if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID)
+    return browserThreadWorkspaceDirectory(thread.id)
+  if (thread.projectId === ASSISTANT_SPACE_ID)
+    return assistantThreadWorkspaceDirectory(thread.id, thread.assistantId)
+  if (thread.projectId === INBOX_PROJECT_ID) return chatThreadWorkspaceDirectory(thread.id)
+  return null
+}
+
 export function artifactInstruction(
-  thread: Pick<Thread, 'projectId' | 'id' | 'title' | 'featureSlug'>,
+  thread: Pick<Thread, 'projectId' | 'id' | 'title' | 'featureSlug' | 'assistantId'>,
   options?: { chatWorkspaceRoot?: string; chatFileSystemMode?: boolean }
 ): string {
-  if (thread.projectId === INBOX_PROJECT_ID || thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
-    const relativeRoot = `${promptPath(
-      thread.projectId === GLOBAL_BROWSER_PROJECT_ID
-        ? browserThreadWorkspaceDirectory(thread.id)
-        : chatThreadWorkspaceDirectory(thread.id)
-    )}/`
+  const standaloneDirectory = standaloneWorkspaceDirectory(thread)
+  if (standaloneDirectory !== null) {
+    const relativeRoot = `${promptPath(standaloneDirectory)}/`
     const absoluteRoot = options?.chatWorkspaceRoot
     const rootLabel = absoluteRoot ? `${relativeRoot} (absolute: ${absoluteRoot})` : relativeRoot
-    const destinationRule =
-      'Save every file you create for the user there: images, Markdown, documents, generated code, exports, anything. That directory is the pre-authorized workspace of this chat: reading and writing inside it never requires approval, and everything you save there appears in the Files panel for the user. Keep filenames descriptive.'
+    const owner = thread.projectId === ASSISTANT_SPACE_ID ? 'this assistant' : 'this chat'
+    const destinationRule = `Save every file you create for the user there: images, Markdown, documents, generated code, exports, anything. That directory is the pre-authorized workspace of ${owner}: reading and writing inside it never requires approval, and everything you save there appears in the Files panel for the user. Keep filenames descriptive.`
+    const deliveryRule =
+      'Write the actual asset there before you answer: when the user asked for an image, graphic, HTML or SVG, do the file, then render it with the artifact render operation. Describing an asset in the reply is not delivering it.'
     const boundaryRule = options?.chatFileSystemMode
       ? 'If the user asks for a file at a specific location outside that directory, honor the explicitly requested path.'
-      : 'Anything outside that directory is gated: if the user asks you to create or touch files anywhere else on their file system, do not do it silently; tell them to turn on File System mode for this chat so that gate opens.'
+      : `Anything outside that directory is gated: if the user asks you to create or touch files anywhere else on their file system, do not do it silently; tell them to turn on File System mode for ${owner} so that gate opens.`
     return [
-      `Your workspace directory in this chat is ${rootLabel}.`,
+      `Your workspace directory in ${owner} is ${rootLabel}.`,
       destinationRule,
+      deliveryRule,
       boundaryRule
     ].join(' ')
   }

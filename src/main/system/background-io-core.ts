@@ -140,6 +140,26 @@ export async function backgroundIo<T>(request: BackgroundIoRequest): Promise<T> 
     case 'list-directory':
       result = await listDirectory(request)
       break
+    case 'turn-stream-tail': {
+      const { readTurnStreamTail, fileTurnStreamSource } = await import('../chat/turn-stream-log')
+      result = await readTurnStreamTail(
+        fileTurnStreamSource(request.path),
+        request.size,
+        request.windowStartTs
+      )
+      break
+    }
+    case 'turn-stream-range': {
+      const { readTurnStreamLog, fileTurnStreamSource } = await import('../chat/turn-stream-log')
+      result = await readTurnStreamLog(
+        fileTurnStreamSource(request.path),
+        request.fromByte,
+        request.size,
+        request.windowStartTs,
+        request.windowEndTs
+      )
+      break
+    }
     default:
       result = await credentials(request)
   }

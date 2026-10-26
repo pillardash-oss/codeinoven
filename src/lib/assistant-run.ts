@@ -1,4 +1,5 @@
 import { ASSISTANT_BRIEF_REPLY_INSTRUCTION } from './assistant-voice'
+import { ASSISTANT_REPORT_UTILITY_ID } from './assistant-reports'
 import { CIO_ASK_USER_TOOL_NAME } from './core-tools'
 import { formatDateTime } from './date-time-format'
 import {
@@ -86,6 +87,7 @@ export function assistantRunContext(
     `This thread runs the assistant "${assistant.name}". Its knowledge is your instruction set; follow it exactly.`,
     `The assistant is already set up and its knowledge is agreed: run it now. Do not restart the getting-started interview, do not ask the questions that produced the knowledge, and do not re-present its setup.`,
     ...reportingLines(assistant),
+    ...reportLines(),
     `Everything the assistant needs should already be connected. Verify each connection the knowledge relies on is actually available in this session before you use it. When one is missing, do not stop and do not send the user to another screen: as the user's assistant, supply it yourself.`,
     `How to supply a missing connection, in order:`,
     `1. Search the app utility library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin.`,
@@ -150,7 +152,7 @@ function reportingLines(assistant: Pick<Assistant, 'delivery' | 'priority'>): st
     }
     if (delivery.note) lines.push(`Delivery note from the agreement: ${delivery.note}`)
     lines.push(
-      `However this assistant delivers, make your final answer the concise result the user needs, never an exhaustive research report or a transcript of your work. The app archives that same concise answer automatically; archiving does not require you to write more.`
+      `However this assistant delivers, make your final answer the concise result the user needs, never an exhaustive research report or a transcript of your work.`
     )
   }
 
@@ -166,4 +168,21 @@ function reportingLines(assistant: Pick<Assistant, 'delivery' | 'priority'>): st
   }
 
   return lines
+}
+
+/**
+ * The rule that decides whether a run leaves a report behind.
+ *
+ * The app never derives a report from a run's answer. Most turns are a question,
+ * a check-in, a status line or an ordinary reply, and wrapping one in a report
+ * document invents a deliverable nobody wrote   a run that asked which logo
+ * direction to refine once filed a two-sentence "report" about it. So the run
+ * declares a report itself, through the app-owned capability, and only when it
+ * genuinely produced one.
+ */
+function reportLines(): string[] {
+  return [
+    `File a report only when this turn produced one. A report is a document the user will read again on its own: a digest, findings, an analysis, or a finished draft. When that is what you produced, activate ${ASSISTANT_REPORT_UTILITY_ID} and invoke save_report with a short title, and with the full body only when the document is more than the answer you are about to write. The app files it in the assistant's workspace, so never name a path or say a report was saved.`,
+    `Everything else leaves no report. A question, a check-in, a status line, an acknowledgement, or a chat reply is an answer, not a report: call nothing, and never present an ordinary reply as a report.`
+  ]
 }

@@ -67,6 +67,12 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     reason: REPOSITORY_READ
   },
   {
+    file: 'src/main/database/repositories/assistant-knowledge-revision-repo.ts',
+    maxSites: 2,
+    reason:
+      'the next sequence and the current count, both read inside the write transaction that appends and prunes a version; listing and reading history go through queryViaWorker'
+  },
+  {
     file: 'src/main/database/repositories/design-repo.ts',
     maxSites: 1,
     reason:

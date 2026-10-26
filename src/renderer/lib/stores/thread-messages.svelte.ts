@@ -16,6 +16,7 @@ import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
 import { ThreadMessagesCache } from './thread-messages-cache.svelte'
+import { threadTraceCache } from './thread-trace-cache.svelte'
 import { ThreadMessagesEvents } from './thread-messages-events.svelte'
 import {
   EMPTY_MESSAGES,
@@ -917,6 +918,9 @@ class ThreadMessagesStore {
   /** Clear the cache for a thread (e.g. on deletion). */
   clear(projectId: string, threadId: string): void {
     this.cache.clear(projectId, threadId)
+    // The working trace is cached per thread too, so a deleted thread must not
+    // leave its fold behind for a later thread that reuses the id.
+    threadTraceCache.forget(projectId, threadId)
   }
 }
 

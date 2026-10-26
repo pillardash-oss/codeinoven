@@ -435,6 +435,19 @@ export function titleAttemptsFromDriver(driver: HarnessDriver): readonly TitleAt
 }
 
 export function rejectedMermaidMessage(message: AgentMessage, error: string): AgentMessage {
+  return rejectedAnswerMessage(message, error)
+}
+
+/**
+ * The answer the engine refused to accept.
+ *
+ * A rejected answer keeps its tool calls in the working trace and loses its
+ * prose, so a claim the engine rejected can never be read as the turn's answer
+ * while the evidence of what the agent actually did stays available. The Mermaid
+ * validator and the visual-deliverable guard share it: both fail on the words,
+ * not on the tools.
+ */
+export function rejectedAnswerMessage(message: AgentMessage, error: string): AgentMessage {
   return {
     ...message,
     origin: message.origin ?? 'provider',
