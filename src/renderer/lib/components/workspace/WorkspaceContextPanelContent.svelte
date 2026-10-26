@@ -9,7 +9,7 @@
   import { panelReveal } from '$lib/components/layout/page-reveal'
   import { appPanelSlot } from '$lib/app-panel-portal'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
+  import { loadCachedPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
   import { logRendererError } from '$lib/system/renderer-logger'
   // BrowserPanel is a dynamic import: terminal and browser panels are the dock's
   // two heaviest residents, and the browser one drags the browser's whole model
@@ -316,7 +316,7 @@
 
 {#if gitPanelProjectId}
   {#key `${gitPanelProjectId}:${panelReloadNonce}`}
-    {#await loadPanelModule(PANEL_KEYS.gitStatus, () => import('../git/GitStatusPanel.svelte'))}
+    {#await loadCachedPanelModule(PANEL_KEYS.gitStatus, () => import('../git/GitStatusPanel.svelte'))}
       <div class="h-full" style:display={gitPanelVisible ? 'block' : 'none'}>
         {@render panelLoading('Git')}
       </div>
@@ -338,7 +338,7 @@
 {#if keepFilesMounted && filesTab}
   <div class="h-full" style:display={filesVisible ? 'block' : 'none'}>
     {#key `${filesPanelKey}:${panelReloadNonce}`}
-      {#await loadPanelModule(PANEL_KEYS.projectFiles, () => import('../files/ProjectFilesPanel.svelte'))}
+      {#await loadCachedPanelModule(PANEL_KEYS.projectFiles, () => import('../files/ProjectFilesPanel.svelte'))}
         {@render panelLoading('Files')}
       {:then { default: ProjectFilesPanel }}
         <ProjectFilesPanel
@@ -374,7 +374,7 @@
         out:leavePanel
       >
         {#if activeContextTab.kind === 'oven'}
-          {#await loadPanelModule(PANEL_KEYS.oven, () => import('../threads/OvenSidebarPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.oven, () => import('../threads/OvenSidebarPanel.svelte'))}
             {@render panelLoading('Oven')}
           {:then { default: OvenSidebarPanel }}
             {#if remoteThread}<OvenSidebarPanel thread={remoteThread} />{/if}
@@ -387,7 +387,7 @@
         {:else if activeContextTab.kind === 'files'}
           <!-- The file reader stays mounted above while its chat is active. -->
         {:else if activeContextTab.kind === 'diff'}
-          {#await loadPanelModule(PANEL_KEYS.diffSidebar, () => import('../files/DiffSidebarPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.diffSidebar, () => import('../files/DiffSidebarPanel.svelte'))}
             {@render panelLoading('Changes')}
           {:then { default: DiffSidebarPanel }}
             <DiffSidebarPanel
@@ -415,7 +415,7 @@
             />
           {/if}
         {:else if activeContextTab.kind === 'actions'}
-          {#await loadPanelModule(PANEL_KEYS.actions, () => import('../actions/ActionsPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.actions, () => import('../actions/ActionsPanel.svelte'))}
             {@render panelLoading('Actions')}
           {:then { default: ActionsPanel }}
             <ActionsPanel
@@ -434,7 +434,7 @@
           {:else if browser.clearDataConfirmOpen && browser.clearDataProjectId === activeContextTab.projectId}
             <div class="h-full bg-app" aria-hidden="true"></div>
           {:else}
-            {#await loadPanelModule(PANEL_KEYS.browser, () => import('$lib/components/browser/BrowserPanel.svelte'))}
+            {#await loadCachedPanelModule(PANEL_KEYS.browser, () => import('$lib/components/browser/BrowserPanel.svelte'))}
               {@render panelLoading('Browser')}
             {:then { default: BrowserPanel }}
               <!-- BrowserPanel captures its tab identity at construction. Key
@@ -450,7 +450,7 @@
             {/await}
           {/if}
         {:else if activeContextTab.kind === 'debugger'}
-          {#await loadPanelModule(PANEL_KEYS.debugger, () => import('../debug/AgentDebugPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.debugger, () => import('../debug/AgentDebugPanel.svelte'))}
             {@render panelLoading('Debugger')}
           {:then { default: AgentDebugPanel }}
             <AgentDebugPanel />
@@ -458,7 +458,7 @@
             {@render panelLoadFailed(PANEL_KEYS.debugger, 'Debugger', error)}
           {/await}
         {:else if activeContextTab.kind === 'sources'}
-          {#await loadPanelModule(PANEL_KEYS.sources, () => import('../threads/SourcesPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.sources, () => import('../threads/SourcesPanel.svelte'))}
             {@render panelLoading('Sources')}
           {:then { default: SourcesPanel }}
             <SourcesPanel
@@ -472,7 +472,7 @@
         {:else if activeContextTab.kind === 'git'}
           <!-- Rendered by the persistent, keep-mounted block above. -->
         {:else if activeContextTab.kind === 'cloud-deployment'}
-          {#await loadPanelModule(PANEL_KEYS.cloudDeployment, () => import('../cloud/CloudDeploymentPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.cloudDeployment, () => import('../cloud/CloudDeploymentPanel.svelte'))}
             {@render panelLoading('Cloud deployment')}
           {:then { default: CloudDeploymentPanel }}
             <CloudDeploymentPanel
@@ -483,7 +483,7 @@
             {@render panelLoadFailed(PANEL_KEYS.cloudDeployment, 'Cloud deployment', error)}
           {/await}
         {:else if activeContextTab.kind === 'temporary-chat'}
-          {#await loadPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
             {@render panelLoading('Chat')}
           {:then { default: TemporaryChatView }}
             <TemporaryChatView tabId={activeContextTab.id} {onContinueInThread} />
@@ -499,7 +499,7 @@
             <div class="h-full" {@attach appPanelSlot}></div>
           {/if}
         {:else if activeContextTab.kind === 'assistant-knowledge'}
-          {#await loadPanelModule(PANEL_KEYS.assistantKnowledge, () => import('../assistant/AssistantPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.assistantKnowledge, () => import('../assistant/AssistantPanel.svelte'))}
             {@render panelLoading('Knowledge')}
           {:then { default: KnowledgePanel }}
             <KnowledgePanel
@@ -516,40 +516,32 @@
             {@render panelLoadFailed(PANEL_KEYS.assistantKnowledge, 'Knowledge', error)}
           {/await}
         {:else if activeContextTab.kind === 'coordinator'}
-          <!--
-            The panel a coordinator row published.
-
-            Every branch reads its props from `boardRegistration`, which is this
-            row's live registration or the last one this panel rendered. The live
-            `tabCoordinator` is what decides whether there is a board at all, so a
-            row that stops coordinating still falls through to the empty state
-            below.
-          -->
-          {#if tabCoordinator && boardRegistration}
-            {#if boardRegistration.panel.component === 'assignment'}
-              {#await loadPanelModule(PANEL_KEYS.assignmentCoordinator, () => import('../threads/AssignmentCoordinatorPanel.svelte'))}
+          <!-- Keep outgoing child props tied to their own row during teardown. -->
+          {#each tabCoordinator && boardRegistration ? [boardRegistration] : [] as board (`${board.projectId}:${board.threadId}:${board.panel.component}`)}
+            {#if board.panel.component === 'assignment'}
+              {#await loadCachedPanelModule(PANEL_KEYS.assignmentCoordinator, () => import('../threads/AssignmentCoordinatorPanel.svelte'))}
                 {@render panelLoading('Assignment')}
               {:then { default: AssignmentCoordinatorPanel }}
-                <AssignmentCoordinatorPanel {...boardRegistration.panel.props} />
+                <AssignmentCoordinatorPanel {...board.panel.props} />
               {:catch error}
                 {@render panelLoadFailed(PANEL_KEYS.assignmentCoordinator, 'Assignment', error)}
               {/await}
-            {:else if boardRegistration.panel.component === 'achievement'}
-              {#await loadPanelModule(PANEL_KEYS.achievementCoordinator, () => import('../threads/AchievementCoordinatorPanel.svelte'))}
+            {:else if board.panel.component === 'achievement'}
+              {#await loadCachedPanelModule(PANEL_KEYS.achievementCoordinator, () => import('../threads/AchievementCoordinatorPanel.svelte'))}
                 {@render panelLoading('Achievement')}
               {:then { default: AchievementCoordinatorPanel }}
-                <AchievementCoordinatorPanel {...boardRegistration.panel.props} />
+                <AchievementCoordinatorPanel {...board.panel.props} />
               {:catch error}
                 {@render panelLoadFailed(PANEL_KEYS.achievementCoordinator, 'Achievement', error)}
               {/await}
-            {:else if boardRegistration.panel.component === 'design'}
-              {#await loadPanelModule(PANEL_KEYS.designCoordinator, () => import('../design/DesignCoordinatorPanel.svelte'))}
+            {:else if board.panel.component === 'design'}
+              {#await loadCachedPanelModule(PANEL_KEYS.designCoordinator, () => import('../design/DesignCoordinatorPanel.svelte'))}
                 {@render panelLoading('Design')}
               {:then { default: DesignCoordinatorPanel }}
-                {#key `${boardRegistration.projectId}:${boardRegistration.panel.props.threadId}:${boardRegistration.panel.props.kind ?? 'session'}`}
+                {#key `${board.projectId}:${board.panel.props.threadId}:${board.panel.props.kind ?? 'session'}`}
                   <DesignCoordinatorPanel
-                    {...boardRegistration.panel.props}
-                    viewingThreadId={selectedThread?.id ?? boardRegistration.threadId}
+                    {...board.panel.props}
+                    viewingThreadId={selectedThread?.id ?? board.threadId}
                     active={active && contextSidebarState.sidebarVisible}
                   />
                 {/key}
@@ -557,10 +549,10 @@
                 {@render panelLoadFailed(PANEL_KEYS.designCoordinator, 'Design', error)}
               {/await}
             {:else}
-              {#await loadPanelModule(PANEL_KEYS.independentAuditCoordinator, () => import('../threads/IndependentAuditCoordinatorPanel.svelte'))}
+              {#await loadCachedPanelModule(PANEL_KEYS.independentAuditCoordinator, () => import('../threads/IndependentAuditCoordinatorPanel.svelte'))}
                 {@render panelLoading('Audit')}
               {:then { default: IndependentAuditCoordinatorPanel }}
-                <IndependentAuditCoordinatorPanel {...boardRegistration.panel.props} />
+                <IndependentAuditCoordinatorPanel {...board.panel.props} />
               {:catch error}
                 {@render panelLoadFailed(PANEL_KEYS.independentAuditCoordinator, 'Audit', error)}
               {/await}
@@ -581,9 +573,9 @@
                 </button>
               {/snippet}
             </EmptyState>
-          {/if}
+          {/each}
         {:else if activeContextTab.kind === 'memory'}
-          {#await loadPanelModule(PANEL_KEYS.memory, () => import('../memory/MemoryPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.memory, () => import('../memory/MemoryPanel.svelte'))}
             {@render panelLoading('Memory')}
           {:then { default: MemoryPanel }}
             <MemoryPanel
@@ -597,7 +589,7 @@
             {@render panelLoadFailed(PANEL_KEYS.memory, 'Memory', error)}
           {/await}
         {:else if activeContextTab.kind === 'thread-note'}
-          {#await loadPanelModule(PANEL_KEYS.threadNote, () => import('../threads/ThreadNotePanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.threadNote, () => import('../threads/ThreadNotePanel.svelte'))}
             {@render panelLoading('Note')}
           {:then { default: ThreadNotePanel }}
             <ThreadNotePanel tab={activeContextTab} />
@@ -605,7 +597,7 @@
             {@render panelLoadFailed(PANEL_KEYS.threadNote, 'Note', error)}
           {/await}
         {:else if activeContextTab.kind === 'attention'}
-          {#await loadPanelModule(PANEL_KEYS.attention, () => import('../notifications/AttentionPanel.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.attention, () => import('../notifications/AttentionPanel.svelte'))}
             {@render panelLoading('Attention')}
           {:then { default: AttentionPanel }}
             <AttentionPanel
@@ -621,7 +613,7 @@
             browser rail's downloads and popup-window tabs share the tab union but
             are never in this sidebar's tab list, and rendering them in
             SubagentSessionView would be wrong. -->
-          {#await loadPanelModule(PANEL_KEYS.subagent, () => import('../threads/SubagentSessionView.svelte'))}
+          {#await loadCachedPanelModule(PANEL_KEYS.subagent, () => import('../threads/SubagentSessionView.svelte'))}
             {@render panelLoading('Sub-agent')}
           {:then { default: SubagentSessionView }}
             <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />
