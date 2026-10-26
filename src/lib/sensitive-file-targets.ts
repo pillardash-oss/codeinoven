@@ -106,6 +106,10 @@ export function sensitiveFileTargets(
       }
     }
     if (!candidate || candidate.startsWith('-') || candidate.includes('://')) return
+    // Language identifiers, not filenames. These reach the token stream from
+    // scripts, inline code, and quoted program text, never from an operand the
+    // shell turns into a path.
+    if (/^(?:process\.env|import\.meta\.env)(?:\.|$)/u.test(candidate)) return
     const absolute = normalize(
       candidate.startsWith('/') || /^[a-z]:[/\\]/iu.test(candidate)
         ? candidate
@@ -143,6 +147,8 @@ export function sensitiveFileTargets(
     let skipOptionValue = false
     let redirect = false
     let embedded: 'shell' | 'language' | undefined
+    let heredoc = ''
+    let heredocDelimiterNext = false
 
     function languageTargets(code: string): void {
       // Ignore quoted prose and comments inside programs. A string that merely
@@ -180,6 +186,14 @@ export function sensitiveFileTargets(
       }
     }
     for (const raw of tokens) {
+      const bare = raw.replace(/^["']|["']$/gu, '')
+      // A heredoc body is data handed to another program, not an operand this
+      // shell resolves, so source such as `process.env` inside it is not a file
+      // named `process.env`. Skip the body up to its delimiter line.
+      if (heredoc) {
+        if (bare === heredoc) heredoc = ''
+        continue
+      }
       if ([';', '|', '&&', '||'].includes(raw)) {
         executable = ''
         skipPattern = false
@@ -187,12 +201,13 @@ export function sensitiveFileTargets(
         embedded = undefined
         continue
       }
-      const token = raw.replace(/^["']|["']$/gu, '')
+      const token = bare
       if (['>', '>>', '<'].includes(token)) {
         redirect = true
         continue
       }
       if (token === '<<') {
+        heredocDelimiterNext = true
         skipOptionValue = true
         continue
       }
@@ -225,6 +240,10 @@ export function sensitiveFileTargets(
       if (['echo', 'printf'].includes(executable)) continue
       if (skipOptionValue) {
         skipOptionValue = false
+        if (heredocDelimiterNext) {
+          heredocDelimiterNext = false
+          heredoc = token
+        }
         continue
       }
       if (token.startsWith('-')) {
