@@ -4,8 +4,8 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { SvelteMap } from 'svelte/reactivity'
 
+  import { annotationIndicatorElement } from '$lib/annotation-indicator.svelte'
   import { getAnnotationToolbarHost, hasAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { Popover } from 'bits-ui'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
@@ -123,14 +123,22 @@
   let penOpen = $state(false)
 
   /**
-   * Badge elements by reference id.
+   * Where the open comment box anchors: its own badge, as the indicator drew it.
    *
-   * The open editor is anchored to its own badge, so this is how the editor
-   * follows the picture through scrolling and resizing rather than being placed
-   * once and drifting away from the mark it comments on. It is reactive so the
-   * anchor is re-measured the moment a badge mounts.
+   * The indicator registers the element it is drawn as, so the editor follows the
+   * picture through scrolling and resizing rather than being placed once and
+   * drifting away from the mark it comments on, without this surface keeping a
+   * second map of pins.
    */
-  const badgeElements = new SvelteMap<string, HTMLElement>()
+  const editorAnchor = $derived.by(() => {
+    void measureToken
+    const mark = editingMark
+    if (!mark) return null
+    const badge = annotationIndicatorElement(`mark:${threadId}`, mark.id)
+    if (!badge) return null
+    const rect = badge.getBoundingClientRect()
+    return { x: rect.left + rect.width / 2, y: rect.bottom }
+  })
 
   // Plain locals for the gesture: where it started in client coordinates and how
   // far it travelled, which is what tells a tap from a drawn area.
@@ -144,24 +152,6 @@
   const editingMark = $derived(
     activeEditingId ? (marks.find((mark) => mark.id === activeEditingId) ?? null) : null
   )
-
-  /** Where the open editor anchors: its badge, re-measured as the layout moves. */
-  const editorAnchor = $derived.by(() => {
-    void measureToken
-    const mark = editingMark
-    if (!mark) return null
-    const badge = badgeElements.get(mark.id)
-    if (!badge) return null
-    const rect = badge.getBoundingClientRect()
-    return { x: rect.left + rect.width / 2, y: rect.bottom }
-  })
-
-  function badgeAttachment(id: string): Attachment<HTMLButtonElement> {
-    return (node) => {
-      badgeElements.set(id, node)
-      return () => badgeElements.delete(id)
-    }
-  }
 
   /** The pointer position as a point normalized to the picture box. */
   function normalizedPoint(event: PointerEvent, layer: HTMLElement): MarkPoint | null {
@@ -287,7 +277,6 @@
       threadId,
       current.filter((reference) => reference.id !== id)
     )
-    badgeElements.delete(id)
     closeEditor()
   }
 
@@ -406,7 +395,6 @@
       hasComment={Boolean(mark.comment)}
       title={badgeHint(mark, number)}
       class="z-40"
-      attach={badgeAttachment(mark.id)}
       onOpen={() => requestEdit(mark.id)}
     />
   {/each}

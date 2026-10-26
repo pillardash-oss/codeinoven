@@ -1,7 +1,8 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
+import { assistants } from '$lib/stores/assistants.svelte'
 import { scopeState, type ScopeProject } from '$lib/stores/scope.svelte'
-import type { Thread } from '$shared/types'
+import type { Assistant, Thread } from '$shared/types'
 
 /** How long a project's thread list stays reusable across picker opens. */
 const THREADS_TTL_MS = 30_000
@@ -22,6 +23,23 @@ class MemoryScopeOptionsState {
 
   get projects(): ScopeProject[] {
     return scopeState.projects
+  }
+
+  /** Assistants offered by the "One assistant" picker. The assistant store is
+   *  app-wide, so it is read directly instead of being re-fetched per panel. */
+  get assistants(): readonly Assistant[] {
+    return assistants.assistants
+  }
+
+  /** Stored custom icon data URLs, so a picked assistant shows its own mark. */
+  get assistantIconUrls(): ReadonlyMap<string, string> {
+    return assistants.iconUrls
+  }
+
+  /** Load the assistant list on the first panel that needs it. Safe to spam:
+   *  the store ignores a second initialize and refreshes itself on mutations. */
+  ensureAssistants(): void {
+    assistants.initialize()
   }
 
   threadsFor(projectId?: string): Thread[] {

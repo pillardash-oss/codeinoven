@@ -31334,6 +31334,12 @@ export class ChatEngine {
     // just like in-app editor saves.
     const userTerminalPaths = await this.userTerminalChangedPaths(info)
     if (info.activeTurnId !== turnId) return
+    // Stale sessions are the reason a filtered card has no visible cause: their
+    // claims must be dropped before they can take paths from this turn.
+    const activeTurnThreadIds = await this.checkpointManager
+      .activeTurnThreadIds(info.projectId)
+      .catch(() => undefined)
+    const foreignLive = this.liveForeignClaimedPaths(info, ownThreadIds, activeTurnThreadIds)
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -31349,7 +31355,9 @@ export class ChatEngine {
         {
           changeSources: info.changeSources,
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
-          foreignClaimedPaths: this.liveForeignClaimedPaths(info, ownThreadIds),
+          foreignPrecisePaths: foreignLive.claimed,
+          foreignWindowPaths: foreignLive.window,
+          foreignClaimants: foreignLive.claimants,
           // Worker sub-agent threads dispatched by this thread are part of the
           // same logical turn: their captured checkpoints must never mark the
           // turn's real changes as foreign concurrent edits.
@@ -31410,16 +31418,20 @@ export class ChatEngine {
   }
 
   /**
-   * Paths other active sessions' precise file tools claimed this turn. Only
-   * paths claimed by a different thread outside this thread's sub-agent family
-   * can belong to a concurrent edit; the caller time-filters these against the
-   * turn's start before dropping them.
+   * What other running turns hold in this project, split by evidence. `claimed`
+   * are paths a precise file tool wrote (a real claim); `window` are paths a
+   * shell command only watched move, which proves nothing about who wrote them;
+   * `claimants` names the thread behind each path so a filtered card can say
+   * who took it.
    */
   private liveForeignClaimedPaths(
     self: SessionInfo,
-    ownThreadIds?: ReadonlySet<string>
-  ): Map<string, number> {
-    const foreign = new Map<string, number>()
+    ownThreadIds?: ReadonlySet<string>,
+    activeTurnThreadIds?: ReadonlySet<string>
+  ): { claimed: Map<string, number>; window: Map<string, number>; claimants: Map<string, string> } {
+    const claimed = new Map<string, number>()
+    const window = new Map<string, number>()
+    const claimants = new Map<string, string>()
     const now = Date.now()
     for (const other of this.sessionRegistry.values()) {
       if (other === self || other.projectId !== self.projectId) continue
@@ -31428,20 +31440,25 @@ export class ChatEngine {
       // their claimed paths belong to this turn's card.
       if (ownThreadIds?.has(other.threadId)) continue
       if (!other.activeTurnId) continue
+      // The in-memory turn id can outlive the turn itself (another instance
+      // settled the checkpoint, or the turn ended on a path that skipped the
+      // session cleanup). A ghost session would then hold its paths forever and
+      // strip them from every later turn's card, so require the durable row.
+      if (activeTurnThreadIds && !activeTurnThreadIds.has(other.threadId)) continue
       for (const [path, claimedAt] of other.preciseChangedPaths ?? []) {
-        const existing = foreign.get(path)
-        if (existing === undefined || claimedAt < existing) foreign.set(path, claimedAt)
+        const existing = claimed.get(path)
+        if (existing === undefined || claimedAt < existing) {
+          claimed.set(path, claimedAt)
+          claimants.set(path, other.threadId)
+        }
       }
-      // Shell-window mutations have no per-path timestamp; treat any path the
-      // other active turn has observed as claimed now so an overlapping victim
-      // turn that didn't precisely claim it is filtered as foreign. A victim's
-      // own precise claim still exempts it via keepChange in completeTurn.
       for (const path of other.changedPaths ?? []) {
-        if (foreign.has(path)) continue
-        foreign.set(path, now)
+        if (claimed.has(path) || window.has(path)) continue
+        window.set(path, now)
+        claimants.set(path, other.threadId)
       }
     }
-    return foreign
+    return { claimed, window, claimants }
   }
 
   /**
@@ -31477,12 +31494,18 @@ export class ChatEngine {
     const changedPaths = session.changedPaths ?? new Set<string>()
     const rawPaths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
     const ownThreadIds = await this.selfFamilyThreadIds(projectId, threadId)
+    const activeTurnThreadIds = await this.checkpointManager
+      .activeTurnThreadIds(projectId)
+      .catch(() => undefined)
     const foreign = await this.checkpointManager.foreignClaimedPathsForLive(
       checkpoint,
-      this.liveForeignClaimedPaths(session, ownThreadIds),
+      this.liveForeignClaimedPaths(session, ownThreadIds, activeTurnThreadIds),
       ownThreadIds
     )
     const precise = session.preciseChangedPaths ?? new Map<string, number>()
+    /** This turn recorded a write source for the path (tool target or shell window). */
+    const ownedSource = (path: string): boolean =>
+      (session.changeSources?.get(path)?.length ?? 0) > 0
     // Batched, bounded scanning: stat + hash only claimed paths, 8 at a time,
     // so low-end hardware is never hammered.
     const BATCH = 8
@@ -31497,12 +31520,14 @@ export class ChatEngine {
       const batch = rawPaths.slice(i, i + BATCH)
       const results = await Promise.all(
         batch.map(async (path) => {
-          // Foreign dedup: another thread demonstrably claimed this path and
-          // this thread didn't precisely claim it: skip. Window proof alone does
-          // not exempt, so a fork can't steal a file via its shell window. A
-          // live claim is current by construction (the other thread's claims
-          // reset per turn), so its timestamp is never compared to turnStart.
+          // Foreign dedup, strongest evidence first. Another turn's file tool
+          // beats everything but this turn's own precise claim. Another turn's
+          // shell window only watched the file move, so this turn's own recorded
+          // write evidence outranks it. A live claim is current by construction
+          // (the other thread's claims reset per turn), so its timestamp is never
+          // compared to the turn start.
           if (foreign.claimed.has(path) && !precise.has(path)) return null
+          if (foreign.window.has(path) && !precise.has(path) && !ownedSource(path)) return null
           // The user's own in-app editor saves are never the thread's changes.
           if (userTouched?.has(path)) return null
           const before = checkpoint.before.files[path]

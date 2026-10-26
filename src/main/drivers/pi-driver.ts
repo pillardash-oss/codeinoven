@@ -3007,6 +3007,9 @@ export class PiDriver extends PersistentCliDriver {
             ...(permissionPayload.command ? { command: permissionPayload.command } : {}),
             ...(permissionPayload.review ? { arguments: permissionPayload.review } : {}),
             ...(permissionPayload.surface ? { surface: permissionPayload.surface } : {}),
+            ...(permissionPayload.matchedPatterns
+              ? { matchedPatterns: permissionPayload.matchedPatterns }
+              : {}),
             reason: stringValue(record['title']) ?? 'Destructive action requires approval'
           }
         }
@@ -3045,18 +3048,15 @@ export class PiDriver extends PersistentCliDriver {
     this.emit({ type: 'question.asked', sessionId, requestId, questions })
   }
 
-  /** Resolve the core-tools permission gate's confirm dialog. `reject` also
-   *  covers alternative-instruction rejects: the gate blocks the tool call and
-   *  the engine delivers the corrective feedback to the model separately. */
+  /** Queue corrective feedback before resolving the blocked permission gate. */
   override async replyPermission(
     _projectPath: string,
     requestId: string,
     reply: PermissionReply,
-    _message?: string,
+    message?: string,
     sessionId?: string
   ): Promise<void> {
     void _projectPath
-    void _message
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.method !== 'cio-permission') {
       throw new PermissionRequestGoneError(sessionId, requestId, this.name)
@@ -3070,6 +3070,19 @@ export class PiDriver extends PersistentCliDriver {
     const rawId = request.request['id']
     if (typeof rawId !== 'string' && typeof rawId !== 'number') {
       throw new Error(`Pi permission request has an invalid id: ${requestId}`)
+    }
+    // The engine persists the alternative for display, but does not send a
+    // second prompt. Queue it while the tool is still blocked so Pi sees the
+    // user's correction before continuing after the denial.
+    if (reply === 'reject' && message?.trim()) {
+      await request.client.steer(
+        [
+          'The user rejected the requested action. Do not retry it unchanged.',
+          'Continue this turn by following the user-provided alternative:',
+          message
+        ].join('\n\n'),
+        []
+      )
     }
     request.client.respondToExtensionUiRequest(
       rawId,

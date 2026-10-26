@@ -4,7 +4,13 @@
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioZap from '@pdslng/cio-icon/CioZap.svelte'
-  import type { MemoryCategory, MemoryEntry, MemoryPriority, Thread } from '$shared/types'
+  import type {
+    Assistant,
+    MemoryCategory,
+    MemoryEntry,
+    MemoryPriority,
+    Thread
+  } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { locationScopeOf } from '$shared/memory/memory-scopes'
   import { formatDate } from '$shared/date-time-format'
@@ -12,6 +18,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import AssistantSelect from '../shared/AssistantSelect.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ProjectSelect from '../shared/ProjectSelect.svelte'
   import ThreadSelect from '../shared/ThreadSelect.svelte'
@@ -31,6 +38,10 @@
     threads?: readonly Thread[]
     /** Whether the entry's project threads are still loading. */
     threadsLoading?: boolean
+    /** Assistants offered by the "One assistant" picker. */
+    assistants?: readonly Assistant[]
+    /** Stored assistant icon data URLs, keyed by assistant id. */
+    assistantIconUrls?: ReadonlyMap<string, string>
     initiallyExpanded?: boolean
     onUpdate: (
       index: number,
@@ -49,6 +60,8 @@
     projects = [],
     threads = [],
     threadsLoading = false,
+    assistants = [],
+    assistantIconUrls,
     initiallyExpanded,
     onUpdate,
     onRemove
@@ -70,6 +83,13 @@
   })
   let showProjectPicker = $derived(currentScopeOption?.needsProject ?? false)
   let showThreadPicker = $derived(currentScopeOption?.needsThread ?? false)
+  let showAssistantPicker = $derived(currentScopeOption?.needsAssistant ?? false)
+  /** Two place pickers share one row; a single one takes the whole row. */
+  let pickerColumns = $derived(
+    [showProjectPicker, showThreadPicker, showAssistantPicker].filter(Boolean).length > 1
+      ? 'grid-cols-2'
+      : 'grid-cols-1'
+  )
   let selectedScopeProject = $derived(
     projects.find((project) => project.id === entry.projectId) ?? null
   )
@@ -268,10 +288,8 @@
         </div>
       </div>
 
-      {#if showProjectPicker || showThreadPicker}
-        <div
-          class="grid gap-3 {showProjectPicker && showThreadPicker ? 'grid-cols-2' : 'grid-cols-1'}"
-        >
+      {#if showProjectPicker || showThreadPicker || showAssistantPicker}
+        <div class="grid gap-3 {pickerColumns}">
           {#if showProjectPicker}
             <div>
               <span class="mb-1 block text-xs font-medium text-muted">Project</span>
@@ -306,7 +324,27 @@
               />
             </div>
           {/if}
+          {#if showAssistantPicker}
+            <div>
+              <span class="mb-1 block text-xs font-medium text-muted">Assistant</span>
+              <AssistantSelect
+                {assistants}
+                iconUrls={assistantIconUrls}
+                value={entry.assistantId ?? null}
+                onValueChange={(nextAssistantId) => onUpdate(index, 'assistantId', nextAssistantId)}
+                ariaLabel="Select the assistant this memory applies to"
+                placeholder="Select an assistant"
+                searchPlaceholder="Search assistants…"
+                emptyMessage="No assistants yet"
+              />
+            </div>
+          {/if}
         </div>
+        {#if showAssistantPicker && !entry.assistantId}
+          <p class="text-[0.6875rem] text-danger" role="alert">
+            Choose an assistant before saving this entry.
+          </p>
+        {/if}
         {#if showProjectPicker && !entry.projectId}
           <p class="text-[0.6875rem] text-danger" role="alert">
             Choose a project before saving this entry.

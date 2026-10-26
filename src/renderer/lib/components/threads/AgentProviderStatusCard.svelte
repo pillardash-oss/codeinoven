@@ -366,7 +366,7 @@ card, the way it did before the head moved onto the shared primitives. -->
     {/if}
 
     {#if !foldState.folded}
-      <CardFoot>
+      <CardFoot yields="right">
         {#snippet left()}
           {#if !waiting && onDismiss}
             <CardButton

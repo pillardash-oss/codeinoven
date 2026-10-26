@@ -7,6 +7,53 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **Downloading an inline artifact now opens the save dialog and copies the file
+  where you choose.** The preview's download control was a plain link to the
+  artifact's served `appfile://` URL, and the renderer's session guard refuses
+  every download that is not the window's own `blob:` URL, so the control did
+  nothing at all: no dialog, no file. The bytes were never the problem. An
+  artifact lives in a workspace the app is free to clean up, so a download is a
+  copy of that file to a destination the user names, and the main process now
+  takes it (`dialog:saveCopy`): it resolves the file from the served URL through
+  the project mount that serves it, asks for the destination, writes the copy
+  and confirms it. One shared helper (`lib/download-shown-file.ts`) makes that
+  decision for every surface that offers a download, so a `blob:` source keeps
+  Chromium's own save assistant (now with the real file name registered for it)
+  and a served source never falls through to a route that is refused. The
+  attachment preview, which downloaded served files the same dead way, uses it
+  too.
+
+- **An element marked on an HTML or SVG artifact can be dragged off the element
+  it names, and the picks on an artifact no longer crash the artifact.
+  Every other place a reader can comment on something (a passage in a
+  conversation, a mark on a picture, a note in the file viewer, a passage of a
+  specification) shows the app's one annotation indicator, which is draggable so
+  a comment can be moved off whatever it points at. The artifact inspector drew a
+  pin of its own instead, a bare numbered button that could only be clicked, so
+  the same gesture did nothing there. The pick now renders the shared
+  `AnnotationIndicator`, which also gives it the app's number badge, the active
+  state while its comment is open, and drags that outlive a re-measure of the
+  artifact. Registering the pin's element is now the indicator's own job: every
+  surface that anchors a comment box to its pin used to repeat the same fixture
+  (a reactive element map, a cached attachment per comment, a lookup), and the
+  artifact's copy of it wrote that map from a template expression, which Svelte
+  refuses with `state_unsafe_mutation` and which took the whole card down. One
+  copy of the fixture now lives in `lib/annotation-indicator.svelte.ts`, and the
+  picture annotator, which carried the other copy, uses it too.
+
+- **The inspect toggle in an artifact viewer responds to a click again.** The
+  button lived in the viewer's canonical header, and a fullscreen `Modal` header
+  is drawn in the same band the app header reserves for dragging the window.
+  A drag rectangle is computed from layout rather than paint order, so the press
+  aimed at the toggle was turned into a window drag and no click was ever
+  delivered: the mode never armed, and nothing on screen changed. Only a control
+  that happened to sit over a hole in the app header's own controls (the close
+  button) still worked. The canonical fullscreen header now states the same
+  contract every other full screen surface in the app states: the band carries
+  `titlebar-drag` and the header's action cluster carries `titlebar-no-drag`, so
+  a header action is pressable no matter where the app header's own controls
+  leave the strip.
+
 - **A design element commented on a tab the app was already showing can be
   edited again.** The browser's inspection session only learned what a tab was
   serving from the state report that tab broadcasts as it loads, so a tab that

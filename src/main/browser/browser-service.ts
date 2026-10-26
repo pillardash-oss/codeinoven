@@ -4270,66 +4270,37 @@ export class BrowserService {
     return tab
   }
   /**
-   * Decide where a page's `window.open` lands.
+   * Ordinary target=_blank links, featureless window.open calls and targeted
+   * forms open as tabs. Only Chromium's explicit new-window disposition uses
+   * the global browser's popup rail.
    *
-   * Two answers, by what the page asked for:
-   *
-   * - foreground window requests, including featureless windows and POST forms,
-   *   use the existing popup host to preserve Chromium's opener and submission;
-   * - explicit background-tab gestures keep opening a background tab, unless
-   *   they carry a POST body that must be submitted by Chromium.
-   *
-   * The global browser hosts foreground children in its popup rail. Thread and
-   * agent browsers adopt Chromium's child contents into regular tabs, preserving
-   * the same opener, session, POST submission and script-close lifecycle.
-   *
-   * Shared by tabs and popup windows, because a popup may open a popup (a
-   * sign-in that takes a second step) and both must land the same way.
+   * Both surfaces adopt Chromium's child contents, preserving the opener,
+   * session, POST submission and script-close lifecycle.
    */
   private windowOpenResponse(
     owner: BrowserPageOwner,
     details: Electron.HandlerDetails
   ): Electron.WindowOpenHandlerResponse {
-    // A `window.open` aimed at an external scheme is the same handoff a link
-    // click is, and never becomes a tab: the address is not a page.
     if (this.offerExternalNavigation(owner, details.url)) return { action: 'deny' }
-    // Disposition and feature strings describe presentation, not whether the
-    // child needs its opener. Featureless window.open and targeted POST forms
-    // also participate in verification callbacks. Cancelling them and loading
-    // their URL ourselves loses WindowProxy, postMessage and the POST body.
-    if (
-      owner.projectId === GLOBAL_BROWSER_PROJECT_ID &&
-      (details.disposition !== 'background-tab' || details.postBody)
-    ) {
+    if (owner.projectId === GLOBAL_BROWSER_PROJECT_ID && details.disposition === 'new-window') {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
     }
-    if (owner.projectId !== GLOBAL_BROWSER_PROJECT_ID) {
-      const url = details.url || 'about:blank'
-      if (!isAllowedPopupWindowUrl(url)) return { action: 'deny' }
-      let children = 0
-      for (const opener of this.childTabOpeners.values()) {
-        if (opener === owner.tabId) children++
-      }
-      if (children >= MAX_POPUP_WINDOWS_PER_TAB) return { action: 'deny' }
-      return {
-        action: 'allow',
-        createWindow: (options) => {
-          const contents = popupWindowContents(options)
-          if (!contents) throw new Error('Browser child tab was offered no web contents')
-          return this.openNewTabFor(owner, url, false, null, contents)
-        }
+    const url = details.url || 'about:blank'
+    if (!isAllowedPopupWindowUrl(url)) return { action: 'deny' }
+    let children = 0
+    for (const opener of this.childTabOpeners.values()) {
+      if (opener === owner.tabId) children++
+    }
+    if (children >= MAX_POPUP_WINDOWS_PER_TAB) return { action: 'deny' }
+    return {
+      action: 'allow',
+      createWindow: (options) => {
+        const contents = popupWindowContents(options)
+        if (!contents) throw new Error('Browser child tab was offered no web contents')
+        return this.openNewTabFor(owner, url, false, null, contents)
       }
     }
-    try {
-      this.openNewTabFor(
-        owner,
-        this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
-      )
-    } catch (error: unknown) {
-      Logger.error('Browser popup rejected unsafe URL:', error)
-    }
-    return { action: 'deny' }
   }
 
   /**

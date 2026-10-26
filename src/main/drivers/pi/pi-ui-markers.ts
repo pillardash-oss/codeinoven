@@ -27,6 +27,7 @@ export function permissionMarkerPayload(record: Record<string, unknown>): {
   command?: string
   surface?: string
   review?: string
+  matchedPatterns?: string[]
 } | null {
   if (stringValue(record['method']) !== 'confirm') return null
   const message = stringValue(record['message'])
@@ -39,11 +40,20 @@ export function permissionMarkerPayload(record: Record<string, unknown>): {
       command?: unknown
       surface?: unknown
       review?: unknown
+      matchedPatterns?: unknown
     }
     const permission = typeof payload.permission === 'string' ? payload.permission : ''
     if (!permission) return null
     const patterns = Array.isArray(payload.patterns)
       ? payload.patterns.filter((pattern): pattern is string => typeof pattern === 'string')
+      : []
+    const matchedPatterns = Array.isArray(payload.matchedPatterns)
+      ? payload.matchedPatterns
+          .filter(
+            (pattern): pattern is string =>
+              typeof pattern === 'string' && pattern.length > 0 && pattern.length <= 256
+          )
+          .slice(0, 16)
       : []
     return {
       permission,
@@ -51,7 +61,8 @@ export function permissionMarkerPayload(record: Record<string, unknown>): {
       ...(typeof payload.tool === 'string' ? { tool: payload.tool } : {}),
       ...(typeof payload.command === 'string' ? { command: payload.command } : {}),
       ...(typeof payload.review === 'string' ? { review: payload.review.slice(0, 12100) } : {}),
-      ...(typeof payload.surface === 'string' ? { surface: payload.surface } : {})
+      ...(typeof payload.surface === 'string' ? { surface: payload.surface } : {}),
+      ...(matchedPatterns.length > 0 ? { matchedPatterns } : {})
     }
   } catch {
     return null
