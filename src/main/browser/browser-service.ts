@@ -1383,6 +1383,28 @@ export class BrowserService {
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
+    replaceHandler('browser:popupWindowMenu', (_event, rawId, x, y) => {
+      const record = this.popupWindows.find(validatePopupWindowId(rawId))
+      if (!record || this.window.isDestroyed()) return
+      Menu.buildFromTemplate(this.popupWindowMenuItems(record)).popup({
+        window: this.window,
+        x: Math.max(0, Math.round(Number(x) || 0)),
+        y: Math.max(0, Math.round(Number(y) || 0))
+      })
+    })
+    replaceHandler('browser:openPopupAsTab', (_event, rawId, duplicate, rawBoxId) => {
+      const record = this.popupWindows.find(validatePopupWindowId(rawId))
+      if (!record || record.view.webContents.isDestroyed()) return
+      if (typeof duplicate !== 'boolean') throw new Error('Invalid popup action')
+      const boxId = rawBoxId === undefined ? record.boxId : validateOptionalBoxId(rawBoxId)
+      const url = this.validateTabNavigationUrl(
+        record.projectId,
+        boxId,
+        record.view.webContents.getURL()
+      )
+      this.openNewTabFor({ ...popupPageOwner(record), boxId }, url)
+      if (!duplicate) this.popupWindows.close(record.id, 'opened as a browser tab')
+    })
     replaceHandler('browser:showPopupWindow', (_event, rawPopupId, rawBounds) => {
       this.popupWindows.show(validatePopupWindowId(rawPopupId), validateBounds(rawBounds))
     })
@@ -6394,24 +6416,52 @@ export class BrowserService {
     this.showPageContextMenu(
       { contents, owner: popupPageOwner(record) },
       params,
-      record.displayedBounds
+      record.displayedBounds,
+      [...this.popupWindowMenuItems(record), { type: 'separator' }]
     )
+  }
+
+  private popupWindowMenuItems(record: BrowserPopupWindowRecord): MenuItemConstructorOptions[] {
+    const choose = (
+      action: 'open' | 'duplicate' | 'moveBox' | 'duplicateBox' | 'fullscreen',
+      boxId: string | null = null
+    ): void => {
+      if (!this.popupWindows.find(record.id) || this.window.isDestroyed()) return
+      sendToRenderer(this.window.webContents, 'browser:popupWindowAction', record.id, action, boxId)
+    }
+    const boxes = (action: 'moveBox' | 'duplicateBox'): MenuItemConstructorOptions[] => [
+      { label: 'New box', click: () => choose(action) },
+      ...getGlobalBrowserContextMenuBoxes().map((box) => ({
+        label: box.name,
+        click: () => choose(action, box.id)
+      }))
+    ]
+    return [
+      { label: 'Open in new tab', click: () => choose('open') },
+      { label: 'Duplicate in new tab', click: () => choose('duplicate') },
+      { label: 'Move to box', submenu: boxes('moveBox') },
+      { label: 'Duplicate in box', submenu: boxes('duplicateBox') },
+      { type: 'separator' },
+      { label: 'Full screen', click: () => choose('fullscreen') }
+    ]
   }
 
   /** Build and pop the point-specific context menu for one page. */
   private showPageContextMenu(
     page: BrowserMenuPage,
     params: Electron.ContextMenuParams,
-    frame: BrowserViewBounds | null
+    frame: BrowserViewBounds | null,
+    extraItems: MenuItemConstructorOptions[] = []
   ): void {
-    const menu = Menu.buildFromTemplate(
-      buildBrowserContextMenuItems(
+    const menu = Menu.buildFromTemplate([
+      ...extraItems,
+      ...buildBrowserContextMenuItems(
         params,
         this.contextMenuContext(page.contents),
         this.contextMenuActions(page, frame, { x: params.x, y: params.y }),
         this.extensionMenuItems(page, params)
       )
-    )
+    ])
     // The point Electron reports is in the page's own coordinates, and a native
     // menu wants the window's, so the frame the page is displayed at is added.
     if (frame) menu.popup({ window: this.window, x: frame.x + params.x, y: frame.y + params.y })

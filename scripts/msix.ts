@@ -257,7 +257,9 @@ function parseFlags(argv: string[]): Map<string, string> {
     if (!argument.startsWith('--')) continue
     const key = argument.slice(2)
     const next = argv[index + 1]
-    if (next === undefined || next.startsWith('--')) {
+    // The workflow passes architecture flags such as `--arch "--x64"`.
+    const architectureValue = key === 'arch' && /^--(?:x64|arm64|ia32)$/.test(next ?? '')
+    if (next === undefined || (next.startsWith('--') && !architectureValue)) {
       flags.set(key, 'true')
     } else {
       flags.set(key, next)

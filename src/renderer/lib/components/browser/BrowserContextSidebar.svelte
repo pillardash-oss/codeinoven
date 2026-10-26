@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import CioChat from '@pdslng/cio-icon/CioChat.svelte'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -413,6 +414,10 @@
 
   /** The agent tab's right-click menu, as an OS-native popup above the page. */
   async function handleAgentTabContextMenu(tabId: string, event: MouseEvent): Promise<void> {
+    if (browserPopupWindows.find(tabId)) {
+      browserPopupWindows.openMenu(tabId, event)
+      return
+    }
     const tab = agentTab?.id === tabId ? agentTab : null
     if (!tab) return
     event.preventDefault()
@@ -465,15 +470,21 @@
   }
 </script>
 
+{#snippet popupContent(id: string)}
+  {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}
+    <BrowserPopupWindowPanel popupId={id} />
+  {/await}
+{/snippet}
+
 {#snippet railContent()}
   {#if notificationsTab || stickyNotesTab}
     <!-- The app's global panels are mounted once by `AppPanelHost`; this rail
          only offers the body slot it fills. -->
     <div class="h-full" {@attach appPanelSlot}></div>
   {:else if globalBrowser.popupsSidebarShown}
-    {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}
-      <BrowserPopupWindowPanel popupId={activePopup?.id ?? ''} />
-    {/await}
+    {#if !browserPopupWindows.fullscreenId}
+      {@render popupContent(activePopup?.id ?? '')}
+    {/if}
   {:else if globalBrowser.downloadsSidebarShown}
     {#await import('./BrowserDownloadsPanel.svelte') then { default: BrowserDownloadsPanel }}
       <BrowserDownloadsPanel />
@@ -557,7 +568,7 @@
   <ContextSidebar
     {tabs}
     {activeTabId}
-    width={width}
+    {width}
     height={contextSidebarState.terminalHeight}
     placement="right"
     content={railContent}
@@ -590,3 +601,20 @@
     was answering about is not affected.
   </p>
 </ConfirmDialog>
+
+{#if browserPopupWindows.fullscreenId}
+  <FullscreenPanelDialog
+    tabs={browserPopupWindows.tabs()}
+    activeTabId={browserPopupWindows.fullscreenId}
+    minimizeLabel="Return popup to panel"
+    hostsBrowserView
+    onMinimize={() => (browserPopupWindows.fullscreenId = null)}
+    onSelect={(id) => {
+      browserPopupWindows.select(id)
+      browserPopupWindows.fullscreenId = id
+    }}
+    onTabContextMenu={(id, event) => browserPopupWindows.openMenu(id, event)}
+  >
+    {@render popupContent(browserPopupWindows.fullscreenId)}
+  </FullscreenPanelDialog>
+{/if}

@@ -35,6 +35,7 @@
 
 import { WebContentsView, type WebContents } from 'electron'
 import type { BrowserPopupWindow, BrowserViewBounds } from '../../../lib/ipc-contract'
+import { fetchIconAsDataUrl } from '../../editor/favicon-service'
 import { Logger } from '../../system/logger'
 import { applyBrowserPageBackground } from './browser-page-background'
 import type { BrowserPageOwner, BrowserViewport } from './browser-types'
@@ -138,6 +139,10 @@ export class BrowserPopupWindows {
   private suspended = false
 
   constructor(private readonly viewHost: BrowserPopupWindowHost) {}
+
+  find(id: string): BrowserPopupWindowRecord | undefined {
+    return this.popups.get(id)
+  }
 
   /** Retained pages still own their extension session while hidden. */
   liveJars(): { projectId: string; boxId: string | null }[] {
@@ -559,8 +564,17 @@ export class BrowserPopupWindows {
     contents.on('did-navigate-in-page', refresh)
     contents.on('page-title-updated', refresh)
     contents.on('page-favicon-updated', (_event, favicons) => {
-      record.favicon = favicons[0] ?? null
-      this.viewHost.changed()
+      const source = favicons.find((icon) => icon.length > 0)
+      if (!source) return
+      const url = contents.getURL()
+      void fetchIconAsDataUrl(source)
+        .then((favicon) => {
+          if (!favicon || contents.isDestroyed() || contents.getURL() !== url) return
+          if (!this.popups.has(record.id)) return
+          record.favicon = favicon
+          this.viewHost.changed()
+        })
+        .catch((error: unknown) => Logger.dev('Popup favicon unavailable', error))
     })
     // A page that closed itself   every completed sign-in and checkout does   is
     // reported here and nowhere else: there is no window to hear it from. A popup

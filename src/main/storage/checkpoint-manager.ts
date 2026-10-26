@@ -108,6 +108,19 @@ export interface TurnCompletionOptions {
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
 const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
 
+/**
+ * What other threads did to paths while this turn ran.
+ *
+ * `claimed` paths carry the other turn's own write evidence. `borrowed` paths
+ * only appeared in another turn's project-wide diff while a third turn was
+ * writing them, so they prove nothing and belong to whichever turn can show it
+ * wrote the file.
+ */
+export interface ForeignPaths {
+  claimed: Map<string, number>
+  borrowed: Map<string, number>
+}
+
 /** Minimum age before a still-`active` checkpoint can be called abandoned, and
  *  the bounds of one settlement pass. The age is what makes the pass safe: a
  *  turn that is genuinely starting writes its `active_turns` ledger row a
@@ -250,9 +263,18 @@ export class CheckpointManager {
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       const precisePaths = options.precisePaths ?? new Set<string>()
       const excludedPaths = options.excludedPaths
+      // A path this turn recorded write evidence for. Window evidence counts: a
+      // shell command that measured the file changing is this turn's own work.
+      const claimedByThisTurn = (path: string): boolean =>
+        (options.changeSources?.get(path)?.length ?? 0) > 0
       const keepChange = (path: string): boolean =>
-        (foreign === undefined || !foreign.has(path) || precisePaths.has(path)) &&
-        !(excludedPaths?.has(path) ?? false)
+        !(excludedPaths?.has(path) ?? false) &&
+        (foreign === undefined ||
+          ((!foreign.claimed.has(path) || precisePaths.has(path)) &&
+            // A path another turn only swept into its project-wide diff belongs
+            // to whichever turn can prove it wrote the file. Without that proof
+            // the path stays out, so a card never lists files its turn never touched.
+            (!foreign.borrowed.has(path) || claimedByThisTurn(path))))
       // `undefined` preserves the project-wide snapshot behavior used by
       // recovery and direct checkpoint callers. A supplied empty set means the
       // owning turn reported no mutations and must record no workspace diff.
@@ -263,18 +285,21 @@ export class CheckpointManager {
       // the file-changes card silently shows nothing. Record why, bounded, so a
       // missing card can be explained from the log instead of a reproduction.
       if (changes.length === 0 && allChanges.length > 0) {
-        let foreigned = 0
+        let claimedElsewhere = 0
+        let borrowedElsewhere = 0
         let userOwned = 0
         for (const change of allChanges) {
           if (excludedPaths?.has(change.path) ?? false) userOwned += 1
-          else if (foreign?.has(change.path) ?? false) foreigned += 1
+          else if (foreign?.claimed.has(change.path) ?? false) claimedElsewhere += 1
+          else if (foreign?.borrowed.has(change.path) ?? false) borrowedElsewhere += 1
         }
         Logger.info('Turn diff was filtered out of the file-changes card', {
           projectId,
           threadId,
           turnId: checkpoint.id,
           changed: allChanges.length,
-          foreigned,
+          foreigned: claimedElsewhere,
+          borrowed: borrowedElsewhere,
           userOwned,
           claimFiltered: changedPaths !== undefined,
           sample: allChanges.slice(0, 3).map((change) => change.path)
@@ -344,17 +369,16 @@ export class CheckpointManager {
   }
 
   /**
-   * Paths another thread demonstrably edited while this turn ran, path → when
-   * the other thread touched it (ms). Merges live claims from turns that are
-   * still running with the paths other threads completed inside this turn's
-   * window actually claimed. A live claim is always current: the other thread's
-   * claim map is reset per turn, so it can only describe work happening now.
+   * Paths other threads touched while this turn ran, split by how well they can
+   * be attributed. `claimed` holds paths another turn wrote with evidence it
+   * records per path; `borrowed` holds paths another turn only swept into its
+   * project-wide diff while a different turn was actually writing them.
    */
   async foreignClaimedPathsForLive(
     checkpoint: TurnCheckpoint,
     foreignLive: ReadonlyMap<string, number>,
     ownThreadIds?: ReadonlySet<string>
-  ): Promise<Map<string, number>> {
+  ): Promise<ForeignPaths> {
     const opts: TurnCompletionOptions = { foreignClaimedPaths: foreignLive, ownThreadIds }
     return this.foreignClaimedPaths(checkpoint, opts)
   }
@@ -362,8 +386,9 @@ export class CheckpointManager {
   private async foreignClaimedPaths(
     checkpoint: TurnCheckpoint,
     options: TurnCompletionOptions
-  ): Promise<Map<string, number>> {
-    const foreign = new Map<string, number>()
+  ): Promise<ForeignPaths> {
+    const claimed = new Map<string, number>()
+    const borrowed = new Map<string, number>()
     const turnStart = checkpoint.before.createdAt
     // A live claim comes from a turn that is still running, so its presence is
     // the evidence and its first-claim time is not. Two long turns overlap: the
@@ -375,42 +400,62 @@ export class CheckpointManager {
     // touched. This turn's own precise claim still exempts its path in
     // completeTurn, so a shared edit stays on the card of the turn that made it.
     for (const [path, claimedAt] of options.foreignClaimedPaths ?? []) {
-      foreign.set(path, claimedAt)
+      claimed.set(path, claimedAt)
     }
-    // Extract only (threadId, completedAt, path) in SQL. Shipping full checkpoint JSON
-    // blobs across the worker port just to read two fields crashed the process
-    // on large projects and spiked memory on every turn completion.
+    // Extract only the fields the decision needs in SQL. Shipping full checkpoint
+    // JSON blobs across the worker port just to read two fields crashed the
+    // process on large projects and spiked memory on every turn completion.
     //
     // Read `changeSourceRefs`, never `changes`. A checkpoint's change list is a
     // project-wide diff, so it also carries files another turn was editing while
-    // it ran: that turn had not claimed them (its refs for those paths are
-    // empty), it only swept them in. Trusting the list turned that mistake into
-    // a revocation, because the turn that actually owned the files finished
-    // second and lost every path to the first turn's borrow.
+    // it ran: that turn recorded no evidence for those paths, it only swept them
+    // in. Treating the list as a claim turned that mistake into a revocation,
+    // because the turn that actually owned the files finished second and lost
+    // every path to the first turn's borrow.
     const rows = await this.queryRows(
       `SELECT json_extract(tc.data, '$.threadId') AS tid,
               json_extract(tc.data, '$.completedAt') AS completed_at,
-              je.key AS path
+              je.key AS path,
+              json_array_length(je.value) AS refs
        FROM turn_checkpoints tc, json_each(json_extract(tc.data, '$.changeSourceRefs')) je
        WHERE tc.project_id = ? AND tc.thread_id != ?
          AND json_extract(tc.data, '$.status') = 'completed'
+         AND json_extract(tc.data, '$.completedAt') >= ?`,
+      [checkpoint.projectId, checkpoint.threadId, turnStart],
+      FOREIGN_CHECKPOINT_SCAN_LIMIT
+    )
+    // Checkpoints written before per-path evidence existed only carry the diff.
+    // Their paths are unattributable, so they count as borrowed rather than as
+    // proof that the other thread wrote the file.
+    const legacyRows = await this.queryRows(
+      `SELECT json_extract(tc.data, '$.threadId') AS tid,
+              json_extract(tc.data, '$.completedAt') AS completed_at,
+              json_extract(je.value, '$.path') AS path
+       FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je
+       WHERE tc.project_id = ? AND tc.thread_id != ?
+         AND json_extract(tc.data, '$.status') = 'completed'
          AND json_extract(tc.data, '$.completedAt') >= ?
-         AND json_array_length(je.value) > 0`,
+         AND json_type(tc.data, '$.changeSourceRefs') IS NULL`,
       [checkpoint.projectId, checkpoint.threadId, turnStart],
       FOREIGN_CHECKPOINT_SCAN_LIMIT
     )
     const own = options.ownThreadIds
-    for (const row of rows) {
+    const record = (row: Record<string, unknown>, evidence: boolean): void => {
       const path = row['path']
-      const tid = row['tid']
-      if (typeof path === 'string' && !foreign.has(path)) {
-        // Worker sub-agent threads owned by this turn are part of this work
-        // their completions must not mark paths as foreign.
-        if (own?.has(typeof tid === 'string' ? tid : '')) continue
-        foreign.set(path, Number(row['completed_at'] ?? turnStart))
+      if (typeof path !== 'string') return
+      // Worker sub-agent threads owned by this turn are part of this work:
+      // their completions must not mark paths as foreign.
+      if (own?.has(typeof row['tid'] === 'string' ? row['tid'] : '')) return
+      const at = Number(row['completed_at'] ?? turnStart)
+      if (evidence) {
+        claimed.set(path, at)
+        return
       }
+      if (!claimed.has(path)) borrowed.set(path, at)
     }
-    return foreign
+    for (const row of rows) record(row, Number(row['refs'] ?? 0) > 0)
+    for (const row of legacyRows) record(row, false)
+    return { claimed, borrowed }
   }
 
   /**
