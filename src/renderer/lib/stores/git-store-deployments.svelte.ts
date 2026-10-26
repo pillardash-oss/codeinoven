@@ -1,9 +1,11 @@
 import { invoke } from '$lib/ipc.svelte'
 import type {
+  GitHubDeployment,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentPage,
   GitHubPermissionRequired,
+  GitHubWorkflowRun,
   GitHubWorkflowRunDetail,
   GitHubWorkflowRunPage,
   WorkflowRerunMode,
@@ -393,6 +395,42 @@ export class GitDeploymentCache {
     return { ...result, items: previous.items }
   }
 
+  /** Keep cached listing rows consistent with authoritative detail responses. */
+  private reconcileRun(owner: string, repo: string, run: GitHubWorkflowRun): void {
+    for (const [key, cached] of Object.entries(this.runPages)) {
+      const parsed = parseWorkflowRunPageKey(key, owner, repo)
+      if (!parsed || !cached.page.items.some((item) => item.id === run.id)) continue
+      const matches =
+        parsed.filter === 'all' ||
+        (parsed.filter === 'succeeded'
+          ? run.conclusion === 'success'
+          : run.conclusion === 'failure')
+      this.runPages[key] = {
+        ...cached,
+        page: {
+          ...cached.page,
+          items: cached.page.items.flatMap((item) =>
+            item.id === run.id ? (matches ? [run] : []) : [item]
+          )
+        }
+      }
+    }
+  }
+
+  private reconcileDeployment(owner: string, repo: string, deployment: GitHubDeployment): void {
+    for (const [key, cached] of Object.entries(this.deploymentPages)) {
+      if (!key.startsWith(`${deploymentKey(owner, repo)}#deployments:`)) continue
+      if (!cached.page.items.some((item) => item.id === deployment.id)) continue
+      this.deploymentPages[key] = {
+        ...cached,
+        page: {
+          ...cached.page,
+          items: cached.page.items.map((item) => (item.id === deployment.id ? deployment : item))
+        }
+      }
+    }
+  }
+
   /** Load one deployment's rich detail, serving cache first (same pattern). */
   async ensureDeploymentDetail(
     projectId: string,
@@ -414,6 +452,8 @@ export class GitDeploymentCache {
         ...this.details,
         [key]: { detail: result, fetchedAt: Date.now() }
       }
+      this.reconcileDeployment(owner, repo, result.deployment)
+      if (result.workflowRun) this.reconcileRun(owner, repo, result.workflowRun)
       delete this.failures[key]
       return result
     } catch (reason) {
@@ -445,6 +485,7 @@ export class GitDeploymentCache {
         ...this.runDetails,
         [key]: { detail: result, fetchedAt: Date.now() }
       }
+      this.reconcileRun(owner, repo, result.run)
       delete this.failures[key]
       return result
     } catch (reason) {

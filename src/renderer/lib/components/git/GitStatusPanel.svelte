@@ -1784,8 +1784,13 @@
   })
   /** A run's state is its conclusion once it is done, its status until then. */
   const openRunState = $derived.by(() => {
-    const run = selectedRun
-    if (!run) return 'unknown'
+    const selected = selectedRun
+    const identity = githubIdentity
+    if (!selected || !identity) return 'unknown'
+    const run =
+      gitState.deploymentRunDetails[
+        GitState.workflowRunKey(identity.owner, identity.repo, selected.id)
+      ]?.detail.run ?? selected
     return run.status === 'completed' ? (run.conclusion ?? 'completed') : run.status
   })
   /**
