@@ -1441,6 +1441,10 @@
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: CioThreadBrowser,
         active: dockKindActive('browser'),
+        playing: browserTabs.some((tab) => {
+          const runtime = contextSidebarState.browserRuntime(tab.id)
+          return runtime.audible && !runtime.muted
+        }),
         countBadge:
           browser.unfinishedDownloadCount > 0 ? String(browser.unfinishedDownloadCount) : undefined,
         menu: browser.menuOpen ? browserMenu : undefined,
