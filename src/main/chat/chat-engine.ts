@@ -27566,7 +27566,10 @@ export class ChatEngine {
     // block list never asks about a file inside it: that name is the session's
     // own work, not a secret it is reaching for. The card still covers
     // everything that leaves the workspace, and a project thread keeps the list
-    // everywhere because its cwd holds the project's real secrets.
+    // everywhere because its cwd holds the project's real secrets. A project
+    // thread that runs in its own scope worktree is the same case as a chat
+    // workspace: the `.env` it writes there next to `.env.example` is its own
+    // work, so that directory is exempt while the project root stays gated.
     const workspaceRoots = isAssistant ? [resolve(info.projectPath)] : []
     // A thread in a real project also owns that project's `.cio` scratch folder:
     // it is where the agent stages its own work, so deletes and confined shell
@@ -27574,6 +27577,11 @@ export class ChatEngine {
     // the policy, because the platform owns those.
     if (!isChat && !isAssistant) {
       scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
+      const projectThread = await this.threadManager.getThread(info.projectId, info.threadId)
+      const workingDirectory = projectThread?.workingDirectory
+      if (workingDirectory && resolve(workingDirectory) !== resolve(info.projectPath)) {
+        workspaceRoots.push(resolve(workingDirectory))
+      }
     }
     // Reuse the allowlist until a user message invalidates it; permission
     // requests must not rescan the conversation for every file operation.

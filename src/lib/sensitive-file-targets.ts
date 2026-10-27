@@ -17,6 +17,9 @@ export function sensitiveFileTargets(
   exists?: (path: string) => boolean
 ): SensitiveFileTarget[] {
   const targets = new Map<string, string>()
+  // Templates are committed on purpose and carry no values, so an example or
+  // sample file never needs consent even when its name matches `.env.*`.
+  const templateBasename = /(?:^|\.)(?:example|sample|template|dist|defaults)$/iu
   const fields = new Set([
     'path',
     'paths',
@@ -137,6 +140,7 @@ export function sensitiveFileTargets(
         ? ordered
         : ordered.filter((target) => exists(target))
     for (const target of reachable) {
+      if (templateBasename.test(target.replaceAll('\\', '/').split('/').at(-1) ?? '')) continue
       const pattern = patterns.find((entry) => matches(target, entry))
       if (pattern === undefined) continue
       // Report the path that matched, so an alias shows the secret it reaches.
