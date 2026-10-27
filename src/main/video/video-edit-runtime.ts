@@ -3,13 +3,16 @@ import type {
   VideoEditClip,
   VideoEditRect,
   VideoEditorGesture,
-  VideoEditorSelection
+  VideoEditorSelection,
+  VideoCaptionAppearance
 } from '../../lib/video/edit'
 
 export interface VideoEditRendererHooks {
   seekMedia(media: HTMLMediaElement, seconds: number): Promise<void>
   mediaReady(media: HTMLMediaElement): Promise<void>
   drawCaptions(ctx: CanvasRenderingContext2D, seconds: number, width: number, height: number): void
+  captionBounds(index: number, width: number, height: number): VideoEditRect | null
+  captionAppearance(index: number): VideoCaptionAppearance
 }
 
 /** Serialized into the composition. All decoding, filtering and gestures stay in its renderer. */
@@ -39,6 +42,8 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
   let audioContext: AudioContext | null = null
   let frame = 0
   let selection: VideoEditorSelection = null
+  let editing = false
+  let currentTime = 0
   let studio: VideoStudioDocument | null = null
   let canvas: HTMLCanvasElement | null = null
   let overlay: HTMLCanvasElement | null = null
@@ -48,10 +53,35 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     startX: number
     startY: number
     rect: VideoEditRect
-    resize: boolean
+    edgeX: number
+    edgeY: number
+    appearance?: VideoCaptionAppearance
     selection: Exclude<VideoEditorSelection, null>
   } | null = null
   let dragRect: VideoEditRect | null = null
+  const pendingGestures: VideoEditorGesture[] = []
+  let painting = false
+  let paintAgain = false
+  const emitGesture = (gesture: VideoEditorGesture): void => {
+    const receive = gestureReceiver
+    gestureReceiver = null
+    if (receive) receive(gesture)
+    else pendingGestures.push(gesture)
+    if (pendingGestures.length > 16) pendingGestures.shift()
+  }
+  async function paintLive(): Promise<void> {
+    paintAgain = true
+    if (painting) return
+    painting = true
+    try {
+      do {
+        paintAgain = false
+        await host.__cioTransport?.freezeAt?.(host.__cioTransport.time)
+      } while (paintAgain)
+    } finally {
+      painting = false
+    }
+  }
   const scratch = document.createElement('canvas')
   const scratchContext = scratch.getContext('2d')
   const gradeFilters = new Map<
@@ -61,7 +91,11 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
   let filterRoot: SVGSVGElement | null = null
   const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value))
   const host = globalThis as typeof globalThis & {
-    __cioTransport?: { playing: boolean; time: number }
+    __cioTransport?: {
+      playing: boolean
+      time: number
+      freezeAt?(seconds: number): Promise<unknown>
+    }
     __cioEditPreviewDisabled?: boolean
   }
 
@@ -260,15 +294,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       return studio.edit?.clips.find((clip) => clip.id === target.id)?.rect ?? null
     if (target.kind === 'region')
       return studio.edit?.regions.find((region) => region.id === target.id) ?? null
-    const appearance = studio.captions[target.index]?.appearance ?? studio.captionAppearance
-    return appearance
-      ? {
-          x: appearance.x - appearance.width / 2,
-          y: appearance.y - appearance.size,
-          width: appearance.width,
-          height: appearance.size * 2
-        }
-      : { x: 0.08, y: 0.825, width: 0.84, height: 0.07 }
+    return canvas ? hooks.captionBounds(target.index, canvas.width, canvas.height) : null
   }
 
   function paintOverlay(): void {
@@ -296,10 +322,12 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     if (!ctx) return
     ctx.clearRect(0, 0, overlay.width, overlay.height)
     if (!rect) {
-      overlay.style.pointerEvents = 'none'
+      overlay.style.pointerEvents = editing ? 'auto' : 'none'
+      overlay.style.cursor = 'default'
       return
     }
     overlay.style.pointerEvents = 'auto'
+    overlay.style.cursor = 'move'
     ctx.strokeStyle =
       getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim() ||
       '#e7bb42'
@@ -314,7 +342,11 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       [x, y],
       [x + w, y],
       [x, y + h],
-      [x + w, y + h]
+      [x + w, y + h],
+      [x + w / 2, y],
+      [x + w / 2, y + h],
+      [x, y + h / 2],
+      [x + w, y + h / 2]
     ])
       ctx.fillRect(px - 4, py - 4, 8, 8)
   }
@@ -327,7 +359,80 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     document.body.append(overlay)
     observer = new ResizeObserver(paintOverlay)
     observer.observe(canvas)
+    function hit(event: PointerEvent | MouseEvent): VideoEditorSelection {
+      if (!overlay || !studio) return null
+      const bounds = overlay.getBoundingClientRect(),
+        x = (event.clientX - bounds.left) / bounds.width,
+        y = (event.clientY - bounds.top) / bounds.height
+      const contains = (rect: VideoEditRect): boolean =>
+        x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
+      const current = selectedRect()
+      if (
+        current &&
+        selection &&
+        (Math.abs(x - current.x) < 10 / bounds.width ||
+          Math.abs(x - current.x - current.width) < 10 / bounds.width ||
+          Math.abs(y - current.y) < 10 / bounds.height ||
+          Math.abs(y - current.y - current.height) < 10 / bounds.height) &&
+        x >= current.x - 0.02 &&
+        x <= current.x + current.width + 0.02 &&
+        y >= current.y - 0.02 &&
+        y <= current.y + current.height + 0.02
+      )
+        return selection
+      const caption = studio.captions.findIndex(
+        (caption) => currentTime >= caption.start && currentTime < caption.end
+      )
+      const captionRect =
+        caption >= 0 && canvas ? hooks.captionBounds(caption, canvas.width, canvas.height) : null
+      if (captionRect && contains(captionRect)) return { kind: 'caption', index: caption }
+      const region = studio.edit?.regions.findLast(
+        (region) =>
+          currentTime >= region.start &&
+          currentTime < region.start + region.duration &&
+          contains(region)
+      )
+      if (region) return { kind: 'region', id: region.id }
+      const clips =
+        studio.edit?.clips.filter(
+          (clip) =>
+            currentTime >= clip.start &&
+            currentTime < clip.start + clip.duration &&
+            studio?.edit?.assets.find((asset) => asset.id === clip.assetId)?.kind !== 'audio' &&
+            !studio?.edit?.tracks.find((track) => track.id === clip.trackId)?.hidden
+        ) ?? []
+      clips.sort(
+        (a, b) =>
+          (studio?.edit?.tracks.findIndex((track) => track.id === a.trackId) ?? 0) -
+          (studio?.edit?.tracks.findIndex((track) => track.id === b.trackId) ?? 0)
+      )
+      const clip = clips.findLast((clip) => contains(clip.rect))
+      return clip ? { kind: 'clip', id: clip.id } : null
+    }
+    overlay.addEventListener('contextmenu', (event) => {
+      event.preventDefault()
+      const target = hit(event)
+      if (!target || !overlay) return
+      selection = target
+      const rect = selectedRect()
+      if (rect)
+        emitGesture({
+          kind: 'context',
+          selection: target,
+          rect,
+          point: { x: event.clientX / window.innerWidth, y: event.clientY / window.innerHeight }
+        })
+      paintOverlay()
+    })
     overlay.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return
+      const target = hit(event)
+      if (target) {
+        selection = target
+        const rect = selectedRect()
+        if (rect) emitGesture({ kind: 'select', selection: target, rect })
+        paintOverlay()
+      }
       const rect = selectedRect()
       if (!overlay || !rect || !selection || host.__cioTransport?.playing) return
       const bounds = overlay.getBoundingClientRect(),
@@ -340,44 +445,154 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
         y > rect.y + rect.height + 0.02
       )
         return
+      if (selection.kind === 'clip') {
+        const id = selection.id
+        const clip = studio?.edit?.clips.find((clip) => clip.id === id)
+        if (studio?.edit?.tracks.find((track) => track.id === clip?.trackId)?.locked) return
+      }
       event.preventDefault()
       overlay.setPointerCapture(event.pointerId)
       drag = {
         startX: x,
         startY: y,
         rect: { ...rect },
-        resize:
-          Math.abs(x - rect.x - rect.width) < 0.04 && Math.abs(y - rect.y - rect.height) < 0.04,
+        edgeX:
+          Math.abs(x - rect.x) < 9 / bounds.width
+            ? -1
+            : Math.abs(x - rect.x - rect.width) < 9 / bounds.width
+              ? 1
+              : 0,
+        edgeY:
+          Math.abs(y - rect.y) < 9 / bounds.height
+            ? -1
+            : Math.abs(y - rect.y - rect.height) < 9 / bounds.height
+              ? 1
+              : 0,
+        appearance:
+          selection.kind === 'caption' ? hooks.captionAppearance(selection.index) : undefined,
         selection: { ...selection }
       }
     })
     overlay.addEventListener('pointermove', (event) => {
-      if (!drag || !overlay) return
+      if (!overlay) return
+      if (!drag) {
+        const rect = selectedRect()
+        if (!rect) return
+        const bounds = overlay.getBoundingClientRect()
+        const x = (event.clientX - bounds.left) / bounds.width
+        const y = (event.clientY - bounds.top) / bounds.height
+        const horizontal =
+          Math.abs(x - rect.x) < 9 / bounds.width ||
+          Math.abs(x - rect.x - rect.width) < 9 / bounds.width
+        const vertical =
+          Math.abs(y - rect.y) < 9 / bounds.height ||
+          Math.abs(y - rect.y - rect.height) < 9 / bounds.height
+        const inside =
+          x >= rect.x - 0.02 &&
+          x <= rect.x + rect.width + 0.02 &&
+          y >= rect.y - 0.02 &&
+          y <= rect.y + rect.height + 0.02
+        overlay.style.cursor = !inside
+          ? 'default'
+          : horizontal && vertical
+            ? x < rect.x + rect.width / 2 === y < rect.y + rect.height / 2
+              ? 'nwse-resize'
+              : 'nesw-resize'
+            : horizontal
+              ? 'ew-resize'
+              : vertical
+                ? 'ns-resize'
+                : 'move'
+        return
+      }
       const bounds = overlay.getBoundingClientRect(),
         dx = (event.clientX - bounds.left) / bounds.width - drag.startX,
         dy = (event.clientY - bounds.top) / bounds.height - drag.startY
-      dragRect = drag.resize
-        ? {
-            ...drag.rect,
-            width: clamp(drag.rect.width + dx, 0.02, 2),
-            height: clamp(drag.rect.height + dy, 0.02, 2)
+      const rect = { ...drag.rect }
+      if (!drag.edgeX && !drag.edgeY) {
+        rect.x += dx
+        rect.y += dy
+      } else {
+        if (drag.edgeX) {
+          rect.width = clamp(rect.width + drag.edgeX * dx, 0.02, 2)
+          if (drag.edgeX < 0) rect.x += drag.rect.width - rect.width
+        }
+        if (drag.edgeY) {
+          rect.height = clamp(rect.height + drag.edgeY * dy, 0.02, 2)
+          if (drag.edgeY < 0) rect.y += drag.rect.height - rect.height
+        }
+      }
+      rect.x = clamp(rect.x, -1, 1)
+      rect.y = clamp(rect.y, -1, 1)
+      if (studio && drag.selection.kind === 'caption' && drag.appearance && canvas) {
+        const before = drag.appearance
+        const appearance = { ...before }
+        if (!drag.edgeX && !drag.edgeY) {
+          appearance.x = clamp(before.x + dx)
+          appearance.y = clamp(before.y + dy)
+        } else {
+          const factor = drag.edgeY ? clamp(rect.height / drag.rect.height, 0.1, 8) : 1
+          appearance.size = clamp(before.size * factor, 0.01, 0.15)
+          appearance.width = clamp(drag.edgeX ? rect.width : before.width, 0.1, 1)
+          appearance.x = clamp(rect.x + rect.width / 2)
+          studio.captions[drag.selection.index].appearance = appearance
+          const actual = hooks.captionBounds(drag.selection.index, canvas.width, canvas.height)
+          if (actual && drag.edgeY) {
+            const anchor = drag.edgeY < 0 ? drag.rect.y + drag.rect.height : drag.rect.y
+            appearance.y = clamp(
+              appearance.y + anchor - (drag.edgeY < 0 ? actual.y + actual.height : actual.y)
+            )
           }
-        : { ...drag.rect, x: clamp(drag.rect.x + dx, -1, 1), y: clamp(drag.rect.y + dy, -1, 1) }
+        }
+        studio.captions[drag.selection.index].appearance = appearance
+        dragRect = hooks.captionBounds(drag.selection.index, canvas.width, canvas.height)
+      } else {
+        dragRect = rect
+        if (studio && drag.selection.kind === 'clip') {
+          const id = drag.selection.id
+          const target = studio.edit?.clips.find((clip) => clip.id === id)
+          if (target) target.rect = rect
+        } else if (studio && drag.selection.kind === 'region') {
+          const id = drag.selection.id
+          const target = studio.edit?.regions.find((region) => region.id === id)
+          if (target) Object.assign(target, rect)
+        }
+      }
+      void paintLive()
       paintOverlay()
     })
     overlay.addEventListener('pointerup', (event) => {
       if (!overlay || !drag) return
       const result = dragRect ?? drag.rect,
-        target = drag.selection
+        target = drag.selection,
+        changed = dragRect !== null && JSON.stringify(dragRect) !== JSON.stringify(drag.rect),
+        appearance =
+          target.kind === 'caption' ? studio?.captions[target.index]?.appearance : undefined
       drag = null
       dragRect = null
       if (overlay.hasPointerCapture(event.pointerId)) overlay.releasePointerCapture(event.pointerId)
-      const receive = gestureReceiver
-      gestureReceiver = null
-      receive?.({ selection: target, rect: result })
+      if (changed)
+        emitGesture({
+          selection: target,
+          rect: result,
+          ...(appearance ? { captionAppearance: appearance } : {})
+        })
       paintOverlay()
     })
     overlay.addEventListener('pointercancel', () => {
+      if (drag && studio) {
+        const target = drag.selection
+        if (target.kind === 'caption') studio.captions[target.index].appearance = drag.appearance
+        if (target.kind === 'clip') {
+          const clip = studio.edit?.clips.find((clip) => clip.id === target.id)
+          if (clip) clip.rect = drag.rect
+        }
+        if (target.kind === 'region') {
+          const region = studio.edit?.regions.find((region) => region.id === target.id)
+          if (region) Object.assign(region, drag.rect)
+        }
+        void paintLive()
+      }
       drag = null
       dragRect = null
       paintOverlay()
@@ -391,6 +606,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     time: number
   ): Promise<void> {
     studio = document
+    currentTime = time
     canvas = output
     const edit = document.edit,
       ctx = canvas.getContext('2d')
@@ -609,13 +825,15 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       }
     if (!playing && audioContext?.state === 'running')
       void audioContext.suspend().catch(() => undefined)
-    if (!host.__cioEditPreviewDisabled && selection) {
+    if (!host.__cioEditPreviewDisabled && editing) {
       installOverlay()
       paintOverlay()
     }
   }
 
   function stopEditing(): void {
+    editing = false
+    pendingGestures.length = 0
     selection = null
     drag = null
     dragRect = null
@@ -629,19 +847,18 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
   }
   return {
     render,
+    get editing() {
+      return editing
+    },
     setSelection(next: VideoEditorSelection): void {
+      editing = true
       selection = next
-      if (selection) {
-        installOverlay()
-        paintOverlay()
-      } else {
-        observer?.disconnect()
-        observer = null
-        overlay?.remove()
-        overlay = null
-      }
+      installOverlay()
+      paintOverlay()
     },
     takeGesture(): Promise<VideoEditorGesture | null> {
+      const pending = pendingGestures.shift()
+      if (pending) return Promise.resolve(pending)
       gestureReceiver?.(null)
       return new Promise((resolve) => {
         gestureReceiver = resolve

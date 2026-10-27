@@ -3,7 +3,7 @@
   import { on } from 'svelte/events'
   import { ContextMenu } from 'bits-ui'
   import { createAttachmentKey } from 'svelte/attachments'
-  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
+  import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import StudioSidebarResizeHandle from '$lib/components/specs/StudioSidebarResizeHandle.svelte'
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
@@ -25,6 +25,26 @@
   let draggedTrack = ''
   let hoverTime = $state<number | null>(null)
   const occlusion = { [createAttachmentKey()]: trackBrowserOcclusion }
+  const stageContext = {
+    [createAttachmentKey()]: (element: HTMLElement) => {
+      const request = editor.contextRequest
+      if (!request) return
+      queueMicrotask(() => {
+        const bounds = browserVisibility.pageBoundsFor(editor.tabId)
+        if (!bounds) return
+        element.dispatchEvent(
+          new MouseEvent('contextmenu', {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            clientX: bounds.x + request.x * bounds.width,
+            clientY: bounds.y + request.y * bounds.height
+          })
+        )
+        if (editor.contextRequest === request) editor.contextRequest = null
+      })
+    }
+  }
   const trackHeight = (id: string): number => rowHeights[id] ?? 64
   function rememberRows(): void {
     localStorage.setItem('cio:video-editor-tracks', JSON.stringify({ labelWidth, rowHeights }))
@@ -77,6 +97,9 @@
   const end = $derived((scrollLeft + width) / scale)
   const frameCells = $derived(
     visibleVideoFrames(editor.duration, editor.fps, start, end, contentWidth)
+  )
+  const pendingChanges = $derived(
+    editor.edit?.changes.filter((change) => change.author === 'agent' && !change.reviewed) ?? []
   )
   const visibleClips = $derived.by(() => {
     const items =
@@ -303,13 +326,14 @@
     max={220}
     onResize={(value) => (rowHeights[id] = value)}
     onCommit={rememberRows}
-    class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-border/40 hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+    class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
   />
 {/snippet}
 
 <ContextMenu.Root>
   <ContextMenu.Trigger
-    class="flex min-h-0 flex-1 flex-col border-t border-border"
+    {...stageContext}
+    class="flex min-h-0 flex-1 flex-col"
     data-drop-region="video-editor"
     oncontextmenu={(event) => {
       const element = event.target instanceof Element ? event.target : null
@@ -415,7 +439,7 @@
               max={220}
               onResize={(value) => (rowHeights[track.id] = value)}
               onCommit={rememberRows}
-              class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-border/40 hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+              class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
             />
           </div>
         {/each}
@@ -433,7 +457,11 @@
           Blur / privacy
           {@render bandSizer('regions', 'privacy track height')}
         </div>
-        <div class="flex h-6 items-center px-2 text-[0.625rem] text-primary">Agent edits</div>
+        {#if pendingChanges.length}<div
+            class="flex h-6 items-center px-2 text-[0.625rem] text-muted"
+          >
+            Assistant changes
+          </div>{/if}
       </div>
       <StudioSidebarResizeHandle
         sidebarLabel="track labels"
@@ -442,7 +470,7 @@
         max={320}
         onResize={(value) => (labelWidth = value)}
         onCommit={rememberRows}
-        class="h-full w-1.5 shrink-0 cursor-col-resize touch-none bg-border/40 hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+        class="h-full w-1.5 shrink-0 cursor-col-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
       />
       <div
         {@attach (element) => {
@@ -556,7 +584,7 @@
                   class={[
                     'absolute top-1 flex min-w-1 touch-none items-center overflow-hidden border px-2 text-left text-[0.625rem]',
                     editor.selection?.kind === 'clip' && editor.selection.id === clip.id
-                      ? 'border-primary bg-primary/20 text-foreground'
+                      ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
                       : track.kind === 'audio'
                         ? 'border-success/35 bg-success/10 text-foreground'
                         : 'border-border bg-elevated text-foreground',
@@ -568,6 +596,8 @@
                   style:width={`${Math.max(4, clip.duration * scale)}px`}
                   style:height={`${trackHeight(track.id) - 12}px`}
                   data-video-clip={clip.id}
+                  aria-pressed={editor.selection?.kind === 'clip' &&
+                    editor.selection.id === clip.id}
                   title={`${asset?.name ?? 'Clip'} · ${videoTimecode(clip.start)} · drag to move; drag an edge to trim`}
                   aria-label={`${asset?.name ?? 'Clip'} at ${videoTimecode(clip.start)}`}
                   onpointerdown={(event) => startClip(event, clip.id)}
@@ -607,7 +637,7 @@
                 max={220}
                 onResize={(value) => (rowHeights[track.id] = value)}
                 onCommit={rememberRows}
-                class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-border/40 hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+                class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
               />
             </div>
           {/each}
@@ -624,7 +654,7 @@
                   class={[
                     'absolute top-1 touch-none overflow-hidden border px-2 text-left text-[0.5625rem]',
                     editor.selection?.kind === 'caption' && editor.selection.index === index
-                      ? 'border-primary bg-primary/25 text-foreground'
+                      ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
                       : 'border-warning/30 bg-warning/10 text-foreground'
                   ]}
                   style:left={`${caption.start * scale}px`}
@@ -632,6 +662,8 @@
                   title={`${caption.text} · drag to move or trim`}
                   aria-label={`Caption: ${caption.text}`}
                   data-video-caption={index}
+                  aria-pressed={editor.selection?.kind === 'caption' &&
+                    editor.selection.index === index}
                   style:height={`${trackHeight('captions') - 12}px`}
                   onpointerdown={(event) =>
                     startBand(event, 'caption', '', index, caption.start, caption.end)}
@@ -666,7 +698,7 @@
                   class={[
                     'absolute top-1 touch-none overflow-hidden border px-2 text-left text-[0.5625rem]',
                     editor.selection?.kind === 'region' && editor.selection.id === region.id
-                      ? 'border-primary bg-primary/25 text-foreground'
+                      ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
                       : 'border-danger/30 bg-danger/10 text-foreground'
                   ]}
                   style:left={`${region.start * scale}px`}
@@ -674,6 +706,8 @@
                   title={`${region.kind} · drag to move or trim`}
                   aria-label={`${region.kind} region at ${videoTimecode(region.start)}`}
                   data-video-region={region.id}
+                  aria-pressed={editor.selection?.kind === 'region' &&
+                    editor.selection.id === region.id}
                   style:height={`${trackHeight('regions') - 12}px`}
                   onpointerdown={(event) =>
                     startBand(
@@ -701,19 +735,23 @@
             {/each}
             {@render bandSizer('regions', 'privacy track height')}
           </div>
-          <div class="relative h-6" role="group" aria-label="Unreviewed agent changes">
-            {#each editor.edit?.changes.filter((change) => change.author === 'agent' && !change.reviewed) ?? [] as change (change.id)}
-              <button
-                type="button"
-                class="absolute top-1 h-4 overflow-hidden bg-primary/30 px-1 text-[0.5625rem] text-primary"
-                style:left={`${change.start * scale}px`}
-                style:width={`${Math.max(10, (change.end - change.start) * scale)}px`}
-                title={`${change.label} · click to review from here`}
-                aria-label={change.label}
-                onclick={() => editor.seek(change.start)}>Agent</button
-              >
-            {/each}
-          </div>
+          {#if pendingChanges.length}<div
+              class="relative h-6"
+              role="group"
+              aria-label="Unreviewed assistant changes"
+            >
+              {#each pendingChanges as change (change.id)}
+                <button
+                  type="button"
+                  class="absolute top-1 h-4 overflow-hidden bg-primary/30 px-1 text-[0.5625rem] text-primary"
+                  style:left={`${change.start * scale}px`}
+                  style:width={`${Math.max(10, (change.end - change.start) * scale)}px`}
+                  title={`${change.label} · click to review from here`}
+                  aria-label={change.label}
+                  onclick={() => editor.seek(change.start)}>Agent</button
+                >
+              {/each}
+            </div>{/if}
           <div
             class="pointer-events-none absolute inset-y-0 z-10 w-px bg-primary"
             style:left={`${editor.time * scale}px`}
@@ -724,12 +762,17 @@
   </ContextMenu.Trigger>
   <ContextMenu.Portal>
     <ContextMenu.Content
+      data-layer-above-modal
       {...occlusion}
-      class="z-50 flex min-w-56 flex-col border border-border bg-surface py-1 shadow-lg"
+      class="z-80 flex min-w-56 flex-col border border-border bg-surface py-1 shadow-lg"
     >
       {@render contextActions?.()}
       {#if contextTrack}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
+        <ContextMenu.Item
+          class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
+          onSelect={() => editor.duplicateTrack(contextTrack)}>Duplicate track</ContextMenu.Item
+        >
         <ContextMenu.Item
           class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
           onSelect={() => shiftTrack(-1)}>Move track up</ContextMenu.Item

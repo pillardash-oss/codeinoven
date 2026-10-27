@@ -107,8 +107,11 @@ export type VideoEditorSelection =
   | { kind: 'caption'; index: number }
   | null
 export interface VideoEditorGesture {
+  kind?: 'select' | 'context'
+  point?: { x: number; y: number }
   selection: Exclude<VideoEditorSelection, null>
   rect: VideoEditRect
+  captionAppearance?: VideoCaptionAppearance
 }
 export function validateVideoEditorSelection(raw: unknown): VideoEditorSelection {
   if (raw === null || raw === undefined) return null

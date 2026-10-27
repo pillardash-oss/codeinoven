@@ -31,6 +31,7 @@ export class VideoEditorController {
   document = $state.raw<VideoStudioDocument | null>(null)
   manifest = $state.raw<VideoProjectManifest | null>(null)
   selection = $state.raw<VideoEditorSelection>(null)
+  contextRequest = $state.raw<{ x: number; y: number } | null>(null)
   private copiedClip = $state.raw<VideoEditClip | null>(null)
   time = $state(0)
   playing = $state(false)
@@ -387,13 +388,14 @@ export class VideoEditorController {
     this.queuePreview()
   }
   undo(): void {
+    if (this.gestureBefore) this.finishGesture()
     const before = this.undoEntries.at(-1)
     if (!before || !this.document) return
     this.redoEntries = [...this.redoEntries, JSON.stringify(this.document)]
     this.undoEntries = this.undoEntries.slice(0, -1)
     this.document = JSON.parse(before) as VideoStudioDocument
     this.dirty = true
-    this.selection = null
+    this.retainSelection()
     this.queuePreview()
   }
   redo(): void {
@@ -403,7 +405,7 @@ export class VideoEditorController {
     this.redoEntries = this.redoEntries.slice(0, -1)
     this.document = JSON.parse(next) as VideoStudioDocument
     this.dirty = true
-    this.selection = null
+    this.retainSelection()
     this.queuePreview()
   }
 
@@ -414,7 +416,73 @@ export class VideoEditorController {
       for (const clip of clips) splitVideoEditClip(edit, clip.id, this.time, this.fps)
     })
   }
+  private retainSelection(): void {
+    const selection = this.selection
+    if (!selection || !this.document?.edit) return
+    if (
+      selection.kind === 'clip' &&
+      !this.document.edit.clips.some((clip) => clip.id === selection.id)
+    )
+      this.selection = null
+    if (
+      selection.kind === 'region' &&
+      !this.document.edit.regions.some((region) => region.id === selection.id)
+    )
+      this.selection = null
+    if (selection.kind === 'caption' && !this.document.captions[selection.index])
+      this.selection = null
+  }
+  duplicateTrack(id: string): void {
+    this.mutate((_doc, edit) => {
+      const track = edit.tracks.find((track) => track.id === id)
+      if (!track || track.locked) return
+      const copy = { ...track, id: crypto.randomUUID(), name: `${track.name} copy` }
+      edit.tracks.splice(edit.tracks.indexOf(track) + 1, 0, copy)
+      edit.clips.push(
+        ...edit.clips
+          .filter((clip) => clip.trackId === id)
+          .map((clip) => ({ ...structuredClone(clip), id: crypto.randomUUID(), trackId: copy.id }))
+      )
+    })
+  }
   duplicate(): void {
+    const selection = this.selection
+    if (!selection) return
+    if (selection.kind === 'caption') {
+      this.mutate((doc, edit) => {
+        const selected = doc.captions[selection.index]
+        if (!selected) return
+        const clone = structuredClone(selected)
+        const offset = selected.end - selected.start
+        clone.start += offset
+        clone.end += offset
+        clone.words = clone.words?.map((word) => ({
+          ...word,
+          start: word.start + offset,
+          end: word.end + offset
+        }))
+        doc.captions.push(clone)
+        doc.captions.sort((a, b) => a.start - b.start)
+        edit.duration = Math.max(edit.duration, clone.end)
+        this.selection = { kind: 'caption', index: doc.captions.indexOf(clone) }
+      })
+      return
+    }
+    if (selection.kind === 'region') {
+      this.mutate((_doc, edit) => {
+        const selected = edit.regions.find((region) => region.id === selection.id)
+        if (!selected) return
+        const clone = {
+          ...selected,
+          id: crypto.randomUUID(),
+          start: selected.start + selected.duration
+        }
+        edit.regions.push(clone)
+        edit.duration = Math.max(edit.duration, clone.start + clone.duration)
+        this.selection = { kind: 'region', id: clone.id }
+      })
+      return
+    }
     const selected = this.selectedClip
     if (!selected) return
     this.mutate((_doc, edit) => {
@@ -513,6 +581,12 @@ export class VideoEditorController {
     })
   }
   private applyGesture(gesture: VideoEditorGesture): void {
+    if (gesture.kind) {
+      // The native stage already painted its selection. Do not replace its document mid-drag.
+      this.selection = gesture.selection
+      if (gesture.kind === 'context' && gesture.point) this.contextRequest = { ...gesture.point }
+      return
+    }
     this.mutate((doc, edit) => {
       const target = gesture.selection
       if (target.kind === 'clip') {
@@ -525,7 +599,7 @@ export class VideoEditorController {
       } else {
         const caption = doc.captions[target.index]
         if (caption)
-          caption.appearance = {
+          caption.appearance = gesture.captionAppearance ?? {
             ...VIDEO_CAPTION_APPEARANCE,
             ...doc.captionAppearance,
             ...caption.appearance,

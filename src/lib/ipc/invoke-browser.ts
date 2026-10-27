@@ -411,7 +411,10 @@ export const invokeBrowserContract = {
    * of them itself, it only matches a chord the page reported as unhandled and
    * hands it back.
    */
-  'browser:setAppShortcutChords': {} as Contract<[chords: BrowserShortcutChord[]], void>,
+  'browser:setAppShortcutChords': {} as Contract<
+    [chords: BrowserShortcutChord[], compositionChords?: BrowserShortcutChord[]],
+    void
+  >,
   /**
    * Report whether a website may override the app's keymaps.
    *

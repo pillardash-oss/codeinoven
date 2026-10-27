@@ -155,7 +155,9 @@
       })
   }
   function keydown(event: KeyboardEvent): void {
-    if (!active || !(event.target instanceof Node) || !root?.contains(event.target)) return
+    if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
+    const fromPage = event.target === document
+    if (!root?.contains(event.target) && !fromPage) return
     if (keymapState.matches('video-primary-action', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -265,7 +267,7 @@
       void remove()
     }}>Cut clip</ContextMenu.Item
   >
-  {#each [{ label: 'Undo', run: () => editor.undo(), disabled: !editor.canUndo }, { label: 'Redo', run: () => editor.redo(), disabled: !editor.canRedo }, { label: 'Split at playhead', run: () => editor.split(), disabled: !editor.selectedClip }, { label: 'Split all unlocked tracks', run: () => editor.split(true), disabled: !editor.edit }, { label: 'Duplicate clip', run: () => editor.duplicate(), disabled: !editor.selectedClip }, { label: 'Remove selected item', run: () => {
+  {#each [{ label: 'Undo', run: () => editor.undo(), disabled: !editor.canUndo }, { label: 'Redo', run: () => editor.redo(), disabled: !editor.canRedo }, { label: 'Split at playhead', run: () => editor.split(), disabled: !editor.selectedClip }, { label: 'Split all unlocked tracks', run: () => editor.split(true), disabled: !editor.edit }, { label: 'Duplicate selected item', run: () => editor.duplicate(), disabled: !editor.selection }, { label: 'Remove selected item', run: () => {
         void remove()
       }, disabled: !editor.selection }, { label: 'Ripple delete clip', run: () => {
         void remove(true)
@@ -308,9 +310,9 @@
   )}
   {@render action(
     CioCopy,
-    'Duplicate the selected clip',
+    'Duplicate the selected item',
     () => editor.duplicate(),
-    !editor.selectedClip
+    !editor.selection
   )}
   {@render action(
     CioTrash,
@@ -440,18 +442,12 @@
   {:else if editor.edit}
     {#if mode === 'fullscreen'}
       <div
-        class="grid min-h-40 shrink-0 border-b border-border"
+        class="grid min-h-40 shrink-0"
         style:height={`${shownUpperHeight}px`}
         style:grid-template-columns={`${shownLeftWidth}px 0.375rem minmax(0,1fr)`}
       >
-        <aside
-          class="flex min-h-0 min-w-0 flex-col border-r border-border bg-surface"
-          aria-label="Media and inspector"
-        >
-          <div
-            class="min-h-20 shrink-0 border-b border-border"
-            style:height={`${shownAssetsHeight}px`}
-          >
+        <aside class="flex min-h-0 min-w-0 flex-col bg-surface" aria-label="Media and inspector">
+          <div class="min-h-20 shrink-0" style:height={`${shownAssetsHeight}px`}>
             <VideoEditAssets {editor} expanded />
           </div>
           <StudioSidebarResizeHandle
@@ -462,7 +458,7 @@
             max={Math.max(80, shownUpperHeight - 100)}
             onResize={(value) => (assetsHeight = value)}
             onCommit={rememberLayout}
-            class="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-border/40 hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+            class="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
           />
           <div class="min-h-0 flex-1">
             <VideoEditInspector {editor} expanded captions={section === 'captions'} />
@@ -475,7 +471,7 @@
           max={Math.max(192, workspaceWidth - 320)}
           onResize={(value) => (leftWidth = value)}
           onCommit={rememberLayout}
-          class="h-full w-1.5 cursor-col-resize touch-none bg-border/40 hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+          class="h-full w-1.5 cursor-col-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
         />
         <div class="flex min-h-0 min-w-0 flex-col bg-app" aria-label="Video preview">
           {@render preview?.()}
@@ -489,7 +485,7 @@
         max={Math.max(160, workspaceHeight - 200)}
         onResize={(value) => (upperHeight = value)}
         onCommit={rememberLayout}
-        class="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-border/40 hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+        class="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
       />
       <div class="flex min-h-32 flex-1 flex-col">
         <VideoEditTimeline {editor} tools={timelineTools} contextActions={timelineContextActions} />

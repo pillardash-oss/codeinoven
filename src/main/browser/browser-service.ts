@@ -722,6 +722,7 @@ export class BrowserService {
    * the page has had its turn.
    */
   private appShortcutChords: BrowserShortcutChord[] = []
+  private compositionShortcutChords: BrowserShortcutChord[] = []
   /**
    * Whether a page may keep a chord the app also binds.
    *
@@ -1662,8 +1663,9 @@ export class BrowserService {
     replaceHandler('browser:setSwitcherBindings', (_event, rawBindings) => {
       this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
     })
-    replaceHandler('browser:setAppShortcutChords', (_event, rawChords) => {
+    replaceHandler('browser:setAppShortcutChords', (_event, rawChords, rawCompositionChords) => {
       this.appShortcutChords = validateBrowserAppShortcutChords(rawChords)
+      this.compositionShortcutChords = validateBrowserAppShortcutChords(rawCompositionChords ?? [])
     })
     replaceHandler('browser:setSiteKeymapOverride', (_event, rawAllows) => {
       if (typeof rawAllows !== 'boolean') {
@@ -3702,6 +3704,10 @@ export class BrowserService {
       }
     } else {
       const owner = this.tabForContents(contents.id)
+      if (owner?.tab.composition && matchesBrowserChord(input, this.compositionShortcutChords)) {
+        this.dispatchPageKey(key)
+        return
+      }
       if (
         owner &&
         action &&
@@ -4016,6 +4022,14 @@ export class BrowserService {
         event.preventDefault()
         return
       }
+      if (
+        this.tabs.get(tabId)?.composition &&
+        matchesBrowserChord(input, this.compositionShortcutChords)
+      ) {
+        event.preventDefault()
+        this.dispatchPageKey(pageKeyFromInput(input))
+        return
+      }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
       const usable =
         action &&
@@ -4048,6 +4062,16 @@ export class BrowserService {
     // the browser's own right-click menu is produced: link, image, media,
     // selection, editing and page actions, decided from the point clicked.
     view.webContents.on('context-menu', (_event, params) => {
+      if (this.tabs.get(tabId)?.composition) {
+        void view.webContents
+          .executeJavaScript('globalThis.CIOVideo?.editing === true')
+          .then((editing: unknown) => {
+            if (editing !== true && !view.webContents.isDestroyed())
+              this.showTabContextMenu(tabId, params)
+          })
+          .catch(() => {})
+        return
+      }
       this.showTabContextMenu(tabId, params)
     })
     // Audio the page emits is a tab-level fact the strip renders, so the state

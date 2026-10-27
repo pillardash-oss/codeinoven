@@ -1,4 +1,4 @@
-import type { VideoStudioDocument, VideoValue } from '../../lib/video/studio'
+import type { VideoCaption, VideoStudioDocument, VideoValue } from '../../lib/video/studio'
 import { FONT_STACKS } from '../../lib/app-fonts'
 import {
   VIDEO_CAPTION_APPEARANCE,
@@ -22,7 +22,13 @@ function installVideoRuntime(
     captionStyle: 'plain'
   }
   const parameters: Record<string, VideoValue> = Object.create(null)
-  const editor = editorFactory({ seekMedia, mediaReady, drawCaptions })
+  const editor = editorFactory({
+    seekMedia,
+    mediaReady,
+    drawCaptions,
+    captionBounds,
+    captionAppearance
+  })
   let currentDraw: ((seconds: number) => Promise<void>) | undefined
   const ready = (async () => {
     await new Promise<void>((resolve) => {
@@ -102,6 +108,55 @@ function installVideoRuntime(
       return 1 + scaled * Math.pow(p - 1, 3) + overshoot * Math.pow(p - 1, 2)
     }
   }
+  function captionAppearance(index: number): VideoCaptionAppearance {
+    return {
+      ...defaultAppearance,
+      ...studio.captionAppearance,
+      ...studio.captions[index]?.appearance
+    }
+  }
+  function captionLayout(
+    ctx: CanvasRenderingContext2D,
+    caption: VideoCaption,
+    width: number,
+    height: number
+  ) {
+    const appearance = { ...defaultAppearance, ...studio.captionAppearance, ...caption.appearance }
+    ctx.font = `${appearance.weight} ${height * appearance.size}px ${fonts[appearance.font] ?? fonts.system}`
+    const words = caption.words?.length
+      ? caption.words
+      : caption.text.split(/\s+/u).map((text) => ({ text, start: caption.start, end: caption.end }))
+    const lines: (typeof words)[] = [[]]
+    let currentWidth = 0
+    const gap = ctx.measureText(' ').width
+    for (const word of words) {
+      const wordWidth = ctx.measureText(word.text).width
+      if (currentWidth + wordWidth > width * appearance.width && lines[lines.length - 1].length) {
+        lines.push([])
+        currentWidth = 0
+      }
+      lines[lines.length - 1].push(word)
+      currentWidth += wordWidth + gap
+    }
+    const lineHeight = height * appearance.size * 1.4
+    const top = height * appearance.y - (lines.length - 1) * lineHeight
+    return { appearance, lines, lineHeight, top, gap }
+  }
+  function captionBounds(index: number, width: number, height: number) {
+    const output = (window as typeof window & { cioVideoCanvas?: HTMLCanvasElement }).cioVideoCanvas
+    const ctx = output?.getContext('2d'),
+      caption = studio.captions[index]
+    if (!ctx || !caption) return null
+    ctx.save()
+    const { appearance, lines, lineHeight, top } = captionLayout(ctx, caption, width, height)
+    ctx.restore()
+    return {
+      x: appearance.x - appearance.width / 2,
+      y: (top - lineHeight * 0.7) / height,
+      width: appearance.width,
+      height: ((lines.length + 0.4) * lineHeight) / height
+    }
+  }
   function drawCaptions(
     ctx: CanvasRenderingContext2D,
     seconds: number,
@@ -125,28 +180,10 @@ function installVideoRuntime(
       }
     }
     if (!caption) return
-    const appearance = { ...defaultAppearance, ...studio.captionAppearance, ...caption.appearance }
     ctx.save()
-    ctx.font = `${appearance.weight} ${height * appearance.size}px ${fonts[appearance.font] ?? fonts.system}`
+    const { appearance, lines, lineHeight, top, gap } = captionLayout(ctx, caption, width, height)
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    const words = caption.words?.length
-      ? caption.words
-      : caption.text.split(/\s+/u).map((text) => ({ text, start: caption.start, end: caption.end }))
-    const lines: (typeof words)[] = [[]]
-    let currentWidth = 0
-    const gap = ctx.measureText(' ').width
-    for (const word of words) {
-      const wordWidth = ctx.measureText(word.text).width
-      if (currentWidth + wordWidth > width * appearance.width && lines[lines.length - 1].length) {
-        lines.push([])
-        currentWidth = 0
-      }
-      lines[lines.length - 1].push(word)
-      currentWidth += wordWidth + gap
-    }
-    const lineHeight = height * appearance.size * 1.4
-    const top = height * appearance.y - (lines.length - 1) * lineHeight
     ctx.fillStyle = appearance.background
     ctx.globalAlpha = appearance.backgroundOpacity
     ctx.fillRect(
@@ -381,6 +418,9 @@ function installVideoRuntime(
       }
     },
     takeGesture: editor.takeGesture,
+    get editing() {
+      return editor.editing
+    },
     stopEditing: editor.stopEditing,
     /**
      * Name the canvas the export should encode.
