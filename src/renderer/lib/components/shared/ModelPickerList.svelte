@@ -13,7 +13,10 @@
 
   import { modelKey, parseModelKey } from '$lib/model-keys'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { modelPickerProviderOrder } from '$lib/stores/model-picker-provider-order.svelte'
+  import {
+    modelPickerProviderOrder,
+    providerOrderKey
+  } from '$lib/stores/model-picker-provider-order.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import type { ProviderCatalog } from '$shared/types'
@@ -143,12 +146,10 @@
   let draggingFavoriteKey = $state<string | null>(null)
   /** Drop target + position for the favorites section, if dragging over a row. */
   let favoriteDropTarget = $state<{ key: string; position: 'before' | 'after' } | null>(null)
-  /** Provider group currently being dragged, if any. The harness travels with it
-   *  because a provider group can only land beside another provider of its own
-   *  harness   the picker draws each harness as one run. */
-  let draggingProvider = $state<{ harnessId: string; providerId: string } | null>(null)
+  /** Order key of the provider group currently being dragged, if any. */
+  let draggingProviderKey = $state<string | null>(null)
   /** Drop target + position for the provider sections, if dragging over a header. */
-  let providerDropTarget = $state<{ providerId: string; position: 'before' | 'after' } | null>(null)
+  let providerDropTarget = $state<{ key: string; position: 'before' | 'after' } | null>(null)
   /** When the last provider drag ended, so the click a browser may still fire on
    *  the header it started from cannot also collapse the group. A plain variable:
    *  it is read inside an event handler and never drives rendering. */
@@ -242,6 +243,7 @@
   )
   const filteredProviders = $derived.by(() => {
     const words = searchWords(search)
+    const view = effectiveView
     return modelPickerProviderOrder.orderProviders(
       displayProviders
         .filter((provider) => passesPropHarnessFilter(provider.harnessId))
@@ -262,7 +264,8 @@
           (provider) =>
             provider.models.length > 0 ||
             (words.length === 0 && provider.catalogStatus === 'unavailable')
-        )
+        ),
+      view.kind === 'harness' ? view.harnessId : null
     )
   })
   /**
@@ -617,7 +620,7 @@
   function favoriteDragOver(event: DragEvent, targetKey: string): void {
     if (!onReorderFavorite) return
     // A provider group dragged over a favorite row is not a favorites drag.
-    if (draggingProvider) return
+    if (draggingProviderKey) return
     event.preventDefault()
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
     favoriteDropTarget = {
@@ -628,7 +631,7 @@
 
   function favoriteDrop(event: DragEvent, targetKey: string): void {
     if (!onReorderFavorite) return
-    if (draggingProvider) return
+    if (draggingProviderKey) return
     event.preventDefault()
     const draggedKey = event.dataTransfer?.getData('text/plain')
     const position = favoriteDropTarget?.key === targetKey ? favoriteDropTarget.position : 'after'
@@ -646,71 +649,87 @@
   }
 
   /**
-   * Whether a provider group has a sibling of its own harness to swap places with.
+   * Every provider the active rail section can move, search aside.
    *
-   * A lone provider has nowhere to go, so it gets no grip and stays undraggable:
-   * offering a drag that cannot move anything is worse than not offering it.
+   * The All section moves any provider of any harness, so a provider can be
+   * dragged above one from a different harness; a harness section moves only that
+   * harness's providers, which is the list it shows.
    */
-  function canReorderProvider(provider: ProviderCatalog): boolean {
-    return displayProviders.some(
-      (candidate) => candidate.harnessId === provider.harnessId && candidate.id !== provider.id
-    )
+  function reorderScope(): ProviderCatalog[] {
+    const allowed = displayProviders
+      .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+      .filter((provider) => !isUnavailableHarness(provider.harnessId))
+    const view = effectiveView
+    return view.kind === 'harness'
+      ? allowed.filter((provider) => provider.harnessId === view.harnessId)
+      : allowed
+  }
+
+  /**
+   * Whether the active section has more than one provider to arrange.
+   *
+   * A section holding a single provider has nowhere to put it, so it gets no grip
+   * and its header stays undraggable: offering a drag that cannot move anything is
+   * worse than not offering it.
+   */
+  function canReorderProviders(): boolean {
+    return reorderScope().length > 1
   }
 
   function startProviderDrag(event: DragEvent, provider: ProviderCatalog): void {
-    if (!canReorderProvider(provider)) {
+    const key = providerOrderKey(provider)
+    if (!canReorderProviders()) {
       event.preventDefault()
       return
     }
-    event.dataTransfer!.setData('text/plain', provider.harnessId + ':' + provider.id)
+    event.dataTransfer!.setData('text/plain', key)
     event.dataTransfer!.effectAllowed = 'move'
-    draggingProvider = { harnessId: provider.harnessId, providerId: provider.id }
+    draggingProviderKey = key
     clearFavoriteDrag()
-    setDragGhost(event, provider.name)
+    setDragGhost(event, providerDisplayName(provider.name))
   }
 
   function providerDragOver(event: DragEvent, provider: ProviderCatalog): void {
-    const dragged = draggingProvider
-    if (!dragged || dragged.harnessId !== provider.harnessId) return
+    const dragged = draggingProviderKey
+    if (!dragged) return
     event.preventDefault()
-    if (dragged.providerId === provider.id) {
+    if (dragged === providerOrderKey(provider)) {
       providerDropTarget = null
       return
     }
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
     providerDropTarget = {
-      providerId: provider.id,
+      key: providerOrderKey(provider),
       position: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
     }
   }
 
   function providerDrop(event: DragEvent, provider: ProviderCatalog): void {
     event.preventDefault()
-    const dragged = draggingProvider
+    const draggedKey = draggingProviderKey
     const target = providerDropTarget
     clearProviderDrag()
-    if (!dragged || dragged.harnessId !== provider.harnessId) return
-    if (dragged.providerId === provider.id) return
-    const position = target?.providerId === provider.id ? target.position : 'after'
-    // The order is normalized against every provider this harness has, not just
-    // the ones a search is showing, so a drag made mid-search still records a
-    // complete arrangement.
-    const catalogIds = displayProviders
-      .filter((candidate) => candidate.harnessId === provider.harnessId)
-      .map((candidate) => candidate.id)
+    if (!draggedKey) return
+    const targetKey = providerOrderKey(provider)
+    if (draggedKey === targetKey) return
+    const position = target?.key === targetKey ? target.position : 'after'
+    // The arrangement covers every provider the section can move, not just the
+    // ones a search is showing, so a drag made mid-search still records a complete
+    // order.
+    const view = effectiveView
     modelPickerProviderOrder.moveProvider(
-      provider.harnessId,
-      catalogIds,
-      dragged.providerId,
-      provider.id,
+      view.kind === 'harness' ? view.harnessId : null,
+      reorderScope(),
+      draggedKey,
+      targetKey,
       position
     )
   }
 
   function clearProviderDrag(): void {
-    if (draggingProvider) providerDragEndedAt = performance.now()
+    if (draggingProviderKey) providerDragEndedAt = performance.now()
     providerDropTarget = null
-    draggingProvider = null
+    draggingProviderKey = null
   }
 
   /**
@@ -945,11 +964,11 @@
 {#snippet providerHeader(provider: ProviderCatalog)}
   {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
   {@const label = providerDisplayName(provider.name)}
-  {@const reorderable = canReorderProvider(provider)}
-  {@const edge =
-    providerDropTarget?.providerId === provider.id ? providerDropTarget.position : null}
+  {@const reorderable = canReorderProviders()}
+  {@const key = providerOrderKey(provider)}
+  {@const edge = providerDropTarget?.key === key ? providerDropTarget.position : null}
   <div
-    class={`relative h-full ${draggingProvider?.harnessId === provider.harnessId && draggingProvider.providerId === provider.id ? 'opacity-50' : ''}`}
+    class={`relative h-full ${draggingProviderKey === key ? 'opacity-50' : ''}`}
     role="listitem"
     draggable={reorderable}
     ondragstart={(event: DragEvent) => startProviderDrag(event, provider)}
