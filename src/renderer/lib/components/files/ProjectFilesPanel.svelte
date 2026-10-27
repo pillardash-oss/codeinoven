@@ -70,7 +70,6 @@
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
   import ProjectFilesPanelReadAlong from './ProjectFilesPanelReadAlong.svelte'
-  import { ProjectFilesPanelSvgPreview } from './project-files-panel-svg-preview.svelte'
   import { ProjectFilesPanelFind } from './project-files-panel-find.svelte'
   import { ProjectFilesPanelDocumentPreview } from './project-files-panel-document-preview.svelte'
   import {
@@ -329,14 +328,16 @@
   let htmlPreview = $derived(previewFlags.html)
   let pdf = $derived(previewFlags.pdf)
   let image = $derived(previewFlags.image)
-  let svg = $derived(previewFlags.svg)
   let video = $derived(previewFlags.video)
   let audio = $derived(previewFlags.audio)
   let previewReloadToken = $derived(
     activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
   )
+  /** Every rendered file streams from disk through `appfile://`, SVG included:
+   *  its response carries `default-src 'none'` and the `<img>` this feeds never
+   *  runs the document's scripts, so no blob round-trip is needed. */
   let previewUrl = $derived(
-    activeTab && (pdf || image || video || audio) && !svg
+    activeTab && (pdf || image || video || audio)
       ? projectFilePreviewUrl(
           projectId,
           activeTab.path,
@@ -345,25 +346,6 @@
         )
       : null
   )
-  // SVG is rendered natively in the renderer via a blob URL (animated SVGs
-  // play), instead of the privileged `appfile://` scheme, which intentionally
-  // refuses to serve project-controlled SVG.
-  const svgPreview = new ProjectFilesPanelSvgPreview()
-  $effect(() =>
-    svgPreview.sync({
-      projectId,
-      activePath: activeTab?.path ?? null,
-      isSvg: svg,
-      // Reading the reload token keeps the effect reactive to explicit reloads:
-      // bumping it revokes the stale blob and re-reads the file from disk.
-      currentReloadToken: () =>
-        activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0,
-      scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
-      mountThreadId
-    })
-  )
-  let imagePreviewSrc = $derived(svg ? svgPreview.url : previewUrl)
-  let imagePreviewFailed = $derived(svg ? svgPreview.failed : false)
   /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
   let documentPreview = $derived(previewFlags.document)
   let previewKindLabel = $derived(previewKindLabelFor(previewFlags))
@@ -1307,8 +1289,6 @@
           {visibleContent}
           {htmlPreviewSrcdoc}
           {previewUrl}
-          {imagePreviewSrc}
-          {imagePreviewFailed}
           documentLoading={docPreview.loading}
           documentHtml={docPreview.html}
           documentFailed={docPreview.failed}
@@ -1322,11 +1302,7 @@
         </div>
       {:else if activeTab && !activeSession && !deletedAtCheckpoint}
         {#if image}
-          <FileImagePreview
-            src={imagePreviewSrc}
-            alt={activeTab.path}
-            failed={imagePreviewFailed}
-          />
+          <FileImagePreview src={previewUrl} alt={activeTab.path} />
         {:else if video || audio}
           <FileMediaPreview
             src={previewUrl}
@@ -1716,8 +1692,6 @@
             {visibleContent}
             {htmlPreviewSrcdoc}
             {previewUrl}
-            {imagePreviewSrc}
-            {imagePreviewFailed}
             documentLoading={docPreview.loading}
             documentHtml={docPreview.html}
             documentFailed={docPreview.failed}
@@ -1726,11 +1700,7 @@
           />
         {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
           {#if image && (renderOnlyFile || activeTab.view !== 'source')}
-            <FileImagePreview
-              src={imagePreviewSrc}
-              alt={activeTab.path}
-              failed={imagePreviewFailed}
-            />
+            <FileImagePreview src={previewUrl} alt={activeTab.path} />
           {:else if (video || audio) && (renderOnlyFile || activeTab.view !== 'source')}
             <FileMediaPreview
               src={previewUrl}

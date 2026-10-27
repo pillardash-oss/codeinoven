@@ -65,7 +65,7 @@
   const previewable = $derived(supportsFilePreview(path))
   /** Kinds whose content can never be read as text and whose preview streams
    *  bytes to the element instead of crossing IPC. SVG is deliberately excluded:
-   *  it is XML, so its source stays editable while its preview renders from a blob. */
+   *  it is XML, so it keeps an editable source view beside its streamed preview. */
   const binaryPreview = $derived(pdf || video || audio || documentPreview || (image && !svg))
   /** Format this file can be beautified as ("JSON"), or null when the editor
    *  has no beautifier for it. The label doubles as the flag, so the action is
@@ -94,7 +94,7 @@
   let requestSequence = 0
 
   const previewUrl = $derived(
-    pdf || video || audio || (image && !svg)
+    pdf || video || audio || image
       ? standaloneFilePreviewUrl(path, name || path, reloadToken)
       : null
   )
@@ -103,14 +103,15 @@
   const htmlSrcdoc = $derived(htmlPreview && session ? htmlPreviewFrame(session.draft) : null)
 
   /**
-   * SVG is previewed from a data URL built from the draft. The privileged
-   * `appfile://` scheme refuses to serve SVG, and an `<img>` rendering a data URL
-   * cannot run the document's scripts, so the same active-XML protection holds.
-   * Building it from the draft rather than from the last read means an unsaved SVG
-   * edit shows in the preview immediately, with no object-URL lifecycle to manage.
+   * An edited SVG previews from a data URL built from the draft, so an unsaved
+   * change shows immediately instead of the bytes still on disk. A clean file
+   * streams through `appfile://` like every other image; both paths end in an
+   * `<img>`, which never runs the document's scripts.
    */
   const svgPreviewSrc = $derived(
-    svg && session ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(session.draft)}` : null
+    svg && session && dirty
+      ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(session.draft)}`
+      : null
   )
 
   async function loadSource(): Promise<void> {
@@ -390,7 +391,7 @@
     {/if}
   </div>
 {:else if activeView === 'preview' && image}
-  <FileImagePreview src={svg ? svgPreviewSrc : previewUrl} alt={name} />
+  <FileImagePreview src={svgPreviewSrc ?? previewUrl} alt={name} />
 {:else if activeView === 'preview' && (video || audio)}
   <FileMediaPreview src={previewUrl} alt={name} kind={video ? 'video' : 'audio'} />
 {:else if session}
