@@ -94,6 +94,8 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
       parent = next
     }
     return absolute
+  }, function (candidate) {
+    try { return existsSync(candidate) } catch { return false }
   })
   if (matches.length === 0) return null
   const targets = matches.map(function (match) { return match.path })
