@@ -13,6 +13,7 @@
 
   import { modelKey, parseModelKey } from '$lib/model-keys'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { modelPickerProviderOrder } from '$lib/stores/model-picker-provider-order.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import type { ProviderCatalog } from '$shared/types'
@@ -141,6 +142,17 @@
   let draggingFavoriteKey = $state<string | null>(null)
   /** Drop target + position for the favorites section, if dragging over a row. */
   let favoriteDropTarget = $state<{ key: string; position: 'before' | 'after' } | null>(null)
+  /** Provider group currently being dragged, if any. The harness travels with it
+   *  because a provider group can only land beside another provider of its own
+   *  harness   the picker draws each harness as one run. */
+  let draggingProvider = $state<{ harnessId: string; providerId: string } | null>(null)
+  /** Drop target + position for the provider sections, if dragging over a header. */
+  let providerDropTarget = $state<{ providerId: string; position: 'before' | 'after' } | null>(null)
+  /** When the last provider drag ended, so the click a browser may still fire on
+   *  the header it started from cannot also collapse the group. A plain variable:
+   *  it is read inside an event handler and never drives rendering. */
+  let providerDragEndedAt = 0
+  const PROVIDER_DRAG_CLICK_GUARD_MS = 250
 
   const favoriteModelsSet = $derived(new Set(favoriteModels))
   const selectedModelKeysSet = $derived(new Set(selectedModelKeys))
@@ -229,26 +241,28 @@
   )
   const filteredProviders = $derived.by(() => {
     const words = searchWords(search)
-    return displayProviders
-      .filter((provider) => passesPropHarnessFilter(provider.harnessId))
-      .filter((provider) => !isUnavailableHarness(provider.harnessId))
-      .filter((provider) => passesRailHarness(provider.harnessId))
-      .map((provider) => ({
-        ...provider,
-        models:
-          words.length === 0
-            ? provider.models.filter((model) => passesVisionFilter(model, visionOnly))
-            : provider.models.filter(
-                (model) =>
-                  passesVisionFilter(model, visionOnly) &&
-                  words.every((word) => modelHaystack(provider, model).includes(word))
-              )
-      }))
-      .filter(
-        (provider) =>
-          provider.models.length > 0 ||
-          (words.length === 0 && provider.catalogStatus === 'unavailable')
-      )
+    return modelPickerProviderOrder.orderProviders(
+      displayProviders
+        .filter((provider) => passesPropHarnessFilter(provider.harnessId))
+        .filter((provider) => !isUnavailableHarness(provider.harnessId))
+        .filter((provider) => passesRailHarness(provider.harnessId))
+        .map((provider) => ({
+          ...provider,
+          models:
+            words.length === 0
+              ? provider.models.filter((model) => passesVisionFilter(model, visionOnly))
+              : provider.models.filter(
+                  (model) =>
+                    passesVisionFilter(model, visionOnly) &&
+                    words.every((word) => modelHaystack(provider, model).includes(word))
+                )
+        }))
+        .filter(
+          (provider) =>
+            provider.models.length > 0 ||
+            (words.length === 0 && provider.catalogStatus === 'unavailable')
+        )
+    )
   })
   /**
    * Harnesses present in the current catalog, ordered by the canonical harness
@@ -579,13 +593,11 @@
     if (offset !== undefined) scrollPickerListTo(offset - 60)
   }
 
-  function startFavoriteDrag(event: DragEvent, key: string, name: string): void {
-    if (!onReorderFavorite) return
-    event.dataTransfer!.setData('text/plain', key)
-    event.dataTransfer!.effectAllowed = 'move'
-    draggingFavoriteKey = key
+  /** Drag an image of the dragged row's label instead of the row itself, so the
+   *  ghost matches the compact picker instead of the full-width list row. */
+  function setDragGhost(event: DragEvent, label: string): void {
     const ghost = document.createElement('div')
-    ghost.textContent = name
+    ghost.textContent = label
     ghost.style.cssText =
       'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
@@ -593,8 +605,18 @@
     requestAnimationFrame(() => document.body.removeChild(ghost))
   }
 
+  function startFavoriteDrag(event: DragEvent, key: string, name: string): void {
+    if (!onReorderFavorite) return
+    event.dataTransfer!.setData('text/plain', key)
+    event.dataTransfer!.effectAllowed = 'move'
+    draggingFavoriteKey = key
+    setDragGhost(event, name)
+  }
+
   function favoriteDragOver(event: DragEvent, targetKey: string): void {
     if (!onReorderFavorite) return
+    // A provider group dragged over a favorite row is not a favorites drag.
+    if (draggingProvider) return
     event.preventDefault()
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
     favoriteDropTarget = {
@@ -605,6 +627,7 @@
 
   function favoriteDrop(event: DragEvent, targetKey: string): void {
     if (!onReorderFavorite) return
+    if (draggingProvider) return
     event.preventDefault()
     const draggedKey = event.dataTransfer?.getData('text/plain')
     const position = favoriteDropTarget?.key === targetKey ? favoriteDropTarget.position : 'after'
@@ -619,6 +642,86 @@
   function clearFavoriteDrag(): void {
     favoriteDropTarget = null
     draggingFavoriteKey = null
+  }
+
+  /**
+   * Whether a provider group has a sibling of its own harness to swap places with.
+   *
+   * A lone provider has nowhere to go, so it gets no grip and stays undraggable:
+   * offering a drag that cannot move anything is worse than not offering it.
+   */
+  function canReorderProvider(provider: ProviderCatalog): boolean {
+    return displayProviders.some(
+      (candidate) => candidate.harnessId === provider.harnessId && candidate.id !== provider.id
+    )
+  }
+
+  function startProviderDrag(event: DragEvent, provider: ProviderCatalog): void {
+    if (!canReorderProvider(provider)) {
+      event.preventDefault()
+      return
+    }
+    event.dataTransfer!.setData('text/plain', provider.harnessId + ':' + provider.id)
+    event.dataTransfer!.effectAllowed = 'move'
+    draggingProvider = { harnessId: provider.harnessId, providerId: provider.id }
+    clearFavoriteDrag()
+    setDragGhost(event, provider.name)
+  }
+
+  function providerDragOver(event: DragEvent, provider: ProviderCatalog): void {
+    const dragged = draggingProvider
+    if (!dragged || dragged.harnessId !== provider.harnessId) return
+    event.preventDefault()
+    if (dragged.providerId === provider.id) {
+      providerDropTarget = null
+      return
+    }
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    providerDropTarget = {
+      providerId: provider.id,
+      position: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    }
+  }
+
+  function providerDrop(event: DragEvent, provider: ProviderCatalog): void {
+    event.preventDefault()
+    const dragged = draggingProvider
+    const target = providerDropTarget
+    clearProviderDrag()
+    if (!dragged || dragged.harnessId !== provider.harnessId) return
+    if (dragged.providerId === provider.id) return
+    const position = target?.providerId === provider.id ? target.position : 'after'
+    // The order is normalized against every provider this harness has, not just
+    // the ones a search is showing, so a drag made mid-search still records a
+    // complete arrangement.
+    const catalogIds = displayProviders
+      .filter((candidate) => candidate.harnessId === provider.harnessId)
+      .map((candidate) => candidate.id)
+    modelPickerProviderOrder.moveProvider(
+      provider.harnessId,
+      catalogIds,
+      dragged.providerId,
+      provider.id,
+      position
+    )
+  }
+
+  function clearProviderDrag(): void {
+    if (draggingProvider) providerDragEndedAt = performance.now()
+    providerDropTarget = null
+    draggingProvider = null
+  }
+
+  /**
+   * Collapse or expand a provider group, ignoring the click a browser can fire on
+   * the header a drag started from.
+   *
+   * Dropping a provider must only rearrange the list; without this guard the same
+   * gesture can end with the group folded shut.
+   */
+  function toggleProviderGroup(provider: ProviderCatalog): void {
+    if (performance.now() - providerDragEndedAt < PROVIDER_DRAG_CLICK_GUARD_MS) return
+    toggleGroup(provider.harnessId + ':' + provider.id)
   }
 </script>
 
@@ -840,27 +943,58 @@
 
 {#snippet providerHeader(provider: ProviderCatalog)}
   {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
-  <button
-    type="button"
-    class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-    aria-expanded={!collapsed}
-    title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
-    onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
+  {@const reorderable = canReorderProvider(provider)}
+  {@const edge =
+    providerDropTarget?.providerId === provider.id ? providerDropTarget.position : null}
+  <div
+    class={`relative h-full ${draggingProvider?.harnessId === provider.harnessId && draggingProvider.providerId === provider.id ? 'opacity-50' : ''}`}
+    role="listitem"
+    draggable={reorderable}
+    ondragstart={(event: DragEvent) => startProviderDrag(event, provider)}
+    ondragover={(event: DragEvent) => providerDragOver(event, provider)}
+    ondrop={(event: DragEvent) => providerDrop(event, provider)}
+    ondragend={clearProviderDrag}
   >
-    <CioForward
-      size={11}
-      class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
-    />
-    <VendorIcon name={provider.name} id={provider.id} size={14} />
-    <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-      {provider.name}
-    </span>
-    {#if provider.catalogStatus === 'unavailable'}
-      <span class="ml-auto text-[0.5625rem] font-medium text-dimmed">Unavailable</span>
-    {:else}
-      <span class="ml-auto text-[0.5625rem] text-dimmed">{provider.models.length}</span>
+    {#if reorderable}
+      <span
+        class="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 cursor-grab text-dimmed"
+        aria-hidden="true"
+      >
+        <CioGrip size={11} />
+      </span>
     {/if}
-  </button>
+    <button
+      type="button"
+      class={`flex h-full w-full items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-elevated ${reorderable ? 'pl-4 pr-2' : 'px-2'}`}
+      aria-expanded={!collapsed}
+      title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
+      onclick={() => toggleProviderGroup(provider)}
+    >
+      <CioForward
+        size={11}
+        class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
+      />
+      <VendorIcon name={provider.name} id={provider.id} size={14} />
+      <span class="truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+        {provider.name}
+      </span>
+      {#if provider.catalogStatus === 'unavailable'}
+        <span class="ml-auto shrink-0 text-[0.5625rem] font-medium text-dimmed">Unavailable</span>
+      {:else}
+        <span class="ml-auto shrink-0 text-[0.5625rem] text-dimmed">{provider.models.length}</span>
+      {/if}
+    </button>
+    {#if edge}
+      <!-- The edge this provider group will land on, drawn on the header it will
+           land beside, so the line is a promise rather than a hint. -->
+      <span
+        class="pointer-events-none absolute inset-x-0 h-0.5 bg-primary {edge === 'before'
+          ? 'top-0'
+          : 'bottom-0'}"
+        aria-hidden="true"
+      ></span>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet renderPickerItem(item: PickerListItem & { offset: number })}
@@ -903,9 +1037,8 @@
     {#if item.favoriteKey !== undefined}
       {@const key = item.favoriteKey}
       <div
-        class="relative h-full"
+        class={`relative h-full ${draggingFavoriteKey === key ? 'opacity-50' : ''}`}
         role="listitem"
-        class:opacity-50={draggingFavoriteKey === key}
         draggable={item.draggable}
         ondragstart={(event: DragEvent) => startFavoriteDrag(event, key, item.entry.model.name)}
         ondragover={(event: DragEvent) => favoriteDragOver(event, key)}
