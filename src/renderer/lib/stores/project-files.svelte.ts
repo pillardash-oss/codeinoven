@@ -164,6 +164,15 @@ class ProjectFilesWorkspace {
     return this.explorer.listingsMatchMount(projectId)
   }
 
+  /** Refresh the explorer's listings in the background whenever the tree shows
+   *  up, so the files it lists are the ones on disk now instead of the ones that
+   *  were there when it was last open. Deliberately fire-and-forget: the tree
+   *  keeps its current listing on screen while the reads run, and nothing about
+   *  opening the panel waits on them. */
+  refreshOnOpen(projectId: string): void {
+    void this.explorer.refreshOpenListings(projectId)
+  }
+
   toggleDirectory(projectId: string, directory: string): Promise<void> {
     return this.explorer.toggleDirectory(projectId, directory)
   }

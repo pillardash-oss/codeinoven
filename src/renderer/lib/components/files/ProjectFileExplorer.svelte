@@ -429,6 +429,31 @@
     return projectFilesWorkspace.clipboard !== null
   }
 
+  /** Refresh the tree's listings whenever this explorer becomes visible.
+   *
+   *  The sidebar keeps a panel mounted and hides it with `display: none`, so
+   *  returning to it does not remount this component. Visibility is what makes
+   *  "the tree was opened" observable, and an intersection callback is the
+   *  signal that reports it without polling. The refresh is background work: it
+   *  never blocks the open and never replaces the listing on screen until a
+   *  fresh read answers, so files created outside the app are already there
+   *  instead of waiting for the Refresh button. */
+  function attachOpenRefresh(node: HTMLElement): () => void {
+    if (typeof IntersectionObserver === 'undefined') {
+      projectFilesWorkspace.refreshOnOpen(projectId)
+      return () => undefined
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return
+        projectFilesWorkspace.refreshOnOpen(projectId)
+      },
+      { threshold: 0 }
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }
+
   /** Track the scroll viewport without making every tree row reactive. */
   function attachTreeScroll(node: HTMLDivElement): () => void {
     treeScroll = node
@@ -1320,6 +1345,7 @@
 </script>
 
 <aside
+  {@attach attachOpenRefresh}
   class="relative flex h-full min-h-0 min-w-44 shrink-0 flex-col border-l border-border bg-surface"
   style:width={`${projectState.explorerWidth}px`}
   aria-label="Project file explorer"
