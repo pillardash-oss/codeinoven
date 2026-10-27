@@ -409,6 +409,28 @@ export class BrowserOverlayWindow {
     return true
   }
 
+  /**
+   * Drop everything the app renderer published, because the document that
+   * published it is gone.
+   *
+   * Each surface here is normally taken down by its own component's unmount
+   * (`null` per dock, an empty stack, no strip), and a document reload unmounts
+   * nothing: this window would keep painting a toast or a modal for a state that
+   * no longer exists. A modal is the worst of them, because it keeps the whole
+   * window opaque to the mouse, so every press in the app lands on a surface
+   * that nothing left can dismiss, until the app is restarted. Anything that
+   * arrives afterwards is a surface the new document opened itself.
+   *
+   * The window itself is kept: a held host is what makes the next dialog paint
+   * immediately, and an empty one draws nothing and passes every click through.
+   */
+  clearRendererSurfaces(): void {
+    this.status = null
+    for (const id of [...this.docks.keys()]) this.applyDock(id, null)
+    this.applyStrip(null)
+    this.applyStack(null)
+  }
+
   /** Everything on display, resolved to the document's own pull on first load. */
   currentState(): BrowserOverlaySnapshot {
     return {

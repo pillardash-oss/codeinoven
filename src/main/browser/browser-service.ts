@@ -6913,7 +6913,8 @@ export class BrowserService {
 
   /**
    * Detach the native view when the app renderer goes away, so a reload can never
-   * leave the browser floating over the app.
+   * leave the browser floating over the app, and take down every overlay surface
+   * that renderer had published.
    *
    * The renderer is the only thing that knows which tab belongs on screen and at
    * which frame, and the compositor paints the view ABOVE every DOM surface. A
@@ -6932,9 +6933,38 @@ export class BrowserService {
   private guardAgainstStrandedView(): void {
     const contents = this.window.webContents
     contents.on('did-start-navigation', (details) => {
-      if (details.isMainFrame && !details.isSameDocument) this.detachDisplayedView()
+      if (details.isMainFrame && !details.isSameDocument) this.releaseRendererSurfaces()
     })
-    contents.on('render-process-gone', () => this.detachDisplayedView())
+    contents.on('render-process-gone', () => this.releaseRendererSurfaces())
+  }
+
+  /**
+   * Take down everything the app renderer had put on screen natively, so a reload
+   * or a renderer that died can never leave a native surface behind.
+   *
+   * The page view is only one of them. Toasts, the floating tab strip, tooltips
+   * and the modals the app draws over a page all live in views and child windows
+   * that outlive the document which published them, and only that document ever
+   * takes them down (each surface sends its own `null` when its component
+   * unmounts, which a document reload never runs). Nothing in the new document
+   * knows they exist: svelte-sonner starts empty and does not publish an empty
+   * stack at boot, and no panel re-opens itself, so a stale toast card sits over
+   * the app and a stale modal keeps its whole window opaque to the mouse, which
+   * reads as an app that stopped responding until it is restarted.
+   */
+  private releaseRendererSurfaces(): void {
+    this.detachDisplayedView()
+    // The toast card is bounded but its own dismissal lives in the renderer that
+    // published it, so it would otherwise stay until something else raised one.
+    this.nativeToasts.apply(null)
+    this.nativeToasts.setHeight(0)
+    // One call retires the floating strip and the panel dock it hosts, because a
+    // dock leaving re-applies the strip that came with it.
+    this.nativeStrip.applyDock(null)
+    this.overlay.clearRendererSurfaces()
+    // The permission prompt is deliberately left alone: it is the main process
+    // asking a question the main process still owns, and hiding it would leave a
+    // pending decision nobody can answer.
   }
 
   /**
