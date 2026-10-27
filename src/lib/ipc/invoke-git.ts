@@ -1,4 +1,6 @@
 import type {
+  BranchDeletionOutcome,
+  BranchDeletionState,
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
@@ -363,17 +365,18 @@ export const invokeGitContract = {
     GitHubMutationResult<PullRequestReference>
   >,
   /**
-   * Whether GitHub protects a branch, which is what decides whether the reader
-   * may offer to delete it once the pull request is merged.
+   * What a branch is as far as deleting it goes: deletable, protected, or gone.
+   * Null when the read itself failed, so the merged reader draws no action rather
+   * than one that may be refused.
    */
-  'pr:branchProtection': {} as Contract<
+  'pr:branchState': {} as Contract<
     [projectId: string, owner: string, repo: string, branch: string],
-    boolean
+    BranchDeletionState | null
   >,
   /** Delete a merged pull request's head branch. Protected branches refuse this. */
   'pr:deleteBranch': {} as Contract<
     [projectId: string, owner: string, repo: string, branch: string],
-    GitHubMutationResult<boolean>
+    GitHubMutationResult<BranchDeletionOutcome>
   >,
   /**
    * Replace the labels a pull request carries, returning the labels it now has.

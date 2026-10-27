@@ -1,5 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import type {
+  BranchDeletionOutcome,
+  BranchDeletionState,
   GitHubMutationResult,
   GitHubPermissionRequired,
   PrAgentAssignmentInput,
@@ -342,24 +344,23 @@ export class GitPullRequestOperations {
   }
 
   /**
-   * Whether GitHub protects the pull request's head branch.
+   * What the pull request's head branch is as far as deleting it goes.
    *
    * Read only where the answer decides whether an action is drawn, which is the
    * merged reader, so it costs one round trip per merged pull request a person
-   * opens. An unreadable answer reports unprotected: the delete itself is the
-   * authority, and it answers with GitHub's own refusal when the branch is
-   * protected after all.
+   * opens. An unreadable answer reports null, and the caller then offers no action
+   * rather than one that may be refused.
    */
-  async branchProtection(
+  async branchDeletionState(
     projectId: string,
     owner: string,
     repo: string,
     branch: string
-  ): Promise<boolean> {
+  ): Promise<BranchDeletionState | null> {
     try {
-      return await invoke('pr:branchProtection', projectId, owner, repo, branch)
+      return await invoke('pr:branchState', projectId, owner, repo, branch)
     } catch {
-      return false
+      return null
     }
   }
 
@@ -368,26 +369,23 @@ export class GitPullRequestOperations {
    *
    * This is the repository's branch list, not the checkout: merging already put
    * the commits where they belong, so the merged branch is only clutter, and
-   * deleting it was otherwise a trip to the Branches tab. Protected branches are
-   * refused by GitHub, which is why the surface hides the action for them.
+   * deleting it was otherwise a trip to the Branches tab. A branch that is already
+   * gone reports `missing` rather than failing, because the caller wanted it gone.
    */
   async deleteMergedBranch(
     projectId: string,
     owner: string,
     repo: string,
     branch: string
-  ): Promise<boolean> {
+  ): Promise<BranchDeletionOutcome | null> {
     this.access.markBusy('pr-branch-delete', true)
     this.access.setError(null)
     this.access.setGitHubPermission(null)
     try {
-      return (
-        this.resolveMutation(await invoke('pr:deleteBranch', projectId, owner, repo, branch)) ===
-        true
-      )
+      return this.resolveMutation(await invoke('pr:deleteBranch', projectId, owner, repo, branch))
     } catch (reason) {
       this.access.setError(errorMessage(reason, 'The branch could not be deleted'))
-      return false
+      return null
     } finally {
       this.access.markBusy('pr-branch-delete', false)
     }

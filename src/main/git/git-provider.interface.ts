@@ -1,4 +1,6 @@
 import type {
+  BranchDeletionOutcome,
+  BranchDeletionState,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentPage,
@@ -309,15 +311,20 @@ export interface GitProvider {
   /** Close an open pull request without merging. */
   closePullRequest(input: PullRequestTarget): Promise<PullRequestReference>
   /**
-   * Whether the repository protects a branch.
+   * What a branch is as far as deleting it goes: deletable, protected, or
+   * already gone.
    *
-   * A protected branch refuses deletion, so a surface that offers to delete one
-   * has to know the answer before it draws the action. A branch the provider
-   * cannot find counts as unprotected: there is nothing left to protect.
+   * A surface that offers to delete a branch has to know this before it draws
+   * the action: a protected branch refuses the write, and a branch that no
+   * longer exists has nothing left to delete.
    */
-  isBranchProtected(input: BranchTarget): Promise<boolean>
-  /** Delete a branch from the repository, the way its own branches page does. */
-  deleteBranch(input: BranchTarget): Promise<void>
+  readBranchDeletionState(input: BranchTarget): Promise<BranchDeletionState>
+  /**
+   * Delete a branch from the repository, the way its own branches page does.
+   * A branch that is already gone reports `missing` rather than failing: the
+   * caller wanted it gone, and it is.
+   */
+  deleteBranch(input: BranchTarget): Promise<BranchDeletionOutcome>
   /** Update an open pull request's title and/or description. */
   updatePullRequest(
     input: PullRequestTarget & { title?: string; body?: string }

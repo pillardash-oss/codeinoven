@@ -1,4 +1,6 @@
 import type {
+  BranchDeletionOutcome,
+  BranchDeletionState,
   GitHubDeployment,
   GitHubDeploymentDetail,
   GitHubDeploymentJob,
@@ -405,6 +407,17 @@ function branchPath(input: { branch: string }): string {
 }
 
 /**
+ * Whether GitHub refused a branch delete because the ref is already gone.
+ *
+ * The refusal is a 422 carrying "Reference does not exist", which is the same
+ * status a protected branch refusal uses, so the message is what separates a
+ * branch that was already deleted from a write that was denied.
+ */
+function isMissingRefRefusal(failure: ProviderHttpError): boolean {
+  return failure.status === 422 && /Reference does not exist/iu.test(failure.message)
+}
+
+/**
  * GitHub-first REST adapter.
  *
  * The token is resolved from `SecretVault` in the main process only and is
@@ -545,22 +558,22 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
-   * Whether GitHub protects a branch.
+   * What a branch is as far as deleting it goes.
    *
-   * The branch endpoint reports it beside the commit it points at, and a branch
-   * GitHub cannot find comes back 404. A missing branch is reported as
-   * unprotected on purpose: the caller asks so it knows whether deletion may
-   * proceed, and a branch that is already gone has nothing left to protect.
+   * The branch endpoint reports protection beside the commit it points at, and a
+   * branch GitHub cannot find comes back 404. The three answers are kept apart
+   * rather than collapsed into "may delete": a missing branch reading as
+   * deletable is exactly the race that offers an action which cannot land.
    */
-  async isBranchProtected(input: BranchTarget): Promise<boolean> {
+  async readBranchDeletionState(input: BranchTarget): Promise<BranchDeletionState> {
     try {
       const response = await this.request(`${this.repoPath(input)}/branches/${branchPath(input)}`, {
         method: 'GET'
       })
       const record = Array.isArray(response) ? {} : response
-      return record['protected'] === true
+      return record['protected'] === true ? 'protected' : 'deletable'
     } catch (failure) {
-      if (failure instanceof ProviderHttpError && failure.status === 404) return false
+      if (failure instanceof ProviderHttpError && failure.status === 404) return 'missing'
       throw failure
     }
   }
@@ -568,14 +581,22 @@ export class GitHubProvider implements GitProvider {
   /**
    * Delete a branch from the repository.
    *
-   * GitHub refuses this for a protected branch with a 422, which refuses the
-   * write rather than leaving the caller to believe it landed; the surface hides
-   * the action for those branches anyway, so this is the backstop.
+   * A branch that is already gone reports `missing`: GitHub answers a delete for
+   * an absent ref with a 422 "Reference does not exist", and that is the outcome
+   * the caller asked for, not a failure to report. A protected branch answers
+   * with a different 422, which stays an error, so the refusal is never mistaken
+   * for success.
    */
-  async deleteBranch(input: BranchTarget): Promise<void> {
-    await this.request(`${this.repoPath(input)}/git/refs/heads/${branchPath(input)}`, {
-      method: 'DELETE'
-    })
+  async deleteBranch(input: BranchTarget): Promise<BranchDeletionOutcome> {
+    try {
+      await this.request(`${this.repoPath(input)}/git/refs/heads/${branchPath(input)}`, {
+        method: 'DELETE'
+      })
+      return 'deleted'
+    } catch (failure) {
+      if (failure instanceof ProviderHttpError && isMissingRefRefusal(failure)) return 'missing'
+      throw failure
+    }
   }
 
   /** Update an open pull request's title and/or description, mirroring GitHub's edit. */

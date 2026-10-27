@@ -69,6 +69,7 @@
     participantMentionUsers
   } from './pr-mentions'
   import type {
+    BranchDeletionState,
     PrAgentReport,
     PrMergeMethod,
     PrReviewEvent,
@@ -221,13 +222,13 @@
   let resolveConfirm = $state(false)
   let branchDeleteConfirm = $state(false)
   /**
-   * Whether the merged head branch is still worth offering to delete.
-   *
-   * `checking` is the honest first state: the answer is a provider read, and until
-   * it lands the action is neither shown nor claimed to be unavailable.
+   * What the merged head branch is as far as deleting it goes. Null until the
+   * provider answers, and null again if it could not: either way nothing is
+   * offered, so a branch that may be protected or already gone never gets a
+   * button that cannot land.
    */
-  let branchState = $state<'checking' | 'deletable' | 'protected' | 'deleted'>('checking')
-  /** The pull request whose protection has already been asked for, so it is read once. */
+  let branchState = $state<BranchDeletionState | 'deleted' | null>(null)
+  /** The pull request whose branch state has already been read, so it is read once. */
   let branchStateFor = 0
   let commitTitle = $state('')
   let commitMessage = $state('')
@@ -307,6 +308,8 @@
     }
     return branchState === 'deletable'
   })
+  /** The head branch is gone, whether the reader deleted it or the merge did. */
+  const headBranchGone = $derived(branchState === 'deleted' || branchState === 'missing')
   const draft = $derived(detail?.draft ?? summary.draft)
   const hasBody = $derived(commentBody.trim().length > 0)
   /** Why merging may not be a good idea right now   shown next to the button. */
@@ -715,21 +718,23 @@
    * Only the repository's branch goes: the local checkout keeps its own copy, so
    * this can never discard commits sitting in someone's working tree. The footer
    * records the outcome rather than disappearing, so the action cannot be pressed
-   * twice for a branch that is already gone.
+   * twice for a branch that is already gone, and a branch somebody else deleted
+   * first reports that instead of an error.
    */
   async function deleteMergedBranch(): Promise<void> {
     branchDeleteConfirm = false
     const branch = summary.headRef
     if (!branch) return
-    const deleted = await gitState.deleteMergedBranch(
+    const outcome = await gitState.deleteMergedBranch(
       projectId,
       identity.owner,
       identity.repo,
       branch
     )
-    if (!deleted) return
+    if (!outcome) return
     branchState = 'deleted'
-    notice = `Branch ${branch} deleted`
+    notice =
+      outcome === 'missing' ? `Branch ${branch} was already deleted` : `Branch ${branch} deleted`
   }
 
   /**
@@ -788,9 +793,10 @@
   })
 
   /**
-   * Read the head branch's protection once per pull request, and only once it is
-   * merged: that is the only state whose footer offers to delete the branch, so a
-   * read made any earlier would be a request nobody needed.
+   * Read the head branch's deletion state once per pull request, and only once it
+   * is merged: that is the only state whose footer offers to delete the branch, so
+   * a read made any earlier would be a request nobody needed. A branch GitHub has
+   * already deleted reads `missing`, which is what keeps the action off the footer.
    */
   $effect(() => {
     const pull = number
@@ -799,10 +805,10 @@
     if (branchStateFor === pull) return
     branchStateFor = pull
     void gitState
-      .branchProtection(projectId, identity.owner, identity.repo, branch)
-      .then((isProtected) => {
+      .branchDeletionState(projectId, identity.owner, identity.repo, branch)
+      .then((state) => {
         if (branchStateFor !== pull) return
-        branchState = isProtected ? 'protected' : 'deletable'
+        branchState = state
       })
   })
 
@@ -1449,7 +1455,7 @@
         <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
           <CioMerge size={10} class="shrink-0" />
           <span class="truncate">
-            {branchState === 'deleted' ? 'Merged · branch deleted' : 'Merged'}
+            {headBranchGone ? 'Merged · branch deleted' : 'Merged'}
           </span>
         </span>
         <span class="flex-1"></span>
