@@ -185,6 +185,42 @@ function titleDrift(frames) {
   return findings
 }
 
+/* The spine is a fixed column, so the one thing it can do wrong is hold more
+ * width than its content needs: that dead space lands right before the rule and
+ * reads as a gap nobody accounted for. It is measured from the children, not
+ * from scrollWidth, which clamps to the column and would hide exactly the gap
+ * this check exists to find. */
+function spineFill(frames) {
+  const rows = []
+  for (const frame of frames) {
+    const spine = frame.querySelector('.zone.left.spine')
+    if (!spine) continue
+    const spineRect = rectOf(spine)
+    const children = [...spine.children].filter((child) => rectOf(child).width > 0)
+    if (children.length === 0) continue
+    const contentEnd = Math.max(...children.map((child) => rectOf(child).right))
+    const contentStart = Math.min(...children.map((child) => rectOf(child).left))
+    const column = Math.round(spineRect.width)
+    const content = Math.round(contentEnd - contentStart)
+    const brand = spine.querySelector('.brand span')
+    const truncated = brand ? brand.scrollWidth > brand.clientWidth + 1 : false
+    const platform = (frame.className.match(/os-[a-z-]+/) ?? [''])[0]
+    const width = frame.classList.contains('narrow') || frame.closest('.stack.narrow') ? 'narrow' : 'full'
+    const parts = children
+      .map((child) => `${child.className.split(' ')[0]}=${Math.round(rectOf(child).width)}`)
+      .join('+')
+    rows.push({
+      parts,
+      key: `${platform} ${width}`,
+      column,
+      content,
+      slack: column - content,
+      truncated
+    })
+  }
+  return rows
+}
+
 function run() {
   const report = document.createElement('section')
   report.className = 'section'
@@ -239,6 +275,34 @@ function run() {
     }
   }
 
+  const fill = spineFill(frames)
+  const unique = fill.filter((row, index) => fill.findIndex((other) => other.key === row.key) === index)
+  const fillLine =
+    unique.length === 0
+      ? 'no spine on this screen'
+      : unique
+          .map(
+            (row) =>
+              `${row.key}: column ${row.column}px · content ${row.content}px [${row.parts}] · dead ${row.slack}px${
+                row.truncated ? ' · wordmark truncated' : ''
+              }`
+          )
+          .join('\n')
+
+  /* The column may not hold more than 8px the content does not use, and it may
+     never truncate the wordmark: both are the same failure seen from either
+     side of a gap. */
+  const worstSlack = unique.reduce((max, row) => Math.max(max, row.slack), 0)
+  const truncates = unique.some((row) => row.truncated)
+  const fillVerdict =
+    unique.length === 0
+      ? 'none'
+      : truncates
+        ? 'wordmark truncated'
+        : worstSlack > 8
+          ? `${worstSlack}px dead space`
+          : 'fitted'
+
   const drift = titleDrift(frames)
   const driftLine =
     drift.length === 0
@@ -247,7 +311,7 @@ function run() {
 
   report.innerHTML = `<div class="section-head"><h2>Title stability</h2><span class="meta">${
     drift.length === 0 ? 'no drift' : `${drift.length} drifting`
-  }</span></div><pre class="check-log">${driftLine}</pre><div class="section-head"><h2>Flush edges</h2><span class="meta">${
+  }</span></div><pre class="check-log">${driftLine}</pre><div class="section-head"><h2>Spine fill</h2><span class="meta">${fillVerdict}</span></div><pre class="check-log">${fillLine}</pre><div class="section-head"><h2>Flush edges</h2><span class="meta">${
     slack.length === 0 ? 'every bar reaches the window edge' : `${slack.length} with slack`
   }</span></div><pre class="check-log">${
     slack.length === 0 ? 'flush · no gap beyond the OS reservation' : slack.join('\n')

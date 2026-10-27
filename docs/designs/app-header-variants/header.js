@@ -115,10 +115,15 @@ function gitChipMarkup() {
    column of fixed width. One separator marks where the column ends; nothing
    inside it is divided, because it reads as one block of chrome. */
 function spineMarkup(platform, options) {
+  /* Three boxes, in order: the identity (natural width, so the column fits the
+     name the platform actually shows), the navigation pair, and the view's
+     actions in a slot that always reserves room for three. That reservation is
+     what keeps the column's width fixed while the actions change, and it is the
+     only width in the spine that is fixed, so nothing in it is ever empty. */
   return [
     brandMarkup(platform, options),
     navigationMarkup(),
-    variantActions(options)
+    `<span class="spine-actions">${variantActions(options)}</span>`
   ].join('')
 }
 

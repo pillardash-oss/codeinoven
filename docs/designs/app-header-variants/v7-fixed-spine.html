@@ -36,8 +36,9 @@
           <p>
             One column of chrome on the leading edge: mark, name, back and forward, then the view's
             own actions. A single rule closes it, and the thread title starts exactly there. The
-            column has a fixed width, so a view that registers one action and a view that registers
-            three put the title on the same pixel.
+            action slot reserves room for three buttons whatever the view registers, and that is the
+            only fixed width in the column, so a view with one action and a view with three put the
+            title on the same pixel without leaving a gap in front of the rule.
           </p>
         </div>
         <aside class="intro-aside">
@@ -81,10 +82,11 @@
           <span class="meta">one action, three actions, idle</span>
         </div>
         <p class="lede">
-          The reason the column is fixed rather than fitted: the title must not move when a view
-          registers a different number of actions, or when the thread gains a working badge. Three
-          frames below have one action, three actions and no working state, and the title starts on
-          the same pixel in all of them.
+          The reason the action slot is reserved rather than fitted: the title must not move when a
+          view registers a different number of actions, or when the thread gains a working badge.
+          Three frames below have one action, three actions and no working state, and the title
+          starts on the same pixel in all of them. The rest of the column takes its own width, so
+          macOS with a short "cio" mark carries no leftover space in front of the rule.
         </p>
         <div id="held"></div>
       </section>

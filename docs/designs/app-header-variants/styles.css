@@ -1175,19 +1175,36 @@ h1 {
    themselves are the only reservation, and they are exact. */
 
 .variant-v7 {
-  /* Wide enough for the longest identity the app ever shows ("CodeInOven"), the
-     navigation pair, and three view actions at their 28px box. One value, so a
-     view that registers a single action does not shift the title. */
-  --spine-width: 16.5rem;
+  /* The width of the view's action slot, not of the whole column: three 28px
+     boxes and their 2px gaps. A view that registers one action still reserves
+     the room for three, which is what holds the column's width, and nothing in
+     the slot is ever empty because the actions sit at its leading edge. */
+  --spine-actions: 5.5rem;
 }
 
-/* The spine owns the leading edge, so the bar spends nothing before it. */
+/* The spine takes exactly its content: the identity at the width its platform
+   actually shows, the navigation pair, and the action slot. Sizing the whole
+   column to the longest name is what left 61px of dead space before the rule on
+   macOS, where the identity is "cio". */
 .variant-v7 .zone.left.spine {
-  flex: 0 0 var(--spine-width);
-  width: var(--spine-width);
+  flex: 0 0 auto;
+  width: auto;
   justify-content: flex-start;
   gap: 0;
   overflow: visible;
+}
+
+.variant-v7 .zone.left.spine .brand {
+  flex: 0 0 auto;
+}
+
+/* Reserved, not fitted: this is the only fixed width in the spine. */
+.variant-v7 .spine-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  flex: 0 0 var(--spine-actions);
+  width: var(--spine-actions);
 }
 
 /* Only the spine's own trailing separator: one rule that says where app chrome
@@ -1254,14 +1271,10 @@ h1 {
   text-overflow: ellipsis;
 }
 
-/* The column narrows in one step below a 44rem bar, and it drops the wordmark
-   before it drops a control: the title's start point only has to be stable at a
-   given width, not identical at every width. */
+/* Below a 44rem bar the wordmark leaves and the spine narrows to the mark, the
+   navigation pair and the action slot. It is still stable at that width, which
+   is the only promise the column makes. */
 @container (max-width: 44rem) {
-  .variant-v7 {
-    --spine-width: 11.5rem;
-  }
-
   .variant-v7 .zone.left.spine .brand span,
   .variant-v7 .status,
   .variant-v7 .thread .pico {
@@ -1269,24 +1282,25 @@ h1 {
   }
 }
 
-@container (max-width: 34rem) {
-  .variant-v7 {
-    --spine-width: 9rem;
-  }
-}
-
-@container (max-width: 44rem) {
+/* The variable has to be set on a descendant, not on `.variant-v7`: a container
+   cannot query itself, so a rule that styled the frame from inside its own
+   container query would never match. */
+@container (max-width: 42rem) {
   .variant-v7 .zone.left.spine {
-    flex-basis: 9.75rem;
-    width: 9.75rem;
+    /* Two boxes and one gap: the slot narrows with the bar instead of overflowing
+       it, and the third action is reachable from the thread menu. */
+    --spine-actions: 3.625rem;
   }
 
-  .variant-v7 .zone.left.spine .slot,
-  .variant-v7 .thread .pico,
-  .variant-v7 .status {
+  .variant-v7 .spine-actions .ibtn:last-child {
+    display: none;
+  }
+
+  .variant-v7 .zone.center .thread .menu {
     display: none;
   }
 }
+
 
 /* The diagnostic report reads as a developer tool, not as part of the study. */
 .check-report {
