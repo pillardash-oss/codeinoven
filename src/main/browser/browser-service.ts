@@ -5939,6 +5939,29 @@ export class BrowserService {
       },
       { useSystemPicker: true }
     )
+    // A site asking "sign in with a passkey"   a discoverable request, `get()` with an
+    // empty `allowCredentials`   makes Electron ask the app which account to use. A
+    // request nothing answers is not refused: the ceremony never settles, the page
+    // waits on a promise that no prompt will ever resolve, and every later ceremony
+    // on that page rejects with "A request is already pending". Google's sign-in is
+    // this exact shape, and the Windows Hello prompt it raises belongs to the OS, so
+    // the page has no way back from it on its own.
+    //
+    // The app draws no account picker, so this answers the two cases it can answer
+    // honestly instead of leaving both to hang: a request offering exactly one
+    // account completes with that account, and a request that would need the user to
+    // choose is declined, which lets the site fall back to its own sign-in.
+    browserSession.on('select-webauthn-account', (_event, details, callback) => {
+      const chosen =
+        details.accounts.length === 1 ? Reflect.get(details.accounts[0], 'credentialId') : null
+      Logger.info('Browser passkey account request answered', {
+        partition,
+        relyingPartyId: details.relyingPartyId,
+        offered: details.accounts.length,
+        chosen: typeof chosen === 'string'
+      })
+      callback(typeof chosen === 'string' ? chosen : null)
+    })
     this.configuredSessions.add(partition)
     return browserSession
   }
