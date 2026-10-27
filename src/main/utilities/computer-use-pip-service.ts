@@ -207,14 +207,16 @@ export class ComputerUsePipService {
 
   /**
    * Ask for one frame because the run just did something a person would want to
-   * see. Only the tracked run may ask: two threads can drive the computer at
-   * once and this overlay shows one of them.
+   * see. Only the tracked run may ask, and only while that run is on screen: a
+   * preview the user is not looking at takes its next frame (and pays for it)
+   * when it comes back, not on every operation in the meantime.
    *
    * The request is a flag, not a capture, so a burst of operations collapses
    * into the next tick's single frame instead of one capture per operation.
    */
   private requestFrame(event: CuaOperationEvent): void {
-    if (!this.active || event.threadId !== this.ownerThreadId) return
+    if (!this.active || !this.previewVisible) return
+    if (event.threadId !== this.ownerThreadId) return
     this.frameRequested = true
   }
 
@@ -821,8 +823,8 @@ export class ComputerUsePipService {
     this.nextAttemptAt = Date.now() + RETRY_INTERVAL_MS
     // A failed frame is still owed: the retry is what ages a run that cannot be
     // photographed out of its miss budget instead of leaving it to the slow idle
-    // refresh.
-    this.frameRequested = true
+    // refresh. A hidden preview owes nothing, so it retries when it comes back.
+    this.frameRequested = this.previewVisible
   }
 
   /**
