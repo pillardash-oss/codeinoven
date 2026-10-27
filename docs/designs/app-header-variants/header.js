@@ -80,8 +80,12 @@ function navigationMarkup() {
   return `${iconButton('back', 'path')}${iconButton('forward', 'dim')}`
 }
 
-function viewActionsMarkup() {
-  return `<span class="slot">${iconButton('plus')}${iconButton('search')}${iconButton('tools')}</span>`
+/* The view's own actions, in the order the app registers them. `count` exists
+   so the study can show the spine holding its width while the group changes
+   size, which is the one promise the fixed column makes. */
+function viewActionsMarkup(count = 3) {
+  const icons = ['plus', 'search', 'tools'].slice(3 - Math.max(1, Math.min(3, count)))
+  return `<span class="slot">${icons.map((icon) => iconButton(icon)).join('')}</span>`
 }
 
 function threadMarkup(options = {}) {
@@ -107,16 +111,19 @@ function gitChipMarkup() {
   return `<span class="chip">${ICONS.branch}<span>main</span><span class="lead">3</span></span>`
 }
 
-/* The fixed spine of V7: four groups, each separated by a hairline, in a column
-   that does not change width when the thread title does. */
+/* The spine of V7: identity, back and forward, and the view's actions, in one
+   column of fixed width. One separator marks where the column ends; nothing
+   inside it is divided, because it reads as one block of chrome. */
 function spineMarkup(platform, options) {
   return [
     brandMarkup(platform, options),
-    `<span class="hair"></span>`,
     navigationMarkup(),
-    `<span class="hair"></span>`,
-    viewActionsMarkup()
+    variantActions(options)
   ].join('')
+}
+
+function variantActions(options) {
+  return viewActionsMarkup(options.actionCount ?? 3)
 }
 
 function seamed(platform, content) {
@@ -128,9 +135,6 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   const config = PLATFORMS[platform]
   const classes = ['frame', config.cls, `variant-${variant}`]
   if (width === 'narrow') classes.push('narrow')
-  /* The optional constant gutter: the same left margin on every platform, so
-     the spine and the title start on the same pixel in all four windows. */
-  if (variant === 'v7' && options.hardGutter) classes.push('hard-gutter')
 
   const left =
     variant === 'v7'
@@ -149,7 +153,7 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   } else {
     center =
       variant === 'v7'
-        ? `<div class="zone center"><span class="hair optional"></span>${threadMarkup(options)}</div>`
+        ? `<div class="zone center"><span class="spine-rule"></span>${threadMarkup(options)}</div>`
         : `<div class="zone center">${threadMarkup(options)}</div>`
   }
 

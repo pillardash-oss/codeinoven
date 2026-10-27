@@ -124,6 +124,34 @@ function geometryOf(frame) {
   }
 }
 
+/* Flush means: on the edge the window controls do not own, the bar's content
+ * reaches the window edge. Not "somewhere near it": the frame's own padding on
+ * that edge has to be zero, and the first or last control has to sit in it.
+ *
+ * Only the free edge is checked, because the reserved edge is padding by
+ * definition and measuring it says nothing. */
+function flushness(frame) {
+  const style = getComputedStyle(frame)
+  const reservedLeft = frame.classList.contains('os-mac') || frame.classList.contains('os-linux-left')
+  const freeEdge = reservedLeft ? 'right' : 'left'
+  const controls = [...frame.querySelectorAll('.zone button, .zone .chip, .zone .thread')]
+    .filter((control) => rectOf(control).width > 0)
+  if (controls.length === 0) return null
+
+  const frameRect = rectOf(frame)
+  const border = Number.parseFloat(style.borderLeftWidth) || 0
+  const padding = Number.parseFloat(
+    freeEdge === 'right' ? style.paddingRight : style.paddingLeft
+  )
+  const slack = Number.parseFloat(
+    freeEdge === 'right' ? style.paddingRight : style.paddingLeft
+  )
+  const last = Math.max(...controls.map((control) => rectOf(control).right))
+  const first = Math.min(...controls.map((control) => rectOf(control).left))
+  const actual = freeEdge === 'right' ? frameRect.right - border - last : first - frameRect.left - border
+  return { edge: freeEdge, padding: Number.isFinite(slack) ? slack : 0, actual: Math.round(actual) }
+}
+
 /* The spine's promise is that the title starts at one place regardless of what
  * the thread is called or which of its actions are present. That is a claim
  * about the source, so it is measured on the source: every frame of the same
@@ -197,6 +225,20 @@ function run() {
     return `${family}: ${loaded ? 'loaded' : 'NOT LOADED'}`
   })
 
+  /* A gap on the free edge is slack nobody asked for. Two pixels of tolerance
+     covers a sub-pixel rect, nothing more. */
+  const slack = []
+  for (const frame of frames) {
+    const flush = flushness(frame)
+    if (!flush) continue
+    const label = `${(frame.className.match(/variant-v\d/) ?? [''])[0]} ${
+      frame.closest('.frame-block')?.querySelector('.frame-label b')?.textContent ?? 'frame'
+    }`
+    if (flush.actual > 2) {
+      slack.push(`${label}: ${flush.actual}px of slack on the ${flush.edge} edge`)
+    }
+  }
+
   const drift = titleDrift(frames)
   const driftLine =
     drift.length === 0
@@ -205,7 +247,11 @@ function run() {
 
   report.innerHTML = `<div class="section-head"><h2>Title stability</h2><span class="meta">${
     drift.length === 0 ? 'no drift' : `${drift.length} drifting`
-  }</span></div><pre class="check-log">${driftLine}</pre><div class="section-head"><h2>Fonts</h2><span class="meta">the app's own bundled faces</span></div><pre class="check-log">${fonts.join('\n')}</pre><div class="section-head"><h2>Layout checks</h2><span class="meta">${
+  }</span></div><pre class="check-log">${driftLine}</pre><div class="section-head"><h2>Flush edges</h2><span class="meta">${
+    slack.length === 0 ? 'every bar reaches the window edge' : `${slack.length} with slack`
+  }</span></div><pre class="check-log">${
+    slack.length === 0 ? 'flush · no gap beyond the OS reservation' : slack.join('\n')
+  }</pre><div class="section-head"><h2>Fonts</h2><span class="meta">the app's own bundled faces</span></div><pre class="check-log">${fonts.join('\n')}</pre><div class="section-head"><h2>Layout checks</h2><span class="meta">${
     frames.length
   } frames · ${failures} failing</span></div><pre class="check-log">${lines.join('\n')}</pre><div class="section-head"><h2>Zone geometry</h2><span class="meta">percent of bar width</span></div><pre class="check-log">${geometry.join('\n')}</pre>`
   /* The report goes first: a snapshot of a tall page is capped, and the counts

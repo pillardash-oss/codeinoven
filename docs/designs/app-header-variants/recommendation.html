@@ -98,10 +98,11 @@
           <span class="meta">fixed column, title follows it</span>
         </div>
         <p class="lede">
-          A fixed 18.5rem column holds identity, back and forward, and the view's actions, with a
-          hairline between each group. The title starts where the column ends and truncates there.
-          Nothing in the measure moves when the thread's actions or status change, which is
-          measured: every state in every frame puts the title on the same pixel.
+          A fixed 16.5rem column holds the mark, the name, back and forward, and the view's actions,
+          closed by one rule. The title starts where the column ends and truncates there. Nothing in
+          the measure moves when the thread's actions or status change, which is measured: every
+          state in every frame puts the title on the same pixel. Both edges are flush: only the OS
+          zone is reserved, never a decorative gutter.
         </p>
         <div class="frames" id="spine"></div>
       </section>
@@ -205,8 +206,8 @@
       document.querySelector('#spine').innerHTML = [
         window.CIOHeader.block({ platform: 'mac', variant: 'v7' }),
         window.CIOHeader.block({ platform: 'win', variant: 'v7' }),
-        window.CIOHeader.block({ platform: 'mac', variant: 'v7', options: { hardGutter: true } }),
-        window.CIOHeader.block({ platform: 'win', variant: 'v7', options: { hardGutter: true } })
+        window.CIOHeader.block({ platform: 'linux-left', variant: 'v7' }),
+        window.CIOHeader.block({ platform: 'mac', variant: 'v7', options: { actionCount: 1 } })
       ].join('')
     </script>
       <script src="./checks.js"></script>

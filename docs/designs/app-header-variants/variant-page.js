@@ -89,17 +89,26 @@ function build() {
   const widths = document.querySelector('#widths')
   if (widths) widths.replaceWith(framesForWidths(variant, options))
 
-  /* The spine's second arrangement: the same column behind one constant gutter
-     on every platform. Its own frames rather than a toggle, so the two are
-     comparable side by side on the canvas. */
-  const hard = document.querySelector('#hard')
-  if (hard) {
+  /* The spine's promise: the column holds its width whatever the view registers
+     as its actions, so the title starts on the same pixel for one action, two
+     or three. Rendered as its own frames so the claim is visible rather than
+     asserted. */
+  const held = document.querySelector('#held')
+  if (held) {
     const host = document.createElement('div')
     host.className = 'frames'
-    host.innerHTML = PLATFORMS.map((platform) =>
-      window.CIOHeader.block({ platform, variant, options: { ...options, hardGutter: true } })
-    ).join('')
-    hard.replaceWith(host)
+    host.innerHTML = [
+      window.CIOHeader.block({ platform: 'mac', variant, options: { ...options, actionCount: 1 } }),
+      window.CIOHeader.block({ platform: 'mac', variant, options: { ...options, actionCount: 3 } }),
+      window.CIOHeader.block({
+        platform: 'mac',
+        variant,
+        options: { ...options, actionCount: 1, working: false, dots: false }
+      }),
+      window.CIOHeader.block({ platform: 'win', variant, options: { ...options, actionCount: 1 } }),
+      window.CIOHeader.block({ platform: 'win', variant, options: { ...options, actionCount: 3 } })
+    ].join('')
+    held.replaceWith(host)
   }
 
   const statesHost = document.querySelector('#states')

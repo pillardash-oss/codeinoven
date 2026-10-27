@@ -662,7 +662,7 @@ h1 {
    within 4px of a seam. */
 
 .variant-v1 .zone.right {
-  padding-right: 0.25rem;
+  padding-right: 0;
 }
 
 .variant-v1 .zone.center {
@@ -704,7 +704,7 @@ h1 {
 }
 
 .variant-v2 .zone.right {
-  padding-right: 0.25rem;
+  padding-right: 0;
 }
 
 /* V3 · The rail owns the actions ──────────────────────────────────────────
@@ -737,7 +737,7 @@ h1 {
 
 .variant-v4 .zone.right {
   flex: 0 1 auto;
-  padding-right: 0.25rem;
+  padding-right: 0;
 }
 
 .cmd {
@@ -854,7 +854,7 @@ h1 {
 
 .variant-v6 .zone.right {
   flex: 0 1 auto;
-  padding-right: 0.25rem;
+  padding-right: 0;
 }
 
 .ladder {
@@ -1159,52 +1159,92 @@ h1 {
 }
 
 /* ─── V7 · Fixed spine ─────────────────────────────────────────────────────
-   One fixed-width column on the left holds identity, navigation and the view's
-   actions, each group separated by a hairline, and the thread title is aligned
-   left after it instead of floating in the centre. Because the column is fixed,
-   the title starts on the same pixel no matter what the thread is called.
+   One column of chrome, fixed width, flush against the edge the OS left free:
 
-   Two ways to place that column against the window controls:
+     [mark] [cio] [back] [forward] [view actions] │ [title] · type · chips ⟶  [spec] [notes] [bell]
 
-   natural  the column starts where the OS zone ends, so the bar's first pixel
-            is the identity mark on macOS and a caption gutter on Windows;
-   hard     the column starts at one constant inset (--spine-gutter) on every
-            platform, with the OS zone allowed to overlap nothing: the macOS
-            lights sit inside the column's leading gap, and on Windows, where
-            the captions are on the other edge, that same gutter is simply
-            margin, so identity lands on the same pixel everywhere.
+   The last separator is the spine: everything left of it is app chrome at a
+   width that never changes, so the title always starts on the same pixel. It
+   does not matter whether the view registers one action or three; the column
+   holds its width and the title does not move.
 
-   The hard gutter is the only variant in this study that makes the horizontal
-   position of our content identical on every platform. It costs 138px of bar on
-   Windows and Linux, which is where the trade sits. */
+   Flush is part of the design, not a detail. Whichever edge the window controls
+   do not own is ours end to end: no trailing gutter on macOS, none on Windows or
+   Linux-right, because a bar that floats 4px off its own window edge reads as a
+   panel inside a frame rather than as the window's title bar. The OS zones
+   themselves are the only reservation, and they are exact. */
 
 .variant-v7 {
-  --spine-width: 18.5rem;
-  /* The caption overlay's own width. It is the smallest constant inset the
-     Linux-left case allows, so it is the one value that works everywhere. */
-  --spine-gutter: 8.625rem;
+  /* Wide enough for the longest identity the app ever shows ("CodeInOven"), the
+     navigation pair, and three view actions at their 28px box. One value, so a
+     view that registers a single action does not shift the title. */
+  --spine-width: 16.5rem;
 }
 
-.variant-v7.hard-gutter {
-  padding-left: var(--spine-gutter);
-}
-
-/* The gutter is exactly the caption overlay's width, which is the smallest
-   constant that clears a left-side Linux cluster; everywhere else it is simply
-   margin, and the traffic lights sit inside it. */
-.variant-v7.hard-gutter.os-linux-left {
-  padding-left: max(var(--spine-gutter), var(--os-left));
-}
-
+/* The spine owns the leading edge, so the bar spends nothing before it. */
 .variant-v7 .zone.left.spine {
   flex: 0 0 var(--spine-width);
   width: var(--spine-width);
   justify-content: flex-start;
-  gap: 0.25rem;
+  gap: 0;
+  overflow: visible;
 }
 
-/* The column is fixed, so the wordmark inside it is the one thing that can give:
-   "CodeInOven" truncates before the column or the title moves. */
+/* Only the spine's own trailing separator: one rule that says where app chrome
+   ends and the open thread begins. */
+.variant-v7 .spine-rule {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--color-border);
+  flex: none;
+  margin: 0 0.625rem 0 0.5rem;
+}
+
+/* Everything after the spine is left-aligned and takes whatever is left. */
+.variant-v7 .zone.center {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  max-width: none;
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 0;
+}
+
+.variant-v7 .zone.center .thread {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* The title is the bar's elastic part: it takes the room the spine leaves and
+   truncates there, so a long name never reaches the trailing controls. */
+.variant-v7 .thread h1 {
+  max-width: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+/* The trailing pair never shrinks and never floats: it ends at the window edge
+   on every platform where the captions are not there, and at the caption zone
+   where they are. */
+.variant-v7 .zone.right {
+  flex: 0 0 auto;
+  padding-right: 0;
+}
+
+/* The trailing controls are their own group, so the last icon's own box ends at
+   the window edge. This is the one rule the other variants break by leaving a
+   4px gutter, and the checker reports it as slack when it does. */
+.variant-v7 .zone.right .slot {
+  padding-right: 0;
+}
+
+/* Inside the spine the wordmark is the only thing that can give when the bar is
+   narrow, so "CodeInOven" truncates rather than the column or the title. */
 .variant-v7 .zone.left.spine .brand {
   min-width: 0;
 }
@@ -1214,90 +1254,24 @@ h1 {
   text-overflow: ellipsis;
 }
 
-.variant-v7 .zone.center {
-  flex: 1 1 auto;
-  justify-content: flex-start;
-  max-width: none;
-  min-width: 0;
-  overflow: hidden;
-  padding-left: 0.25rem;
-}
-
-.variant-v7 .zone.center .thread {
-  flex: 0 1 auto;
-  max-width: 100%;
-}
-
-/* The trailing pair never shrinks: the title is the flexible part, so a narrow
-   bar truncates the name instead of squeezing Spec and the bell. */
-.variant-v7 .zone.right {
-  flex: 0 0 auto;
-  padding-right: 0.25rem;
-}
-
-/* The title is the flexible part of the spine's row: it takes the space the
-   column leaves and truncates there, so a long thread name never reaches the
-   spec action on the other side of the bar. */
-.variant-v7 .thread h1 {
-  max-width: none;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.hair {
-  width: 1px;
-  height: 1.125rem;
-  background: var(--color-border);
-  flex: none;
-}
-
-/* The title reads as the page's own heading once it is left-aligned: one step
-   louder than the chrome around it, which is what makes the spine legible as a
-   spine rather than as a row of stray buttons. */
-.variant-v7 .thread h1 {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-}
-
-/* The column narrows in two steps, and only then does the view's action group
-   leave it, because the column is the one thing in this bar that must not be
-   elastic: shrinking it is cheaper than letting the title jump when a thread's
-   actions change. */
-@container (max-width: 60rem) {
-  .variant-v7 .zone.left.spine {
-    flex-basis: 13rem;
-    width: 13rem;
+/* The column narrows in one step below a 44rem bar, and it drops the wordmark
+   before it drops a control: the title's start point only has to be stable at a
+   given width, not identical at every width. */
+@container (max-width: 44rem) {
+  .variant-v7 {
+    --spine-width: 11.5rem;
   }
-}
 
-/* Below 46rem the bar is down to identity, title, spec and the global pair: the
-   thread's status badge is detail the thread list already carries. */
-@container (max-width: 52rem) {
-  .variant-v7 .zone.left.spine {
-    flex-basis: 12rem;
-    width: 12rem;
-  }
-}
-
-@container (max-width: 46rem) {
+  .variant-v7 .zone.left.spine .brand span,
   .variant-v7 .status,
-  .variant-v7 .thread .menu,
-  .variant-v7 .hair.optional {
+  .variant-v7 .thread .pico {
     display: none;
   }
 }
 
-@container (max-width: 40rem) {
-  .variant-v7 .zone.left.spine {
-    flex-basis: 8.5rem;
-    width: 8.5rem;
-  }
-
-  .variant-v7 .zone.left.spine .slot {
-    display: none;
+@container (max-width: 34rem) {
+  .variant-v7 {
+    --spine-width: 9rem;
   }
 }
 
@@ -1308,10 +1282,6 @@ h1 {
   }
 
   .variant-v7 .zone.left.spine .slot,
-  .variant-v7 .hair.optional {
-    display: none;
-  }
-
   .variant-v7 .thread .pico,
   .variant-v7 .status {
     display: none;

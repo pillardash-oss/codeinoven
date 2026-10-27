@@ -34,17 +34,17 @@
           <div class="eyebrow">Variant 7</div>
           <h1>V7 · Fixed spine</h1>
           <p>
-            One fixed-width column holds identity, back and forward, and the view's actions, each
-            group separated by a hairline. The thread title follows the column, aligned left
-            instead of floating in the middle. The column never changes width when the title does,
-            so the title starts on the same pixel for every thread.
+            One column of chrome on the leading edge: mark, name, back and forward, then the view's
+            own actions. A single rule closes it, and the thread title starts exactly there. The
+            column has a fixed width, so a view that registers one action and a view that registers
+            three put the title on the same pixel.
           </p>
         </div>
         <aside class="intro-aside">
-          <strong>Trade</strong>
-          Left alignment is what makes the bar readable at a glance: everything the app is doing
-          reads from one edge, and the right edge is only chrome. It costs a fixed 17rem before the
-          title on every view, which is real space for a long thread name.
+          <strong>Flush, both edges</strong>
+          The bar runs to the window edge the OS left free, with no trailing gutter. macOS is flush
+          right, Windows and Linux-right are flush left, and only the OS zone itself is reserved.
+          A 4px float off your own window edge reads as a panel inside a frame, not as a title bar.
         </aside>
       </section>
 
@@ -62,13 +62,14 @@
 
       <section class="section">
         <div class="section-head">
-          <h2>Natural gutter</h2>
-          <span class="meta">spine starts where the OS zone ends</span>
+          <h2>Four window geometries</h2>
+          <span class="meta">flush, and the column never moves</span>
         </div>
         <p class="lede">
-          The column begins immediately after the window controls, so on macOS it starts at 80px and
-          on Windows and Linux at 0 or 138px depending on which edge owns the captions. Inside the
-          column, nothing ever moves.
+          macOS reserves 80px for its traffic lights and the bar is flush to the right edge. Windows
+          reserves 138px for its captions and the bar is flush to the left edge. A Linux desktop gets
+          either, following gtk-decoration-layout, and the spine is flush against whichever edge is
+          free. Nothing is added beyond the reservation itself.
         </p>
         <div id="widths"></div>
         <div id="rulers"></div>
@@ -76,18 +77,16 @@
 
       <section class="section">
         <div class="section-head">
-          <h2>Hard gutter</h2>
-          <span class="meta">one constant inset, all four windows</span>
+          <h2>The width is held</h2>
+          <span class="meta">one action, three actions, idle</span>
         </div>
         <p class="lede">
-          The same column, preceded by one constant 138px gutter on every platform: the width of a
-          native caption cluster, which is the smallest constant that also clears a Linux desktop
-          that puts close on the left. This is the only arrangement in the study where the identity
-          mark and the title start on the identical pixel in all four windows. On macOS the traffic
-          lights sit inside the gutter, and on Windows it is plain margin, since the captions are on
-          the other edge.
+          The reason the column is fixed rather than fitted: the title must not move when a view
+          registers a different number of actions, or when the thread gains a working badge. Three
+          frames below have one action, three actions and no working state, and the title starts on
+          the same pixel in all of them.
         </p>
-        <div id="hard"></div>
+        <div id="held"></div>
       </section>
 
       <div id="states"></div>
