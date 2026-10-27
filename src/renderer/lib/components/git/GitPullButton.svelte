@@ -114,9 +114,9 @@
         -->
         <DropdownMenu.Item class={itemClass} onSelect={onAskEveryPull}>
           <span class="flex min-w-0 flex-1 flex-col">
-            <span class="truncate">Ask me each pull</span>
+            <span class="truncate">Ask every time</span>
             <span class="truncate text-[0.5625rem] text-dimmed">
-              Choose the strategy when you pull, without saving it.
+              The same preference Settings offers: choose the strategy as you pull.
             </span>
           </span>
           {#if preference === 'ask'}
