@@ -41,6 +41,12 @@ class LayoutPanelState {
    */
   conversationLeft = $state(0)
   /**
+   * The conversation page's own width, in pixels. The thread's name is as wide as
+   * the page a reader is looking at and no wider: a title that ran past the text
+   * column would be a line the reader cannot finish.
+   */
+  conversationWidth = $state(0)
+  /**
    * Whether the workspace shell is the page on screen. The shell stays mounted
    * across views so returning to a thread never reloads it, which means a
    * conversation that is not being looked at still has a position: the header

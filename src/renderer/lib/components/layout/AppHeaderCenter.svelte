@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import { slide } from 'svelte/transition'
   import { toast } from 'svelte-sonner'
@@ -39,9 +40,17 @@
     threadActionsMenu: ReturnType<typeof createThreadActionsMenu>
     /** Distance from the chrome's end to the conversation column's left edge. */
     titleInset?: number
+    /** The conversation page's width: the thread's name truncates at its edge. */
+    titleMaxWidth?: number
   }
 
-  let { activeView, chatMode, threadActionsMenu, titleInset = 0 }: Props = $props()
+  let {
+    activeView,
+    chatMode,
+    threadActionsMenu,
+    titleInset = 0,
+    titleMaxWidth = 0
+  }: Props = $props()
 
   const viewLabels: Record<string, string> = {
     projects: 'Projects',
@@ -128,7 +137,10 @@
     {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
     <!-- The block is as wide as the room the bar leaves it, so a long thread name
          uses the whole column before it gives up any of itself. -->
-    <div class="titlebar-no-drag relative flex min-w-0 items-center gap-2">
+    <div
+      class="titlebar-no-drag relative flex min-w-0 items-center gap-2"
+      style:max-width={titleMaxWidth > 0 ? `${titleMaxWidth}px` : undefined}
+    >
       {#if thread.projectId === ASSISTANT_SPACE_ID}
         <!-- An assistant thread wears its assistant's icon, exactly as its sidebar
              row does, so the header names the assistant at a glance. A
@@ -147,6 +159,19 @@
                 : 'var(--color-muted)'}"
             />
           {/if}
+        </span>
+      {:else if chatMode || thread.projectId === INBOX_PROJECT_ID}
+        <!-- A chat thread has no project, but it still wears a mark in the same
+             place and at the same size as one, so the bar reads the same whichever
+             kind of thread is open. -->
+        <span
+          class="flex shrink-0 items-center justify-center text-muted transition-[height,width] duration-200 ease-out {isWorking
+            ? 'h-6 w-6'
+            : 'h-4 w-4'}"
+          title="Chat"
+          aria-hidden="true"
+        >
+          <CioMessage class="h-full w-full" />
         </span>
       {:else if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
         {@const headerProject =

@@ -27,15 +27,20 @@
       /* The column's own padding is inside its box, and the text starts after it:
          aligning the header to the box edge leaves the title a few pixels left of
          the line the messages start on. */
-      const padding = Number.parseFloat(getComputedStyle(element).paddingLeft) || 0
+      const styles = getComputedStyle(element)
+      const padding = Number.parseFloat(styles.paddingLeft) || 0
+      const paddingRight = Number.parseFloat(styles.paddingRight) || 0
       /* A conversation the reader cannot see has a position but not a meaning:
          reporting it would align the header to a page nobody is looking at. */
       const onScreen =
         element.getClientRects().length > 0 &&
         getComputedStyle(element).visibility !== 'hidden'
+      const box = element.getBoundingClientRect()
       layoutPanelState.conversationLeft =
+        onScreen && layoutPanelState.contentVisible ? Math.round(box.left + padding) : 0
+      layoutPanelState.conversationWidth =
         onScreen && layoutPanelState.contentVisible
-          ? Math.round(element.getBoundingClientRect().left + padding)
+          ? Math.round(box.width - padding - paddingRight)
           : 0
     }
     reportConversationColumnNow = report
@@ -54,6 +59,7 @@
       window.removeEventListener('resize', report)
       if (reportConversationColumnNow === report) reportConversationColumnNow = null
       layoutPanelState.conversationLeft = 0
+      layoutPanelState.conversationWidth = 0
     }
   }
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'

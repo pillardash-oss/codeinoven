@@ -121,6 +121,15 @@
     return Math.max(0, Math.round(contentLeft - chromeEnd))
   })
 
+  /** The page's own width, less the distance the block had to move to reach it:
+   *  the thread's name never runs wider than the text the reader is reading. */
+  let titleMaxWidth = $derived.by(() => {
+    if (!layoutPanelState.contentVisible) return 0
+    const width = layoutPanelState.conversationWidth
+    if (width <= 0) return 0
+    return Math.max(0, width - titleInset)
+  })
+
   /** A checkout and a probe run the same source, so the one thing that tells
    *  them apart is where their data lives. The header says which this is, and a
    *  shipped build says nothing at all. */
@@ -399,7 +408,13 @@
       <AppHeaderBrowserCenter />
     {/await}
   {:else}
-    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} />
+    <AppHeaderCenter
+      {activeView}
+      {chatMode}
+      {threadActionsMenu}
+      {titleInset}
+      {titleMaxWidth}
+    />
   {/if}
 
   <AppHeaderThreadModals menu={threadActionsMenu} />
