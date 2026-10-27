@@ -303,8 +303,10 @@ h1 {
   padding-right: var(--os-right, 0px);
   overflow: hidden;
   /* A bar is its own container: the anchored centre of V2 is handed back to the
-     flex row by how wide the bar is, not by how wide the window is. */
-  container-type: inline-size;
+     flex row by how wide the bar is, not by how wide the window is. It is named,
+     because the spine inside it is a container too and its queries must not
+     borrow the bar's width. */
+  container: bar / inline-size;
 }
 
 .frame.narrow {
@@ -690,7 +692,7 @@ h1 {
   flex: 1 1 0;
 }
 
-@container (min-width: 56rem) {
+@container bar (min-width: 56rem) {
   .variant-v2 .zone.center {
     position: absolute;
     left: 50%;
@@ -1095,7 +1097,7 @@ h1 {
    The queries are on the frame, not the window, because the frame is what has
    the width: a 40rem-wide window still holds a full 40rem bar. */
 
-@container (max-width: 52rem) {
+@container bar (max-width: 52rem) {
   .zone.left .slot,
   .chip {
     display: none;
@@ -1106,7 +1108,7 @@ h1 {
   }
 }
 
-@container (max-width: 44rem) {
+@container bar (max-width: 44rem) {
   .frame .thread h1,
   .thread h1 {
     max-width: 8rem;
@@ -1126,7 +1128,7 @@ h1 {
   }
 }
 
-@container (max-width: 34rem) {
+@container bar (max-width: 34rem) {
   .brand span {
     display: none;
   }
@@ -1274,9 +1276,10 @@ h1 {
 /* Below a 44rem bar the wordmark leaves and the spine narrows to the mark, the
    navigation pair and the action slot. It is still stable at that width, which
    is the only promise the column makes. */
-@container (max-width: 44rem) {
-  :is(.variant-v7, .variant-v8) .zone.left.spine .brand span,
+@container bar (max-width: 44rem) {
+  :is(.variant-v7, .variant-v8):not(.panel-mode) .zone.left.spine .brand span,
   :is(.variant-v7, .variant-v8) .status,
+  .variant-v8 .under-status,
   :is(.variant-v7, .variant-v8) .thread .pico {
     display: none;
   }
@@ -1285,7 +1288,7 @@ h1 {
 /* The variable has to be set on a descendant, not on `.variant-v7`: a container
    cannot query itself, so a rule that styled the frame from inside its own
    container query would never match. */
-@container (max-width: 42rem) {
+@container bar (max-width: 42rem) {
   :is(.variant-v7, .variant-v8) .zone.left.spine {
     /* Two boxes and one gap: the slot narrows with the bar instead of overflowing
        it, and the third action is reachable from the thread menu. */
@@ -1327,9 +1330,10 @@ h1 {
    owns its whole row: the name on top, the state underneath, so neither pushes
    the other sideways.
 
-   The identity leaves too. The mark and the wordmark move to the left rail,
-   where the app's own utility group already lives, so the header starts with
-   navigation and the spine gets 108px (the wordmark's corner) back. */
+   The identity stays where it is. Windows and Linux have no menu bar naming the
+   app, and on macOS the mark is what sits beside the traffic lights, so the bar
+   keeps it on all four platform geometries; the rail keeps exactly the utilities
+   it has today. */
 
 .variant-v8 .thread.stacked {
   align-items: center;
@@ -1409,6 +1413,11 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 0.5625rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1552,4 +1561,272 @@ h1 {
   position: static;
   box-shadow: none;
   width: 13rem;
+}
+
+
+/* ─── V8 · The rule follows the panel ──────────────────────────────────────
+   The bar's leading cluster is not sized to its content any more: it is the
+   thread panel, and its last pixel is the panel's edge. The rule that closes the
+   cluster runs on down the panel's own border, so the header and the body share
+   one continuous line that moves with the panel instead of floating in the
+   middle of the window.
+
+     rail │ [mark] CodeInOven  back forward actions │  Repair header…      spec ⌘
+          │ ├───────────── panel edge ──────────────┴──────────────────────────
+          │ │ Threads                               │ conversation
+          │ │ ● Repair header collision under…      │
+
+   The wordmark is the bar's elastic part: as the panel narrows it truncates with
+   an ellipsis, and the width where only the mark survives is the panel's floor.
+   The app's own sidebar runs 200 to 420px, and 200 is exactly where the wordmark
+   runs out with three view actions beside it, which is why the floor is real
+   rather than declared. */
+
+.window.panel-window {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  /* A window has a minimum size, and this one's is where the panel column and
+     the trailing controls still leave the title a line. Below it the demo
+     scrolls rather than pretending a 400px window is a window. */
+  min-width: 46rem;
+  height: 15rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+/* The bar is the window's title bar here, so it loses its own frame. It spans
+   the whole window, rail included, which is the room the column gets back. */
+.panel-window > .frame {
+  flex: 0 0 3rem;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.panel-body {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.panel {
+  flex: 0 0 var(--panel-width, 20rem);
+  width: var(--panel-width, 20rem);
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.375rem 0;
+  background: var(--color-surface);
+}
+
+/* The panel's edge is drawn by the column beside it, so the pixel the bar's rule
+   occupies is the pixel this border occupies: one line, not two that nearly
+   meet. */
+.content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  background: var(--color-app);
+  border-left: 1px solid var(--color-border);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.625rem 0.375rem;
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-dimmed);
+}
+
+.panel-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.0625rem;
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.5rem;
+  padding: 0 0.625rem;
+  color: var(--color-muted);
+  font-size: 0.625rem;
+  min-width: 0;
+}
+
+.panel-row.on {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.panel-dot {
+  width: 0.25rem;
+  height: 0.25rem;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+  flex: none;
+}
+
+.panel-row.on .panel-dot {
+  background: var(--color-info);
+  opacity: 1;
+}
+
+.panel-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The cluster is the panel: minus the OS reservation, because the bar is padded
+   by the window controls and the panel below is not. */
+/* A named container of its own, so the fold below is driven by the room the
+   column actually has rather than by the window's width. */
+.variant-v8.panel-mode .zone.left.spine {
+  flex: 0 0 calc(2.5rem + var(--panel-width, 20rem) - var(--os-left, 0px));
+  width: calc(2.5rem + var(--panel-width, 20rem) - var(--os-left, 0px));
+  min-width: 0;
+  overflow: hidden;
+  container: spine / inline-size;
+}
+
+/* The wordmark gives way first, and it gives way down to the mark and no
+   further: the mark, the navigation and whatever actions still fit are what sets
+   the panel's floor. */
+.variant-v8.panel-mode .zone.left.spine .brand {
+  flex: 0 1 auto;
+  min-width: 1.75rem;
+}
+
+.variant-v8.panel-mode .zone.left.spine .brand span {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.variant-v8.panel-mode .zone.left.spine .spine-actions {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+/* The fold: the identity truncates first because it is the only thing that
+   shrinks, and the actions give way one at a time once the wordmark is down to
+   the mark. Nothing is ever clipped, and the last action is still one right
+   click away in the thread's menu. */
+/* Below this the wordmark has nothing worth showing: a letter and an ellipsis
+   read as damage, so the identity becomes the mark alone, which is the floor the
+   panel is allowed to shrink to. */
+@container spine (max-width: 11rem) {
+  .variant-v8.panel-mode .zone.left.spine .brand span {
+    display: none;
+  }
+}
+
+@container spine (max-width: 11.5rem) {
+  .variant-v8.panel-mode .spine-actions .ibtn:nth-child(3) {
+    display: none;
+  }
+}
+
+@container spine (max-width: 9.5rem) {
+  .variant-v8.panel-mode .spine-actions .ibtn:nth-child(2) {
+    display: none;
+  }
+}
+
+@container spine (max-width: 7.75rem) {
+  .variant-v8.panel-mode .spine-actions {
+    display: none;
+  }
+}
+
+/* One line: the rule starts exactly at the cluster's edge, which is the panel's
+   edge, and the content column's border continues it. */
+.variant-v8.panel-mode .zone.center .spine-rule {
+  margin-left: 0;
+  height: 100%;
+}
+
+/* The live control the screen is driven by. */
+.panel-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-bottom: 0;
+  background: var(--color-elevated);
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+.panel-controls label {
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.5625rem;
+  color: var(--color-dimmed);
+}
+
+.panel-controls output {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-foreground);
+  min-width: 3.25rem;
+}
+
+.panel-controls input[type='range'] {
+  width: 12rem;
+  accent-color: var(--color-accent);
+}
+
+.panel-controls .panel-state {
+  margin-left: auto;
+  color: var(--color-muted);
+}
+
+.panel-controls .panel-state strong {
+  color: var(--color-foreground);
+  font-weight: 600;
+}
+
+.panel-stage {
+  margin-bottom: 1rem;
+}
+
+.panel-stage .panel-windows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  overflow-x: auto;
+}
+
+/* The panel frames hold a whole window, so a page narrower than one scrolls
+   them instead of squeezing a bar past the point where it is a bar. */
+.frames {
+  overflow-x: auto;
+}
+
+/* The older conclusion stays readable, but it must not read as the current one. */
+.superseded {
+  border-left: 2px solid var(--color-accent);
+  padding-left: 0.75rem;
+}
+
+.superseded a {
+  color: var(--color-foreground);
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
 }

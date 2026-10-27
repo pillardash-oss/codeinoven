@@ -226,6 +226,69 @@ function spineFill(frames) {
   return rows
 }
 
+/* A panel-aligned bar: the column is the thread panel, so the two things worth
+ * measuring are whether the rule still lands on the panel's edge and where the
+ * wordmark has got to. Column width against content is not a question here. */
+function panelAlignment(frames) {
+  const rows = []
+  let failures = 0
+  for (const frame of frames) {
+    if (!frame.classList.contains('panel-mode')) continue
+    const windowElement = frame.closest('.panel-window')
+    if (!windowElement) continue
+    const panel = windowElement.querySelector('.panel')
+    const content = windowElement.querySelector('.content')
+    const rule = frame.querySelector('.zone.center .spine-rule')
+    const brand = frame.querySelector('.zone.left.spine .brand span')
+    if (!panel || !content || !rule) continue
+
+    const problems = []
+    const ruleLeft = rectOf(rule).left
+    const panelRight = rectOf(panel).right
+    const contentLeft = rectOf(content).left
+    if (Math.abs(panelRight - ruleLeft) > 1) {
+      problems.push(`rule is ${Math.round(ruleLeft - panelRight)}px off the panel edge`)
+    }
+    if (Math.abs(contentLeft - ruleLeft) > 1) {
+      problems.push(`the panel's border starts ${Math.round(contentLeft - ruleLeft)}px off the rule`)
+    }
+
+    const platform = (frame.className.match(/os-[a-z-]+/) ?? [''])[0]
+    const width = Math.round(Number(getComputedStyle(windowElement).getPropertyValue('--panel-width').replace('px', '')))
+    const labelWidth = brand ? Math.round(rectOf(brand).width) : 0
+    const label =
+      !brand || labelWidth === 0
+        ? 'mark only'
+        : brand.scrollWidth > brand.clientWidth + 1
+          ? `truncated to ${labelWidth}px`
+          : 'whole wordmark'
+
+    /* The width where the wordmark has run out must also be the width the panel
+       refuses to go below, or the floor is a claim rather than a rule. */
+    const spine = frame.querySelector('.zone.left.spine')
+    const clusterEnd = Math.round(rectOf(rule).left - rectOf(frame).left)
+    const overflows = spine ? spine.scrollWidth > spine.clientWidth + 1 : false
+    const spineWidth = spine ? Math.round(rectOf(spine).width) : 0
+    const actions = spine
+      ? [...spine.querySelectorAll('.spine-actions .ibtn')].filter(
+          (button) => rectOf(button).width > 0
+        ).length
+      : 0
+
+    if (overflows) problems.push('the spine clip is hiding controls, not a label')
+
+    if (problems.length > 0) failures += 1
+    rows.push(
+      `${problems.length === 0 ? 'ok' : 'FAIL'} · ${platform} panel ${width}px · rule at ${Math.round(
+        clusterEnd
+      )}px of the bar · spine ${spineWidth}px · label ${labelWidth}px (${label}) · ${actions} actions${
+        problems.length ? ` · ${problems.join('; ')}` : ''
+      }`
+    )
+  }
+  return { rows, failures }
+}
+
 function run() {
   const report = document.createElement('section')
   report.className = 'section'
@@ -238,6 +301,11 @@ function run() {
   )
   const lines = []
   let failures = 0
+
+  /* A panel bar's column is the panel, so the content-sized spine's two rules do
+     not apply to it: the wordmark is meant to truncate, and the column is meant
+     to hold width its content does not fill. */
+  const stable = frames.filter((frame) => !frame.classList.contains('panel-mode'))
 
   for (const frame of frames) {
     const problems = checkFrame(frame)
@@ -284,7 +352,7 @@ function run() {
     }
   }
 
-  const fill = spineFill(frames)
+  const fill = spineFill(stable)
   const unique = fill.filter((row, index) => fill.findIndex((other) => other.key === row.key) === index)
   const fillLine =
     unique.length === 0
@@ -312,13 +380,23 @@ function run() {
           ? `${worstSlack}px dead space`
           : 'fitted'
 
-  const drift = titleDrift(frames)
+  const drift = titleDrift(stable)
   const driftLine =
     drift.length === 0
       ? 'stable · the title starts on the same pixel in every state'
       : drift.join('\n')
 
-  report.innerHTML = `<div class="section-head"><h2>Title stability</h2><span class="meta">${
+  const panel = panelAlignment(frames)
+  const panelLine =
+    panel.rows.length === 0 ? 'no panel-aligned bar on this screen' : panel.rows.join('\n')
+
+  report.innerHTML = `<div class="section-head"><h2>Panel alignment</h2><span class="meta">${
+    panel.failures === 0
+      ? panel.rows.length === 0
+        ? 'none'
+        : 'the rule is the panel edge'
+      : `${panel.failures} failing`
+  }</span></div><pre class="check-log">${panelLine}</pre><div class="section-head"><h2>Title stability</h2><span class="meta">${
     drift.length === 0 ? 'no drift' : `${drift.length} drifting`
   }</span></div><pre class="check-log">${driftLine}</pre><div class="section-head"><h2>Spine fill</h2><span class="meta">${fillVerdict}</span></div><pre class="check-log">${fillLine}</pre><div class="section-head"><h2>Flush edges</h2><span class="meta">${
     slack.length === 0 ? 'every bar reaches the window edge' : `${slack.length} with slack`
@@ -335,14 +413,30 @@ function run() {
 }
 
 if (new URLSearchParams(location.search).get('checks') === '1') {
-  window.addEventListener('load', async () => {
-  /* Ask for each face by name: a face nothing has painted yet is not loaded, and
-     checking it would report a font that renders fine once the wordmark appears. */
-  await Promise.all([
-    document.fonts.load('0.75rem "Oven Box"'),
-    document.fonts.load('1rem "Oven Mono"')
-  ]).catch(() => undefined)
-  run()
-})
+  const start = async () => {
+    /* Ask for each face by name: a face nothing has painted yet is not loaded,
+       and checking it would report a font that renders fine once the wordmark
+       appears. */
+    await Promise.all([
+      document.fonts.load('0.75rem "Oven Box"'),
+      document.fonts.load('1rem "Oven Mono"')
+    ]).catch(() => undefined)
+    run()
+  }
+  /* A cached script can arrive after the page has already loaded, in which case
+     a listener for `load` would never fire and the screen would silently report
+     nothing. */
+  const guarded = async () => {
+    try {
+      await start()
+    } catch (error) {
+      const report = document.createElement('pre')
+      report.style.cssText = 'padding:1rem;border:1px dashed #b00;color:#b00;font:12px monospace'
+      report.textContent = `layout checks failed: ${error && error.stack ? error.stack : error}`
+      document.querySelector('.page')?.prepend(report)
+    }
+  }
+  if (document.readyState === 'complete') void guarded()
+  else window.addEventListener('load', () => void guarded())
 }
 })()

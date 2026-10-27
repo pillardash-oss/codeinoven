@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>V6 · Priority ladder · App header study</title>
+    <title>V8 · Icon as menu · App header study</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -32,7 +32,7 @@
       <section class="intro">
         <div>
           <div class="eyebrow">Variant 8</div>
-          <h1>V8 · Icon as menu</h1>
+          <h1>V8 · Icon as menu, panel-aligned bar</h1>
           <p>
             The thread's controls collapse into the two things it already shows. The project icon
             left-clicks to the project dropdown and right-clicks to the thread's actions, so the
@@ -41,10 +41,11 @@
           </p>
         </div>
         <aside class="intro-aside">
-          <strong>The identity leaves too</strong>
-          The mark and the wordmark come out of the header and join the rail's utility group, next
-          to downloads and about. The bar then starts with navigation, on every platform, and the
-          spine loses the 108px the wordmark used to hold.
+          <strong>The panel sizes the bar</strong>
+          Everything left of the rule is app chrome at the thread panel's width, so the rule is the
+          panel's edge and the header and the body share one line. Narrow it and the wordmark gives
+          way first, then the view's actions fold one at a time. The chrome never spills out of the
+          column, and the identity never leaves the bar.
         </aside>
       </section>
 
@@ -64,15 +65,47 @@
       <section class="section">
         <div class="section-head">
           <h2>Four window geometries</h2>
-          <span class="meta">no mark, no wordmark, no ellipsis</span>
+          <span class="meta">no ellipsis, no floating state, identity kept</span>
         </div>
         <p class="lede">
-          With identity gone the spine opens with back and forward, which means the first control in
-          the bar is the same control on every platform. The bar still reserves only the OS zone, so
-          macOS is flush right and Windows flush left.
+          The identity stays in the bar on every platform: it is what Windows and Linux have instead
+          of a menu bar naming the app, and on macOS it is the mark beside the traffic lights. The
+          rail keeps exactly the utilities it has today, update indicator included. The bar still
+          reserves only the OS zone, so macOS is flush right and Windows flush left.
         </p>
         <div id="widths"></div>
         <div id="rulers"></div>
+      </section>
+
+      <section class="section" id="rule-follows">
+        <div class="section-head">
+          <h2>The rule follows the panel</h2>
+          <span class="meta">drag it · 200 to 420px</span>
+        </div>
+        <p class="lede">
+          The bar's leading cluster is the thread panel. Its last pixel is the panel's edge, and the
+          rule that closes it runs on down the panel's border, so the header and the body share one
+          line instead of two that nearly meet. Drag it: the wordmark gives way first, then the
+          view's actions fold one at a time, and nothing ever spills out of the column. On the
+          layouts whose controls sit on the left the column looks smaller than it is, because the
+          lights take 80 to 138px of it, so at the app's 200px minimum the identity is the mark
+          alone on macOS and Linux-left and still holds about five characters on Windows.
+        </p>
+        <div id="panel"></div>
+      </section>
+
+      <section class="section" id="ladder-section">
+        <div class="section-head">
+          <h2>The truncation ladder</h2>
+          <span class="meta">200 · 264 · 320 · 420</span>
+        </div>
+        <p class="lede">
+          The same bar at four panel widths, on the two platforms whose identity differs: macOS reads
+          "cio" and reaches its whole label sooner, Windows reads "CodeInOven" and holds a truncated
+          wordmark across a wider range. Neither ever moves the rule off the panel's edge, and
+          neither ever pushes a control into the title.
+        </p>
+        <div id="ladder"></div>
       </section>
 
       <section class="section">
@@ -88,24 +121,10 @@
         <div id="menus"></div>
       </section>
 
-      <section class="section">
-        <div class="section-head">
-          <h2>The mark, back on the rail</h2>
-          <span class="meta">utility group, under downloads</span>
-        </div>
-        <p class="lede">
-          The rail is where the app's own utilities live, so the mark belongs there: 16px, full
-          colour, closing the utility group under downloads and about. It names the app and does
-          nothing, which is exactly what it did in the header, and the bar no longer has to carry a
-          wordmark that only exists because the window has no menu bar on Windows or Linux.
-        </p>
-        <div id="rail"></div>
-      </section>
-
       <div id="states"></div>
 
       <p class="footnote">
-        Variant 6 of six. The same frames are re-rendered by
+        Variant 8 of eight. The same frames are re-rendered by
         <span class="inline-code">header.js</span>, so a change to the frame anatomy reaches every
         screen and every variant at once.
       </p>

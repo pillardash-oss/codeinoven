@@ -129,15 +129,13 @@ function gitChipMarkup() {
   return `<span class="chip">${ICONS.branch}<span>main</span><span class="lead">3</span></span>`
 }
 
-/* The spine of V7: identity, back and forward, and the view's actions, in one
-   column of fixed width. One separator marks where the column ends; nothing
-   inside it is divided, because it reads as one block of chrome. */
+/* The spine of V7 and V8: identity, back and forward, and the view's actions, in
+   one column. One separator marks where the column ends; nothing inside it is
+   divided, because it reads as one block of chrome.
+
+   In V7 the column fits its content. In V8 it is the thread panel's width, so
+   the wordmark gives way as the panel narrows rather than the bar rearranging. */
 function spineMarkup(platform, options) {
-  /* V8 drops the identity from the bar entirely: it lives on the rail, so the
-     spine starts with navigation. */
-  if (options.noBrand) {
-    return [navigationMarkup(), `<span class="spine-actions">${variantActions(options)}</span>`].join('')
-  }
   /* Three boxes, in order: the identity (natural width, so the column fits the
      name the platform actually shows), the navigation pair, and the view's
      actions in a slot that always reserves room for three. That reservation is
@@ -163,12 +161,11 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   const config = PLATFORMS[platform]
   const classes = ['frame', config.cls, `variant-${variant}`]
   if (width === 'narrow') classes.push('narrow')
+  if (options.panelWidth) classes.push('panel-mode')
 
   const left =
-    variant === 'v7'
+    variant === 'v7' || variant === 'v8'
       ? `<div class="zone left spine">${spineMarkup(platform, options)}</div>`
-      : variant === 'v8'
-        ? `<div class="zone left spine">${spineMarkup(platform, { ...options, noBrand: true })}</div>`
       : `<div class="zone left">${brandMarkup(platform, options)}${navigationMarkup()}${
           variant === 'v6' ? '' : viewActionsMarkup()
         }</div>`
@@ -223,9 +220,9 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   return `<div class="${classes.join(' ')}">${inner}</div>`
 }
 
-/* V8's second half: the app mark leaves the bar and lands in the left rail's
-   utility group, beside about and downloads. Drawn as the rail the window
-   actually has, 40px wide, with the active view and the utility stack. */
+/* The rail as the window has it today, 40px wide: the view switcher above, the
+   utility group at the foot where downloads, about and the update state live.
+   V8 leaves it exactly as it is. */
 function railMarkup() {
   /* The rail as the window has it: 40px wide, the view switcher stacked at the
      top, and the utility group pinned to the foot. The mark joins that group,
@@ -237,7 +234,40 @@ function railMarkup() {
         `<span class="rail-btn${index === 2 ? ' on' : ''}" title="View">${ICONS[icon]}</span>`
     )
     .join('')
-  return `<div class="rail"><div class="rail-group">${items}</div><div class="rail-group rail-utility"><span class="rail-btn" title="Downloads">${ICONS.download}</span><span class="rail-btn" title="About">${ICONS.info}</span><span class="rail-btn rail-mark" title="CodeInOven" aria-label="CodeInOven">${ICONS.mark}</span></div></div>`
+  return `<div class="rail"><div class="rail-group">${items}</div><div class="rail-group rail-utility"><span class="rail-btn" title="Downloads">${ICONS.download}</span><span class="rail-btn" title="About">${ICONS.info}</span></div></div>`
+}
+
+/* The thread panel, as the app's sidebar draws it: a heading with its count and
+   a few rows, the open one marked. It exists so the bar above it can be measured
+   against a real column of content. */
+function panelRows() {
+  const rows = [
+    ['Repair header collision under caption overlay', true],
+    ['Stabilise the caption overlay inset', false],
+    ['Retire the duplicated spacer', false],
+    ['Ship the panel-aligned bar', false],
+    ['Document the gutter models', false]
+  ]
+  return `<div class="panel-head"><span>Threads</span><span class="panel-count">${rows.length}</span></div><div class="panel-list">${rows
+    .map(
+      ([label, open]) =>
+        `<div class="panel-row${open ? ' on' : ''}"><i class="panel-dot"></i><span class="panel-name">${label}</span></div>`
+    )
+    .join('')}</div>`
+}
+
+/* V8's whole argument in one picture: the bar's leading cluster is the panel.
+   Its last pixel is the panel's edge, and the rule that closes the cluster runs
+   straight on down the panel's border, so the header and the body share a single
+   line that moves with the panel instead of floating in the window's middle.
+
+   The bar spans the whole window, as the app's header does, so the column it
+   hands the panel is the rail plus the panel minus whatever the window controls
+   take on that edge. */
+function panelWindow({ platform, panelWidth, options = {} }) {
+  const config = PLATFORMS[platform]
+  const bar = frame({ platform, variant: 'v8', options: { ...options, panelWidth } })
+  return `<div class="window panel-window ${config.cls}" style="--panel-width: ${panelWidth}px">${bar}<div class="panel-body">${railMarkup()}<aside class="panel">${panelRows()}</aside><div class="content"><span class="fill-label">conversation</span></div></div></div>`
 }
 
 function withRail(inner) {
@@ -246,13 +276,16 @@ function withRail(inner) {
 
 function block({ platform, variant, width = 'full', options = {}, label = '' }) {
   const heading = label || `${LABELS[platform]} · ${NOTES[platform]}`
+  const panelNote = options.panelWidth ? ` · panel ${options.panelWidth}px` : ''
+  const inner =
+    options.panelWidth && variant === 'v8'
+      ? panelWindow({ platform, panelWidth: options.panelWidth, options })
+      : options.withRail && variant === 'v8'
+        ? withRail(frame({ platform, variant, width, options }))
+        : frame({ platform, variant, width, options })
   return `<div class="frame-block"><div class="frame-label"><b>${LABELS[platform]}</b><span class="note">${
     notesFor(platform)
-  }${width === 'narrow' ? ' · narrow window' : ''}</span></div>${
-    options.withRail && variant === 'v8'
-      ? withRail(frame({ platform, variant, width, options }))
-      : frame({ platform, variant, width, options })
-  }</div>`
+  }${width === 'narrow' ? ' · narrow window' : ''}${panelNote}</span></div>${inner}</div>`
 }
 
 function notesFor(platform) {
@@ -293,7 +326,11 @@ function themeToggle() {
   const choices = [...document.querySelectorAll('[data-theme-choice]')]
   for (const choice of choices) {
     choice.addEventListener('click', () => {
-      document.body.dataset.theme = choice.dataset.themeChoice
+      const theme = choice.dataset.themeChoice
+      document.body.dataset.theme = theme
+      /* The tokens live in a `.dark` block, so the class is what actually swaps
+         the palette; the data attribute only records the reader's choice. */
+      document.documentElement.classList.toggle('dark', theme === 'dark')
       for (const item of choices) {
         item.setAttribute('aria-pressed', String(item === choice))
       }
@@ -304,6 +341,7 @@ function themeToggle() {
 window.CIOHeader = {
   ICONS,
   frame,
+  panelWindow,
   block,
   renderAll,
   mount,

@@ -96,6 +96,68 @@ function menuPanel(kind) {
     .join('')}</div>`
 }
 
+/* The panel the bar is measured against, driven by the reader: the range is the
+   app's own sidebar range, 200 to 420px, and the two windows redraw as it moves. */
+const PANEL_MIN = 200
+const PANEL_MAX = 420
+
+function livePanel(variant, options) {
+  const stage = document.createElement('div')
+  stage.className = 'panel-stage'
+
+  const requested = Number(new URLSearchParams(location.search).get('panel'))
+  const start =
+    Number.isFinite(requested) && requested > 0
+      ? Math.min(PANEL_MAX, Math.max(PANEL_MIN, Math.round(requested)))
+      : 264
+
+  stage.innerHTML = `<div class="panel-controls"><label for="panel-size">Thread panel</label><input id="panel-size" type="range" min="${PANEL_MIN}" max="${PANEL_MAX}" step="2" value="${start}" /><output id="panel-size-value">${start}px</output><span class="panel-state" id="panel-size-state"></span></div><div class="panel-windows" id="panel-size-windows">${
+    window.CIOHeader.block({ platform: 'mac', variant, options: { ...options, panelWidth: start } }) +
+    window.CIOHeader.block({ platform: 'win', variant, options: { ...options, panelWidth: start } })
+  }</div>`
+
+  const input = stage.querySelector('#panel-size')
+  const output = stage.querySelector('#panel-size-value')
+  const state = stage.querySelector('#panel-size-state')
+  const windows = stage.querySelector('#panel-size-windows')
+
+  /* The label's own measurement decides the wording: no guessing at what a
+     truncated wordmark looks like at 218px. */
+  function identityOf(windowElement) {
+    const brand = windowElement.querySelector('.variant-v8.panel-mode .brand span')
+    if (!brand) return 'no identity'
+    const shown = Math.round(brand.getBoundingClientRect().width)
+    if (shown <= 2) return 'mark only'
+    if (brand.scrollWidth > brand.clientWidth + 1) return `${shown}px of wordmark`
+    return 'whole wordmark'
+  }
+
+  function describe() {
+    const bars = [...windows.querySelectorAll('.window')]
+    const mac = bars[0] ? identityOf(bars[0]) : ''
+    const win = bars[1] ? identityOf(bars[1]) : ''
+    return `<strong>macOS</strong> ${mac} · <strong>Windows</strong> ${win}`
+  }
+
+  function apply(width) {
+    output.textContent = `${width}px`
+    for (const windowElement of windows.querySelectorAll('.window')) {
+      windowElement.style.setProperty('--panel-width', `${width}px`)
+    }
+    state.innerHTML = describe()
+  }
+
+  input.addEventListener('input', () => apply(Number(input.value)))
+  apply(start)
+  /* The first read has to wait for the stage to be in the document: measured
+     while detached, every box is zero and the strip would claim the wordmark is
+     gone at every width. */
+  requestAnimationFrame(() => {
+    state.innerHTML = describe()
+  })
+  return stage
+}
+
 function platformLabel(platform) {
   return {
     mac: 'macOS',
@@ -148,8 +210,8 @@ function build() {
     }
   }
 
-  /* V8's own sections: the two menus the icon owns, and the rail the mark moved
-     to, drawn at the window height they actually occupy. */
+  /* V8's own section: the two menus the icon owns, drawn at the window height
+     they actually occupy. */
   const menus = document.querySelector('#menus')
   if (menus) {
     const host = document.createElement('div')
@@ -162,13 +224,32 @@ function build() {
     menus.replaceWith(host)
   }
 
-  const rail = document.querySelector('#rail')
-  if (rail) {
+  /* V8's core argument: the bar's leading cluster is the thread panel, so the
+     rule between chrome and title is the panel's edge, and the wordmark is what
+     gives way when the panel narrows. */
+
+  const ladder = document.querySelector('#ladder')
+  if (ladder) {
     const host = document.createElement('div')
     host.className = 'frames'
-    host.innerHTML = window.CIOHeader.block({ platform: 'mac', variant, options: { withRail: true } })
-    rail.replaceWith(host)
+    host.innerHTML = [200, 264, 320, 420]
+      .map((panelWidth) =>
+        ['mac', 'win']
+          .map((platform) =>
+            window.CIOHeader.block({
+              platform,
+              variant,
+              options: { ...options, panelWidth }
+            })
+          )
+          .join('')
+      )
+      .join('')
+    ladder.replaceWith(host)
   }
+
+  const panel = document.querySelector('#panel')
+  if (panel) panel.replaceWith(livePanel(variant, options))
 
   const rulers = document.querySelector('#rulers')
   if (rulers) rulers.replaceWith(rulerStrip())
