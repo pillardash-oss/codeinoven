@@ -1,5 +1,4 @@
 <script lang="ts">
-  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
   import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
@@ -25,6 +24,12 @@
     workspaceState.selectedThread ? threadScopeBucket(workspaceState.selectedThread) : null
   )
   const inWorktree = $derived(worktreeBucket?.root.kind === 'worktree')
+
+  /** The branch the thread is on. The bar is quiet enough for the name again, and a
+   *  name says more than the icon alone ever did: the icon only promised that
+   *  something git-shaped was behind it. It also names the tree that branch is in,
+   *  which is why the worktree icon it used to sit beside is gone. */
+  let branchName = $derived(gitState.branch)
 
   function openGitPanel(): void {
     const thread = workspaceState.selectedThread
@@ -79,9 +84,11 @@
   onclick={openGitPanel}
 >
   <CioTabGit size={13} class="shrink-0" />
-  {#if inWorktree}
-    <span class="flex shrink-0" title={`Worktree: ${worktreeBucket?.name}`}>
-      <CioFolderGit size={13} aria-hidden="true" />
+  {#if branchName}
+    <!-- Hidden by the header's own container rule on a narrow window, where the
+         chip keeps its icons and its counts. -->
+    <span class="header-control-label max-w-24 truncate text-[0.6875rem] font-medium">
+      {branchName}
     </span>
   {/if}
   {#if gitState.conflicted.length > 0}
