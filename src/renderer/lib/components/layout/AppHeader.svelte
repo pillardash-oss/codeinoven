@@ -66,6 +66,24 @@
     return Math.max(0, layoutPanelState.railWidth + docked - leftInset)
   })
 
+  /**
+   * Which form the app's name takes in this bar. Only the name ever gives way:
+   * the mark, the navigation pair and every view action keep their places at
+   * every panel width, so the column follows the panel only until it is as narrow
+   * as the chrome itself.
+   *
+   * `none` is the view without a sidebar (nothing to align to) and the column
+   * past the width the chrome needs: the mark alone. `long` needs the room the
+   * name itself takes beside three actions; below that the bar falls back to the
+   * short name rather than to an ellipsis.
+   */
+  let brandForm = $derived.by((): 'long' | 'short' | 'none' => {
+    const column = panelColumnWidth
+    if (column <= 0 || column < 118) return 'none'
+    if (controlsOnLeft) return 'short'
+    return column >= 264 ? 'long' : 'short'
+  })
+
   /** A checkout and a probe run the same source, so the one thing that tells
    *  them apart is where their data lives. The header says which this is, and a
    *  shipped build says nothing at all. */
@@ -251,7 +269,7 @@
   style={trafficLightInsetStyle({ mirrorRightInset: false, rightPadding: '0.25rem' })}
 >
   <nav
-    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1 overflow-hidden"
+    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1"
     aria-label="Primary navigation"
     style:width={panelColumnWidth > 0 ? `${panelColumnWidth}px` : undefined}
   >
@@ -263,8 +281,9 @@
       onclick={() => threadSwitcherRequest.requestOpen()}
     >
       <VendorIcon name="CodeInOven" size={20} />
-      <span class="header-brand-name header-brand-long">CodeInOven</span>
-      <span class="header-brand-name header-brand-short">cio</span>
+      {#if brandForm !== 'none'}
+        <span class="header-brand-name">{brandForm === 'long' ? 'CodeInOven' : 'cio'}</span>
+      {/if}
     </button>
 
     {#if buildLabel}
@@ -478,7 +497,10 @@
      own width, not on the window's, because it is the panel that squeezes it. */
 
   .header-cluster {
-    container: cluster / inline-size;
+    /* The bar is never narrower than the controls it carries: the mark, the
+       navigation pair and every action stay on screen at every panel width, and
+       only the name gives way. */
+    min-width: max-content;
   }
 
   .header-brand-name {
@@ -486,29 +508,6 @@
     font-size: 0.75rem;
     font-weight: 500;
     letter-spacing: -0.02em;
-  }
-
-  /* Short by default: the long name must never flash before the rules below
-     have decided which one this bar can carry. */
-  .header-brand-short {
-    display: none;
-  }
-
-  /* A layout whose window controls sit on the left already names the app in its
-     own decoration, so the identity there is the short name and never the
-     wordmark. */
-  .app-header[data-controls='left'] .header-brand-long {
-    display: none;
-  }
-
-  .app-header[data-controls='left'] .header-brand-short {
-    display: inline;
-  }
-
-  /* No sidebar docked: there is no column to align to, so the identity drops to
-     the mark and every action comes back. */
-  .app-header[data-panel='hidden'] .header-brand-name {
-    display: none;
   }
 
   /* The boundary: one hairline at the column's edge, exactly where the sidebar's
@@ -526,38 +525,5 @@
 
   .header-cluster-actions {
     display: contents;
-  }
-
-  /* The column cannot hold the wordmark, so it becomes the short name instead of
-     an ellipsis where the name used to be. */
-  @container cluster (max-width: 17rem) {
-    .app-header[data-controls='right']:not([data-panel='hidden']) .header-brand-long {
-      display: none;
-    }
-
-    .app-header[data-controls='right']:not([data-panel='hidden']) .header-brand-short {
-      display: inline;
-    }
-  }
-
-  /* Then the view's own actions give way, then the navigation pair, and at the
-     very bottom of the range even the short name: a folded action is still one
-     click away in the view's own menu. */
-  @container cluster (max-width: 13rem) {
-    .app-header:not([data-panel='hidden']) .header-cluster-actions {
-      display: none;
-    }
-  }
-
-  @container cluster (max-width: 9rem) {
-    .app-header:not([data-panel='hidden']) .header-cluster-nav {
-      display: none;
-    }
-  }
-
-  @container cluster (max-width: 7rem) {
-    .app-header:not([data-panel='hidden']) .header-brand-name {
-      display: none;
-    }
   }
 </style>
