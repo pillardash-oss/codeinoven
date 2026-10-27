@@ -79,7 +79,7 @@
         active={isActive(option.id)}
         shortcut={option.keys}
         playing={badges.playing}
-        recording={activity.isRecording(option.id, projectBadgeOption)}
+        media={activity.mediaFor(option.id, projectBadgeOption)}
         onSelect={option.select}
         onHover={() => onOptionHover(option.id)}
       >

@@ -44,6 +44,7 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { captureActivities } from '$shared/media-activity'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import {
@@ -1386,7 +1387,7 @@
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in ${authoredWorkOwnerLabel(selectedThread.projectId)}`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
           active: authoredWorkActive(kind),
-          playing: kind === 'video' && browserAudio.videoIsPlaying(selectedThread.id),
+          media: browserAudio.boardActivities(selectedThread.id, kind),
           onSelect: () => openAuthoredWork(kind)
         })
       }
@@ -1441,7 +1442,17 @@
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: CioThreadBrowser,
         active: dockKindActive('browser'),
-        recording: browserTabs.some((tab) => contextSidebarState.browserRuntime(tab.id).capturing),
+        media: [
+          ...new SvelteSet(
+            browserTabs.flatMap((tab) => {
+              const runtime = contextSidebarState.browserRuntime(tab.id)
+              return [
+                ...captureActivities(runtime),
+                ...(runtime.audible && !runtime.muted ? ['audio' as const] : [])
+              ]
+            })
+          )
+        ],
         playing: browserTabs.some((tab) => {
           const runtime = contextSidebarState.browserRuntime(tab.id)
           return runtime.audible && !runtime.muted

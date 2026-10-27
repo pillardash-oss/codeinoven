@@ -12,6 +12,8 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
+  import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
   import { speechController } from '$lib/speech/speech-controller.svelte'
@@ -35,6 +37,7 @@
   import { runRowLine, taskPopoverState, taskRowIconKey, taskRunLine } from './assistant-view'
 
   interface Props {
+    media?: readonly import('$shared/media-activity').MediaActivity[]
     task: Thread
     active: boolean
     /**
@@ -93,6 +96,7 @@
 
   let {
     task,
+    media,
     active,
     variant = 'task',
     runWorking = false,
@@ -394,7 +398,8 @@
         >
           {foreignTransfer?.error ?? runLine}
         </span>
-        {#if indicator}
+        <MediaActivityTrail activities={media ?? threadMediaActivity(task.id)} label={task.title} />
+        {#if indicator && indicator !== 'recording' && indicator !== 'speaking'}
           <ThreadIndicatorSlot {indicator} />
         {/if}
       </span>

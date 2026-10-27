@@ -34,6 +34,7 @@
     /** The work behind this item is emitting sound. */
     playing?: boolean
     recording?: boolean
+    media?: readonly MediaActivity[]
     /** Renders a small status dot on the icon   e.g. pending memory proposals.
      *  Colours and variants flow through the global `ThreadStatusTone` palette
      *  (same vocabulary as thread rows and `StatusBadge`), so the rail can
@@ -79,6 +80,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { onDestroy } from 'svelte'
   import RailHighlight from './RailHighlight.svelte'
+  import type { MediaActivity } from '$shared/media-activity'
   import RailAudioBadge from './RailAudioBadge.svelte'
 
   interface Props {
@@ -189,11 +191,14 @@
           {:else if Icon}
             <Icon size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
           {/if}
-          {#if item.recording}
-            <RailAudioBadge label={item.label} recording />
-          {/if}
-          {#if item.playing}
-            <RailAudioBadge label={item.label} />
+          {#if item.media?.length || item.playing || item.recording}
+            <RailAudioBadge
+              label={item.label}
+              activities={item.media ?? [
+                ...(item.playing ? ['audio' as const] : []),
+                ...(item.recording ? ['microphone' as const] : [])
+              ]}
+            />
           {/if}
           {#if item.badge}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">

@@ -1,3 +1,4 @@
+import { captureActivities, type CaptureActivity, type MediaActivity } from '$shared/media-activity'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 
@@ -45,27 +46,73 @@ interface BrowserAudioTab {
 class BrowserAudioState {
   /** Live audio state of every browser tab, keyed by tab id. */
   private readonly tabs = new SvelteMap<string, BrowserAudioTab>()
+  private readonly boardKinds = new SvelteMap<string, 'design' | 'video'>()
+
+  reportBoard(tabId: string, kind: 'design' | 'video'): void {
+    this.boardKinds.set(tabId, kind)
+  }
+
   private readonly captures = new SvelteMap<
     string,
-    { threadId: string | null; family: ContentThreadFamily | null }
+    { threadId: string | null; family: ContentThreadFamily | null; kinds: MediaActivity[] }
   >()
 
   reportCapture(
     tabId: string,
     threadId: string | null,
     projectId: string | null,
-    capturing: boolean
+    capturing: boolean,
+    details: CaptureActivity = {}
   ): void {
     if (!capturing) {
       this.captures.delete(tabId)
       return
     }
     const current = this.captures.get(tabId)
-    if (current?.threadId === threadId) return
+    const kinds = captureActivities({ ...details, capturing })
+    if (current?.threadId === threadId && current.kinds.join() === kinds.join()) return
     this.captures.set(tabId, {
       threadId,
-      family: projectId === null ? null : contentThreadFamily({ projectId })
+      family: projectId === null ? null : contentThreadFamily({ projectId }),
+      kinds
     })
+  }
+
+  activitiesForThread(threadId: string): MediaActivity[] {
+    return this.activities((entry) => entry.threadId === threadId)
+  }
+
+  boardActivities(threadId: string, kind: 'design' | 'video'): MediaActivity[] {
+    const kinds = new SvelteSet<MediaActivity>()
+    for (const [id, tab] of this.tabs)
+      if (
+        tab.threadId === threadId &&
+        tab.audible &&
+        (this.boardKinds.get(id) === kind || (kind === 'video' && id.startsWith('video-export:')))
+      )
+        kinds.add('audio')
+    for (const [id, capture] of this.captures)
+      if (capture.threadId === threadId && this.boardKinds.get(id) === kind)
+        for (const kind of capture.kinds) kinds.add(kind)
+    return [...kinds]
+  }
+
+  activitiesForFamily(family: ContentThreadFamily): MediaActivity[] {
+    return this.activities((entry) => entry.family === family)
+  }
+
+  globalActivities(): MediaActivity[] {
+    return this.activities((entry) => entry.threadId === null)
+  }
+
+  private activities(
+    matches: (entry: { threadId: string | null; family: ContentThreadFamily | null }) => boolean
+  ): MediaActivity[] {
+    const kinds = new SvelteSet<MediaActivity>()
+    for (const tab of this.tabs.values()) if (tab.audible && matches(tab)) kinds.add('audio')
+    for (const capture of this.captures.values())
+      if (matches(capture)) for (const kind of capture.kinds) kinds.add(kind)
+    return [...kinds]
   }
 
   threadIsCapturing(threadId: string): boolean {
@@ -113,6 +160,7 @@ class BrowserAudioState {
   forget(tabId: string): void {
     this.tabs.delete(tabId)
     this.captures.delete(tabId)
+    this.boardKinds.delete(tabId)
   }
 
   /** When a thread's browser audio began, or null while the thread is silent.

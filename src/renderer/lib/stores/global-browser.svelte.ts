@@ -2296,12 +2296,15 @@ export class GlobalBrowserState {
     if (peek && (state.loading || state.url !== '')) peek.documentSeen = true
     if (changed && !peek) this.persist()
     browserAudio.reportGlobalTab(state.tabId, state.audible && !state.muted)
-    browserAudio.reportCapture(state.tabId, null, null, state.capturing)
+    browserAudio.reportCapture(state.tabId, null, null, state.capturing, state)
     const current = this.runtime.get(state.tabId)
     if (
       current &&
       current.audible === state.audible &&
       current.muted === state.muted &&
+      current.microphoneActive === state.microphoneActive &&
+      current.cameraActive === state.cameraActive &&
+      current.screenActive === state.screenActive &&
       current.capturing === state.capturing &&
       current.loading === state.loading &&
       isSameBrowserLoadError(current.loadError, state.loadError) &&
@@ -2314,6 +2317,9 @@ export class GlobalBrowserState {
       audible: state.audible,
       muted: state.muted,
       capturing: state.capturing,
+      microphoneActive: state.microphoneActive,
+      cameraActive: state.cameraActive,
+      screenActive: state.screenActive,
       loading: state.loading,
       loadError: state.loadError,
       canGoBack: state.canGoBack,

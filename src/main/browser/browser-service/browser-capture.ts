@@ -35,6 +35,9 @@ interface ObservedFrame {
   frame: WebFrameMain
   /** Live capture tracks this frame reported. */
   count: number
+  microphoneActive: boolean
+  cameraActive: boolean
+  screenActive: boolean
   /** True while this frame has an outstanding promise to main, which is what
    *  keeps a duplicate arm from stacking a second waiter on the same observer. */
   pending: boolean
@@ -77,25 +80,46 @@ export function captureObserverScript(key: string): string {
     if (!globalThis[key]) {
       const tracks = new Set();
       const waiters = new Set();
-      let reported = 0;
+      let reported = '';
+      const sources = new Map();
+      const activity = () => {
+        const total = { count: tracks.size, microphoneActive: false, cameraActive: false, screenActive: false };
+        for (const track of tracks) {
+          if (sources.get(track) === 'screen') total.screenActive = true;
+          else if (track.kind === 'audio') total.microphoneActive = true;
+          else total.cameraActive = true;
+        }
+        return total;
+      };
+      const snapshot = () => JSON.stringify(activity());
       const publish = () => {
-        const total = tracks.size;
-        if (total === reported) return;
+        const total = snapshot();
+        if (total === reported || waiters.size === 0) return;
         reported = total;
         for (const resolve of [...waiters]) {
           waiters.delete(resolve);
-          resolve(total);
+          resolve(JSON.parse(total));
         }
       };
-      const watchStream = (stream) => {
+      const watchStream = (stream, source) => {
         try {
           if (stream && typeof stream.getTracks === 'function') {
             for (const track of stream.getTracks()) {
-              if (track.kind !== 'audio' && track.kind !== 'video') continue;
+              if ((track.kind !== 'audio' && track.kind !== 'video') || track.readyState === 'ended') continue;
               if (tracks.has(track)) continue;
               tracks.add(track);
+              sources.set(track, source);
+              const stop = track.stop;
+              track.stop = function () {
+                const result = stop.call(this);
+                tracks.delete(track);
+                sources.delete(track);
+                publish();
+                return result;
+              };
               track.addEventListener('ended', () => {
                 tracks.delete(track);
+                sources.delete(track);
                 publish();
               });
             }
@@ -115,7 +139,7 @@ export function captureObserverScript(key: string): string {
           writable: true,
           value: function (...args) {
             const result = original.apply(this, args);
-            if (result && typeof result.then === 'function') return result.then(watchStream);
+            if (result && typeof result.then === 'function') return result.then((stream) => watchStream(stream, name === 'getDisplayMedia' ? 'screen' : 'device'));
             return result;
           }
         });
@@ -125,9 +149,9 @@ export function captureObserverScript(key: string): string {
       const observer = {
         wait: () =>
           new Promise((resolve) => {
-            if (tracks.size !== reported) {
-              reported = tracks.size;
-              resolve(tracks.size);
+            if (snapshot() !== reported) {
+              reported = snapshot();
+              resolve(JSON.parse(reported));
               return;
             }
             waiters.add(resolve);
@@ -169,7 +193,15 @@ export class BrowserCaptureObserver {
       observed.frame = frame
     } else {
       if (tab.frames.size >= MAX_CAPTURED_FRAMES) return
-      tab.frames.set(key, { frame, count: 0, pending: false, failures: 0 })
+      tab.frames.set(key, {
+        frame,
+        count: 0,
+        microphoneActive: false,
+        cameraActive: false,
+        screenActive: false,
+        pending: false,
+        failures: 0
+      })
     }
     this.arm(tabId, key)
   }
@@ -179,6 +211,22 @@ export class BrowserCaptureObserver {
     let total = 0
     for (const observed of this.tabs.get(tabId)?.frames.values() ?? []) total += observed.count
     return total
+  }
+
+  activity(tabId: string): {
+    microphoneActive: boolean
+    cameraActive: boolean
+    screenActive: boolean
+  } {
+    let microphoneActive = false,
+      cameraActive = false,
+      screenActive = false
+    for (const frame of this.tabs.get(tabId)?.frames.values() ?? []) {
+      microphoneActive ||= frame.microphoneActive
+      cameraActive ||= frame.cameraActive
+      screenActive ||= frame.screenActive
+    }
+    return { microphoneActive, cameraActive, screenActive }
   }
 
   isCapturing(tabId: string): boolean {
@@ -221,15 +269,32 @@ export class BrowserCaptureObserver {
         if (!current) return
         current.pending = false
         current.failures = 0
-        if (typeof reported !== 'number') {
+        if (
+          !reported ||
+          typeof reported !== 'object' ||
+          !('count' in reported) ||
+          typeof reported.count !== 'number'
+        ) {
           // The observer refused to install (no mediaDevices in the document, or
           // a page that froze the globals it installs into). Observing this
           // frame is not going to work.
           this.forgetFrame(tabId, key, epoch)
           return
         }
-        if (current.count !== reported) {
-          current.count = reported
+        const microphoneActive =
+          'microphoneActive' in reported && reported.microphoneActive === true
+        const cameraActive = 'cameraActive' in reported && reported.cameraActive === true
+        const screenActive = 'screenActive' in reported && reported.screenActive === true
+        if (
+          current.count !== reported.count ||
+          current.microphoneActive !== microphoneActive ||
+          current.cameraActive !== cameraActive ||
+          current.screenActive !== screenActive
+        ) {
+          current.count = reported.count
+          current.microphoneActive = microphoneActive
+          current.cameraActive = cameraActive
+          current.screenActive = screenActive
           this.deps.onChange(tabId)
         }
         this.scheduleArm(tabId, key, epoch)

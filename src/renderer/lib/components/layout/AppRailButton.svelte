@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ICON_SIZE, RAIL_ICON_STROKE } from '$lib/components/icons/cio/scale'
   import { encodeShortcutTokens } from '$lib/keymap/keymap'
+  import type { MediaActivity } from '$shared/media-activity'
   import RailAudioBadge from './RailAudioBadge.svelte'
   import type { Component, Snippet } from 'svelte'
 
@@ -26,6 +27,7 @@
     /** Corner mark saying a browser behind this item is playing sound. */
     playing?: boolean
     recording?: boolean
+    media?: readonly MediaActivity[]
     onSelect: () => void
     onHover?: () => void
     /** Corner content, e.g. an activity badge. */
@@ -43,6 +45,7 @@
     progress,
     playing = false,
     recording = false,
+    media,
     onSelect,
     onHover,
     badge
@@ -115,16 +118,14 @@
       class={spin ? 'animate-spin' : undefined}
     />
   {/if}
-  {#if playing}
-    <!-- The speaker rides the opposite corner from the badge stack, so a view can
-         say "working" and "playing sound" at the same time without either mark
-         hiding the other. It is a status, not a control: the mute toggle lives
-         on the tab row the sound actually belongs to. Like the badge row above,
-         it clears the glyph band on the way out, so the item's icon reads. -->
-    <RailAudioBadge {label} />
-  {/if}
-  {#if recording}
-    <RailAudioBadge {label} recording />
+  {#if media?.length || playing || recording}
+    <RailAudioBadge
+      {label}
+      activities={media ?? [
+        ...(playing ? ['audio' as const] : []),
+        ...(recording ? ['microphone' as const] : [])
+      ]}
+    />
   {/if}
   {@render badge?.()}
 </button>

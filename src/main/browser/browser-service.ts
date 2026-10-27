@@ -6971,6 +6971,7 @@ export class BrowserService {
       audible: contents.isCurrentlyAudible(),
       muted: contents.isAudioMuted(),
       capturing: this.capture.isCapturing(tabId),
+      ...this.capture.activity(tabId),
       design: tab.design,
       composition: tab.composition,
       canGoBack: contents.navigationHistory.canGoBack(),

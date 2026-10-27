@@ -30,6 +30,9 @@ export type ThreadIndicator =
   | 'transcribing-steer'
   | 'computer-use'
   | 'browser-audio'
+  | 'browser-microphone'
+  | 'browser-camera'
+  | 'browser-screen'
   | 'engineering'
 
 export interface ThreadIndicatorCandidate {

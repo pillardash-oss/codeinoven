@@ -475,9 +475,7 @@
   let isBusyIndicator = $derived(
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
-  let isRecording = $derived(
-    speechController.isRecordingThread(thread.id) || browserAudio.threadIsCapturing(thread.id)
-  )
+  let isRecording = $derived(speechController.isRecordingThread(thread.id))
   /** The thread's agent is driving the computer right now   window-scoped or
    *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */
   let isUsingComputerUse = $derived(pipState.isThreadUsingComputerUse(thread.id))
@@ -531,6 +529,16 @@
     }
     if (isUsingComputerUse) live.push('computer-use')
     if (browserAudioAt !== null) live.push('browser-audio')
+    for (const kind of browserAudio.activitiesForThread(thread.id)) {
+      if (kind !== 'audio')
+        live.push(
+          kind === 'microphone'
+            ? 'browser-microphone'
+            : kind === 'camera'
+              ? 'browser-camera'
+              : 'browser-screen'
+        )
+    }
     // The Engineering mark covers both halves of the tooling: the lifecycle
     // marker, and the independent audit, which is locked out of that lifecycle
     // and therefore carries its own durable flags.

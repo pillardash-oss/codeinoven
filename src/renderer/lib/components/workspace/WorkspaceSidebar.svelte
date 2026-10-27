@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity'
+  import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
   import { archiveItem } from '$lib/archive-actions'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
@@ -1207,6 +1209,13 @@
                   >
                     <div>
                       <FolderRow
+                        media={[
+                          ...new SvelteSet(
+                            (threadsByProject.get(project.id) ?? []).flatMap((thread) =>
+                              threadMediaActivity(thread.id)
+                            )
+                          )
+                        ]}
                         {project}
                         iconUrl={projectIcons.get(project.id) ?? null}
                         {expanded}
@@ -1244,7 +1253,9 @@
                               class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                               aria-label="New thread in {project.name}"
                               title="New thread"
-                              data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
+                              data-shortcut={encodeShortcutTokens(
+                                keymapState.keysFor('nav-new-thread')
+                              )}
                               onclick={() => onCreateThread(project)}
                             >
                               <CioPlus size={12} />
@@ -1476,6 +1487,13 @@
               >
                 <div>
                   <FolderRow
+                    media={[
+                      ...new SvelteSet(
+                        (threadsByProject.get(project.id) ?? []).flatMap((thread) =>
+                          threadMediaActivity(thread.id)
+                        )
+                      )
+                    ]}
                     {project}
                     iconUrl={projectIcons.get(project.id) ?? null}
                     {expanded}
@@ -1513,7 +1531,9 @@
                           class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                           aria-label="New thread in {project.name}"
                           title="New thread"
-                          data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
+                          data-shortcut={encodeShortcutTokens(
+                            keymapState.keysFor('nav-new-thread')
+                          )}
                           onclick={() => onCreateThread(project)}
                         >
                           <CioPlus size={12} />

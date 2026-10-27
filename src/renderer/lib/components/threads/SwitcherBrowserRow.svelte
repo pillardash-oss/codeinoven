@@ -1,8 +1,9 @@
 <script lang="ts">
+  import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
+  import { captureActivities } from '$shared/media-activity'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
@@ -74,16 +75,12 @@
         aria-label="Peek open on this tab"><CioEye size={12} /></span
       >
     {/if}
-    {#if runtime.audible && !runtime.muted}
-      <span
-        role="img"
-        class="flex shrink-0 items-center text-info"
-        title="Playing audio"
-        aria-label="Playing audio"
-      >
-        <CioVolume size={12} />
-      </span>
-    {/if}
+    <MediaActivityTrail
+      activities={[
+        ...captureActivities(runtime),
+        ...(runtime.audible && !runtime.muted ? ['audio' as const] : [])
+      ]}
+    />
     {#if box}
       <span
         role="img"

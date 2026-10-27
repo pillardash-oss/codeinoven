@@ -9,6 +9,7 @@ import {
   type BrowserDownloadOutstanding
 } from '$lib/stores/browser-downloads.svelte'
 import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
+import type { MediaActivity } from '$shared/media-activity'
 import { speechController } from '$lib/speech/speech-controller.svelte'
 import { browserAudio } from '$lib/stores/browser-audio.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
@@ -158,26 +159,34 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateC
  * same threads on the same rule.
  */
 export class ViewRailActivity {
-  isRecording(
+  mediaFor(
     optionId: HeaderViewOptionId,
     projectBadgeOption: HeaderViewOptionId | null
-  ): boolean {
-    const scope = speechController.recordingScope
-    if (optionId === 'browser') {
-      return (
-        browserAudio.globalIsCapturing() ||
-        (scope !== null &&
-          scope.kind !== 'global' &&
-          browserAssistant.threads.some((thread) => thread.id === scope.threadId))
-      )
-    }
+  ): MediaActivity[] {
     const family = viewOptionFamily(optionId)
-    if (family === 'projects' && optionId !== projectBadgeOption) return false
-    if (browserAudio.familiesCapturing().has(family)) return true
-    if (!scope || scope.kind === 'global') return false
-    if (scope.kind === 'project')
-      return contentThreadFamily({ projectId: scope.projectId }) === family
-    return family === 'chats'
+    if (optionId !== 'browser' && family === 'projects' && optionId !== projectBadgeOption)
+      return []
+    const kinds =
+      optionId === 'browser'
+        ? browserAudio.globalActivities()
+        : browserAudio.activitiesForFamily(family)
+    const recording = speechController.recordingScope
+    const speaking = speechController.speakingScope
+    for (const [scope, kind] of [
+      [recording, 'microphone'],
+      [speaking, 'audio']
+    ] as const) {
+      if (!scope || scope.kind === 'global') continue
+      const browserOwned = browserAssistant.threads.some((thread) => thread.id === scope.threadId)
+      const scopeFamily =
+        scope.kind === 'project' ? contentThreadFamily({ projectId: scope.projectId }) : 'chats'
+      if (
+        (optionId === 'browser' ? browserOwned : !browserOwned && scopeFamily === family) &&
+        !kinds.includes(kind)
+      )
+        kinds.push(kind)
+    }
+    return kinds
   }
 
   counts: ViewActivityCounts = $derived.by((): ViewActivityCounts => {

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
+  import MediaActivityIndicator from '$lib/components/speech/MediaActivityIndicator.svelte'
+  import { captureActivities } from '$shared/media-activity'
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
@@ -12,8 +15,6 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioStar from '@pdslng/cio-icon/CioStar.svelte'
   import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
-  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
-  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type {
     BrowserStripOverlayAction,
     BrowserStripOverlayRequest
@@ -217,13 +218,14 @@
               <CioPin size={12} />
             </span>
           {/if}
+          <MediaActivityTrail activities={captureActivities(tab)} />
           {#if tab.muted}
             <span class="shrink-0 text-accent" role="img" title="Tab is muted">
-              <CioVolumeX size={12} />
+              <MediaActivityIndicator kind="audio" muted decorative />
             </span>
           {:else if tab.audible}
             <span class="shrink-0 text-accent" role="img" title="Tab is playing audio">
-              <CioVolume size={12} />
+              <MediaActivityIndicator kind="audio" decorative />
             </span>
           {:else if tab.hibernated}
             <span class="shrink-0 text-dimmed" role="img" title="Hibernated to save memory">
