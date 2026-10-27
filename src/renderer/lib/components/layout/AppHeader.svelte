@@ -510,9 +510,11 @@
     letter-spacing: -0.02em;
   }
 
-  /* The boundary: one hairline at the column's edge, exactly where the sidebar's
-     own edge continues below it. */
-  .app-header[data-panel='docked'] .header-cluster::after {
+  /* The boundary between the app's chrome and the open thread. It is the panel's
+     edge when a panel is docked and simply the end of the chrome when one is not:
+     either way the thread's own column starts on a line, never in the middle of
+     the bar. */
+  .header-cluster::after {
     content: '';
     position: absolute;
     top: 50%;

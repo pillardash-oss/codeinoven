@@ -68,6 +68,10 @@
     )
   }
 
+  /** The thread's actions menu, opened from the project icon rather than from a
+   *  button of its own. */
+  let threadMenuOpen = $state(false)
+
   let headerThreadTitle = $derived(
     workspaceState.selectedThread ? effectiveThreadTitle(workspaceState.selectedThread) : ''
   )
@@ -90,7 +94,10 @@
   )
 </script>
 
-<div class="flex min-w-0 flex-1 items-center justify-center px-2">
+<!-- The title block belongs to the thread column, not to the middle of the bar:
+     it starts exactly where the header's chrome cluster ends, which is the
+     thread panel's edge, and takes the room the trailing controls leave. -->
+<div class="flex min-w-0 flex-1 items-center justify-start px-2">
   {#if onSettings}
     <div class="pointer-events-none">
       <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
@@ -107,13 +114,9 @@
     {@const isForeignRun = foreignRuns.isForeign(thread.projectId, thread.id)}
     {@const activeRunActivity = agentRuns.activity(thread.projectId, thread.id)}
     {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
-    <!-- `max-w-[var(--app-header-center-max-width)]` (set on the header shell)
-         holds the whole centred block to the middle band of the bar: the title
-         truncates there, and the project icon, thread menu, and status badge
-         stay pinned inside the same band. -->
-    <div
-      class="titlebar-no-drag relative flex min-w-0 max-w-[var(--app-header-center-max-width)] items-center gap-2"
-    >
+    <!-- The block is as wide as the room the bar leaves it, so a long thread name
+         uses the whole column before it gives up any of itself. -->
+    <div class="titlebar-no-drag relative flex min-w-0 items-center gap-2">
       {#if thread.projectId === ASSISTANT_SPACE_ID}
         <!-- An assistant thread wears its assistant's icon, exactly as its sidebar
              row does, so the header names the assistant at a glance. A
@@ -144,7 +147,22 @@
             workspaceState.activeProjectIconUrl ?? undefined
           )}
           {#if resolvedProjectIcon}
-            <div class="pointer-events-auto shrink-0">
+            <!-- One control, two menus. The icon's left click is the project's own
+                 dropdown; its context menu is the thread's actions, which is why
+                 the bar carries no second ellipsis button. The corner cue is the
+                 only thing that says a second menu exists. -->
+            <div
+              class="header-project-menu pointer-events-auto relative shrink-0"
+              oncontextmenu={(event: MouseEvent) => {
+                event.preventDefault()
+                threadMenuOpen = true
+              }}
+              onkeydown={(event: KeyboardEvent) => {
+                if (event.key !== 'F10' || !event.shiftKey) return
+                event.preventDefault()
+                threadMenuOpen = true
+              }}
+            >
               <ProjectInfoDropdown
                 project={headerProject}
                 iconUrl={resolvedProjectIcon}
@@ -161,28 +179,37 @@
                   onerror={projectIconOnError(headerProject)}
                 />
               </ProjectInfoDropdown>
+              <ThreadDropdown
+                items={threadActionsMenu.items}
+                bind:open={threadMenuOpen}
+                anchorOnly
+                title="Thread actions"
+              />
             </div>
           {/if}
         {/if}
       {/if}
-      <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
+      <!-- The name owns its row and the state sits under it, so neither pushes
+           the other sideways: the title is never shortened to make room for a
+           badge, and a long name still has the whole column before it truncates. -->
+      <div class="flex min-w-0 flex-col justify-center">
         <h1
           class="truncate text-[0.6875rem] font-medium tracking-tight text-foreground"
           title={headerThreadTitle}
         >
           {headerThreadTitle}
         </h1>
-        <ThreadDropdown items={threadActionsMenu.items} onOpen={() => {}} />
         {#if isWorking}
           <span
-            class="flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
-              ? 'bg-warning/10 text-warning'
-              : 'bg-info/10 text-info'}"
+            class="flex min-w-0 items-center gap-1 text-[0.5625rem] tracking-[0.06em] uppercase {isRetryPaused
+              ? 'text-warning'
+              : 'text-info'}"
           >
+            <span class="block h-1 w-1 shrink-0 rounded-full bg-current"></span>
             {#if isForeignRun}
-              <CioWindow size={10} />
+              <CioWindow size={9} />
             {/if}
-            <span class="header-status-label">
+            <span class="header-status-label truncate">
               {workspaceState.specStudioFormulating
                 ? 'Formulating…'
                 : isForeignRun
@@ -209,6 +236,23 @@
 </div>
 
 <style>
+  /* The corner cue: the project icon opens two menus, and this is the only thing
+     that says so. Two dots, small enough to read as texture on the icon rather
+     than as a second control beside it. */
+  .header-project-menu::after {
+    content: '';
+    position: absolute;
+    right: 0.0625rem;
+    bottom: 0.0625rem;
+    width: 0.125rem;
+    height: 0.125rem;
+    color: var(--color-muted);
+    background: currentColor;
+    opacity: 0.5;
+    box-shadow: 0.25rem 0 0 currentColor;
+    pointer-events: none;
+  }
+
   @container (max-width: 760px) {
     .header-status-label {
       display: none;
