@@ -162,6 +162,14 @@ function seamed(platform, content) {
   return `${content}<span class="seam ${seamSide}"></span>`
 }
 
+/* The width below which this bar cannot go: the mark, the navigation pair and
+   the actions the view registered, and nothing else. Only the name is elastic, so
+   this is also the panel width at which the name has nowhere left to go. */
+function spineFloor(options = {}) {
+  const actions = Math.max(1, Math.min(3, options.actionCount ?? 3))
+  return 88 + actions * 28 + (actions - 1) * 2
+}
+
 function frame({ platform, variant, width = 'full', options = {} }) {
   const config = PLATFORMS[platform]
   const classes = ['frame', config.cls, `variant-${variant}`]
@@ -224,7 +232,7 @@ function frame({ platform, variant, width = 'full', options = {} }) {
     }<span class="label">Thread</span></button></div></div>`
   }
 
-  return `<div class="${classes.join(' ')}">${inner}</div>`
+  return `<div class="${classes.join(' ')}" style="--spine-floor: ${spineFloor(options)}px">${inner}</div>`
 }
 
 /* The rail as the window has it today, 40px wide: the view switcher above, the

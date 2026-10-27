@@ -90,8 +90,11 @@
           line instead of two that nearly meet. Drag it: the wordmark gives way first, then the
           view's actions fold one at a time, and nothing ever spills out of the column. On the
           layouts whose controls sit on the left the column looks smaller than it is, because the
-          lights take 80 to 138px of it, so at the app's 200px minimum the identity is the mark
-          alone on macOS and Linux-left and still holds about five characters on Windows.
+          lights take 80 to 138px of it. Nothing except the name ever gives way: the mark, the
+          navigation pair and every action keep their place at every width, so the column can only
+          follow the panel down to the width the chrome itself needs. That floor is 216px on macOS
+          and 274px with Linux decorations on the left; the app's 200px minimum sits below it there,
+          which is why the boundary stops at the chrome's own end instead of sliding further.
         </p>
         <div id="panel"></div>
       </section>

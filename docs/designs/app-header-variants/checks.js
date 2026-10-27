@@ -249,10 +249,16 @@ function panelAlignment(frames) {
     const ruleLeft = rectOf(rule).left
     const panelRight = rectOf(panel).right
     const contentLeft = rectOf(content).left
-    if (Math.abs(panelRight - ruleLeft) > 1) {
-      problems.push(`rule is ${Math.round(ruleLeft - panelRight)}px off the panel edge`)
-    }
-    if (Math.abs(contentLeft - ruleLeft) > 1) {
+    /* The column follows the panel, but it is never narrower than the controls it
+       carries: past that point the boundary is the chrome's own end, which is the
+       panel's floor rather than a defect. Short of the panel edge is the real
+       failure, because there the chrome is sitting over the panel. */
+    const offset = Math.round(ruleLeft - panelRight)
+    if (offset < -1) problems.push(`the column is ${-offset}px short of the panel edge`)
+    /* At the floor the boundary is the chrome's end and the panel's border falls
+       where the panel actually is, so the two only have to agree once the panel
+       is wide enough to hold the chrome. */
+    if (offset <= 1 && Math.abs(contentLeft - ruleLeft) > 1) {
       problems.push(`the panel's border starts ${Math.round(contentLeft - ruleLeft)}px off the rule`)
     }
 
@@ -285,7 +291,7 @@ function panelAlignment(frames) {
     rows.push(
       `${problems.length === 0 ? 'ok' : 'FAIL'} · ${platform} panel ${width}px · rule at ${Math.round(
         clusterEnd
-      )}px of the bar · spine ${spineWidth}px · label ${labelWidth}px (${label}) · ${actions} actions · names ${visibility}${
+      )}px of the bar · spine ${spineWidth}px · label ${labelWidth}px (${label}) · ${actions} actions · names ${visibility}${offset > 1 ? ` · at the chrome floor, ${offset}px past the panel` : ''}${
         problems.length ? ` · ${problems.join('; ')}` : ''
       }`
     )

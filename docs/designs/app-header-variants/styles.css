@@ -1599,11 +1599,12 @@ h1 {
           │ │ Threads                               │ conversation
           │ │ ● Repair header collision under…      │
 
-   The name is the bar's elastic part, and it gives way in steps rather than in
-   fractions of a letter: the wordmark, then the short name, then the mark alone,
-   with the view's actions folding one at a time between those steps. The app's
-   own sidebar runs 200 to 420px, and its 200px floor is where the identity is
-   down to the mark with the navigation still beside it. */
+   The name is the bar's only elastic part: it gives way in steps rather than in
+   fractions of a letter, from the wordmark to the short name to nothing at all.
+   Nothing else moves. The mark, the navigation pair and every view action keep
+   their places at every panel width, which is what sets the panel's floor: the
+   column can only follow the panel until the panel is narrower than the chrome
+   it has to hold. */
 
 .window.panel-window {
   display: flex;
@@ -1718,10 +1719,14 @@ h1 {
 /* A named container of its own, so the fold below is driven by the room the
    column actually has rather than by the window's width. */
 .variant-v8.panel-mode .zone.left.spine {
-  flex: 0 0 calc(2.5rem + var(--panel-width, 20rem) - var(--os-left, 0px));
+  flex: 0 0 auto;
   width: calc(2.5rem + var(--panel-width, 20rem) - var(--os-left, 0px));
-  min-width: 0;
-  overflow: hidden;
+  /* The bar can never be narrower than the controls it carries: the mark, the
+     navigation pair and every action stay on screen at every panel width. Only
+     the name gives way, and only the name. The floor is stated per frame because
+     a size container cannot measure its own contents. */
+  min-width: var(--spine-floor, 11rem);
+  overflow: visible;
   container: spine / inline-size;
 }
 
@@ -1761,29 +1766,8 @@ h1 {
   }
 }
 
-/* The fold: the actions give way one at a time after the name has shortened.
-   Nothing is ever clipped, and a folded action is still one right click away in
-   the thread's menu. */
-@container spine (max-width: 13rem) {
-  .variant-v8.panel-mode .spine-actions .ibtn:nth-child(3) {
-    display: none;
-  }
-}
-
-@container spine (max-width: 11rem) {
-  .variant-v8.panel-mode .spine-actions .ibtn:nth-child(2) {
-    display: none;
-  }
-}
-
-@container spine (max-width: 9.2rem) {
-  .variant-v8.panel-mode .spine-actions {
-    display: none;
-  }
-}
-
-/* At the very bottom of the range even the short name has to go: the mark and
-   the navigation pair are what the column cannot do without. */
+/* At the very bottom of the range even the short name has to go. Nothing else
+   moves: the mark, the navigation pair and the actions are what the bar is. */
 @container spine (max-width: 7.4rem) {
   .variant-v8.panel-mode .zone.left.spine .brand-name {
     display: none;
