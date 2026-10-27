@@ -258,16 +258,18 @@ function build() {
   if (ladder) {
     const host = document.createElement('div')
     host.className = 'frames'
-    host.innerHTML = [null, 200, 264, 320, 420]
-      .map((panelWidth) =>
+    const states = [
+      { panelHidden: true },
+      { panelHidden: true, compactActions: true },
+      { panelWidth: 200 },
+      { panelWidth: 264 },
+      { panelWidth: 320 },
+      { panelWidth: 420 }
+    ]
+    host.innerHTML = states
+      .map((state) =>
         ['mac', 'win']
-          .map((platform) =>
-            window.CIOHeader.block({
-              platform,
-              variant,
-              options: panelWidth === null ? { ...options, panelHidden: true } : { ...options, panelWidth }
-            })
-          )
+          .map((platform) => window.CIOHeader.block({ platform, variant, options: { ...options, ...state } }))
           .join('')
       )
       .join('')

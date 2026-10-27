@@ -154,10 +154,10 @@ function spineMarkup(platform, options) {
 }
 
 function variantActions(options) {
-  /* With no panel docked the bar has no column to spend on buttons, so the view
-     actions fold into one ellipsis that opens them. The thread's own name gets
-     the room instead. */
-  if (options.panelHidden) return iconButton('dots', 'actions-folded')
+  /* Folding is about room, not about the panel alone: with no panel docked the bar
+     is content-sized, and the actions only give up their place when the context
+     panel is open and the conversation, with the title beside it, is narrow. */
+  if (options.compactActions) return iconButton('dots', 'actions-folded')
   return viewActionsMarkup(options.actionCount ?? 3)
 }
 

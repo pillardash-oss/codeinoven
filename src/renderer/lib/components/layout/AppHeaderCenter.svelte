@@ -102,9 +102,13 @@
 <!-- The title block belongs to the thread column, not to the middle of the bar:
      it starts exactly where the header's chrome cluster ends, which is the
      thread panel's edge, and takes the room the trailing controls leave. -->
+<!-- Never flush against the end of the chrome: the thread block keeps its own
+     gutter even when it is aligned to the conversation column, and that gap is
+     the smallest one it will take. -->
 <div
   class="flex min-w-0 flex-1 items-center justify-start pr-2"
-  style:padding-left={titleInset > 0 ? `${titleInset}px` : undefined}
+  style:padding-left={titleInset > 0 ? `${Math.max(titleInset, 8)}px` : undefined}
+  class:pl-2={titleInset <= 0}
 >
   {#if onSettings}
     <div class="pointer-events-none">

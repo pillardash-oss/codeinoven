@@ -12,7 +12,11 @@
    */
   const reportConversationColumn: Attachment<HTMLElement> = (element) => {
     const report = () => {
-      layoutPanelState.conversationLeft = Math.round(element.getBoundingClientRect().left)
+      /* The column's own padding is inside its box, and the text starts after it:
+         aligning the header to the box edge leaves the title a few pixels left of
+         the line the messages start on. */
+      const padding = Number.parseFloat(getComputedStyle(element).paddingLeft) || 0
+      layoutPanelState.conversationLeft = Math.round(element.getBoundingClientRect().left + padding)
     }
     report()
     const observer = new ResizeObserver(report)

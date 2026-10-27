@@ -370,7 +370,13 @@
       </button>
     {:else}
       <div class="header-cluster-actions">
-        <AppHeaderViewActions compact={panelColumnWidth === 0} />
+        <!-- Folded only when the bar genuinely has no room for them: no panel
+             column to spend, and the context panel open, which is what narrows the
+             conversation and the title with it. Both panels closed, or a panel
+             docked on the left, and the actions stay in the bar. -->
+        <AppHeaderViewActions
+          compact={panelColumnWidth === 0 && contextSidebarState.visible}
+        />
       </div>
     {/if}
   </nav>
