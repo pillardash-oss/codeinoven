@@ -34,6 +34,27 @@ import {
 const IDLE_DISPOSE_MS = 20_000
 
 /**
+ * Whether the overlay may forward mouse moves into its own document while it
+ * ignores the mouse.
+ *
+ * Forwarding is how the document learns where the pointer is in that state, and
+ * on macOS it is free: only a key window is delivered native hover and cursor
+ * changes, and this window is deliberately never key. Windows is not. A
+ * forwarded move reaches this window's Chromium, which answers with the cursor
+ * its own transparent document hit-tests   the arrow   while the app window
+ * underneath answers with the one the user is actually pointing at: the
+ * pointer, the grab, the resize. One answer per move, alternating as fast as
+ * the mouse travels, is a cursor that flickers between shapes everywhere in the
+ * app, because this window spans all of it. The document does not need those
+ * moves: it derives the same answer from the window-server cursor on its own
+ * beat, which is the input it already trusts over the events themselves
+ * (`renderer/lib/components/ui/BrowserOverlaySurface.svelte`).
+ */
+function forwardsMouseMoves(): boolean {
+  return process.platform !== 'win32'
+}
+
+/**
  * Owns the frameless child window that draws the app's overlay content over a
  * browser page.
  *
@@ -142,11 +163,12 @@ export class BrowserOverlayWindow {
     private readonly preloadPath: string = resolveChildWindowPreload(),
     private readonly onModalHostChanged: (host: BrowserWindow | null) => void = () => {}
   ) {
-    // While the application is active this window stays mapped, empty and
-    // click-through. Hiding it and showing it again costs the window server its
-    // map, which is what a modal would otherwise wait for on the very gesture
-    // that opened it. It is hidden the moment another application comes forward,
-    // so an always-on-top overlay can never float over one.
+    // While the application is active this window is brought back whenever it has
+    // something to draw, and it is never mapped while it does not. An empty
+    // overlay is invisible to the user and not to the window server: it sits
+    // above every pixel of the app and competes for the cursor over all of them
+    // (`forwardsMouseMoves`). It is hidden the moment another application comes
+    // forward, so an always-on-top overlay can never float over one.
     this.parent.on('focus', () => this.showWhileWarm())
     this.parent.on('blur', () => {
       setTimeout(() => {
@@ -160,11 +182,17 @@ export class BrowserOverlayWindow {
     })
   }
 
-  /** Bring the warm window back when the application becomes active. */
+  /**
+   * Bring the window back when the application becomes active.
+   *
+   * Only when it has something to draw. A held window that draws nothing stays
+   * unmapped: mapped, it sits above every pixel of the app and competes for the
+   * cursor over all of them (`forwardsMouseMoves`).
+   */
   private showWhileWarm(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
-    if (!this.wantsWindow && !this.hasContent()) return
+    if (!this.hasContent()) return
     this.reveal(popup)
   }
 
@@ -172,9 +200,9 @@ export class BrowserOverlayWindow {
    * Whether anything is holding this window loaded.
    *
    * The browser view holds it while it is on screen, and the app renderer holds
-   * it from the session's first gesture onwards. Empty is not the same as
-   * unwanted: a held window stays mapped and click-through so the next drawer
-   * does not pay the window server for the map.
+   * it from the session's first gesture onwards. Loaded is not the same as
+   * mapped: a held window that draws nothing stays hidden and ready, so the next
+   * drawer pays one window-server map and never a document load (`settle`).
    */
   private get wantsWindow(): boolean {
     return this.warm || this.sessionWarm
@@ -301,9 +329,16 @@ export class BrowserOverlayWindow {
    * The app renderer calls this on the session's first gesture
    * (`renderer/lib/overlay-host-warm.ts`). From that moment the session draws
    * modals, tooltips and the switcher here, and a document reload between two of
-   * them is a blank frame the user watches. The window is mapped now, empty and
-   * click-through, rather than on the gesture that opens the first dialog,
-   * because the window server's map is part of that gesture's cost.
+   * them is a few hundred milliseconds the user watches as a blank frame. That
+   * load is what this hold pays for, on the gesture rather than on the one that
+   * opens the first dialog.
+   *
+   * The window is deliberately left unmapped. A mapped overlay sits above every
+   * pixel of the app and, while it ignores the mouse, competes for the cursor
+   * over all of them (`forwardsMouseMoves`): a cursor the user cannot keep still,
+   * everywhere, in exchange for one window-server map saved from the first
+   * dialog. Content maps it   every surface that draws here calls `reveal`   and
+   * a hidden window with background throttling off still loads and draws.
    *
    * Answers false when the window could not be created, which leaves the first
    * projection to fall back to the app window's own panel and lets the next
@@ -316,7 +351,6 @@ export class BrowserOverlayWindow {
       this.sessionWarm = false
       return false
     }
-    this.reveal(popup)
     return true
   }
 
@@ -617,9 +651,11 @@ export class BrowserOverlayWindow {
     if (this.hasContent()) return
     this.pointerOverContent = false
     this.applyClickThrough()
-    // A held window stays mapped, empty and click-through, so the next modal
-    // paints into a window that is already on screen.
-    if (!this.wantsWindow && popup.isVisible()) popup.hide()
+    // A held window stays loaded, which is what the next modal needs, but it is
+    // unmapped while it draws nothing: mapped, it competes for the cursor over
+    // every pixel of the app it covers (`forwardsMouseMoves`), and the map a
+    // returning surface pays for is one frame next to that.
+    if (popup.isVisible()) popup.hide()
   }
 
   /**
@@ -646,7 +682,9 @@ export class BrowserOverlayWindow {
     const ignore = !(this.hasContent() && (this.hasModalDock() || this.pointerOverContent))
     if (ignore === this.ignoringMouse) return
     this.ignoringMouse = ignore
-    popup.setIgnoreMouseEvents(ignore, { forward: true })
+    // Forwarding is only ever used while ignoring, and only where it does not
+    // cost the cursor (`forwardsMouseMoves`).
+    popup.setIgnoreMouseEvents(ignore, { forward: ignore && forwardsMouseMoves() })
   }
 
   /** Whether a modal dock is on display, which owns the whole window. */
@@ -760,7 +798,7 @@ export class BrowserOverlayWindow {
     // An invisible window must never swallow a click meant for the page: the
     // document arms this off, and back on only over drawn content.
     this.ignoringMouse = true
-    popup.setIgnoreMouseEvents(true, { forward: true })
+    popup.setIgnoreMouseEvents(true, { forward: forwardsMouseMoves() })
     this.position(popup)
     popup.webContents.on('before-input-event', (event, input) => {
       if (popup.isDestroyed()) return
@@ -871,8 +909,9 @@ export class BrowserOverlayWindow {
         return
       }
       this.position(popup)
-      if ((this.wantsWindow || (this.ready && this.hasContent())) && !popup.isVisible())
-        popup.showInactive()
+      // Mapped only while it draws something, for the same reason `settle` leaves
+      // it unmapped otherwise: a held but empty window is loaded, not on screen.
+      if (this.hasContent() && !popup.isVisible()) popup.showInactive()
     }
     this.parent.on('move', reposition)
     this.parent.on('resize', reposition)

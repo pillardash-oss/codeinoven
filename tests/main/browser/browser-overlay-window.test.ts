@@ -145,6 +145,7 @@ describe('native browser overlay window', () => {
     ])
   })
   it('keeps tooltips click-through and gives only a modal keyboard ownership', () => {
+    stubPlatform('darwin')
     const { host, parent } = setup()
     host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', passive: true, modal: false })
     const popup = windows[1]
@@ -152,10 +153,39 @@ describe('native browser overlay window', () => {
     expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
     expect(popup.focus).not.toHaveBeenCalled()
     host.applyDock(request.id, request)
-    expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
+    expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: false })
     expect(host.focusDock(request.id)).toBe(true)
     expect(popup.focus).toHaveBeenCalledOnce()
     expect(parent.hide).not.toHaveBeenCalled()
+  })
+  it('never forwards mouse moves on Windows, where they fight the app for the cursor', () => {
+    stubPlatform('win32')
+    const { host } = setup()
+    host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', modal: false, passive: true })
+    const popup = windows[1]
+    // Forwarding is armed per click-through state, and never on Windows: the
+    // forwarded move would make this document answer with its own cursor while
+    // the app window underneath answers with the one the user is pointing at.
+    expect(popup.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: false })
+    popup.webContents.emit('did-finish-load')
+    expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: false })
+    host.applyDock(request.id, request)
+    expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: false })
+  })
+  it('loads the session-warmed host without mapping it until it draws', () => {
+    stubPlatform('darwin')
+    const { host } = setup()
+    expect(host.warmForSession()).toBe(true)
+    expect(windows).toHaveLength(2)
+    const popup = windows[1]
+    popup.webContents.emit('did-finish-load')
+    // The document is loaded and kept, and deliberately not on screen: a mapped,
+    // empty overlay competes for the cursor over every pixel of the app.
+    expect(popup.showInactive).not.toHaveBeenCalled()
+    host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', modal: false })
+    expect(popup.showInactive).toHaveBeenCalledOnce()
+    host.applyDock('app-tooltip', null)
+    expect(popup.hide).toHaveBeenCalledOnce()
   })
   it('routes native key input to the source modal and leaves the browser attached', () => {
     const { host, parent } = setup()
@@ -194,6 +224,7 @@ describe('native browser overlay window', () => {
   })
   it('removes the modal and restores click-through after the bounded exit', async () => {
     vi.useFakeTimers()
+    stubPlatform('darwin')
     const { host, parent } = setup()
     host.applyDock(request.id, request)
     const popup = windows[1]
@@ -228,6 +259,7 @@ describe('native browser overlay window', () => {
 })
 
 it('keeps native link previews passive and click-through', () => {
+  stubPlatform('darwin')
   const { parent, host } = setup()
   const status = { url: 'https://example.com', left: 10, bottom: 4 }
   host.applyStatus(status)
