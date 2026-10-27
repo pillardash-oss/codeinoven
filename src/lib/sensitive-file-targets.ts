@@ -85,6 +85,7 @@ export function sensitiveFileTargets(
     if (!pattern) return false
     const subtree = pattern.endsWith('/**') ? pattern.slice(0, -3) : pattern
     const pieces = path.split('/').filter(Boolean)
+    const basename = pieces.at(-1) ?? ''
     const candidates = pattern.includes('/')
       ? [path, ...pieces.map((_, index) => pieces.slice(index).join('/'))]
       : pieces
@@ -93,9 +94,15 @@ export function sensitiveFileTargets(
         glob(candidate, pattern) ||
         candidate === subtree ||
         candidate.startsWith(`${subtree}/`) ||
-        (/[?*]/u.test(candidate) &&
-          candidate.replace(/[?*]/gu, '').length >= 2 &&
-          glob(pattern.replaceAll('*', 'sample').replaceAll('?', 'x'), candidate))
+        // A bare-name pattern can catch a glob operand that would expand onto
+        // it (`cat *env*`). The reverse test is meaningless against a path
+        // pattern, and comparing a glob candidate to a full path is how
+        // `/…/codeinoven/*ode*n*oven*` once looked like `agent-secrets/**`.
+        (!pattern.includes('/') &&
+          /[?*]/u.test(basename) &&
+          basename.replace(/[?*]/gu, '').length >= 2 &&
+          candidate === basename &&
+          glob(pattern.replaceAll('*', 'sample').replaceAll('?', 'x'), basename))
     )
   }
 
