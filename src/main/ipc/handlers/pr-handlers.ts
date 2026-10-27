@@ -460,6 +460,22 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle(
+    'pr:search',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, text: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.searchPullRequests({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        state: validatePrState(state),
+        // Bounded like every other search term that reaches the provider, so the
+        // query GitHub builds stays a query rather than a page of text.
+        text: typeof text === 'string' ? text.slice(0, 256) : ''
+      })
+    }
+  )
+
+  ipcMain.handle(
     'deployment:activity',
     async (_, projectId: unknown, owner: unknown, repo: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')

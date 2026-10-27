@@ -199,6 +199,24 @@ export interface IssueCommentTarget {
   commentId: number
 }
 
+/**
+ * Search a repository's pull requests by text.
+ *
+ * The state is part of the query because the find belongs to the PR listing the
+ * reader is on: a search from the Closed listing has to reach merged work, and a
+ * search from the Open listing must not answer with it.
+ */
+export interface SearchPullRequestsInput {
+  owner: string
+  repo: string
+  /**
+   * Free text in GitHub's own search syntax. Empty lists the most recently updated
+   * pull requests in the requested state, which is what the bar shows before a key.
+   */
+  text: string
+  state: PrState
+}
+
 /** Search a repository's issues by text, for the relationship picker. */
 export interface SearchIssueCandidatesInput {
   owner: string
@@ -332,6 +350,14 @@ export interface GitProvider {
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]>
   /** Paginated listing with the detail the sidebar list needs. */
   listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage>
+  /**
+   * Search the repository's pull requests by text, for the panel's own find.
+   *
+   * Search-backed like the listing, and read with the same mapper, so a result is
+   * a row the PR list would have drawn: selecting one opens the reader directly.
+   * Bounded rather than paged, because a find is a jump to one item.
+   */
+  searchPullRequests(input: SearchPullRequestsInput): Promise<PullRequestSummary[]>
   /**
    * One page of the repository's issues, narrowed by the viewer's relationship
    * and ordered the way the sidebar draws it.

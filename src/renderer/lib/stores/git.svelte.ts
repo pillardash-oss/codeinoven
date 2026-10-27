@@ -61,6 +61,7 @@ import type {
   PrMinimizeReason,
   PrReactionContent,
   PrResolveOptions,
+  PrState,
   PullRequestBundle,
   PullRequestPage,
   PullRequestSummary,
@@ -1400,6 +1401,16 @@ export class GitState {
 
   getDefaultBranch(projectId: string) {
     return this.prOps.getDefaultBranch(projectId)
+  }
+
+  /**
+   * Search this repository's pull requests, for the PR view's own find.
+   *
+   * The state is the listing the reader is on, so the find answers within the view
+   * rather than across every pull request the repository ever had.
+   */
+  searchPullRequests(projectId: string, owner: string, repo: string, state: PrState, text: string) {
+    return this.prOps.searchPullRequests(projectId, owner, repo, state, text)
   }
 
   comparePullRequests(projectId: string, owner: string, repo: string, base: string, head: string) {

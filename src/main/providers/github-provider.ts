@@ -50,7 +50,11 @@ import type {
   WorkflowRerunMode,
   WorkflowRunFilter
 } from '../../lib/types'
-import type { IssueLinkInput, SearchIssueCandidatesInput } from '../git/git-provider.interface'
+import type {
+  IssueLinkInput,
+  SearchIssueCandidatesInput,
+  SearchPullRequestsInput
+} from '../git/git-provider.interface'
 import { capJobLogText } from '../../lib/github-job-log'
 import { isReactionContent } from '../../lib/github-reactions'
 import type {
@@ -266,6 +270,14 @@ const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!
  * of the reader, and the search field is how they reach anything further.
  */
 const ISSUE_CANDIDATE_LIMIT = 20
+
+/**
+ * How many pull requests the panel's find offers.
+ *
+ * Bounded like the issue picker, and for the same reason: a find is one item out of
+ * a list the reader is already looking at, and typing is how they narrow it.
+ */
+const PR_SEARCH_LIMIT = 20
 
 /**
  * The relationship mutations.
@@ -687,6 +699,44 @@ export class GitHubProvider implements GitProvider {
       // The IPC handler tells a repository the App cannot see apart from a
       // transient outage by HTTP status, so a GraphQL access failure has to
       // arrive as the same `ProviderHttpError` the REST calls raise.
+      if (failure instanceof ProviderGraphqlError) {
+        if (failure.type === 'FORBIDDEN') throw new ProviderHttpError(403, failure.message)
+        if (failure.type === 'NOT_FOUND') throw new ProviderHttpError(404, failure.message)
+      }
+      throw failure
+    }
+  }
+
+  /**
+   * Search the repository's pull requests for the panel's find.
+   *
+   * Shares `PULL_REQUEST_LIST_QUERY` and its mapper with the listing, so a result is
+   * a row the PR list itself would have drawn and opening it needs no second read.
+   * Stack counts are left unset on purpose: a find is a jump to one pull request, and
+   * the reader reads the stack when it opens.
+   */
+  async searchPullRequests(input: SearchPullRequestsInput): Promise<PullRequestSummary[]> {
+    const qualifiers = ['is:pr', `repo:${input.owner}/${input.repo}`]
+    if (input.state === 'open') qualifiers.push('is:open')
+    else if (input.state === 'closed') qualifiers.push('is:closed')
+    const text = input.text.trim()
+    if (text) qualifiers.push(text)
+    qualifiers.push(LIST_SORTS['updated'])
+    try {
+      const data = await this.runGraphql(PULL_REQUEST_LIST_QUERY, {
+        q: qualifiers.join(' '),
+        first: PR_SEARCH_LIMIT,
+        after: null
+      })
+      const search = this.readRecord(data, 'search')
+      const nodes: unknown[] = search && Array.isArray(search['nodes']) ? search['nodes'] : []
+      return nodes.flatMap((node) => {
+        const summary = this.toGraphqlSummary(node, input.owner, input.repo)
+        return summary ? [summary] : []
+      })
+    } catch (failure) {
+      // Same translation as the listing: the handler tells a repository this App
+      // cannot see apart from a transient outage by HTTP status.
       if (failure instanceof ProviderGraphqlError) {
         if (failure.type === 'FORBIDDEN') throw new ProviderHttpError(403, failure.message)
         if (failure.type === 'NOT_FOUND') throw new ProviderHttpError(404, failure.message)

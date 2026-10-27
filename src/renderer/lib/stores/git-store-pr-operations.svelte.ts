@@ -21,6 +21,7 @@ import type {
   PullRequestLabel,
   PullRequestMilestone,
   PullRequestReference,
+  PullRequestSummary,
   RepositoryMentionUser,
   ThreadSettings
 } from '$shared/types'
@@ -249,6 +250,23 @@ export class GitPullRequestOperations {
     } catch {
       return []
     }
+  }
+
+  /**
+   * Search this repository's pull requests for the PR view's find.
+   *
+   * Not wrapped in a catch: the bar shows the failure itself, because a search that
+   * silently answers nothing is indistinguishable from a search that matched nothing.
+   * The caller keeps the last results and says why they may be stale.
+   */
+  async searchPullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState,
+    text: string
+  ): Promise<PullRequestSummary[]> {
+    return await invoke('pr:search', projectId, owner, repo, state, text)
   }
 
   /**

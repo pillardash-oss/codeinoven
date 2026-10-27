@@ -101,7 +101,13 @@
   import GitStatusPanelConfirmDialogs from './GitStatusPanelConfirmDialogs.svelte'
   import GitStatusPanelChangesView from './GitStatusPanelChangesView.svelte'
   import GitStatusPanelCommitComposer from './GitStatusPanelCommitComposer.svelte'
-  import GitStatusPanelCommitSearch from './GitStatusPanelCommitSearch.svelte'
+  import GitStatusPanelFind from './GitStatusPanelFind.svelte'
+  import {
+    GIT_FIND_WORDS,
+    gitFindScopeFor,
+    type GitFindRow,
+    type GitFindScope
+  } from './git-panel-find'
   import GitStatusPanelNotices from './GitStatusPanelNotices.svelte'
   import OvenSurfaceOverlay from '../shared/OvenSurfaceOverlay.svelte'
   import GitStatusPanelRepoStates from './GitStatusPanelRepoStates.svelte'
@@ -154,6 +160,7 @@
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+  import { issuePanelView } from '$lib/stores/issue-panel-view.svelte'
   import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
@@ -287,11 +294,18 @@
   let remoteUpdatesRequestId = 0
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
-  let commitSearchQuery = $state('')
-  let commitSearchResults = $state.raw<GitCommitInfo[]>([])
-  let commitSearchLoading = $state(false)
-  let commitSearchActiveIndex = $state(0)
-  let commitSearchRequestId = 0
+  let findQuery = $state('')
+  let findRows = $state.raw<GitFindRow[]>([])
+  let findLoading = $state(false)
+  let findActiveIndex = $state(0)
+  let findRequestId = 0
+  /** Why the last search could not be answered, when it could not. */
+  let findError = $state<string | null>(null)
+  /** How many matches the bar offers: a find is a jump to one item, not a listing. */
+  const FIND_LIMIT = 20
+  /** What the bar searches, which the view in focus decides. */
+  const findScope = $derived(gitFindScopeFor(activeTab))
+  const findWords = $derived(GIT_FIND_WORDS[findScope])
   /** Invalidated whenever the panel swaps scope buckets, so a history page
    *  fetched for the previous worktree can never land in the new one's list. */
   let historyRequestId = 0
@@ -1034,7 +1048,11 @@
 
   /** Switch the panel's view. History is the one view that pages its data in. */
   function selectTab(id: GitPanelTabId): void {
+    // The find bar follows the view, so a subject change drops the answers that
+    // belonged to the old one while leaving the bar open if it was open.
+    const subjectChanged = gitFindScopeFor(id) !== findScope
     activeTab = id
+    if (subjectChanged && findNavState.gitFindOpen) resetFindResults()
     if (id === 'history') void loadHistory()
     // Notifications arrive from GitHub rather than the repository, so the view
     // asks for its own data the first time it is shown.
@@ -1257,55 +1275,289 @@
     }
   }
 
-  function openCommitSearch(): void {
+  function openFind(): void {
     findNavState.openGitFind()
   }
 
-  function closeCommitSearch(): void {
-    commitSearchRequestId++
-    commitSearchQuery = ''
-    commitSearchResults = []
-    commitSearchLoading = false
-    commitSearchActiveIndex = 0
+  function closeFind(): void {
+    findRequestId++
+    findQuery = ''
+    findRows = []
+    findLoading = false
+    findActiveIndex = 0
+    findError = null
     findNavState.closeGitFind()
   }
 
-  async function searchCommits(rawQuery: string): Promise<void> {
+  /**
+   * Drop what the previous view answered, keeping the bar open.
+   *
+   * Switching views switches the subject of the search, and results from the old
+   * subject would be a list of things this view does not show.
+   */
+  function resetFindResults(): void {
+    findRequestId++
+    findQuery = ''
+    findRows = []
+    findLoading = false
+    findActiveIndex = 0
+    findError = null
+  }
+
+  async function runFind(rawQuery: string): Promise<void> {
     const query = rawQuery.trim()
-    commitSearchQuery = query
-    commitSearchActiveIndex = 0
-    const requestId = ++commitSearchRequestId
+    findQuery = query
+    findActiveIndex = 0
+    findError = null
+    const requestId = ++findRequestId
     if (!query) {
-      commitSearchResults = []
-      commitSearchLoading = false
+      findRows = []
+      findLoading = false
       return
     }
 
-    commitSearchResults = []
-    commitSearchLoading = true
-    const results = await gitState.getLog(projectId, 50, 0, query)
-    if (requestId !== commitSearchRequestId) return
-    commitSearchResults = results
-    commitSearchLoading = false
+    findRows = []
+    findLoading = true
+    try {
+      const rows = await findRowsFor(findScope, query)
+      if (requestId !== findRequestId) return
+      findRows = rows
+    } catch (reason) {
+      if (requestId !== findRequestId) return
+      findRows = []
+      findError = reason instanceof Error ? reason.message : 'The search could not be run'
+    } finally {
+      if (requestId === findRequestId) findLoading = false
+    }
   }
 
-  function moveCommitSearch(direction: -1 | 1): void {
-    if (commitSearchResults.length === 0) return
-    commitSearchActiveIndex =
-      (commitSearchActiveIndex + direction + commitSearchResults.length) %
-      commitSearchResults.length
+  /**
+   * The rows the active view's search answers with.
+   *
+   * Every scope reads the same data its view draws, so a result is a thing the
+   * view can open: the commit list reads commits, the PR search asks GitHub for
+   * `is:pr`, and the views whose lists are already resident filter what is loaded
+   * rather than making a request per keystroke.
+   */
+  async function findRowsFor(scope: GitFindScope, query: string): Promise<GitFindRow[]> {
+    switch (scope) {
+      case 'commits': {
+        const commits = await gitState.getLog(projectId, 50, 0, query)
+        return commits.map((commit) => ({
+          kind: 'commit',
+          key: commit.hash,
+          title: commit.message.split('\n')[0] ?? commit.shortHash,
+          detail: `${commit.shortHash} · ${commit.author} · ${formatCompactAge(commit.date)}`,
+          commit
+        }))
+      }
+      case 'branches': {
+        const needle = query.toLowerCase()
+        return gitState.branches
+          .filter(
+            (branch) =>
+              branch.name.toLowerCase().includes(needle) ||
+              branch.ref.toLowerCase().includes(needle)
+          )
+          .slice(0, FIND_LIMIT)
+          .map((branch) => ({
+            kind: 'branch',
+            key: branch.ref,
+            title: branch.name,
+            detail: branch.remote ? `${branch.remote} · ${branch.kind}` : branch.kind,
+            badge: branch.current ? 'current' : undefined,
+            branch
+          }))
+      }
+      case 'pulls': {
+        const identity = requireFindIdentity('pull requests')
+        const pulls = await gitState.searchPullRequests(
+          projectId,
+          identity.owner,
+          identity.repo,
+          prListState,
+          query
+        )
+        return pulls.map((pull) => ({
+          kind: 'pull',
+          key: String(pull.number),
+          title: `#${String(pull.number)} ${pull.title}`,
+          detail: `${pull.headRef} → ${pull.baseRef} · @${pull.authorLogin}`,
+          badge: pull.state,
+          pull
+        }))
+      }
+      case 'issues': {
+        const identity = requireFindIdentity('issues')
+        const issues = await gitState.searchIssueCandidates(
+          projectId,
+          identity.owner,
+          identity.repo,
+          query
+        )
+        return issues.map((issue) => ({
+          kind: 'issue',
+          key: String(issue.number),
+          title: `#${String(issue.number)} ${issue.title}`,
+          detail: `@${issue.authorLogin} · ${formatCompactAge(Date.parse(issue.updatedAt))}`,
+          badge: issue.state,
+          issue
+        }))
+      }
+      case 'notifications': {
+        const needle = query.toLowerCase()
+        return githubNotifications.items
+          .filter((item) =>
+            `${item.title} ${item.repositoryFullName}`.toLowerCase().includes(needle)
+          )
+          .slice(0, FIND_LIMIT)
+          .map((notification) => ({
+            kind: 'notification',
+            key: notification.id,
+            title: notification.title,
+            detail: `${notification.repositoryFullName} · ${formatCompactAge(Date.parse(notification.updatedAt))}`,
+            badge: notification.unread ? 'unread' : undefined,
+            notification
+          }))
+      }
+      case 'stashes': {
+        const needle = query.toLowerCase()
+        return gitState.stashes
+          .filter((stash) =>
+            `${stash.message} ${stash.branch ?? ''}`.toLowerCase().includes(needle)
+          )
+          .slice(0, FIND_LIMIT)
+          .map((stash) => ({
+            kind: 'stash',
+            key: stash.id,
+            title: stash.message,
+            detail: stash.branch ? `${stash.id} · ${stash.branch}` : stash.id,
+            badge: formatCompactAge(stash.date),
+            stash
+          }))
+      }
+      case 'deployments': {
+        const identity = requireFindIdentity('deploys')
+        const prefix = `${identity.owner}/${identity.repo}#`
+        const needle = query.toLowerCase()
+        const runs: GitHubWorkflowRun[] = []
+        const seenRuns: Record<number, true> = {}
+        for (const [key, cached] of Object.entries(gitState.deploymentRunPages)) {
+          if (!key.startsWith(`${prefix}runs:`)) continue
+          for (const run of cached.page.items) {
+            if (seenRuns[run.id]) continue
+            seenRuns[run.id] = true
+            runs.push(run)
+          }
+        }
+        const deployments: GitHubDeployment[] = []
+        const seenDeployments: Record<number, true> = {}
+        for (const [key, cached] of Object.entries(gitState.deploymentPages)) {
+          if (!key.startsWith(`${prefix}deployments:`)) continue
+          for (const deployment of cached.page.items) {
+            if (seenDeployments[deployment.id]) continue
+            seenDeployments[deployment.id] = true
+            deployments.push(deployment)
+          }
+        }
+        const runRows: GitFindRow[] = runs
+          .filter((run) =>
+            `${run.displayTitle} ${run.name} ${run.branch} ${run.headSha}`
+              .toLowerCase()
+              .includes(needle)
+          )
+          .map((run) => ({
+            kind: 'run',
+            key: `run-${String(run.id)}`,
+            title: run.displayTitle || run.name,
+            detail: `${run.name} · ${run.branch} · ${run.headSha.slice(0, 7)}`,
+            badge: run.conclusion ?? run.status,
+            run
+          }))
+        const deploymentRows: GitFindRow[] = deployments
+          .filter((deployment) =>
+            `${deployment.environment} ${deployment.ref} ${deployment.sha}`
+              .toLowerCase()
+              .includes(needle)
+          )
+          .map((deployment) => ({
+            kind: 'deployment',
+            key: `deployment-${String(deployment.id)}`,
+            title: deployment.environment,
+            detail: `${deployment.ref} · ${deployment.sha.slice(0, 7)}`,
+            badge: deployment.latestStatus?.state,
+            deployment
+          }))
+        return [...runRows, ...deploymentRows].slice(0, FIND_LIMIT)
+      }
+    }
   }
 
-  function openActiveCommitSearchResult(): void {
-    const commit = commitSearchResults[commitSearchActiveIndex]
-    if (!commit) return
-    closeCommitSearch()
-    void selectCommit(commit)
+  /**
+   * The repository a GitHub-backed search reads from, or the reason there is none.
+   *
+   * A view that searches GitHub has nothing to search when origin is not a GitHub
+   * remote, and an empty answer would claim the repository holds no matches.
+   */
+  function requireFindIdentity(subject: string): { owner: string; repo: string } {
+    const identity = githubIdentity
+    if (!identity)
+      throw new Error(`Git origin is not a GitHub repository, so ${subject} cannot be searched`)
+    return identity
   }
 
-  function selectCommitSearchResult(commit: GitCommitInfo): void {
-    closeCommitSearch()
-    void selectCommit(commit)
+  function moveFind(direction: -1 | 1): void {
+    if (findRows.length === 0) return
+    findActiveIndex = (findActiveIndex + direction + findRows.length) % findRows.length
+  }
+
+  function openActiveFindResult(): void {
+    const row = findRows[findActiveIndex]
+    if (!row) return
+    selectFindRow(row)
+  }
+
+  /**
+   * Open the row the bar answered with, in the view it came from.
+   *
+   * Each kind has one action the view already offers for that kind of row: a
+   * commit opens its diff, a pull request opens the reader, and a deploy opens the
+   * record the Deployments view shows.
+   */
+  function selectFindRow(row: GitFindRow): void {
+    closeFind()
+    switch (row.kind) {
+      case 'commit':
+        void selectCommit(row.commit)
+        return
+      case 'branch':
+        requestCheckout(row.branch)
+        return
+      case 'pull':
+        selectedPullRequest = row.pull
+        prDetailTab = 'conversation'
+        return
+      case 'issue':
+        issuePanelView.set(projectId, {
+          ...issuePanelView.get(projectId),
+          selectedIssue: row.issue
+        })
+        return
+      case 'notification':
+        githubNotifications.openThread(row.notification)
+        return
+      case 'run':
+        selectedRun = row.run
+        selectedDeployment = null
+        return
+      case 'deployment':
+        selectedDeployment = row.deployment
+        selectedRun = null
+        return
+      case 'stash':
+        void selectStash(row.stash)
+        return
+    }
   }
 
   async function selectCommit(commit: GitCommitInfo): Promise<void> {
@@ -1571,7 +1823,7 @@
     historyRequestId += 1
     remoteUpdatesRequestId += 1
     remoteUpdates = []
-    closeCommitSearch()
+    closeFind()
     selectedCommit = null
     selectedStash = null
     selectedPaths = {}
@@ -1739,7 +1991,7 @@
       unsubscribePullRequestOpen()
       unsubscribeThreadUpdates()
       unsubscribeGitHubSignIn()
-      if (findNavState.gitFindOpen) closeCommitSearch()
+      if (findNavState.gitFindOpen) closeFind()
     }
   })
 
@@ -3914,19 +4166,21 @@
 {/snippet}
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-panel">
-  <GitStatusPanelCommitSearch
+  <GitStatusPanelFind
     open={findNavState.gitFindOpen}
-    query={commitSearchQuery}
-    bind:activeIndex={commitSearchActiveIndex}
+    scope={findScope}
+    query={findQuery}
+    bind:activeIndex={findActiveIndex}
     focusTrigger={findNavState.gitFindFocusTrigger}
-    loading={commitSearchLoading}
-    results={commitSearchResults}
-    onQueryChange={searchCommits}
-    onNext={() => moveCommitSearch(1)}
-    onPrev={() => moveCommitSearch(-1)}
-    onSubmit={openActiveCommitSearchResult}
-    onClose={closeCommitSearch}
-    onSelectResult={selectCommitSearchResult}
+    loading={findLoading}
+    rows={findRows}
+    error={findError}
+    onQueryChange={runFind}
+    onNext={() => moveFind(1)}
+    onPrev={() => moveFind(-1)}
+    onSubmit={openActiveFindResult}
+    onClose={closeFind}
+    onSelectResult={selectFindRow}
   />
 
   <!--
@@ -4005,10 +4259,10 @@
                 ? 'bg-elevated text-foreground'
                 : 'text-dimmed hover:bg-elevated hover:text-foreground'
             ]}
-            aria-label="Search commits"
-            title="Search commits"
+            aria-label={findWords.label}
+            title={findWords.label}
             aria-pressed={findNavState.gitFindOpen}
-            onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
+            onclick={() => (findNavState.gitFindOpen ? closeFind() : openFind())}
           >
             <CioSearch size={12} aria-hidden="true" />
           </button>
