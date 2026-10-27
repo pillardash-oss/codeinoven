@@ -11,6 +11,10 @@ import {
   flushBrowserSessionCookiesFor
 } from './browser-service/browser-session-cookies'
 import {
+  BROWSER_IDENTITY_USER_AGENT_ENV,
+  browserIdentityUserAgent
+} from './browser-service/browser-identity-user-agent'
+import {
   validateNativeDockAck,
   validateNativeDockId,
   validateNativeDockCommit,
@@ -5694,6 +5698,18 @@ export class BrowserService {
     // every context that picked that box.
     this.downloads.watchSession(projectId, browserSession, partition)
     if (this.configuredSessions.has(partition)) return browserSession
+    // The jar can be asked to present the runtime's own user agent instead of the
+    // branded Chrome string. This has to happen before the first page is created
+    // on the session: `setUserAgent` does not reach web contents that already
+    // exist. See `browser-identity-user-agent.ts`.
+    const identityUserAgent = browserIdentityUserAgent(process.env[BROWSER_IDENTITY_USER_AGENT_ENV])
+    if (identityUserAgent) {
+      browserSession.setUserAgent(identityUserAgent)
+      Logger.info('Browser jar presents the runtime user agent', {
+        partition,
+        variable: BROWSER_IDENTITY_USER_AGENT_ENV
+      })
+    }
     // Reuse the ledgers the durable memory loaded: a fresh set here would throw
     // away every decision the user already made, so a site the user allowed in
     // an earlier run would be prompted again the first time it asked.

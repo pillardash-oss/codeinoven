@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
+import { rememberRuntimeUserAgent } from './browser/browser-service/browser-identity-user-agent'
 import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
@@ -90,6 +91,11 @@ app.setName(APP_NAME)
 // Use a standard Chrome user agent: app/runtime product tokens cause browser
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.
+//
+// The runtime's own string is recorded first. The app browser can be asked to
+// present it instead (see `browser-identity-user-agent.ts`), and this assignment
+// is the only point where Chromium's untouched value is still readable.
+rememberRuntimeUserAgent(app.userAgentFallback)
 app.userAgentFallback = brandUserAgent(app.userAgentFallback, process.versions.chrome)
 
 configureElectronDataRoot()
