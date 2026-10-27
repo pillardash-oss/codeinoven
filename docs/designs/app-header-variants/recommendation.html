@@ -46,10 +46,10 @@
           </p>
         </div>
         <aside class="intro-aside">
-          <strong>Why not the others</strong>
-          V3 moves thread controls away from the thread. V4 hides the agent's live state behind a
-          chip. V5 costs 32px on every view. V6 puts the git chip behind a menu. V1 is the same
-          idea as V2 with the cluster anchored to an edge that moves.
+          <strong>The live contender</strong>
+          V7 answers the question V2 leaves open: instead of centring the title, put it at a fixed
+          column and grow the bar from the left. Both are below. Everything in the bar that can
+          move now sits on one side of the title, so nothing shifts when the thread changes.
         </aside>
       </section>
 
@@ -61,6 +61,7 @@
         <a class="pill-link" href="./v4-command-field.html">V4 command</a>
         <a class="pill-link" href="./v5-two-tiers.html">V5 tiers</a>
         <a class="pill-link" href="./v6-priority-ladder.html">V6 ladder</a>
+        <a class="pill-link" href="./v7-fixed-spine.html">V7 spine</a>
         <a class="pill-link" href="./recommendation.html" aria-current="page">Recommendation</a>
       </nav>
 
@@ -89,6 +90,20 @@
           jumps sideways when the window is resized.
         </p>
         <div class="frames" id="narrow"></div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V7 · the left-anchored answer</h2>
+          <span class="meta">fixed column, title follows it</span>
+        </div>
+        <p class="lede">
+          A fixed 18.5rem column holds identity, back and forward, and the view's actions, with a
+          hairline between each group. The title starts where the column ends and truncates there.
+          Nothing in the measure moves when the thread's actions or status change, which is
+          measured: every state in every frame puts the title on the same pixel.
+        </p>
+        <div class="frames" id="spine"></div>
       </section>
 
       <section class="section">
@@ -142,10 +157,10 @@
           </div>
         </div>
         <div class="verdict">
-          <b>One decision to confirm.</b> Whether identity sits outside the traffic lights on macOS
-          (lights, then mark) or inside them. Outside keeps the mark at the window's corner, which
-          is where a user looks for the app name; inside keeps the lights alone at the corner,
-          which is what every native Mac app does.
+          <b>Two decisions to confirm.</b> One: left-anchored (V7) or centred (V2) for the title.
+          Two: on macOS, whether identity sits outside the traffic lights or inside them, which
+          every native Mac app chooses. Both are one-line changes in the frame anatomy, and neither
+          affects <span class="inline-code">traffic-light.ts</span>.
         </div>
       </section>
 
@@ -185,6 +200,13 @@
           variant: 'v2',
           options: { title: 'Remove the duplicate window-controls inset from fullscreen dialogs' }
         })
+      ].join('')
+
+      document.querySelector('#spine').innerHTML = [
+        window.CIOHeader.block({ platform: 'mac', variant: 'v7' }),
+        window.CIOHeader.block({ platform: 'win', variant: 'v7' }),
+        window.CIOHeader.block({ platform: 'mac', variant: 'v7', options: { hardGutter: true } }),
+        window.CIOHeader.block({ platform: 'win', variant: 'v7', options: { hardGutter: true } })
       ].join('')
     </script>
       <script src="./checks.js"></script>

@@ -89,6 +89,19 @@ function build() {
   const widths = document.querySelector('#widths')
   if (widths) widths.replaceWith(framesForWidths(variant, options))
 
+  /* The spine's second arrangement: the same column behind one constant gutter
+     on every platform. Its own frames rather than a toggle, so the two are
+     comparable side by side on the canvas. */
+  const hard = document.querySelector('#hard')
+  if (hard) {
+    const host = document.createElement('div')
+    host.className = 'frames'
+    host.innerHTML = PLATFORMS.map((platform) =>
+      window.CIOHeader.block({ platform, variant, options: { ...options, hardGutter: true } })
+    ).join('')
+    hard.replaceWith(host)
+  }
+
   const statesHost = document.querySelector('#states')
   if (statesHost) {
     for (const state of STATES) {

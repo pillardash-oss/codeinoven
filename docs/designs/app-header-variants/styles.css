@@ -536,6 +536,8 @@ h1 {
 }
 
 .thread {
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -1154,4 +1156,177 @@ h1 {
 .frame.narrow .cmd kbd,
 .frame.narrow .cmd .cmd-chip {
   display: none;
+}
+
+/* ─── V7 · Fixed spine ─────────────────────────────────────────────────────
+   One fixed-width column on the left holds identity, navigation and the view's
+   actions, each group separated by a hairline, and the thread title is aligned
+   left after it instead of floating in the centre. Because the column is fixed,
+   the title starts on the same pixel no matter what the thread is called.
+
+   Two ways to place that column against the window controls:
+
+   natural  the column starts where the OS zone ends, so the bar's first pixel
+            is the identity mark on macOS and a caption gutter on Windows;
+   hard     the column starts at one constant inset (--spine-gutter) on every
+            platform, with the OS zone allowed to overlap nothing: the macOS
+            lights sit inside the column's leading gap, and on Windows, where
+            the captions are on the other edge, that same gutter is simply
+            margin, so identity lands on the same pixel everywhere.
+
+   The hard gutter is the only variant in this study that makes the horizontal
+   position of our content identical on every platform. It costs 138px of bar on
+   Windows and Linux, which is where the trade sits. */
+
+.variant-v7 {
+  --spine-width: 18.5rem;
+  /* The caption overlay's own width. It is the smallest constant inset the
+     Linux-left case allows, so it is the one value that works everywhere. */
+  --spine-gutter: 8.625rem;
+}
+
+.variant-v7.hard-gutter {
+  padding-left: var(--spine-gutter);
+}
+
+/* The gutter is exactly the caption overlay's width, which is the smallest
+   constant that clears a left-side Linux cluster; everywhere else it is simply
+   margin, and the traffic lights sit inside it. */
+.variant-v7.hard-gutter.os-linux-left {
+  padding-left: max(var(--spine-gutter), var(--os-left));
+}
+
+.variant-v7 .zone.left.spine {
+  flex: 0 0 var(--spine-width);
+  width: var(--spine-width);
+  justify-content: flex-start;
+  gap: 0.25rem;
+}
+
+/* The column is fixed, so the wordmark inside it is the one thing that can give:
+   "CodeInOven" truncates before the column or the title moves. */
+.variant-v7 .zone.left.spine .brand {
+  min-width: 0;
+}
+
+.variant-v7 .zone.left.spine .brand span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.variant-v7 .zone.center {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  max-width: none;
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 0.25rem;
+}
+
+.variant-v7 .zone.center .thread {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* The trailing pair never shrinks: the title is the flexible part, so a narrow
+   bar truncates the name instead of squeezing Spec and the bell. */
+.variant-v7 .zone.right {
+  flex: 0 0 auto;
+  padding-right: 0.25rem;
+}
+
+/* The title is the flexible part of the spine's row: it takes the space the
+   column leaves and truncates there, so a long thread name never reaches the
+   spec action on the other side of the bar. */
+.variant-v7 .thread h1 {
+  max-width: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hair {
+  width: 1px;
+  height: 1.125rem;
+  background: var(--color-border);
+  flex: none;
+}
+
+/* The title reads as the page's own heading once it is left-aligned: one step
+   louder than the chrome around it, which is what makes the spine legible as a
+   spine rather than as a row of stray buttons. */
+.variant-v7 .thread h1 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+/* The column narrows in two steps, and only then does the view's action group
+   leave it, because the column is the one thing in this bar that must not be
+   elastic: shrinking it is cheaper than letting the title jump when a thread's
+   actions change. */
+@container (max-width: 60rem) {
+  .variant-v7 .zone.left.spine {
+    flex-basis: 13rem;
+    width: 13rem;
+  }
+}
+
+/* Below 46rem the bar is down to identity, title, spec and the global pair: the
+   thread's status badge is detail the thread list already carries. */
+@container (max-width: 52rem) {
+  .variant-v7 .zone.left.spine {
+    flex-basis: 12rem;
+    width: 12rem;
+  }
+}
+
+@container (max-width: 46rem) {
+  .variant-v7 .status,
+  .variant-v7 .thread .menu,
+  .variant-v7 .hair.optional {
+    display: none;
+  }
+}
+
+@container (max-width: 40rem) {
+  .variant-v7 .zone.left.spine {
+    flex-basis: 8.5rem;
+    width: 8.5rem;
+  }
+
+  .variant-v7 .zone.left.spine .slot {
+    display: none;
+  }
+}
+
+@container (max-width: 44rem) {
+  .variant-v7 .zone.left.spine {
+    flex-basis: 9.75rem;
+    width: 9.75rem;
+  }
+
+  .variant-v7 .zone.left.spine .slot,
+  .variant-v7 .hair.optional {
+    display: none;
+  }
+
+  .variant-v7 .thread .pico,
+  .variant-v7 .status {
+    display: none;
+  }
+}
+
+/* The diagnostic report reads as a developer tool, not as part of the study. */
+.check-report {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+.check-report .section-head {
+  border-top: 0;
+  padding-top: 0;
 }

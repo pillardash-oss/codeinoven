@@ -107,6 +107,18 @@ function gitChipMarkup() {
   return `<span class="chip">${ICONS.branch}<span>main</span><span class="lead">3</span></span>`
 }
 
+/* The fixed spine of V7: four groups, each separated by a hairline, in a column
+   that does not change width when the thread title does. */
+function spineMarkup(platform, options) {
+  return [
+    brandMarkup(platform, options),
+    `<span class="hair"></span>`,
+    navigationMarkup(),
+    `<span class="hair"></span>`,
+    viewActionsMarkup()
+  ].join('')
+}
+
 function seamed(platform, content) {
   const seamSide = PLATFORMS[platform].zone
   return `${content}<span class="seam ${seamSide}"></span>`
@@ -116,10 +128,16 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   const config = PLATFORMS[platform]
   const classes = ['frame', config.cls, `variant-${variant}`]
   if (width === 'narrow') classes.push('narrow')
+  /* The optional constant gutter: the same left margin on every platform, so
+     the spine and the title start on the same pixel in all four windows. */
+  if (variant === 'v7' && options.hardGutter) classes.push('hard-gutter')
 
-  const left = `<div class="zone left">${brandMarkup(platform, options)}${navigationMarkup()}${
-    variant === 'v6' ? '' : viewActionsMarkup()
-  }</div>`
+  const left =
+    variant === 'v7'
+      ? `<div class="zone left spine">${spineMarkup(platform, options)}</div>`
+      : `<div class="zone left">${brandMarkup(platform, options)}${navigationMarkup()}${
+          variant === 'v6' ? '' : viewActionsMarkup()
+        }</div>`
 
   let center
   if (options.empty) {
@@ -129,7 +147,10 @@ function frame({ platform, variant, width = 'full', options = {} }) {
       options.title ?? 'Search, run a command, or open the thread'
     }</span><kbd>${platform === 'mac' ? '⌘K' : 'Ctrl K'}</kbd><span class="cmd-chip">${ICONS.spec}Spec</span><span class="cmd-chip">${ICONS.branch}3</span></div></div>`
   } else {
-    center = `<div class="zone center">${threadMarkup(options)}</div>`
+    center =
+      variant === 'v7'
+        ? `<div class="zone center"><span class="hair optional"></span>${threadMarkup(options)}</div>`
+        : `<div class="zone center">${threadMarkup(options)}</div>`
   }
 
   let right

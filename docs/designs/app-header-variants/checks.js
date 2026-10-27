@@ -124,6 +124,39 @@ function geometryOf(frame) {
   }
 }
 
+/* The spine's promise is that the title starts at one place regardless of what
+ * the thread is called or which of its actions are present. That is a claim
+ * about the source, so it is measured on the source: every frame of the same
+ * variant, platform and width must put the title at the same x. */
+function titleDrift(frames) {
+  const groups = new Map()
+  for (const frame of frames) {
+    const title = frame.querySelector('.thread h1')
+    if (!title) continue
+    const platform = (frame.className.match(/os-[a-z-]+/) ?? [''])[0]
+    /* The variant and the gutter model are part of the identity: a hard-gutter
+       frame is deliberately 88px to the right of a natural-gutter one, so the
+       two are never the same measurement. */
+    const variant = (frame.className.match(/variant-(v\d)/) ?? [''])[0]
+    const gutter = frame.classList.contains('hard-gutter') ? 'hard' : 'natural'
+    const width =
+      frame.classList.contains('narrow') || frame.closest('.stack.narrow') ? 'narrow' : 'full'
+    const key = `${variant} ${platform} ${width} ${gutter}`
+    const x = Math.round(rectOf(title).left)
+    const entry = groups.get(key) ?? { values: new Set(), samples: [] }
+    entry.values.add(x)
+    entry.samples.push(x)
+    groups.set(key, entry)
+  }
+  const findings = []
+  for (const [key, entry] of groups) {
+    if (entry.values.size <= 1) continue
+    const spread = Math.max(...entry.samples) - Math.min(...entry.samples)
+    findings.push(`${key}: title shifts ${spread}px between states (${[...entry.values].join(', ')})`)
+  }
+  return findings
+}
+
 function run() {
   const report = document.createElement('section')
   report.className = 'section'
@@ -164,10 +197,22 @@ function run() {
     return `${family}: ${loaded ? 'loaded' : 'NOT LOADED'}`
   })
 
-  report.innerHTML = `<div class="section-head"><h2>Fonts</h2><span class="meta">the app's own bundled faces</span></div><pre class="check-log">${fonts.join('\n')}</pre><div class="section-head"><h2>Layout checks</h2><span class="meta">${
+  const drift = titleDrift(frames)
+  const driftLine =
+    drift.length === 0
+      ? 'stable · the title starts on the same pixel in every state'
+      : drift.join('\n')
+
+  report.innerHTML = `<div class="section-head"><h2>Title stability</h2><span class="meta">${
+    drift.length === 0 ? 'no drift' : `${drift.length} drifting`
+  }</span></div><pre class="check-log">${driftLine}</pre><div class="section-head"><h2>Fonts</h2><span class="meta">the app's own bundled faces</span></div><pre class="check-log">${fonts.join('\n')}</pre><div class="section-head"><h2>Layout checks</h2><span class="meta">${
     frames.length
   } frames · ${failures} failing</span></div><pre class="check-log">${lines.join('\n')}</pre><div class="section-head"><h2>Zone geometry</h2><span class="meta">percent of bar width</span></div><pre class="check-log">${geometry.join('\n')}</pre>`
-  document.querySelector('.page').append(report)
+  /* The report goes first: a snapshot of a tall page is capped, and the counts
+     are the part that has to survive the cap. */
+  const page = document.querySelector('.page')
+  page.prepend(report)
+  report.classList.add('check-report')
 }
 
 if (new URLSearchParams(location.search).get('checks') === '1') {
