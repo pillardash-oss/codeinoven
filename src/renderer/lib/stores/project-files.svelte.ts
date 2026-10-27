@@ -730,6 +730,9 @@ class ProjectFilesWorkspace {
       if (session.draft === submittedDraft) session.draft = source.content
       // After saving, the session matches the disk version by construction.
       delete this.ensureState(projectId).staleFiles[path]
+      // An SVG is text in the editor but renders from its own blob, so a save
+      // has to re-read that blob or the viewer keeps showing the old artwork.
+      if (isSvgMime(mimeFromPath(path))) this.reloadPreview(projectId, path)
       await this.reconcileConflictAfterSave(projectId, path)
     } catch (error) {
       session.error = errorMessage(error)

@@ -354,9 +354,6 @@
       projectId,
       activePath: activeTab?.path ?? null,
       isSvg: svg,
-      // A live draft renders instead of a re-read, so an unsaved SVG edit is
-      // what the preview shows and a save never leaves a stale blob behind.
-      draft: activeSession?.draft ?? null,
       // Reading the reload token keeps the effect reactive to explicit reloads:
       // bumping it revokes the stale blob and re-reads the file from disk.
       currentReloadToken: () =>
