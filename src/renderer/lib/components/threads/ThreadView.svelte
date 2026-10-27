@@ -5620,6 +5620,15 @@
         void sendMessage(draft, files, undefined, undefined, undefined, [], [], undefined, [], true)
       }
     })
+    // Coming back to the window is exactly when a transcript cached before
+    // leaving can have been overtaken: a sibling instance writes the shared
+    // mirror while this window sits in the background, and its announcement is
+    // only best effort. One bounded tail read keeps what the reader returns to
+    // honest without polling.
+    const onWindowFocus = (): void => {
+      void refreshMessages()
+    }
+    window.addEventListener('focus', onWindowFocus)
     return () => {
       alive = false
       queuedMessageDispatcher.markUnmounted(mountedProjectId, mountedThreadId)
@@ -5636,6 +5645,7 @@
       unsubscribeLifecycleInheritance?.()
       unsubscribeVoiceSend()
       window.removeEventListener('resize', onResize)
+      window.removeEventListener('focus', onWindowFocus)
       clearTimeout(copyResetTimer)
       cancelAnimationFrame(initialPaintRevealFrame)
       if (historyPrefetchHandle !== null) {
@@ -5838,8 +5848,15 @@
     try {
       const [threadData, , config] = await Promise.all([
         invoke('thread:get', projectId, id),
+        // A warm cache is re-read, never trusted. A sibling instance writes the
+        // same mirrored conversation this window holds, and its announcement is
+        // best effort: a batch still waiting on the coalescing timer when the
+        // sibling quits is lost, so a thread opened here after that write kept
+        // showing only the prompt it had cached. The refresh is the same bounded
+        // turn-aligned tail a cold open takes, and it merges additively, so
+        // nothing already on screen is dropped.
         threadMessages.loaded(projectId, id)
-          ? Promise.resolve()
+          ? threadMessages.mergeTurnAlignedTail(projectId, id, THREAD_MESSAGE_PRELOAD_WINDOW)
           : threadMessages.load(projectId, id, THREAD_MESSAGE_PRELOAD_WINDOW),
         invoke('config:get')
       ])
