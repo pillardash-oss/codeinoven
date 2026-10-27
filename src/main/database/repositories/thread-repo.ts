@@ -1175,9 +1175,19 @@ export class ThreadRepo {
     // Unread, drafting, and pinned threads bypass the quota entirely: a
     // stale-but-unread or explicitly pinned row must never be hidden from the
     // first-paint slice, whatever its age.
+    // Every project's own quota becomes a CASE arm, so the callback alone decides
+    // how deep each slice goes: the inbox asks for MAX_SAFE_INTEGER and gets its
+    // stored `thread_limit`, every other project asks for its own number. Only
+    // building arms for the MAX projects made the callback's other answers
+    // unreachable, and every project fell to the default depth instead.
     const cases = [...quotas.entries()]
-      .filter(([id]) => quotaByProject(id) === Number.MAX_SAFE_INTEGER)
-      .map(([id, quota]) => `WHEN project_id = '${id.replace(/'/g, "''")}' THEN ${quota}`)
+      .map(([id, limit]) => {
+        const requested = quotaByProject(id)
+        const quota = requested === Number.MAX_SAFE_INTEGER ? limit : requested
+        return { id, quota }
+      })
+      .filter(({ quota }) => Number.isFinite(quota) && quota > 0)
+      .map(({ id, quota }) => `WHEN project_id = '${id.replace(/'/g, "''")}' THEN ${quota}`)
     const quotaExpr =
       cases.length > 0
         ? `CASE ${cases.join(' ')} ELSE ${quotaByProject('')} END`
