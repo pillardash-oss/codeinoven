@@ -439,10 +439,30 @@ h1 {
   letter-spacing: -0.02em;
 }
 
-.wordmark {
+.brand-name {
+  white-space: nowrap;
+}
+
+.brand-name-long {
   font-family: 'Oven Mono', var(--font-app);
   font-weight: 700;
   letter-spacing: -0.06em;
+}
+
+/* Short by default, so nothing flashes the long wordmark before the layout rules
+   below have decided: the mark-up carries both names and exactly one is drawn. */
+.brand-name-short {
+  display: none;
+}
+
+/* A layout that keeps the window controls on the left names the app in its own
+   decoration, so the identity there is the short name and never the wordmark. */
+.controls-left .brand-name-long {
+  display: none;
+}
+
+.controls-left .brand-name-short {
+  display: inline;
 }
 
 .ibtn {
@@ -1268,16 +1288,19 @@ h1 {
   min-width: 0;
 }
 
-:is(.variant-v7, .variant-v8) .zone.left.spine .brand span {
+:is(.variant-v7, .variant-v8) .zone.left.spine .brand-name {
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* Below a 44rem bar the wordmark leaves and the spine narrows to the mark, the
    navigation pair and the action slot. It is still stable at that width, which
    is the only promise the column makes. */
 @container bar (max-width: 44rem) {
-  :is(.variant-v7, .variant-v8):not(.panel-mode) .zone.left.spine .brand span,
+  /* The bar runs out of room for a wordmark, not for a name: it goes short
+     rather than empty. */
+  :is(.variant-v7, .variant-v8):not(.panel-mode) .zone.left.spine .brand-name-long,
   :is(.variant-v7, .variant-v8) .status,
   .variant-v8 .under-status,
   :is(.variant-v7, .variant-v8) .thread .pico {
@@ -1576,11 +1599,11 @@ h1 {
           │ │ Threads                               │ conversation
           │ │ ● Repair header collision under…      │
 
-   The wordmark is the bar's elastic part: as the panel narrows it truncates with
-   an ellipsis, and the width where only the mark survives is the panel's floor.
-   The app's own sidebar runs 200 to 420px, and 200 is exactly where the wordmark
-   runs out with three view actions beside it, which is why the floor is real
-   rather than declared. */
+   The name is the bar's elastic part, and it gives way in steps rather than in
+   fractions of a letter: the wordmark, then the short name, then the mark alone,
+   with the view's actions folding one at a time between those steps. The app's
+   own sidebar runs 200 to 420px, and its 200px floor is where the identity is
+   down to the mark with the navigation still beside it. */
 
 .window.panel-window {
   display: flex;
@@ -1702,17 +1725,22 @@ h1 {
   container: spine / inline-size;
 }
 
-/* The wordmark gives way first, and it gives way down to the mark and no
-   further: the mark, the navigation and whatever actions still fit are what sets
-   the panel's floor. */
+/* The identity gives way first, and it gives way in steps rather than in
+   fractions of a letter: the wordmark, then the short name, then the mark alone.
+   Whichever step it is on, the column reads as the app's name and not as a
+   clipped string. */
 .variant-v8.panel-mode .zone.left.spine .brand {
   flex: 0 1 auto;
   min-width: 1.75rem;
 }
 
-.variant-v8.panel-mode .zone.left.spine .brand span {
-  min-width: 0;
-  white-space: nowrap;
+/* The name is never clipped: it is either the whole word, the whole short name,
+   or gone. A column that is a few pixels short drops a step instead of showing
+   the first letter and an ellipsis. */
+.variant-v8.panel-mode .zone.left.spine .brand-name {
+  flex: 0 0 auto;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .variant-v8.panel-mode .zone.left.spine .spine-actions {
@@ -1720,35 +1748,63 @@ h1 {
   width: auto;
 }
 
-/* The fold: the identity truncates first because it is the only thing that
-   shrinks, and the actions give way one at a time once the wordmark is down to
-   the mark. Nothing is ever clipped, and the last action is still one right
-   click away in the thread's menu. */
-/* Below this the wordmark has nothing worth showing: a letter and an ellipsis
-   read as damage, so the identity becomes the mark alone, which is the floor the
-   panel is allowed to shrink to. */
-@container spine (max-width: 11rem) {
-  .variant-v8.panel-mode .zone.left.spine .brand span {
+/* The wordmark becomes the short name as soon as the column cannot hold the
+   whole of it, which is what "truncate to cio" means and why no ellipsis is
+   ever drawn where the name should be. */
+@container spine (max-width: 16.5rem) {
+  .variant-v8.panel-mode .zone.left.spine .brand-name-long {
     display: none;
+  }
+
+  .variant-v8.panel-mode .zone.left.spine .brand-name-short {
+    display: inline;
   }
 }
 
-@container spine (max-width: 11.5rem) {
+/* The fold: the actions give way one at a time after the name has shortened.
+   Nothing is ever clipped, and a folded action is still one right click away in
+   the thread's menu. */
+@container spine (max-width: 13rem) {
   .variant-v8.panel-mode .spine-actions .ibtn:nth-child(3) {
     display: none;
   }
 }
 
-@container spine (max-width: 9.5rem) {
+@container spine (max-width: 11rem) {
   .variant-v8.panel-mode .spine-actions .ibtn:nth-child(2) {
     display: none;
   }
 }
 
-@container spine (max-width: 7.75rem) {
+@container spine (max-width: 9.2rem) {
   .variant-v8.panel-mode .spine-actions {
     display: none;
   }
+}
+
+/* At the very bottom of the range even the short name has to go: the mark and
+   the navigation pair are what the column cannot do without. */
+@container spine (max-width: 7.4rem) {
+  .variant-v8.panel-mode .zone.left.spine .brand-name {
+    display: none;
+  }
+}
+
+/* The panel hidden: nothing to align to, so the cluster is its own width, the
+   identity is the mark alone, and every action is drawn because no column is
+   squeezing it. */
+.variant-v8.panel-hidden .zone.left.spine {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.variant-v8.panel-hidden .zone.left.spine .brand-name {
+  display: none;
+}
+
+.variant-v8.panel-hidden .zone.center .spine-rule {
+  margin-left: 0;
+  height: 100%;
 }
 
 /* One line: the rule starts exactly at the cluster's edge, which is the panel's
@@ -1787,6 +1843,39 @@ h1 {
 .panel-controls input[type='range'] {
   width: 12rem;
   accent-color: var(--color-accent);
+}
+
+.panel-controls input[type='range']:disabled {
+  opacity: 0.4;
+}
+
+.panel-controls input[type='range']:focus-visible,
+.panel-controls .panel-toggle:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.panel-controls .panel-toggle {
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-foreground);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 120ms ease-out, border-color 120ms ease-out;
+}
+
+.panel-controls .panel-toggle:hover {
+  background: var(--color-app);
+  border-color: var(--color-border-strong);
+}
+
+.panel-controls .panel-toggle[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .panel-controls .panel-state {

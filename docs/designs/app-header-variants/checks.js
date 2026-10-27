@@ -207,7 +207,7 @@ function spineFill(frames) {
     const contentStart = Math.min(...children.map((child) => rectOf(child).left))
     const column = Math.round(spineRect.width)
     const content = Math.round(contentEnd - contentStart)
-    const brand = spine.querySelector('.brand span')
+    const brand = [...spine.querySelectorAll('.brand-name')].find((name) => rectOf(name).width > 0)
     const truncated = brand ? brand.scrollWidth > brand.clientWidth + 1 : false
     const platform = (frame.className.match(/os-[a-z-]+/) ?? [''])[0]
     const width = frame.classList.contains('narrow') || frame.closest('.stack.narrow') ? 'narrow' : 'full'
@@ -239,7 +239,10 @@ function panelAlignment(frames) {
     const panel = windowElement.querySelector('.panel')
     const content = windowElement.querySelector('.content')
     const rule = frame.querySelector('.zone.center .spine-rule')
-    const brand = frame.querySelector('.zone.left.spine .brand span')
+    /* Two names live in the mark-up and one of them is drawn, so measure the one
+       the column actually shows. */
+    const names = [...frame.querySelectorAll('.zone.left.spine .brand-name')]
+    const brand = names.filter((name) => rectOf(name).width > 0).sort((a, b) => rectOf(a).width - rectOf(b).width)[0] ?? null
     if (!panel || !content || !rule) continue
 
     const problems = []
@@ -256,12 +259,13 @@ function panelAlignment(frames) {
     const platform = (frame.className.match(/os-[a-z-]+/) ?? [''])[0]
     const width = Math.round(Number(getComputedStyle(windowElement).getPropertyValue('--panel-width').replace('px', '')))
     const labelWidth = brand ? Math.round(rectOf(brand).width) : 0
+    const visibility = names.map((name) => getComputedStyle(name).display).join('/')
     const label =
       !brand || labelWidth === 0
         ? 'mark only'
         : brand.scrollWidth > brand.clientWidth + 1
           ? `truncated to ${labelWidth}px`
-          : 'whole wordmark'
+          : 'whole name'
 
     /* The width where the wordmark has run out must also be the width the panel
        refuses to go below, or the floor is a claim rather than a rule. */
@@ -281,7 +285,7 @@ function panelAlignment(frames) {
     rows.push(
       `${problems.length === 0 ? 'ok' : 'FAIL'} · ${platform} panel ${width}px · rule at ${Math.round(
         clusterEnd
-      )}px of the bar · spine ${spineWidth}px · label ${labelWidth}px (${label}) · ${actions} actions${
+      )}px of the bar · spine ${spineWidth}px · label ${labelWidth}px (${label}) · ${actions} actions · names ${visibility}${
         problems.length ? ` · ${problems.join('; ')}` : ''
       }`
     )
@@ -305,7 +309,10 @@ function run() {
   /* A panel bar's column is the panel, so the content-sized spine's two rules do
      not apply to it: the wordmark is meant to truncate, and the column is meant
      to hold width its content does not fill. */
-  const stable = frames.filter((frame) => !frame.classList.contains('panel-mode'))
+  const stable = frames.filter(
+    (frame) =>
+      !frame.classList.contains('panel-mode') && !frame.classList.contains('panel-hidden')
+  )
 
   for (const frame of frames) {
     const problems = checkFrame(frame)

@@ -36,12 +36,20 @@ const ICONS = {
   close: `<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5"/></svg>`
 }
 
+/* A layout that keeps the window controls on the left already names the app in
+   its own decoration, so the identity there is the short name; the layouts that
+   keep them on the right have no such thing and carry the wordmark. */
 const PLATFORMS = {
-  mac: { cls: 'os-mac', brand: 'cio', zone: 'left' },
-  win: { cls: 'os-win', brand: 'CodeInOven', zone: 'right' },
-  'linux-left': { cls: 'os-linux-left', brand: 'CodeInOven', zone: 'left' },
-  'linux-right': { cls: 'os-linux-right', brand: 'CodeInOven', zone: 'right' }
+  mac: { cls: 'os-mac', zone: 'left' },
+  win: { cls: 'os-win', zone: 'right' },
+  'linux-left': { cls: 'os-linux-left', zone: 'left' },
+  'linux-right': { cls: 'os-linux-right', zone: 'right' }
 }
+
+/* The app has one long name and one short one, and the layout decides which it
+   can afford: the short name is not a platform's name, it is the same name with
+   less room. */
+const BRAND = { long: 'CodeInOven', short: 'cio' }
 
 const LABELS = {
   mac: 'macOS',
@@ -70,15 +78,12 @@ function zoneMarkup(platform) {
   return `<div class="os-zone left"><i class="light"></i><i class="light"></i><i class="light"></i></div>`
 }
 
-function brandMarkup(platform, options = {}) {
-  const config = PLATFORMS[platform]
-  /* Windows and Linux have no menu bar naming the app, so the bar carries the
-     wordmark there; macOS keeps the short mark beside its traffic lights. */
-  const name =
-    config.brand === 'CodeInOven'
-      ? `<span class="wordmark">CodeInOven</span>`
-      : `<span>${config.brand}</span>`
-  return `<button type="button" class="brand" tabindex="-1">${ICONS.mark}${name}</button>`
+/* Two names, one of them shown: the wordmark where the platform has room for it
+   and the short name everywhere else. Keeping both in the mark-up is what lets
+   the column shorten the identity to "cio" when the thread panel squeezes it,
+   instead of leaving an ellipsis where a word used to be. */
+function brandMarkup() {
+  return `<button type="button" class="brand" tabindex="-1">${ICONS.mark}<span class="brand-name brand-name-long">${BRAND.long}</span><span class="brand-name brand-name-short">${BRAND.short}</span></button>`
 }
 
 function navigationMarkup() {
@@ -162,6 +167,8 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   const classes = ['frame', config.cls, `variant-${variant}`]
   if (width === 'narrow') classes.push('narrow')
   if (options.panelWidth) classes.push('panel-mode')
+  if (options.panelHidden) classes.push('panel-hidden')
+  classes.push(`controls-${config.zone}`)
 
   const left =
     variant === 'v7' || variant === 'v8'
@@ -266,8 +273,19 @@ function panelRows() {
    take on that edge. */
 function panelWindow({ platform, panelWidth, options = {} }) {
   const config = PLATFORMS[platform]
-  const bar = frame({ platform, variant: 'v8', options: { ...options, panelWidth } })
-  return `<div class="window panel-window ${config.cls}" style="--panel-width: ${panelWidth}px">${bar}<div class="panel-body">${railMarkup()}<aside class="panel">${panelRows()}</aside><div class="content"><span class="fill-label">conversation</span></div></div></div>`
+  const hidden = !panelWidth
+  const bar = frame({
+    platform,
+    variant: 'v8',
+    options: hidden ? { ...options, panelHidden: true } : { ...options, panelWidth }
+  })
+  const width = hidden ? 0 : panelWidth
+  /* With the panel hidden there is no column to align to, so the bar keeps its
+     chrome at its own width, the identity drops to the mark, and the whole
+     cluster hands the room back to the title. */
+  return `<div class="window panel-window ${config.cls}${hidden ? ' panel-gone' : ''}" style="--panel-width: ${width}px">${bar}<div class="panel-body">${railMarkup()}${
+    hidden ? '' : `<aside class="panel">${panelRows()}</aside>`
+  }<div class="content"><span class="fill-label">conversation</span></div></div></div>`
 }
 
 function withRail(inner) {
@@ -276,9 +294,13 @@ function withRail(inner) {
 
 function block({ platform, variant, width = 'full', options = {}, label = '' }) {
   const heading = label || `${LABELS[platform]} · ${NOTES[platform]}`
-  const panelNote = options.panelWidth ? ` · panel ${options.panelWidth}px` : ''
+  const panelNote = options.panelWidth
+    ? ` · panel ${options.panelWidth}px`
+    : options.panelHidden
+      ? ' · panel hidden'
+      : ''
   const inner =
-    options.panelWidth && variant === 'v8'
+    (options.panelWidth || options.panelHidden) && variant === 'v8'
       ? panelWindow({ platform, panelWidth: options.panelWidth, options })
       : options.withRail && variant === 'v8'
         ? withRail(frame({ platform, variant, width, options }))

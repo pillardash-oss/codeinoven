@@ -97,39 +97,47 @@ function menuPanel(kind) {
 }
 
 /* The panel the bar is measured against, driven by the reader: the range is the
-   app's own sidebar range, 200 to 420px, and the two windows redraw as it moves. */
+   app's own sidebar range, 200 to 420px, and the panel can be hidden, which is
+   the state the app spends most of its time in when a view has no sidebar. */
 const PANEL_MIN = 200
 const PANEL_MAX = 420
+const PANEL_START = 264
 
 function livePanel(variant, options) {
   const stage = document.createElement('div')
   stage.className = 'panel-stage'
 
-  const requested = Number(new URLSearchParams(location.search).get('panel'))
-  const start =
-    Number.isFinite(requested) && requested > 0
-      ? Math.min(PANEL_MAX, Math.max(PANEL_MIN, Math.round(requested)))
-      : 264
+  const requested = new URLSearchParams(location.search).get('panel')
+  const asked = requested === null ? PANEL_START : Number(requested)
+  let hidden = asked === 0
+  let width = hidden
+    ? PANEL_START
+    : Math.min(PANEL_MAX, Math.max(PANEL_MIN, Math.round(Number.isFinite(asked) ? asked : PANEL_START)))
 
-  stage.innerHTML = `<div class="panel-controls"><label for="panel-size">Thread panel</label><input id="panel-size" type="range" min="${PANEL_MIN}" max="${PANEL_MAX}" step="2" value="${start}" /><output id="panel-size-value">${start}px</output><span class="panel-state" id="panel-size-state"></span></div><div class="panel-windows" id="panel-size-windows">${
-    window.CIOHeader.block({ platform: 'mac', variant, options: { ...options, panelWidth: start } }) +
-    window.CIOHeader.block({ platform: 'win', variant, options: { ...options, panelWidth: start } })
-  }</div>`
+  stage.innerHTML = `<div class="panel-controls"><label for="panel-size">Thread panel</label><input id="panel-size" type="range" min="${PANEL_MIN}" max="${PANEL_MAX}" step="2" value="${width}" /><output id="panel-size-value">${width}px</output><button type="button" class="panel-toggle" id="panel-toggle" aria-pressed="${hidden}">${
+    hidden ? 'Show panel' : 'Hide panel'
+  }</button><span class="panel-state" id="panel-size-state"></span></div><div class="panel-windows" id="panel-size-windows"></div>`
 
   const input = stage.querySelector('#panel-size')
+  const toggle = stage.querySelector('#panel-toggle')
   const output = stage.querySelector('#panel-size-value')
   const state = stage.querySelector('#panel-size-state')
   const windows = stage.querySelector('#panel-size-windows')
 
-  /* The label's own measurement decides the wording: no guessing at what a
-     truncated wordmark looks like at 218px. */
+  function barsMarkup(currentWidth, isHidden) {
+    const frameOptions = isHidden ? { panelHidden: true } : { panelWidth: currentWidth }
+    return (
+      window.CIOHeader.block({ platform: 'mac', variant, options: { ...options, ...frameOptions } }) +
+      window.CIOHeader.block({ platform: 'win', variant, options: { ...options, ...frameOptions } })
+    )
+  }
+
   function identityOf(windowElement) {
-    const brand = windowElement.querySelector('.variant-v8.panel-mode .brand span')
-    if (!brand) return 'no identity'
-    const shown = Math.round(brand.getBoundingClientRect().width)
-    if (shown <= 2) return 'mark only'
-    if (brand.scrollWidth > brand.clientWidth + 1) return `${shown}px of wordmark`
-    return 'whole wordmark'
+    const names = [...windowElement.querySelectorAll('.brand-name')]
+    const name = names.find((item) => item.getBoundingClientRect().width > 0)
+    if (!name) return 'mark only'
+    const shown = Math.round(name.getBoundingClientRect().width)
+    return `${name.textContent} at ${shown}px`
   }
 
   function describe() {
@@ -139,22 +147,40 @@ function livePanel(variant, options) {
     return `<strong>macOS</strong> ${mac} · <strong>Windows</strong> ${win}`
   }
 
-  function apply(width) {
-    output.textContent = `${width}px`
-    for (const windowElement of windows.querySelectorAll('.window')) {
-      windowElement.style.setProperty('--panel-width', `${width}px`)
-    }
+  function measure() {
     state.innerHTML = describe()
   }
 
-  input.addEventListener('input', () => apply(Number(input.value)))
-  apply(start)
-  /* The first read has to wait for the stage to be in the document: measured
-     while detached, every box is zero and the strip would claim the wordmark is
-     gone at every width. */
-  requestAnimationFrame(() => {
-    state.innerHTML = describe()
+  function paintWidth(currentWidth) {
+    for (const windowElement of windows.querySelectorAll('.window')) {
+      windowElement.style.setProperty('--panel-width', `${hidden ? 0 : currentWidth}px`)
+    }
+    output.textContent = hidden ? 'hidden' : `${currentWidth}px`
+    input.disabled = hidden
+    toggle.textContent = hidden ? 'Show panel' : 'Hide panel'
+    toggle.setAttribute('aria-pressed', String(hidden))
+    measure()
+  }
+
+  function paintHidden(isHidden) {
+    hidden = isHidden
+    windows.innerHTML = barsMarkup(width, hidden)
+    paintWidth(width)
+  }
+
+  input.addEventListener('input', () => {
+    width = Number(input.value)
+    paintWidth(width)
   })
+
+  toggle.addEventListener('click', () => paintHidden(!hidden))
+
+  windows.innerHTML = barsMarkup(width, hidden)
+  paintWidth(width)
+  /* The first read has to wait for the stage to be in the document: measured
+     while detached, every box is zero and the strip would claim the identity is
+     gone at every width. */
+  requestAnimationFrame(measure)
   return stage
 }
 
@@ -232,14 +258,14 @@ function build() {
   if (ladder) {
     const host = document.createElement('div')
     host.className = 'frames'
-    host.innerHTML = [200, 264, 320, 420]
+    host.innerHTML = [null, 200, 264, 320, 420]
       .map((panelWidth) =>
         ['mac', 'win']
           .map((platform) =>
             window.CIOHeader.block({
               platform,
               variant,
-              options: { ...options, panelWidth }
+              options: panelWidth === null ? { ...options, panelHidden: true } : { ...options, panelWidth }
             })
           )
           .join('')
