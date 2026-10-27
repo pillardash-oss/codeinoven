@@ -73,9 +73,12 @@ import {
 } from './persistent-cli/persistent-cli-title'
 import {
   auxiliaryBlockUntil,
-  runOneShotWithCandidates,
-  type AuxiliaryQuotaBlock
+  runOneShotWithCandidates
 } from './persistent-cli/persistent-cli-one-shot'
+import {
+  AUXILIARY_VERDICT_FILE,
+  AuxiliaryVerdictStore
+} from './persistent-cli/auxiliary-verdict-store'
 import { hasProcessExited, waitForProcessExit } from './persistent-cli/persistent-cli-process'
 import { buildUserMessage } from './persistent-cli/persistent-cli-user-message'
 
@@ -138,12 +141,19 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   >()
   private readonly titleTurns = new TitleTurnRegistry()
   /**
-   * Provider-reported usage reset per auxiliary candidate (`providerId/modelId`),
-   * so an exhausted account is probed once per window instead of once per
-   * queued background job. In-process state by design: an app restart forgets
-   * it and probes afresh, so a stale block can never outlive the session.
+   * Provider-reported auxiliary candidate verdicts (`providerId/modelId`), so a
+   * candidate a provider already rejected is not probed again per queued
+   * background job, nor again after a restart. Built lazily because the store
+   * needs this driver's storage root, which the constructor assigns after the
+   * field initializers run.
    */
-  private readonly auxiliaryQuotaBlocks = new Map<string, AuxiliaryQuotaBlock>()
+  private auxiliaryVerdictsInstance: AuxiliaryVerdictStore | null = null
+  private get auxiliaryVerdicts(): AuxiliaryVerdictStore {
+    return (this.auxiliaryVerdictsInstance ??= new AuxiliaryVerdictStore({
+      filePath: this.storage.resolve(AUXILIARY_VERDICT_FILE)
+    }))
+  }
+
   /**
    * The candidate list this driver's own auxiliary runs resolved last, kept so
    * the ranking drain can tell whether a harness's whole route is inside a
@@ -255,7 +265,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       {
         driverName: this.name,
         titleTurns: this.titleTurns,
-        quotaBlocks: this.auxiliaryQuotaBlocks,
+        quotaBlocks: this.auxiliaryVerdicts,
         createSession: (path, title) => this.createSession(path, title),
         sendPrompt: (path, promptOptions) => this.sendPrompt(path, promptOptions),
         requireSession: (path, id) => this.requireSession(path, id),
@@ -358,9 +368,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * provider usage window, or null while one of them is free. See the
    * `HarnessDriver` contract: the caller names the complete route, because a
    * candidate left out would flip the verdict.
+   *
+   * The persisted verdicts are restored in the background, so a call that beats
+   * the first restore reads the route as open; the auxiliary run itself always
+   * waits for the restore, so the worst case is one row queued a few
+   * milliseconds early, never a harness process spawned for a retired model.
    */
   auxiliaryWindowUntil(candidates: readonly AuxiliaryModelCandidate[]): number | null {
-    return auxiliaryBlockUntil(candidates, this.auxiliaryQuotaBlocks, Date.now())
+    return auxiliaryBlockUntil(candidates, this.auxiliaryVerdicts.blocks, Date.now())
   }
 
   /** The route this driver's own auxiliary runs resolved, or null when unknown. */
