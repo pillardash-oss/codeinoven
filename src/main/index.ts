@@ -91,6 +91,24 @@ app.setName(APP_NAME)
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.
 app.userAgentFallback = brandUserAgent(app.userAgentFallback, process.versions.chrome)
+// Windows Hello is the platform authenticator on Windows, and Chromium reports it as
+// available without the app arming anything   unlike macOS, where
+// `installPlatformAuthenticator` has to ask first. A site offering "sign in with a
+// passkey" is therefore taken up on Windows and nowhere else in development, and the
+// ceremony is one the app cannot finish the way a real browser does: the prompt is a
+// Windows security dialog raised over an embedded page, and `accounts.google.com`
+// answers it with "This browser or app may not be secure" and refuses the sign-in.
+//
+// `WebAuthenticationUseNativeWinApi` is Chromium's own bridge to that Windows API, so
+// turning it off makes the platform authenticator unavailable and leaves such a page
+// with the password form it has always worked with. Hardware security keys keep
+// working, because their transport is built independently of this bridge. The
+// alternatives are worse: Electron delivers no PIN UI for a key that needs one, and an
+// embedded page has no way to present the Windows dialog it triggered.
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'WebAuthenticationUseNativeWinApi')
+  Logger.info('Windows Hello passkey bridge disabled, so sign-in pages fall back to a password')
+}
 
 configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
