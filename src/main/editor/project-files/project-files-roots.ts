@@ -5,7 +5,7 @@
  * higher-level operations built on top.
  */
 
-import { realpathSync, statSync, type Stats } from 'node:fs'
+import type { Stats } from 'node:fs'
 import { lstat, realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import {
@@ -298,9 +298,24 @@ export class ProjectFilesRootResolver {
     return canonical
   }
 
-  resolveForDragSync(projectId: string, relativePaths: string[], scopeBucketId?: string): string[] {
-    const root = this.projectRoots.get(scopedKey(projectId, scopeBucketId))
-    if (!root) throw new Error('Project files must be loaded before they can be dragged')
+  /**
+   * Resolve the absolute paths a native drag carries out of a file tree.
+   *
+   * The root comes from the same authority every other file operation uses, so an
+   * assistant's, a chat's or a browser's tree drags the files under its own
+   * workspace mount, and a scoped tree drags that worktree's copy. Reading the
+   * root straight out of the (project, scope) cache missed the thread mount
+   * entirely, which is why dragging a file out of any of those trees never
+   * started: it failed with "Project files must be loaded before they can be
+   * dragged" even while the tree was on screen.
+   */
+  async resolveForDrag(
+    projectId: string,
+    relativePaths: string[],
+    scopeBucketId?: string,
+    threadId?: string
+  ): Promise<string[]> {
+    const root = await this.projectRoot(projectId, scopeBucketId, threadId)
     const resolved: string[] = []
     const uniquePaths = [...new Set(relativePaths)].filter(
       (candidate) =>
@@ -316,11 +331,11 @@ export class ProjectFilesRootResolver {
       }
       // Symlinks are followed; the realpath containment check below is the
       // safety gate, so links resolving outside the project still fail.
-      const metadata = statSync(current)
+      const metadata = await stat(current)
       if (!metadata.isFile() && !metadata.isDirectory()) {
         throw new Error('Project path is not a regular file or directory')
       }
-      const canonical = realpathSync(current)
+      const canonical = await realpath(current)
       if (!isWithinRoot(root, canonical))
         throw new Error('Project file path escapes the project root')
       resolved.push(canonical)

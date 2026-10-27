@@ -1234,15 +1234,22 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   )
   ipcMain.on(
     'projectFiles:startDrag',
-    (event, projectId: unknown, relativePaths: unknown, scopeBucketId?: unknown) => {
+    (
+      event,
+      projectId: unknown,
+      relativePaths: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       void (async () => {
         try {
-          const paths = projectFilesService.resolveForDragSync(
+          const paths = await projectFilesService.resolveForDrag(
             validateEntityId(projectId, 'Project ID'),
             validateStringArray(relativePaths, 'Dragged paths'),
             scopeBucketId === undefined
               ? undefined
-              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+              : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+            threadIdArg(threadId)
           )
           if (paths.length === 0) throw new Error('No files are available to drag')
           const icon = await resolveDragIcon(paths[0])

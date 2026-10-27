@@ -1017,11 +1017,14 @@
   }
 
   function handleFileDragStart(entry: ProjectFileEntry, event: DragEvent): void {
+    // A remote checkout has no local paths to hand the OS, and the tree already
+    // offers no Finder hand-off there.
+    if (ovenTree) return
     const paths = [...selectionPathsFor(entry, projectState.selectedPaths)].map(String)
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
     event.preventDefault()
     try {
-      window.api.startFileDrag(projectId, paths)
+      projectFilesWorkspace.startFileDrag(projectId, paths)
     } catch (error) {
       reportError(error, 'Native dragging is unavailable')
     }

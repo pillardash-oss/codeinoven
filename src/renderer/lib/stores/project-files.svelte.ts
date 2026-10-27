@@ -272,6 +272,14 @@ class ProjectFilesWorkspace {
     return this.explorer.copyPathsToClipboard(projectId, paths, text)
   }
 
+  /** Start a native drag of the given entries, addressed the way every other
+   *  file operation addresses this tree: the scope it is showing and, for a
+   *  chat, an assistant task or a browser tab, the mounted conversation whose
+   *  own workspace directory is the root. */
+  startFileDrag(projectId: string, paths: string[]): void {
+    window.api.startFileDrag(projectId, paths, this.scopeFor(projectId), this.threadArg(projectId))
+  }
+
   /** Total bytes plus file and folder counts below a directory, walked on
    *  demand. Only the File info surface asks for it. */
   directorySize(projectId: string, path: string): Promise<ProjectDirectorySize> {
