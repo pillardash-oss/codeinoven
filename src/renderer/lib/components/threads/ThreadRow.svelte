@@ -9,11 +9,8 @@
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
-  import {
-    AUTHORED_WORK_ICON_BY_KIND,
-    AUTHORED_WORK_NAME_BY_KIND
-  } from '$lib/authored-work-presentation'
-  import { feature } from '$lib/feature-registry'
+  import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
+  import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -73,7 +70,6 @@
   import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { AuthoredWorkKind } from '$shared/ipc-contract'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
   import type { Thread } from '$shared/types'
   import {
@@ -1001,19 +997,6 @@
   {/if}
 {/snippet}
 
-{#snippet authoredWorkMarker(kinds: readonly AuthoredWorkKind[])}
-  {#each kinds as kind (kind)}
-    {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
-    <span
-      class="flex shrink-0 items-center text-muted"
-      title="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
-      aria-label="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
-    >
-      <WorkIcon size={11} strokeWidth={1.8} aria-hidden="true" />
-    </span>
-  {/each}
-{/snippet}
-
 {#snippet temporaryChatMarker()}
   {#if hasTemporaryChat}
     <!-- The context sidebar's temporary-chat tab mark, carried onto the row so a
@@ -1248,16 +1231,8 @@
               <span>{branchLabel}</span>
             </span>
           {/if}
-          {#if hasNote}
-            {@const ThreadNoteIcon = feature('thread-note').icon}
-            <span
-              class="flex shrink-0 items-center text-warning"
-              title={`${feature('thread-note').name} attached`}
-            >
-              <ThreadNoteIcon size={11} />
-            </span>
-          {/if}
-          {@render authoredWorkMarker(authoredWorkKinds)}
+          <ThreadNoteMark threadId={thread.id} />
+          <AuthoredWorkMarks kinds={authoredWorkKinds} />
           {#each activeIndicators as live (live)}
             <ThreadIndicatorSlot indicator={live} />
           {/each}
@@ -1566,17 +1541,9 @@
                 <span>{branchLabel}</span>
               </span>
             {/if}
-            {#if hasNote}
-              {@const ThreadNoteIcon = feature('thread-note').icon}
-              <span
-                class="flex shrink-0 items-center text-warning"
-                title={`${feature('thread-note').name} attached`}
-              >
-                <ThreadNoteIcon size={11} />
-              </span>
-            {/if}
+            <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKinds)}
+            <AuthoredWorkMarks kinds={authoredWorkKinds} />
             {#each activeIndicators as live (live)}
               <ThreadIndicatorSlot indicator={live} />
             {/each}
@@ -1745,17 +1712,9 @@
                 <span class="truncate">{branchLabel}</span>
               </span>
             {/if}
-            {#if hasNote}
-              {@const ThreadNoteIcon = feature('thread-note').icon}
-              <span
-                class="flex shrink-0 items-center text-warning"
-                title={`${feature('thread-note').name} attached`}
-              >
-                <ThreadNoteIcon size={11} />
-              </span>
-            {/if}
+            <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKinds)}
+            <AuthoredWorkMarks kinds={authoredWorkKinds} />
             <span
               class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
               title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span

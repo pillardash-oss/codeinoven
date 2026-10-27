@@ -13,9 +13,15 @@
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
+  import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
+  import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
+  import {
+    threadUsesEngineeringTooling,
+    type ThreadIndicator
+  } from '$lib/components/threads/thread-indicator'
   import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
-  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -236,6 +242,27 @@
     if (voiceSendStage === 'send') return 'transcribing-send'
     return 'transcribing'
   })
+  /**
+   * The marks a task or run carries that are not media activity: the agent
+   * driving the computer, and the Engineering tooling the thread engaged.
+   *
+   * A task row lists a thread, and a thread row reports everything that thread
+   * is doing. Resolving these here keeps that true for assistant work too, so an
+   * assistant task cannot look idle while its thread is painting a project's
+   * screen or sitting on an audit report.
+   */
+  const liveMarks = $derived.by((): ThreadIndicator[] => {
+    const live: ThreadIndicator[] = []
+    if (pipState.isThreadUsingComputerUse(task.id)) live.push('computer-use')
+    if (threadUsesEngineeringTooling(task)) live.push('engineering')
+    return live
+  })
+  /** The authored-work sessions this thread has entered, in canonical order, so
+   *  a task that designed something and then cut a video about it wears both
+   *  marks instead of the last one over the first. */
+  const authoredWorkKinds = $derived(
+    task.authoredWorkKinds ?? (task.authoredWorkKind ? [task.authoredWorkKind] : [])
+  )
 
   /** A task's own menu only; a run keeps the identical thread menu (rename, pin,
    *  fork, notes, copy id, delete), since a run is a thread too. */
@@ -398,7 +425,12 @@
         >
           {foreignTransfer?.error ?? runLine}
         </span>
+        <ThreadNoteMark threadId={task.id} />
+        <AuthoredWorkMarks kinds={authoredWorkKinds} />
         <MediaActivityTrail activities={media ?? threadMediaActivity(task.id)} label={task.title} />
+        {#each liveMarks as live (live)}
+          <ThreadIndicatorSlot indicator={live} />
+        {/each}
         {#if indicator && indicator !== 'recording' && indicator !== 'speaking'}
           <ThreadIndicatorSlot {indicator} />
         {/if}
