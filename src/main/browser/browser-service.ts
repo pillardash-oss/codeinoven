@@ -4176,6 +4176,14 @@ export class BrowserService {
       // kept (a live preview reloads itself mid-session), but the outstanding
       // event promise is void and the next arm installs into the new document.
       this.inspector.reset(tabId)
+      // A design tab announces what it is serving on every commit, not only when
+      // the answer changes. The renderer decides which pins the page draws, and
+      // the answer it needs for that is the design, so a reload that says nothing
+      // left a session that had lost that answer unable to ask for it again: the
+      // pins stayed away until something else marked the tab, which is what a
+      // refresh used to fix and could no longer. A commit off the design's own
+      // origin says nothing here: the mark is about to be cleared for it.
+      if (tab.design && url.startsWith(tab.design.origin)) this.publishState(tabId)
       // Recognition is decided from the page that just committed, not from a record
       // of who opened the tab last: that is what keeps a design a design across a
       // restart, and what covers a tab the agent opened itself.
