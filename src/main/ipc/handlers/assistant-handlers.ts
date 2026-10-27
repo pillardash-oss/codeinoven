@@ -8,7 +8,9 @@ import {
   ASSISTANT_CHAT_SETUP_ACTION,
   ASSISTANT_CHAT_SETUP_PROMPT,
   ASSISTANT_MANUAL_SETUP_ACTION,
-  assistantManualSetupPrompt
+  ASSISTANT_SCHEDULE_SETUP_ACTION,
+  assistantManualSetupPrompt,
+  assistantScheduleSetupPrompt
 } from '../../../lib/assistant-chat-setup'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { LOCAL_OVEN_ID } from '../../../lib/ovens'
@@ -717,6 +719,25 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
       id,
       assistantManualSetupPrompt(assistant),
       ASSISTANT_MANUAL_SETUP_ACTION
+    )
+  })
+
+  /**
+   * Agree the assistant's clock with the agent, from the panel's Schedule section.
+   *
+   * The switch in the panel never writes a schedule: a cadence and the times of day
+   * are things the agent asks for and the recap saves, so this only opens that
+   * conversation with one visible line. An assistant that is already scheduled goes
+   * through the same turn, which is how a clock is changed.
+   */
+  ipcMain.handle('assistant:scheduleWithAgent', async (_, assistantId: unknown) => {
+    const id = validateEntityId(assistantId, 'Assistant ID')
+    const assistant = assistantManager.getAssistant(id)
+    if (!assistant) return
+    await postAssistantOpeningTurn(
+      id,
+      assistantScheduleSetupPrompt(assistant),
+      ASSISTANT_SCHEDULE_SETUP_ACTION
     )
   })
 

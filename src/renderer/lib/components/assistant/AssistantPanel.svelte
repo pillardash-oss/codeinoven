@@ -267,6 +267,11 @@
   })
 
   const collapsed = new SvelteSet<string>()
+  /** The user turned the clock on: the panel holds that intent until the agent agrees it. */
+  let scheduleRequest = $state(false)
+  /** The confirmation that stands between the user and dropping the clock. */
+  let scheduleOffConfirm = $state(false)
+  let scheduleOffBusy = $state(false)
   /**
    * The assistant's name, for copy that would otherwise repeat "this assistant".
    * An assistant that has not been named yet (the create-by-chat flow starts with
@@ -340,16 +345,53 @@
   /**
    * Turn the assistant's clock on or off.
    *
-   * The flag is the authority: turning it off drops the schedule and its name, so
-   * nothing can fire a slot the assistant no longer has. Turning it back on leaves
-   * the assistant to agree a fresh clock with the user instead of quietly restoring
-   * a cadence from before.
+   * On is never written here. The panel knows nothing about the cadence or the
+   * times, and a schedule nobody agreed fires at hours the user never chose, so the
+   * switch only records that they want one and hands them the button that agrees it
+   * with the agent. Off is written, but only after a confirmation, because it drops
+   * the clock and its name and putting them back means agreeing a new one with the
+   * agent.
    */
-  function setScheduled(next: boolean): void {
-    void persistAssistant(
-      { scheduled: next },
-      next ? 'Could not turn the schedule on' : 'Could not turn the schedule off'
-    )
+  function setScheduledSwitch(next: boolean): void {
+    if (next) {
+      if (!scheduled) scheduleRequest = true
+      return
+    }
+    if (scheduleRequest) {
+      scheduleRequest = false
+      return
+    }
+    if (scheduled) scheduleOffConfirm = true
+  }
+
+  /** Hand the clock to the agent: it asks for the name, the cadence and the times. */
+  async function scheduleWithAgent(): Promise<void> {
+    const target = assistant
+    if (!target) return
+    const thread = knowledgeThread
+    if (!thread) {
+      toast.error('This assistant has no behavior thread to schedule in')
+      return
+    }
+    scheduleRequest = false
+    openKnowledgeTask()
+    try {
+      await invoke('assistant:scheduleWithAgent', target.id)
+    } catch (error) {
+      reportError(error, 'Could not start the schedule with your assistant')
+    }
+  }
+
+  /** Drop the clock, once the user has been told what dropping it costs. */
+  async function confirmScheduleOff(): Promise<void> {
+    if (!assistant) return
+    scheduleOffBusy = true
+    try {
+      await persistAssistant({ scheduled: false }, 'Could not turn the schedule off')
+      scheduleOffConfirm = false
+    } finally {
+      scheduleOffBusy = false
+    }
   }
 
   /** Commit the name the user gives the assistant's clock. Typed, so it writes on blur. */
@@ -1230,7 +1272,17 @@
                 {#each sections as section (section.id)}
                   {@const folded = collapsed.has(section.id) && editingId !== section.id}
                   <li class="border-t border-border first:border-t-0">
-                    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+                    <!--
+                      While this section is being edited its header sticks to the top of
+                      the panel and carries the actions, so Save and Cancel are always
+                      under the pointer instead of at the end of a long document the user
+                      would have to scroll back down to reach.
+                    -->
+                    <div
+                      class="flex items-center gap-1.5 px-2.5 py-1.5 {editingId === section.id
+                        ? 'sticky top-0 z-10 border-b border-border bg-surface'
+                        : ''}"
+                    >
                       <button
                         type="button"
                         class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
@@ -1249,7 +1301,26 @@
                           {section.title}
                         </span>
                       </button>
-                      {#if editingId !== section.id}
+                      {#if editingId === section.id}
+                        <div class="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            title="Discard these changes"
+                            onclick={cancelEdit}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                            title="Save {section.title}"
+                            onclick={() => void saveSection(section.id)}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      {:else}
                         <button
                           type="button"
                           class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -1279,22 +1350,6 @@
                           containerClass="border border-border bg-surface"
                           class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
                         />
-                        <div class="mt-1.5 flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                            onclick={cancelEdit}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                            onclick={() => void saveSection(section.id)}
-                          >
-                            Save
-                          </button>
-                        </div>
                       </div>
                     {:else if !folded}
                       <div class="border-t border-border px-2.5 py-2">
@@ -1325,14 +1380,34 @@
             <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
               <span class="text-[0.75rem] text-muted">Run on a schedule</span>
               <Switch
-                checked={scheduled}
-                onchange={setScheduled}
+                checked={scheduled || scheduleRequest}
+                onchange={setScheduledSwitch}
                 aria-label="Run this assistant on a schedule"
                 title={scheduled
                   ? 'Runs on the clock it agreed with you'
-                  : 'Runs only when you ask'}
+                  : scheduleRequest
+                    ? 'Waiting for the clock it will agree with you'
+                    : 'Runs only when you ask'}
               />
             </div>
+            {#if scheduleRequest && !scheduled}
+              <div class="flex flex-col gap-2 border-t border-border py-2">
+                <p class="text-[0.6875rem] leading-relaxed text-muted">
+                  A clock is agreed, not typed: {assistantLabel} has to ask what you want to call it,
+                  how often it runs, and at what times. Nothing is scheduled until you save what it proposes.
+                </p>
+                <div class="flex justify-end">
+                  <button
+                    type="button"
+                    class="bg-primary px-2.5 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                    title="Agree this assistant's schedule with it"
+                    onclick={() => void scheduleWithAgent()}
+                  >
+                    Schedule with {assistantLabel}
+                  </button>
+                </div>
+              </div>
+            {/if}
             {#if scheduled}
               <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
                 <label class="shrink-0 text-[0.75rem] text-muted" for="assistant-schedule-name"
@@ -1758,6 +1833,20 @@
     onSaved={() => void loadConnectionLibrary()}
   />
 {/if}
+
+<ConfirmDialog
+  open={scheduleOffConfirm}
+  title="Turn the schedule off"
+  confirmLabel="Turn it off"
+  busy={scheduleOffBusy}
+  onCancel={() => (scheduleOffConfirm = false)}
+  onConfirm={confirmScheduleOff}
+>
+  <p>
+    Turning the schedule off drops the clock and its name. {assistantLabel} will only run when you ask,
+    and putting it back on a clock means agreeing a new one with it.
+  </p>
+</ConfirmDialog>
 
 <ConfirmDialog
   open={connectionRemoveTarget !== null}

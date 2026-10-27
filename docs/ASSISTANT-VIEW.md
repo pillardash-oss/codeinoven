@@ -726,6 +726,16 @@ has; turning it back on leaves the assistant re-authored rather than silently
 restoring a cadence the user may have forgotten. `assistantIsScheduled`
 (`src/lib/types/assistant.ts`) is the single rule every surface reads.
 
+A clock is agreed, never typed. The **Assistant** tab's Schedule card shows the
+switch, but turning it on writes nothing: the panel holds the intent, says the clock
+has to be agreed, and offers **Schedule with <assistant>**, which opens the behavior
+thread and posts one app-owned turn (`assistant:scheduleWithAgent`,
+`assistantScheduleSetupPrompt` in `src/lib/assistant-chat-setup.ts`) where the agent
+asks for the name, the cadence and the times and the recap saves them
+(`scheduled: true` with `scheduleName` and `schedule`). Turning the switch off goes
+through a confirmation first, because it drops the clock and its name and putting it
+back means agreeing a new one with the agent.
+
 What the flag changes:
 
 - **The authoring interview never asks for a schedule.** The chat engine passes
