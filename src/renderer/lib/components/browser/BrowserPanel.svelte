@@ -4,6 +4,7 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { onMount, tick } from 'svelte'
@@ -65,9 +66,18 @@
      * moved its active tab.
      */
     onTabReplaced?: (tabId: string) => void
+    /**
+     * The way out of this surface, when the surface draws no strip of its own.
+     *
+     * A composition opened full screen is watched, not browsed: it carries the
+     * playback controls where a browser would carry its address bar, so the
+     * minimize button has to sit on that row, and only the caller owns the
+     * surface that closes.
+     */
+    onMinimize?: () => void
   }
 
-  let { tab, fullscreen = false, onTabReplaced }: Props = $props()
+  let { tab, fullscreen = false, onTabReplaced, onMinimize }: Props = $props()
 
   /** The surface this instance renders on. A fullscreen instance outranks every
    *  sidebar instance, so the store resolves which one owns the single native
@@ -128,6 +138,15 @@
    *  opened is a gesture, not a state this panel holds. */
   let addressBar = $state<BrowserAddressBar | undefined>(undefined)
   let pageState = $state<BrowserPageState>(initialPageState())
+  /**
+   * A composition watched full screen is a player, not a browser.
+   *
+   * The surface then carries the playback row where an address bar would sit and
+   * nothing else: no back/forward, no reload, no address field, no find bar. The
+   * user came here to watch and to place notes on frames, and every browser control
+   * around the picture is one more thing between them and the film.
+   */
+  let compositionPlayer = $derived(fullscreen && pageState.composition !== null)
   let stateRevision = 0
   /** The panel's current on-screen content rectangle, refreshed by the same
    *  observers that align the native view. */
@@ -362,6 +381,24 @@
     if (!contentElement) return null
     const rect = contentElement.getBoundingClientRect()
     if (rect.width < 1 || rect.height < 1) return null
+    // A composition draws at the size its manifest declares, so it is fitted into
+    // the content box at that aspect and centred, exactly as the board's own stage
+    // fits it. Handing a 16:9 page a window-shaped view made the picture arrive
+    // stretched or cropped, and the page's `100vw` sizing then drew it at the wrong
+    // shape rather than merely at the wrong scale.
+    const composition = pageState.composition
+    if (composition && composition.width > 0 && composition.height > 0) {
+      const ratio = composition.width / composition.height
+      const boxRatio = rect.width / rect.height
+      const width = ratio > boxRatio ? rect.width : rect.height * ratio
+      const height = ratio > boxRatio ? rect.width / ratio : rect.height
+      return {
+        x: Math.max(0, Math.round(rect.x + (rect.width - width) / 2)),
+        y: Math.max(0, Math.round(rect.y + (rect.height - height) / 2)),
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height))
+      }
+    }
     return {
       x: Math.max(0, Math.round(rect.x)),
       y: Math.max(0, Math.round(rect.y)),
@@ -597,7 +634,8 @@
   {@attach panelVisible && !pageState.loadError && !isBlank && manageNativeBrowserView}
   class="flex h-full min-h-0 flex-col bg-app"
 >
-  <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
+  {#if !compositionPlayer}
+    <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
     <button
       type="button"
       class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
@@ -734,8 +772,9 @@
         {/if}
       </button>
     {/if}
-  </div>
-  {#if findOpen && panelVisible}
+    </div>
+  {/if}
+  {#if findOpen && panelVisible && !compositionPlayer}
     <!-- The bar is a row of this column rather than an overlay: the page is a
          native view composited above the DOM, so a row above it shrinks the
          content rect and the observers place the page under the bar.
@@ -751,15 +790,30 @@
     </div>
   {/if}
   {#if pageState.composition}
-    <BrowserCompositionTransport
-      {tabId}
-      composition={pageState.composition}
-      projectId={pageState.projectId}
-      threadId={pageState.threadId}
-      active={panelVisible}
-    />
+    <div class="flex shrink-0 items-stretch">
+      <div class="min-w-0 flex-1">
+        <BrowserCompositionTransport
+          {tabId}
+          composition={pageState.composition}
+          projectId={pageState.projectId}
+          threadId={pageState.threadId}
+          active={panelVisible}
+        />
+      </div>
+      {#if compositionPlayer && onMinimize}
+        <button
+          type="button"
+          class="flex w-9 shrink-0 items-center justify-center border-b border-border bg-surface text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Leave full screen"
+          title="Leave full screen"
+          onclick={onMinimize}
+        >
+          <CioMinimize size={14} />
+        </button>
+      {/if}
+    </div>
   {/if}
-  {#if inspectArmed}
+  {#if inspectArmed && !compositionPlayer}
     <p
       class="shrink-0 border-b border-accent/20 bg-accent/10 px-3 py-1 text-[0.6875rem] text-foreground"
       role="status"

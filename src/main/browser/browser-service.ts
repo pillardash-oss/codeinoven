@@ -1589,7 +1589,15 @@ export class BrowserService {
       return tab ? this.stateFor(tabId, tab) : null
     })
     replaceHandler('browser:reload', (_event, rawTabId) => {
-      this.liveTab(validateTabId(rawTabId))?.view.webContents.reload()
+      const tabId = validateTabId(rawTabId)
+      const tab = this.liveTab(tabId)
+      if (!tab) return
+      // A composition resumes where it was instead of jumping back to its first
+      // frame, which is what makes an editor-triggered refresh (a saved caption
+      // style, a moved track) safe to do while the user is watching.
+      void this.reloadKeepingPlayhead(tabId, tab).catch((error: unknown) => {
+        Logger.error('A browser tab could not reload:', error)
+      })
     })
     replaceHandler('browser:transport', async (_event, rawTabId, rawCommand, rawValue) => {
       const tabId = validateTabId(rawTabId)
@@ -3192,9 +3200,24 @@ export class BrowserService {
       rendered = (await this.renderTabFrame(tabId, at).catch(() => ({ rendered: false }))).rendered
     }
     if (!rendered) return null
-    const image = await tab.view.webContents.capturePage()
-    const size = image.getSize()
-    if (size.width < 1 || size.height < 1) return null
+    // The capture is a picture of the view where it is on screen, and only one
+    // native view is attached at a time. A surface that has just taken the view
+    // over (the board's stage handing it to the full screen panel) can still be
+    // mid-attach, and a view that is not parented captures blank, which is what
+    // answered the pen with "that frame could not be captured". Ask for the
+    // attach, nudge the page to paint, and retry briefly before giving up.
+    if (this.activeTabId === tabId) {
+      this.showActiveView()
+      tab.view.webContents.invalidate()
+    }
+    let image: Awaited<ReturnType<typeof tab.view.webContents.capturePage>> | null = null
+    for (let attempt = 0; attempt < FRAME_CAPTURE_ATTEMPTS && image === null; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FRAME_CAPTURE_RETRY_MS))
+      const shot = await tab.view.webContents.capturePage()
+      const size = shot.getSize()
+      if (size.width >= 1 && size.height >= 1) image = shot
+    }
+    if (!image) return null
     const project = this.projects.get(tab.projectId)
     const root = project?.source === 'local' ? project.path : null
     if (!root) return null

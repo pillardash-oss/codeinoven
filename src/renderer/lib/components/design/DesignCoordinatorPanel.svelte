@@ -21,6 +21,8 @@
   import CioStore from '@pdslng/cio-icon/CioStore.svelte'
   import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
@@ -268,6 +270,8 @@
   let savedExport = $state<string | null>(null)
   /** Whether the studio controls hold unsaved edits, which a reload would discard. */
   let studioDirty = $state(false)
+  /** The controls' save action, drawn in the section strip so it never moves. */
+  let studioSaveAction = $state<(() => void) | null>(null)
   /**
    * Bumped when the studio controls save the composition.
    *
@@ -1179,6 +1183,11 @@
   /** A save moved the composition, so the timeline re-reads the bands it draws. */
   function setStudioSaved(): void {
     studioRevision += 1
+    // The page reads studio.json once, when it loads, so a saved caption style, a
+    // moved track or an edited word is invisible in the picture until the page
+    // reads the file again. Reloading the board's own view refreshes it, and the
+    // browser remembers the playhead across that reload.
+    if (boardTabId !== '') void invoke('browser:reload', boardTabId).catch(() => undefined)
   }
 
   /** The editor's height, bounded so neither half of the board can be dragged shut. */
@@ -2143,14 +2152,14 @@
           type="button"
           class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
           disabled={opening || !playable || selected.directory === '' || selectedMissing}
-          title={`Watch this ${noun} full screen in the in-app browser`}
-          aria-label={`Watch this ${noun} full screen in the in-app browser`}
+          title={`Expand this ${noun} to full screen`}
+          aria-label={`Expand this ${noun} to full screen`}
           onclick={() => void openPreview(selected.entry)}
         >
           {#if opening}
             <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <CioThreadBrowser size={ICON_SIZE.inline} />
+            <CioMaximize size={ICON_SIZE.inline} />
           {/if}
         </button>
       </span>
@@ -2251,6 +2260,26 @@
               tabId={boardTabId}
               revision={studioRevision}
             >
+              {#snippet saveAction()}
+                <!--
+                  One save control for the whole editor, on the row that never
+                  moves. It reads the same as the file editor's save, so a save is
+                  the same gesture everywhere in the app, and it is the only place
+                  that says whether the file on disk is behind.
+                -->
+                <button
+                  type="button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+                  disabled={!studioDirty || studioSaveAction === null}
+                  aria-label="Save the composition"
+                  title={studioDirty
+                    ? 'Save the composition'
+                    : 'The composition has no unsaved changes'}
+                  onclick={() => studioSaveAction?.()}
+                >
+                  <CioSave size={11} />
+                </button>
+              {/snippet}
               {#snippet controls(section, seek)}
                 {#if liveEditing}
                   <VideoStudioControls
@@ -2264,6 +2293,7 @@
                     onSeek={seek}
                     onDirtyChange={setStudioDirty}
                     onSaved={setStudioSaved}
+                    onSaveAction={(action) => (studioSaveAction = action)}
                   />
                 {/if}
               {/snippet}
@@ -2494,12 +2524,17 @@
     activeTabId={shownFullscreenTab.id}
     minimizeLabel="Minimize the composition"
     hostsBrowserView
+    hideStrip
     onSelect={() => {}}
     onMinimize={() => (compositionFullscreen = false)}
   >
     {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
       {#key shownFullscreenTab.id}
-        <BrowserPanel tab={shownFullscreenTab} fullscreen />
+        <BrowserPanel
+          tab={shownFullscreenTab}
+          fullscreen
+          onMinimize={() => (compositionFullscreen = false)}
+        />
       {/key}
     {/await}
   </FullscreenPanelDialog>

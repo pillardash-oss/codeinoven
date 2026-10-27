@@ -25,7 +25,14 @@ export interface VideoStudioDocument {
   version: 1
   controls: VideoControl[]
   captions: VideoCaption[]
-  captionStyle: 'plain' | 'highlight' | 'karaoke'
+  /**
+   * How captions are drawn over the picture.
+   *
+   * `none` draws no captions at all: a composition can carry its words for a
+   * transcript and still show none of them, which is a real editorial choice and
+   * not the same as an empty caption list.
+   */
+  captionStyle: 'plain' | 'highlight' | 'karaoke' | 'none'
   audioTracks: VideoAudioTrack[]
 }
 export interface VideoJob {
@@ -122,7 +129,7 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
     return caption
   })
   const style = value.captionStyle ?? 'plain'
-  if (style !== 'plain' && style !== 'highlight' && style !== 'karaoke')
+  if (style !== 'plain' && style !== 'highlight' && style !== 'karaoke' && style !== 'none')
     throw new Error('Unsupported caption style')
   const audioTracks = list('audioTracks', 24).map((raw): VideoAudioTrack => {
     const track = videoRecord(raw)

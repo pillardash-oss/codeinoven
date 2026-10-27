@@ -79,6 +79,16 @@
     onDirtyChange?: (dirty: boolean) => void
     /** Told after a save, so the timeline's bands re-read the file they draw. */
     onSaved?: () => void
+    /**
+     * The save action, handed up to the section strip.
+     *
+     * The strip belongs to the timeline and the document belongs to these
+     * controls, so the one button that writes the file cannot read this state
+     * itself. Publishing it keeps one save control in one place for every
+     * section, instead of each section growing its own and the button moving
+     * under the user's pointer when they switch tabs.
+     */
+    onSaveAction?: (action: (() => void) | null) => void
   }
   let {
     projectId,
@@ -90,7 +100,8 @@
     onExport,
     onSeek,
     onDirtyChange,
-    onSaved
+    onSaved,
+    onSaveAction
   }: Props = $props()
   let studio = $state<VideoStudioDocument | null>(null)
   let revision = ''
@@ -125,13 +136,14 @@
   let panel: HTMLElement | null = null
   /** The caption styles the studio accepts, as the app's own picker form. */
   const CAPTION_STYLES = [
-    { id: 'plain', label: 'Plain', hint: 'One line of text, drawn as it is written.' },
+    { id: 'plain', label: 'Plain', hint: 'One colour of text, drawn as it is written.' },
     {
       id: 'highlight',
-      label: 'Highlight word',
-      hint: 'The word being spoken is drawn in the accent colour.'
+      label: 'Highlight',
+      hint: 'The word being spoken is painted in the accent colour.'
     },
-    { id: 'karaoke', label: 'Karaoke', hint: 'Words fill in as they are spoken.' }
+    { id: 'karaoke', label: 'Karaoke', hint: 'Words fill in as they are spoken; the rest stay dim.' },
+    { id: 'none', label: 'Off', hint: 'Draw no captions over the picture at all.' }
   ] as const
   const labels: Record<string, string> = {
     filmstrip: 'Footage frames',
@@ -188,6 +200,13 @@
   // to decide between reloading at once and asking first.
   $effect(() => {
     onDirtyChange?.(dirty)
+  })
+  // Hand the strip its save control. `save` is a stable function over this
+  // component's own state, so one publication is all the strip needs, and the
+  // cleanup takes the control away with the editor.
+  $effect(() => {
+    onSaveAction?.(() => void save())
+    return () => onSaveAction?.(null)
   })
   function setControl(key: string, value: VideoValue): void {
     const control = studio?.controls.find((item) => item.key === key)
@@ -358,7 +377,9 @@
       {/each}
     </div>
   {:else}
-    <p class="pt-1 text-[0.6875rem] text-dimmed">This composition declares no values to edit.</p>
+    <p class="pt-1 text-[0.6875rem] text-dimmed">
+      This composition declares no editable controls.
+    </p>
   {/if}
 {/snippet}
 
@@ -387,20 +408,10 @@
     >
       <fieldset disabled={busy} class="min-w-0">
         <legend class="sr-only">Composition editor</legend>
-        {#if dirty}
-          <div class="mb-2 flex items-center justify-end gap-2">
-            <span class="text-[0.6875rem] text-dimmed">Unsaved changes</span>
-            <button
-              type="submit"
-              class="flex h-7 shrink-0 items-center bg-primary px-2.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            >
-              Save changes
-            </button>
-          </div>
-        {/if}
-
         {#if section === 'timeline'}
-          {#if studio.captions.length === 0}{@render compositionValues()}{/if}
+          {#if studio.captions.length === 0 && studio.audioTracks.length === 0}
+            {@render compositionValues()}
+          {/if}
         {:else if section === 'captions'}
           {@render compositionValues()}
           {#if studio.captions.length > 0}

@@ -87,6 +87,9 @@ function installVideoRuntime(): void {
     width: number,
     height: number
   ): void {
+    // A composition can carry its words and still show none of them, which is a
+    // choice the user makes in the editor rather than a missing transcript.
+    if (studio.captionStyle === 'none') return
     let low = 0,
       high = studio.captions.length - 1
     let caption: VideoStudioDocument['captions'][number] | undefined
@@ -137,11 +140,36 @@ function installVideoRuntime(): void {
       for (const word of line) {
         const measured = ctx.measureText(word.text).width
         const active = seconds >= word.start && seconds < word.end
-        ctx.fillStyle = studio.captionStyle !== 'plain' && active ? '#facc15' : '#ffffff'
+        const spoken = seconds >= word.end
+        // The three styles have to be tellable apart at a glance, because the
+        // picker asks the user to choose between them and a preview that draws
+        // them the same is asking them to choose blind. Plain is one colour;
+        // highlight paints the word being spoken; karaoke fills the words in as
+        // they pass, so what is said next still reads while it is dimmer.
         ctx.save()
         ctx.translate(x + measured / 2, top + row * lineHeight)
-        if (studio.captionStyle === 'karaoke' && active) ctx.scale(1.08, 1.08)
-        ctx.fillText(word.text, 0, 0, width * 0.8)
+        if (studio.captionStyle === 'highlight' && active) {
+          const pad = lineHeight * 0.2
+          ctx.fillStyle = '#facc15'
+          ctx.beginPath()
+          ctx.roundRect(
+            -(measured / 2) - pad,
+            -(lineHeight * 0.42),
+            measured + pad * 2,
+            lineHeight * 0.84,
+            lineHeight * 0.14
+          )
+          ctx.fill()
+          ctx.fillStyle = '#111111'
+          ctx.fillText(word.text, 0, 0, width * 0.8)
+        } else if (studio.captionStyle === 'karaoke') {
+          ctx.fillStyle = spoken || active ? '#facc15' : 'rgba(255,255,255,0.4)'
+          if (active) ctx.scale(1.12, 1.12)
+          ctx.fillText(word.text, 0, 0, width * 0.8)
+        } else {
+          ctx.fillStyle = '#ffffff'
+          ctx.fillText(word.text, 0, 0, width * 0.8)
+        }
         ctx.restore()
         x += measured + gap
       }
