@@ -596,6 +596,35 @@ describe('CheckpointManager', () => {
     expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
   })
 
+  // Another thread's turn in flight makes the project-wide diff unusable: its
+  // writes look exactly like this turn's, so a turn that only answered a
+  // question reported a room full of files another thread was writing.
+  it('claims only its own evidence while another turn is in flight', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'mine.txt'), 'before', 'utf-8')
+    await writeFile(join(projectRoot, 'theirs.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'reader', projectRoot, 'Reader turn', false)
+    await writeFile(join(projectRoot, 'mine.txt'), 'my fix', 'utf-8')
+    await writeFile(join(projectRoot, 'theirs.txt'), 'another turn mid-write', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        changeSources: new Map([['mine.txt', [claimedSource('mine.txt')]]]),
+        contestedDiff: true
+      }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
+  })
+
   it('bounds the failure text written to a checkpoint', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()

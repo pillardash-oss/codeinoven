@@ -31393,6 +31393,12 @@ export class ChatEngine {
       .activeTurnThreadIds(info.projectId)
       .catch(() => undefined)
     const foreignLive = this.liveForeignClaimedPaths(info, ownThreadIds, activeTurnThreadIds)
+    // Another thread with a turn in flight here or in a sibling instance makes
+    // the project-wide diff ambiguous: its writes look exactly like this turn's.
+    // Only this turn's own evidence may claim a path in that state.
+    const contestedDiff = [...(activeTurnThreadIds ?? [])].some(
+      (threadId) => threadId !== info.threadId && !ownThreadIds.has(threadId)
+    )
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -31411,6 +31417,7 @@ export class ChatEngine {
           foreignPrecisePaths: foreignLive.claimed,
           foreignWindowPaths: foreignLive.window,
           foreignClaimants: foreignLive.claimants,
+          contestedDiff,
           // Worker sub-agent threads dispatched by this thread are part of the
           // same logical turn: their captured checkpoints must never mark the
           // turn's real changes as foreign concurrent edits.
