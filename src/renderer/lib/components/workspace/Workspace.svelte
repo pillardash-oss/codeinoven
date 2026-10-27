@@ -880,7 +880,12 @@
    */
   $effect(() => {
     const thread = selectedThread
-    if (!thread) return
+    if (!thread) {
+      // Nothing is on screen, so nothing may dock itself: a read still in flight
+      // for the thread that was just closed must not open its coordinator panel.
+      designCoordinatorState.release()
+      return
+    }
     // The sidebar's panels are scoped to the project it is docked on, so make
     // sure it is docked on the thread on screen before anything reads it. A
     // surface that moved the visible thread without activating the sidebar would

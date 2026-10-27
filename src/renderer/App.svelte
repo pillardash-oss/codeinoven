@@ -698,7 +698,7 @@
     }
   }
 
-  function navigate(view: View): void {
+  function navigate(view: View, options: { reconcileThread?: boolean } = {}): void {
     // Entering another section starts its Utilities page fresh; history
     // restores a recorded Utilities page after this navigation.
     if (view !== activeView) settingsRouteState.resetUtilities()
@@ -737,7 +737,12 @@
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
-    reconcileThreadForContentView(view)
+    // A navigation that is only a step on the way to a specific thread skips the
+    // reconcile: that step would open the family's remembered thread first, which
+    // records a visit, persists it, docks its panels, and leaves it on screen
+    // whenever the intended open cannot resolve. The caller opens the real thread
+    // immediately after this returns.
+    if (options.reconcileThread !== false) reconcileThreadForContentView(view)
     observeNavigationLocation()
   }
 
@@ -880,7 +885,9 @@
     // conversation, a spun-off passage, a process's thread) has to be shown by
     // the view that owns its family; only the shell may move the view.
     workspaceState.navigateToThreadView = (thread) => {
-      if (!viewShowsThread(activeView, thread)) navigate(contentViewForThread(thread))
+      if (!viewShowsThread(activeView, thread)) {
+        navigate(contentViewForThread(thread), { reconcileThread: false })
+      }
     }
     return () => {
       workspaceState.navigateToSettings = null
