@@ -17,7 +17,7 @@
     disabled?: boolean
     /** Symbolic key tokens from the keymap registry, shown in the tooltip chip. */
     shortcut?: readonly string[]
-    /** Icon colour when the item is idle. */
+    /** Icon colour when the item is active. */
     tone?: 'default' | 'primary' | 'danger' | 'accent'
     /** Spins the icon, for in-flight states such as a download. */
     spin?: boolean
@@ -56,21 +56,16 @@
         : 0
   )
 
-  /** Tonal items keep their colour in every state; the rest use the neutral
-   *  idle/active palette shared by the view rail and the context dock. */
-  const toneClass = $derived.by((): string => {
-    if (active) return 'text-foreground'
-    switch (tone) {
-      case 'primary':
-        return 'text-primary hover:bg-elevated'
-      case 'danger':
-        return 'text-danger hover:bg-elevated'
-      case 'accent':
-        return 'text-accent'
-      default:
-        return 'text-muted hover:bg-elevated hover:text-foreground'
-    }
-  })
+  /** Idle tools stay muted; only the current destination uses its active colour. */
+  const toneClass = $derived(
+    active
+      ? tone === 'danger'
+        ? 'text-danger'
+        : tone === 'accent'
+          ? 'text-accent'
+          : 'text-primary'
+      : 'text-muted hover:bg-elevated hover:text-foreground'
+  )
 </script>
 
 <!-- One rail item: the 32px tool button shared by the view rail's views and its

@@ -132,13 +132,9 @@
       .join('|')
   )
 
-  /** A toned tool   an attention-worthy entry such as a written thread note   keeps
-   *  its colour in every state; the shared highlight behind the current item
-   *  paints the active background for every tool, so an untinted icon reads as
-   *  one more tool and never as a second class of thing. */
+  /** Keep idle tools muted and light up the current tool. */
   function toneClass(item: ContextDockItem): string {
-    if (item.tone === 'warning') return 'text-warning hover:bg-elevated'
-    return item.active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
+    return item.active ? 'text-primary' : 'text-muted hover:bg-elevated hover:text-foreground'
   }
 
   /** Text colour for one token of a `countText` row. */

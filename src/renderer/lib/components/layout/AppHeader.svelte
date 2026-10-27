@@ -22,7 +22,6 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
@@ -37,7 +36,6 @@
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
 
   import AppHeaderCenter from './AppHeaderCenter.svelte'
-  import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
   import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
@@ -212,10 +210,6 @@
     memoryProposalState.setContext(workspaceState.selectedThread?.projectId ?? null)
   })
 
-  // ─── Editor preference ───────────────────────────────────────────────
-
-  void editorPreference.load()
-
   // ─── Git status chip ─────────────────────────────────────────────────────
 
   /** Refresh git status whenever the active thread's project changes. */
@@ -269,7 +263,7 @@
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
       <button
-        class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
         aria-label="Go back"
         title="Go back"
         disabled={!navigationHistoryState.canGoBack}
@@ -278,7 +272,7 @@
         <CioBack size={ICON_SIZE.control} />
       </button>
       <button
-        class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
         aria-label="Go forward"
         title="Go forward"
         disabled={!navigationHistoryState.canGoForward}
@@ -323,12 +317,6 @@
   <AppHeaderThreadModals menu={threadActionsMenu} />
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- Editor preference   hidden in chat mode, scope view, the browser view,
-         and when no project is selected -->
-    {#if !chatMode && !onScope && !onBrowser && workspaceState.activeProject}
-      <AppHeaderEditorMenu />
-    {/if}
-
     <!-- Spec studio   only for an existing document or an eligible final-response retry -->
     {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
@@ -392,9 +380,9 @@
 
     <!-- Sticky notes and notifications stay available in every view. -->
     <button
-      class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {stickyNotesPanelActive
-        ? 'bg-elevated text-foreground'
-        : ''}"
+      class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {stickyNotesPanelActive
+        ? 'bg-elevated text-primary'
+        : 'text-muted hover:bg-elevated hover:text-foreground'}"
       aria-label={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
       aria-pressed={stickyNotesPanelActive}
       title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
@@ -404,10 +392,11 @@
     </button>
 
     <button
-      class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
-        ? 'bg-elevated text-foreground'
-        : ''}"
+      class="relative flex h-8 w-8 items-center justify-center transition-colors duration-150 {notificationsPanelActive
+        ? 'bg-elevated text-primary'
+        : 'text-muted hover:bg-elevated hover:text-foreground'}"
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
+      aria-pressed={notificationsPanelActive}
       title="Open notifications"
       data-onboarding="notifications"
       data-guide="notifications"
