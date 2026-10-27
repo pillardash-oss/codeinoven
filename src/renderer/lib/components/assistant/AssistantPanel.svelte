@@ -256,6 +256,12 @@
   /** Whether this assistant runs on a clock at all; drives the schedule copy. */
   const scheduled = $derived(assistant ? assistantIsScheduled(assistant) : true)
   /**
+   * Whether a clock actually exists, which is what the countdown rows are about.
+   * An assistant whose flag is on but whose schedule was never agreed has nothing to
+   * show, so the section offers the conversation instead of empty rows.
+   */
+  const scheduleAgreed = $derived(Boolean(assistant?.schedule))
+  /**
    * The schedule line everywhere in the panel: what the user named the clock,
    * then the cadence the assistant agreed, or "runs on demand" when it has none.
    */
@@ -1369,16 +1375,17 @@
           {/if}
 
           <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-            <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
             <!--
-              The clock is a decision, not a readout: it is agreed with the agent
-              during setup, and the panel is where the user changes it afterwards,
-              exactly like the reporting row below. Turning it off drops the
-              schedule outright, so turning it back on makes the assistant agree a
-              fresh one instead of silently restoring a cadence nobody remembers.
+              The switch sits on the section's own title, so nothing here repeats
+              what the heading already says. The clock is a decision, not a readout:
+              it is agreed with the agent during setup, and the panel is where the
+              user turns it on or off afterwards, exactly like the reporting rows
+              below. Turning it off drops the schedule outright, so turning it back
+              on makes the assistant agree a fresh one instead of silently restoring
+              a cadence nobody remembers.
             -->
-            <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
-              <span class="text-[0.75rem] text-muted">Run on a schedule</span>
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
               <Switch
                 checked={scheduled || scheduleRequest}
                 onchange={setScheduledSwitch}
@@ -1390,7 +1397,7 @@
                     : 'Runs only when you ask'}
               />
             </div>
-            {#if scheduleRequest && !scheduled}
+            {#if !scheduleAgreed && (scheduleRequest || scheduled)}
               <div class="flex flex-col gap-2 border-t border-border py-2">
                 <p class="text-[0.6875rem] leading-relaxed text-muted">
                   A clock is agreed, not typed: {assistantLabel} has to ask what you want to call it,
@@ -1408,7 +1415,7 @@
                 </div>
               </div>
             {/if}
-            {#if scheduled}
+            {#if scheduleAgreed}
               <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
                 <label class="shrink-0 text-[0.75rem] text-muted" for="assistant-schedule-name"
                   >Schedule name</label
@@ -1425,28 +1432,31 @@
                     commitScheduleName((event.currentTarget as HTMLInputElement).value)}
                 />
               </div>
+              <!-- The countdown is only worth its space when there is a clock to
+                   count down to, so these three rows appear with the schedule and
+                   not before it. -->
+              <dl class="flex flex-col">
+                <div
+                  class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"
+                >
+                  <dt class="text-[0.75rem] text-muted">Runs</dt>
+                  <dd class="text-right text-[0.75rem] text-foreground">{scheduleLabel}</dd>
+                </div>
+                <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                  <dt class="text-[0.75rem] text-muted">Next run</dt>
+                  <dd class="text-right text-[0.75rem] text-foreground">
+                    {nextRunLabel}
+                    {#if nextRunRelative && nextRunRelative !== 'now'}
+                      <span class="ml-1 text-dimmed">{nextRunRelative}</span>
+                    {/if}
+                  </dd>
+                </div>
+                <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                  <dt class="text-[0.75rem] text-muted">If a run is missed</dt>
+                  <dd class="text-right text-[0.75rem] text-foreground">{missedRunPolicyLabel}</dd>
+                </div>
+              </dl>
             {/if}
-            <dl class="flex flex-col">
-              <div
-                class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"
-              >
-                <dt class="text-[0.75rem] text-muted">Runs</dt>
-                <dd class="text-right text-[0.75rem] text-foreground">{scheduleLabel}</dd>
-              </div>
-              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
-                <dt class="text-[0.75rem] text-muted">Next run</dt>
-                <dd class="text-right text-[0.75rem] text-foreground">
-                  {nextRunLabel}
-                  {#if nextRunRelative && nextRunRelative !== 'now'}
-                    <span class="ml-1 text-dimmed">{nextRunRelative}</span>
-                  {/if}
-                </dd>
-              </div>
-              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
-                <dt class="text-[0.75rem] text-muted">If a run is missed</dt>
-                <dd class="text-right text-[0.75rem] text-foreground">{missedRunPolicyLabel}</dd>
-              </div>
-            </dl>
           </div>
 
           <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
