@@ -17,6 +17,12 @@
     report()
     const observer = new ResizeObserver(report)
     observer.observe(element)
+    /* The page keeps its width while the pane around it narrows, so observing the
+       column alone misses every panel that opens or closes beside it: the column
+       moves without resizing. The pane it is centred in is what actually changes
+       size, and observing that catches both. */
+    const pane = element.parentElement
+    if (pane) observer.observe(pane)
     window.addEventListener('resize', report)
     return () => {
       observer.disconnect()

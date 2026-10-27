@@ -370,7 +370,7 @@
       </button>
     {:else}
       <div class="header-cluster-actions">
-        <AppHeaderViewActions />
+        <AppHeaderViewActions compact={panelColumnWidth === 0} />
       </div>
     {/if}
   </nav>

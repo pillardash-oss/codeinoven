@@ -154,6 +154,10 @@ function spineMarkup(platform, options) {
 }
 
 function variantActions(options) {
+  /* With no panel docked the bar has no column to spend on buttons, so the view
+     actions fold into one ellipsis that opens them. The thread's own name gets
+     the room instead. */
+  if (options.panelHidden) return iconButton('dots', 'actions-folded')
   return viewActionsMarkup(options.actionCount ?? 3)
 }
 
