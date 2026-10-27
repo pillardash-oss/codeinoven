@@ -219,14 +219,26 @@ export function taskHasMissed(runs: readonly MissedRun[]): boolean {
  * Line 2 of a task row: the next intended run for a scheduled task, else the
  * last run, else "Not scheduled". `onDemand` marks a function the user drives
  * by hand, which reads "On demand" rather than the ambiguous "Not scheduled".
+ *
+ * An on-demand function has no next fire to state, so it states when it last
+ * ran instead. Without that the row gave the user no time at all   only the
+ * word "On demand"   so the one thing a hand-driven function is asked about
+ * (when did it last actually run) was missing from the surface. The dispatch
+ * stamp is preferred over the scheduler's slot claim, because a slot claim is
+ * written for a missed fire too and would report a run that never happened.
  */
 export function taskRunLine(
-  task: Pick<Thread, 'lastRunAt'>,
+  task: Pick<Thread, 'lastRunAt' | 'lastDispatchedAt'>,
   nextRunAt: number | null,
   now: number,
   onDemand = false
 ): string {
-  if (onDemand) return 'On demand'
+  if (onDemand) {
+    const lastRanAt = task.lastDispatchedAt ?? task.lastRunAt
+    return lastRanAt === undefined
+      ? 'On demand · Not run yet'
+      : `On demand · Last run ${describeRelativeTime(lastRanAt, now)}`
+  }
   if (nextRunAt !== null) return `Next run ${describeRelativeTime(nextRunAt, now)}`
   if (task.lastRunAt !== undefined) return `Last run ${describeRelativeTime(task.lastRunAt, now)}`
   return 'Not scheduled'
