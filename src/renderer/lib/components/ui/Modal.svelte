@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
@@ -540,20 +541,36 @@
                     {#if headerActions}
                       {@render headerActions()}
                     {/if}
-                    <!-- The dismiss control wears the collapse mark, never an X.
-                         A dialog's X sits where Windows draws the window's own
-                         close button, so on that platform it reads as "quit the
-                         app". The collapse mark states what the control does:
-                         the surface folds away and the window stays. The one
-                         surface that really does close the thing handed to the
-                         app (a file opened through the OS) draws its own header
-                         with the X it deserves. -->
+                    <!-- A full screen surface wears the collapse mark; every
+                         inset dialog keeps the X.
+
+                         The two glyphs answer two different worries. A dialog
+                         that covers the whole window draws its own title bar
+                         band exactly where the operating system draws the
+                         window's close button, so on Windows an X in that corner
+                         reads as "quit the app" and invites the wrong click. The
+                         collapse mark states the truth on that band: the surface
+                         folds away and the window stays. An inset dialog (a
+                         centred prompt, a side sheet, a bottom sheet, a
+                         palette) never stands in for the title bar, and it floats
+                         inside a window whose own close button is still visible
+                         elsewhere, so its X cannot be mistaken for the app's and
+                         stays the plainer, more conventional mark for a
+                         dismissal.
+
+                         The one full screen surface that really does close what
+                         it was handed (a file opened through the OS) draws its
+                         own header with the X it deserves. -->
                     <Dialog.Close
                       class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       aria-label="Close"
                       title="Close"
                     >
-                      <CioMinimize size={16} />
+                      {#if placement === 'fullscreen'}
+                        <CioMinimize size={16} />
+                      {:else}
+                        <CioClose size={16} />
+                      {/if}
                     </Dialog.Close>
                   </div>
                 </div>

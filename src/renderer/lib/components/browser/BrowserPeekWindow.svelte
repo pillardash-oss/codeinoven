@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import { Portal } from 'bits-ui'
@@ -351,7 +351,7 @@
       class="p-2 text-text-muted hover:bg-hover hover:text-text"
       title="Close this Peek"
       aria-label="Close this Peek"
-      onclick={() => globalBrowser.closePeek()}><CioMinimize size={16} /></button
+      onclick={() => globalBrowser.closePeek()}><CioClose size={16} /></button
     >
   </div>
 {/snippet}
