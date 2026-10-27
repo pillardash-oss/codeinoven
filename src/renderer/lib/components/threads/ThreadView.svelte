@@ -7147,7 +7147,6 @@
     | 'account'
     | 'foreign-run'
     | 'image-descriptor'
-    | 'assistant-recap'
     | 'todo'
   let queuedCardVisible = $derived(
     (queuedMessage !== '' || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread
@@ -7165,7 +7164,8 @@
     if (pendingImageDescriptorError !== null && !achievementAutonomous) {
       slots.push('image-descriptor')
     }
-    if (assistantRecapVisible && assistantDraft) slots.push('assistant-recap')
+    // The recap card is not a stack card: it takes the composer's place, so it
+    // never shares the bottom edge with the thing it is asking about.
     if (visibleTodo !== null && !failureRetryVisible) slots.push('todo')
     return slots
   })
@@ -7987,6 +7987,19 @@
     assistantDraft !== null &&
       !assistantSaving &&
       assistantRecapDismissed !== assistantDraftSignature
+  )
+
+  /**
+   * Whether the recap card takes the composer's place.
+   *
+   * A draft waiting for the user's sign-off is not something to type into, and the
+   * card is asking for the one answer the composer would otherwise collect, so it
+   * replaces the composer instead of stacking on its top edge. It stays there while
+   * the save it started is in flight, so the composer never flashes in beneath the
+   * finger that pressed Save.
+   */
+  const assistantRecapInComposer = $derived(
+    assistantDraft !== null && (assistantRecapVisible || assistantSaving)
   )
 
   /**
@@ -15063,25 +15076,6 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {/if}
-            {#if assistantRecapVisible && assistantDraft}
-              <div>
-                <AssistantRecapCard
-                  assistantName={assistant?.name ?? assistantName ?? thread.title}
-                  knowledge={assistantDraft.knowledge}
-                  plan={assistantDraft.plan}
-                  update={assistantKnowledgeComplete}
-                  previousKnowledge={assistant?.knowledge ?? ''}
-                  scheduled={assistant ? assistantIsScheduled(assistant) : true}
-                  existingConnections={existingAssistantConnections}
-                  saving={assistantSaving}
-                  onSave={() => void confirmAssistantSave()}
-                  onKeepEditing={keepEditingAssistant}
-                  stackedAbove={stackedAboveSlot('assistant-recap')}
-                  joinsBelow
-                  threadId={thread.id}
-                />
-              </div>
-            {/if}
             {#if isAssignmentAuditorThread}
               <AuditGeneratedCard
                 state={assignmentAuditState}
@@ -15446,6 +15440,24 @@
                 {/if}
                 {#if foreignRunActive}
                   <ForeignRunCard projectId={thread.projectId} threadId={thread.id} />
+                {:else if assistantRecapInComposer && assistantDraft}
+                  <!-- The recap card takes the composer's place rather than sitting on
+                       top of it: it is asking for the one answer the composer would
+                       otherwise collect, and a draft under review is not something to
+                       type into. Keep editing puts the composer back. -->
+                  <AssistantRecapCard
+                    assistantName={assistant?.name ?? assistantName ?? thread.title}
+                    knowledge={assistantDraft.knowledge}
+                    plan={assistantDraft.plan}
+                    update={assistantKnowledgeComplete}
+                    previousKnowledge={assistant?.knowledge ?? ''}
+                    scheduled={assistant ? assistantIsScheduled(assistant) : true}
+                    existingConnections={existingAssistantConnections}
+                    saving={assistantSaving}
+                    onSave={() => void confirmAssistantSave()}
+                    onKeepEditing={keepEditingAssistant}
+                    threadId={thread.id}
+                  />
                 {:else if assistantComposerCovered}
                   {#if assistantBehaviorSession && active}
                     {#key `${thread.id}:${assistantBehaviorSession.startedAt}:${assistantBehaviorSession.dismissals}`}

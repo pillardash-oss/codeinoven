@@ -65,18 +65,7 @@
   onMinimize={() => agentAssistJobs.minimize(job.id)}
   onClose={() => agentAssistJobs.close(job.id)}
   storageKey={`agent-assist-job-${job.id}`}
+  actionWhileRunning
   actionLabel={job.threadId ? 'Open thread' : undefined}
   onAction={job.threadId ? openThread : undefined}
->
-  {#snippet details()}
-    {#if job.status === 'running' && job.threadId}
-      <div class="flex justify-end">
-        <button
-          type="button"
-          class="border bg-elevated px-3 py-1.5 text-xs hover:bg-overlay"
-          onclick={openThread}>Open thread</button
-        >
-      </div>
-    {/if}
-  {/snippet}
-</JobPanel>
+/>

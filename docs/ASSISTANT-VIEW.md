@@ -917,7 +917,7 @@ create flow had to store (`ASSISTANT_PLACEHOLDER_NAME`).
   so an open panel follows the interview.
 - The agent then ends its turn on the draft and never saves the assistant itself
   and never tells the user to run a command. The go-ahead is the **recap card**
-  (`AssistantRecapCard.svelte`) that appears above the composer, and the card is
+  (`AssistantRecapCard.svelte`) that takes the composer's place, and the card is
   the only gate: the agent is told not to ask a confirmation question beside it,
   and a question it asks anyway is not drawn while the card is up, because the
   same decision asked twice (once as a card with a clock running on it) reads as

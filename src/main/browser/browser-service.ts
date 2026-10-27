@@ -1383,6 +1383,28 @@ export class BrowserService {
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
+    replaceHandler('browser:popupWindowMenu', (_event, rawId, x, y) => {
+      const record = this.popupWindows.find(validatePopupWindowId(rawId))
+      if (!record || this.window.isDestroyed()) return
+      Menu.buildFromTemplate(this.popupWindowMenuItems(record)).popup({
+        window: this.window,
+        x: Math.max(0, Math.round(Number(x) || 0)),
+        y: Math.max(0, Math.round(Number(y) || 0))
+      })
+    })
+    replaceHandler('browser:openPopupAsTab', (_event, rawId, duplicate, rawBoxId) => {
+      const record = this.popupWindows.find(validatePopupWindowId(rawId))
+      if (!record || record.view.webContents.isDestroyed()) return
+      if (typeof duplicate !== 'boolean') throw new Error('Invalid popup action')
+      const boxId = rawBoxId === undefined ? record.boxId : validateOptionalBoxId(rawBoxId)
+      const url = this.validateTabNavigationUrl(
+        record.projectId,
+        boxId,
+        record.view.webContents.getURL()
+      )
+      this.openNewTabFor({ ...popupPageOwner(record), boxId }, url)
+      if (!duplicate) this.popupWindows.close(record.id, 'opened as a browser tab')
+    })
     replaceHandler('browser:showPopupWindow', (_event, rawPopupId, rawBounds) => {
       this.popupWindows.show(validatePopupWindowId(rawPopupId), validateBounds(rawBounds))
     })
@@ -4248,66 +4270,37 @@ export class BrowserService {
     return tab
   }
   /**
-   * Decide where a page's `window.open` lands.
+   * Ordinary target=_blank links, featureless window.open calls and targeted
+   * forms open as tabs. Only Chromium's explicit new-window disposition uses
+   * the global browser's popup rail.
    *
-   * Two answers, by what the page asked for:
-   *
-   * - foreground window requests, including featureless windows and POST forms,
-   *   use the existing popup host to preserve Chromium's opener and submission;
-   * - explicit background-tab gestures keep opening a background tab, unless
-   *   they carry a POST body that must be submitted by Chromium.
-   *
-   * The global browser hosts foreground children in its popup rail. Thread and
-   * agent browsers adopt Chromium's child contents into regular tabs, preserving
-   * the same opener, session, POST submission and script-close lifecycle.
-   *
-   * Shared by tabs and popup windows, because a popup may open a popup (a
-   * sign-in that takes a second step) and both must land the same way.
+   * Both surfaces adopt Chromium's child contents, preserving the opener,
+   * session, POST submission and script-close lifecycle.
    */
   private windowOpenResponse(
     owner: BrowserPageOwner,
     details: Electron.HandlerDetails
   ): Electron.WindowOpenHandlerResponse {
-    // A `window.open` aimed at an external scheme is the same handoff a link
-    // click is, and never becomes a tab: the address is not a page.
     if (this.offerExternalNavigation(owner, details.url)) return { action: 'deny' }
-    // Disposition and feature strings describe presentation, not whether the
-    // child needs its opener. Featureless window.open and targeted POST forms
-    // also participate in verification callbacks. Cancelling them and loading
-    // their URL ourselves loses WindowProxy, postMessage and the POST body.
-    if (
-      owner.projectId === GLOBAL_BROWSER_PROJECT_ID &&
-      (details.disposition !== 'background-tab' || details.postBody)
-    ) {
+    if (owner.projectId === GLOBAL_BROWSER_PROJECT_ID && details.disposition === 'new-window') {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
     }
-    if (owner.projectId !== GLOBAL_BROWSER_PROJECT_ID) {
-      const url = details.url || 'about:blank'
-      if (!isAllowedPopupWindowUrl(url)) return { action: 'deny' }
-      let children = 0
-      for (const opener of this.childTabOpeners.values()) {
-        if (opener === owner.tabId) children++
-      }
-      if (children >= MAX_POPUP_WINDOWS_PER_TAB) return { action: 'deny' }
-      return {
-        action: 'allow',
-        createWindow: (options) => {
-          const contents = popupWindowContents(options)
-          if (!contents) throw new Error('Browser child tab was offered no web contents')
-          return this.openNewTabFor(owner, url, false, null, contents)
-        }
+    const url = details.url || 'about:blank'
+    if (!isAllowedPopupWindowUrl(url)) return { action: 'deny' }
+    let children = 0
+    for (const opener of this.childTabOpeners.values()) {
+      if (opener === owner.tabId) children++
+    }
+    if (children >= MAX_POPUP_WINDOWS_PER_TAB) return { action: 'deny' }
+    return {
+      action: 'allow',
+      createWindow: (options) => {
+        const contents = popupWindowContents(options)
+        if (!contents) throw new Error('Browser child tab was offered no web contents')
+        return this.openNewTabFor(owner, url, false, null, contents)
       }
     }
-    try {
-      this.openNewTabFor(
-        owner,
-        this.validateTabNavigationUrl(owner.projectId, owner.boxId, details.url)
-      )
-    } catch (error: unknown) {
-      Logger.error('Browser popup rejected unsafe URL:', error)
-    }
-    return { action: 'deny' }
   }
 
   /**
@@ -6394,24 +6387,52 @@ export class BrowserService {
     this.showPageContextMenu(
       { contents, owner: popupPageOwner(record) },
       params,
-      record.displayedBounds
+      record.displayedBounds,
+      [...this.popupWindowMenuItems(record), { type: 'separator' }]
     )
+  }
+
+  private popupWindowMenuItems(record: BrowserPopupWindowRecord): MenuItemConstructorOptions[] {
+    const choose = (
+      action: 'open' | 'duplicate' | 'moveBox' | 'duplicateBox' | 'fullscreen',
+      boxId: string | null = null
+    ): void => {
+      if (!this.popupWindows.find(record.id) || this.window.isDestroyed()) return
+      sendToRenderer(this.window.webContents, 'browser:popupWindowAction', record.id, action, boxId)
+    }
+    const boxes = (action: 'moveBox' | 'duplicateBox'): MenuItemConstructorOptions[] => [
+      { label: 'New box', click: () => choose(action) },
+      ...getGlobalBrowserContextMenuBoxes().map((box) => ({
+        label: box.name,
+        click: () => choose(action, box.id)
+      }))
+    ]
+    return [
+      { label: 'Open in new tab', click: () => choose('open') },
+      { label: 'Duplicate in new tab', click: () => choose('duplicate') },
+      { label: 'Move to box', submenu: boxes('moveBox') },
+      { label: 'Duplicate in box', submenu: boxes('duplicateBox') },
+      { type: 'separator' },
+      { label: 'Full screen', click: () => choose('fullscreen') }
+    ]
   }
 
   /** Build and pop the point-specific context menu for one page. */
   private showPageContextMenu(
     page: BrowserMenuPage,
     params: Electron.ContextMenuParams,
-    frame: BrowserViewBounds | null
+    frame: BrowserViewBounds | null,
+    extraItems: MenuItemConstructorOptions[] = []
   ): void {
-    const menu = Menu.buildFromTemplate(
-      buildBrowserContextMenuItems(
+    const menu = Menu.buildFromTemplate([
+      ...extraItems,
+      ...buildBrowserContextMenuItems(
         params,
         this.contextMenuContext(page.contents),
         this.contextMenuActions(page, frame, { x: params.x, y: params.y }),
         this.extensionMenuItems(page, params)
       )
-    )
+    ])
     // The point Electron reports is in the page's own coordinates, and a native
     // menu wants the window's, so the frame the page is displayed at is added.
     if (frame) menu.popup({ window: this.window, x: frame.x + params.x, y: frame.y + params.y })

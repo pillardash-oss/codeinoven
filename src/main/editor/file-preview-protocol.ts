@@ -220,7 +220,7 @@ export function installFilePreviewProtocol(
         if (!PROJECT_ID_PATTERN.test(projectId)) return notFound()
         const relativePath = segments.slice(1).join('/')
         if (!relativePath) return notFound()
-        const type = previewTypeForPath(relativePath)
+        const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         const projectFiles = getProjectFiles()
         if (!projectFiles) return notFound()
@@ -236,7 +236,7 @@ export function installFilePreviewProtocol(
         if (!THREAD_ID_PATTERN.test(threadId)) return notFound()
         const relativePath = segments.slice(2).join('/')
         if (!relativePath) return notFound()
-        const type = previewTypeForPath(relativePath)
+        const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         const projectFiles = getProjectFiles()
         if (!projectFiles) return notFound()
@@ -255,7 +255,7 @@ export function installFilePreviewProtocol(
         const absolutePath = url.searchParams.get('path') ?? ''
         const name = url.searchParams.get('name') ?? absolutePath
         if (!absolutePath) return notFound()
-        const type = previewTypeForPath(name)
+        const type = previewTypeForPath(name, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         // Authorization is shared with privileged IPC: only paths the user
         // opened (or picked in a dialog) resolve to a canonical path here.
@@ -290,7 +290,7 @@ export function installFilePreviewProtocol(
         }
 
         const name = url.searchParams.get('name') ?? ''
-        const type = previewTypeForPath(name)
+        const type = previewTypeForPath(name, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         return serveFile(absolutePath, type, request)
       }

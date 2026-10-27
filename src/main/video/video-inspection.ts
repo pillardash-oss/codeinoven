@@ -108,6 +108,8 @@ export async function inspectVideo(
     throw new Error('Select an installed transcription model in Sounds first')
   const captions: VideoCaption[] = []
   let wordTimed = true
+  let silentChunks = 0
+  let spokenChunks = 0
   // Existing ASR returns text, not word alignment. Keep measured chunk boundaries explicit.
   const chunkSeconds = videoNumber(input.chunkSeconds ?? 4, 'chunkSeconds', 2, 30)
   const language =
@@ -145,6 +147,7 @@ export async function inspectVideo(
         context.signal
       )
       if (transcript.text) {
+        spokenChunks += 1
         wordTimed = wordTimed && Boolean(transcript.words?.length)
         const words = transcript.words?.map((word) => ({
           ...word,
@@ -157,6 +160,10 @@ export async function inspectVideo(
           end: start + offset + chunkLength,
           ...(words ? { words } : {})
         })
+      } else {
+        // Silence is part of every recording. It is a chunk with nothing to say,
+        // not a broken model, so the pass keeps going.
+        silentChunks += 1
       }
       context.update((offset + chunkLength) / length, 'Transcribing footage')
     }
@@ -168,10 +175,14 @@ export async function inspectVideo(
       result: {
         captions,
         timing,
+        spokenChunks,
+        silentChunks,
         note:
-          timing === 'word'
-            ? 'Word timing comes from the recognizer.'
-            : 'This model supplied no complete word alignment; timing follows audio chunk boundaries.'
+          captions.length === 0
+            ? 'The selected range holds no recognizable speech; nothing was transcribed.'
+            : timing === 'word'
+              ? 'Word timing comes from the recognizer.'
+              : 'This model supplied no complete word alignment; timing follows audio chunk boundaries.'
       }
     }
   } finally {

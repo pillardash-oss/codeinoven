@@ -20,6 +20,7 @@
   import { documentPreviewFrame } from '$lib/document-preview-frame'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { revealAttachmentFile } from '$lib/reveal-file'
+  import { downloadShownFile } from '$lib/download-shown-file'
 
   interface Props {
     attachment: PromptAttachment
@@ -130,23 +131,14 @@
     }
   })
 
-  function triggerDownload(url: string, name: string): void {
-    const link = document.createElement('a')
-    link.href = url
-    link.download = name
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-  }
-
   function handleDownload(): void {
     if (kind === 'markdown' || kind === 'text') {
       if (text === undefined) return
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-      triggerDownload(URL.createObjectURL(blob), filename)
+      downloadShownFile(URL.createObjectURL(blob), filename)
       return
     }
-    if (src) triggerDownload(src, filename)
+    if (src) downloadShownFile(src, filename)
   }
 
   function requestClose(): void {

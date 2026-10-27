@@ -191,6 +191,11 @@ export const invokeBrowserContract = {
    * popup is a native view like a tab's page is, so the rail's rectangle is
    * what puts it on screen inside the panel rather than over the window.
    */
+  'browser:popupWindowMenu': {} as Contract<[popupId: string, x: number, y: number], void>,
+  'browser:openPopupAsTab': {} as Contract<
+    [popupId: string, duplicate: boolean, boxId: string | null | undefined],
+    void
+  >,
   'browser:showPopupWindow': {} as Contract<[popupId: string, bounds: BrowserViewBounds], void>,
   /**
    * Take a popup window's page off screen. The page keeps running, laid out

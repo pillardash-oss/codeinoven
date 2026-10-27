@@ -11,6 +11,7 @@
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
   import { revealAttachmentFile } from '$lib/reveal-file'
+  import { downloadShownFile } from '$lib/download-shown-file'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
 
   interface Props {
@@ -152,6 +153,12 @@
       class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
       aria-label={downloadLabel}
       title={downloadLabel}
+      onclick={(event) => {
+        // The route to the disk depends on where these bytes live, and the shared
+        // helper owns that decision for every surface that offers a download.
+        event.preventDefault()
+        downloadShownFile(src, filename)
+      }}
     >
       <CioDownload size={14} />
     </a>

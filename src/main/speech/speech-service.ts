@@ -138,6 +138,19 @@ export type SpeechAudioTranscribeExecutor = (
 
 type SpeechProgressListener = (event: SpeechProgressEvent) => void
 
+/**
+ * Whether a recognizer's failure really means "no speech in this chunk".
+ *
+ * A Core ML worker reports an empty transcript as an incomplete model
+ * (`... is incomplete at empty transcript`). That wording is only about a
+ * silent chunk, never a damaged install, and footage transcription meets
+ * silence constantly, so it has to read as a no-speech answer.
+ */
+function isSilentChunkError(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : ''
+  return /incomplete at empty transcript/iu.test(message)
+}
+
 /** Main-process coordinator. Native inference is delegated to bounded workers. */
 export class SpeechService {
   private readonly storage: SpeechStorage
@@ -754,9 +767,19 @@ export class SpeechService {
               : {})
           }
         }
-        return backend.transcribeTimed
-          ? backend.transcribeTimed(input, jobSignal)
-          : { text: await backend.transcribe(input, jobSignal) }
+        try {
+          return backend.transcribeTimed
+            ? await backend.transcribeTimed(input, jobSignal)
+            : { text: await backend.transcribe(input, jobSignal) }
+        } catch (cause) {
+          // Footage is full of silence, and a worker built before an empty
+          // transcript became a valid answer reports that silence as an
+          // incomplete model. Read it as the no-speech answer it is, so one
+          // quiet chunk neither fails the pass nor sends the user to reinstall
+          // a model that works.
+          if (!isSilentChunkError(cause)) throw cause
+          return { text: '' }
+        }
       }
     })
     const cancel = (): void => {

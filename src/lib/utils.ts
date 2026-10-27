@@ -280,6 +280,32 @@ export function getCanonicalConfigRoot(): string {
 }
 
 /**
+ * Whether this launch is the packaged-startup smoke proof: the app a build starts
+ * by itself, from an empty data root, to prove the artifact it just produced
+ * boots. A shipped app only honours the smoke's data-root redirect when this is
+ * set, so the variable is the launch's own declaration that it is unattended.
+ */
+export function isPackagedSmokeLaunch(): boolean {
+  return Boolean(process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'])
+}
+
+/**
+ * Whether this launch must never touch the OS keyring.
+ *
+ * `safeStorage` initializes its keyring item the first time it is asked for
+ * anything, and macOS answers a keyring access from a bundle that is not the
+ * signature which stored that item with a modal prompt for the login keychain's
+ * password. An ad-hoc-signed build gets a fresh signature on every package run,
+ * so every verification launch would otherwise stop and wait for a human to
+ * unlock the keychain in the middle of a build. A launch the build starts is
+ * unattended by definition, so it treats the keyring as unavailable and keeps
+ * the build non-interactive.
+ */
+export function skipsOsKeyring(): boolean {
+  return isPackagedSmokeLaunch()
+}
+
+/**
  * Get the app config root path.
  *
  * An absolute `CODEINOVEN_CONFIG_ROOT` redirects the whole app-owned data root.
@@ -291,11 +317,10 @@ export function getCanonicalConfigRoot(): string {
  */
 export function getConfigRoot(): string {
   const configuredRoot = process.env['CODEINOVEN_CONFIG_ROOT']
-  const isPackagedSmoke = Boolean(process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'])
   if (
     configuredRoot &&
     isAbsolute(configuredRoot) &&
-    (isPackagedSmoke || isUnpackagedElectronLaunch())
+    (isPackagedSmokeLaunch() || isUnpackagedElectronLaunch())
   ) {
     return configuredRoot
   }
@@ -325,8 +350,7 @@ export const NO_BACKGROUND_ENV = 'CODEINOVEN_NO_BACKGROUND'
  * asked for rather than assumed.
  */
 export function isBackgroundRegistrationDisabled(): boolean {
-  const isPackagedSmoke = Boolean(process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'])
-  if (!isPackagedSmoke && !isUnpackagedElectronLaunch()) return false
+  if (!isPackagedSmokeLaunch() && !isUnpackagedElectronLaunch()) return false
   const value = process.env[NO_BACKGROUND_ENV]?.trim().toLowerCase()
   return value === '1' || value === 'true' || value === 'yes' || value === 'on'
 }

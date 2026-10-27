@@ -16,6 +16,19 @@ function safeInteger(value: string | undefined, fallback: number): number {
   return Number.isSafeInteger(parsed) ? parsed : fallback
 }
 
+/**
+ * Earlier builds wrote a placeholder to disk the moment "Add memory" was
+ * clicked, so an abandoned click stayed behind as an `Untitled memory` entry
+ * whose whole body was the generated stub. Nobody wrote that text, so it is
+ * skipped on read and disappears from the file on the next save.
+ */
+const RETIRED_PLACEHOLDER_LABEL = 'Untitled memory'
+const RETIRED_PLACEHOLDER_CONTENT = /^New memory\s+\d{10,}-[a-z0-9]{1,8}$/u
+
+function isRetiredPlaceholder(label: string, content: string): boolean {
+  return label === RETIRED_PLACEHOLDER_LABEL && RETIRED_PLACEHOLDER_CONTENT.test(content)
+}
+
 /** Parse memory entries from the current marked Markdown format. */
 export function parseMemoryMd(content: string): MemoryEntry[] {
   const entries: MemoryEntry[] = []
@@ -39,6 +52,7 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
     )
     const cleanBody = hasMetadata ? sections.slice(1).join('\n\n').trim() : body
     if (!cleanBody) continue
+    if (isRetiredPlaceholder(label, cleanBody)) continue
     const now = Date.now()
     const fallbackId = `memory-${createHash('sha256')
       .update(`${label}\0${cleanBody}\0${index}`)

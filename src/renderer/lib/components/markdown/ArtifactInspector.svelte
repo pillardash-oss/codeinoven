@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
-  import { SvelteMap } from 'svelte/reactivity'
-  import type { Attachment } from 'svelte/attachments'
+  import { annotationIndicatorElement } from '$lib/annotation-indicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import { artifactThemeStyles } from './artifact-theme'
   import { sanitizedHtmlArtifactDocument, sanitizedSvgArtifact } from './artifact'
   import { ARTIFACT_STAGE_CLASS, ARTIFACT_STAGE_ID, type ArtifactKind } from './artifact'
@@ -100,8 +100,8 @@
   /** Bumped whenever the open editor must re-measure against the layout. */
   let measureToken = $state(0)
 
-  /** Pin elements by reference id, so the editor anchors to its own pin. */
-  const pinElements = new SvelteMap<string, HTMLElement>()
+  /** The indicator surface this viewer draws its picks on. */
+  const indicatorSurface = $derived(`artifact:${threadId}:${artifactKey}`)
 
   /**
    * The pick whose comment is open.
@@ -124,12 +124,16 @@
    * measured, so an anchor that waited for the pin would drop the editor for a
    * pick the user had just made. The element the pick names stands in, and the
    * surface itself after that, so a pick is always commentable.
+   *
+   * The pin is asked for rather than tracked: the shared annotation indicator
+   * registers the element it drew, which is the same fixture every other surface
+   * would otherwise repeat.
    */
   const editorAnchor = $derived.by(() => {
     void measureToken
     const pick = editingPick
     if (!pick) return null
-    const pin = pinElements.get(pick.id)
+    const pin = annotationIndicatorElement(indicatorSurface, pick.id)
     if (pin) return anchorBelow(pin.getBoundingClientRect())
     const root = shadowRoot
     const element = root ? resolvePick(root, pick) : null
@@ -178,32 +182,6 @@
       ]
     })
   })
-
-  /**
-   * The attachment that registers one pick's pin, kept per pick so a re-render
-   * re-uses it.
-   *
-   * Svelte re-runs an attachment whose expression is a new function, and the pin
-   * map is reactive because the open editor follows its own pin; a fresh closure
-   * per render would therefore write the map the editor reads on every render,
-   * which is an update loop rather than a layout. The cache is keyed by the pick
-   * and dropped with the pin it belongs to.
-   */
-  const pinAttachments = new SvelteMap<string, Attachment<HTMLButtonElement>>()
-
-  function pinAttachment(id: string): Attachment<HTMLButtonElement> {
-    const existing = pinAttachments.get(id)
-    if (existing) return existing
-    const attachment: Attachment<HTMLButtonElement> = (node) => {
-      pinElements.set(id, node)
-      return () => {
-        pinElements.delete(id)
-        pinAttachments.delete(id)
-      }
-    }
-    pinAttachments.set(id, attachment)
-    return attachment
-  }
 
   /** The document's stage box, which is the root an HTML artifact is picked in. */
   function stageRoot(): Element | null {
@@ -484,7 +462,6 @@
       threadId,
       current.filter((reference) => reference.id !== id)
     )
-    pinElements.delete(id)
     closeEditor()
   }
 
@@ -605,8 +582,6 @@
   })
 
   onDestroy(() => {
-    pinElements.clear()
-    pinAttachments.clear()
     shadowRoot = null
   })
 </script>
@@ -654,25 +629,27 @@
   {/if}
 
   <!-- The pins live in app DOM rather than inside the artifact: they are app
-       controls (focusable, labelled, clickable), and the host never scrolls, so
-       an app-space position stays on the element it points at. -->
+       controls (focusable, draggable, clickable), and the host never scrolls, so
+       an app-space position stays on the element it points at. They are the
+       app's one annotation indicator rather than a pin of their own, so a pick
+       made here can be dragged off the element it marks exactly like a pick made
+       on a picture, a document passage or a specification. -->
   {#each pins as pin (pin.id)}
-    <button
-      type="button"
-      class="absolute z-20 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
-      style:left={`${pin.x}px`}
-      style:top={`${pin.y}px`}
+    <AnnotationIndicator
+      id={pin.id}
+      surface={indicatorSurface}
+      left={`${pin.x}px`}
+      top={`${pin.y}px`}
+      centre
+      number={pin.number}
+      hasComment={pin.hasComment}
+      active={activeEditingId === pin.id}
       title={pin.hasComment
-        ? `Edit comment on ${pin.label}`
-        : `Comment on ${pin.label} (${pin.number})`}
-      aria-label={pin.hasComment
-        ? `Edit comment on ${pin.label}`
-        : `Comment on ${pin.label} (${pin.number})`}
-      onclick={() => requestEdit(pin.id)}
-      {@attach pinAttachment(pin.id)}
-    >
-      {pin.number}
-    </button>
+        ? `Edit the comment on ${pin.label}. Drag to move it, click to edit.`
+        : `Comment on ${pin.label} (${pin.number}). Drag to move it, click to write.`}
+      class="z-20"
+      onOpen={() => requestEdit(pin.id)}
+    />
   {/each}
 
   {#if enabled}

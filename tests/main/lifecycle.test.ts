@@ -10,7 +10,18 @@ import { createTestDb, destroyTestDb } from './database/test-helper'
 const temporaryPaths: string[] = []
 const testDatabases: Database[] = []
 
+/**
+ * A PTY session is stopped by signalling its whole process tree, not by calling
+ * `kill()` on the shell, so the stop path is mocked instead of a process object:
+ * the real one would signal a live pid owned by whatever machine runs the suite.
+ */
+const stopPtyProcessesMock = vi.hoisted(() => vi.fn(async (): Promise<void> => {}))
+vi.mock('../../src/main/system/pty-process-stop', () => ({
+  stopPtyProcesses: stopPtyProcessesMock
+}))
+
 afterEach(async () => {
+  stopPtyProcessesMock.mockClear()
   await Promise.all(
     temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))
   )
@@ -156,7 +167,7 @@ describe('lifecycle   Logger flush on shutdown', () => {
 })
 
 describe('lifecycle   PtyService destroyAll', () => {
-  it('kills all active PTY sessions and clears sender', async () => {
+  it('stops every active PTY session and clears sender', async () => {
     const { PtyService } = await import('../../src/main/system/pty-service')
     const { StorageEngine } = await import('../../src/main/storage/storage-engine')
 
@@ -165,13 +176,11 @@ describe('lifecycle   PtyService destroyAll', () => {
     testDatabases.push(database)
     const pty = new PtyService(storage, database)
 
-    const killSpy = vi.fn()
-
     // Simulate a session via the sessions map by adding one directly
     // destroyAll iterates this.sessions.keys()
     const mockSession = {
       id: 'test-pty-1',
-      process: { kill: killSpy, pid: 9999 },
+      process: { kill: vi.fn(), pid: 9999 },
       projectId: 'proj-1',
       cwd: '/tmp',
       shell: '/bin/zsh',
@@ -184,7 +193,10 @@ describe('lifecycle   PtyService destroyAll', () => {
 
     pty.destroyAll()
 
-    expect(killSpy).toHaveBeenCalledTimes(1)
+    // `destroy` stops the tree asynchronously, so wait for the signal instead of
+    // reading it in the same tick the loop was entered.
+    await vi.waitFor(() => expect(stopPtyProcessesMock).toHaveBeenCalledTimes(1))
+    expect(stopPtyProcessesMock).toHaveBeenCalledWith(9999)
     expect(sessions.size).toBe(0)
   })
 })

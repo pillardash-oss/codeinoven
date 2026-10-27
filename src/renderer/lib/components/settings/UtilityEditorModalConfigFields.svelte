@@ -2,8 +2,14 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
+  import type { ImportedMcpServer } from '$shared/mcp-config-import'
   import type { ProviderCatalog } from '$shared/types'
-  import { skillPlaceholder, type UtilityDraft } from './utility-editor-modal-helpers'
+  import UtilityEditorModalMcpPaste from './UtilityEditorModalMcpPaste.svelte'
+  import {
+    applyMcpImport,
+    skillPlaceholder,
+    type UtilityDraft
+  } from './utility-editor-modal-helpers'
 
   interface Props {
     draft: UtilityDraft
@@ -34,6 +40,11 @@
     locked = false,
     providers = []
   }: Props = $props()
+
+  /** Fill the connection fields from a server read out of a pasted config. */
+  function importPastedServer(server: ImportedMcpServer): void {
+    applyMcpImport(draft, server, allowSse)
+  }
 </script>
 
 <fieldset class="space-y-3 border p-3 {locked ? 'opacity-60' : ''}">
@@ -51,6 +62,9 @@
               : 'Provider connection'}
   </legend>
   {#if draft.kind === 'mcp'}
+    {#if !locked}
+      <UtilityEditorModalMcpPaste onImport={importPastedServer} />
+    {/if}
     <label class="block space-y-1 text-xs font-medium">
       <span>Transport</span>
       <select
@@ -102,15 +116,19 @@
           bind:value={draft.headers}></textarea>
       </label>
     {/if}
-    {#if isNative || draft.id !== null}
-      <label class="block space-y-1 text-xs font-medium">
-        <span>Environment</span>
-        <textarea
-          class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
-          placeholder={'{ "NODE_ENV": "production" }'}
-          disabled={locked}
-          bind:value={draft.environment}></textarea>
-      </label>
+    <label class="block space-y-1 text-xs font-medium">
+      <span>Environment</span>
+      <textarea
+        class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
+        placeholder={'{ "NODE_ENV": "production" }'}
+        disabled={locked}
+        bind:value={draft.environment}></textarea>
+    </label>
+    {#if !isNative && draft.id === null}
+      <p class="text-[0.6875rem] text-dimmed">
+        Plain environment values are stored with the server. Store a secret as a credential
+        instead, so it stays in encrypted storage.
+      </p>
     {/if}
   {:else if draft.kind === 'skill'}
     <RichMarkdownEditor

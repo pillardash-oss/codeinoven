@@ -1,4 +1,4 @@
-import { fileUrlToPath } from './mime'
+import { attachmentPreviewKind, fileUrlToPath } from './mime'
 import { localFilePreviewUrl } from './file-preview'
 import type { AppBridge } from '../../preload/index'
 import { SvelteSet } from 'svelte/reactivity'
@@ -102,6 +102,10 @@ export class FileBlobUrlManager {
     const path = fileUrlToPath(url)
     const streamingUrl = localFilePreviewUrl(path, mime)
     if (streamingUrl) return streamingUrl
+    const kind = attachmentPreviewKind(mime, path)
+    if (kind === 'video' || kind === 'audio') {
+      throw new Error('This media format has no streaming preview')
+    }
     const data = await window.api.readFile(path)
     return URL.createObjectURL(new Blob([data], { type: mime }))
   }

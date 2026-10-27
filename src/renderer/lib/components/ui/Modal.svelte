@@ -499,11 +499,28 @@
                      its caption buttons on the right, and a Linux desktop may keep
                      them on the left, so a fullscreen header reserves both edges
                      through `trafficLightInsetStyle` and keeps a left gutter as a
-                     floor. -->
+                     floor.
+
+                     That same band is the window's drag strip: the app header
+                     underneath already carries `titlebar-drag` across the full
+                     width, and a drag rectangle is computed from layout rather
+                     than paint order, so it swallows the press aimed at anything
+                     drawn over it. A fullscreen header therefore states the
+                     contract itself, exactly as every other full screen surface
+                     does (`Chats/MediaPreview.svelte`,
+                     `workspace/PanelTabStrip.svelte`): the band drags the window,
+                     and its controls subtract themselves with
+                     `titlebar-no-drag` on the action cluster, which is why that
+                     class is unconditional here: a panel in any placement can
+                     have its header drawn over a drag strip. Without that a
+                     header action such as the artifact viewer's inspect toggle
+                     was painted above the drag strip yet dead to the mouse, while
+                     the close control (which happened to sit over a hole in the
+                     app header's own controls) still worked. -->
                 <div
                   class={[
                     'flex shrink-0 items-center justify-between border-b px-6',
-                    placement === 'fullscreen' ? 'h-12' : 'py-4'
+                    placement === 'fullscreen' ? 'h-12 titlebar-drag' : 'py-4'
                   ]}
                   style={placement === 'fullscreen'
                     ? trafficLightInsetStyle({ mirrorRightInset: false, leftPadding: '2.5rem' })
@@ -519,7 +536,7 @@
                   {#if description}
                     <Dialog.Description class="sr-only">{description}</Dialog.Description>
                   {/if}
-                  <div class="flex items-center gap-1">
+                  <div class="titlebar-no-drag flex items-center gap-1">
                     {#if headerActions}
                       {@render headerActions()}
                     {/if}

@@ -1,3 +1,9 @@
+/** A file the tool call would reach, with the block-list entry that caught it. */
+export interface SensitiveFileTarget {
+  path: string
+  pattern: string
+}
+
 /**
  * Inspect file operands, not arbitrary prose or tool capabilities. Kept
  * self-contained because bundled Pi embeds this function in its extension.
@@ -8,8 +14,8 @@ export function sensitiveFileTargets(
   cwd: string,
   patterns: readonly string[],
   canonicalize?: (path: string) => string
-): string[] {
-  const targets = new Set<string>()
+): SensitiveFileTarget[] {
+  const targets = new Map<string, string>()
   const fields = new Set([
     'path',
     'paths',
@@ -100,6 +106,10 @@ export function sensitiveFileTargets(
       }
     }
     if (!candidate || candidate.startsWith('-') || candidate.includes('://')) return
+    // Language identifiers, not filenames. These reach the token stream from
+    // scripts, inline code, and quoted program text, never from an operand the
+    // shell turns into a path.
+    if (/^(?:process\.env|import\.meta\.env)(?:\.|$)/u.test(candidate)) return
     const absolute = normalize(
       candidate.startsWith('/') || /^[a-z]:[/\\]/iu.test(candidate)
         ? candidate
@@ -111,18 +121,48 @@ export function sensitiveFileTargets(
     } catch {
       /* Match lexical paths too. */
     }
-    if (patterns.some((pattern) => matches(absolute, pattern))) targets.add(absolute)
-    else if (patterns.some((pattern) => matches(canonical, pattern))) targets.add(canonical)
+    // A `~` operand never resolves against the working directory, so the
+    // canonicalizer's home-expanded path is the only truthful target.
+    const homeRelative = candidate.startsWith('~') && canonical !== absolute
+    const ordered = homeRelative ? [canonical, absolute] : [absolute, canonical]
+    for (const target of ordered) {
+      const pattern = patterns.find((entry) => matches(target, entry))
+      if (pattern === undefined) continue
+      // Report the path that matched, so an alias shows the secret it reaches.
+      if (!targets.has(target)) targets.set(target, pattern)
+      return
+    }
+  }
+
+  /** Drop heredoc bodies. Their text is a program's input, so a `.env` or a
+   *  `cat .env` written into a script file is data, not an operand the shell
+   *  resolves. Line-based, so a body is removed before any substitution is
+   *  scanned out of it. */
+  function withoutHeredocBodies(command: string): string {
+    if (!command.includes('<<')) return command
+    const kept: string[] = []
+    const pending: string[] = []
+    for (const line of command.split('\n')) {
+      if (pending.length > 0) {
+        if (line.replace(/^\t+/u, '').trim() === pending[0]) pending.shift()
+        continue
+      }
+      kept.push(line)
+      for (const match of line.matchAll(/(?:^|\s)<<-?\s*(['"]?)([A-Za-z_][\w.-]*)\1/gu)) {
+        if (match[2]) pending.push(match[2])
+      }
+    }
+    return kept.join('\n')
   }
 
   function commandTargets(command: string, depth = 0): void {
     if (command.length > 65536 || depth > 3) return
+    const script = withoutHeredocBodies(command)
     // Substitutions really execute even when their outer command is echo.
-    for (const match of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/gu)) {
+    for (const match of script.matchAll(/\$\(([^()]*)\)|`([^`]*)`/gu)) {
       commandTargets(match[1] ?? match[2] ?? '', depth + 1)
     }
-    const tokens =
-      command.match(/"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||<<|>>|[;|<>]|[^\s;|<>]+/gu) ?? []
+    const tokens = script.match(/"(?:\\.|[^"\\])*"|'[^']*'|&&|\|\||<<|>>|[;|<>]|[^\s;|<>]+/gu) ?? []
     let executable = ''
     let skipPattern = false
     let skipOptionValue = false
@@ -309,5 +349,5 @@ export function sensitiveFileTargets(
     }
   }
   inspect(input)
-  return [...targets]
+  return [...targets].map(([path, pattern]) => ({ path, pattern }))
 }

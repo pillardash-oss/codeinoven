@@ -476,7 +476,7 @@
     style:height={dock.modal ? `${dock.bounds.height}px` : undefined}
     data-native-modal-panel={dock.modal || undefined}
     transition:fly|global={{
-      duration: dock.modal && !prefersReducedMotion.current ? 140 : 0,
+      duration: dock?.modal && !prefersReducedMotion.current ? 140 : 0,
       y: 4
     }}
     {@attach draw}

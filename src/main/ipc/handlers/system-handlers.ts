@@ -1,6 +1,6 @@
 import { dialog } from '../../system/file-dialogs'
 import { net, app, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
-import { lstat, readFile, writeFile, mkdir } from 'fs/promises'
+import { copyFile, lstat, open, readFile, writeFile, mkdir } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
@@ -22,7 +22,8 @@ import {
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
 import { rememberLocalDownloadName } from '../../system/local-download-names'
-import type { SaveFileInput } from '../../../lib/ipc/invoke-app'
+import type { SaveCopyInput, SaveFileInput } from '../../../lib/ipc/invoke-app'
+import type { ProjectFilesService } from '../../editor/project-files-service'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { IpcHandlerContext } from './context'
 
@@ -193,6 +194,34 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       Logger.error('dialog:saveFile failed:', error)
       return null
     }
+  })
+
+  // Save a copy of a file the app is already showing, where the user chooses.
+  //
+  // An artifact in a conversation is drawn from a served `appfile://` URL, and
+  // the renderer's download guard only lets the window's own `blob:` URLs
+  // through (see `bootstrap/session-guards.ts`), so a download of that URL is
+  // refused: the control did nothing at all, with no dialog and no file. The
+  // file itself already exists on disk, in a directory the app is free to clean
+  // up, so saving it is a copy, and the main process is the side that owns the
+  // path, the dialog and the write.
+  ipcMain.handle('dialog:saveCopy', async (_event, raw: unknown) => {
+    const input = validateSaveCopyInput(raw)
+    const source = await resolveSaveCopySource(projectFilesService, input.url)
+    if (!source) throw new Error('This file is not available to save.')
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    if (win && !win.isFocused()) win.focus()
+    const options: Electron.SaveDialogOptions = {
+      title: 'Save File',
+      defaultPath: input.suggestedName
+    }
+    const result = win
+      ? await dialog.showSaveDialog(win, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    await writeSaveCopy(source, result.filePath)
+    await privilegedIpc.registerUserSelectedFile(result.filePath)
+    return result.filePath
   })
 
   // Name the blob this renderer is handing to Chromium. A save of one of our own
@@ -728,4 +757,109 @@ function validateSaveFileFilters(value: unknown): SaveFileInput['filters'] {
       throw new TypeError('Invalid file filter extensions.')
     return { name, extensions: extensions.map((item) => String(item)) }
   })
+}
+
+/**
+ * Validate a request to save a copy of a file the app is already showing.
+ *
+ * The renderer names the file by the served URL it is drawing and suggests a
+ * plain file name; the destination comes from the save dialog, never from the
+ * renderer, so there is no path to validate.
+ */
+function validateSaveCopyInput(value: unknown): SaveCopyInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new TypeError('A save request is required.')
+  const raw = value as Record<string, unknown>
+  const url = requireString(raw.url, 'File URL')
+  if (!url.startsWith('appfile://') || url.length > 4096)
+    throw new TypeError('A served file URL is required.')
+  const suggestedName = requireString(raw.suggestedName, 'File name')
+  if (suggestedName.length > 255 || /[\\/\0\r\n]/u.test(suggestedName))
+    throw new TypeError('Choose a plain file name without a path.')
+  return { url, suggestedName }
+}
+
+const SAVE_COPY_PROJECT_PATTERN = /^[a-zA-Z0-9_-]+$/u
+const SAVE_COPY_THREAD_PATTERN = /^[a-zA-Z0-9._-]+$/u
+
+/**
+ * Where the file behind a served URL actually lives.
+ *
+ * Read from the URL itself rather than from a renderer-supplied path, with the
+ * same two shapes the `appfile://` reader serves for a conversation: a project
+ * route resolves through the project's own root, and a thread route resolves
+ * through the conversation's workspace (which may be served by another machine,
+ * in which case the file is read through that mount's own reader).
+ */
+interface SaveCopySource {
+  /** Absolute path on this machine, when the file is local. */
+  path?: string
+  /** The file's reader, when the project is mounted from another machine. */
+  remote?: { size: number; read(offset: number): Promise<Uint8Array> }
+}
+
+async function resolveSaveCopySource(
+  projectFiles: ProjectFilesService,
+  url: string
+): Promise<SaveCopySource | null> {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  const segments: string[] = []
+  for (const segment of parsed.pathname.split('/')) {
+    if (!segment) continue
+    try {
+      segments.push(decodeURIComponent(segment))
+    } catch {
+      return null
+    }
+  }
+  if (parsed.host === 'project') {
+    const [projectId = '', ...rest] = segments
+    if (!SAVE_COPY_PROJECT_PATTERN.test(projectId) || rest.length === 0) return null
+    return { path: await projectFiles.resolveForExternalEditor(projectId, rest.join('/')) }
+  }
+  if (parsed.host === 'thread') {
+    const [projectId = '', threadId = '', ...rest] = segments
+    if (!SAVE_COPY_PROJECT_PATTERN.test(projectId) || !SAVE_COPY_THREAD_PATTERN.test(threadId))
+      return null
+    if (rest.length === 0) return null
+    const relativePath = rest.join('/')
+    const remote = await projectFiles.remoteFileReader?.(projectId, threadId, relativePath)
+    if (remote) return { remote }
+    return {
+      path: await projectFiles.resolveForExternalEditor(
+        projectId,
+        relativePath,
+        undefined,
+        threadId
+      )
+    }
+  }
+  return null
+}
+
+/** Write the copy: a local file is copied as it is, a mounted one is streamed. */
+async function writeSaveCopy(source: SaveCopySource, destination: string): Promise<void> {
+  if (source.path) {
+    await copyFile(source.path, destination)
+    return
+  }
+  const remote = source.remote
+  if (!remote) throw new Error('The file could not be read.')
+  const handle = await open(destination, 'w')
+  try {
+    let offset = 0
+    while (offset < remote.size) {
+      const bytes = await remote.read(offset)
+      if (bytes.length === 0) throw new Error('The file changed while it was being copied.')
+      await handle.write(bytes)
+      offset += bytes.length
+    }
+  } finally {
+    await handle.close()
+  }
 }

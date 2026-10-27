@@ -70,6 +70,14 @@ export interface PermissionPolicyOptions {
    *  (deletes included) and shell commands the policy can prove stay inside.
    *  Anything that cannot be proven confined still asks. */
   scratchPaths?: readonly string[]
+  /** Absolute directories this session owns outright: an assistant task's own
+   *  `assistant-cwd/<assistantId ?? threadId>` root, or a chat's own
+   *  `chats-cwd/<threadId>` / `browser-cwd/<threadId>` workspace. The
+   *  sensitive-file block list exists to protect secrets the session does not
+   *  own, so a protected name inside one of these roots is the session's own
+   *  business and never needs an approval. Targets that leave the roots keep
+   *  asking. */
+  workspaceRoots?: readonly string[]
   now?: () => number
 }
 
@@ -215,6 +223,7 @@ export class PermissionPolicy {
   private readonly protectedPathPatterns: readonly string[]
   private readonly allowedPaths: readonly string[]
   private readonly scratchPaths: readonly string[]
+  private readonly workspaceRoots: readonly string[]
   private readonly restrictToAllowed: boolean
   private readonly now: () => number
 
@@ -227,6 +236,7 @@ export class PermissionPolicy {
     ]
     this.allowedPaths = (options.allowedPaths ?? []).map((path) => resolve(path))
     this.scratchPaths = (options.scratchPaths ?? []).map((path) => resolve(path))
+    this.workspaceRoots = (options.workspaceRoots ?? []).map((path) => resolve(path))
     this.restrictToAllowed = options.restrictToAllowed === true
     this.now = options.now ?? Date.now
   }
@@ -249,12 +259,29 @@ export class PermissionPolicy {
           scope
         )
       }
+      // Everything inside the session's own workspace is its own work: an
+      // assistant using a `.env` or a `credentials/` folder it created is not
+      // reaching anyone else's secret. Only targets that leave that workspace
+      // still need the user's approval.
+      const outsideWorkspace = paths.filter((path) => !this.isWorkspacePath(path))
+      if (paths.length > 0 && outsideWorkspace.length === 0) {
+        return this.createDecision(
+          'auto_review',
+          true,
+          "Auto-approved: the protected file is inside this session's own workspace.",
+          'low',
+          scope
+        )
+      }
+      const narrowed = outsideWorkspace.length > 0 && outsideWorkspace.length < paths.length
       return this.createDecision(
         'ask',
         false,
-        'This action targets a file in your sensitive-file block list. Approval is required for this invocation.',
+        narrowed
+          ? "This action targets a protected file outside this session's own workspace. Approval is required for this invocation."
+          : 'This action targets a file in your sensitive-file block list. Approval is required for this invocation.',
         'critical',
-        scope
+        narrowed ? this.createScope(outsideWorkspace) : scope
       )
     }
 
@@ -410,6 +437,19 @@ export class PermissionPolicy {
     const normalized = normalizeNativePath(path)
     const resolvedPath = isAbsolute(normalized) ? resolve(normalized) : resolve(base, normalized)
     return this.isScratchRoot(resolvedPath)
+  }
+
+  /** Whether a path resolves inside a directory this session owns outright.
+   *  A `~` prefix or a traversal segment is never proven to stay inside, so it
+   *  keeps the protected-file card. */
+  private isWorkspacePath(path: string): boolean {
+    if (this.workspaceRoots.length === 0) return false
+    if (!path || path.startsWith('~') || hasTraversal(path)) return false
+    const normalized = normalizeNativePath(path)
+    const resolvedPath = isAbsolute(normalized)
+      ? resolve(normalized)
+      : resolve(this.projectRoot, normalized)
+    return this.workspaceRoots.some((root) => isWithinDirectory(root, resolvedPath))
   }
 
   private isScratchRoot(resolvedPath: string): boolean {

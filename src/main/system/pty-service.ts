@@ -1,5 +1,6 @@
 import { pathIsAccessible } from '../../lib/utils'
 import { PtyOutputBuffer } from './pty-output-buffer'
+import { stopPtyProcesses } from './pty-process-stop'
 import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { realpath, stat } from 'fs/promises'
@@ -312,11 +313,9 @@ export class PtyService {
     try {
       ensureActive()
     } catch (error) {
-      try {
-        session.process.kill()
-      } catch {
-        // The process may already be gone.
-      }
+      // The user already closed this terminal, so nothing should be left
+      // running: stop the whole tree now rather than only the shell.
+      void stopPtyProcesses(session.process.pid, { graceMs: 0 })
       throw error
     }
     this.sessions.set(id, session)
@@ -911,12 +910,10 @@ export class PtyService {
         if (this.sessions.get(session.id) === session) {
           session.exitCodeOverride = 1
           session.idleTimeoutMs = undefined
-          try {
-            session.process.kill()
-          } catch {
-            this.sessions.delete(session.id)
+          this.sessions.delete(session.id)
+          void stopPtyProcesses(session.process.pid, { graceMs: 0 }).catch(() => {
             sendToRenderer(this.sender, `pty:exit:${session.id}`, 1)
-          }
+          })
         }
       }, 300)
     }
@@ -1062,21 +1059,23 @@ export class PtyService {
     }
   }
 
-  private destroy(id: string): void {
+  /**
+   * Close one terminal and stop everything it was running.
+   *
+   * Resolves once the session's process tree is gone, so a caller that stops a
+   * harness install/update and then re-probes the harness reads the state that
+   * exists after the stop, not the one it is still racing.
+   */
+  private async destroy(id: string): Promise<void> {
     const pending = this.pendingStarts.get(id)
     if (pending) pending.cancelled = true
     this.pendingStarts.delete(id)
     this.commandOutput.get(id)?.dispose()
     this.commandOutput.delete(id)
     const session = this.sessions.get(id)
-    if (session) {
-      try {
-        session.process.kill()
-      } catch {
-        // Process may already be dead
-      }
-      this.sessions.delete(id)
-    }
+    if (!session) return
+    this.sessions.delete(id)
+    await stopPtyProcesses(session.process.pid)
   }
 
   destroyAll(): void {
@@ -1087,8 +1086,8 @@ export class PtyService {
     this.commandOutput.clear()
     this.sender = null
     this.stopIdleWatchdog()
-    for (const id of this.sessions.keys()) {
-      this.destroy(id)
+    for (const id of [...this.sessions.keys()]) {
+      void this.destroy(id)
     }
   }
 
@@ -1173,7 +1172,7 @@ export class PtyService {
     const ids = [...new Set([...this.sessions.keys(), ...this.pendingStarts.keys()])]
     this.announceStoppedSessions(ids)
     for (const id of ids) {
-      this.destroy(id)
+      void this.destroy(id)
     }
   }
 }

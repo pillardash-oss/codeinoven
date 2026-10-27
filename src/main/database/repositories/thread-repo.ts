@@ -1156,6 +1156,14 @@ export class ThreadRepo {
    * `isOrchestrationChildThread` defines it. Pinning always surfaces a row: a
    * pinned thread is kept even when it is a child, and it never competes for a
    * quota slot, because the Pinned slice must show every pin the user made.
+   *
+   * A thread parked on the user (`awaiting_approval`) bypasses the quota too,
+   * whatever its age and whether or not it was already read. "Who is waiting on
+   * me" is the fact the view rail's attention badge reports, and the rail counts
+   * the rows the renderer holds (see `ViewRailActivity`): a parked thread that a
+   * quota-only slice left out is a thread the app knows needs the user and the
+   * rail silently does not, which is exactly the news vanishing that the badge
+   * must never lose.
    */
   async listRecentPerProjectViaWorker(
     quotaByProject: (projectId: string) => number,
@@ -1191,7 +1199,11 @@ export class ThreadRepo {
                AND coordinator_thread_id IS NULL
              )
            )
-       ) WHERE rn <= ${quotaExpr} OR read = 0 OR drafting = 1 OR pinned = 1
+       ) WHERE rn <= ${quotaExpr}
+         OR read = 0
+         OR drafting = 1
+         OR pinned = 1
+         OR status = 'awaiting_approval'
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
       [GLOBAL_BROWSER_PROJECT_ID],
       0

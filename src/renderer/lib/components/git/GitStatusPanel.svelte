@@ -115,6 +115,9 @@
   import GitIssueReader from './GitIssueReader.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
+  import CancelRunButton from './CancelRunButton.svelte'
+  import RerunRunMenu from './RerunRunMenu.svelte'
+  import { isFailedJob } from '$shared/github-job-log'
   import PrBatchDialog from './PrBatchDialog.svelte'
   import PrMergeConfirmDialog from './PrMergeConfirmDialog.svelte'
   import PrMetadataDialog from './PrMetadataDialog.svelte'
@@ -826,6 +829,44 @@
     log: GitHubDeploymentJobLog | null
   ): void {
     diagnoseWorkflowJob(projectId, run, job, log)
+  }
+
+  /**
+   * Review the open run's failed job.
+   *
+   * The job's own log is read first so the agent opens with the evidence rather
+   * than a request to fetch it again.
+   */
+  async function reviewOpenRunFailedJob(): Promise<void> {
+    const run = selectedRun
+    const identity = githubIdentity
+    const job = openRunFailedJob
+    if (!run || !identity || !job || preparingRunDiagnosis) return
+    preparingRunDiagnosis = true
+    try {
+      const log = await gitState
+        .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
+        .catch(() => null)
+      startWorkflowDiagnosis(
+        gitState.deploymentRunDetails[
+          GitState.workflowRunKey(identity.owner, identity.repo, run.id)
+        ]?.detail.run ?? run,
+        job,
+        log
+      )
+    } finally {
+      preparingRunDiagnosis = false
+    }
+  }
+
+  /** Re-read the open run after a cancel or a re-run changed its state. */
+  async function reloadOpenRun(): Promise<void> {
+    const run = selectedRun
+    const identity = githubIdentity
+    if (!run || !identity) return
+    await gitState
+      .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, run.id, true)
+      .catch(() => null)
   }
 
   /** Route a failed deployment job to a fresh diagnosis thread. */
@@ -1793,6 +1834,24 @@
       ]?.detail.run ?? selected
     return run.status === 'completed' ? (run.conclusion ?? 'completed') : run.status
   })
+  /**
+   * The open run's loaded jobs, so the header can count them and name the job
+   * that failed. Empty until the detail read lands, which is why the count and
+   * the failed-job control appear a beat after the run itself.
+   */
+  const openRunJobs = $derived.by(() => {
+    const selected = selectedRun
+    const identity = githubIdentity
+    if (!selected || !identity) return []
+    return (
+      gitState.deploymentRunDetails[
+        GitState.workflowRunKey(identity.owner, identity.repo, selected.id)
+      ]?.detail.jobs ?? []
+    )
+  })
+  const openRunFailedJob = $derived(openRunJobs.find(isFailedJob) ?? null)
+  /** Opens the failed job's review thread: true while its log is being read. */
+  let preparingRunDiagnosis = $state(false)
   /**
    * Where the Deploys view's external link points: the deployment page, the run,
    * or the repository's Actions when neither is open. It replaces the per-view
@@ -3685,7 +3744,6 @@
       </span>
     </span>
   {:else if activeTab === 'deployments' && selectedRun !== null}
-    {@const RunGlyph = stateGlyph(openRunState)}
     <button
       type="button"
       class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -3702,6 +3760,11 @@
       >
         {selectedRun.displayTitle}
       </p>
+      <!--
+        The run's identity and its size on one line: what it is, where it ran,
+        the commit, and how many jobs it owns. The count used to sit in a Jobs
+        heading of its own, which the list below already states.
+      -->
       <div class="flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
         <span class="truncate">{selectedRun.name} #{selectedRun.runNumber}</span>
         {#if selectedRun.branch}
@@ -3710,19 +3773,61 @@
         {/if}
         <span>·</span>
         <span class="shrink-0 font-mono">{selectedRun.headSha.slice(0, 7)}</span>
+        {#if openRunJobs.length > 0}
+          <span>·</span>
+          <span class="shrink-0">{openRunJobs.length} jobs</span>
+        {/if}
       </div>
     </div>
+    <!--
+      The state is the word alone: the glyph rotating beside a label that already
+      says the same thing was a mark repeating its own text. The run's controls
+      sit here, next to the state they act on, which is why the detail page no
+      longer carries an action row above its jobs.
+    -->
     <span
-      class="flex shrink-0 items-center gap-1 {stateGlyphClass(openRunState)}"
-      role="img"
+      class="shrink-0 px-1 text-[0.5625rem] font-semibold uppercase tracking-wide {stateGlyphClass(
+        openRunState
+      )}"
       title="Run {stateLabel(openRunState).toLowerCase()}"
-      aria-label="Run {stateLabel(openRunState).toLowerCase()}"
     >
-      <RunGlyph size={13} />
-      <span class="text-[0.5625rem] font-semibold uppercase tracking-wide">
-        {stateLabel(openRunState)}
-      </span>
+      {stateLabel(openRunState)}
     </span>
+    {#if githubIdentity}
+      {#if openRunFailedJob}
+        <button
+          type="button"
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center border border-border text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          title={`Review failed job ${openRunFailedJob.name} with an agent`}
+          aria-label="Review the failed job with an agent"
+          disabled={preparingRunDiagnosis}
+          onclick={() => void reviewOpenRunFailedJob()}
+        >
+          {#if preparingRunDiagnosis}
+            <CioSpinner size={11} class="animate-spin" />
+          {:else}
+            <CioSubagent size={11} />
+          {/if}
+        </button>
+      {/if}
+      <RerunRunMenu
+        {projectId}
+        identity={githubIdentity}
+        runId={selectedRun.id}
+        runStatus={selectedRun.status}
+        hasFailedJobs={openRunFailedJob !== null}
+        compact
+        onRerun={() => void reloadOpenRun()}
+      />
+      <CancelRunButton
+        {projectId}
+        identity={githubIdentity}
+        runId={selectedRun.id}
+        runStatus={selectedRun.status}
+        compact
+        onCancelled={() => void reloadOpenRun()}
+      />
+    {/if}
   {/if}
 {/snippet}
 
@@ -4328,7 +4433,6 @@
             onSignIn={() => githubSignIn.start()}
             requestedRunId={requestedWorkflowRunId}
             onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
-            onAgentDiagnoseRun={startWorkflowDiagnosis}
             onAgentDiagnoseDeployment={startDeploymentDiagnosis}
           />
         {:else if activeTab === 'stashes'}

@@ -61,7 +61,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'transcribe',
-      'Transcribe footage with the installed ASR selected in Sounds. Caption timing uses measured audio chunks, not inferred word timestamps.' +
+      'Transcribe footage with the installed ASR selected in Sounds. Caption timing uses measured audio chunks, not inferred word timestamps. Silent stretches are normal: a chunk with no speech yields no caption, and the result reports spokenChunks and silentChunks.' +
         jobNote,
       {
         source,
@@ -93,7 +93,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'runtime',
-      'Install the CIO-authored standalone cio-video.js helpers beside a composition. Include it as a script and await CIOVideo.bind(draw). Exposes parameters, captions, the curve set in CIOVideo.easings, path reveals, pivots, tracking interpolation and exact media seeking. Does not overwrite a different existing file.',
+      'Install the CIO-authored standalone cio-video.js helpers beside a composition. Include it as a script and await CIOVideo.bind(draw). Exposes parameters, captions, the curve set in CIOVideo.easings, path reveals, pivots, tracking interpolation and exact media seeking. Refreshes a copy the app generated earlier when the runtime has changed, and never overwrites a file it did not generate.',
       { directory },
       ['directory']
     ),

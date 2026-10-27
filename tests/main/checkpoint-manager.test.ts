@@ -8,6 +8,7 @@ import {
   type TurnCheckpoint
 } from '../../src/main/storage/checkpoint-manager'
 import type { Database } from '../../src/main/database/database'
+import type { FileChangeSource } from '../../src/lib/types'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
 const temporaryPaths: string[] = []
@@ -30,6 +31,18 @@ async function testCheckpointManager(): Promise<CheckpointManager> {
   const database = await createTestDb()
   testDatabases.push(database)
   return new CheckpointManager(database)
+}
+
+/** The write evidence a real editing turn records for one path. */
+function claimedSource(path: string): FileChangeSource {
+  return {
+    tool: 'edit',
+    toolPartId: `part-${path}`,
+    messageId: `message-${path}`,
+    callId: `call-${path}`,
+    status: 'completed',
+    verification: 'tool-target-and-content'
+  }
 }
 
 describe('CheckpointManager', () => {
@@ -359,7 +372,8 @@ describe('CheckpointManager', () => {
         'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
         JSON.stringify({
           ...workerDone,
-          changes: [{ path: 'worker.txt', kind: 'modified', binary: false }]
+          changes: [{ path: 'worker.txt', kind: 'modified', binary: false }],
+          changeSourceRefs: { 'worker.txt': [claimedSource('worker.txt')] }
         }),
         workerDone.id
       )
@@ -384,7 +398,8 @@ describe('CheckpointManager', () => {
         'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
         JSON.stringify({
           ...otherDone,
-          changes: [{ path: 'unrelated.txt', kind: 'modified', binary: false }]
+          changes: [{ path: 'unrelated.txt', kind: 'modified', binary: false }],
+          changeSourceRefs: { 'unrelated.txt': [claimedSource('unrelated.txt')] }
         }),
         otherDone.id
       )
@@ -450,7 +465,131 @@ describe('CheckpointManager', () => {
       undefined,
       {
         precisePaths: new Set(['mine.txt']),
-        foreignClaimedPaths: new Map([['theirs.txt', turn.before.createdAt - 60_000]])
+        foreignPrecisePaths: new Map([['theirs.txt', turn.before.createdAt - 60_000]])
+      }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
+  })
+
+  // Regression: a checkpoint's change list is a project-wide diff, so a turn that
+  // finished first also lists files a still-running turn was editing. Treating
+  // that list as a claim revoked the real owner's work when it finished second,
+  // and its card came up empty with every path marked foreign.
+  it('does not revoke a path a completed turn only swept into its diff', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    await writeFile(join(projectRoot, 'borrowed.txt'), 'before', 'utf-8')
+    await writeFile(join(projectRoot, 'claimed.txt'), 'before', 'utf-8')
+
+    // The reading turn is already running when the other turn finishes inside
+    // its window, which is the only order the foreign scan can act on.
+    const mine = await manager.beginTurn('project1', 'reader', projectRoot, 'Reading turn', false)
+    const borrowed = await manager.beginTurn('project1', 'other', projectRoot, 'Other turn', false)
+    await writeFile(join(projectRoot, 'borrowed.txt'), 'written by the reading turn', 'utf-8')
+    await writeFile(join(projectRoot, 'claimed.txt'), 'written by the other turn', 'utf-8')
+    const borrowedDone = await manager.completeTurn(
+      'project1',
+      'other',
+      borrowed.id,
+      projectRoot,
+      'completed'
+    )
+    database.run(
+      'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
+      JSON.stringify({
+        ...borrowedDone,
+        changes: [
+          { path: 'borrowed.txt', kind: 'modified', binary: false },
+          { path: 'claimed.txt', kind: 'modified', binary: false }
+        ],
+        // The other turn only ever wrote claimed.txt; borrowed.txt was in its
+        // diff because this turn was writing it at the same time.
+        changeSourceRefs: { 'claimed.txt': [claimedSource('claimed.txt')] }
+      }),
+      borrowedDone.id
+    )
+
+    await writeFile(join(projectRoot, 'borrowed.txt'), 'my own fix', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      mine.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      // This turn wrote borrowed.txt through a shell window, which is how a
+      // harness that edits from an inline script records its own evidence.
+      { changeSources: new Map([['borrowed.txt', [claimedSource('borrowed.txt')]]]) }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['borrowed.txt'])
+  })
+
+  // The other half of the same rule: a borrowed path this turn cannot prove it
+  // wrote must stay off its card, or the card lists a third turn's files.
+  it('keeps a borrowed path off a turn that cannot show it wrote the file', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    await writeFile(join(projectRoot, 'theirs.txt'), 'before', 'utf-8')
+
+    const mine = await manager.beginTurn('project1', 'reader', projectRoot, 'Reading turn', false)
+    const other = await manager.beginTurn('project1', 'other', projectRoot, 'Other turn', false)
+    await writeFile(join(projectRoot, 'theirs.txt'), 'third turn mid-write', 'utf-8')
+    const otherDone = await manager.completeTurn(
+      'project1',
+      'other',
+      other.id,
+      projectRoot,
+      'completed'
+    )
+    database.run(
+      'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
+      JSON.stringify({
+        ...otherDone,
+        changes: [{ path: 'theirs.txt', kind: 'modified', binary: false }],
+        changeSourceRefs: { 'theirs.txt': [] }
+      }),
+      otherDone.id
+    )
+
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      mine.id,
+      projectRoot,
+      'completed'
+    )
+
+    expect(completed.changes).toEqual([])
+  })
+
+  // A foreign shell window only proves the file moved while another turn's
+  // command ran, which is exactly what happens when this turn writes the file.
+  // It must not outrank this turn's own recorded write evidence.
+  it("keeps a path this turn wrote over another turn's shell window", async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'mine.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'writer', projectRoot, 'Writer turn', false)
+    await writeFile(join(projectRoot, 'mine.txt'), 'my fix', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'writer',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        changeSources: new Map([['mine.txt', [claimedSource('mine.txt')]]]),
+        foreignWindowPaths: new Map([['mine.txt', turn.before.createdAt + 1]])
       }
     )
 

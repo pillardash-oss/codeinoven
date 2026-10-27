@@ -47,8 +47,7 @@
       >
         <CioBack size={14} /> Back
       </button>
-    {/if}
-    {#if setupPreset === 'plugin-bundle'}
+    {:else if setupPreset === 'plugin-bundle'}
       <button
         class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"

@@ -169,6 +169,17 @@ export function buildScreenCanvasDocument(input: {
   plan: ScreenCanvasPlan
   /** Folder name, for the page title. */
   title: string
+  /**
+   * The URL the page's relative entries resolve against, or null for the page's
+   * own location.
+   *
+   * The served page lives at a reserved path one folder down from the design
+   * (`/__cio/canvas.html`), so an entry written as `index.html` would resolve to
+   * `/__cio/index.html` and frame nothing: the served canvas therefore pins its
+   * base to the design folder's own root. An exported canvas sits beside the
+   * screens it frames, where its own location is already right.
+   */
+  base?: string | null
 }): string {
   const sections: string[] = []
   for (const frame of input.plan.frames) {
@@ -208,6 +219,7 @@ export function buildScreenCanvasDocument(input: {
     '  <head>',
     '    <meta charset="utf-8">',
     '    <meta name="viewport" content="width=device-width, initial-scale=1">',
+    ...(input.base ? [`    <base href="${escapeHtml(input.base)}">`] : []),
     `    <title>${escapeHtml(input.title)}</title>`,
     '  </head>',
     '  <body>'
@@ -232,5 +244,9 @@ export function buildScreenCanvasDocument(input: {
 /** The canvas page for one served folder, ready to answer a request with. */
 export async function renderScreenCanvasPage(folderAbsolute: string): Promise<string> {
   const { plan } = await readScreenCanvas({ folderAbsolute })
-  return buildScreenCanvasDocument({ plan, title: `Screen Canvas · ${basename(folderAbsolute)}` })
+  return buildScreenCanvasDocument({
+    plan,
+    title: `Screen Canvas · ${basename(folderAbsolute)}`,
+    base: '/'
+  })
 }
