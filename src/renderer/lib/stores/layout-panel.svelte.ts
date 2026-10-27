@@ -40,6 +40,13 @@ class LayoutPanelState {
    * the end of the header's chrome.
    */
   conversationLeft = $state(0)
+  /**
+   * Whether the workspace shell is the page on screen. The shell stays mounted
+   * across views so returning to a thread never reloads it, which means a
+   * conversation that is not being looked at still has a position: the header
+   * has to know to ignore it.
+   */
+  contentVisible = $state(true)
 
   /** Docked width of the sidebar on screen, zero when none is docked. */
   get dockedWidth(): number {

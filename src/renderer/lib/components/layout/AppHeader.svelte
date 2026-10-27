@@ -104,14 +104,20 @@
     layoutPanelState.minimumWidth = minimumPanelWidth
   })
 
+  /** The chrome's measured width. The column it owns is a target, not a fact: with
+   *  no panel docked the cluster is content-sized, and using the worst-case width
+   *  there pushed the title a few pixels right of the line it was aligning to. */
+  let clusterWidth = $state(0)
+
   /** How far the thread's block sits from the end of the chrome so that its left
    *  edge lands on the conversation page's own left edge. The page is the thing
    *  being read, so it is the bounding box the title aligns to; the panel only
    *  decides how much room the page has. */
   let titleInset = $derived.by(() => {
+    if (!layoutPanelState.contentVisible) return 0
     const contentLeft = layoutPanelState.conversationLeft
     if (contentLeft <= 0) return 0
-    const chromeEnd = leftInset + Math.max(panelColumnWidth, CHROME_WIDTH)
+    const chromeEnd = leftInset + (clusterWidth > 0 ? clusterWidth : CHROME_WIDTH)
     return Math.max(0, Math.round(contentLeft - chromeEnd))
   })
 
@@ -308,6 +314,7 @@
     class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1"
     aria-label="Primary navigation"
     style:width={panelColumnWidth > 0 ? `${panelColumnWidth}px` : undefined}
+    bind:clientWidth={clusterWidth}
   >
     <button
       type="button"

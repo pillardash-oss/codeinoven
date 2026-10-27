@@ -72,6 +72,7 @@
     withBrowser
   } from '$lib/stores/browser-access.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
   import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -473,6 +474,13 @@
    *  and Assistant); the takeover pages (Scope, Settings) layer on top of it.
    *  Shared with the link pipeline, which routes by the same surface. */
   let showsContentView = $derived(viewShowsWorkspaceShell(activeView))
+
+  /* The header aligns the thread title to the conversation's page column, and the
+     shell that owns that column stays mounted while another view is on screen. Tell
+     the header when the column is actually the page being looked at. */
+  $effect(() => {
+    layoutPanelState.contentVisible = showsContentView
+  })
 
   /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)

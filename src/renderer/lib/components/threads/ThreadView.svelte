@@ -10,14 +10,35 @@
    * The pane resizes with the sidebar, so the column moves without the window
    * changing, and a size observer catches both.
    */
+  /** The live reporter, so the page column can be re-measured when the shell it
+   *  lives in becomes the one on screen again instead of waiting for a resize that
+   *  will never come. */
+  let reportConversationColumnNow: (() => void) | null = null
+
+  $effect(() => {
+    /* Read so this effect re-runs when the shell comes back on screen: the page
+       column has not resized, so nothing else would tell it to measure again. */
+    void layoutPanelState.contentVisible
+    reportConversationColumnNow?.()
+  })
+
   const reportConversationColumn: Attachment<HTMLElement> = (element) => {
     const report = () => {
       /* The column's own padding is inside its box, and the text starts after it:
          aligning the header to the box edge leaves the title a few pixels left of
          the line the messages start on. */
       const padding = Number.parseFloat(getComputedStyle(element).paddingLeft) || 0
-      layoutPanelState.conversationLeft = Math.round(element.getBoundingClientRect().left + padding)
+      /* A conversation the reader cannot see has a position but not a meaning:
+         reporting it would align the header to a page nobody is looking at. */
+      const onScreen =
+        element.getClientRects().length > 0 &&
+        getComputedStyle(element).visibility !== 'hidden'
+      layoutPanelState.conversationLeft =
+        onScreen && layoutPanelState.contentVisible
+          ? Math.round(element.getBoundingClientRect().left + padding)
+          : 0
     }
+    reportConversationColumnNow = report
     report()
     const observer = new ResizeObserver(report)
     observer.observe(element)
@@ -31,6 +52,7 @@
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', report)
+      if (reportConversationColumnNow === report) reportConversationColumnNow = null
       layoutPanelState.conversationLeft = 0
     }
   }
