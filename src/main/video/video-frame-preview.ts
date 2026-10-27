@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import type { VideoProjectManifest } from '../../lib/video/project'
 import type { VideoFrameThumbnail } from '../../lib/video/frame-grid'
+import type { VideoStudioDocument } from '../../lib/video/studio'
 import { videoCaptureUrl } from '../../lib/video/project'
 import {
   compositionRenderReadyScript,
@@ -17,7 +18,8 @@ export class VideoFramePreview {
   async render(
     url: string,
     manifest: VideoProjectManifest,
-    times: number[]
+    times: number[],
+    document?: VideoStudioDocument
   ): Promise<VideoFrameThumbnail[]> {
     if (this.disposed || this.queued >= 2) return []
     this.queued += 1
@@ -29,7 +31,7 @@ export class VideoFramePreview {
     await previous
     try {
       if (this.disposed) return []
-      return await this.capture(url, manifest, times)
+      return await this.capture(url, manifest, times, document)
     } finally {
       this.queued -= 1
       release()
@@ -44,7 +46,8 @@ export class VideoFramePreview {
   private async capture(
     url: string,
     manifest: VideoProjectManifest,
-    times: number[]
+    times: number[],
+    document?: VideoStudioDocument
   ): Promise<VideoFrameThumbnail[]> {
     const window = new BrowserWindow({
       show: false,
@@ -79,6 +82,11 @@ export class VideoFramePreview {
               autoplay: false
             })
           )
+          if (document)
+            await window.webContents.executeJavaScript(`(async () => {
+              globalThis.__cioEditPreviewDisabled = true;
+              if (globalThis.CIOVideo?.setStudio) await globalThis.CIOVideo.setStudio(${JSON.stringify(document)}, null);
+            })()`)
           const frames: VideoFrameThumbnail[] = []
           for (const time of times) {
             if (this.disposed || window.isDestroyed()) break

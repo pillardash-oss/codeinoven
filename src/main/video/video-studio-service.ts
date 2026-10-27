@@ -2,6 +2,9 @@ import { ipcMain, app, BrowserWindow } from 'electron'
 import { join, relative, extname } from 'node:path'
 import { mkdir, rm, readFile, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { atomicWrite } from '../../lib/utils'
+import { recordVideoEditChange, validateVideoEditorSelection } from '../../lib/video/edit'
+import { VideoEditorService } from './video-editor-service'
 import { authoredWorkRoot } from '../design/authored-work-root'
 import {
   validateVideoStudio,
@@ -61,13 +64,15 @@ export const VIDEO_STUDIO_OPERATIONS = [
   'captions',
   'track',
   'analyze-motion',
-  'remove-background'
+  'remove-background',
+  'editor'
 ] as const
 export interface VideoStudioOptions {
   database: Database
   previews: DirectoryPreviewService
   speech: () => SpeechService | null
   config: () => Promise<AppConfig>
+  resolveImportPath?: (path: unknown) => Promise<string>
   /**
    * Called when a save rewrote the composition's studio.json.
    *
@@ -88,12 +93,19 @@ function revision(document: VideoStudioDocument): string {
 }
 
 export class VideoStudioService {
+  readonly editor: VideoEditorService
   private readonly framePreviews = new VideoFramePreview()
   readonly jobs = new VideoJobs()
   /** The optional GPU matting stack, installed on demand from Settings. */
   readonly packages = new VideoPackagesService()
   private readonly writes = new Map<string, Promise<unknown>>()
   constructor(private readonly options: VideoStudioOptions) {
+    this.editor = new VideoEditorService({
+      ...options,
+      read: (projectId, threadId, directory) => this.read(projectId, threadId, directory),
+      save: (projectId, threadId, directory, document, revision, cause) =>
+        this.save(projectId, threadId, directory, document, revision, cause)
+    })
     void this.packages.initialize()
   }
   /**
@@ -177,10 +189,45 @@ export class VideoStudioService {
           throw new Error('The agent changed these controls. Reload them before saving.')
         const document = validateVideoStudio(raw)
         for (const track of document.audioTracks) await videoFile(folder, track.source)
+        if (document.edit) {
+          for (const asset of document.edit.assets) await videoFile(folder, asset.source)
+          const captionChanged =
+            JSON.stringify([current.captions, current.captionStyle, current.captionAppearance]) !==
+            JSON.stringify([document.captions, document.captionStyle, document.captionAppearance])
+          recordVideoEditChange(
+            current.edit,
+            document.edit,
+            cause,
+            captionChanged ? [...current.captions, ...document.captions] : []
+          )
+        }
         const savedDirectory = relative(root, folder).replaceAll('\\', '/')
         // Save both sides even when no history panel is mounted.
         await this.options.captureHistory?.(projectId, threadId, savedDirectory, cause)
         await writeVideoStudio(folder, document)
+        if (document.edit) {
+          const manifestPath = await videoFile(folder, 'composition.json')
+          const manifest = videoRecord(JSON.parse(await readFile(manifestPath, 'utf8')))
+          const audible = document.edit.clips.some(
+            (clip) =>
+              clip.volume > 0 &&
+              !document.edit?.tracks.find((track) => track.id === clip.trackId)?.muted &&
+              document.edit?.assets.find((asset) => asset.id === clip.assetId)?.hasAudio
+          )
+          await atomicWrite(
+            manifestPath,
+            JSON.stringify(
+              {
+                ...manifest,
+                duration: document.edit.duration,
+                audioPolicy: audible ? 'required' : 'silent'
+              },
+              null,
+              2
+            )
+          )
+          await installVideoRuntime(root, folder)
+        }
         await this.options.captureHistory?.(projectId, threadId, savedDirectory, cause)
         // A saved control edit is a step in the folder's history, so the pane that
         // shows that history is told, exactly as a design restore tells it.
@@ -227,6 +274,38 @@ export class VideoStudioService {
   readonly execute: VideoCapabilityExecutor = async (operation, input, context) => {
     const scope = await authoredWorkRoot(this.options.database, context.projectId, context.threadId)
     const root = scope.path
+    if (operation === 'editor') {
+      const directory = videoText(input.directory, 'directory')
+      if (input.action === 'apply')
+        return this.editor.apply(
+          context.projectId,
+          context.threadId,
+          directory,
+          input.revision,
+          input.operations
+        )
+      if (input.action === 'import') {
+        const state = await this.read(context.projectId, context.threadId, directory)
+        if (!state.document.edit) throw new Error('Enable the editable timeline first')
+        const assets = await this.editor.importAssets(
+          context.projectId,
+          context.threadId,
+          directory,
+          input.sources
+        )
+        state.document.edit.assets.push(...assets)
+        const saved = await this.save(
+          context.projectId,
+          context.threadId,
+          directory,
+          state.document,
+          state.revision,
+          'agent'
+        )
+        return { ...saved, assets }
+      }
+      return this.editor.enable(context.projectId, context.threadId, directory)
+    }
     if (operation === 'jobs') return this.jobs.list(context.projectId, context.threadId)
     if (operation === 'studio') {
       if (input.document === undefined)
@@ -448,7 +527,7 @@ export class VideoStudioService {
   registerIpc(): void {
     ipcMain.handle(
       'video:frameStrip',
-      async (_event, projectId, threadId, directory, times: unknown) => {
+      async (_event, projectId, threadId, directory, times: unknown, rawDocument: unknown) => {
         if (
           !Array.isArray(times) ||
           times.length > 24 ||
@@ -470,14 +549,44 @@ export class VideoStudioService {
         const entry = await resolveServedEntry(folder, 'index.html')
         if (!entry) return []
         const registration = await this.options.previews.open(folder)
-        return this.framePreviews.render(servedFileUrl(registration.url, entry), manifest, [
-          ...new Set(
-            (times as number[]).map((time) => snapVideoFrame(time, manifest.duration, manifest.fps))
-          )
-        ])
+        const document = rawDocument === undefined ? undefined : validateVideoStudio(rawDocument)
+        const duration = document?.edit?.duration ?? manifest.duration
+        return this.framePreviews.render(
+          servedFileUrl(registration.url, entry),
+          { ...manifest, duration },
+          [
+            ...new Set(
+              (times as number[]).map((time) => snapVideoFrame(time, duration, manifest.fps))
+            )
+          ],
+          document
+        )
       }
     )
     const id = (value: unknown): string => videoText(value, 'identifier', 128)
+    ipcMain.handle('video:editorEnable', (_event, projectId, threadId, directory) =>
+      this.editor.enable(id(projectId), id(threadId), videoText(directory, 'directory'))
+    )
+    ipcMain.handle('video:importAssets', (_event, projectId, threadId, directory, paths) =>
+      this.editor.importAssets(
+        id(projectId),
+        id(threadId),
+        videoText(directory, 'directory'),
+        paths
+      )
+    )
+    ipcMain.handle('video:preview', (_event, projectId, threadId, directory, document, selection) =>
+      this.editor.preview(
+        id(projectId),
+        id(threadId),
+        videoText(directory, 'directory'),
+        document,
+        validateVideoEditorSelection(selection)
+      )
+    )
+    ipcMain.handle('video:stopEditing', (_event, projectId, threadId, directory) =>
+      this.editor.stop(id(projectId), id(threadId), videoText(directory, 'directory'))
+    )
     ipcMain.handle('video:studio', (_event, projectId, threadId, directory) =>
       this.read(id(projectId), id(threadId), directory)
     )

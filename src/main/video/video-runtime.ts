@@ -1,7 +1,18 @@
 import type { VideoStudioDocument, VideoValue } from '../../lib/video/studio'
+import { FONT_STACKS } from '../../lib/app-fonts'
+import {
+  VIDEO_CAPTION_APPEARANCE,
+  type VideoCaptionAppearance,
+  type VideoEditorSelection
+} from '../../lib/video/edit'
+import { createVideoEditRenderer } from './video-edit-runtime'
 
 /** Authored compositions opt into this small runtime; nothing is drawn automatically. */
-function installVideoRuntime(): void {
+function installVideoRuntime(
+  editorFactory: typeof createVideoEditRenderer,
+  fonts: Record<string, string>,
+  defaultAppearance: VideoCaptionAppearance
+): void {
   const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value))
   let studio: VideoStudioDocument = {
     version: 1,
@@ -11,7 +22,17 @@ function installVideoRuntime(): void {
     captionStyle: 'plain'
   }
   const parameters: Record<string, VideoValue> = Object.create(null)
+  const editor = editorFactory({ seekMedia, mediaReady, drawCaptions })
+  let currentDraw: ((seconds: number) => Promise<void>) | undefined
   const ready = (async () => {
+    await new Promise<void>((resolve) => {
+      const link = document.createElement('link')
+      link.rel = 'stylesheet'
+      link.href = './assets/cio-fonts/fonts.css'
+      link.onload = () => resolve()
+      link.onerror = () => resolve()
+      document.head.append(link)
+    })
     const response = await fetch('./studio.json', { cache: 'no-store' })
     if (response.status !== 404) {
       if (!response.ok) throw new Error('Cannot read video controls')
@@ -104,39 +125,42 @@ function installVideoRuntime(): void {
       }
     }
     if (!caption) return
+    const appearance = { ...defaultAppearance, ...studio.captionAppearance, ...caption.appearance }
     ctx.save()
-    ctx.font = `600 ${height * 0.035}px sans-serif`
+    ctx.font = `${appearance.weight} ${height * appearance.size}px ${fonts[appearance.font] ?? fonts.system}`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     const words = caption.words?.length
       ? caption.words
-      : [{ text: caption.text, start: caption.start, end: caption.end }]
+      : caption.text.split(/\s+/u).map((text) => ({ text, start: caption.start, end: caption.end }))
     const lines: (typeof words)[] = [[]]
     let currentWidth = 0
     const gap = ctx.measureText(' ').width
     for (const word of words) {
       const wordWidth = ctx.measureText(word.text).width
-      if (currentWidth + wordWidth > width * 0.82 && lines[lines.length - 1].length) {
+      if (currentWidth + wordWidth > width * appearance.width && lines[lines.length - 1].length) {
         lines.push([])
         currentWidth = 0
       }
       lines[lines.length - 1].push(word)
       currentWidth += wordWidth + gap
     }
-    const lineHeight = height * 0.05
-    const top = height * 0.87 - (lines.length - 1) * lineHeight
-    ctx.fillStyle = 'rgba(0,0,0,0.8)'
+    const lineHeight = height * appearance.size * 1.4
+    const top = height * appearance.y - (lines.length - 1) * lineHeight
+    ctx.fillStyle = appearance.background
+    ctx.globalAlpha = appearance.backgroundOpacity
     ctx.fillRect(
-      width * 0.07,
+      width * (appearance.x - appearance.width / 2),
       top - lineHeight * 0.7,
-      width * 0.86,
+      width * appearance.width,
       lines.length * lineHeight + lineHeight * 0.4
     )
+    ctx.globalAlpha = 1
     lines.forEach((line, row) => {
       const total =
         line.reduce((sum, word) => sum + ctx.measureText(word.text).width, 0) +
         (line.length - 1) * gap
-      let x = (width - total) / 2
+      let x = width * appearance.x - total / 2
       for (const word of line) {
         const measured = ctx.measureText(word.text).width
         const active = seconds >= word.start && seconds < word.end
@@ -151,15 +175,12 @@ function installVideoRuntime(): void {
         if (studio.captionStyle === 'highlight' && active) {
           const pad = lineHeight * 0.2
           ctx.fillStyle = '#facc15'
-          ctx.beginPath()
-          ctx.roundRect(
+          ctx.fillRect(
             -(measured / 2) - pad,
             -(lineHeight * 0.42),
             measured + pad * 2,
-            lineHeight * 0.84,
-            lineHeight * 0.14
+            lineHeight * 0.84
           )
-          ctx.fill()
           ctx.fillStyle = '#111111'
           ctx.fillText(word.text, 0, 0, width * 0.8)
         } else if (studio.captionStyle === 'karaoke') {
@@ -167,7 +188,7 @@ function installVideoRuntime(): void {
           if (active) ctx.scale(1.12, 1.12)
           ctx.fillText(word.text, 0, 0, width * 0.8)
         } else {
-          ctx.fillStyle = '#ffffff'
+          ctx.fillStyle = appearance.color
           ctx.fillText(word.text, 0, 0, width * 0.8)
         }
         ctx.restore()
@@ -280,7 +301,9 @@ function installVideoRuntime(): void {
   const PLAYBACK_SEEK_TOLERANCE = 0.05
   async function seekMedia(media: HTMLMediaElement, seconds: number): Promise<void> {
     const target = clamp(
-      seconds,
+      // Chromium can round an exact video PTS down to the preceding sample.
+      // Seek just inside the requested frame while keeping composition time exact.
+      seconds + (media instanceof HTMLVideoElement && media.paused ? 0.0001 : 0),
       0,
       Number.isFinite(media.duration) ? Math.max(0, media.duration - 0.001) : seconds
     )
@@ -335,6 +358,30 @@ function installVideoRuntime(): void {
     trackingAt,
     seekMedia,
     mediaReady,
+    async setStudio(next: VideoStudioDocument, selection: VideoEditorSelection): Promise<void> {
+      await ready
+      studio = next
+      for (const key of Object.keys(parameters)) delete parameters[key]
+      for (const control of studio.controls) parameters[control.key] = control.value
+      editor.setSelection(selection)
+      const host = window as typeof window & {
+        cioVideoCanvas?: HTMLCanvasElement
+        __cioTransport?: {
+          time: number
+          playing: boolean
+          setDuration?: (seconds: number) => void
+          freezeAt?: (seconds: number) => Promise<unknown>
+        }
+      }
+      if (studio.edit) host.__cioTransport?.setDuration?.(studio.edit.duration)
+      if (studio.edit && host.cioVideoCanvas && !host.__cioTransport?.playing) {
+        if (host.__cioTransport?.freezeAt)
+          await host.__cioTransport.freezeAt(host.__cioTransport.time)
+        else await currentDraw?.(0)
+      }
+    },
+    takeGesture: editor.takeGesture,
+    stopEditing: editor.stopEditing,
     /**
      * Name the canvas the export should encode.
      *
@@ -350,7 +397,7 @@ function installVideoRuntime(): void {
       const initializing = (async () => {
         await ready
         await document.fonts.ready
-        const tracks = studio.audioTracks.map((track) => {
+        const tracks = (studio.edit ? [] : studio.audioTracks).map((track) => {
           const audio = new Audio(track.source)
           audio.dataset.cioTrackStart = String(track.start)
           audio.dataset.cioTrackTrim = String(track.trim)
@@ -364,8 +411,16 @@ function installVideoRuntime(): void {
         cioRenderFrame?: (seconds: number) => Promise<void>
         __cioTransport?: { playing: boolean }
       }
-      host.cioRenderFrame = async (seconds) => {
+      currentDraw = async (seconds) => {
         const tracks = await initializing
+        const canvas = (window as typeof window & { cioVideoCanvas?: HTMLCanvasElement })
+          .cioVideoCanvas
+        if (studio.edit && canvas) {
+          for (const { audio } of tracks) audio.pause()
+          if (studio.edit.background === 'composition') await draw(seconds)
+          await editor.render(studio, canvas, seconds)
+          return
+        }
         const frozen = new URLSearchParams(location.search).has('cio-capture')
         for (const { track, audio } of tracks) {
           const local = seconds - track.start
@@ -384,6 +439,7 @@ function installVideoRuntime(): void {
         }
         await draw(seconds)
       }
+      host.cioRenderFrame = currentDraw
       await initializing
       if (!host.__cioTransport)
         await host.cioRenderFrame(Number(new URLSearchParams(location.search).get('cio-time') ?? 0))
@@ -394,7 +450,7 @@ function installVideoRuntime(): void {
 
 /** Compiles to plain JS before being serialized; no package or network import in authored work. */
 export function videoRuntimeSource(): string {
-  return `${VIDEO_RUNTIME_MARKER}\n(${installVideoRuntime.toString()})();\n`
+  return `${VIDEO_RUNTIME_MARKER}\n(${installVideoRuntime.toString()})(${createVideoEditRenderer.toString()},${JSON.stringify(FONT_STACKS)},${JSON.stringify(VIDEO_CAPTION_APPEARANCE)});\n`
 }
 
 /**

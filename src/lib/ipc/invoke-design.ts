@@ -21,10 +21,39 @@ import type { VideoStudioDocument, VideoJob } from '../video/studio'
 import type { VideoProjectManifest } from '../video/project'
 import type { VideoPackagesState } from './video-packages'
 import type { VideoFrameThumbnail } from '../video/frame-grid'
+import type { VideoEditAsset, VideoEditorSelection } from '../video/edit'
 
 export const invokeDesignContract = {
+  'video:editorEnable': {} as Contract<
+    [projectId: string, threadId: string, directory: string],
+    { document: VideoStudioDocument; revision: string; manifest: VideoProjectManifest | null }
+  >,
+  'video:importAssets': {} as Contract<
+    [projectId: string, threadId: string, directory: string, paths: string[]],
+    VideoEditAsset[]
+  >,
+  'video:preview': {} as Contract<
+    [
+      projectId: string,
+      threadId: string,
+      directory: string,
+      document: VideoStudioDocument,
+      selection: VideoEditorSelection
+    ],
+    void
+  >,
+  'video:stopEditing': {} as Contract<
+    [projectId: string, threadId: string, directory: string],
+    void
+  >,
   'video:frameStrip': {} as Contract<
-    [projectId: string, threadId: string, directory: string, times: number[]],
+    [
+      projectId: string,
+      threadId: string,
+      directory: string,
+      times: number[],
+      document?: VideoStudioDocument
+    ],
     VideoFrameThumbnail[]
   >,
   /**

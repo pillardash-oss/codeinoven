@@ -1,3 +1,10 @@
+import {
+  validateVideoEdit,
+  validateCaptionAppearance,
+  type VideoEditDocument,
+  type VideoCaptionAppearance
+} from './edit'
+
 /** File-backed video edits and bounded job records shared by the tools and UI. */
 export type VideoValue = string | number | boolean
 export interface VideoControl {
@@ -13,6 +20,7 @@ export interface VideoCaption {
   start: number
   end: number
   words?: { text: string; start: number; end: number }[]
+  appearance?: VideoCaptionAppearance
 }
 export interface VideoAudioTrack {
   source: string
@@ -34,6 +42,8 @@ export interface VideoStudioDocument {
    */
   captionStyle: 'plain' | 'highlight' | 'karaoke' | 'none'
   audioTracks: VideoAudioTrack[]
+  edit?: VideoEditDocument
+  captionAppearance?: VideoCaptionAppearance
 }
 export interface VideoJob {
   id: string
@@ -115,6 +125,8 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
     if (start < previous) throw new Error('Captions must be ordered and must not overlap')
     previous = end
     const caption: VideoCaption = { text: videoText(entry.text, 'caption text', 2048), start, end }
+    if (entry.appearance !== undefined)
+      caption.appearance = validateCaptionAppearance(entry.appearance)
     if (entry.words !== undefined) {
       if (!Array.isArray(entry.words) || entry.words.length > 200)
         throw new Error('Too many caption words')
@@ -141,7 +153,17 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
       gain: videoNumber(track.gain ?? 1, 'track gain', 0, 1)
     }
   })
-  return { version: 1, controls, captions, captionStyle: style, audioTracks }
+  return {
+    version: 1,
+    controls,
+    captions,
+    captionStyle: style,
+    audioTracks,
+    ...(value.edit === undefined ? {} : { edit: validateVideoEdit(value.edit) }),
+    ...(value.captionAppearance === undefined
+      ? {}
+      : { captionAppearance: validateCaptionAppearance(value.captionAppearance) })
+  }
 }
 
 /** Retimes source captions after a cut. Supplied word timestamps remain exact. */

@@ -6367,6 +6367,11 @@ export class BrowserService {
       .then(() => {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
         return contents.loadURL(url).catch((error: unknown) => {
+          // Reloads and folder switches cancel the earlier loadURL promise.
+          // Its rejection belongs to the replaced navigation, not the page
+          // now loading, and must never cover that page with an error card.
+          if (isAbortedNavigation(error) || this.tabs.get(tabId) !== tab || contents.isDestroyed())
+            return
           // A media document commits and plays without ever reporting a finished
           // load, so Electron rejects `loadURL` with `ERR_FAILED` over a page that
           // is already on screen. The rejection is read against what the tab

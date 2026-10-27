@@ -150,7 +150,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   const fps = Number.isFinite(options.fps) && options.fps > 0 ? options.fps : 30
   const autoplay = options.autoplay === false ? 'false' : 'true'
   return `(() => {
-  const DURATION = ${JSON.stringify(duration)};
+  let DURATION = ${JSON.stringify(duration)};
   const FPS = ${JSON.stringify(fps)};
   const AUTOPLAY = ${autoplay};
   const MAX_TICK = ${JSON.stringify(TRANSPORT_MAX_TICK_SECONDS)};
@@ -410,10 +410,11 @@ export function compositionTransportScript(options: CompositionTransportOptions)
         const trackStart = Number(element.dataset && element.dataset.cioTrackStart || 0);
         const trackTrim = Number(element.dataset && element.dataset.cioTrackTrim || 0);
         const trackDuration = Number(element.dataset && element.dataset.cioTrackDuration || Infinity);
+        const trackSpeed = Math.max(0.25, Number(element.dataset && element.dataset.cioTrackSpeed || 1));
         const local = transport.time - trackStart;
         if (playing && local >= 0 && local < trackDuration) {
-          if (Math.abs(element.currentTime - (local + trackTrim)) > RESYNC) {
-            element.currentTime = local + trackTrim;
+          if (Math.abs(element.currentTime - (local * trackSpeed + trackTrim)) > RESYNC) {
+            element.currentTime = local * trackSpeed + trackTrim;
           }
           const started = element.play();
           if (started && typeof started.catch === 'function') started.catch(() => {});
@@ -532,6 +533,14 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     return state();
   }
 
+  function setDuration(seconds) {
+    const value = Number(seconds);
+    if (Number.isFinite(value) && value > 0 && value <= 3600) {
+      DURATION = value; transport.duration = value; transport.time = clampTime(transport.time);
+    }
+    return state();
+  }
+
   /** Freeze on one frame, for a capture: the frame is the answer, not playback. */
   async function freezeAt(seconds) {
     transport.playing = false;
@@ -600,6 +609,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   transport.seek = seek;
   transport.stop = stop;
   transport.setLoop = setLoop;
+  transport.setDuration = setDuration;
   transport.freezeAt = freezeAt;
   transport.settle = settle;
   transport.state = state;

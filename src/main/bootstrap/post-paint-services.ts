@@ -766,6 +766,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     speech: () => state.speechService,
     config: () => storage.getConfig(),
     onChanged: announceHistoryChanged,
+    resolveImportPath: async (path) => {
+      if (!state.appfileScopedPathResolver) throw new Error('File selection is not ready')
+      return state.appfileScopedPathResolver(path)
+    },
     captureHistory: async (projectId, threadId, directory, cause) => {
       await designService.historyState(projectId, threadId, directory, cause)
     }
