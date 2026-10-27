@@ -1169,6 +1169,7 @@
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
+              class="text-muted opacity-50 grayscale"
               name={currentModelProviderName}
               id={currentModelProviderId ?? undefined}
               size={13}
@@ -1180,6 +1181,7 @@
       {:else if currentModelProviderName}
         <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
           <VendorIcon
+            class="text-muted opacity-50 grayscale"
             name={currentModelProviderName}
             id={currentModelProviderId ?? undefined}
             size={13}
@@ -1206,7 +1208,12 @@
         {#if harnessIds.length > 0}
           <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
             {#each harnessIds.slice(0, 3) as harnessId (harnessId)}
-              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+              <AgentIcon
+                class="opacity-50 grayscale"
+                agentId={harnessId}
+                label={harnessName(harnessId)}
+                size={14}
+              />
             {/each}
             {#if harnessIds.length > 3}
               <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
@@ -1362,7 +1369,7 @@
         </span>
         {#if spineGlyphVisible}
           <span
-            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
+            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center opacity-60"
             style="color: {glyphMark.colour};"
             role="img"
             title={markLabel}
@@ -1388,7 +1395,7 @@
                  row that also draws a glyph says its state there, and a second copy
                  here would have the reader hear it twice. -->
             <span
-              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
               bind:clientHeight={spineRailHeight}
               role={spineGlyphVisible ? undefined : 'img'}
               title={spineGlyphVisible ? undefined : markLabel}
@@ -1416,7 +1423,7 @@
             </span>
           {:else}
             <span
-              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
               style="background: {spineRailPaint};"
               aria-hidden="true"
             ></span>
@@ -1469,6 +1476,7 @@
               title={thread.settings?.modelId ?? 'Model'}
             >
               <VendorIcon
+                class="text-muted opacity-50 grayscale"
                 name={currentModelProviderName}
                 id={currentModelProviderId ?? undefined}
                 size={13}
@@ -1493,6 +1501,7 @@
               title={thread.settings?.modelId ?? 'Model'}
             >
               <VendorIcon
+                class="text-muted opacity-50 grayscale"
                 name={currentModelProviderName}
                 id={currentModelProviderId ?? undefined}
                 size={13}
@@ -1515,7 +1524,12 @@
               class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
             >
               {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
-                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+                <AgentIcon
+                  class="opacity-50 grayscale"
+                  agentId={harnessId}
+                  label={harnessName(harnessId)}
+                  size={14}
+                />
               {/each}
               {#if visibleHarnessCount < harnessIds.length}
                 <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
@@ -1660,6 +1674,7 @@
             title={thread.settings?.modelId ?? 'Model'}
           >
             <VendorIcon
+              class="text-muted opacity-50 grayscale"
               name={currentModelProviderName}
               id={currentModelProviderId ?? undefined}
               size={13}
@@ -1689,7 +1704,12 @@
           {#if harnessIds.length > 0}
             <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
               {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
-                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+                <AgentIcon
+                  class="opacity-50 grayscale"
+                  agentId={harnessId}
+                  label={harnessName(harnessId)}
+                  size={14}
+                />
               {/each}
               {#if harnessIds.length > MAX_HARNESS_ICONS}
                 <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
