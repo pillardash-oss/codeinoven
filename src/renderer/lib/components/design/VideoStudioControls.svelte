@@ -376,10 +376,6 @@
         </div>
       {/each}
     </div>
-  {:else}
-    <p class="pt-1 text-[0.6875rem] text-dimmed">
-      This composition declares no editable controls.
-    </p>
   {/if}
 {/snippet}
 
@@ -410,7 +406,13 @@
         <legend class="sr-only">Composition editor</legend>
         {#if section === 'timeline'}
           {#if studio.captions.length === 0 && studio.audioTracks.length === 0}
-            {@render compositionValues()}
+            {#if studio.controls.length === 0}
+              <p class="pt-1 text-[0.6875rem] text-dimmed">
+                This composition declares nothing to edit yet.
+              </p>
+            {:else}
+              {@render compositionValues()}
+            {/if}
           {/if}
         {:else if section === 'captions'}
           {@render compositionValues()}
