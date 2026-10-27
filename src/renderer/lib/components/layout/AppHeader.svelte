@@ -288,7 +288,7 @@
       <button
         class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {settingsUiState.searchOpen
           ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+          : 'text-dimmed hover:bg-elevated hover:text-muted'}"
         aria-label="Search settings"
         title="Search settings"
         onclick={() => (settingsUiState.searchOpen = true)}
@@ -324,7 +324,7 @@
           ? 'bg-elevated text-foreground'
           : workspaceState.specStudioRetryable
             ? 'text-danger hover:bg-danger/10'
-            : 'text-muted hover:bg-elevated hover:text-foreground'} disabled:opacity-50"
+            : 'text-dimmed hover:bg-elevated hover:text-muted'} disabled:opacity-50"
         disabled={workspaceState.specStudioBusy}
         aria-label={workspaceState.specStudioBusy
           ? 'Formulating specification'
@@ -382,7 +382,7 @@
     <button
       class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {stickyNotesPanelActive
         ? 'bg-elevated text-primary'
-        : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        : 'text-dimmed hover:bg-elevated hover:text-muted'}"
       aria-label={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
       aria-pressed={stickyNotesPanelActive}
       title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
@@ -394,7 +394,7 @@
     <button
       class="relative flex h-8 w-8 items-center justify-center transition-colors duration-150 {notificationsPanelActive
         ? 'bg-elevated text-primary'
-        : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        : 'text-dimmed hover:bg-elevated hover:text-muted'}"
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
       aria-pressed={notificationsPanelActive}
       title="Open notifications"

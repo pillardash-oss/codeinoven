@@ -67,9 +67,7 @@
 <button
   class={[
     'relative flex h-8 min-w-8 items-center justify-center gap-1.5 px-2 transition-colors duration-150',
-    gitPanelActive
-      ? 'bg-elevated text-primary'
-      : 'text-muted hover:bg-elevated hover:text-foreground'
+    gitPanelActive ? 'bg-elevated text-primary' : 'text-dimmed hover:bg-elevated hover:text-muted'
   ]}
   aria-label={inWorktree ? `Open Git panel, worktree: ${worktreeBucket?.name}` : 'Open Git panel'}
   aria-pressed={gitPanelActive}

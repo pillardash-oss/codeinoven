@@ -136,7 +136,7 @@
 
   /** Keep idle tools muted and light up the current tool. */
   function toneClass(item: ContextDockItem): string {
-    return item.active ? 'text-primary' : 'text-muted hover:bg-elevated hover:text-foreground'
+    return item.active ? 'text-primary' : 'text-dimmed hover:bg-elevated hover:text-muted'
   }
 
   /** Text colour for one token of a `countText` row. */

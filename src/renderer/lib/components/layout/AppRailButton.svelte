@@ -67,7 +67,7 @@
         : tone === 'accent'
           ? 'text-accent'
           : 'text-primary'
-      : 'text-muted hover:bg-elevated hover:text-foreground'
+      : 'text-dimmed hover:bg-elevated hover:text-muted'
   )
 </script>
 
