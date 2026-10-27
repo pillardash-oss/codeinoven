@@ -72,6 +72,30 @@ function rulerStrip() {
   return host
 }
 
+/* The two menus V8's icon opens, as the panels the app already draws. */
+function menuPanel(kind) {
+  const items =
+    kind === 'project'
+      ? [
+          ['Open project', 'quiet'],
+          ['Pin to top', ''],
+          ['Project settings', ''],
+          ['Reveal in Finder', ''],
+          ['Copy project path', 'quiet']
+        ]
+      : [
+          ['Rename thread', ''],
+          ['Pin thread', ''],
+          ['Fork thread', ''],
+          ['Open notes', ''],
+          ['Copy thread ID', 'quiet'],
+          ['Delete thread', 'danger']
+        ]
+  return `<div class="menu-pop demo" role="menu">${items
+    .map(([label, tone]) => `<div class="item ${tone}" role="menuitem">${label}</div>`)
+    .join('')}</div>`
+}
+
 function platformLabel(platform) {
   return {
     mac: 'macOS',
@@ -122,6 +146,28 @@ function build() {
       section.append(framesForState(variant, { ...options, ...state.options }))
       statesHost.append(section)
     }
+  }
+
+  /* V8's own sections: the two menus the icon owns, and the rail the mark moved
+     to, drawn at the window height they actually occupy. */
+  const menus = document.querySelector('#menus')
+  if (menus) {
+    const host = document.createElement('div')
+    host.className = 'frames'
+    host.innerHTML = [
+      window.CIOHeader.block({ platform: 'mac', variant, options: { withRail: true } })
+    ].join('')
+    host.innerHTML += `<div class="frame-block"><div class="frame-label"><b>Left click</b><span class="note">the project's own dropdown</span></div><div class="frame os-mac variant-v8 menu-demo">${menuPanel('project')}</div></div>`
+    host.innerHTML += `<div class="frame-block"><div class="frame-label"><b>Right click</b><span class="note">the thread's actions, where the ellipsis used to be</span></div><div class="frame os-mac variant-v8 menu-demo">${menuPanel('thread')}</div></div>`
+    menus.replaceWith(host)
+  }
+
+  const rail = document.querySelector('#rail')
+  if (rail) {
+    const host = document.createElement('div')
+    host.className = 'frames'
+    host.innerHTML = window.CIOHeader.block({ platform: 'mac', variant, options: { withRail: true } })
+    rail.replaceWith(host)
   }
 
   const rulers = document.querySelector('#rulers')

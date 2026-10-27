@@ -26,6 +26,11 @@ const ICONS = {
   folder: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 4.5h4l1.5 2h6.5v7H2z"/></svg>`,
   terminal: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10"/><path d="m5 6.5 2 1.75L5 10M9 10h2.5"/></svg>`,
   spec: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 2.5h7l3 3v8H3z"/><path d="M9.5 2.5v3.5H13M5.5 8h5M5.5 10.5h5"/></svg>`,
+  download: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 2.5v7.5M5 7.5 8 10.5l3-3M3 13h10"/></svg>`,
+  info: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 7v4.5M8 4.75h.01"/></svg>`,
+  chat: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>`,
+  layers: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 2.5 14 6l-6 3.5L2 6l6-3.5ZM2 9.5 8 13l6-3.5"/></svg>`,
+  globe: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c2 3 2 8 0 11M8 2.5c-2 3-2 8 0 11"/></svg>`,
   minimize: `<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><path d="M2 5h6"/></svg>`,
   maximize: `<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><rect x="2.5" y="2.5" width="5" height="5"/></svg>`,
   close: `<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5"/></svg>`
@@ -93,6 +98,19 @@ function threadMarkup(options = {}) {
     options.working === false
       ? ''
       : `<span class="status"><svg viewBox="0 0 16 16" width="8" height="8" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8" cy="8" r="5"/></svg>Working</span>`
+
+  if (options.stacked) {
+    /* The project icon is the menu, so the title row carries no ellipsis, and the
+       state moves under the title as a small badge of its own. */
+    return `<div class="thread stacked">${
+      options.project === false
+        ? ''
+        : `<button type="button" class="pico menu-owner" id="proj-icon" tabindex="-1" aria-haspopup="menu">${ICONS.folder}</button>`
+    }<div class="thread-text"><h1>${
+      options.title ?? 'Repair header collision under caption overlay'
+    }</h1><span class="under-status"><i class="dot"></i>Working</span></div></div>`
+  }
+
   return `<div class="thread">${
     options.project === false ? '' : `<span class="pico">${ICONS.folder}</span>`
   }<h1>${options.title ?? 'Repair header collision under caption overlay'}</h1><button type="button" class="menu" tabindex="-1">${ICONS.dots}</button>${status}</div>`
@@ -115,6 +133,11 @@ function gitChipMarkup() {
    column of fixed width. One separator marks where the column ends; nothing
    inside it is divided, because it reads as one block of chrome. */
 function spineMarkup(platform, options) {
+  /* V8 drops the identity from the bar entirely: it lives on the rail, so the
+     spine starts with navigation. */
+  if (options.noBrand) {
+    return [navigationMarkup(), `<span class="spine-actions">${variantActions(options)}</span>`].join('')
+  }
   /* Three boxes, in order: the identity (natural width, so the column fits the
      name the platform actually shows), the navigation pair, and the view's
      actions in a slot that always reserves room for three. That reservation is
@@ -144,6 +167,8 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   const left =
     variant === 'v7'
       ? `<div class="zone left spine">${spineMarkup(platform, options)}</div>`
+      : variant === 'v8'
+        ? `<div class="zone left spine">${spineMarkup(platform, { ...options, noBrand: true })}</div>`
       : `<div class="zone left">${brandMarkup(platform, options)}${navigationMarkup()}${
           variant === 'v6' ? '' : viewActionsMarkup()
         }</div>`
@@ -157,8 +182,11 @@ function frame({ platform, variant, width = 'full', options = {} }) {
     }</span><kbd>${platform === 'mac' ? '⌘K' : 'Ctrl K'}</kbd><span class="cmd-chip">${ICONS.spec}Spec</span><span class="cmd-chip">${ICONS.branch}3</span></div></div>`
   } else {
     center =
-      variant === 'v7'
-        ? `<div class="zone center"><span class="spine-rule"></span>${threadMarkup(options)}</div>`
+      variant === 'v7' || variant === 'v8'
+        ? `<div class="zone center"><span class="spine-rule"></span>${threadMarkup({
+            ...options,
+            stacked: variant === 'v8'
+          })}</div>`
         : `<div class="zone center">${threadMarkup(options)}</div>`
   }
 
@@ -195,11 +223,36 @@ function frame({ platform, variant, width = 'full', options = {} }) {
   return `<div class="${classes.join(' ')}">${inner}</div>`
 }
 
+/* V8's second half: the app mark leaves the bar and lands in the left rail's
+   utility group, beside about and downloads. Drawn as the rail the window
+   actually has, 40px wide, with the active view and the utility stack. */
+function railMarkup() {
+  /* The rail as the window has it: 40px wide, the view switcher stacked at the
+     top, and the utility group pinned to the foot. The mark joins that group,
+     last, where the app's own things live. */
+  const views = ['chat', 'layers', 'spec', 'globe', 'terminal']
+  const items = views
+    .map(
+      (icon, index) =>
+        `<span class="rail-btn${index === 2 ? ' on' : ''}" title="View">${ICONS[icon]}</span>`
+    )
+    .join('')
+  return `<div class="rail"><div class="rail-group">${items}</div><div class="rail-group rail-utility"><span class="rail-btn" title="Downloads">${ICONS.download}</span><span class="rail-btn" title="About">${ICONS.info}</span><span class="rail-btn rail-mark" title="CodeInOven" aria-label="CodeInOven">${ICONS.mark}</span></div></div>`
+}
+
+function withRail(inner) {
+  return `<div class="window-with-rail">${railMarkup()}<div class="window-body">${inner}<div class="window-fill"><span class="fill-label">conversation</span></div></div></div>`
+}
+
 function block({ platform, variant, width = 'full', options = {}, label = '' }) {
   const heading = label || `${LABELS[platform]} · ${NOTES[platform]}`
   return `<div class="frame-block"><div class="frame-label"><b>${LABELS[platform]}</b><span class="note">${
     notesFor(platform)
-  }${width === 'narrow' ? ' · narrow window' : ''}</span></div>${frame({ platform, variant, width, options })}</div>`
+  }${width === 'narrow' ? ' · narrow window' : ''}</span></div>${
+    options.withRail && variant === 'v8'
+      ? withRail(frame({ platform, variant, width, options }))
+      : frame({ platform, variant, width, options })
+  }</div>`
 }
 
 function notesFor(platform) {

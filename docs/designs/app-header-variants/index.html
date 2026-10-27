@@ -36,7 +36,7 @@
 
       <section class="intro">
         <div>
-          <div class="eyebrow">Seven variants · one bar</div>
+          <div class="eyebrow">Eight variants · one bar</div>
           <h1>The header has to survive four different windows.</h1>
           <p>
             macOS draws three lights inside the left edge. Windows overlays three caption buttons
@@ -47,7 +47,7 @@
         <aside class="intro-aside">
           <strong>What the study fixes</strong>
           The OS zones never move, so the design job is deciding what of ours sits next to them.
-          Seven answers below, each drawn on macOS, Windows and a narrow window. The detail screens
+          Eight answers below, each drawn on macOS, Windows and a narrow window. The detail screens
           add both Linux directions.
         </aside>
       </section>
@@ -61,6 +61,7 @@
         <a class="pill-link" href="./v5-two-tiers.html">V5 tiers</a>
         <a class="pill-link" href="./v6-priority-ladder.html">V6 ladder</a>
         <a class="pill-link" href="./v7-fixed-spine.html">V7 spine</a>
+        <a class="pill-link" href="./v8-icon-as-menu.html">V8 icon menu</a>
         <a class="pill-link" href="./recommendation.html">Recommendation</a>
       </nav>
 
@@ -179,6 +180,23 @@
         >
       </section>
 
+      <section class="section">
+        <div class="section-head">
+          <h2>V8 · Icon as menu</h2>
+          <span class="meta">one control, two menus, no identity</span>
+        </div>
+        <p class="lede">
+          The project icon left-clicks to the project dropdown and right-clicks to the thread's
+          actions, so the ellipsis disappears. The working state drops under the title as a small
+          badge. The mark and the wordmark leave the header for the rail's utility group, so the bar
+          opens with navigation on every platform.
+        </p>
+        <div class="frames" id="frames-v8"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v8-icon-as-menu.html"
+          >Both menus, and the rail</a
+        >
+      </section>
+
       <p class="footnote">
         Study files: <span class="inline-code">docs/designs/app-header-variants/</span>. One frame
         renderer, six variants, four platform geometries. Open a variant screen for the Linux pair
@@ -193,7 +211,7 @@
         { platform: 'win' },
         { platform: 'mac', width: 'narrow' }
       ]
-      const variants = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7']
+      const variants = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8']
       for (const variant of variants) {
         window.CIOHeader.mount(`#frames-${variant}`, variant, overview)
       }

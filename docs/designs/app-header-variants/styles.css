@@ -1174,7 +1174,7 @@ h1 {
    panel inside a frame rather than as the window's title bar. The OS zones
    themselves are the only reservation, and they are exact. */
 
-.variant-v7 {
+:is(.variant-v7, .variant-v8) {
   /* The width of the view's action slot, not of the whole column: three 28px
      boxes and their 2px gaps. A view that registers one action still reserves
      the room for three, which is what holds the column's width, and nothing in
@@ -1186,7 +1186,7 @@ h1 {
    actually shows, the navigation pair, and the action slot. Sizing the whole
    column to the longest name is what left 61px of dead space before the rule on
    macOS, where the identity is "cio". */
-.variant-v7 .zone.left.spine {
+:is(.variant-v7, .variant-v8) .zone.left.spine {
   flex: 0 0 auto;
   width: auto;
   justify-content: flex-start;
@@ -1194,12 +1194,12 @@ h1 {
   overflow: visible;
 }
 
-.variant-v7 .zone.left.spine .brand {
+:is(.variant-v7, .variant-v8) .zone.left.spine .brand {
   flex: 0 0 auto;
 }
 
 /* Reserved, not fitted: this is the only fixed width in the spine. */
-.variant-v7 .spine-actions {
+:is(.variant-v7, .variant-v8) .spine-actions {
   display: flex;
   align-items: center;
   gap: 0.125rem;
@@ -1209,7 +1209,7 @@ h1 {
 
 /* Only the spine's own trailing separator: one rule that says where app chrome
    ends and the open thread begins. */
-.variant-v7 .spine-rule {
+:is(.variant-v7, .variant-v8) .spine-rule {
   width: 1px;
   height: 1.25rem;
   background: var(--color-border);
@@ -1218,7 +1218,7 @@ h1 {
 }
 
 /* Everything after the spine is left-aligned and takes whatever is left. */
-.variant-v7 .zone.center {
+:is(.variant-v7, .variant-v8) .zone.center {
   flex: 1 1 auto;
   justify-content: flex-start;
   max-width: none;
@@ -1227,14 +1227,14 @@ h1 {
   padding-left: 0;
 }
 
-.variant-v7 .zone.center .thread {
+:is(.variant-v7, .variant-v8) .zone.center .thread {
   flex: 0 1 auto;
   max-width: 100%;
 }
 
 /* The title is the bar's elastic part: it takes the room the spine leaves and
    truncates there, so a long name never reaches the trailing controls. */
-.variant-v7 .thread h1 {
+:is(.variant-v7, .variant-v8) .thread h1 {
   max-width: none;
   flex: 1 1 auto;
   min-width: 0;
@@ -1248,7 +1248,7 @@ h1 {
 /* The trailing pair never shrinks and never floats: it ends at the window edge
    on every platform where the captions are not there, and at the caption zone
    where they are. */
-.variant-v7 .zone.right {
+:is(.variant-v7, .variant-v8) .zone.right {
   flex: 0 0 auto;
   padding-right: 0;
 }
@@ -1256,17 +1256,17 @@ h1 {
 /* The trailing controls are their own group, so the last icon's own box ends at
    the window edge. This is the one rule the other variants break by leaving a
    4px gutter, and the checker reports it as slack when it does. */
-.variant-v7 .zone.right .slot {
+:is(.variant-v7, .variant-v8) .zone.right .slot {
   padding-right: 0;
 }
 
 /* Inside the spine the wordmark is the only thing that can give when the bar is
    narrow, so "CodeInOven" truncates rather than the column or the title. */
-.variant-v7 .zone.left.spine .brand {
+:is(.variant-v7, .variant-v8) .zone.left.spine .brand {
   min-width: 0;
 }
 
-.variant-v7 .zone.left.spine .brand span {
+:is(.variant-v7, .variant-v8) .zone.left.spine .brand span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1275,9 +1275,9 @@ h1 {
    navigation pair and the action slot. It is still stable at that width, which
    is the only promise the column makes. */
 @container (max-width: 44rem) {
-  .variant-v7 .zone.left.spine .brand span,
-  .variant-v7 .status,
-  .variant-v7 .thread .pico {
+  :is(.variant-v7, .variant-v8) .zone.left.spine .brand span,
+  :is(.variant-v7, .variant-v8) .status,
+  :is(.variant-v7, .variant-v8) .thread .pico {
     display: none;
   }
 }
@@ -1286,17 +1286,17 @@ h1 {
    cannot query itself, so a rule that styled the frame from inside its own
    container query would never match. */
 @container (max-width: 42rem) {
-  .variant-v7 .zone.left.spine {
+  :is(.variant-v7, .variant-v8) .zone.left.spine {
     /* Two boxes and one gap: the slot narrows with the bar instead of overflowing
        it, and the third action is reachable from the thread menu. */
     --spine-actions: 3.625rem;
   }
 
-  .variant-v7 .spine-actions .ibtn:last-child {
+  :is(.variant-v7, .variant-v8) .spine-actions .ibtn:last-child {
     display: none;
   }
 
-  .variant-v7 .zone.center .thread .menu {
+  :is(.variant-v7, .variant-v8) .zone.center .thread .menu {
     display: none;
   }
 }
@@ -1313,4 +1313,243 @@ h1 {
 .check-report .section-head {
   border-top: 0;
   padding-top: 0;
+}
+
+/* ─── V8 · Icon as menu ────────────────────────────────────────────────────
+   The thread's own controls collapse into the two things it already shows:
+
+     left click on the project icon   → that project's dropdown
+     right click on the project icon  → the thread's actions (rename, fork, …)
+     the ellipsis                     → gone
+     the working state                → a small badge under the title
+
+   With the ellipsis gone the bar holds one fewer control, and the title block
+   owns its whole row: the name on top, the state underneath, so neither pushes
+   the other sideways.
+
+   The identity leaves too. The mark and the wordmark move to the left rail,
+   where the app's own utility group already lives, so the header starts with
+   navigation and the spine gets 108px (the wordmark's corner) back. */
+
+.variant-v8 .thread.stacked {
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  overflow: visible;
+}
+
+/* The stacked title block is taller than one line, so the bar gives it the room
+   the two rows need without moving the controls beside it. */
+.variant-v8 .zone.center {
+  align-items: center;
+}
+
+/* The icon is a button, and a button that opens two menus earns a hover plate
+   and a corner cue: the plate says it is pressable, the corner says a second
+   menu exists. */
+.variant-v8 .pico.menu-owner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-muted);
+  display: grid;
+  place-items: center;
+  position: relative;
+  cursor: default;
+}
+
+.variant-v8 .pico.menu-owner:hover {
+  border-color: var(--color-border);
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.variant-v8 .pico.menu-owner svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* The corner cue: three dots, small enough to read as a texture on the icon
+   rather than as a second button next to it. */
+.variant-v8 .pico.menu-owner::after {
+  content: '';
+  position: absolute;
+  right: 0.0625rem;
+  bottom: 0.0625rem;
+  width: 0.1875rem;
+  height: 0.1875rem;
+  background: currentColor;
+  opacity: 0.45;
+  box-shadow: 0.1875rem 0 0 currentColor;
+}
+
+.variant-v8 .thread-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  gap: 0.0625rem;
+}
+
+/* The title is one line and the badge is one line under it: two 11px rows plus
+   a hair of leading still fit the 48px bar inside its own padding. */
+.variant-v8 .thread-text h1 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  max-width: none;
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.variant-v8 .under-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-info);
+  line-height: 1.2;
+}
+
+.variant-v8 .under-status .dot {
+  width: 0.25rem;
+  height: 0.25rem;
+  background: currentColor;
+  border-radius: 50%;
+  display: block;
+  flex: none;
+}
+
+.variant-v8 .under-status.idle {
+  color: var(--color-dimmed);
+}
+
+.variant-v8 .under-status.error {
+  color: var(--color-danger);
+}
+
+/* ─── The rail, where the mark now lives ──────────────────────────────────
+   Drawn at a real window's proportions: the rail is 40px and runs the height of
+   the window, the bar is the window's title bar, and a slice of conversation
+   sits under it, because the whole point is that the mark is now one of the
+   app's utilities rather than part of the chrome above the content. */
+
+.window-with-rail {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  height: 13rem;
+}
+
+.window-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.window-with-rail .frame {
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  flex: 0 0 3rem;
+}
+
+.window-fill {
+  flex: 1 1 auto;
+  background: var(--color-app);
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+
+.fill-label {
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-dimmed);
+}
+
+.rail {
+  position: relative;
+  flex: 0 0 2.5rem;
+  width: 2.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.375rem 0;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  gap: 0.125rem;
+}
+
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+/* The utility group is pinned to the rail's foot, which is where the app keeps
+   downloads, about and the update state. */
+.rail-utility {
+  margin-top: auto;
+}
+
+.rail-btn {
+  width: 1.75rem;
+  height: 1.5rem;
+  display: grid;
+  place-items: center;
+  color: var(--color-dimmed);
+}
+
+.rail-btn svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.rail-btn.on {
+  color: var(--color-foreground);
+  background: var(--color-elevated);
+}
+
+/* The mark is the one full-colour thing in the rail. It names the app rather
+   than doing anything, so it carries no hover plate and no pressed state. */
+.rail-mark {
+  color: var(--color-foreground);
+  height: 1.75rem;
+  margin-top: 0.125rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.rail-mark svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.frame.narrow.variant-v8 .under-status {
+  display: none;
+}
+
+/* The two menus, shown open beside the bar they open from rather than floated
+   over it: the study is arguing about the interaction, so both menus are drawn
+   at once instead of hidden behind a click. */
+.variant-v8.menu-demo {
+  padding: 0.5rem 0.75rem;
+  align-items: flex-start;
+  height: auto;
+  min-height: 4rem;
+  overflow: visible;
+}
+
+.menu-pop.demo {
+  position: static;
+  box-shadow: none;
+  width: 13rem;
 }

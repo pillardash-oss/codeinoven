@@ -170,7 +170,9 @@ function titleDrift(frames) {
     const width =
       frame.classList.contains('narrow') || frame.closest('.stack.narrow') ? 'narrow' : 'full'
     const key = `${variant} ${platform} ${width} ${gutter}`
-    const x = Math.round(rectOf(title).left)
+    /* Relative to the frame, not the page: a bar drawn inside the rail demo
+       starts 40px further right, and that is the demo's position, not drift. */
+    const x = Math.round(rectOf(title).left - rectOf(frame).left)
     const entry = groups.get(key) ?? { values: new Set(), samples: [] }
     entry.values.add(x)
     entry.samples.push(x)
@@ -180,6 +182,9 @@ function titleDrift(frames) {
   for (const [key, entry] of groups) {
     if (entry.values.size <= 1) continue
     const spread = Math.max(...entry.samples) - Math.min(...entry.samples)
+    /* Sub-pixel layout rounding lands on a neighbouring pixel now and then; a
+       movement the eye can see does not. */
+    if (spread < 2) continue
     findings.push(`${key}: title shifts ${spread}px between states (${[...entry.values].join(', ')})`)
   }
   return findings
@@ -226,7 +231,11 @@ function run() {
   report.className = 'section'
   report.id = 'layout-checks'
 
-  const frames = [...document.querySelectorAll('.frame')]
+  /* Demo panels (the two open menus) are not bars: they are drawn to be read,
+     not measured, so they are excluded from every geometric check. */
+  const frames = [...document.querySelectorAll('.frame')].filter(
+    (frame) => !frame.classList.contains('menu-demo')
+  )
   const lines = []
   let failures = 0
 

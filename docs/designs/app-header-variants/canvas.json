@@ -1,8 +1,9 @@
 {
   "columns": 2,
   "frames": [
-    { "entry": "./index.html", "title": "Overview", "caption": "Seven variants, macOS / Windows / narrow" },
-    { "entry": "./v7-fixed-spine.html", "title": "V7 Fixed spine", "caption": "Fixed left column, left-aligned title, two gutter models" },
+    { "entry": "./index.html", "title": "Overview", "caption": "Eight variants, macOS / Windows / narrow" },
+    { "entry": "./v8-icon-as-menu.html", "title": "V8 Icon as menu", "caption": "Project icon opens both menus, no identity in the bar" },
+    { "entry": "./v7-fixed-spine.html", "title": "V7 Fixed spine", "caption": "Fixed left column, left-aligned title" },
     { "entry": "./recommendation.html", "title": "Recommendation", "caption": "V2 split centre with V1's seam" },
     { "entry": "./v1-reserved-edge.html", "title": "V1 Reserved edge" },
     { "entry": "./v2-split-center.html", "title": "V2 Split centre" },
