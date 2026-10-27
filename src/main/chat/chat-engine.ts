@@ -154,6 +154,7 @@ import {
 } from './memory/memory-decision'
 import { estimateTypesafeTokens, typesafeCostUsd } from '../../lib/typesafe/policy'
 import type { TypesafeDecisionService } from '../typesafe/typesafe-decision-service'
+import type { TypesafeDecisionStatus } from '../../lib/types/typesafe'
 import { isGreetingOnly } from './greeting-filter'
 import type { StorageEngine } from '../storage/storage-engine'
 import type {
@@ -1675,6 +1676,15 @@ export class ChatEngine {
    * in each caller.
    */
   private typesafeDecision: TypesafeDecisionService | null = null
+
+  /**
+   * Fall-through outcomes already reported, so a standing one logs once.
+   *
+   * An unconfigured capability falls through on every single grade, and the log
+   * line that describes it is identical every time. Recording the outcome once
+   * is what keeps a configuration fact out of the per-turn noise.
+   */
+  private readonly reportedTypesafeFallthroughs = new Set<string>()
 
   /** Last reading of whether the capability is currently in a state that answers. */
   private typesafeAnswerable: { value: boolean; checkedAt: number } | null = null
@@ -30176,12 +30186,7 @@ export class ChatEngine {
       thresholds: { noul: 0, confidence: 0 }
     })
     if (decision.status !== 'answered') {
-      Logger.dev('Ranking grading fell through from TypeSafe:', {
-        harnessId: candidate.harnessId,
-        modelId: candidate.modelId,
-        status: decision.status,
-        detail: decision.detail
-      })
+      this.reportTypesafeFallthrough(decision.status, decision.detail, candidate)
       return null
     }
     const grade = readTurnGrade(decision.answers)
@@ -30206,6 +30211,31 @@ export class ChatEngine {
       judgeModelId: decision.model,
       viaAuxiliary: false
     }
+  }
+
+  /**
+   * Report a TypeSafe fall-through once per distinct outcome.
+   *
+   * The first occurrence carries the information; every later one only proves
+   * the first was not a blip, and a durable log that repeats a standing
+   * `not-configured` on each graded turn is noise an operator learns to skip.
+   * It is logged at `info` because the fall-through is a supported behaviour
+   * (the harness lanes below take over), not a failure.
+   */
+  private reportTypesafeFallthrough(
+    status: Exclude<TypesafeDecisionStatus, 'answered'>,
+    detail: string | undefined,
+    candidate: RankingGradeCandidate
+  ): void {
+    const key = `${status}:${detail ?? ''}`
+    if (this.reportedTypesafeFallthroughs.has(key)) return
+    this.reportedTypesafeFallthroughs.add(key)
+    Logger.info('Ranking grading falls through from TypeSafe', {
+      harnessId: candidate.harnessId,
+      modelId: candidate.modelId,
+      status,
+      detail
+    })
   }
 
   /**

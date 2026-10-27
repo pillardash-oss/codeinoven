@@ -26,7 +26,7 @@ import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar
 import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
-import { startupTelemetry } from './system/startup-telemetry'
+import { startupTelemetry, type StartupStep } from './system/startup-telemetry'
 import { startupBudgetViolation } from './system/startup-budget'
 import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
@@ -236,6 +236,22 @@ function releaseFeaturesAfterBootFailure(): void {
 }
 
 /**
+ * Time one concurrent warm-up task into the boot telemetry.
+ *
+ * Storage, the database and the platform probe run together, so the phase delta
+ * covering them is one number for three workloads. Naming each task is what
+ * turns "startup took six seconds" into "the database open took six seconds".
+ */
+async function trackStartupStep<T>(step: StartupStep, work: Promise<T>): Promise<T> {
+  const finish = startupTelemetry.beginStep(step)
+  try {
+    return await work
+  } finally {
+    finish()
+  }
+}
+
+/**
  * A packaged smoke pass proves more than script execution: the document must
  * load, Electron must report a rendered visual frame, and application
  * hydration must complete. The guard makes concurrent milestone callbacks
@@ -273,13 +289,25 @@ async function completeStartupIfReady(): Promise<void> {
     // smoke. It is recorded, never fatal: a slow machine, a cold cache and a
     // concurrently-running agent build all legitimately boot slowly, and the
     // app must still open. The hard failure lives in the packaged smoke gate.
-    const violation = startupBudgetViolation(startupTelemetry.snapshot())
+    const startupSnapshot = startupTelemetry.snapshot()
+    const violation = startupBudgetViolation(startupSnapshot)
     if (violation) {
       Logger.error('Startup exceeded the first-paint budget', {
         phase: violation.phase,
         atMs: Math.round(violation.atMs),
         overByMs: Math.round(violation.overByMs),
-        budgetMs: violation.budgetMs
+        budgetMs: violation.budgetMs,
+        // The error a slow machine writes has to name the work that owned the
+        // time. Without this line the next reader re-derives the culprit by
+        // hand from a phase delta that several concurrent tasks share.
+        slowestSteps: [...startupSnapshot.steps]
+          .sort((left, right) => right.durationMs - left.durationMs)
+          .slice(0, 3)
+          .map((record) => ({
+            step: record.step,
+            startedAtMs: Math.round(record.startedAtMs),
+            durationMs: Math.round(record.durationMs)
+          }))
       })
     }
   }
@@ -915,11 +943,11 @@ void app
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([
       storage.initialize(),
-      database.init(),
+      trackStartupStep('database:init', database.init()),
       // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
       // here guarantees the flag is ready before `createWindow()` runs without
       // serializing behind the heavier startup work.
-      warmTrafficLightDetection()
+      trackStartupStep('trafficLight:warm', warmTrafficLightDetection())
     ])
     if (state.startupRecovery) return
     // Analytics never delays window creation and never runs in a probe.

@@ -21,6 +21,7 @@ import {
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
 import { Logger } from '../system/logger'
+import { startupTelemetry, type StartupStep } from '../system/startup-telemetry'
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
@@ -209,42 +210,66 @@ export class StorageEngine {
 
   /** Initialize the directory structure */
   async initialize(): Promise<void> {
-    await ensureDir(this.root)
-    await ensureDir(this.resolve('projects'))
-    await ensureDir(this.resolve('projects-gh'))
-    await ensureDir(this.resolve('workflows'))
-    await ensureDir(this.resolve('blobs'))
-    await ensureDir(this.resolve('logs'))
-    await ensureDir(this.resolve(CHATS_CWD_DIR))
-    await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
-    await ensureDir(this.resolve('window-state'))
-    await ensureDir(this.resolve('scheduler'))
-    await ensureDir(this.resolve('memory'))
+    await this.timedStep('storage:directories', async () => {
+      await ensureDir(this.root)
+      await ensureDir(this.resolve('projects'))
+      await ensureDir(this.resolve('projects-gh'))
+      await ensureDir(this.resolve('workflows'))
+      await ensureDir(this.resolve('blobs'))
+      await ensureDir(this.resolve('logs'))
+      await ensureDir(this.resolve(CHATS_CWD_DIR))
+      await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
+      await ensureDir(this.resolve('window-state'))
+      await ensureDir(this.resolve('scheduler'))
+      await ensureDir(this.resolve('memory'))
+    })
 
-    await this.migrateLegacyBehaviorPrompt()
-    await this.migrateLegacyLayout()
+    await this.timedStep('storage:migrations', async () => {
+      await this.migrateLegacyBehaviorPrompt()
+      await this.migrateLegacyLayout()
+    })
 
-    // Create default config if missing
-    const configPath = this.resolve('config.json')
-    const existing = await readJson<AppConfig>(configPath)
-    if (!existing) {
-      await writeJson(configPath, DEFAULT_CONFIG)
-    }
-    await writeJson(
-      this.resolve(BUNDLED_PI_FILE_POLICY),
-      bundledPiFilePolicy(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY)))
-    )
+    await this.timedStep('storage:config', async () => {
+      // Create default config if missing
+      const configPath = this.resolve('config.json')
+      const existing = await readJson<AppConfig>(configPath)
+      if (!existing) {
+        await writeJson(configPath, DEFAULT_CONFIG)
+      }
+      await writeJson(
+        this.resolve(BUNDLED_PI_FILE_POLICY),
+        bundledPiFilePolicy(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY)))
+      )
 
-    // Create default providers file if missing
-    const providersPath = this.resolve('providers.json')
-    const providers = await readJson(providersPath)
-    if (!providers) {
-      await writeJson(providersPath, { providers: [] })
-    }
+      // Create default providers file if missing
+      const providersPath = this.resolve('providers.json')
+      const providers = await readJson(providersPath)
+      if (!providers) {
+        await writeJson(providersPath, { providers: [] })
+      }
 
-    // The default pool is user-visible and can be copied into the custom file by Settings.
-    if ((await this.readRaw(WORKER_NAMES_FILE)) === null) {
-      await writeJson(this.resolve(WORKER_NAMES_FILE), DEFAULT_WORKER_NAMES)
+      // The default pool is user-visible and can be copied into the custom file by Settings.
+      if ((await this.readRaw(WORKER_NAMES_FILE)) === null) {
+        await writeJson(this.resolve(WORKER_NAMES_FILE), DEFAULT_WORKER_NAMES)
+      }
+    })
+  }
+
+  /**
+   * Time one startup step into the boot telemetry.
+   *
+   * A warm-up that takes seconds on one machine and milliseconds on another
+   * cannot be fixed from the log alone: the phase delta in `main.jsonl` says how
+   * long the whole block took and nothing about which group inside it owned the
+   * time. The step is recorded even when the work throws, because a failure that
+   * lands after a slow directory scan is diagnosed by both numbers.
+   */
+  private async timedStep<T>(step: StartupStep, work: () => Promise<T>): Promise<T> {
+    const finish = startupTelemetry.beginStep(step)
+    try {
+      return await work()
+    } finally {
+      finish()
     }
   }
 

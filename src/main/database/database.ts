@@ -84,7 +84,10 @@ export class Database {
   private contextCostRepair: Promise<void> | null = null
 
   constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
-    this.path = path ?? getConfigRoot() + '/codeinoven.db'
+    // `join` rather than string concatenation: the config root is a platform
+    // path, and a hard-coded `/` here printed `C:\Users\...\codeinoven/codeinoven.db`
+    // in every log line and diagnostics export on Windows.
+    this.path = path ?? join(getConfigRoot(), 'codeinoven.db')
     this.workerFactory = workerFactory
   }
 

@@ -163,10 +163,19 @@ export class ModelPricingService {
   start(): void {
     if (this.started) return
     this.started = true
-    void this.ensureLoaded().catch((error) => Logger.dev('Pricing load/refresh failed:', error))
+    void this.ensureLoaded().catch((error: unknown) =>
+      Logger.error('Model pricing load failed', {
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    )
     if (!this.timer) {
       this.timer = setInterval(() => {
-        void this.refreshIfStale().catch((error) => Logger.dev('Pricing refresh failed:', error))
+        void this.refreshIfStale().catch((error: unknown) =>
+          Logger.error('Model pricing refresh failed', {
+            reason: error instanceof Error ? error.message : String(error),
+            cacheAgeMs: this.lastFetchedAt ? Date.now() - this.lastFetchedAt : null
+          })
+        )
       }, TTL_MS)
       this.timer.unref?.()
     }
@@ -215,7 +224,14 @@ export class ModelPricingService {
       })
       .catch((error: unknown) => {
         this.loaded = true
-        Logger.dev('Model metadata load/refresh failed:', error)
+        // A failed metadata fetch is an incident, not a diagnostic: prices and
+        // context limits then come from a cache of unknown age, which changes
+        // what the user sees (cost estimates, context budgets) and has to be
+        // visible in a shipped build. Dev-level would hide it entirely.
+        Logger.error('Model metadata load/refresh failed', {
+          reason: error instanceof Error ? error.message : String(error),
+          cacheAgeMs: this.lastFetchedAt ? Date.now() - this.lastFetchedAt : null
+        })
       })
       .finally(() => {
         this.loading = null
