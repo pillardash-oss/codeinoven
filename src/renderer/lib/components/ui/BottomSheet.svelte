@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import type { Snippet } from 'svelte'
   import Modal from './Modal.svelte'
 
@@ -32,7 +32,7 @@
       title="Close"
       onclick={onClose}
     >
-      <CioClose size={16} />
+      <CioMinimize size={16} />
     </button>
   </div>
   <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">{@render children()}</div>

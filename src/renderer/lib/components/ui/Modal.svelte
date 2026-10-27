@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
@@ -127,7 +127,7 @@
     onCloseShortcut?: () => void
     children: Snippet
     /**
-     * Actions that sit in the canonical header beside the close control.
+     * Actions that sit in the canonical header beside the dismiss control.
      *
      * A surface whose one or two actions belong to the panel itself (a viewer
      * that toggles a mode) puts them here rather than in a footer bar, which
@@ -148,7 +148,7 @@
      *  only one `max-w-*` is ever on the panel. Ignored by `fullscreen`, which
      *  is never width-capped. */
     panelWidth?: string
-    /** Draw the canonical header (title and close) and footer slot. Off for a
+    /** Draw the canonical header (title and dismiss) and footer slot. Off for a
      *  surface that owns its own layout, such as a full screen editor or a
      *  palette. */
     chrome?: boolean
@@ -515,7 +515,7 @@
                      have its header drawn over a drag strip. Without that a
                      header action such as the artifact viewer's inspect toggle
                      was painted above the drag strip yet dead to the mouse, while
-                     the close control (which happened to sit over a hole in the
+                     the dismiss control (which happened to sit over a hole in the
                      app header's own controls) still worked. -->
                 <div
                   class={[
@@ -540,12 +540,20 @@
                     {#if headerActions}
                       {@render headerActions()}
                     {/if}
+                    <!-- The dismiss control wears the collapse mark, never an X.
+                         A dialog's X sits where Windows draws the window's own
+                         close button, so on that platform it reads as "quit the
+                         app". The collapse mark states what the control does:
+                         the surface folds away and the window stays. The one
+                         surface that really does close the thing handed to the
+                         app (a file opened through the OS) draws its own header
+                         with the X it deserves. -->
                     <Dialog.Close
                       class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       aria-label="Close"
                       title="Close"
                     >
-                      <CioClose size={16} />
+                      <CioMinimize size={16} />
                     </Dialog.Close>
                   </div>
                 </div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import type { Snippet } from 'svelte'
@@ -169,7 +169,7 @@
       title="Close (Esc)"
       onclick={onClose}
     >
-      <CioClose size={14} />
+      <CioMinimize size={14} />
     </button>
   </div>
   <div
