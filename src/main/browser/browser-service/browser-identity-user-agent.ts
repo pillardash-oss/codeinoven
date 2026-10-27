@@ -9,13 +9,18 @@
  * which is truthful about what is rendering the page rather than a different claim
  * about it.
  *
- * This is an experiment aimed at a Windows report, not a shipped preference, so it
- * is switched by an environment variable. The main process records the runtime user
- * agent before branding overwrites `app.userAgentFallback`, and the app browser's
- * jars present it only when the variable asks for it.
+ * This scope bakes the alternative in: every browser jar presents the runtime user
+ * agent unless `CODEINOVEN_BROWSER_IDENTITY_UA` turns it off, so a Windows build of
+ * this branch answers the question without a shell variable. It is an experiment,
+ * not a shipped preference, and the whole module goes away with the branch if the
+ * Windows sign-in stays blocked with a truthful agent.
+ *
+ * The main process records the runtime user agent before branding overwrites
+ * `app.userAgentFallback`; only the browser jars present it, so the app's own
+ * windows keep the branded string.
  */
 
-/** Environment variable that makes the app browser present the runtime user agent. */
+/** Environment variable that turns the app browser's runtime user agent off. */
 export const BROWSER_IDENTITY_USER_AGENT_ENV = 'CODEINOVEN_BROWSER_IDENTITY_UA'
 
 /** The runtime user agent captured before branding rewrote the app fallback. */
@@ -36,28 +41,29 @@ export function recordedRuntimeUserAgent(): string | null {
 }
 
 /**
- * Whether the environment asks the app browser for the runtime user agent.
+ * Whether the environment turns the runtime user agent off.
  *
- * An unset or unrecognized value keeps the branded string, so a typo cannot silently
- * change what every site sees.
+ * Only an explicit falsy spelling disables it, so the baked-in default holds for an
+ * unset variable and for a value nobody intended. A typo therefore keeps the
+ * experiment running rather than silently reverting what the branch is testing.
  */
-export function identityUserAgentRequested(value: string | undefined): boolean {
+export function identityUserAgentDisabled(value: string | undefined): boolean {
   if (typeof value !== 'string') return false
   const normalized = value.trim().toLowerCase()
-  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+  return normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off'
 }
 
 /**
  * The user agent a browser jar should present, or null to keep the branded one.
  *
- * Returns null when the variable is off or when startup recorded nothing, because
- * presenting an empty user agent would break every site rather than answering the
- * question this experiment asks.
+ * Returns null when the variable disables it or when startup recorded nothing,
+ * because presenting an empty user agent would break every site rather than
+ * answering the question this experiment asks.
  */
 export function browserIdentityUserAgent(
   value: string | undefined,
   runtime: string | null = runtimeUserAgent
 ): string | null {
-  if (!identityUserAgentRequested(value)) return null
+  if (identityUserAgentDisabled(value)) return null
   return runtime
 }

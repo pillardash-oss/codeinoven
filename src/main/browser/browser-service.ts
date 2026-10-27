@@ -5698,10 +5698,11 @@ export class BrowserService {
     // every context that picked that box.
     this.downloads.watchSession(projectId, browserSession, partition)
     if (this.configuredSessions.has(partition)) return browserSession
-    // The jar can be asked to present the runtime's own user agent instead of the
-    // branded Chrome string. This has to happen before the first page is created
-    // on the session: `setUserAgent` does not reach web contents that already
-    // exist. See `browser-identity-user-agent.ts`.
+    // The jar presents the runtime's own user agent instead of the branded Chrome
+    // string, so the agent a Chromium runtime reports matches what it says about
+    // itself. This has to happen before the first page is created on the session:
+    // `setUserAgent` does not reach web contents that already exist. See
+    // `browser-identity-user-agent.ts`.
     const identityUserAgent = browserIdentityUserAgent(process.env[BROWSER_IDENTITY_USER_AGENT_ENV])
     if (identityUserAgent) {
       browserSession.setUserAgent(identityUserAgent)

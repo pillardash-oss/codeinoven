@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BROWSER_IDENTITY_USER_AGENT_ENV,
   browserIdentityUserAgent,
-  identityUserAgentRequested,
+  identityUserAgentDisabled,
   recordedRuntimeUserAgent,
   rememberRuntimeUserAgent
 } from '../../../src/main/browser/browser-service/browser-identity-user-agent'
@@ -12,31 +12,37 @@ const CHROME_RUNTIME_UA =
   'CodeInOven/0.5.67 Chrome/152.0.7977.167 Electron/44.9.3 Safari/537.36'
 
 describe('browser identity user agent', () => {
-  it('names the environment variable the switch reads', () => {
+  it('names the environment variable that turns it off', () => {
     expect(BROWSER_IDENTITY_USER_AGENT_ENV).toBe('CODEINOVEN_BROWSER_IDENTITY_UA')
   })
 
-  it('treats only explicit truthy spellings as the switch being on', () => {
-    for (const value of ['1', 'true', 'TRUE', 'yes', 'on', ' On ']) {
-      expect(identityUserAgentRequested(value), value).toBe(true)
+  it('treats only explicit falsy spellings as the switch being off', () => {
+    for (const value of ['0', 'false', 'FALSE', 'no', 'off', ' Off ']) {
+      expect(identityUserAgentDisabled(value), value).toBe(true)
     }
-    for (const value of [undefined, '', '0', 'false', 'off', 'identity', 'y']) {
-      expect(identityUserAgentRequested(value), String(value)).toBe(false)
+    for (const value of [undefined, '', '1', 'true', 'yes', 'on', 'identity']) {
+      expect(identityUserAgentDisabled(value), String(value)).toBe(false)
     }
   })
 
-  it('offers no user agent while the switch is off', () => {
-    expect(browserIdentityUserAgent(undefined, CHROME_RUNTIME_UA)).toBeNull()
-    expect(browserIdentityUserAgent('0', CHROME_RUNTIME_UA)).toBeNull()
+  it('offers the runtime user agent by default, with no variable set', () => {
+    expect(browserIdentityUserAgent(undefined, CHROME_RUNTIME_UA)).toBe(CHROME_RUNTIME_UA)
+    expect(browserIdentityUserAgent('1', CHROME_RUNTIME_UA)).toBe(CHROME_RUNTIME_UA)
   })
 
   it('offers the recorded runtime user agent verbatim, app and runtime tokens included', () => {
-    expect(browserIdentityUserAgent('1', CHROME_RUNTIME_UA)).toBe(CHROME_RUNTIME_UA)
-    expect(browserIdentityUserAgent('1', CHROME_RUNTIME_UA)).toContain('Electron/')
+    expect(browserIdentityUserAgent(undefined, CHROME_RUNTIME_UA)).toContain('Electron/')
+    expect(browserIdentityUserAgent(undefined, CHROME_RUNTIME_UA)).toBe(CHROME_RUNTIME_UA)
+  })
+
+  it('offers nothing when the variable turns it off', () => {
+    for (const value of ['0', 'false', 'off']) {
+      expect(browserIdentityUserAgent(value, CHROME_RUNTIME_UA), value).toBeNull()
+    }
   })
 
   it('offers nothing when startup never recorded a runtime user agent', () => {
-    expect(browserIdentityUserAgent('1', null)).toBeNull()
+    expect(browserIdentityUserAgent(undefined, null)).toBeNull()
   })
 
   it('remembers a recorded user agent and refuses an empty one', () => {

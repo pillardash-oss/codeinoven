@@ -92,9 +92,9 @@ app.setName(APP_NAME)
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.
 //
-// The runtime's own string is recorded first. The app browser can be asked to
-// present it instead (see `browser-identity-user-agent.ts`), and this assignment
-// is the only point where Chromium's untouched value is still readable.
+// The runtime's own string is recorded first. The app browser presents it instead of
+// the branded one on this branch (see `browser-identity-user-agent.ts`), and this
+// assignment is the only point where Chromium's untouched value is still readable.
 rememberRuntimeUserAgent(app.userAgentFallback)
 app.userAgentFallback = brandUserAgent(app.userAgentFallback, process.versions.chrome)
 
