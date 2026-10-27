@@ -1,6 +1,29 @@
 <script lang="ts">
   import { isMacPlatform } from '$lib/shortcut-display'
   import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
+  import type { Attachment } from 'svelte/attachments'
+
+  /**
+   * The conversation page column reports where it begins, so the header's thread
+   * block can put its left edge on the same line as the text a reader is reading.
+   * The pane resizes with the sidebar, so the column moves without the window
+   * changing, and a size observer catches both.
+   */
+  const reportConversationColumn: Attachment<HTMLElement> = (element) => {
+    const report = () => {
+      layoutPanelState.conversationLeft = Math.round(element.getBoundingClientRect().left)
+    }
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(element)
+    window.addEventListener('resize', report)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', report)
+      layoutPanelState.conversationLeft = 0
+    }
+  }
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -13811,7 +13834,10 @@
       aria-label="Conversation"
       data-region="conversation"
     >
-      <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
+      <div
+        class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
+        {@attach reportConversationColumn}
+      >
         {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
             <CioSpinner size={16} class="animate-spin" />

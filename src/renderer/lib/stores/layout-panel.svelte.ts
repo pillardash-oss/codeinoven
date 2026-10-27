@@ -31,6 +31,15 @@ class LayoutPanelState {
    * never pull the bar's controls out of their column.
    */
   minimumWidth = $state(0)
+  /**
+   * Where the conversation's own page column starts, in window pixels.
+   *
+   * The header's thread block aligns to that column rather than to the panel: the
+   * page is the thing the reader is looking at, and the panel is only how much
+   * room it has. Zero when no conversation is on screen, which leaves the block at
+   * the end of the header's chrome.
+   */
+  conversationLeft = $state(0)
 
   /** Docked width of the sidebar on screen, zero when none is docked. */
   get dockedWidth(): number {

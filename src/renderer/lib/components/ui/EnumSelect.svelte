@@ -33,6 +33,7 @@
    */
 
   import { DropdownMenu } from 'bits-ui'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
     options: readonly EnumSelectOption<T>[]
@@ -50,6 +51,8 @@
     inline?: boolean
     /** Layout classes for the trigger, e.g. a flex sizing class. */
     class?: string
+    /** Wider option menus for dense inspector and editor toolbars. */
+    menuMinWidth?: string
   }
 
   let {
@@ -62,10 +65,42 @@
     disabled = false,
     compact = false,
     inline = false,
-    class: className = ''
+    class: className = '',
+    menuMinWidth
   }: Props = $props()
 
   const selected = $derived(options.find((option) => option.id === value) ?? null)
+  let menuRef = $state<HTMLElement | null>(null)
+  let releaseOcclusion: (() => void) | undefined
+  function setMenuRef(element: HTMLElement | null): void {
+    releaseOcclusion?.()
+    releaseOcclusion = undefined
+    menuRef = element
+    if (!element) return
+    const key = `enum-menu-${crypto.randomUUID()}`
+    const place = (): void => {
+      const rect = element.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0)
+        browserVisibility.publishOcclusion(key, {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height
+        })
+    }
+    const resized = new ResizeObserver(place)
+    resized.observe(element)
+    const moved = new MutationObserver(place)
+    if (element.parentElement)
+      moved.observe(element.parentElement, { attributes: true, attributeFilter: ['style'] })
+    const frame = requestAnimationFrame(place)
+    releaseOcclusion = () => {
+      resized.disconnect()
+      moved.disconnect()
+      cancelAnimationFrame(frame)
+      browserVisibility.clearOcclusion(key)
+    }
+  }
 </script>
 
 {#if inline}
@@ -120,11 +155,13 @@
 
     <DropdownMenu.Portal>
       <DropdownMenu.Content
+        bind:ref={() => menuRef, setMenuRef}
         side="bottom"
         align="start"
         sideOffset={6}
         collisionPadding={8}
         class="z-60 w-[var(--bits-dropdown-menu-anchor-width)] border border-border bg-surface p-1 shadow-lg"
+        style={menuMinWidth ? `min-width:${menuMinWidth};max-width:calc(100vw - 1rem)` : undefined}
       >
         {#each options as option (option.id)}
           <DropdownMenu.Item

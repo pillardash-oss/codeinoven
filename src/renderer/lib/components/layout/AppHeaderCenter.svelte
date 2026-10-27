@@ -37,9 +37,11 @@
     chatMode: boolean
     /** Shared thread action menu owned by the header shell. */
     threadActionsMenu: ReturnType<typeof createThreadActionsMenu>
+    /** Distance from the chrome's end to the conversation column's left edge. */
+    titleInset?: number
   }
 
-  let { activeView, chatMode, threadActionsMenu }: Props = $props()
+  let { activeView, chatMode, threadActionsMenu, titleInset = 0 }: Props = $props()
 
   const viewLabels: Record<string, string> = {
     projects: 'Projects',
@@ -100,7 +102,10 @@
 <!-- The title block belongs to the thread column, not to the middle of the bar:
      it starts exactly where the header's chrome cluster ends, which is the
      thread panel's edge, and takes the room the trailing controls leave. -->
-<div class="flex min-w-0 flex-1 items-center justify-start px-2">
+<div
+  class="flex min-w-0 flex-1 items-center justify-start pr-2"
+  style:padding-left={titleInset > 0 ? `${titleInset}px` : undefined}
+>
   {#if onSettings}
     <div class="pointer-events-none">
       <h1 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
@@ -242,23 +247,6 @@
 </div>
 
 <style>
-  /* The corner cue: the project icon opens two menus, and this is the only thing
-     that says so. Two dots, small enough to read as texture on the icon rather
-     than as a second control beside it. */
-  .header-project-menu::after {
-    content: '';
-    position: absolute;
-    right: 0.0625rem;
-    bottom: 0.0625rem;
-    width: 0.125rem;
-    height: 0.125rem;
-    color: var(--color-muted);
-    background: currentColor;
-    opacity: 0.5;
-    box-shadow: 0.25rem 0 0 currentColor;
-    pointer-events: none;
-  }
-
   @container (max-width: 760px) {
     .header-status-label {
       display: none;

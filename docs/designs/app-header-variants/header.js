@@ -194,11 +194,10 @@ function frame({ platform, variant, width = 'full', options = {} }) {
     }</span><kbd>${platform === 'mac' ? '⌘K' : 'Ctrl K'}</kbd><span class="cmd-chip">${ICONS.spec}Spec</span><span class="cmd-chip">${ICONS.branch}3</span></div></div>`
   } else {
     center =
-      variant === 'v7' || variant === 'v8'
-        ? `<div class="zone center"><span class="spine-rule"></span>${threadMarkup({
-            ...options,
-            stacked: variant === 'v8'
-          })}</div>`
+      variant === 'v7'
+        ? `<div class="zone center"><span class="spine-rule"></span>${threadMarkup(options)}</div>`
+        : variant === 'v8'
+          ? `<div class="zone center">${threadMarkup({ ...options, stacked: true })}</div>`
         : `<div class="zone center">${threadMarkup(options)}</div>`
   }
 

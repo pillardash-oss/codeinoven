@@ -104,6 +104,17 @@
     layoutPanelState.minimumWidth = minimumPanelWidth
   })
 
+  /** How far the thread's block sits from the end of the chrome so that its left
+   *  edge lands on the conversation page's own left edge. The page is the thing
+   *  being read, so it is the bounding box the title aligns to; the panel only
+   *  decides how much room the page has. */
+  let titleInset = $derived.by(() => {
+    const contentLeft = layoutPanelState.conversationLeft
+    if (contentLeft <= 0) return 0
+    const chromeEnd = leftInset + Math.max(panelColumnWidth, CHROME_WIDTH)
+    return Math.max(0, Math.round(contentLeft - chromeEnd))
+  })
+
   /** A checkout and a probe run the same source, so the one thing that tells
    *  them apart is where their data lives. The header says which this is, and a
    *  shipped build says nothing at all. */
@@ -375,7 +386,7 @@
       <AppHeaderBrowserCenter />
     {/await}
   {:else}
-    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} />
+    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} />
   {/if}
 
   <AppHeaderThreadModals menu={threadActionsMenu} />
@@ -534,24 +545,6 @@
     font-size: 0.75rem;
     font-weight: 500;
     letter-spacing: -0.02em;
-  }
-
-  /* The boundary between the app's chrome and the open thread. It is the panel's
-     edge when a panel is docked and simply the end of the chrome when one is not:
-     either way the thread's own column starts on a line, never in the middle of
-     the bar. */
-  .header-cluster::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 6px;
-    /* The panel's edge is its scrollbar, so the bar's boundary has to be the same
-       6px the scrollbar takes and sit on the same pixels, or the line reads as
-       half a pixel off where the panel actually ends. */
-    margin-right: -6px;
-    background: var(--color-border-strong);
   }
 
   .header-cluster-actions {

@@ -238,15 +238,17 @@ function panelAlignment(frames) {
     if (!windowElement) continue
     const panel = windowElement.querySelector('.panel')
     const content = windowElement.querySelector('.content')
-    const rule = frame.querySelector('.zone.center .spine-rule')
+    /* There is no divider to measure any more, so what is measured is where the
+       thread's own column begins. */
+    const start = frame.querySelector('.zone.center > *')
     /* Two names live in the mark-up and one of them is drawn, so measure the one
        the column actually shows. */
     const names = [...frame.querySelectorAll('.zone.left.spine .brand-name')]
     const brand = names.filter((name) => rectOf(name).width > 0).sort((a, b) => rectOf(a).width - rectOf(b).width)[0] ?? null
-    if (!panel || !content || !rule) continue
+    if (!panel || !content || !start) continue
 
     const problems = []
-    const ruleLeft = rectOf(rule).left
+    const ruleLeft = rectOf(start).left
     const panelRight = rectOf(panel).right
     const contentLeft = rectOf(content).left
     /* The column follows the panel, but it is never narrower than the controls it
@@ -276,7 +278,7 @@ function panelAlignment(frames) {
     /* The width where the wordmark has run out must also be the width the panel
        refuses to go below, or the floor is a claim rather than a rule. */
     const spine = frame.querySelector('.zone.left.spine')
-    const clusterEnd = Math.round(rectOf(rule).left - rectOf(frame).left)
+    const clusterEnd = Math.round(ruleLeft - rectOf(frame).left)
     const overflows = spine ? spine.scrollWidth > spine.clientWidth + 1 : false
     const spineWidth = spine ? Math.round(rectOf(spine).width) : 0
     const actions = spine
@@ -289,7 +291,7 @@ function panelAlignment(frames) {
 
     if (problems.length > 0) failures += 1
     rows.push(
-      `${problems.length === 0 ? 'ok' : 'FAIL'} · ${platform} panel ${width}px · rule at ${Math.round(
+      `${problems.length === 0 ? 'ok' : 'FAIL'} · ${platform} panel ${width}px · thread starts at ${Math.round(
         clusterEnd
       )}px of the bar · spine ${spineWidth}px · label ${labelWidth}px (${label}) · ${actions} actions · names ${visibility}${offset > 1 ? ` · at the chrome floor, ${offset}px past the panel` : ''}${
         problems.length ? ` · ${problems.join('; ')}` : ''

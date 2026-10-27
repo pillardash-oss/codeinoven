@@ -110,7 +110,7 @@
 
   /** A composition always runs for something, and a zero-length timeline would
    *  make every fraction below divide by it. */
-  const duration = $derived(Math.max(composition.duration, 0.001))
+  const duration = $derived(Math.max(playback?.duration ?? composition.duration, 0.001))
   const frameStep = $derived(1 / Math.max(composition.fps, 1))
   const time = $derived(playback?.time ?? 0)
   const playing = $derived(playback?.playing ?? false)

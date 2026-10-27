@@ -21,7 +21,6 @@
   import CioStore from '@pdslng/cio-icon/CioStore.svelte'
   import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
-  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
@@ -39,8 +38,7 @@
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import CompositionStage from '$lib/components/design/CompositionStage.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
-  import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
+  import VideoEditWorkspace from '$lib/components/design/VideoEditWorkspace.svelte'
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
   import { authoredWorkOwnerLabel } from '$lib/authored-work-presentation'
@@ -51,13 +49,10 @@
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
-  import { videoPackagesStore } from '$lib/stores/video-packages.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { openInBrowser } from '$lib/open-in-browser'
-  import { APP_SLUG } from '$shared/brand'
   import { designContractRequest } from '$shared/design/design-contract'
   import type { VideoJob } from '$shared/video/studio'
   import { DESIGN_EXPORT_FORMATS, type DesignExportFormat } from '$shared/design/design-export'
@@ -270,38 +265,6 @@
   let savedExport = $state<string | null>(null)
   /** Whether the studio controls hold unsaved edits, which a reload would discard. */
   let studioDirty = $state(false)
-  /** The controls' save action, drawn in the section strip so it never moves. */
-  let studioSaveAction = $state<(() => void) | null>(null)
-  /**
-   * Bumped when the studio controls save the composition.
-   *
-   * The timeline draws its bands from its own read of the same file, so a save has
-   * to reach it without remounting it: a remount would drop the zoom, the scroll
-   * and the open comment for a change that only moved a track.
-   */
-  let studioRevision = $state(0)
-  /**
-   * The editor's height in pixels, dragged by the splitter under the picture.
-   *
-   * A composition is read in two halves, and which half needs the room depends on
-   * what the user is doing: watching the frame, or placing a track. The splitter is
-   * what hands that choice over, and the choice is remembered per machine.
-   */
-  let editorHeight = $state(0)
-  /** The column holding the picture and the editor, measured to bound the drag. */
-  let splitArea = $state<HTMLElement | null>(null)
-  /** A drag on the splitter: the pointer it belongs to and what it started from. */
-  let resizingEditor = false
-  let resizePointer = 0
-  let resizeStartY = 0
-  let resizeStartHeight = 0
-  /** The editor never collapses below a readable strip of ruler and bands. */
-  const EDITOR_MIN_HEIGHT = 148
-  /** The picture keeps enough height to be a picture, not a sliver. */
-  const STAGE_MIN_HEIGHT = 120
-  /** The splitter's own hit area, in pixels, matching the `h-2` it is drawn at. */
-  const SPLITTER_HEIGHT = 8
-  const EDITOR_HEIGHT_KEY = `${APP_SLUG}:video-editor-height`
   /** Bumped to remount the video timeline and controls, so a refresh re-reads them. */
   let boardRevision = $state(0)
   /** Whether the user asked to reload over unsaved video controls. */
@@ -459,16 +422,6 @@
    */
   let boardTabId = $state('')
   /**
-   * Whether the optional video pack is installed, which is what enables the
-   * live editor.
-   *
-   * The pack is the app's one on-demand video dependency, so it is the signal
-   * for whether the board offers direct editing at all: with it the board plays
-   * the composition, scrubs it and edits its controls, and without it the board
-   * stays a reader and the user edits by prompting the agent.
-   */
-  let liveEditing = $derived(video && videoPackagesStore.state?.installed === true)
-  /**
    * The composition the board is playing, when its own view is on screen for the
    * folder in front.
    *
@@ -508,6 +461,11 @@
    * the board's mute and transport keep driving what the full screen shows.
    */
   let compositionFullscreen = $state(false)
+  let compositionPlaybackOnly = $state(false)
+  function minimizeCompositionEditor(): void {
+    compositionPlaybackOnly = false
+    compositionFullscreen = false
+  }
   /**
    * The composition's tab described as a browser tab, for the full screen surface.
    *
@@ -1133,7 +1091,7 @@
     void readVideoJobs()
     // A view that was closed under the board has nothing to mount, so the one
     // Refresh asks for it again rather than leaving the stage on a still.
-    if (liveEditing) void ensureComposition(selected.directory, true)
+    if (video) void ensureComposition(selected.directory, true)
   }
 
   /** Read the composition's jobs, the list the board's export stands on. */
@@ -1169,16 +1127,6 @@
     }
   }
 
-  /** Cancel a running job, which the controls ask for rather than doing themselves. */
-  async function cancelVideoJob(id: string): Promise<void> {
-    try {
-      await invoke('video:cancel', projectId, threadId, id)
-      await readVideoJobs()
-    } catch (failure) {
-      error = failure instanceof Error ? failure.message : 'The job could not be cancelled.'
-    }
-  }
-
   /**
    * Start an export from the board's own menu or the controls' primary action.
    *
@@ -1205,53 +1153,11 @@
 
   /** A save moved the composition, so the timeline re-reads the bands it draws. */
   function setStudioSaved(): void {
-    studioRevision += 1
     // The page reads studio.json once, when it loads, so a saved caption style, a
     // moved track or an edited word is invisible in the picture until the page
     // reads the file again. Reloading the board's own view refreshes it, and the
     // browser remembers the playhead across that reload.
     if (boardTabId !== '') void invoke('browser:reload', boardTabId).catch(() => undefined)
-  }
-
-  /** The editor's height, bounded so neither half of the board can be dragged shut. */
-  function clampEditorHeight(height: number): number {
-    const available = splitArea?.clientHeight ?? 0
-    if (available <= 0) return Math.max(EDITOR_MIN_HEIGHT, height)
-    const maximum = Math.max(EDITOR_MIN_HEIGHT, available - STAGE_MIN_HEIGHT - SPLITTER_HEIGHT)
-    return Math.min(Math.max(height, EDITOR_MIN_HEIGHT), maximum)
-  }
-
-  /** Start a drag on the splitter, remembering where the editor stood. */
-  function startEditorResize(event: PointerEvent & { currentTarget: HTMLButtonElement }): void {
-    resizingEditor = true
-    resizePointer = event.pointerId
-    resizeStartY = event.clientY
-    resizeStartHeight = editorHeight
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  /** Follow the pointer: up gives the editor more room and the picture less. */
-  function resizeEditor(event: PointerEvent): void {
-    if (!resizingEditor || event.pointerId !== resizePointer) return
-    editorHeight = clampEditorHeight(resizeStartHeight - (event.clientY - resizeStartY))
-  }
-
-  /** Settle the drag and remember it, so the next visit opens the same way. */
-  function finishEditorResize(event: PointerEvent): void {
-    if (!resizingEditor || event.pointerId !== resizePointer) return
-    resizingEditor = false
-    localStorage.setItem(EDITOR_HEIGHT_KEY, String(editorHeight))
-  }
-
-  /** The same split from the keyboard, for a control that is reachable without a mouse. */
-  function resizeEditorWithKeyboard(event: KeyboardEvent): void {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown' && event.key !== 'Home') return
-    event.preventDefault()
-    editorHeight =
-      event.key === 'Home'
-        ? clampEditorHeight(Math.round((splitArea?.clientHeight ?? 0) * 0.45))
-        : clampEditorHeight(editorHeight + (event.key === 'ArrowUp' ? 24 : -24))
-    localStorage.setItem(EDITOR_HEIGHT_KEY, String(editorHeight))
   }
 
   /** The history pane's Undo and Redo, mirrored into the board header. */
@@ -1342,9 +1248,6 @@
 
   onMount(() => {
     projectWorkState.invalidate(projectId, threadId)
-    // The board is one of the surfaces that watches the optional video pack, so
-    // installing it from Settings turns on live editing here without a reload.
-    void videoPackagesStore.load()
     void projectWorkState.refresh(projectId, threadId).then(async () => {
       await loadState()
       if (selectedItem)
@@ -1356,7 +1259,6 @@
     return () => {
       if (selectedItem)
         projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
-      videoPackagesStore.dispose()
     }
   })
 
@@ -1375,8 +1277,7 @@
   // active board. Fullscreen and menus reuse that ownership, never end it.
   $effect(() => {
     const directory = selected.directory
-    if (!active || !video || !liveEditing || !playable || selectedMissing || directory === '')
-      return
+    if (!active || !video || !playable || selectedMissing || directory === '') return
     let cancelled = false
     // Read the lifecycle inputs above, without subscribing to the state written
     // while the asynchronous open completes.
@@ -1392,7 +1293,7 @@
   // A board that is no longer the surface on screen cannot keep a full screen
   // window: the picture would stay up over whatever the user navigated to.
   $effect(() => {
-    if (!active) compositionFullscreen = false
+    if (!active) minimizeCompositionEditor()
   })
 
   // The board owns the composition job poll, because it draws the export above the
@@ -1422,39 +1323,6 @@
 
 <div class="flex h-full min-h-0 flex-col" {@attach watchViewingThread}>
   {#snippet videoStage()}
-    {#if video && selected.directory !== '' && !liveEditing}
-      <!--
-        Live editing is off because the optional video pack is not installed.
-
-        The board stays a reader: it shows the last export or the captured still
-        and the timeline below still places notes, so a user edits by prompting
-        the agent. The pack is what turns the board into a player and a direct
-        editor, so the one thing this asks for is the pack, in one click, rather
-        than explaining a setting the user would have to go and find.
-      -->
-      <div class="mb-2 shrink-0 border border-border bg-surface p-3">
-        <div class="flex items-center gap-1.5">
-          <CioDownload size={13} class="text-accent" aria-hidden="true" />
-          <span class="text-xs font-semibold text-foreground">
-            Install the video pack to edit here
-          </span>
-        </div>
-        <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
-          {exportPath
-            ? 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent and watch the last export here.'
-            : 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent.'}
-        </p>
-        <button
-          type="button"
-          class="mt-2 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90"
-          title="Open Design and video settings to install the optional video pack"
-          aria-label="Open Design and video settings to install the optional video pack"
-          onclick={() => workspaceState.navigateToSettings?.('design')}
-        >
-          Open Settings
-        </button>
-      </div>
-    {/if}
     {#if liveTab && !compositionFullscreen}
       <!--
         The live composition, played in the board.
@@ -2193,95 +2061,23 @@
         scrolling column with the controls would be drawn past the panel at the
         sizes where the column is taller than the panel.
       -->
-      <div
-        class="flex min-h-0 flex-1 flex-col"
-        {@attach (node) => {
-          splitArea = node
-          // The stored height is a pixel count this window has to be able to hold,
-          // so it is corrected against the column it is being placed in rather than
-          // trusted: a board opened on a smaller window opens with both halves whole.
-          if (editorHeight === 0) {
-            const stored = Number.parseInt(localStorage.getItem(EDITOR_HEIGHT_KEY) ?? '', 10)
-            editorHeight = clampEditorHeight(
-              Number.isFinite(stored) ? stored : Math.round(node.clientHeight * 0.45)
-            )
-          }
-          return () => {
-            splitArea = null
-          }
-        }}
-      >
+      <div class="flex min-h-0 flex-1 flex-col">
         <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
           {@render videoStage()}
         </div>
-        <!--
-          The split between the picture and the editor.
-
-          The band belongs to the bottom of the picture, not to the top of the
-          timeline: the picture's own frame already draws the line between the two
-          halves, so the band draws nothing and a second hairline here would read
-          as an extra rule floating above the timeline. The whole band is the
-          control, there is no grabber to aim at, its cursor is the row resize it
-          performs, and it is a button so the split can be moved from the keyboard.
-        -->
-        <button
-          type="button"
-          class="flex h-2 w-full shrink-0 cursor-row-resize touch-none items-center px-2.5 outline-none"
-          aria-label="Resize the composition editor"
-          title="Drag to resize the timeline, or use the arrow keys"
-          onpointerdown={startEditorResize}
-          onpointermove={resizeEditor}
-          onpointerup={finishEditorResize}
-          onpointercancel={finishEditorResize}
-          onkeydown={resizeEditorWithKeyboard}
-        ></button>
-        <div class="flex min-h-0 shrink-0 flex-col pb-2 pl-2.5" style:height={`${editorHeight}px`}>
+        <div class="flex shrink-0 flex-col border-t border-border pb-2 pl-2.5">
           {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
-            <VideoTimeline
+            <VideoEditWorkspace
               {projectId}
               {threadId}
               directory={selected.directory}
               tabId={boardTabId}
-              revision={studioRevision}
-            >
-              {#snippet saveAction()}
-                <!--
-                  One save control for the whole editor, on the row that never
-                  moves. It reads the same as the file editor's save, so a save is
-                  the same gesture everywhere in the app, and it is the only place
-                  that says whether the file on disk is behind.
-                -->
-                <button
-                  type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-                  disabled={!studioDirty || studioSaveAction === null}
-                  aria-label="Save the composition"
-                  title={studioDirty
-                    ? 'Save the composition'
-                    : 'The composition has no unsaved changes'}
-                  onclick={() => studioSaveAction?.()}
-                >
-                  <CioSave size={11} />
-                </button>
-              {/snippet}
-              {#snippet controls(section, seek)}
-                {#if liveEditing}
-                  <VideoStudioControls
-                    {projectId}
-                    {threadId}
-                    {section}
-                    directory={selected.directory}
-                    jobs={videoJobs}
-                    onCancelJob={cancelVideoJob}
-                    onExport={exportVideo}
-                    onSeek={seek}
-                    onDirtyChange={setStudioDirty}
-                    onSaved={setStudioSaved}
-                    onSaveAction={(action) => (studioSaveAction = action)}
-                  />
-                {/if}
-              {/snippet}
-            </VideoTimeline>
+              active={active && !compositionFullscreen}
+              onDirtyChange={setStudioDirty}
+              onSaved={setStudioSaved}
+              onExport={exportVideo}
+              onExpand={() => void openPreview(null)}
+            />
           {/key}
         </div>
       </div>
@@ -2510,15 +2306,40 @@
     hostsBrowserView
     hideStrip
     onSelect={() => {}}
-    onMinimize={() => (compositionFullscreen = false)}
+    onMinimize={minimizeCompositionEditor}
   >
     {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
       {#key shownFullscreenTab.id}
-        <BrowserPanel
-          tab={shownFullscreenTab}
-          fullscreen
-          onMinimize={() => (compositionFullscreen = false)}
-        />
+        {#if compositionPlaybackOnly}
+          <BrowserPanel
+            tab={shownFullscreenTab}
+            fullscreen
+            minimizeTitle="Return to the video editor"
+            onMinimize={() => (compositionPlaybackOnly = false)}
+          />
+        {:else}
+          <VideoEditWorkspace
+            {projectId}
+            {threadId}
+            directory={selected.directory}
+            tabId={boardTabId}
+            {active}
+            mode="fullscreen"
+            onMinimize={minimizeCompositionEditor}
+            onDirtyChange={setStudioDirty}
+            onSaved={setStudioSaved}
+            onExport={exportVideo}
+          >
+            {#snippet preview()}
+              <BrowserPanel
+                tab={shownFullscreenTab}
+                fullscreen
+                playerInEditor
+                onExpandVideo={() => (compositionPlaybackOnly = true)}
+              />
+            {/snippet}
+          </VideoEditWorkspace>
+        {/if}
       {/key}
     {/await}
   </FullscreenPanelDialog>

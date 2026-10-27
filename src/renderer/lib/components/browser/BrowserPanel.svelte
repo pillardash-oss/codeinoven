@@ -6,6 +6,7 @@
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { onMount, tick } from 'svelte'
@@ -76,9 +77,20 @@
      * surface that closes.
      */
     onMinimize?: () => void
+    playerInEditor?: boolean
+    onExpandVideo?: () => void
+    minimizeTitle?: string
   }
 
-  let { tab, fullscreen = false, onTabReplaced, onMinimize }: Props = $props()
+  let {
+    tab,
+    fullscreen = false,
+    onTabReplaced,
+    onMinimize,
+    playerInEditor = false,
+    onExpandVideo,
+    minimizeTitle = 'Leave full screen'
+  }: Props = $props()
 
   /** The surface this instance renders on. A fullscreen instance outranks every
    *  sidebar instance, so the store resolves which one owns the single native
@@ -637,142 +649,142 @@
 >
   {#if !compositionPlayer}
     <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
-      disabled={!pageState.canGoBack}
-      aria-label="Go back"
-      title="Go back"
-      onclick={() => void invoke('browser:goBack', tabId).catch(() => {})}
-    >
-      <CioArrowLeft size={14} />
-    </button>
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
-      disabled={!pageState.canGoForward}
-      aria-label="Go forward"
-      title="Go forward"
-      onclick={() => void invoke('browser:goForward', tabId).catch(() => {})}
-    >
-      <CioArrowRight size={14} />
-    </button>
-    <!-- Reload is shown only when there is a page to act on: an empty tab has
-         nothing to reload, and the button becomes the stop affordance while a
-         load is in flight. -->
-    {#if pageState.loading || pageState.url !== ''}
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
-        title={pageState.loading ? 'Stop loading' : 'Reload page'}
-        onclick={onReloadButton}
-        oncontextmenu={onReloadContextMenu}
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+        disabled={!pageState.canGoBack}
+        aria-label="Go back"
+        title="Go back"
+        onclick={() => void invoke('browser:goBack', tabId).catch(() => {})}
       >
-        {#if pageState.loading}
-          <CioClose size={14} />
-        {:else}
-          <CioRefresh size={13} />
+        <CioArrowLeft size={14} />
+      </button>
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+        disabled={!pageState.canGoForward}
+        aria-label="Go forward"
+        title="Go forward"
+        onclick={() => void invoke('browser:goForward', tabId).catch(() => {})}
+      >
+        <CioArrowRight size={14} />
+      </button>
+      <!-- Reload is shown only when there is a page to act on: an empty tab has
+         nothing to reload, and the button becomes the stop affordance while a
+         load is in flight. -->
+      {#if pageState.loading || pageState.url !== ''}
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
+          title={pageState.loading ? 'Stop loading' : 'Reload page'}
+          onclick={onReloadButton}
+          oncontextmenu={onReloadContextMenu}
+        >
+          {#if pageState.loading}
+            <CioClose size={14} />
+          {:else}
+            <CioRefresh size={13} />
+          {/if}
+        </button>
+      {/if}
+      <BrowserAddressBar
+        bind:this={addressBar}
+        {tabId}
+        url={address}
+        projectId={tabProjectId}
+        threadId={tabThreadId}
+        boxId={tabBoxId}
+        {secure}
+        loading={pageState.loading}
+        {siteMenuOpen}
+        onOpenSiteMenu={openSiteMenu}
+        onNavigate={navigate}
+      />
+      <BrowserBoxButton
+        projectId={tabProjectId}
+        threadId={tabThreadId}
+        boxId={tabBoxId}
+        labelled={fullscreen}
+        onChange={(boxId) => {
+          const replacementId = contextSidebarState.setBrowserTabBox(tabId, boxId)
+          if (replacementId) onTabReplaced?.(replacementId)
+        }}
+      />
+      <button
+        type="button"
+        class="relative flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Browser downloads"
+        title="Browser downloads"
+        onclick={openDownloadsMenu}
+      >
+        <CioDownload size={13} />
+        {#if unfinishedDownloadCount > 0}
+          <span
+            class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
+          >
+            {unfinishedDownloadCount}
+          </span>
         {/if}
       </button>
-    {/if}
-    <BrowserAddressBar
-      bind:this={addressBar}
-      {tabId}
-      url={address}
-      projectId={tabProjectId}
-      threadId={tabThreadId}
-      boxId={tabBoxId}
-      {secure}
-      loading={pageState.loading}
-      {siteMenuOpen}
-      onOpenSiteMenu={openSiteMenu}
-      onNavigate={navigate}
-    />
-    <BrowserBoxButton
-      projectId={tabProjectId}
-      threadId={tabThreadId}
-      boxId={tabBoxId}
-      labelled={fullscreen}
-      onChange={(boxId) => {
-        const replacementId = contextSidebarState.setBrowserTabBox(tabId, boxId)
-        if (replacementId) onTabReplaced?.(replacementId)
-      }}
-    />
-    <button
-      type="button"
-      class="relative flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label="Browser downloads"
-      title="Browser downloads"
-      onclick={openDownloadsMenu}
-    >
-      <CioDownload size={13} />
-      {#if unfinishedDownloadCount > 0}
-        <span
-          class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
-        >
-          {unfinishedDownloadCount}
-        </span>
-      {/if}
-    </button>
-    <button
-      type="button"
-      class={[
-        'relative flex h-7 shrink-0 items-center justify-center transition-colors',
-        fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-        devToolsOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-foreground'
-      ]}
-      aria-label="Toggle browser DevTools"
-      aria-pressed={devToolsOpen}
-      title="Toggle browser DevTools"
-      onclick={() => void toggleDevTools()}
-    >
-      <CioTerminal size={13} />
-      {#if fullscreen}
-        <span>Console</span>
-      {/if}
-    </button>
-    {#if authoredWork}
-      <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-      {#if screenEntry}
-        {#key `${authoredWork.directory}:${screenEntry}`}
-          <DesignScreenHistoryControls
-            projectId={tabProjectId}
-            threadId={tabThreadId}
-            {tabId}
-            directory={authoredWork.directory}
-            entry={screenEntry}
-            labelled={fullscreen}
-            active={panelVisible}
-          />
-        {/key}
-      {/if}
-    {/if}
-    {#if pageState.design}
       <button
         type="button"
         class={[
           'relative flex h-7 shrink-0 items-center justify-center transition-colors',
           fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-          inspectArmed
-            ? 'bg-accent/15 text-accent'
+          devToolsOpen
+            ? 'bg-elevated text-foreground'
             : 'text-dimmed hover:bg-elevated hover:text-foreground'
         ]}
-        aria-label={inspectArmed ? 'Stop inspecting elements' : 'Pick an element to comment on'}
-        aria-pressed={inspectArmed}
-        title={inspectArmed
-          ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
-          : 'Pick an element in this design to comment on'}
-        onclick={toggleInspect}
+        aria-label="Toggle browser DevTools"
+        aria-pressed={devToolsOpen}
+        title="Toggle browser DevTools"
+        onclick={() => void toggleDevTools()}
       >
-        <CioMarquee size={13} />
+        <CioTerminal size={13} />
         {#if fullscreen}
-          <span>Inspect</span>
+          <span>Console</span>
         {/if}
       </button>
-    {/if}
+      {#if authoredWork}
+        <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        {#if screenEntry}
+          {#key `${authoredWork.directory}:${screenEntry}`}
+            <DesignScreenHistoryControls
+              projectId={tabProjectId}
+              threadId={tabThreadId}
+              {tabId}
+              directory={authoredWork.directory}
+              entry={screenEntry}
+              labelled={fullscreen}
+              active={panelVisible}
+            />
+          {/key}
+        {/if}
+      {/if}
+      {#if pageState.design}
+        <button
+          type="button"
+          class={[
+            'relative flex h-7 shrink-0 items-center justify-center transition-colors',
+            fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
+            inspectArmed
+              ? 'bg-accent/15 text-accent'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-label={inspectArmed ? 'Stop inspecting elements' : 'Pick an element to comment on'}
+          aria-pressed={inspectArmed}
+          title={inspectArmed
+            ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
+            : 'Pick an element in this design to comment on'}
+          onclick={toggleInspect}
+        >
+          <CioMarquee size={13} />
+          {#if fullscreen}
+            <span>Inspect</span>
+          {/if}
+        </button>
+      {/if}
     </div>
   {/if}
   {#if findOpen && panelVisible && !compositionPlayer}
@@ -794,26 +806,34 @@
     <div
       class={[
         'titlebar-no-drag flex shrink-0 items-stretch bg-surface',
-        compositionPlayer && 'h-10'
+        compositionPlayer && !playerInEditor && 'h-10'
       ]}
-      style={compositionPlayer ? trafficLightInsetStyle() : undefined}
+      style={compositionPlayer && !playerInEditor ? trafficLightInsetStyle() : undefined}
     >
       <div class="min-w-0 flex-1">
         <BrowserCompositionTransport
           {tabId}
           composition={pageState.composition}
-          titlebar={compositionPlayer}
+          titlebar={compositionPlayer && !playerInEditor}
           projectId={pageState.projectId}
           threadId={pageState.threadId}
           active={panelVisible}
         />
       </div>
-      {#if compositionPlayer && onMinimize}
+      {#if compositionPlayer && onExpandVideo}
+        <button
+          type="button"
+          class="titlebar-no-drag flex w-9 shrink-0 items-center justify-center border-b border-border bg-surface text-dimmed hover:bg-elevated hover:text-foreground"
+          title="Watch the video in full screen"
+          aria-label="Watch the video in full screen"
+          onclick={onExpandVideo}><CioMaximize size={14} /></button
+        >
+      {:else if compositionPlayer && onMinimize}
         <button
           type="button"
           class="flex w-9 shrink-0 items-center justify-center border-b border-border bg-surface text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Leave full screen"
-          title="Leave full screen"
+          aria-label={minimizeTitle}
+          title={minimizeTitle}
           onclick={onMinimize}
         >
           <CioMinimize size={14} />
