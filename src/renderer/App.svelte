@@ -109,6 +109,7 @@
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
+  import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
@@ -2330,6 +2331,13 @@
     <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
     {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
       <GitSyncDockHost />
+    {/await}
+  {/if}
+
+  {#if gitPullJobs.jobs.length}
+    <!-- Floats above every view so a pull reports itself after its chooser is gone, and its outcome is never a dialog. -->
+    {#await import('$lib/components/git/GitPullDockHost.svelte') then { default: GitPullDockHost }}
+      <GitPullDockHost />
     {/await}
   {/if}
 

@@ -107,8 +107,10 @@
   import GitStatusPanelDialogs from './GitStatusPanelDialogs.svelte'
   import GitStatusPanelStashesView from './GitStatusPanelStashesView.svelte'
   import GitSyncButton from './GitSyncButton.svelte'
+  import GitPullButton from './GitPullButton.svelte'
   import GitSyncPeerDialog from './GitSyncPeerDialog.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
+  import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
   import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitIssuesView from './GitIssuesView.svelte'
@@ -221,9 +223,8 @@
   let identityName = $state('')
   let identityEmail = $state('')
   let pushConfirm = $state(false)
-  /** Pull strategy chooser, opened by the default `ask` preference or a failed strategy. */
+  /** Pull strategy chooser, opened by the default `ask` preference. */
   let pullStrategyOpen = $state(false)
-  let pullStrategyError = $state('')
   /**
    * Main-sync strategy chooser, opened by the `ask` preference, a failure, or
    * always when sending commits out of this checkout (that mutates a branch the
@@ -1607,7 +1608,6 @@
     pushDiverged = false
     pushRecoverMode = null
     pullStrategyOpen = false
-    pullStrategyError = ''
     syncMainOpen = false
     showIntegrateModal = false
     showStashModal = false
@@ -2178,9 +2178,7 @@
   })
 
   function closePullStrategy(): void {
-    if (gitState.isBusy('pull')) return
     pullStrategyOpen = false
-    pullStrategyError = ''
   }
 
   function resolvePullTarget(): { remote: string; branch: string } | null {
@@ -2200,32 +2198,52 @@
     return { remote: primaryRemote.name, branch: currentStatus.branch }
   }
 
-  async function performPull(strategy: GitPullStrategy): Promise<void> {
-    const target = resolvePullTarget()
-    if (!target) {
-      pullStrategyError = 'No tracked branch is available to pull'
-      pullStrategyOpen = true
-      return
-    }
-
-    pullStrategyError = ''
-    await gitState.pullIntegrate(projectId, target.remote, target.branch, strategy)
-    if (gitState.error) {
-      pullStrategyError = gitState.error
-      gitState.error = null
-      pullStrategyOpen = true
-      return
-    }
-    pullStrategyOpen = false
+  /**
+   * Remember the strategy the user just chose, so the next pull uses it without
+   * asking. `ask` stays available in Settings; any explicit pick replaces it.
+   */
+  function rememberPullStrategy(strategy: GitPullStrategy): void {
+    if (appConfigState.defaultPullStrategy === strategy) return
+    void invoke('config:update', { defaultPullStrategy: strategy }).catch(() => undefined)
   }
 
-  async function pullAction(): Promise<void> {
+  /**
+   * A pull leaves the panel as a background job the moment a strategy is chosen,
+   * exactly like a sync between checkouts: the round trip and the integration
+   * report in the docked run panel, so the chooser never holds the window and a
+   * conflict is answered where the work continues.
+   */
+  function startPull(strategy: GitPullStrategy): void {
+    const target = resolvePullTarget()
+    if (!target) {
+      toast.error('No tracked branch is available to pull')
+      return
+    }
+
+    rememberPullStrategy(strategy)
+    pullStrategyOpen = false
+    gitPullJobs.start({
+      projectId,
+      remote: target.remote,
+      branch: target.branch,
+      strategy,
+      incoming: commitsBehind,
+      onSettled: () => void refreshStatus()
+    })
+  }
+
+  /** The wide half of the Pull control: the saved strategy, or the chooser. */
+  function pullAction(): void {
+    const target = resolvePullTarget()
+    if (!target) {
+      toast.error('No tracked branch is available to pull')
+      return
+    }
     if (appConfigState.defaultPullStrategy === 'ask') {
-      pullStrategyError = ''
       pullStrategyOpen = true
       return
     }
-    await performPull(appConfigState.defaultPullStrategy)
+    startPull(appConfigState.defaultPullStrategy)
   }
 
   /**
@@ -4117,8 +4135,10 @@
         conflict controls, and Pull and Push. Pull and Push are independent   a
         diverged branch needs both   so each gets a share of the row's width
         instead of one hiding the other, and they are the only items here that
-        stretch. While conflicts are open they stand aside entirely (see
-        `conflictsOpen`) so the row can hold the controls that end them.
+        stretch. Pull is split at its right edge so a one-off strategy is a
+        click away from the saved one. While conflicts are open they stand aside
+        entirely (see `conflictsOpen`) so the row can hold the controls that end
+        them.
       -->
       <div
         class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-2"
@@ -4126,20 +4146,14 @@
         {@render viewContext()}
         {#if showsRemoteActions}
           {#if showsPull}
-            <button
-              type="button"
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
-              title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
-              disabled={branchSyncBusy}
-              onclick={() => void pullAction()}
-            >
-              {#if gitState.isBusy('pull')}
-                <CioSpinner size={11} class="animate-spin" />
-              {:else}
-                <CioDownload size={11} />
-              {/if}
-              <span class="min-w-0 truncate">Pull {commitsBehind}</span>
-            </button>
+            <GitPullButton
+              behind={commitsBehind}
+              busy={gitState.isBusy('pull')}
+              blocked={branchSyncBusy}
+              preference={appConfigState.defaultPullStrategy}
+              onPull={pullAction}
+              onPullWith={startPull}
+            />
           {/if}
           {#if showsPush}
             <button
@@ -4481,7 +4495,6 @@
     {remoteBranchExists}
     {pushBlocked}
     {pullStrategyOpen}
-    {pullStrategyError}
     {syncMainOpen}
     {syncDirection}
     {integrationOpen}
@@ -4525,7 +4538,7 @@
     {confirmPushUpstream}
     {recoverPush}
     {closePullStrategy}
-    {performPull}
+    {startPull}
     {closeSyncMain}
     {performSyncMain}
     {confirmCompleteMerge}

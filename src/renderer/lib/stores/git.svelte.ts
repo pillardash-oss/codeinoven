@@ -1209,7 +1209,7 @@ export class GitState {
     remote: string,
     branch: string,
     strategy: Parameters<GitLocalOperations['pullIntegrate']>[3]
-  ): Promise<void> {
+  ): Promise<GitStatus | null> {
     return this.local.pullIntegrate(projectId, remote, branch, strategy)
   }
 
@@ -1414,9 +1414,9 @@ export class GitState {
     return this.prOps.closePullRequest(projectId, owner, repo, pullNumber)
   }
 
-  /** Whether GitHub protects a branch, so a merged reader knows if it may be deleted. */
-  branchProtection(projectId: string, owner: string, repo: string, branch: string) {
-    return this.prOps.branchProtection(projectId, owner, repo, branch)
+  /** What a merged pull request's head branch is as far as deleting it goes. */
+  branchDeletionState(projectId: string, owner: string, repo: string, branch: string) {
+    return this.prOps.branchDeletionState(projectId, owner, repo, branch)
   }
 
   /** Delete a merged pull request's head branch from the repository. */

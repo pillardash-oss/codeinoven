@@ -14,6 +14,7 @@
     GitStatus
   } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import { PULL_STRATEGY_OPTIONS } from './git-pull-copy'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -26,7 +27,6 @@
     /** Push is unavailable: another remote action is running, or a fetch is. */
     pushBlocked: boolean
     pullStrategyOpen: boolean
-    pullStrategyError: string
     syncMainOpen: boolean
     syncDirection: GitSyncDirection
     integrationOpen: boolean
@@ -70,7 +70,7 @@
     confirmPushUpstream: () => void
     recoverPush: (mode: 'merge' | 'rebase') => void
     closePullStrategy: () => void
-    performPull: (strategy: GitPullStrategy) => void
+    startPull: (strategy: GitPullStrategy) => void
     closeSyncMain: () => void
     performSyncMain: (direction: GitSyncDirection, strategy: GitPullStrategy) => void
     confirmCompleteMerge: () => void
@@ -96,7 +96,6 @@
     remoteBranchExists,
     pushBlocked,
     pullStrategyOpen,
-    pullStrategyError,
     syncMainOpen,
     syncDirection,
     integrationOpen,
@@ -140,7 +139,7 @@
     confirmPushUpstream,
     recoverPush,
     closePullStrategy,
-    performPull,
+    startPull,
     closeSyncMain,
     performSyncMain,
     confirmCompleteMerge,
@@ -270,34 +269,18 @@
           <span class="font-mono">{status?.upstream ?? 'its remote'}</span>
         </p>
       </div>
-      {#if pullStrategyError}
-        <div class="border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-          <p class="text-[0.625rem] font-semibold text-danger">
-            That pull strategy could not finish
-          </p>
-          <p
-            class="mt-0.5 whitespace-pre-wrap break-words text-[0.5625rem] leading-relaxed text-danger"
-          >
-            {pullStrategyError}
-          </p>
-          <p class="mt-1 text-[0.5625rem] leading-relaxed text-dimmed">
-            Choose another strategy below, or cancel without changing the branch further.
-          </p>
-        </div>
-      {/if}
       <div class="space-y-1 text-[0.5625rem] leading-relaxed text-dimmed">
+        {#each PULL_STRATEGY_OPTIONS as option (option.value)}
+          <p>
+            <span class="font-medium text-foreground">{option.label}</span>
+            {option.note}
+          </p>
+        {/each}
         <p>
-          <span class="font-medium text-foreground">Merge</span> keeps both histories and may create a
-          merge commit.
+          The strategy you pick becomes your default, so the next pull uses it without asking. You
+          can change it in Settings or from the arrow beside the Pull button.
         </p>
-        <p>
-          <span class="font-medium text-foreground">Rebase</span> replays local commits on top of the
-          remote branch.
-        </p>
-        <p>
-          <span class="font-medium text-foreground">Fast-forward only</span> pulls only when no reconciliation
-          is needed.
-        </p>
+        <p>The pull reports in its own panel, so you can keep working while it runs.</p>
       </div>
     </div>
     {#snippet footer()}
@@ -305,36 +288,25 @@
         <button
           type="button"
           class="cursor-pointer px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-          disabled={gitState.isBusy('pull')}
           onclick={closePullStrategy}
         >
           Cancel
         </button>
-        <button
-          type="button"
-          class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-          disabled={gitState.isBusy('pull')}
-          onclick={() => void performPull('ff-only')}
-        >
-          Fast-forward only
-        </button>
-        <button
-          type="button"
-          class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-          disabled={gitState.isBusy('pull')}
-          onclick={() => void performPull('rebase')}
-        >
-          Rebase
-        </button>
-        <button
-          type="button"
-          class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-          data-modal-primary
-          disabled={gitState.isBusy('pull')}
-          onclick={() => void performPull('merge')}
-        >
-          Merge
-        </button>
+        {#each PULL_STRATEGY_OPTIONS as option (option.value)}
+          <button
+            type="button"
+            class={[
+              'h-8 cursor-pointer px-3 text-[0.6875rem] font-medium transition-colors disabled:cursor-default disabled:opacity-50',
+              option.value === 'merge'
+                ? 'bg-primary text-on-primary hover:bg-primary-hover'
+                : 'border border-border text-foreground hover:bg-elevated'
+            ]}
+            data-modal-primary={option.value === 'merge' ? '' : undefined}
+            onclick={() => startPull(option.value)}
+          >
+            {option.label}
+          </button>
+        {/each}
       </div>
     {/snippet}
   </Modal>
