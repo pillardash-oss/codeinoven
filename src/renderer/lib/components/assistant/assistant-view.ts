@@ -22,7 +22,8 @@ import {
 import { normalizePlanDelivery, normalizePlanPriority } from '$shared/assistant-reporting'
 import {
   ASSISTANT_PERSONALITY_HEADING,
-  ASSISTANT_PERSONALITY_SECTION_TITLE
+  ASSISTANT_PERSONALITY_SECTION_TITLE,
+  assistantPersonalityDocument
 } from '$shared/assistant-personality'
 import type { ComposerAssistantTag } from '../chats/composer-mentions'
 import { assistantAccentColor } from '../../assistant-icons'
@@ -834,7 +835,10 @@ export function readKnowledgePersonality(knowledge: string): string {
  *
  * A document that already carries the section has it rewritten in place, so the
  * order the agent wrote stays as it is. One that does not gets it at the top, where
- * the panel shows it and where the authoring contract asks the agent to write it.
+ * the panel shows it and where the authoring contract asks the agent to write it. A
+ * document with no headings of its own takes an `Instructions` boundary first, so
+ * the personality stays one section instead of owning everything under it.
+ *
  * An empty personality leaves just the heading, so the section survives as an empty
  * one the user can fill in later instead of disappearing from the panel.
  */
@@ -848,6 +852,11 @@ export function withKnowledgePersonality(knowledge: string, personality: string)
     )
   }
   if (!body) return knowledge
+  // A heading-less document is one unheaded section, so it needs the boundary the
+  // shared helper adds; anything else already opens with a heading of its own.
+  if (sections.length === 1 && !sections[0]?.heading) {
+    return assistantPersonalityDocument(body, knowledge)
+  }
   return serializeKnowledgeSections([
     {
       id: 'personality',

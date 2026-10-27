@@ -18,6 +18,8 @@ import {
   missedTabVisible,
   parseKnowledgeSections,
   parsePlanTime,
+  readKnowledgePersonality,
+  withKnowledgePersonality,
   parseAssistantPlan,
   previewRuns,
   resolveConnections,
@@ -390,6 +392,49 @@ const AUTHORED_KNOWLEDGE = [
   'STYLE AND DISCLOSURE',
   '- The report never contains tool names.'
 ].join('\n')
+
+describe('personality section', () => {
+  it('reads the section the agent wrote, wherever it sits', () => {
+    const knowledge = [
+      '# Ola',
+      '',
+      '## Personality',
+      'Brief and direct.',
+      '',
+      '## Rules',
+      'x'
+    ].join('\n')
+    expect(readKnowledgePersonality(knowledge)).toBe('Brief and direct.')
+    expect(readKnowledgePersonality('## Rules\nNothing about voice.')).toBe('')
+  })
+
+  it('rewrites the section in place without dropping the other ones', () => {
+    const knowledge = ['## Personality', 'Old.', '', '## Rules', 'Be careful.'].join('\n')
+    expect(withKnowledgePersonality(knowledge, 'New.')).toBe(
+      ['## Personality', 'New.', '', '## Rules', 'Be careful.'].join('\n')
+    )
+  })
+
+  it('puts the section first above a document that has headings of its own', () => {
+    const knowledge = ['# Ola', '', '## Identity', '- Name: Ola.'].join('\n')
+    expect(withKnowledgePersonality(knowledge, 'Brief.')).toBe(
+      ['## Personality', 'Brief.', '', knowledge].join('\n')
+    )
+  })
+
+  it('adds an Instructions boundary so a heading-less document is never swallowed', () => {
+    // A markdown heading owns everything under it, so the personality must not be
+    // dropped straight above prose: the whole document would read as one section
+    // called Personality, which is exactly the collapse this boundary prevents.
+    const knowledge = 'You are Ola.\n\nSupport the brand.'
+    expect(withKnowledgePersonality(knowledge, 'Brief.')).toBe(
+      ['## Personality', 'Brief.', '', '## Instructions', knowledge].join('\n')
+    )
+    expect(withKnowledgePersonality('', 'Only a voice.')).toBe(
+      ['## Personality', 'Only a voice.'].join('\n')
+    )
+  })
+})
 
 describe('knowledge section parsing', () => {
   it('splits ALL-CAPS titles, including a parenthesised one with lowercase inside', () => {
