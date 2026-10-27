@@ -48,6 +48,7 @@
   import { createModelProfilesController } from './useModelProfiles.svelte'
   import {
     findModelEntry,
+    providerDisplayName,
     truncateLabel,
     type ModelPickerProfilesGroup
   } from './model-picker-helpers'
@@ -754,7 +755,7 @@
           <span class="flex shrink-0 items-center gap-0.5">
             <ModelPickerVendorIcons
               harnessId={selectedProvider.harnessId}
-              providerName={selectedProvider.name}
+              providerName={providerDisplayName(selectedProvider.name)}
               providerId={selectedProvider.id}
             />
           </span>

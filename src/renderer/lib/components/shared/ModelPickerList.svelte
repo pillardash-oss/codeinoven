@@ -32,6 +32,7 @@
     passesVisionFilter,
     pickerIndexForSelectedModel,
     PICKER_ROW_HEIGHT,
+    providerDisplayName,
     resolveModel,
     searchWords,
     visiblePickerItems,
@@ -943,6 +944,7 @@
 
 {#snippet providerHeader(provider: ProviderCatalog)}
   {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
+  {@const label = providerDisplayName(provider.name)}
   {@const reorderable = canReorderProvider(provider)}
   {@const edge =
     providerDropTarget?.providerId === provider.id ? providerDropTarget.position : null}
@@ -967,16 +969,16 @@
       type="button"
       class={`flex h-full w-full items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-elevated ${reorderable ? 'pl-4 pr-2' : 'px-2'}`}
       aria-expanded={!collapsed}
-      title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
+      title={collapsed ? `Expand ${label}` : `Collapse ${label}`}
       onclick={() => toggleProviderGroup(provider)}
     >
       <CioForward
         size={11}
         class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
       />
-      <VendorIcon name={provider.name} id={provider.id} size={14} />
+      <VendorIcon name={label} id={provider.id} size={14} />
       <span class="truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-        {provider.name}
+        {label}
       </span>
       {#if provider.catalogStatus === 'unavailable'}
         <span class="ml-auto shrink-0 text-[0.5625rem] font-medium text-dimmed">Unavailable</span>
@@ -1078,6 +1080,7 @@
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
   {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
+  {@const providerLabel = providerDisplayName(entry.provider.name)}
   <button
     class={`model-row-btn group/row ml-4 flex h-full w-[calc(100%-1rem)] flex-col justify-center px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={unavailable
@@ -1219,10 +1222,10 @@
     <span class="flex items-center gap-1 truncate text-[0.625rem] text-dimmed">
       <ModelPickerVendorIcons
         harnessId={entry.provider.harnessId}
-        providerName={entry.provider.name}
+        providerName={providerLabel}
         providerId={entry.provider.id}
       />
-      <span class="truncate">{entry.provider.name}</span>
+      <span class="truncate">{providerLabel}</span>
     </span>
   </button>
 {/snippet}
