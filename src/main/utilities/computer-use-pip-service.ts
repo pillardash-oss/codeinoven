@@ -14,8 +14,34 @@ import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
-const TARGET_FRAME_RATE = 15
-const FRAME_INTERVAL_MS = Math.round(1_000 / TARGET_FRAME_RATE)
+/* Frame cadence. The preview is activity driven, not free-running, and the
+ * numbers below come from measuring one frame rather than from a target rate.
+ *
+ * A frame costs the driver one window capture: measured on macOS 27 against
+ * CuaDriver 0.38, a full-screen window answers `get_window_state` in 250-300 ms
+ * of wall time and about one core-second, and the accessibility walk this used to
+ * ask for as well was a further ~120 ms at over one core. A 15 fps loop could
+ * therefore never reach its target: it simply ran captures back to back for the
+ * whole run, kept a core busy (the fan users hear), and streamed half a megabyte
+ * of base64 per frame. Frames are now asked for by what actually happens:
+ *   - one per computer-use operation the agent performs, which is also what makes
+ *     the preview show that action,
+ *   - a slow refresh while the overlay is on screen, so a quiet run still shows
+ *     changes the agent did not cause,
+ *   - nothing at all while the overlay is hidden. */
+/** How often the loop asks whether a frame is due. Only a scheduler: a tick that
+ *  finds nothing due costs nothing and calls no driver tool. */
+const FRAME_TICK_MS = 100
+/** The floor between two captures. Coalesces a burst of operations (typing,
+ *  scrolling, a multi-step script) into the frames a person can actually watch,
+ *  and matches what one capture already costs. */
+const MIN_FRAME_GAP_MS = 250
+/** How often a run that performs no operation refreshes the preview. */
+const IDLE_REFRESH_MS = 2_000
+/** How long a window ranking is reused before it is resolved again, so the
+ *  preview still follows the app's frontmost window without enumerating every
+ *  window on every frame. */
+const WINDOW_RESOLVE_TTL_MS = 2_000
 /** Failed re-resolutions a run that has never painted a frame may report before
  *  it hides. Nothing is on screen to freeze, so the overlay lets go after a
  *  couple of seconds and the thread row keeps reporting the run. */
@@ -28,7 +54,7 @@ const STALE_FRAME_MISS_BUDGET = 20
 /** The pause between re-resolutions while frames are failing. Full frame rate
  *  through a failure would spend every attempt on a driver call that cannot
  *  change the answer yet. */
-const RETRY_INTERVAL_MS = 250
+const RETRY_INTERVAL_MS = MIN_FRAME_GAP_MS
 /** How long a window the driver refused to photograph is skipped while the pid
  *  has another window worth showing. The refusal is a property of the moment,
  *  not of the window. */
@@ -92,6 +118,18 @@ export class ComputerUsePipService {
   private active = false
   private misses = 0
   private captureInFlight = false
+  /** Whether the run performed an operation (or came on screen) since the last
+   *  frame, i.e. whether the next tick owes the user a capture. */
+  private frameRequested = false
+  /** When the last capture attempt started, which is what the cadence and the
+   *  idle refresh are measured from. */
+  private lastFrameStartedAt = 0
+  /** Whether the renderer would paint a preview at all. False while the user is
+   *  looking at another thread: nobody sees the frames, so none are taken. */
+  private previewVisible = true
+  /** The last window ranking resolved for the tracked pid, so the frame path does
+   *  not enumerate windows for every capture. */
+  private windowRanking: { pid: number; readAt: number; windows: WindowRecord[] } | null = null
   /** Window ids the driver refused to photograph, until a deadline. Consulted
    *  by the next frame so a dud window (a wrapper surface, a window that is not
    *  capturable yet) does not sink the run while the pid has another window
@@ -164,6 +202,35 @@ export class ComputerUsePipService {
       void this.track(event.pid, event.threadId, event.sessionId, event.permissionLevel)
     }
     this.noteAgentCursor(event)
+    this.requestFrame(event)
+  }
+
+  /**
+   * Ask for one frame because the run just did something a person would want to
+   * see. Only the tracked run may ask: two threads can drive the computer at
+   * once and this overlay shows one of them.
+   *
+   * The request is a flag, not a capture, so a burst of operations collapses
+   * into the next tick's single frame instead of one capture per operation.
+   */
+  private requestFrame(event: CuaOperationEvent): void {
+    if (!this.active || event.threadId !== this.ownerThreadId) return
+    this.frameRequested = true
+  }
+
+  /**
+   * Renderer-reported need: whether a preview would be painted at all.
+   *
+   * A run keeps going while the user reads another thread, and the overlay is
+   * simply not on screen then. Capturing anyway used to keep a core busy to paint
+   * frames nobody could see, so the loop goes quiet until a preview is back.
+   */
+  setPreviewVisible(visible: boolean): void {
+    if (this.previewVisible === visible) return
+    this.previewVisible = visible
+    // A preview coming back on screen holds a frame that may be seconds old, and
+    // the loop has taken none while it was hidden.
+    if (visible) this.frameRequested = true
   }
 
   /**
@@ -197,6 +264,7 @@ export class ComputerUsePipService {
     this.rejectedWindows.clear()
     this.framePainted = false
     this.nextAttemptAt = 0
+    this.windowRanking = null
   }
 
   /** Every thread whose agent is currently driving the computer. */
@@ -251,11 +319,13 @@ export class ComputerUsePipService {
       this.clearCursor()
       this.resetWindowCapture()
       this.captureGeneration += 1
+      this.lastFrameStartedAt = 0
     }
     if (this.active && this.targetPid === pid) return
     this.targetPid = pid
     this.misses = 0
     this.active = true
+    this.frameRequested = true
     this.broadcastState()
     await this.captureOnce()
     this.ensureLoop()
@@ -376,6 +446,8 @@ export class ComputerUsePipService {
     this.misses = 0
     this.ownerThreadId = null
     this.targetSessionId = null
+    this.frameRequested = false
+    this.lastFrameStartedAt = 0
     this.clearCursor()
     this.resetWindowCapture()
     this.clearAutoDismiss()
@@ -410,6 +482,8 @@ export class ComputerUsePipService {
     this.active = false
     this.runGeneration += 1
     this.captureGeneration += 1
+    this.frameRequested = false
+    this.lastFrameStartedAt = 0
     this.clearCursor()
     this.resetWindowCapture()
     this.clearLoop()
@@ -442,9 +516,28 @@ export class ComputerUsePipService {
 
   private ensureLoop(): void {
     if (this.timer || !this.active) return
+    // The tick is a scheduler only: `captureOnce` decides whether a frame is due
+    // (a request from the run, an idle refresh, a retry) and drops the tick
+    // without calling the driver when none is.
     this.timer = setInterval(() => {
       void this.captureOnce()
-    }, FRAME_INTERVAL_MS)
+    }, FRAME_TICK_MS)
+  }
+
+  /**
+   * Whether this tick owes a frame.
+   *
+   * Three gates, cheapest first: a pending retry pause after a failed frame, the
+   * coalescing floor between captures, and then either a request from the run or
+   * the slow refresh that keeps a quiet run's preview current.
+   */
+  private frameDue(): boolean {
+    const now = Date.now()
+    if (now < this.nextAttemptAt) return false
+    const sinceLast = now - this.lastFrameStartedAt
+    if (sinceLast < MIN_FRAME_GAP_MS) return false
+    if (this.frameRequested) return true
+    return this.previewVisible && sinceLast >= IDLE_REFRESH_MS
   }
 
   private clearLoop(): void {
@@ -530,14 +623,19 @@ export class ComputerUsePipService {
 
   private async captureOnce(): Promise<void> {
     if (!this.active || this.targetPid === null || this.captureInFlight) return
-    if (Date.now() < this.nextAttemptAt) return
+    if (!this.frameDue()) return
     this.captureInFlight = true
+    this.frameRequested = false
+    this.lastFrameStartedAt = Date.now()
     const pid = this.targetPid
     const sessionId = this.targetSessionId
     const generation = this.captureGeneration
+    const cap = this.frameCap()
     try {
       const client = await this.ensureClient()
-      const candidates = this.captureCandidates(rankWindows(await this.listWindows(client, pid)))
+      const candidates = this.captureCandidates(
+        rankWindows(await this.rankedWindows(client, pid, this.misses > 0))
+      )
       if (candidates.length === 0) {
         await this.failFrame({ generation, pid }, `pid ${pid} has no capturable top-level window`)
         return
@@ -557,15 +655,29 @@ export class ComputerUsePipService {
         // A gateway is about to act on this window from a snapshot it took
         // itself, and this frame would take that snapshot's place. One frame of
         // preview is worth less than the action, so the window waits for the
-        // next tick; nothing about this frame's failure accounting changes.
-        if (cuaSnapshotLeased(pid, window.window_id)) return
+        // next tick; nothing about this frame's failure accounting changes, but
+        // the frame is still owed so the wait costs one tick and not the idle
+        // refresh.
+        if (cuaSnapshotLeased(pid, window.window_id)) {
+          this.frameRequested = true
+          return
+        }
         let result: unknown
         try {
+          // The preview asks for what the driver documents as its live-preview
+          // path, and it is the cheapest frame it can produce: no accessibility
+          // walk (`include_accessibility_tree: false`, which also stops a preview
+          // frame from replacing the snapshot the agent is acting on and staling
+          // its element tokens), no registered action capture (`display_only`),
+          // and the image capped at the size the overlay paints instead of a
+          // 1366px PNG that this process would only decode and shrink again.
           result = await client.callTool('get_window_state', {
             pid,
             window_id: window.window_id,
             include_screenshot: true,
-            max_elements: 1
+            include_accessibility_tree: false,
+            display_only: true,
+            max_dimension: cap
           })
         } catch (error) {
           // A rejected call belongs to the transport or the run, not to one
@@ -580,7 +692,7 @@ export class ComputerUsePipService {
         }
         const image = extractImage(result)
         if (image) {
-          const optimizedImage = optimizeImage(image, this.frameCap())
+          const optimizedImage = optimizeImage(image, cap)
           // The overlay may have been dismissed, re-targeted, or re-latched while
           // we awaited the driver   never paint a stale frame, or record the
           // run's state from a stale window, into the run that replaced it.
@@ -592,9 +704,11 @@ export class ComputerUsePipService {
           this.windowId = window.window_id
           // Reprojected every frame against the window this frame really shows,
           // so the marker holds its place in the app when the window moves or is
-          // replaced.
+          // replaced. The bounds come from the capture itself: the window ranking
+          // is deliberately not re-resolved for every frame.
+          const shown: WindowRecord = image.bounds ? { ...window, bounds: image.bounds } : window
           const projectedCursor = this.agentCursorScreen
-            ? projectCursor(this.agentCursorScreen, window, optimizedImage)
+            ? projectCursor(this.agentCursorScreen, shown, optimizedImage)
             : null
           if (projectedCursor) this.frameCursor = projectedCursor
           const frame: ComputerUsePipFrame = {
@@ -661,8 +775,9 @@ export class ComputerUsePipService {
    * replaced it.
    *
    * The reason is logged once per run of consecutive failures, never per frame:
-   * the loop runs at 15 fps, and a lost driver daemon used to fill the error log
-   * with one stack trace every 69 ms. A frame the driver refused outright stays a
+   * the loop retries every few hundred milliseconds, and a lost driver daemon
+   * used to fill the error log with one stack trace per frame. A frame the driver
+   * refused outright stays a
    * dev-level detail (windows come and go mid-teardown); a failure that broke the
    * connection is a fault and keeps its error-level line and stack.
    *
@@ -704,6 +819,10 @@ export class ComputerUsePipService {
       return
     }
     this.nextAttemptAt = Date.now() + RETRY_INTERVAL_MS
+    // A failed frame is still owed: the retry is what ages a run that cannot be
+    // photographed out of its miss budget instead of leaving it to the slow idle
+    // refresh.
+    this.frameRequested = true
   }
 
   /**
@@ -742,6 +861,35 @@ export class ComputerUsePipService {
   /** The tracked pid's current top-level windows, freshly resolved. */
   private async listWindows(client: McpClient, pid: number): Promise<WindowRecord[]> {
     return extractWindows(await client.callTool('list_windows', { pid }))
+  }
+
+  /**
+   * The tracked pid's windows, resolved at most once per
+   * `WINDOW_RESOLVE_TTL_MS`.
+   *
+   * Enumerating every window of the app is not free, and the frame path used to
+   * do it for every capture. A frame instead reuses the ranking it has, which is
+   * enough to keep photographing the window the run is driving, and a forced read
+   * happens exactly when the answer may have changed for a reason that matters: a
+   * frame that just failed (the window it names may be gone) or a new target.
+   */
+  private async rankedWindows(
+    client: McpClient,
+    pid: number,
+    force: boolean
+  ): Promise<WindowRecord[]> {
+    const cached = this.windowRanking
+    if (
+      !force &&
+      cached &&
+      cached.pid === pid &&
+      Date.now() - cached.readAt < WINDOW_RESOLVE_TTL_MS
+    ) {
+      return cached.windows
+    }
+    const windows = await this.listWindows(client, pid)
+    this.windowRanking = { pid, readAt: Date.now(), windows }
+    return windows
   }
 
   /**
@@ -864,7 +1012,12 @@ function extractWindows(result: unknown): WindowRecord[] {
   })
 }
 
-function extractImage(result: unknown): { dataUrl: string; width: number; height: number } | null {
+function extractImage(result: unknown): {
+  dataUrl: string
+  width: number
+  height: number
+  bounds?: WindowBounds
+} | null {
   if (!isRecord(result)) return null
   const content = Array.isArray(result['content']) ? result['content'] : []
   for (const item of content) {
@@ -875,13 +1028,26 @@ function extractImage(result: unknown): { dataUrl: string; width: number; height
     const structured = recordValue(result['structuredContent'])
     const width = Number(structured['screenshot_width']) || 0
     const height = Number(structured['screenshot_height']) || 0
+    const bounds = extractBounds(structured['window_bounds'])
     return {
       dataUrl: `data:${mimeType};base64,${data}`,
       width,
-      height
+      height,
+      ...(bounds ? { bounds } : {})
     }
   }
   return null
+}
+
+/** The window rectangle a snapshot reports, when it reports a usable one. */
+function extractBounds(value: unknown): WindowBounds | null {
+  const record = recordValue(value)
+  const x = Number(record['x'])
+  const y = Number(record['y'])
+  const width = Number(record['width'] ?? record['w'])
+  const height = Number(record['height'] ?? record['h'])
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null
+  return { x, y, width, height }
 }
 
 /**

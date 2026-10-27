@@ -13,8 +13,8 @@
  *
  * That registry is shared by every client of the driver, and the app itself is
  * one of them twice over: the gateway serves the model's calls, while the
- * computer-use PiP photographs the same window at up to 15 frames a second to
- * show the run. A snapshot held across two model calls is therefore usually
+ * computer-use PiP photographs the same window once per action to show the run.
+ * A snapshot held across two model calls is therefore usually
  * superseded by the time the second call arrives, which is what made clicks
  * through the gateway unreliable.
  *

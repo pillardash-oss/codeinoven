@@ -572,7 +572,7 @@ interface TurnState {
    *
    * A Cua action addresses elements and pixels inside one snapshot, and the
    * driver's registry keeps a single slot per window that the app's own
-   * computer-use preview refills at up to 15 frames a second. Keeping the view
+   * computer-use preview refills once per action. Keeping the view
    * here is what lets an action name the snapshot its index truly belongs to,
    * and re-anchor that reference onto a fresh one when the registry has moved
    * on. See `src/lib/cua-driver.ts`.
@@ -3115,7 +3115,7 @@ export class UtilityOrchestrationService {
    * The driver refuses every element and pixel action whose snapshot has been
    * replaced, and a window's snapshot is replaced by the next snapshot of that
    * window from any client. The app is itself such a client: the computer-use
-   * preview photographs the window being driven at up to 15 frames a second, so
+   * preview photographs the window being driven after every action, so
    * a reference the model read on one call is normally superseded by the time it
    * acts on the next one.
    *
