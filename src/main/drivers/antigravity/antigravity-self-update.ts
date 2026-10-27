@@ -3,6 +3,7 @@ import { mkdir, utimes, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Logger } from '../../system/logger'
+import { resolveExecutablePathAsync } from '../cli-environment'
 
 /**
  * Hold Antigravity's own background auto-updater so CodeInOven owns updates.
@@ -32,6 +33,12 @@ import { Logger } from '../../system/logger'
  * The stamp follows the HOME the CLI itself will run under: a managed account
  * is a HOME container, and a turn's runtime overlay HOME links the real
  * `antigravity-cli` profile directory through, so it is one file per install.
+ *
+ * A machine without the CLI is left completely alone: no Antigravity home is
+ * created for a harness that is not installed. An install that has never run
+ * yet (installed but no profile directory) does get one seeded, which is the
+ * directory the CLI would create on its first launch anyway, so that first
+ * launch cannot update itself either.
  */
 export function antigravityAutoUpdateStampPath(environment: NodeJS.ProcessEnv = {}): string {
   const home = environment['HOME'] ?? environment['USERPROFILE'] ?? homedir()
@@ -49,10 +56,11 @@ export async function holdAntigravitySelfUpdate(
 ): Promise<void> {
   const stampPath = antigravityAutoUpdateStampPath(environment)
   const profileDirectory = dirname(stampPath)
-  // Only hold an install that already has a profile directory: creating one
-  // here could seed a home the CLI does not resolve, and a fresh install is on
-  // the current release anyway.
-  if (!existsSync(profileDirectory)) return
+  if (!existsSync(profileDirectory)) {
+    // No profile yet. Seed one only for an install that exists, so a machine
+    // without Antigravity never gains an empty home it never asked for.
+    if (!(await resolveExecutablePathAsync('agy', environment))) return
+  }
   try {
     const now = new Date()
     if (existsSync(stampPath)) {

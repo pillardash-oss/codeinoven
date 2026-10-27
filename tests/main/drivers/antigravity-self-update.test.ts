@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'fs/promises'
+import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -64,10 +64,23 @@ describe('antigravity self-update hold', () => {
 
   it('leaves a home with no Antigravity profile untouched', async () => {
     const home = await tempHome()
+    const emptyPath = await tempHome()
 
-    await holdAntigravitySelfUpdate({ HOME: home })
+    await holdAntigravitySelfUpdate({ HOME: home, PATH: emptyPath })
 
     expect(existsSync(join(home, '.gemini', 'antigravity-cli'))).toBe(false)
+  })
+
+  it('seeds the hold for an install the CLI has never run yet', async () => {
+    const home = await tempHome()
+    const bin = await tempHome()
+    const executable = join(bin, process.platform === 'win32' ? 'agy.exe' : 'agy')
+    await writeFile(executable, '')
+    if (process.platform !== 'win32') await chmod(executable, 0o755)
+
+    await holdAntigravitySelfUpdate({ HOME: home, PATH: bin })
+
+    expect(existsSync(antigravityAutoUpdateStampPath({ HOME: home }))).toBe(true)
   })
 
   it('never throws when the stamp cannot be written', async () => {
