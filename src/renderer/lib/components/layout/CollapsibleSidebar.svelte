@@ -134,6 +134,11 @@
 
   let docked = $derived(pinned || sidebarState.docked)
 
+  /** The panel never narrows past the width the header's own chrome needs: the
+   *  bar's mark, navigation and actions all live in this column, so shrinking
+   *  below their width would push them out of it. */
+  let dockedWidth = $derived(Math.max(sidebarState.width, layoutPanelState.minimumWidth))
+
   /* The header sits above this sidebar and puts its chrome/title boundary on this
      panel's right edge, so the panel has to say where that edge is. Registration
      happens once; every resize drag and every collapse only reports the new
@@ -141,7 +146,7 @@
   let panelRegistration: number | null = null
 
   $effect(() => {
-    const width = docked ? sidebarState.width : 0
+    const width = docked ? dockedWidth : 0
     if (panelRegistration === null) {
       panelRegistration = layoutPanelState.register(width)
       return
@@ -193,7 +198,7 @@
     data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
     data-region={region}
     aria-label={label}
-    style="width: {sidebarState.width}px"
+    style="width: {dockedWidth}px"
     class:select-none={resizing}
     in:slideWidth={{ duration: motionDuration(200), easing: cubicOut }}
     out:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
@@ -243,9 +248,13 @@
     <!-- Resize handle -->
     <SidebarResizeHandle
       side="right"
-      width={sidebarState.width}
+      width={dockedWidth}
       label="Resize sidebar"
-      onResize={(width) => (sidebarState.width = sidebarState.clampWidth(width))}
+      onResize={(width) =>
+        (sidebarState.width = Math.max(
+          layoutPanelState.minimumWidth,
+          sidebarState.clampWidth(width)
+        ))}
       onResizeEnd={() => sidebarState.persist()}
       bind:resizing
     />
@@ -266,7 +275,7 @@
       data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
       data-region={region}
       aria-label={label}
-      style="width: {sidebarState.width}px"
+      style="width: {dockedWidth}px"
       class:invisible={nativeHost}
       class:pointer-events-none={nativeHost}
       transition:fly={{ x: -16, duration: nativeHost ? 0 : motionDuration(140) }}

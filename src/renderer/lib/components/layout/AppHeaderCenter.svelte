@@ -1,6 +1,9 @@
 <script lang="ts">
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
+  import { slide } from 'svelte/transition'
   import { toast } from 'svelte-sonner'
+
+  import { motionDuration } from '$lib/motion'
 
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
@@ -167,7 +170,9 @@
                 project={headerProject}
                 iconUrl={resolvedProjectIcon}
                 branch={thread.branch ?? null}
-                class="group/icon relative h-5 w-5"
+                class="group/icon relative shrink-0 transition-[height,width] duration-200 ease-out {isWorking
+                  ? 'h-6 w-6'
+                  : 'h-4 w-4'}"
                 onPinToggled={handleProjectPinToggled}
                 onEdit={(projectId) => workspaceState.openProjectEdit(projectId)}
                 onError={(message) => toast.error(message)}
@@ -175,7 +180,7 @@
                 <img
                   src={resolvedProjectIcon}
                   alt=""
-                  class="h-4 w-4 object-contain"
+                  class="h-full w-full object-contain"
                   onerror={projectIconOnError(headerProject)}
                 />
               </ProjectInfoDropdown>
@@ -201,9 +206,10 @@
         </h1>
         {#if isWorking}
           <span
-            class="flex min-w-0 items-center gap-1 text-[0.5625rem] tracking-[0.06em] uppercase {isRetryPaused
+            class="flex min-w-0 items-center gap-1 overflow-hidden text-[0.5625rem] tracking-[0.06em] uppercase {isRetryPaused
               ? 'text-warning'
               : 'text-info'}"
+            transition:slide={{ duration: motionDuration(160) }}
           >
             <span class="block h-1 w-1 shrink-0 rounded-full bg-current"></span>
             {#if isForeignRun}

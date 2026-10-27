@@ -24,6 +24,13 @@ class LayoutPanelState {
   private panels = $state<PanelRegistration[]>([])
   /** The view rail the sidebar sits after, measured from the window edge. */
   readonly railWidth = 40
+  /**
+   * The narrowest the panel may get before the header's own chrome stops fitting
+   * inside it. The header owns this number because it is the one that knows how
+   * wide its mark, navigation and actions are; the sidebar reads it so a drag can
+   * never pull the bar's controls out of their column.
+   */
+  minimumWidth = $state(0)
 
   /** Docked width of the sidebar on screen, zero when none is docked. */
   get dockedWidth(): number {

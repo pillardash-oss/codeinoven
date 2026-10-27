@@ -77,17 +77,42 @@
    * name itself takes beside three actions; below that the bar falls back to the
    * short name rather than to an ellipsis.
    */
+  /** The bar's controls at their narrowest: the mark, the navigation pair and
+   *  three view actions. Nothing in the chrome shrinks, so this is what the
+   *  panel has to be able to hold. */
+  const CHROME_WIDTH = 182
+  /** The same column with the short name beside the mark. */
+  const CHROME_WIDTH_WITH_SHORT_NAME = 203
+  /** And with the whole wordmark. */
+  const CHROME_WIDTH_WITH_LONG_NAME = 252
+
   let brandForm = $derived.by((): 'long' | 'short' | 'none' => {
     const column = panelColumnWidth
-    if (column <= 0 || column < 118) return 'none'
+    if (column <= 0 || column < CHROME_WIDTH_WITH_SHORT_NAME) return 'none'
     if (controlsOnLeft) return 'short'
-    return column >= 264 ? 'long' : 'short'
+    return column >= CHROME_WIDTH_WITH_LONG_NAME ? 'long' : 'short'
+  })
+
+  /** The narrowest panel that still contains the header's chrome, so a drag can
+   *  never pull the action buttons out of the panel's column and into the
+   *  thread's. */
+  let minimumPanelWidth = $derived(
+    Math.max(0, CHROME_WIDTH + leftInset - layoutPanelState.railWidth)
+  )
+
+  $effect(() => {
+    layoutPanelState.minimumWidth = minimumPanelWidth
   })
 
   /** A checkout and a probe run the same source, so the one thing that tells
    *  them apart is where their data lives. The header says which this is, and a
    *  shipped build says nothing at all. */
   let buildLabel = $derived(buildEnvironmentLabel(window.api?.windowInfo.buildEnvironment) ?? null)
+
+  /** A probe runs the same source as a checkout, so its marker wears the
+   *  specification's colour: narrowed to two letters it still says which build
+   *  this is. */
+  let buildTone = $derived(window.api?.windowInfo.buildEnvironment === 'probe' ? 'spec' : 'neutral')
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -288,11 +313,12 @@
 
     {#if buildLabel}
       <StatusPill
-        tone="neutral"
+        tone={buildTone}
         dot
+        truncate
         title="CodeInOven {buildLabel} build"
         aria-label="CodeInOven build: {buildLabel}"
-        class="px-1 py-0">{buildLabel}</StatusPill
+        class="min-w-0 px-1 py-0">{buildLabel}</StatusPill
       >
     {/if}
 
@@ -517,12 +543,15 @@
   .header-cluster::after {
     content: '';
     position: absolute;
-    top: 50%;
+    top: 0;
     right: 0;
-    width: 1px;
-    height: 1.25rem;
-    transform: translateY(-50%);
-    background: var(--color-border);
+    bottom: 0;
+    width: 6px;
+    /* The panel's edge is its scrollbar, so the bar's boundary has to be the same
+       6px the scrollbar takes and sit on the same pixels, or the line reads as
+       half a pixel off where the panel actually ends. */
+    margin-right: -6px;
+    background: var(--color-border-strong);
   }
 
   .header-cluster-actions {
