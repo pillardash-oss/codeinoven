@@ -1,0 +1,13 @@
+{
+  "columns": 2,
+  "frames": [
+    { "entry": "./index.html", "title": "Overview", "caption": "Six variants, macOS / Windows / narrow" },
+    { "entry": "./recommendation.html", "title": "Recommendation", "caption": "V2 split centre with V1's seam" },
+    { "entry": "./v1-reserved-edge.html", "title": "V1 Reserved edge" },
+    { "entry": "./v2-split-center.html", "title": "V2 Split centre" },
+    { "entry": "./v3-rail-actions.html", "title": "V3 Rail owns the actions" },
+    { "entry": "./v4-command-field.html", "title": "V4 Command field" },
+    { "entry": "./v5-two-tiers.html", "title": "V5 Two tiers" },
+    { "entry": "./v6-priority-ladder.html", "title": "V6 Priority ladder" }
+  ]
+}
