@@ -115,6 +115,13 @@ export interface PullRequestTarget {
   pullNumber: number
 }
 
+/** Address one branch in a repository. */
+export interface BranchTarget {
+  owner: string
+  repo: string
+  branch: string
+}
+
 /**
  * List issues for a repository, optionally filtered by state. State `all` asks
  * for both open and closed, which is the only way to read a closed issue.
@@ -301,6 +308,16 @@ export interface GitProvider {
   reopenPullRequest(input: PullRequestTarget): Promise<PullRequestReference>
   /** Close an open pull request without merging. */
   closePullRequest(input: PullRequestTarget): Promise<PullRequestReference>
+  /**
+   * Whether the repository protects a branch.
+   *
+   * A protected branch refuses deletion, so a surface that offers to delete one
+   * has to know the answer before it draws the action. A branch the provider
+   * cannot find counts as unprotected: there is nothing left to protect.
+   */
+  isBranchProtected(input: BranchTarget): Promise<boolean>
+  /** Delete a branch from the repository, the way its own branches page does. */
+  deleteBranch(input: BranchTarget): Promise<void>
   /** Update an open pull request's title and/or description. */
   updatePullRequest(
     input: PullRequestTarget & { title?: string; body?: string }

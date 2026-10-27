@@ -341,6 +341,58 @@ export class GitPullRequestOperations {
     }
   }
 
+  /**
+   * Whether GitHub protects the pull request's head branch.
+   *
+   * Read only where the answer decides whether an action is drawn, which is the
+   * merged reader, so it costs one round trip per merged pull request a person
+   * opens. An unreadable answer reports unprotected: the delete itself is the
+   * authority, and it answers with GitHub's own refusal when the branch is
+   * protected after all.
+   */
+  async branchProtection(
+    projectId: string,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<boolean> {
+    try {
+      return await invoke('pr:branchProtection', projectId, owner, repo, branch)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Delete the head branch of a merged pull request.
+   *
+   * This is the repository's branch list, not the checkout: merging already put
+   * the commits where they belong, so the merged branch is only clutter, and
+   * deleting it was otherwise a trip to the Branches tab. Protected branches are
+   * refused by GitHub, which is why the surface hides the action for them.
+   */
+  async deleteMergedBranch(
+    projectId: string,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<boolean> {
+    this.access.markBusy('pr-branch-delete', true)
+    this.access.setError(null)
+    this.access.setGitHubPermission(null)
+    try {
+      return (
+        this.resolveMutation(await invoke('pr:deleteBranch', projectId, owner, repo, branch)) ===
+        true
+      )
+    } catch (reason) {
+      this.access.setError(errorMessage(reason, 'The branch could not be deleted'))
+      return false
+    } finally {
+      this.access.markBusy('pr-branch-delete', false)
+    }
+  }
+
   /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
   async updatePullRequest(
     projectId: string,

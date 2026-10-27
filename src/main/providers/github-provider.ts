@@ -52,6 +52,7 @@ import type { IssueLinkInput, SearchIssueCandidatesInput } from '../git/git-prov
 import { capJobLogText } from '../../lib/github-job-log'
 import { isReactionContent } from '../../lib/github-reactions'
 import type {
+  BranchTarget,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreatePrCommentInput,
@@ -393,6 +394,17 @@ const WORKFLOW_RUN_FILTER_STATUS: Record<WorkflowRunFilter, string | null> = {
 }
 
 /**
+ * A branch name as a URL path, keeping its slashes as separators.
+ *
+ * A branch is spelled in a URL the way it is spelled in git (`feature/thing`),
+ * so each segment is encoded on its own: encoding the whole name turns the
+ * separators into `%2F`, which GitHub's router does not read back as a branch.
+ */
+function branchPath(input: { branch: string }): string {
+  return input.branch.split('/').map(encodeURIComponent).join('/')
+}
+
+/**
  * GitHub-first REST adapter.
  *
  * The token is resolved from `SecretVault` in the main process only and is
@@ -530,6 +542,40 @@ export class GitHubProvider implements GitProvider {
       body: JSON.stringify({ state: 'closed' })
     })
     return this.toReference(response)
+  }
+
+  /**
+   * Whether GitHub protects a branch.
+   *
+   * The branch endpoint reports it beside the commit it points at, and a branch
+   * GitHub cannot find comes back 404. A missing branch is reported as
+   * unprotected on purpose: the caller asks so it knows whether deletion may
+   * proceed, and a branch that is already gone has nothing left to protect.
+   */
+  async isBranchProtected(input: BranchTarget): Promise<boolean> {
+    try {
+      const response = await this.request(`${this.repoPath(input)}/branches/${branchPath(input)}`, {
+        method: 'GET'
+      })
+      const record = Array.isArray(response) ? {} : response
+      return record['protected'] === true
+    } catch (failure) {
+      if (failure instanceof ProviderHttpError && failure.status === 404) return false
+      throw failure
+    }
+  }
+
+  /**
+   * Delete a branch from the repository.
+   *
+   * GitHub refuses this for a protected branch with a 422, which refuses the
+   * write rather than leaving the caller to believe it landed; the surface hides
+   * the action for those branches anyway, so this is the backstop.
+   */
+  async deleteBranch(input: BranchTarget): Promise<void> {
+    await this.request(`${this.repoPath(input)}/git/refs/heads/${branchPath(input)}`, {
+      method: 'DELETE'
+    })
   }
 
   /** Update an open pull request's title and/or description, mirroring GitHub's edit. */

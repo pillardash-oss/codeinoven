@@ -266,6 +266,44 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
     }
   )
 
+  /**
+   * Whether the merged pull request's head branch is protected.
+   *
+   * Read beside the merge so the reader only draws "Delete branch" where GitHub
+   * would actually let the branch go. A branch name is not a pull request, so it
+   * resolves the repository's provider itself rather than through
+   * `pullRequestTarget`.
+   */
+  ipcMain.handle(
+    'pr:branchProtection',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, branch: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.isBranchProtected({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        branch: validateBranchName(branch)
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:deleteBranch',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, branch: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      const target = {
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        branch: validateBranchName(branch)
+      }
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.deleteBranch(target)
+        return true
+      })
+    }
+  )
+
   ipcMain.handle(
     'pr:update',
     async (

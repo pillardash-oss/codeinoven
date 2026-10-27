@@ -3,7 +3,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
 
   /**
-   * The reader's close and conflict-resolution confirmations.
+   * The reader's close, conflict-resolution and branch-deletion confirmations.
    *
    * The merge confirmation is deliberately not here. It holds parameters worth
    * reviewing before they run (the method, the commit title, the message a squash
@@ -15,8 +15,10 @@
     summary: PullRequestSummary
     closeOpen: boolean
     resolveOpen: boolean
+    deleteBranchOpen: boolean
     onResolveLocally: () => void
     onClosePullRequest: () => void
+    onDeleteBranch: () => void
   }
 
   let {
@@ -24,8 +26,10 @@
     summary,
     closeOpen = $bindable(),
     resolveOpen = $bindable(),
+    deleteBranchOpen = $bindable(),
     onResolveLocally,
-    onClosePullRequest
+    onClosePullRequest,
+    onDeleteBranch
   }: Props = $props()
 </script>
 
@@ -59,5 +63,19 @@
   <p>
     <strong class="text-foreground">{summary.title}</strong> will be closed without merging. You can reopen
     it later from this view.
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={deleteBranchOpen}
+  title={`Delete branch “${summary.headRef}”?`}
+  onCancel={() => (deleteBranchOpen = false)}
+  onConfirm={onDeleteBranch}
+  confirmLabel="Delete branch"
+>
+  <p>
+    Branch <strong class="text-foreground">{summary.headRef}</strong> will be deleted from the
+    repository. The merge is already in {summary.baseRef}, so nothing merged is lost, but anyone
+    still working on this branch loses the one it tracks.
   </p>
 </ConfirmDialog>

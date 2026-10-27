@@ -1414,6 +1414,16 @@ export class GitState {
     return this.prOps.closePullRequest(projectId, owner, repo, pullNumber)
   }
 
+  /** Whether GitHub protects a branch, so a merged reader knows if it may be deleted. */
+  branchProtection(projectId: string, owner: string, repo: string, branch: string) {
+    return this.prOps.branchProtection(projectId, owner, repo, branch)
+  }
+
+  /** Delete a merged pull request's head branch from the repository. */
+  deleteMergedBranch(projectId: string, owner: string, repo: string, branch: string) {
+    return this.prOps.deleteMergedBranch(projectId, owner, repo, branch)
+  }
+
   /** Close a batch, one at a time, reporting what succeeded and what did not. */
   closePullRequests(
     projectId: string,

@@ -363,6 +363,19 @@ export const invokeGitContract = {
     GitHubMutationResult<PullRequestReference>
   >,
   /**
+   * Whether GitHub protects a branch, which is what decides whether the reader
+   * may offer to delete it once the pull request is merged.
+   */
+  'pr:branchProtection': {} as Contract<
+    [projectId: string, owner: string, repo: string, branch: string],
+    boolean
+  >,
+  /** Delete a merged pull request's head branch. Protected branches refuse this. */
+  'pr:deleteBranch': {} as Contract<
+    [projectId: string, owner: string, repo: string, branch: string],
+    GitHubMutationResult<boolean>
+  >,
+  /**
    * Replace the labels a pull request carries, returning the labels it now has.
    * One write for the whole set rather than an add or a remove per label, so a
    * picker that toggles several chips costs one round trip and its result is the

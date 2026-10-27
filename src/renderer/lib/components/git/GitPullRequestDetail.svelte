@@ -16,6 +16,7 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioThumbsUp from '@pdslng/cio-icon/CioThumbsUp.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, tick } from 'svelte'
@@ -218,6 +219,16 @@
   let mergeConfirm = $state(false)
   let closeConfirm = $state(false)
   let resolveConfirm = $state(false)
+  let branchDeleteConfirm = $state(false)
+  /**
+   * Whether the merged head branch is still worth offering to delete.
+   *
+   * `checking` is the honest first state: the answer is a provider read, and until
+   * it lands the action is neither shown nor claimed to be unavailable.
+   */
+  let branchState = $state<'checking' | 'deletable' | 'protected' | 'deleted'>('checking')
+  /** The pull request whose protection has already been asked for, so it is read once. */
+  let branchStateFor = 0
   let commitTitle = $state('')
   let commitMessage = $state('')
   let notice = $state('')
@@ -279,9 +290,23 @@
   const resolving = $derived(gitState.isBusy('merge'))
   const reopening = $derived(gitState.isBusy('pr-reopen'))
   const closing = $derived(gitState.isBusy('pr-close'))
+  const branchDeleting = $derived(gitState.isBusy('pr-branch-delete'))
   const markingReady = $derived(gitState.isBusy('pr-ready'))
   const prState = $derived(detail?.state ?? summary.state)
   const open = $derived(prState === 'open')
+  /**
+   * A merged pull request's head branch is only this repository's to delete when
+   * it lives here. A fork's branch belongs to the fork, so it is left alone.
+   */
+  const headBranchDeletable = $derived.by(() => {
+    const branch = summary.headRef
+    if (!branch || prState !== 'merged') return false
+    const head = summary.headRepository
+    if (head && head.toLowerCase() !== `${identity.owner}/${identity.repo}`.toLowerCase()) {
+      return false
+    }
+    return branchState === 'deletable'
+  })
   const draft = $derived(detail?.draft ?? summary.draft)
   const hasBody = $derived(commentBody.trim().length > 0)
   /** Why merging may not be a good idea right now   shown next to the button. */
@@ -685,6 +710,29 @@
   }
 
   /**
+   * Delete the merged pull request's head branch.
+   *
+   * Only the repository's branch goes: the local checkout keeps its own copy, so
+   * this can never discard commits sitting in someone's working tree. The footer
+   * records the outcome rather than disappearing, so the action cannot be pressed
+   * twice for a branch that is already gone.
+   */
+  async function deleteMergedBranch(): Promise<void> {
+    branchDeleteConfirm = false
+    const branch = summary.headRef
+    if (!branch) return
+    const deleted = await gitState.deleteMergedBranch(
+      projectId,
+      identity.owner,
+      identity.repo,
+      branch
+    )
+    if (!deleted) return
+    branchState = 'deleted'
+    notice = `Branch ${branch} deleted`
+  }
+
+  /**
    * Post an agent's report into the PR conversation, verbatim.
    *
    * The report is named by the caller rather than read from a selection: the
@@ -737,6 +785,25 @@
         if (config?.defaultMergeMethod) method = config.defaultMergeMethod
       })
       .catch(() => undefined)
+  })
+
+  /**
+   * Read the head branch's protection once per pull request, and only once it is
+   * merged: that is the only state whose footer offers to delete the branch, so a
+   * read made any earlier would be a request nobody needed.
+   */
+  $effect(() => {
+    const pull = number
+    const branch = summary.headRef
+    if (prState !== 'merged' || !branch) return
+    if (branchStateFor === pull) return
+    branchStateFor = pull
+    void gitState
+      .branchProtection(projectId, identity.owner, identity.repo, branch)
+      .then((isProtected) => {
+        if (branchStateFor !== pull) return
+        branchState = isProtected ? 'protected' : 'deletable'
+      })
   })
 
   $effect(() => {
@@ -1381,8 +1448,32 @@
         {@render commentToggle()}
         <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
           <CioMerge size={10} class="shrink-0" />
-          <span class="truncate">Merged nothing more to do</span>
+          <span class="truncate">
+            {branchState === 'deleted' ? 'Merged · branch deleted' : 'Merged'}
+          </span>
         </span>
+        <span class="flex-1"></span>
+        {#if headBranchDeletable}
+          <!--
+            Merging leaves the head branch behind, and deleting it used to mean a
+            trip to the Branches tab. Protected branches refuse deletion on GitHub,
+            so the action only appears for the ones that will actually go.
+          -->
+          <button
+            type="button"
+            class="flex h-7 shrink-0 cursor-pointer items-center gap-1 border border-danger/30 px-2.5 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+            title={`Delete the merged ${summary.headRef} branch from the repository`}
+            disabled={branchDeleting}
+            onclick={() => (branchDeleteConfirm = true)}
+          >
+            {#if branchDeleting}
+              <CioSpinner size={12} class="shrink-0 animate-spin" />
+            {:else}
+              <CioTrash size={12} class="shrink-0" />
+            {/if}
+            <span class="min-w-0 truncate">Delete branch</span>
+          </button>
+        {/if}
       </div>
     {/if}
   </div>
@@ -1440,8 +1531,10 @@
   {summary}
   bind:closeOpen={closeConfirm}
   bind:resolveOpen={resolveConfirm}
+  bind:deleteBranchOpen={branchDeleteConfirm}
   onResolveLocally={() => onResolveLocally?.(summary)}
   onClosePullRequest={() => void closePullRequest()}
+  onDeleteBranch={() => void deleteMergedBranch()}
 />
 
 <PrMergeConfirmDialog
