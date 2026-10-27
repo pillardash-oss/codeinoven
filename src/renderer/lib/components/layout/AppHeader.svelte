@@ -1,9 +1,4 @@
 <script lang="ts">
-  // Windows and Linux hide the native title bar, so the header itself is the only
-  // place the application name can live there. macOS keeps 'cio' beside the icon
-  // because the traffic lights and the menu bar already name the app.
-  const captionOverlayChrome = hasCaptionOverlay(window.api?.windowInfo.platform)
-
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
@@ -18,7 +13,6 @@
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { buildEnvironmentLabel } from '$shared/build-environment'
-  import { hasCaptionOverlay } from '$shared/traffic-light'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -29,7 +23,8 @@
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
-  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { trafficLightInsetStyle, trafficLightState } from '$lib/stores/traffic-light.svelte'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
   import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -53,6 +48,23 @@
   }
 
   let { activeView, goBack, goForward, navigation }: Props = $props()
+
+  /** Whether this layout keeps the window controls on the left. A bar that
+   *  already names the app in its own decoration needs only the short name,
+   *  while a bar whose controls sit on the right carries the wordmark. */
+  let controlsOnLeft = $derived(trafficLightState.side === 'left')
+
+  /** Space the window controls take from this bar's own left edge. */
+  let leftInset = $derived(trafficLightState.side === 'left' ? trafficLightState.offset : 0)
+
+  /** The width the thread panel owns in this bar: the sidebar plus the rail it
+   *  sits after, minus whatever the window controls hold on this edge. Zero when
+   *  no sidebar is docked, which is also the state a view without one lives in. */
+  let panelColumnWidth = $derived.by(() => {
+    const docked = layoutPanelState.dockedWidth
+    if (docked <= 0) return 0
+    return Math.max(0, layoutPanelState.railWidth + docked - leftInset)
+  })
 
   /** A checkout and a probe run the same source, so the one thing that tells
    *  them apart is where their data lives. The header says which this is, and a
@@ -234,9 +246,15 @@
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
   data-guide="header"
+  data-controls={controlsOnLeft ? 'left' : 'right'}
+  data-panel={panelColumnWidth > 0 ? 'docked' : 'hidden'}
   style={trafficLightInsetStyle({ mirrorRightInset: false, rightPadding: '0.25rem' })}
 >
-  <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
+  <nav
+    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1 overflow-hidden"
+    aria-label="Primary navigation"
+    style:width={panelColumnWidth > 0 ? `${panelColumnWidth}px` : undefined}
+  >
     <button
       type="button"
       class="flex shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
@@ -245,9 +263,8 @@
       onclick={() => threadSwitcherRequest.requestOpen()}
     >
       <VendorIcon name="CodeInOven" size={20} />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"
-        >{captionOverlayChrome ? 'CodeInOven' : 'cio'}</span
-      >
+      <span class="header-brand-name header-brand-long">CodeInOven</span>
+      <span class="header-brand-name header-brand-short">cio</span>
     </button>
 
     {#if buildLabel}
@@ -261,7 +278,7 @@
     {/if}
 
     <!-- Global navigation: back / forward -->
-    <div class="flex items-center gap-0.5">
+    <div class="header-cluster-nav flex items-center gap-0.5">
       <button
         class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
         aria-label="Go back"
@@ -296,7 +313,9 @@
         <CioSearch size={ICON_SIZE.control} />
       </button>
     {:else}
-      <AppHeaderViewActions />
+      <div class="header-cluster-actions">
+        <AppHeaderViewActions />
+      </div>
     {/if}
   </nav>
 
@@ -435,7 +454,9 @@
 
 <style>
   .app-header {
-    container-type: inline-size;
+    /* Named, because the navigation cluster inside it is a container of its own
+       and its queries must not borrow the bar's width. */
+    container: header / inline-size;
     /* The centre of the header (the open thread's title, or the browser page's
        title) is capped to this width: a long title truncates inside the middle
        band of the bar instead of stretching towards the view switcher and the
@@ -444,8 +465,98 @@
     --app-header-center-max-width: min(100%, 32rem);
   }
 
-  @container (max-width: 1100px) {
+  @container header (max-width: 1100px) {
     .header-control-label {
+      display: none;
+    }
+  }
+
+  /* ─── The panel's column in the bar ─────────────────────────────────────
+     Everything left of the boundary is app chrome at the thread panel's width,
+     so that boundary is the sidebar's right edge and the header and the body
+     share one line instead of two that nearly meet. The column is queried on its
+     own width, not on the window's, because it is the panel that squeezes it. */
+
+  .header-cluster {
+    container: cluster / inline-size;
+  }
+
+  .header-brand-name {
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+
+  /* Short by default: the long name must never flash before the rules below
+     have decided which one this bar can carry. */
+  .header-brand-short {
+    display: none;
+  }
+
+  /* A layout whose window controls sit on the left already names the app in its
+     own decoration, so the identity there is the short name and never the
+     wordmark. */
+  .app-header[data-controls='left'] .header-brand-long {
+    display: none;
+  }
+
+  .app-header[data-controls='left'] .header-brand-short {
+    display: inline;
+  }
+
+  /* No sidebar docked: there is no column to align to, so the identity drops to
+     the mark and every action comes back. */
+  .app-header[data-panel='hidden'] .header-brand-name {
+    display: none;
+  }
+
+  /* The boundary: one hairline at the column's edge, exactly where the sidebar's
+     own edge continues below it. */
+  .app-header[data-panel='docked'] .header-cluster::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 0;
+    width: 1px;
+    height: 1.25rem;
+    transform: translateY(-50%);
+    background: var(--color-border);
+  }
+
+  .header-cluster-actions {
+    display: contents;
+  }
+
+  /* The column cannot hold the wordmark, so it becomes the short name instead of
+     an ellipsis where the name used to be. */
+  @container cluster (max-width: 17rem) {
+    .app-header[data-controls='right']:not([data-panel='hidden']) .header-brand-long {
+      display: none;
+    }
+
+    .app-header[data-controls='right']:not([data-panel='hidden']) .header-brand-short {
+      display: inline;
+    }
+  }
+
+  /* Then the view's own actions give way, then the navigation pair, and at the
+     very bottom of the range even the short name: a folded action is still one
+     click away in the view's own menu. */
+  @container cluster (max-width: 13rem) {
+    .app-header:not([data-panel='hidden']) .header-cluster-actions {
+      display: none;
+    }
+  }
+
+  @container cluster (max-width: 9rem) {
+    .app-header:not([data-panel='hidden']) .header-cluster-nav {
+      display: none;
+    }
+  }
+
+  @container cluster (max-width: 7rem) {
+    .app-header:not([data-panel='hidden']) .header-brand-name {
       display: none;
     }
   }
