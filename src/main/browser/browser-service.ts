@@ -40,6 +40,7 @@ import { authoredWorkRoot } from '../design/authored-work-root'
 import { createHash } from 'node:crypto'
 import { videoTimecode } from '../../lib/video/timeline'
 import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
@@ -295,6 +296,11 @@ import {
   validateViewportRequest
 } from './browser-service/browser-validation'
 import { designScreenEntryFromUrl } from '../../lib/design/screens'
+import {
+  browserIdentityPreload,
+  coherentClientHintHeaders,
+  toStringHeaders
+} from './browser-service/browser-client-hints'
 import { compositionBoardTabId } from './browser-service/composition-board-tab'
 import { designScreenTabId } from './browser-service/design-screen-tab'
 
@@ -576,6 +582,11 @@ const FRAME_CAPTURE_ATTEMPTS = 4
 /** Gap between frame requests, so a page still parsing gets time to define one. */
 const FRAME_CAPTURE_RETRY_MS = 150
 /**
+ * The preload that makes a browser page's view of its own client hints agree with the
+ * brand hints its requests carry. Written into the config root on every launch.
+ */
+const BROWSER_IDENTITY_PRELOAD_FILE = 'browser-identity-preload.cjs'
+/**
  * Ceiling on one encoded composition frame.
  *
  * A PNG of a 4K canvas is a few megabytes; past this the canvas answered with
@@ -634,6 +645,8 @@ export class BrowserService {
    */
   private readonly threadBrowserPages = new Map<string, BrowserThreadBrowserPage>()
   private readonly configuredSessions = new Set<string>()
+  /** Where the browser page's identity preload was written, or null if it could not be. */
+  private browserIdentityPreloadPath: string | null = null
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
@@ -5578,6 +5591,35 @@ export class BrowserService {
   }
 
   /**
+   * Write the preload a browser page is created with, once per run.
+   *
+   * The file has to exist before a jar's first page, and `sessionForProject` cannot wait
+   * on disk, so this write is synchronous and tiny. Its content comes from the same
+   * module that rewrites the request's brand hints, so the page and its headers can
+   * never describe the browser differently. See `browser-client-hints.ts`.
+   */
+  private ensureBrowserIdentityPreload(): string | null {
+    if (this.browserIdentityPreloadPath !== null) return this.browserIdentityPreloadPath
+    const file = join(getConfigRoot(), BROWSER_IDENTITY_PRELOAD_FILE)
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(
+        file,
+        browserIdentityPreload({
+          chromeVersion: process.versions.chrome,
+          platform: process.platform
+        }),
+        'utf8'
+      )
+      this.browserIdentityPreloadPath = file
+      return file
+    } catch (error: unknown) {
+      Logger.error('The browser identity preload could not be written:', error)
+      return null
+    }
+  }
+
+  /**
    * One navigation fact for a tab's main frame, aimed at the extensions loaded
    * in that tab's jar.
    *
@@ -5961,6 +6003,35 @@ export class BrowserService {
         chosen: typeof chosen === 'string'
       })
       callback(typeof chosen === 'string' ? chosen : null)
+    })
+    // One identity across everything a site can read. The user agent already names a
+    // plain Chrome, while Chromium's own client hints and `navigator.userAgentData` name
+    // Chromium, so a site that reads both is told two browsers rendered the page: that
+    // mismatch is what Google's account pages answer with "This browser or app may not
+    // be secure". The hints are rewritten on the way out, and the preload that makes the
+    // page's own object agree has to be registered before the jar's first page exists.
+    // See `browser-client-hints.ts`.
+    const identityPreload = this.ensureBrowserIdentityPreload()
+    if (identityPreload !== null) {
+      browserSession.registerPreloadScript({
+        type: 'frame',
+        id: 'codeinoven-browser-identity',
+        filePath: identityPreload
+      })
+    }
+    browserSession.webRequest.onBeforeSendHeaders(
+      { urls: ['http://*/*', 'https://*/*'] },
+      (details, done) => {
+        const rewritten = coherentClientHintHeaders(details.requestHeaders, process.versions.chrome)
+        done({
+          requestHeaders: rewritten === null ? details.requestHeaders : toStringHeaders(rewritten)
+        })
+      }
+    )
+    Logger.info('Browser jar presents one coherent Chrome identity', {
+      partition,
+      chromeVersion: process.versions.chrome,
+      preload: identityPreload !== null
     })
     this.configuredSessions.add(partition)
     return browserSession
