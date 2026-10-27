@@ -758,8 +758,9 @@ hand. `AssistantManager.resolveTaskScheduled` owns the rule, and the renderer
 store's `taskScheduled` mirrors it so the sidebar and the scheduler never
 disagree.
 
-A task row shows the state on its line (**On demand** when off, followed by when
-it last actually ran, so a hand-driven function still states a time) and reveals a
+A task row shows the state on its line (**On demand** when off, followed by how
+long ago the thread last worked in the compact `8m` age every project and thread
+row wears) and reveals a
 calendar toggle on hover (`AssistantTaskRow.svelte`); the toggle calls
 `assistant:setTaskScheduled`, which persists the flag and broadcasts the fresh
 row. Turning a function off never touches its assistant's schedule, and turning an

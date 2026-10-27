@@ -1,4 +1,4 @@
-import { formatDateTime } from '$shared/date-time-format'
+import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
 import {
   describeRelativeTime,
   isAssistantSetupThread,
@@ -220,24 +220,22 @@ export function taskHasMissed(runs: readonly MissedRun[]): boolean {
  * last run, else "Not scheduled". `onDemand` marks a function the user drives
  * by hand, which reads "On demand" rather than the ambiguous "Not scheduled".
  *
- * An on-demand function has no next fire to state, so it states when it last
- * ran instead. Without that the row gave the user no time at all   only the
- * word "On demand"   so the one thing a hand-driven function is asked about
- * (when did it last actually run) was missing from the surface. The dispatch
- * stamp is preferred over the scheduler's slot claim, because a slot claim is
- * written for a missed fire too and would report a run that never happened.
+ * An on-demand function has no next fire to state, so it states how long ago the
+ * thread last worked instead, in the same compact age ("8m") a project and
+ * thread row wear. Without that the row gave the user no time at all   only the
+ * word "On demand". It is last activity, not the scheduler's last-run stamp: a
+ * hand-driven function is worked in its own conversation, and that is what the
+ * user is asking the row about.
  */
 export function taskRunLine(
-  task: Pick<Thread, 'lastRunAt' | 'lastDispatchedAt'>,
+  task: Pick<Thread, 'lastRunAt'> & Partial<Pick<Thread, 'lastActivity'>>,
   nextRunAt: number | null,
   now: number,
   onDemand = false
 ): string {
   if (onDemand) {
-    const lastRanAt = task.lastDispatchedAt ?? task.lastRunAt
-    return lastRanAt === undefined
-      ? 'On demand · Not run yet'
-      : `On demand · Last run ${describeRelativeTime(lastRanAt, now)}`
+    const age = formatCompactAge(task.lastActivity, now)
+    return age ? `On demand · ${age}` : 'On demand'
   }
   if (nextRunAt !== null) return `Next run ${describeRelativeTime(nextRunAt, now)}`
   if (task.lastRunAt !== undefined) return `Last run ${describeRelativeTime(task.lastRunAt, now)}`

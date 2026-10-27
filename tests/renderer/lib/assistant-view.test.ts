@@ -102,15 +102,15 @@ describe('assistant-view presentation helpers', () => {
     expect(taskRunLine({}, null, now)).toBe('Not scheduled')
   })
 
-  it('states when an on-demand function last ran beside its On demand label', () => {
+  it('states how long ago an on-demand function worked beside its label', () => {
     const now = new Date(2026, 2, 10, 10, 0).getTime()
-    expect(taskRunLine({ lastDispatchedAt: now - 60 * 60 * 1000 }, null, now, true)).toBe(
-      'On demand · Last run 1h ago'
+    expect(taskRunLine({ lastActivity: now - 8 * 60 * 1000 }, null, now, true)).toBe(
+      'On demand · 8m'
     )
-    expect(taskRunLine({ lastRunAt: now - 2 * 60 * 60 * 1000 }, null, now, true)).toBe(
-      'On demand · Last run 2h ago'
+    expect(taskRunLine({ lastActivity: now - 60 * 60 * 1000 }, null, now, true)).toBe(
+      'On demand · 1h'
     )
-    expect(taskRunLine({}, null, now, true)).toBe('On demand · Not run yet')
+    expect(taskRunLine({ lastActivity: now - 30 * 1000 }, null, now, true)).toBe('On demand · Now')
   })
 
   it('uses a custom task icon only when one is set', () => {

@@ -8,7 +8,7 @@
   import CioSwap from '@pdslng/cio-icon/CioSwap.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import { Portal } from 'bits-ui'
-  import { createSubscriber } from 'svelte/reactivity'
+  import { relativeTimeClock } from '$lib/relative-time.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -122,11 +122,10 @@
   const renameFormId = $derived(`${componentId}-task-${task.id}-rename-form`)
   const renameInputId = $derived(`${componentId}-task-${task.id}-rename-input`)
 
-  /** Coarse clock so relative run lines stay current without a render storm. */
-  const subscribeMinute = createSubscriber((update) => {
-    const timer = window.setInterval(update, 60_000)
-    return () => window.clearInterval(timer)
-  })
+  /** Keep the shared relative-age clock live while this row is on screen. One
+   *  timer serves every row on the list, and the on-demand line's "8m" stays
+   *  honest the way a project or thread row's stamp does. */
+  $effect(() => relativeTimeClock.hold())
 
   const taskIcon = $derived(
     task.assistantIconType ? getIconSvgDataUrl(task.assistantIconType, color ?? '#8b95a5') : null
@@ -140,13 +139,11 @@
   const runLine = $derived.by(() => {
     const working = runWorking || isThreadLiveWorking(task)
     if (isRun) {
-      subscribeMinute()
-      const line = working ? 'Running now' : runRowLine(task, Date.now())
+      const line = working ? 'Running now' : runRowLine(task, relativeTimeClock.now)
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
     if (knowledgeThread) return 'Assistant behavior'
-    subscribeMinute()
-    return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now(), !scheduled)
+    return working ? 'Running now' : taskRunLine(task, nextRunAt, relativeTimeClock.now, !scheduled)
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
