@@ -1033,6 +1033,18 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return this.titleTurns.isTitleSession(sessionId)
   }
 
+  /**
+   * Whether this session exists only to run one auxiliary completion.
+   *
+   * Every auxiliary job (title, grade, probe) opens a disposable session the
+   * chat engine never registers, so its driver events carry no project, thread
+   * or turn. The audit writer asks this to label the row instead of leaving
+   * three fields silently missing.
+   */
+  isAuxiliarySession(sessionId: string): boolean {
+    return this.titleTurns.isTitleSession(sessionId)
+  }
+
   protected observeHarnessProcess(
     sessionId: string | undefined,
     child: ChildProcess,

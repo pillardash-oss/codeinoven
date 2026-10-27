@@ -236,6 +236,30 @@ function releaseFeaturesAfterBootFailure(): void {
 }
 
 /**
+ * The GPU features Chromium actually enabled, attached to a paint that missed.
+ *
+ * Both startup paint barriers are Chromium's own first-frame work, so a boot that
+ * blows them on one machine and not another is usually a compositing difference
+ * rather than app code. A software-rendered VM reports
+ * `gpuCompositing: 'disabled_software'` here, which is what separates "chase a
+ * bundle-size regression" from "this machine has no GPU path". Without it the
+ * report only says how long the frame took, which is the question, not the answer.
+ */
+function paintPathFeatures(): Record<string, string> {
+  try {
+    const status = app.getGPUFeatureStatus()
+    return {
+      gpuCompositing: status.gpu_compositing,
+      canvas2d: status['2d_canvas'],
+      multipleRasterThreads: status.multiple_raster_threads
+    }
+  } catch {
+    // A GPU status that cannot be read must never replace the report it explains.
+    return {}
+  }
+}
+
+/**
  * Time one concurrent warm-up task into the boot telemetry.
  *
  * Storage, the database and the platform probe run together, so the phase delta
@@ -297,6 +321,7 @@ async function completeStartupIfReady(): Promise<void> {
         atMs: Math.round(violation.atMs),
         overByMs: Math.round(violation.overByMs),
         budgetMs: violation.budgetMs,
+        ...paintPathFeatures(),
         // The error a slow machine writes has to name the work that owned the
         // time. Without this line the next reader re-derives the culprit by
         // hand from a phase delta that several concurrent tasks share.
@@ -909,7 +934,12 @@ void app
         isProduction
       )
       startupTelemetry.mark('splash:created')
-      splashOutcome = await splashVisualReady
+      // The barrier is waited on so the splash has a frame before synchronous
+      // database work can starve it. Waiting is therefore real elapsed time that
+      // the phase deltas would otherwise attribute to storage, so it is timed as
+      // its own step: on a machine where the splash never paints it costs the
+      // whole 5 s budget, and that has to be visible as what it is.
+      splashOutcome = await trackStartupStep('splash:barrier', splashVisualReady)
       if (splashOutcome === 'ready') {
         startupTelemetry.mark('splash:visualReady')
       }
@@ -931,7 +961,8 @@ void app
     logConfiguredDataRoot()
     if (!startHidden && splashOutcome !== 'ready') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
-        outcome: splashOutcome
+        outcome: splashOutcome,
+        ...paintPathFeatures()
       })
     }
 

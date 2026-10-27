@@ -3208,7 +3208,7 @@ export class BrowserService {
       rendered = (await this.renderTabFrame(tabId, at).catch(() => ({ rendered: false }))).rendered
     }
     if (!rendered) return null
-    const frame = await this.readCompositionFrame(tab, at)
+    const frame = await this.readCompositionFrame(tabId, tab, at)
     if (!frame) return null
     const project = this.projects.get(tab.projectId)
     const root = project?.source === 'local' ? project.path : null
@@ -3258,6 +3258,7 @@ export class BrowserService {
    * answer null for this click, never throw out of the IPC.
    */
   private async readCompositionFrame(
+    tabId: string,
     tab: BrowserTab,
     at: number
   ): Promise<{ bytes: Buffer; width: number; height: number } | null> {
@@ -3300,7 +3301,9 @@ export class BrowserService {
     }
     // A view that has just changed hands can still be mid-attach, and a detached
     // view captures blank, so ask for the attach, nudge the page and retry.
-    if (this.activeTabId === tab.id) {
+    // The tab record is keyed by id and carries none, so the caller's id is the
+    // only way to tell whether this view is the one that just changed hands.
+    if (this.activeTabId === tabId) {
       this.showActiveView()
       contents.invalidate()
     }
@@ -3640,7 +3643,13 @@ export class BrowserService {
    * deliberately do not, because the page must keep the keyboard after them.
    */
   private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
-    if (this.window.webContents.isDestroyed()) return
+    // A page's captured chord can land after its window closed, because the
+    // `before-input-event` listener outlives the window by one turn. Reading
+    // `webContents` on a destroyed window throws "Object has been destroyed",
+    // which reached the durable log as an uncaught exception on 2026-10-27.
+    // The window and its contents are destroyed in that order, so both are
+    // checked here.
+    if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) return
     if (action === 'focus-address' || action === 'new-tab') {
       this.window.webContents.focus()
     }

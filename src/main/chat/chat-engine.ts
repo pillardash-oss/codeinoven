@@ -25546,7 +25546,22 @@ export class ChatEngine {
 
     const session = this.sessionRegistry.get(event.sessionId)
     const childOwner = this.childSessionOwners.get(event.sessionId)
+    // A driver session the engine never registered has no project, thread or
+    // turn to report. Ten of fifteen idle records in one day's file were exactly
+    // that, each with three fields silently dropped by `JSON.stringify`, so the
+    // row now says which kind of unattributed session it was: a reader can
+    // filter the probes out instead of meeting a half-written record.
+    const attribution =
+      !session && !childOwner
+        ? (this.drivers.get(driverId) ?? this.accountDrivers.get(driverId))?.isAuxiliarySession?.(
+            event.sessionId
+          )
+          ? 'auxiliary'
+          : 'unregistered'
+        : undefined
     const identifiers: Record<string, string> = {}
+
+    if (attribution) identifiers.attribution = attribution
 
     if (event.type === 'message.completed') {
       identifiers.messageId = event.messageId

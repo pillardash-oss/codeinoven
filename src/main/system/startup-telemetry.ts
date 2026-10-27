@@ -48,6 +48,7 @@ export interface StartupPhaseRecord {
  * start, so concurrent work reports concurrent numbers.
  */
 export type StartupStep =
+  | 'splash:barrier'
   | 'storage:directories'
   | 'storage:migrations'
   | 'storage:config'
