@@ -574,6 +574,14 @@ export type BrowserAgentActionApprover = (
 const FRAME_CAPTURE_ATTEMPTS = 4
 /** Gap between frame requests, so a page still parsing gets time to define one. */
 const FRAME_CAPTURE_RETRY_MS = 150
+/**
+ * Ceiling on one encoded composition frame.
+ *
+ * A PNG of a 4K canvas is a few megabytes; past this the canvas answered with
+ * something other than a frame, and writing it would waste the user's disk on a
+ * picture nobody can read.
+ */
+const MAX_COMPOSITION_FRAME_BASE64 = 48 * 1024 * 1024
 
 /**
  * A readable, stable folder for one composition's captured frames.
@@ -3200,24 +3208,8 @@ export class BrowserService {
       rendered = (await this.renderTabFrame(tabId, at).catch(() => ({ rendered: false }))).rendered
     }
     if (!rendered) return null
-    // The capture is a picture of the view where it is on screen, and only one
-    // native view is attached at a time. A surface that has just taken the view
-    // over (the board's stage handing it to the full screen panel) can still be
-    // mid-attach, and a view that is not parented captures blank, which is what
-    // answered the pen with "that frame could not be captured". Ask for the
-    // attach, nudge the page to paint, and retry briefly before giving up.
-    if (this.activeTabId === tabId) {
-      this.showActiveView()
-      tab.view.webContents.invalidate()
-    }
-    let image: Awaited<ReturnType<typeof tab.view.webContents.capturePage>> | null = null
-    for (let attempt = 0; attempt < FRAME_CAPTURE_ATTEMPTS && image === null; attempt += 1) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FRAME_CAPTURE_RETRY_MS))
-      const shot = await tab.view.webContents.capturePage()
-      const size = shot.getSize()
-      if (size.width >= 1 && size.height >= 1) image = shot
-    }
-    if (!image) return null
+    const frame = await this.readCompositionFrame(tab, at)
+    if (!frame) return null
     const project = this.projects.get(tab.projectId)
     const root = project?.source === 'local' ? project.path : null
     if (!root) return null
@@ -3226,7 +3218,7 @@ export class BrowserService {
     const absolute = join(root, relative)
     try {
       await mkdir(dirname(absolute), { recursive: true })
-      await writeFile(absolute, image.toPNG())
+      await writeFile(absolute, frame.bytes)
     } catch (error) {
       Logger.error('A composition frame could not be written:', error)
       return null
@@ -3244,9 +3236,87 @@ export class BrowserService {
       fps: composition.fps,
       duration: composition.duration,
       directory: composition.directory,
-      width: size.width,
-      height: size.height
+      width: frame.width,
+      height: frame.height
     }
+  }
+
+  /**
+   * The pixels of one composition frame, from the page's own canvas.
+   *
+   * A picture of the native view is what the compositor happens to have on screen,
+   * and that is the wrong source twice over: a view that is mid-attach, parked, or
+   * covered captures blank (Chromium answers `capturePage` with `UnknownVizError`,
+   * which is exactly the failure the pen reported as "this frame could not be
+   * captured"), and when it does answer it is the view scaled to the window rather
+   * than the frame at its own size. The composition draws into a canvas it names
+   * with `CIOVideo.useCanvas`, so reading that canvas is the frame itself, at full
+   * resolution, whether or not anything is on screen.
+   *
+   * The view capture stays as the fallback for a composition that draws only with
+   * DOM and names no canvas, and every step of it is guarded: a failed capture must
+   * answer null for this click, never throw out of the IPC.
+   */
+  private async readCompositionFrame(
+    tab: BrowserTab,
+    at: number
+  ): Promise<{ bytes: Buffer; width: number; height: number } | null> {
+    const contents = tab.view.webContents
+    // Re-asking for the frame guarantees the canvas holds this second, not the one
+    // the transport happened to stop on.
+    await contents
+      .executeJavaScript(`Promise.resolve(globalThis.cioRenderFrame?.(${JSON.stringify(at)}))`)
+      .catch(() => undefined)
+    const encoded = await contents
+      .executeJavaScript(
+        `(() => {
+          const named = globalThis.cioVideoCanvas;
+          const canvas = named instanceof HTMLCanvasElement ? named : document.querySelector('canvas');
+          if (!canvas || canvas.width < 1 || canvas.height < 1) return '';
+          try { return canvas.toDataURL('image/png'); } catch { return ''; }
+        })()`
+      )
+      .catch(() => '')
+    if (typeof encoded === 'string' && encoded.startsWith('data:image/png;base64,')) {
+      const base64 = encoded.slice('data:image/png;base64,'.length)
+      if (base64.length > 1 && base64.length <= MAX_COMPOSITION_FRAME_BASE64) {
+        const size = await contents
+          .executeJavaScript(
+            `(() => {
+              const named = globalThis.cioVideoCanvas;
+              const canvas = named instanceof HTMLCanvasElement ? named : document.querySelector('canvas');
+              return canvas ? { width: canvas.width, height: canvas.height } : null;
+            })()`
+          )
+          .catch(() => null)
+        const bytes = Buffer.from(base64, 'base64')
+        return {
+          bytes,
+          width: typeof size?.width === 'number' ? size.width : 0,
+          height: typeof size?.height === 'number' ? size.height : 0
+        }
+      }
+      Logger.dev('A composition frame canvas returned no usable image at', at)
+    }
+    // A view that has just changed hands can still be mid-attach, and a detached
+    // view captures blank, so ask for the attach, nudge the page and retry.
+    if (this.activeTabId === tab.id) {
+      this.showActiveView()
+      contents.invalidate()
+    }
+    for (let attempt = 0; attempt < FRAME_CAPTURE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FRAME_CAPTURE_RETRY_MS))
+      try {
+        const shot = await contents.capturePage()
+        const size = shot.getSize()
+        if (size.width >= 1 && size.height >= 1) {
+          return { bytes: shot.toPNG(), width: size.width, height: size.height }
+        }
+      } catch (error) {
+        Logger.dev('A composition view could not be captured:', error)
+      }
+    }
+    return null
   }
 
   /**

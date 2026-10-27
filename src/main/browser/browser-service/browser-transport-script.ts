@@ -168,6 +168,10 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   // Negative until the first tick, rather than zero: a synthetic clock can hand
   // out a timestamp of exactly zero, and that must not read as "no baseline yet".
   let lastAt = -1;
+  /** One composition frame, which is the fastest a viewing can usefully draw. */
+  const FRAME = 1 / FPS;
+  /** Where the picture was last drawn, so a tick inside the same frame can wait. */
+  let drawnAt = -Infinity;
   let pendingFrame = null;
   let queuedFrame = null;
   const transport = {
@@ -423,6 +427,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
       pending = 0;
     }
     lastAt = -1;
+    drawnAt = -Infinity;
   }
 
   function tick(now) {
@@ -436,7 +441,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     if (next >= DURATION) {
       if (!transport.loop) {
         transport.time = DURATION;
-        renderAt(DURATION);
+        drawAt(DURATION);
         transport.playing = false;
         syncMedia(false);
         return;
@@ -447,11 +452,27 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     } else {
       transport.time = next;
     }
-    if (!renderAt(next)) {
+    // A film has its own frame rate and the display usually has a higher one.
+    // Drawing at 120 Hz what the composition draws at 30 Hz spends four times the
+    // frame budget on the same picture, and the first draw that overruns its slot
+    // makes the playhead jump a frame's worth: that is the skipping a viewer sees.
+    // The clock still advances on every tick, and only the draw waits for the next
+    // frame boundary of the composition's own rate.
+    if (next - drawnAt < FRAME * 0.75) {
+      pending = raf(tick);
+      return;
+    }
+    if (!drawAt(next)) {
       transport.playing = false;
       return;
     }
     pending = raf(tick);
+  }
+
+  /** Draw one frame of a running viewing, and remember where the picture is. */
+  function drawAt(seconds) {
+    drawnAt = seconds;
+    return renderAt(seconds);
   }
 
   function play() {

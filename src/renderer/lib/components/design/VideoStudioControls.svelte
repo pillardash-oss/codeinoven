@@ -421,20 +421,21 @@
                   Captions
                   <span class="tabular-nums text-dimmed">{studio.captions.length}</span>
                 </span>
-                <EnumSelect
-                  options={CAPTION_STYLES}
-                  value={studio.captionStyle}
-                  placeholder="Plain"
-                  ariaLabel="Caption style"
-                  title="How the captions are drawn over the composition"
-                  inline
-                  compact
-                  onChange={(style) => {
-                    if (!studio) return
-                    studio.captionStyle = style
-                    dirty = true
-                  }}
-                />
+                <div class="w-40 shrink-0">
+                  <EnumSelect
+                    options={CAPTION_STYLES}
+                    value={studio.captionStyle}
+                    placeholder="Plain"
+                    ariaLabel="Caption style"
+                    title="How the captions are drawn over the composition"
+                    compact
+                    onChange={(style) => {
+                      if (!studio) return
+                      studio.captionStyle = style
+                      dirty = true
+                    }}
+                  />
+                </div>
               </div>
               <!--
                 One box per caption, folded, exactly like a track in the audio
