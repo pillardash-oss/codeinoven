@@ -7814,6 +7814,42 @@
    *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
+  /** Whether this assistant runs on a clock at all, its own task's override
+   *  included, so the setup card states what the scheduler will actually do. */
+  const assistantScheduled = $derived(assistants.taskScheduled(thread))
+
+  /** The next fire a scheduled setup card counts down to, or null when nothing
+   *  will fire (an on-demand assistant, a paused one, or no clock to read). */
+  const assistantSetupNextRunAt = $derived(
+    assistant && assistantScheduled && !assistant.paused ? assistants.nextRunForTask(thread) : null
+  )
+
+  let assistantRunStarting = $state(false)
+
+  /**
+   * Run the assistant now from its setup card, ignoring the schedule, so the user
+   * can see what they just built instead of waiting for the next fire. It runs
+   * every task of the assistant, and the first fresh run is opened, since a run
+   * happens on its own thread.
+   */
+  async function runAssistantNow(): Promise<void> {
+    const current = assistant
+    if (!current || assistantRunStarting) return
+    assistantRunStarting = true
+    try {
+      const runs = await assistants.runNow(current.id)
+      toast.success(runs.length === 1 ? 'Run started' : `${runs.length} runs started`)
+      const first = runs[0]
+      if (!first) return
+      const targetProject = await invoke('project:get', first.projectId).catch(() => null)
+      workspaceState.openThreadInOwningView(first, targetProject)
+    } catch (error) {
+      reportError(error, 'Could not run the assistant')
+    } finally {
+      assistantRunStarting = false
+    }
+  }
+
   /**
    * Whether this conversation is authoring the assistant, so its text carries the
    * app's own draft payload: the knowledge block and the plan block. Both belong
@@ -15474,8 +15510,12 @@
                     <AssistantReadyCard
                       threadId={thread.id}
                       {active}
+                      scheduled={assistantScheduled}
+                      nextRunAt={assistantSetupNextRunAt}
+                      running={assistantRunStarting}
                       onModify={modifyAssistantBehavior}
                       onStartTask={() => workspaceState.requestAssistantTask()}
+                      onRunNow={() => void runAssistantNow()}
                     />
                   {/if}
                 {:else}
