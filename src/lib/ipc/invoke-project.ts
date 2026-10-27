@@ -261,6 +261,18 @@ export const invokeProjectContract = {
     [projectId: string, relativePath: string, scopeBucketId?: string, threadId?: string],
     string | null
   >,
+  /** Copy entries to the OS clipboard as real files, with the `@tag` text the
+   *  in-app composer reads as file references. */
+  'projectFiles:copyToClipboard': {} as Contract<
+    [
+      projectId: string,
+      relativePaths: string[],
+      text: string,
+      scopeBucketId?: string,
+      threadId?: string
+    ],
+    void
+  >,
   'projectFiles:paste': {} as Contract<
     [
       sourceProjectId: string,

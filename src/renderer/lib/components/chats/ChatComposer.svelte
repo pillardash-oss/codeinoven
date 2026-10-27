@@ -97,6 +97,7 @@
   import ComposerShoe, { type ComposerShoeData, type ComposerUsage } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { sessionTagKind } from '$shared/session-tags'
   import { expertSessionFor, shouldOfferExpertCard, type ExpertSummary } from '$shared/experts'
   import { mediaProviderLabel } from '$shared/media-generation'
@@ -2008,6 +2009,17 @@
     getValue: () => value,
     getAttachmentStorage: () => attachmentStorage,
     getSelectedHarnessLacksAttachments: () => selectedHarnessLacksAttachments,
+    getOwnFileCopy: () => {
+      const copied = projectFilesWorkspace.clipboard
+      if (!copied) return null
+      // Tags only target a file when the copy came from the same project and the
+      // same scope bucket they are relative to; anything else has to travel as
+      // the files themselves.
+      const sameProject =
+        copied.projectId === projectId &&
+        (!projectId || copied.scopeBucketId === workspaceState.activeScopeBucketIdFor(projectId))
+      return { paths: copied.paths, sameProject }
+    },
     addPastedTextAttachment,
     addFileAttachment,
     setTextAttachmentError: (message) => (textAttachmentError = message),

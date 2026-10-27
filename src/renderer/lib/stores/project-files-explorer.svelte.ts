@@ -581,6 +581,22 @@ export class ProjectFilesExplorer {
     )
   }
 
+  /** Put the copied entries on the OS clipboard as the files they are, so a
+   *  paste outside the app (Finder, Mail, any editor) lands the files and not a
+   *  text clipping. The tags travel with them for the in-app composer. */
+  async copyPathsToClipboard(projectId: string, paths: string[], text: string): Promise<void> {
+    await this.runFileOperation(() =>
+      invoke(
+        'projectFiles:copyToClipboard',
+        projectId,
+        paths,
+        text,
+        this.host.scopeFor(projectId),
+        this.host.threadArg(projectId)
+      )
+    )
+  }
+
   async directorySize(projectId: string, path: string): Promise<ProjectDirectorySize> {
     return this.runFileOperation(() =>
       invoke(

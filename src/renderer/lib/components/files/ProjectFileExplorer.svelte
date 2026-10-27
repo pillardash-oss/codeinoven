@@ -17,6 +17,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
+  import { projectFileCopyTags } from '$lib/project-file-copy-tags'
   import { openInBrowser } from '$lib/open-in-browser'
   import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
@@ -860,9 +861,20 @@
   async function copyForPaste(paths: string[], mode: ProjectFileTransferMode): Promise<void> {
     const label = selectionLabel(paths)
     projectFilesWorkspace.setClipboard(projectId, paths, mode)
-    // The notice describes the in-app clipboard, which is already set. A failed OS
-    // clipboard write changes nothing about it, so that copy stays quiet.
-    void copyText(paths.map((path) => `@${path}`).join('\n'), null).catch(() => {})
+    const tags = projectFileCopyTags(paths)
+    // The in-app clipboard is already set, so a failed OS write changes nothing
+    // about the copy and stays quiet.
+    const writeToOs = async (): Promise<void> => {
+      // A cut writes tags only: the files are about to move, so handing the OS
+      // paths that will no longer exist would be worse than the text. A remote
+      // tree has no local files to hand out at all.
+      if (mode === 'copy' && !ovenTree) {
+        await projectFilesWorkspace.copyPathsToClipboard(projectId, paths, tags)
+        return
+      }
+      await copyText(tags, null)
+    }
+    void writeToOs().catch(() => copyText(tags, null).catch(() => {}))
     notifyClipboard(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
   }
 

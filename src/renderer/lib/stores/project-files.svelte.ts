@@ -266,6 +266,12 @@ class ProjectFilesWorkspace {
     return this.explorer.fileInfo(projectId, path)
   }
 
+  /** Offer copied entries to the OS clipboard as real files, so the copy can
+   *  leave the app; the tags travel with them for the in-app composer. */
+  copyPathsToClipboard(projectId: string, paths: string[], text: string): Promise<void> {
+    return this.explorer.copyPathsToClipboard(projectId, paths, text)
+  }
+
   /** Total bytes plus file and folder counts below a directory, walked on
    *  demand. Only the File info surface asks for it. */
   directorySize(projectId: string, path: string): Promise<ProjectDirectorySize> {
