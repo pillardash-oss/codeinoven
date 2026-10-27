@@ -9,6 +9,7 @@ import {
   type BrowserDownloadOutstanding
 } from '$lib/stores/browser-downloads.svelte'
 import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
+import { speechController } from '$lib/speech/speech-controller.svelte'
 import { browserAudio } from '$lib/stores/browser-audio.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
@@ -157,6 +158,28 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateC
  * same threads on the same rule.
  */
 export class ViewRailActivity {
+  isRecording(
+    optionId: HeaderViewOptionId,
+    projectBadgeOption: HeaderViewOptionId | null
+  ): boolean {
+    const scope = speechController.recordingScope
+    if (optionId === 'browser') {
+      return (
+        browserAudio.globalIsCapturing() ||
+        (scope !== null &&
+          scope.kind !== 'global' &&
+          browserAssistant.threads.some((thread) => thread.id === scope.threadId))
+      )
+    }
+    const family = viewOptionFamily(optionId)
+    if (family === 'projects' && optionId !== projectBadgeOption) return false
+    if (browserAudio.familiesCapturing().has(family)) return true
+    if (!scope || scope.kind === 'global') return false
+    if (scope.kind === 'project')
+      return contentThreadFamily({ projectId: scope.projectId }) === family
+    return family === 'chats'
+  }
+
   counts: ViewActivityCounts = $derived.by((): ViewActivityCounts => {
     // Re-check on a coarse clock only while a retry deadline is tracked, so a
     // 6h+ parked wait rejoins the count once its reset gets close.

@@ -504,6 +504,7 @@ export class SidebarBrowserTabs {
   applyPageState(state: BrowserPageState): void {
     const tab = this.tabs.find((candidate) => candidate.id === state.tabId)
     if (tab) {
+      browserAudio.reportCapture(state.tabId, tab.threadId, tab.projectId, state.capturing)
       // A document with no committed URL yet (a fresh tab, an about:blank
       // popup) reports an empty URL and must not erase the address on screen.
       this.updateTab(state.tabId, state.url || tab.url, state.title, state.favicon)
@@ -519,6 +520,7 @@ export class SidebarBrowserTabs {
     }
     // Composition board views have thread ownership but no browser-strip tab.
     if (!tab && state.tabId.startsWith('browser:board:')) {
+      browserAudio.reportCapture(state.tabId, state.threadId, state.projectId, state.capturing)
       browserAudio.reportThreadTab(
         state.tabId,
         state.threadId,

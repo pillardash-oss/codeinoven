@@ -1441,6 +1441,7 @@
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: CioThreadBrowser,
         active: dockKindActive('browser'),
+        recording: browserTabs.some((tab) => contextSidebarState.browserRuntime(tab.id).capturing),
         playing: browserTabs.some((tab) => {
           const runtime = contextSidebarState.browserRuntime(tab.id)
           return runtime.audible && !runtime.muted

@@ -1712,7 +1712,10 @@ export class GlobalBrowserState {
    * really a replacement (a reopen in another box) or an eviction has no tab to
    * bring back, so recording it would only push a phantom onto the reopen stack.
    */
-  close(tabId: string, options: { recordForReopen?: boolean; focusNeighbour?: boolean } = {}): void {
+  close(
+    tabId: string,
+    options: { recordForReopen?: boolean; focusNeighbour?: boolean } = {}
+  ): void {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
     const closing = this.tabs[index]
@@ -2293,6 +2296,7 @@ export class GlobalBrowserState {
     if (peek && (state.loading || state.url !== '')) peek.documentSeen = true
     if (changed && !peek) this.persist()
     browserAudio.reportGlobalTab(state.tabId, state.audible && !state.muted)
+    browserAudio.reportCapture(state.tabId, null, null, state.capturing)
     const current = this.runtime.get(state.tabId)
     if (
       current &&

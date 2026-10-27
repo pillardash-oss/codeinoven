@@ -33,6 +33,7 @@
     active: boolean
     /** The work behind this item is emitting sound. */
     playing?: boolean
+    recording?: boolean
     /** Renders a small status dot on the icon   e.g. pending memory proposals.
      *  Colours and variants flow through the global `ThreadStatusTone` palette
      *  (same vocabulary as thread rows and `StatusBadge`), so the rail can
@@ -191,6 +192,9 @@
             {/if}
           {:else if Icon}
             <Icon size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
+          {/if}
+          {#if item.recording}
+            <RailAudioBadge label={item.label} recording />
           {/if}
           {#if item.playing}
             <RailAudioBadge label={item.label} />

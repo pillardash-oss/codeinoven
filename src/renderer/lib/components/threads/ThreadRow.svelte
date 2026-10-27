@@ -475,7 +475,9 @@
   let isBusyIndicator = $derived(
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
-  let isRecording = $derived(speechController.isRecordingThread(thread.id))
+  let isRecording = $derived(
+    speechController.isRecordingThread(thread.id) || browserAudio.threadIsCapturing(thread.id)
+  )
   /** The thread's agent is driving the computer right now   window-scoped or
    *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */
   let isUsingComputerUse = $derived(pipState.isThreadUsingComputerUse(thread.id))

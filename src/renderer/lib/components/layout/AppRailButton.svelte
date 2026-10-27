@@ -25,6 +25,7 @@
     progress?: number
     /** Corner mark saying a browser behind this item is playing sound. */
     playing?: boolean
+    recording?: boolean
     onSelect: () => void
     onHover?: () => void
     /** Corner content, e.g. an activity badge. */
@@ -41,6 +42,7 @@
     spin = false,
     progress,
     playing = false,
+    recording = false,
     onSelect,
     onHover,
     badge
@@ -125,6 +127,9 @@
          on the tab row the sound actually belongs to. Like the badge row above,
          it clears the glyph band on the way out, so the item's icon reads. -->
     <RailAudioBadge {label} />
+  {/if}
+  {#if recording}
+    <RailAudioBadge {label} recording />
   {/if}
   {@render badge?.()}
 </button>

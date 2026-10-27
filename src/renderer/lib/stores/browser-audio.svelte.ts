@@ -45,6 +45,42 @@ interface BrowserAudioTab {
 class BrowserAudioState {
   /** Live audio state of every browser tab, keyed by tab id. */
   private readonly tabs = new SvelteMap<string, BrowserAudioTab>()
+  private readonly captures = new SvelteMap<
+    string,
+    { threadId: string | null; family: ContentThreadFamily | null }
+  >()
+
+  reportCapture(
+    tabId: string,
+    threadId: string | null,
+    projectId: string | null,
+    capturing: boolean
+  ): void {
+    if (!capturing) {
+      this.captures.delete(tabId)
+      return
+    }
+    const current = this.captures.get(tabId)
+    if (current?.threadId === threadId) return
+    this.captures.set(tabId, {
+      threadId,
+      family: projectId === null ? null : contentThreadFamily({ projectId })
+    })
+  }
+
+  threadIsCapturing(threadId: string): boolean {
+    return [...this.captures.values()].some((capture) => capture.threadId === threadId)
+  }
+
+  familiesCapturing(): ReadonlySet<ContentThreadFamily> {
+    const families = new SvelteSet<ContentThreadFamily>()
+    for (const capture of this.captures.values()) if (capture.family) families.add(capture.family)
+    return families
+  }
+
+  globalIsCapturing(): boolean {
+    return [...this.captures.values()].some((capture) => capture.threadId === null)
+  }
 
   /** Families whose thread browser has an audible tab. */
   private readonly audibleFamilies = $derived.by((): ReadonlySet<ContentThreadFamily> => {
@@ -76,6 +112,7 @@ class BrowserAudioState {
   /** Forget a tab that no longer exists, so its sound mark cannot linger. */
   forget(tabId: string): void {
     this.tabs.delete(tabId)
+    this.captures.delete(tabId)
   }
 
   /** When a thread's browser audio began, or null while the thread is silent.

@@ -1,6 +1,6 @@
 <script lang="ts">
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
-  import CioMic from '@pdslng/cio-icon/CioMic.svelte'
+  import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
@@ -45,7 +45,7 @@
       title={BROWSER_TAB_CAPTURE_LABEL}
       aria-label={BROWSER_TAB_CAPTURE_LABEL}
     >
-      <CioMic size={12} />
+      <RecordingIndicator decorative />
     </span>
   {:else}
     <button
