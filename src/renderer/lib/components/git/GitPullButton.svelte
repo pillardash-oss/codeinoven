@@ -30,9 +30,11 @@
     onPull: () => void
     /** Start a pull with this strategy, which also becomes the saved preference. */
     onPullWith: (strategy: GitPullStrategy) => void
+    /** Save `ask`, so the next pull opens the chooser again. */
+    onAskEveryPull: () => void
   }
 
-  let { behind, busy, blocked, preference, onPull, onPullWith }: Props = $props()
+  let { behind, busy, blocked, preference, onPull, onPullWith, onAskEveryPull }: Props = $props()
 
   /** The strategy the wide half uses when no `ask` preference is saved. */
   const savedStrategy = $derived<GitPullStrategy | null>(preference === 'ask' ? null : preference)
@@ -104,6 +106,24 @@
             {/if}
           </DropdownMenu.Item>
         {/each}
+        <DropdownMenu.Separator class="my-1 h-px bg-border" />
+        <!--
+          The preference is always one of four states, so the menu marks one of
+          them even when nothing is saved: a chooser every pull is a choice, not
+          the absence of one.
+        -->
+        <DropdownMenu.Item class={itemClass} onSelect={onAskEveryPull}>
+          <span class="flex min-w-0 flex-1 flex-col">
+            <span class="truncate">Ask me each pull</span>
+            <span class="truncate text-[0.5625rem] text-dimmed">
+              Choose the strategy when you pull, without saving it.
+            </span>
+          </span>
+          {#if preference === 'ask'}
+            <CioCheck size={11} class="shrink-0 text-primary" aria-hidden="true" />
+            <span class="sr-only">Your saved default</span>
+          {/if}
+        </DropdownMenu.Item>
       </DropdownMenu.Content>
     </DropdownMenu.Portal>
   </DropdownMenu.Root>

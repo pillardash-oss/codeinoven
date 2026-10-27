@@ -74,6 +74,7 @@
     GitDiff,
     GitFileChange,
     GitPullStrategy,
+    GitPullPreference,
     GitSyncDirection,
     GitRebaseAction,
     GitHubDeployment,
@@ -2199,12 +2200,12 @@
   }
 
   /**
-   * Remember the strategy the user just chose, so the next pull uses it without
-   * asking. `ask` stays available in Settings; any explicit pick replaces it.
+   * Remember the preference the user just chose, so the next pull uses it without
+   * asking. `ask` is a preference too: it puts the chooser back.
    */
-  function rememberPullStrategy(strategy: GitPullStrategy): void {
-    if (appConfigState.defaultPullStrategy === strategy) return
-    void invoke('config:update', { defaultPullStrategy: strategy }).catch(() => undefined)
+  function savePullPreference(preference: GitPullPreference): void {
+    if (appConfigState.defaultPullStrategy === preference) return
+    void invoke('config:update', { defaultPullStrategy: preference }).catch(() => undefined)
   }
 
   /**
@@ -2220,7 +2221,7 @@
       return
     }
 
-    rememberPullStrategy(strategy)
+    savePullPreference(strategy)
     pullStrategyOpen = false
     gitPullJobs.start({
       projectId,
@@ -2244,6 +2245,14 @@
       return
     }
     startPull(appConfigState.defaultPullStrategy)
+  }
+
+  /**
+   * Stop choosing for the user: the next pull opens the chooser again, the same
+   * preference the Settings page writes.
+   */
+  function askEveryPull(): void {
+    savePullPreference('ask')
   }
 
   /**
@@ -4153,6 +4162,7 @@
               preference={appConfigState.defaultPullStrategy}
               onPull={pullAction}
               onPullWith={startPull}
+              onAskEveryPull={askEveryPull}
             />
           {/if}
           {#if showsPush}
