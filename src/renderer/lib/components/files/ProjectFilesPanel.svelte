@@ -35,7 +35,8 @@
     ConflictResolutionStatus
   } from './conflict-resolution'
   import { motionDuration } from '$lib/motion'
-  import { supportsFilePreview } from '$lib/mime'
+  import { mimeFromPath, supportsFilePreview } from '$lib/mime'
+  import { hasNoTextSource } from '$lib/stores/project-files-state'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -163,6 +164,10 @@
   )
   let activeSession = $derived(activeTab ? (projectState.sessions[activeTab.path] ?? null) : null)
   let dirty = $derived(activeSession ? activeSession.draft !== activeSession.source.content : false)
+  /** The mime of the file on screen, and whether it has any text form at all.
+   *  A rendered type with a text form (SVG, which is XML) keeps its source view. */
+  let activeMime = $derived(activeTab ? mimeFromPath(activeTab.path) : null)
+  let renderOnlyFile = $derived(activeMime !== null && hasNoTextSource(activeMime))
   let checkpointDiff = $derived(activeTab?.checkpointDiff ?? null)
   const diffComputation = new FileDiffState(() =>
     activeTab?.view === 'diff' && checkpointDiff && !checkpointDiff.binary
@@ -349,6 +354,9 @@
       projectId,
       activePath: activeTab?.path ?? null,
       isSvg: svg,
+      // A live draft renders instead of a re-read, so an unsaved SVG edit is
+      // what the preview shows and a save never leaves a stale blob behind.
+      draft: activeSession?.draft ?? null,
       // Reading the reload token keeps the effect reactive to explicit reloads:
       // bumping it revokes the stale blob and re-reads the file from disk.
       currentReloadToken: () =>
@@ -1720,13 +1728,13 @@
             showDocumentError={false}
           />
         {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
-          {#if image}
+          {#if image && (renderOnlyFile || activeTab.view !== 'source')}
             <FileImagePreview
               src={imagePreviewSrc}
               alt={activeTab.path}
               failed={imagePreviewFailed}
             />
-          {:else if video || audio}
+          {:else if (video || audio) && (renderOnlyFile || activeTab.view !== 'source')}
             <FileMediaPreview
               src={previewUrl}
               alt={activeTab.path}
@@ -1742,6 +1750,14 @@
               onStatusChange={(next) => handleConflictStatus('fullscreen', next)}
               onOpenOriginal={() => void openRawConflictSource()}
             />
+          {:else if projectState.loadingPaths[activeTab.path] && !activeSession}
+            <div
+              class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed"
+              role="status"
+            >
+              <CioSpinner size={13} class="animate-spin" />
+              Loading file
+            </div>
           {:else}
             {#key activeTab.id}
               <ProjectTextEditor

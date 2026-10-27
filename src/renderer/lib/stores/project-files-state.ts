@@ -9,10 +9,13 @@ import { ipcErrorMessage } from '$lib/ipc-errors'
 import { posixDirname } from '$shared/paths'
 import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import {
+  isAudioMime,
   isDocumentPreviewMime,
   isImageMime,
   isMarkdownPreviewPath,
   isPdfMime,
+  isSvgMime,
+  isVideoMime,
   mimeFromPath,
   supportsFilePreview
 } from '$lib/mime'
@@ -156,8 +159,20 @@ export function parentDirectory(path: string): string {
   return posixDirname(path)
 }
 
+/** Types the panel renders instead of opening the editor, so a file of one of
+ *  them always opens in the preview view. SVG is listed here even though it is
+ *  text: opening an icon means looking at the icon, and the source view stays
+ *  one click away. */
 export function isPreviewableBinary(mime: string): boolean {
   return isPdfMime(mime) || isImageMime(mime) || isDocumentPreviewMime(mime)
+}
+
+/** Types with no text to read at all, so no editor session is ever loaded for
+ *  them. SVG is `image/svg+xml` yet plain XML: it previews by default but must
+ *  keep a readable, editable source view, which is why it is excluded here. */
+export function hasNoTextSource(mime: string): boolean {
+  if (isSvgMime(mime)) return false
+  return isPreviewableBinary(mime) || isVideoMime(mime) || isAudioMime(mime)
 }
 
 /**

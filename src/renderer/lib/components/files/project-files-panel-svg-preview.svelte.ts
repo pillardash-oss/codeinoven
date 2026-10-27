@@ -5,6 +5,10 @@ export interface SvgPreviewInput {
   projectId: string
   activePath: string | null
   isSvg: boolean
+  /** The editor's live draft for this file, or null while it has no session.
+   *  A draft wins over the disk read, so an unsaved SVG edit shows in the
+   *  preview immediately and a save never leaves a stale rendering behind. */
+  draft: string | null
   /** Reads the current reload token, so a superseded read can drop its blob. */
   currentReloadToken: () => number
   scopeBucketId: string
@@ -29,6 +33,10 @@ export class ProjectFilesPanelSvgPreview {
       this.revoke()
       return () => {}
     }
+    if (input.draft !== null) {
+      this.replace(input.draft)
+      return () => this.revoke()
+    }
     const path = input.activePath
     const reloadToken = input.currentReloadToken()
     let cancelled = false
@@ -45,7 +53,7 @@ export class ProjectFilesPanelSvgPreview {
         // A newer reload request superseded this read; its own run will land
         // the fresh blob, so drop the stale content.
         if (input.currentReloadToken() !== reloadToken) return
-        this.url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
+        this.replace(source.content)
       })
       .catch(() => {
         if (cancelled) return
@@ -55,6 +63,13 @@ export class ProjectFilesPanelSvgPreview {
       cancelled = true
       this.revoke()
     }
+  }
+
+  private replace(content: string): void {
+    this.failed = false
+    const previous = this.url
+    this.url = URL.createObjectURL(new Blob([content], { type: 'image/svg+xml' }))
+    if (previous) URL.revokeObjectURL(previous)
   }
 
   private revoke(): void {
