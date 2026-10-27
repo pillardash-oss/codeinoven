@@ -96,7 +96,7 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
     projectId: {
       type: 'string',
       description:
-        'Project the thread belongs to. Omit to dispatch inside the project this conversation is already working on.'
+        'Project the thread belongs to, from the `projects` list in cio_orchestrate_targets. Omit to dispatch inside the project this conversation is already working on.'
     },
     ovenId: {
       type: 'string',
@@ -168,7 +168,7 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
   {
     name: ORCHESTRATION_TARGETS_TOOL_NAME,
     description:
-      'Read the CodeInOven workstation: the Ovens (machines) and which harnesses each one has installed, the harness catalog, the model catalogs with the thinking levels each model offers, the saved model profiles, and the accounts per harness with the one the app marks as default. Call this before cio_orchestrate_dispatch: it is the only source of the exact ids a dispatch accepts. Its results also carry the current project, the default Oven and the default harness, so a request that names none of them still has a real value to propose and confirm with the user.',
+      'Read the CodeInOven workstation: the Ovens (machines) and which harnesses each one has installed, the harness catalog, the model catalogs with the thinking levels each model offers, the saved model profiles, the accounts per harness with the one the app marks as default, and every project with its id. Call this before cio_orchestrate_dispatch: it is the only source of the exact ids a dispatch accepts. Its results also carry the current project, the default Oven and the default harness, so a request that names none of them still has a real value to propose and confirm with the user.',
     inputSchema: TARGETS_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-targets',
@@ -177,7 +177,7 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
   {
     name: ORCHESTRATION_DISPATCH_TOOL_NAME,
     description:
-      'Create a real CodeInOven thread and run a prompt in it, on a chosen Oven with a chosen harness, provider, model, thinking level, account and permission tier. The thread appears in the sidebar like any other, bound to the Oven and streaming its status, exactly as if the user had configured and started it by hand. Use only exact ids read from cio_orchestrate_targets. Before calling, resolve every field the user named; for a field the user left out and the app has no default for, ask the user with the harness question tool and offer the real options. The call returns as soon as the run is accepted: do not block, and do not claim the work is finished. The app reports back into this conversation when the dispatched thread settles.',
+      'Create a real CodeInOven thread and run a prompt in it, on a chosen Oven with a chosen harness, provider, model, thinking level, account and permission tier. This is also the one call that starts a thread in another project with a first message: pass that project id from cio_orchestrate_targets and the user never sees an empty thread. The thread appears in the sidebar like any other, bound to the Oven and streaming its status, exactly as if the user had configured and started it by hand. Use only exact ids read from cio_orchestrate_targets. Before calling, resolve every field the user named; for a field the user left out and the app has no default for, ask the user with the harness question tool and offer the real options. The call returns as soon as the run is accepted: do not block, and do not claim the work is finished. The app reports back into this conversation when the dispatched thread settles.',
     inputSchema: DISPATCH_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-dispatch',

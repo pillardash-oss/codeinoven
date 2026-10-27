@@ -2373,25 +2373,8 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:refreshProviderCatalog',
-      async (_, projectId: string, options: ProviderCatalogRefreshOptions = {}) => {
-        const force = options.force ?? true
-        if (force) {
-          // A forced picker refresh also re-probes every custom provider's model
-          // endpoint so newly added/removed upstream models reach the catalog.
-          // An explicit user refresh additionally forces each harness to
-          // re-fetch its own model catalog from upstream first; the two are
-          // independent network passes, so they run together.
-          await Promise.all([
-            refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
-              // Per-provider failures already preserve their old model lists.
-            }),
-            options.refreshModelCatalogs === true
-              ? this.refreshHarnessModelCatalogs()
-              : Promise.resolve()
-          ])
-        }
-        return this.listProviders(projectId, force)
-      }
+      async (_, projectId: string, options: ProviderCatalogRefreshOptions = {}) =>
+        this.refreshProviderCatalog(projectId, options)
     )
     ipcMain.handle(
       'agent:refreshModelContext',
@@ -5509,6 +5492,38 @@ export class ChatEngine {
     } catch {
       return null
     }
+  }
+
+  /**
+   * Discover a project's provider catalogs, optionally forcing every upstream
+   * model list to be fetched again first.
+   *
+   * Shared by the model picker's refresh channel and by an orchestration
+   * dispatch that named a model the current snapshot does not carry: a launch
+   * before the first discovery reports every id as unknown, and discovery is the
+   * actual fix, not a different id.
+   */
+  async refreshProviderCatalog(
+    projectId: string,
+    options: ProviderCatalogRefreshOptions = {}
+  ): Promise<ProviderCatalog[]> {
+    const force = options.force ?? true
+    if (force) {
+      // A forced picker refresh also re-probes every custom provider's model
+      // endpoint so newly added/removed upstream models reach the catalog.
+      // An explicit user refresh additionally forces each harness to
+      // re-fetch its own model catalog from upstream first; the two are
+      // independent network passes, so they run together.
+      await Promise.all([
+        refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
+          // Per-provider failures already preserve their old model lists.
+        }),
+        options.refreshModelCatalogs === true
+          ? this.refreshHarnessModelCatalogs()
+          : Promise.resolve()
+      ])
+    }
+    return this.listProviders(projectId, force)
   }
 
   /**
@@ -26644,6 +26659,16 @@ export class ChatEngine {
     const ovenHarness = new OvenHarnessService(new OvenService(ovenRegistry), this.storage)
     this.orchestration = createOrchestrationRuntime({
       listProviderCatalogs: (projectId) => this.listProviderSnapshot(projectId),
+      // A dispatch that cannot find its model discovers once instead of
+      // bouncing the agent back to a target list built from the same snapshot.
+      refreshProviderCatalogs: (projectId) =>
+        this.refreshProviderCatalog(projectId, { force: true }),
+      listProjects: async () =>
+        (await this.projectManager.listProjects()).map((project) => ({
+          id: project.id,
+          name: project.name,
+          path: project.path
+        })),
       listAccounts: () => this.accountRegistry.list(),
       listOvens: () => ovenRegistry.state(),
       harnessInventory: async (ovenId) => {
