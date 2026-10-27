@@ -63,17 +63,11 @@ export interface Assistant {
   name: string
   /**
    * The assistant's own description, written by the user for their own reference
-   * (what the assistant is for). It is never sent to the agent and never becomes
-   * part of the knowledge.
+   * (what the assistant is for). It is what the row's hover card shows, and it is
+   * never sent to the agent and never becomes part of the knowledge: how the
+   * assistant behaves is authored as the `Personality` section of its knowledge.
    */
   description?: string
-  /**
-   * How the assistant should behave and speak, written by its owner when they
-   * create it ("You manage my X and LinkedIn accounts, and you write in my
-   * voice"). It rides every turn of the assistant's threads, ahead of the
-   * knowledge, so the assistant answers as the person they were given.
-   */
-  personality?: string
   /**
    * Whether this assistant runs on a schedule. On by default, so an assistant the
    * user has always known about keeps firing. When off, the assistant is
@@ -218,9 +212,6 @@ export const ASSISTANT_PLACEHOLDER_NAME = 'New assistant'
  */
 export const ASSISTANT_NAME_LIMIT = 200
 
-/** Ceiling for the personality a user describes in the setup conversation. */
-export const ASSISTANT_PERSONALITY_LIMIT = 4_000
-
 /** Ceiling for the name a user gives their assistant's clock. */
 export const ASSISTANT_SCHEDULE_NAME_LIMIT = 120
 
@@ -231,9 +222,8 @@ export function assistantIsUnnamed(assistant: Pick<Assistant, 'name'>): boolean 
 
 export interface CreateAssistantInput {
   name: string
+  /** The user's own note on what the assistant is for; shown on its hover card. */
   description?: string
-  /** How the assistant should behave and speak; rides every turn of its threads. */
-  personality?: string
   /** Defaults to true: an assistant runs on a schedule unless the user turns it off. */
   scheduled?: boolean
   /** What the owner calls the assistant's clock; only used while it is scheduled. */
@@ -254,8 +244,6 @@ export interface UpdateAssistantInput {
   name?: string
   /** `null` clears the description. */
   description?: string | null
-  /** `null` clears the personality, leaving the assistant with no voice of its own. */
-  personality?: string | null
   /** Turn the assistant's schedule on or off; turning it off clears its schedule. */
   scheduled?: boolean
   /** `null` clears the schedule's name, falling back to the assistant's own name. */

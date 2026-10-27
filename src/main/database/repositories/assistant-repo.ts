@@ -15,7 +15,6 @@ interface AssistantRow {
   id: string
   name: string
   description: string | null
-  personality: string | null
   scheduled: number
   schedule_name: string | null
   color: string | null
@@ -148,7 +147,6 @@ function rowToAssistant(row: AssistantRow): Assistant {
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
-    personality: row.personality ?? undefined,
     scheduled: row.scheduled !== 0,
     scheduleName: row.schedule_name ?? undefined,
     color: row.color ?? undefined,
@@ -179,14 +177,13 @@ export class AssistantRepo {
   upsert(assistant: Assistant): void {
     this.db.run(
       `INSERT INTO assistants(
-        id, name, description, personality, scheduled, schedule_name, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, knowledge,
+        id, name, description, scheduled, schedule_name, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, knowledge,
         knowledge_updated_at, connections, delivery, priority, agents, execution, paused, pinned,
         pinned_at, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
-        personality = excluded.personality,
         scheduled = excluded.scheduled,
         schedule_name = excluded.schedule_name,
         color = excluded.color,
@@ -211,7 +208,6 @@ export class AssistantRepo {
       assistant.id,
       assistant.name,
       assistant.description ?? null,
-      assistant.personality ?? null,
       assistant.scheduled === false ? 0 : 1,
       assistant.scheduleName ?? null,
       assistant.color ?? null,
@@ -277,26 +273,19 @@ export class AssistantRepo {
   }
 
   /**
-   * Write the two fields the setup conversation settles before the knowledge
-   * exists: the name the user gives their assistant and the personality they
-   * described.
+   * Rename an assistant from the setup conversation, the moment the user names it.
    *
    * Narrower than `upsert` on purpose. The capability that calls this may only
-   * rename the assistant and record how it should behave, so it can never clobber
-   * a schedule, a connection set or a knowledge that the panel is editing in the
-   * same window. Only the fields the caller passes are touched.
+   * rename the assistant, so it can never clobber a schedule, a connection set or a
+   * knowledge that the panel is editing in the same window. Only the field the
+   * caller passes is touched.
    */
-  updateIdentity(
-    id: string,
-    identity: { name?: string; personality?: string },
-    updatedAt: number
-  ): Assistant | null {
+  updateIdentity(id: string, identity: { name?: string }, updatedAt: number): Assistant | null {
     const existing = this.get(id)
     if (!existing) return null
     const next: Assistant = {
       ...existing,
       ...(identity.name !== undefined ? { name: identity.name } : {}),
-      ...(identity.personality !== undefined ? { personality: identity.personality } : {}),
       updatedAt
     }
     this.upsert(next)

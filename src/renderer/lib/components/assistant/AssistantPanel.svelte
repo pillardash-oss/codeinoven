@@ -14,10 +14,12 @@
   } from '$lib/components/icons/cio/AssistantIcon.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import AssistantKnowledgeHistory from './AssistantKnowledgeHistory.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { getAssistantIcon } from '$lib/assistant-icons'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -57,14 +59,21 @@
     ASSISTANT_TIMELINESS_OPTIONS
   } from '$shared/assistant-reporting'
   import {
+    ASSISTANT_PERSONALITY_HEADING,
+    ASSISTANT_PERSONALITY_SECTION_TITLE
+  } from '$shared/assistant-personality'
+  import {
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
+    isPersonalitySection,
     knowledgeSectionSummary,
     parseKnowledgeSections,
     previewRuns,
+    readKnowledgePersonality,
     resolveConnections,
     serializeKnowledgeSections,
+    withKnowledgePersonality,
     missedRunReasonText,
     TASK_RUN_PREVIEW,
     type ConnectionSetupRequest,
@@ -199,6 +208,16 @@
   )
 
   /**
+   * The mark this assistant wears: the image or SVG icon the user picked for it,
+   * tinted with its accent, resolved exactly as the sidebar row resolves it. The
+   * panel used to draw the default mark for every assistant, so the icon the user
+   * chose never appeared on the one surface that documents it.
+   */
+  const assistantIcon = $derived(
+    assistant ? getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null) : null
+  )
+
+  /**
    * The count a tab carries, or null when it has nothing worth counting. A zero
    * is noise on a tab label, so every empty section reads as a bare label instead
    * of a badge that says nothing.
@@ -214,7 +233,21 @@
 
   // ─── Assistant content ──────────────────────────────────────────────────────
 
-  const sections = $derived(assistant ? parseKnowledgeSections(assistant.knowledge) : [])
+  /** Every row of the behavior card: the personality first, then what it knows. */
+  const PERSONALITY_SECTION_ID = 'personality'
+  /** The authored sections, without the personality, which is always shown first. */
+  const authoredSections = $derived(
+    assistant ? parseKnowledgeSections(assistant.knowledge) : ([] as KnowledgeSection[])
+  )
+  const sections = $derived<KnowledgeSection[]>([
+    {
+      id: PERSONALITY_SECTION_ID,
+      heading: ASSISTANT_PERSONALITY_HEADING,
+      title: ASSISTANT_PERSONALITY_SECTION_TITLE,
+      body: assistant ? readKnowledgePersonality(assistant.knowledge) : ''
+    },
+    ...authoredSections.filter((section) => !isPersonalitySection(section))
+  ])
 
   /** The one-line summary a folded section shows in place of its body. */
   const sectionSummary = knowledgeSectionSummary
@@ -265,14 +298,21 @@
 
   async function saveSection(sectionId: string): Promise<void> {
     if (!assistant) return
-    const next = sections.map((section) =>
-      section.id === sectionId ? { ...section, body: editDraft.trim() } : section
-    )
+    const body = editDraft.trim()
     editingId = null
-    await persistAssistant(
-      { knowledge: serializeKnowledgeSections(next) },
-      'Could not save the assistant behavior'
-    )
+    // The personality is written into the knowledge as its own section; every other
+    // row rewrites the section it was opened from, in the document's own order. The
+    // whole parsed document is rewritten, not the filtered rows, so a save can never
+    // drop the personality section it did not edit.
+    const knowledge =
+      sectionId === PERSONALITY_SECTION_ID
+        ? withKnowledgePersonality(assistant.knowledge, body)
+        : serializeKnowledgeSections(
+            parseKnowledgeSections(assistant.knowledge).map((section) =>
+              section.id === sectionId ? { ...section, body } : section
+            )
+          )
+    await persistAssistant({ knowledge }, 'Could not save the assistant behavior')
   }
 
   // ─── Persistence ──────────────────────────────────────────────────────────
@@ -295,6 +335,29 @@
       { paused: !assistant.paused },
       assistant.paused ? 'Could not resume the assistant' : 'Could not pause the assistant'
     )
+  }
+
+  /**
+   * Turn the assistant's clock on or off.
+   *
+   * The flag is the authority: turning it off drops the schedule and its name, so
+   * nothing can fire a slot the assistant no longer has. Turning it back on leaves
+   * the assistant to agree a fresh clock with the user instead of quietly restoring
+   * a cadence from before.
+   */
+  function setScheduled(next: boolean): void {
+    void persistAssistant(
+      { scheduled: next },
+      next ? 'Could not turn the schedule on' : 'Could not turn the schedule off'
+    )
+  }
+
+  /** Commit the name the user gives the assistant's clock. Typed, so it writes on blur. */
+  function commitScheduleName(raw: string): void {
+    if (!assistant) return
+    const name = raw.trim()
+    if (name === (assistant.scheduleName ?? '')) return
+    void persistAssistant({ scheduleName: name || null }, 'Could not save the schedule name')
   }
 
   function setAgents(agents: AssistantAgents): void {
@@ -799,8 +862,12 @@
     -->
     <header class="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2.5">
       <div class="flex items-center gap-2.5">
-        <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-on-primary">
-          <AssistantIcon size={20} />
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-elevated">
+          {#if assistantIcon}
+            <img src={assistantIcon} alt="" class="h-5 w-5 object-contain" draggable="false" />
+          {:else}
+            <AssistantIcon size={20} />
+          {/if}
         </span>
         <div class="min-w-0 flex-1">
           <h1 class="truncate text-[0.875rem] font-semibold tracking-tight text-foreground">
@@ -1136,17 +1203,6 @@
           {#if !knowledgeComplete}
             {@render assistantEmptyState()}
           {:else}
-            {#if assistant.personality?.trim()}
-              <div class="border border-border bg-surface px-2.5 py-2">
-                <p
-                  class="mb-1 text-[0.625rem] font-medium text-dimmed"
-                  title="How this assistant behaves and sounds"
-                >
-                  Personality
-                </p>
-                <p class="text-[0.6875rem] leading-relaxed text-muted">{assistant.personality}</p>
-              </div>
-            {/if}
             <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
               <div class="flex items-center justify-between gap-2">
                 <h2 class="text-[0.875rem] font-semibold text-foreground">Assistant behavior</h2>
@@ -1166,7 +1222,8 @@
                 </div>
               </div>
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                The instructions this assistant follows on every run. The agent follows them
+                The instructions this assistant follows on every run. Personality is how it behaves
+                and sounds, and the sections under it are what it does. The agent follows them
                 literally, so anything not written here does not happen.
               </p>
               <ol class="flex flex-col gap-2">
@@ -1258,6 +1315,42 @@
 
           <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
             <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
+            <!--
+              The clock is a decision, not a readout: it is agreed with the agent
+              during setup, and the panel is where the user changes it afterwards,
+              exactly like the reporting row below. Turning it off drops the
+              schedule outright, so turning it back on makes the assistant agree a
+              fresh one instead of silently restoring a cadence nobody remembers.
+            -->
+            <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
+              <span class="text-[0.75rem] text-muted">Run on a schedule</span>
+              <Switch
+                checked={scheduled}
+                onchange={setScheduled}
+                aria-label="Run this assistant on a schedule"
+                title={scheduled
+                  ? 'Runs on the clock it agreed with you'
+                  : 'Runs only when you ask'}
+              />
+            </div>
+            {#if scheduled}
+              <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
+                <label class="shrink-0 text-[0.75rem] text-muted" for="assistant-schedule-name"
+                  >Schedule name</label
+                >
+                <input
+                  id="assistant-schedule-name"
+                  type="text"
+                  class="min-w-0 flex-1 border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
+                  placeholder={assistant.name}
+                  title="What you call this assistant's clock"
+                  aria-label="Schedule name"
+                  value={assistant.scheduleName ?? ''}
+                  onchange={(event: Event) =>
+                    commitScheduleName((event.currentTarget as HTMLInputElement).value)}
+                />
+              </div>
+            {/if}
             <dl class="flex flex-col">
               <div
                 class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"

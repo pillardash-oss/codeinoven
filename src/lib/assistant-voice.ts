@@ -37,20 +37,10 @@ export const ASSISTANT_VOICE_INSTRUCTION = [
 ].join(' ')
 
 /**
- * The assistant's personality as its owner wrote it, framed for the model.
+ * The assistant's own voice rule.
  *
- * It is free prose the user typed when they created the assistant ("You keep my
- * X and LinkedIn accounts moving, and you write the way I do"), so it is carried
- * verbatim and framed only enough to say whose words these are and how far they
- * reach. The last line matters: the app's own rules (the run contract, the
- * verification rules) always win over a personality that contradicts them.
+ * How the assistant was asked to behave is not carried here: it is the first
+ * section of the knowledge the user edits (`src/lib/assistant-personality.ts`), so
+ * it reaches every turn with the instructions rather than as a second copy of
+ * them.
  */
-export function assistantPersonalityContext(personality: string | undefined): string | undefined {
-  const text = personality?.trim()
-  if (!text) return undefined
-  return [
-    'Your owner described you like this when they created you:',
-    text,
-    'Be that person in everything you write to them. It shapes how you sound, how much you say, and what you take on yourself, and it never overrides the rules the application gives you.'
-  ].join('\n')
-}

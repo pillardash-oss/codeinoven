@@ -8215,7 +8215,7 @@
       : assistantSetupRecapIssue(assistant, draft.plan)
     if (setupIssue) {
       await sendMessage(
-        `The application could not save this setup: ${setupIssue} Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block and an assistant block containing actual values for name, personality, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.`,
+        `The application could not save this setup: ${setupIssue} Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block, opening with the Personality section, and an assistant block containing actual values for name, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.`,
         [],
         undefined,
         undefined,
@@ -8236,10 +8236,10 @@
       const wasScheduled = assistant ? assistantIsScheduled(assistant) : true
       const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
       // A conversation settles who the assistant is as well as what it does, so a
-      // plan that carries the name the user gave it, the way they asked it to
-      // behave, or a clock they did or did not want is applied on the same save.
+      // plan that carries the name the user gave it, or a clock they did or did not
+      // want, is applied on the same save. How it behaves is not here: it is the
+      // `Personality` section of the knowledge the same save writes.
       if (plan?.name) patch.name = plan.name
-      if (plan?.personality) patch.personality = plan.personality
       if (typeof plan?.scheduled === 'boolean') patch.scheduled = plan.scheduled
       const scheduled = plan?.scheduled ?? wasScheduled
       // An on-demand assistant has no schedule, so a plan that still carries one

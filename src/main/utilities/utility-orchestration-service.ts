@@ -137,7 +137,7 @@ import {
   ASSISTANT_REPORT_UTILITY_ID,
   assistantReportUtility
 } from '../../lib/assistant-reports'
-import { ASSISTANT_NAME_LIMIT, ASSISTANT_PERSONALITY_LIMIT } from '../../lib/types'
+import { ASSISTANT_NAME_LIMIT } from '../../lib/types'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   UtilityScopeFootprintService,
@@ -254,11 +254,12 @@ export interface UtilityTurnRequest {
   saveAssistantCheckpoint?: (markdown: string) => Promise<{ path: string }>
   /**
    * Present only for an assistant's Getting started interview; the callback writes
-   * the name and the personality the conversation settles onto the assistant and
-   * broadcasts the change, so every surface renames itself the moment the user
-   * answers rather than at the end of the interview.
+   * the name the conversation settles onto the assistant and broadcasts the change,
+   * so every surface renames itself the moment the user answers rather than at the
+   * end of the interview. How the assistant behaves has no callback: it is the
+   * `Personality` section of the knowledge.
    */
-  saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
+  saveAssistantIdentity?: (identity: { name: string }) => Promise<void>
   /** Persist the clock choice during the live setup interview. */
   saveAssistantSchedule?: (scheduled: boolean) => Promise<void>
   /** Persist settled reporting choices during the live setup interview. */
@@ -2734,23 +2735,11 @@ export class UtilityOrchestrationService {
             'Renaming the assistant is only available while its knowledge is being written'
           )
         }
-        // Only the fields the user has actually settled are sent on, so naming the
-        // assistant never clears a personality the conversation agreed earlier.
-        const identity: { name?: string; personality?: string } = {}
-        if (operationInput['name'] !== undefined) {
-          identity.name = requiredString(operationInput['name'], 'name', ASSISTANT_NAME_LIMIT)
-        }
-        if (operationInput['personality'] !== undefined) {
-          identity.personality = requiredString(
-            operationInput['personality'],
-            'personality',
-            ASSISTANT_PERSONALITY_LIMIT
-          )
-        }
-        if (identity.name === undefined && identity.personality === undefined) {
-          throw new Error('save_identity needs a name or a personality')
-        }
-        result = await state.request.saveAssistantIdentity(identity)
+        // Only the name is settled here. How the assistant behaves is a section of
+        // the knowledge, so it arrives with the knowledge block instead.
+        result = await state.request.saveAssistantIdentity({
+          name: requiredString(operationInput['name'], 'name', ASSISTANT_NAME_LIMIT)
+        })
       } else {
         throw new Error(
           'The getting-started capability exposes save_checkpoint, save_identity, save_schedule and save_reporting'

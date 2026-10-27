@@ -131,7 +131,7 @@ import {
   pendingContinuationRequest,
   type PendingContinuationRequest
 } from '../../lib/pending-request'
-import { ASSISTANT_VOICE_INSTRUCTION, assistantPersonalityContext } from '../../lib/assistant-voice'
+import { ASSISTANT_VOICE_INSTRUCTION } from '../../lib/assistant-voice'
 import { composeAssistantInstruction, assistantRunContext } from '../../lib/assistant-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
@@ -407,7 +407,6 @@ import {
   assistantKnowledgeComplete,
   workerReportsToCoordinator
 } from '../../lib/types'
-import type { Assistant } from '../../lib/types'
 import {
   resolveWorkflowCoordinatorThreadId,
   workflowGroupThreads
@@ -4427,7 +4426,7 @@ export class ChatEngine {
                 this.saveAssistantSchedule(authoringAssistantId, scheduled),
               saveAssistantReporting: (reporting: AssistantReportingPatch) =>
                 this.saveAssistantReporting(authoringAssistantId, reporting),
-              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+              saveAssistantIdentity: (identity: { name: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
@@ -4771,7 +4770,7 @@ export class ChatEngine {
                 this.saveAssistantSchedule(authoringAssistantId, scheduled),
               saveAssistantReporting: (reporting: AssistantReportingPatch) =>
                 this.saveAssistantReporting(authoringAssistantId, reporting),
-              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+              saveAssistantIdentity: (identity: { name: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
@@ -8659,7 +8658,7 @@ export class ChatEngine {
     // is what the agent revises. The interview checkpoint belongs to the authoring
     // conversation, so it is neither read nor injected here.
     if (conversation === 'update') {
-      return [this.assistantPersonaContext(assistant), assistantKnowledgeUpdateContext(assistant)]
+      return [this.assistantPersonaContext(), assistantKnowledgeUpdateContext(assistant)]
         .filter(Boolean)
         .join('\n\n')
     }
@@ -8674,7 +8673,7 @@ export class ChatEngine {
     ])
     const decisions = formatInterviewDecisions(messages, ASSISTANT_AUTHORING_DECISION_LIMIT)
     return [
-      this.assistantPersonaContext(assistant),
+      this.assistantPersonaContext(),
       assistantAuthoringContext(assistant),
       assistantAuthoringProgressContext({ checkpoint, decisions })
     ]
@@ -8704,20 +8703,22 @@ export class ChatEngine {
   }
 
   /**
-   * Record who the assistant is, the moment the conversation settles it.
+   * Record the name the conversation settles for the assistant.
    *
    * The user names their assistant in the first answer of the setup conversation,
    * and waiting for the recap to save would leave every surface calling it "New
-   * assistant" for the whole interview. This writes the name, and the personality
-   * once they have described how they want it to behave, straight onto the row and
-   * broadcasts the assistant list, so the sidebar, the panel, the tab and the
-   * thread's own head start rename themselves as the answer lands. The capability
-   * that calls it is bound to the live authoring turn, so the write is app-owned
-   * and the agent never names an id.
+   * assistant" for the whole interview. This writes the name straight onto the row
+   * and broadcasts the assistant list, so the sidebar, the panel, the tab and the
+   * thread's own head rename themselves as the answer lands. The capability that
+   * calls it is bound to the live authoring turn, so the write is app-owned and the
+   * agent never names an id.
+   *
+   * How the assistant behaves is not written here: it is the `Personality` section
+   * of the knowledge, which the recap saves with the rest of the instructions.
    */
   private async saveAssistantIdentity(
     assistantId: string,
-    identity: { name?: string; personality?: string }
+    identity: { name: string }
   ): Promise<void> {
     const updated = this.assistantRepo.updateIdentity(assistantId, identity, Date.now())
     if (!updated) return
@@ -8768,19 +8769,20 @@ export class ChatEngine {
   }
 
   /**
-   * The persona layers for any turn on an assistant's own threads: who the user
-   * asked the assistant to be, and how it talks. They ride ahead of the
-   * knowledge, so an assistant sounds like itself while it is setting up, while
-   * the user is changing what it knows, and when it runs.
+   * The persona layer for any turn on an assistant's own threads: how it talks.
+   * It rides ahead of the knowledge, so an assistant sounds like itself while it is
+   * setting up, while the user is changing what it knows, and when it runs.
+   *
+   * Who the user asked the assistant to be is not a layer of its own: it is the
+   * `Personality` section at the top of the knowledge, so it arrives with the
+   * document the user edits.
    *
    * The voice rule is unconditional: it is what makes an assistant's answer read
    * as a message from a person rather than a report, and the Assistant view is
    * used by people who did not come here to read a report.
    */
-  private assistantPersonaContext(assistant: Assistant): string {
-    return [assistantPersonalityContext(assistant.personality), ASSISTANT_VOICE_INSTRUCTION].join(
-      '\n\n'
-    )
+  private assistantPersonaContext(): string {
+    return ASSISTANT_VOICE_INSTRUCTION
   }
 
   /**
@@ -8799,7 +8801,7 @@ export class ChatEngine {
     if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.assistantId) return undefined
     const assistant = this.assistantRepo.get(thread.assistantId)
     if (!assistant || !assistantKnowledgeComplete(assistant)) return undefined
-    return [this.assistantPersonaContext(assistant), assistant.knowledge.trim()]
+    return [this.assistantPersonaContext(), assistant.knowledge.trim()]
       .filter((layer) => layer.length > 0)
       .join('\n\n')
   }

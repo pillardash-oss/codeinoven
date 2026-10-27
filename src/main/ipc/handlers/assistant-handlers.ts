@@ -40,11 +40,7 @@ import type {
   AssistantTimeliness,
   UpdateAssistantInput
 } from '../../../lib/types'
-import {
-  ASSISTANT_NAME_LIMIT,
-  ASSISTANT_PERSONALITY_LIMIT,
-  ASSISTANT_SCHEDULE_NAME_LIMIT
-} from '../../../lib/types'
+import { ASSISTANT_NAME_LIMIT, ASSISTANT_SCHEDULE_NAME_LIMIT } from '../../../lib/types'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import { validateCustomIconImage } from '../../../lib/custom-icon'
 
@@ -54,7 +50,6 @@ const TIMELINESS_BRACKETS = new Set<string>(ASSISTANT_TIMELINESS_IDS)
 const IMPACT_BRACKETS = new Set<string>(ASSISTANT_IMPACT_IDS)
 const MAX_ASSISTANT_NAME = ASSISTANT_NAME_LIMIT
 const MAX_ASSISTANT_DESCRIPTION = 2000
-const MAX_ASSISTANT_PERSONALITY = ASSISTANT_PERSONALITY_LIMIT
 const MAX_ASSISTANT_SCHEDULE_NAME = ASSISTANT_SCHEDULE_NAME_LIMIT
 const MAX_KNOWLEDGE = 100_000
 const MAX_CONNECTIONS = 64
@@ -239,9 +234,6 @@ function validateCreateInput(value: unknown): CreateAssistantInput {
     ...(typeof record.description === 'string'
       ? { description: record.description.slice(0, MAX_ASSISTANT_DESCRIPTION) }
       : {}),
-    ...(typeof record.personality === 'string'
-      ? { personality: record.personality.slice(0, MAX_ASSISTANT_PERSONALITY) }
-      : {}),
     ...(typeof record.scheduled === 'boolean' ? { scheduled: record.scheduled } : {}),
     ...(typeof record.scheduleName === 'string'
       ? { scheduleName: record.scheduleName.slice(0, MAX_ASSISTANT_SCHEDULE_NAME) }
@@ -290,15 +282,6 @@ function validateUpdateInput(value: unknown): UpdateAssistantInput {
       throw new TypeError('Assistant scheduled flag must be a boolean')
     }
     patch.scheduled = record.scheduled
-  }
-  if (record.personality !== undefined) {
-    patch.personality =
-      record.personality === null
-        ? null
-        : requireString(record.personality, 'Assistant personality', true).slice(
-            0,
-            MAX_ASSISTANT_PERSONALITY
-          )
   }
   if (record.scheduleName !== undefined) {
     patch.scheduleName =
@@ -722,8 +705,9 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   /**
    * Open a form-created assistant's first conversation. The name and the
-   * personality are already the user's own words, so the assistant opens by using
-   * them, asks only what to call the user, and says where a task goes.
+   * description are already the user's own words, so the assistant opens by using
+   * the name, asks how they want it to behave and what to call the user, and says
+   * where a task goes.
    */
   ipcMain.handle('assistant:startManualSetup', async (_, assistantId: unknown) => {
     const id = validateEntityId(assistantId, 'Assistant ID')

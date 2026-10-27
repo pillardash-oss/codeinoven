@@ -789,7 +789,8 @@ walks the interview in one order, one question at a time, and the same order hol
 whether the assistant came from the form or from the chat path:
 
 1. the name the user gives it (`name`),
-2. how they want it to behave, in their own words (`personality`),
+2. how they want it to behave, in their own words, which becomes the `Personality`
+   section at the top of the knowledge (`src/lib/assistant-personality.ts`),
 3. the activities they want it to take on,
 4. whether it runs on a clock, and, when it does, what they call that clock
    (`scheduled`, `scheduleName`) and the cadence and times (`schedule`),
@@ -806,12 +807,20 @@ specialist, the contract asks once whether they want to be spoken to in that
 language, and records the answer so every later run keeps to it.
 
 The answers that are not prose travel in the plan block's identity fields
-(`name`, `personality`, `scheduled`, `scheduleName`), validated by
+(`name`, `scheduled`, `scheduleName`), validated by
 `parseAssistantPlanValue` (`src/lib/assistant-plan.ts`), and the recap commit
 applies them to the assistant on the same save as the knowledge
 (`saveAssistantKnowledge` in `ThreadView.svelte`). That is how an assistant built by
 talking ends up with the name the user gave it rather than the placeholder the
 create flow had to store (`ASSISTANT_PLACEHOLDER_NAME`).
+
+How the assistant behaves is not a setting and never travels in the plan: it is the
+first section of the knowledge document, so it arrives with the instructions, shows
+up in the card as prose, and is edited in the panel like every other section. The
+model carries a name and a user-written `description` (what the assistant is for,
+shown on the row's hover card) and nothing else about who it is; a personality
+stored by an older build is folded into the knowledge at startup
+(`migrateAssistantIdentityColumns`, `src/main/database/database.ts`).
 
 - An assistant shows an amber **Incomplete** icon (`AlertTriangle`,
   `--color-warning`) whenever it cannot run yet, with the exact gap on hover.
@@ -929,14 +938,14 @@ create flow had to store (`ASSISTANT_PLACEHOLDER_NAME`).
   it for that draft revision only, so a revised draft brings it back.
 - **The card is the draft's presentation, and the transcript never shows the wire
   format.** The recap card reads like the Assignment card: a ledger of the
-  settings the save writes (name, personality, schedule, connections, reporting),
+  settings the save writes (name, schedule, connections, reporting),
   then the instruction document itself section by section as prose
   (`AssistantRecapContent.svelte`), a scrollable body, a **Full screen** review,
   and the save on the right. Nothing about it is on a clock, so it carries a
   `Draft` stamp rather than a timer. The two fenced blocks are the card's payload
   and are stripped from every text the transcript draws in an authoring
-  conversation   the turn's closing statement (`assistantDisplayText`) and each
-  step of its working trace (`WorkingTrace`'s `formatOutput`)   so the reader
+  conversation the turn's closing statement (`assistantDisplayText`) and each
+  step of its working trace (`WorkingTrace`'s `formatOutput`) so the reader
   never receives the knowledge as a monospaced wall or the plan as raw JSON under
   an `ASSISTANT` fence label.
 - The app commits all three together: the instructions, the schedule, and the

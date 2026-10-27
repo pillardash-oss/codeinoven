@@ -4590,9 +4590,7 @@
     const agents = withDefaultAssistantPrimary({ fallbacks: [] }, currentAssistantModelSelection())
     const assistant = await assistants.createAssistant({
       name: draft.name,
-      personality: draft.personality || undefined,
-      scheduled: draft.scheduled,
-      scheduleName: draft.scheduleName || undefined,
+      description: draft.description || undefined,
       agents
     })
     // The seed task is created already inside the assistant: a follow-up regroup
@@ -4603,10 +4601,11 @@
     })
     await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
     await openAssistantKnowledgeFor(assistant)
-    // The assistant was given its name and personality on the form, so it opens
-    // the conversation itself: it greets the user by using them, asks what to
-    // call them, and says where a task goes. A failed opening turn is not fatal,
-    // because the conversation is open and the user can send the first message.
+    // The assistant was given its name and description on the form, so it opens
+    // the conversation itself: it greets them by name, asks how they want it to
+    // behave and what to call them, and says where a task goes. A failed opening
+    // turn is not fatal, because the conversation is open and the user can send the
+    // first message.
     try {
       await assistants.startManualSetup(assistant.id)
     } catch (error) {
