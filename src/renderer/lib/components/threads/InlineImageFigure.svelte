@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import InlineFigure from './InlineFigure.svelte'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte.ts'
 
   const APPFILE_RETRY_DELAYS = [250, 500, 1000, 2000] as const
@@ -48,12 +47,11 @@
   onDestroy(clearRetryTimer)
 </script>
 
-<!-- The picture sets the frame's size, so it is drawn whole at its own shape: a
-     tall picture is capped (the fullscreen viewer is where it is seen big) and a
-     wide one takes the column, and neither leaves a box behind wider than
-     itself. -->
-<InlineFigure {filename} {onExpand}>
-  <div class="relative">
+<!-- The picture is the content: no frame, no caption, no border around it. It is
+     drawn at its own shape inside the conversation column, and the whole picture
+     is the expand target, which opens the viewer where it is seen big. -->
+<figure class="min-w-0 max-w-full self-start">
+  <div class="relative w-fit max-w-full">
     <img
       src={imageUrls.getUrl(url)}
       alt={filename}
@@ -62,9 +60,6 @@
       onerror={handleImageError}
       onload={clearRetryTimer}
     />
-    <!-- The whole picture is the expand target as well as the caption's button.
-         It is a second path to the same action, never the only one, so the
-         affordance itself stays visible in the caption. -->
     <button
       type="button"
       class="absolute inset-0 cursor-zoom-in"
@@ -73,4 +68,4 @@
       onclick={onExpand}
     ></button>
   </div>
-</InlineFigure>
+</figure>
