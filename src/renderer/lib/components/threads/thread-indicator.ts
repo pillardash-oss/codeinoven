@@ -94,6 +94,12 @@ export function threadUsesEngineeringTooling(
  * boundary for state that cannot exist there: IPC on the conversation's critical
  * path, and a background read racing a deleted thread. Chat threads (Chats, the
  * Assistant space, browser assistant chats) own no Engineering state at all.
+ *
+ * The audit fields are here on purpose. The independent (spec-less) audit never
+ * sets the Engineering marker, so its own durable pair is what keeps it
+ * hydrated, and a row that still carries an audit gate or a durable auditor
+ * thread is never treated as an ordinary conversation even if a marker is
+ * missing from an older database.
  */
 export function threadHydratesEngineeringState(
   thread: Pick<
@@ -105,7 +111,14 @@ export function threadHydratesEngineeringState(
     | 'assignmentId'
     | 'assignmentRole'
     | 'achievementRole'
+    | 'auditState'
+    | 'auditorThreadId'
   >
 ): boolean {
-  return threadUsesEngineeringTooling(thread) || isOrchestrationChildThread(thread)
+  return (
+    threadUsesEngineeringTooling(thread) ||
+    isOrchestrationChildThread(thread) ||
+    thread.auditState !== undefined ||
+    thread.auditorThreadId !== undefined
+  )
 }

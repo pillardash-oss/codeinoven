@@ -4334,7 +4334,11 @@
    *  the mount settles, which is what lets the entering view of a thread switch
    *  keep the previous row's panel on screen instead of blanking it. */
   $effect(() => {
-    if (hasController || !workflowReady) return
+    if (hasController) return
+    // A thread with no Engineering state to load is already settled: waiting for
+    // a reconcile that will never run would leave a stale coordinator dock and
+    // stale studio flags from the thread the user came from.
+    if (!workflowReady && shouldHydrateEngineeringState(thread)) return
     if (coordinatorKind !== null) return
     // Only the orchestration boards this view publishes. An authored-work board on
     // the same row belongs to the design store and must survive this cleanup.
@@ -4937,7 +4941,10 @@
     // restored it once the async reads finished, which read as a flash. Wait
     // for the mount to settle so moving between a coordinator's workers keeps
     // the chrome in place.
-    if (!workflowReady) return
+    //
+    // A thread that never engaged Engineering settles with nothing to show, and
+    // publishing that here is what clears the previous thread's studio flags.
+    if (!workflowReady && shouldHydrateEngineeringState(thread)) return
     const hasStudioDocument =
       brainstorm !== null ||
       prd !== null ||
