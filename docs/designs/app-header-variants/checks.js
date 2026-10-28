@@ -9,8 +9,6 @@
  * rectangle, and the results are appended as text. A clean run is a page of
  * "ok" lines. */
 
-const ZONES = { 'os-zone': 'os' }
-
 function rectOf(element) {
   return element.getBoundingClientRect()
 }
@@ -140,9 +138,6 @@ function flushness(frame) {
 
   const frameRect = rectOf(frame)
   const border = Number.parseFloat(style.borderLeftWidth) || 0
-  const padding = Number.parseFloat(
-    freeEdge === 'right' ? style.paddingRight : style.paddingLeft
-  )
   const slack = Number.parseFloat(
     freeEdge === 'right' ? style.paddingRight : style.paddingLeft
   )

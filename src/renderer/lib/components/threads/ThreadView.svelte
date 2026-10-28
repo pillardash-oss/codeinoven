@@ -136,7 +136,6 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
-  import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import { onVoiceComposerReset } from '../../speech/voice-send'
   import WorkingTrace from './WorkingTrace.svelte'
@@ -14527,12 +14526,17 @@
                           data-message-id={msg.id}
                         >
                           {#if isReadingActiveLine}
-                            <ReadAlongOverlay
-                              segments={speechController.activeSegments!}
-                              activeIndex={speechController.visibleSegmentIndex}
-                              spokenProgress={speechController.activeSegmentProgress}
-                              textClass="text-[0.8125rem]"
-                            />
+                            <!-- The read-along only exists while a turn is being
+                                 spoken, so its chunk waits for playback instead
+                                 of riding along with the first screen. -->
+                            {#await import('../speech/ReadAlongOverlay.svelte') then { default: ReadAlongOverlay }}
+                              <ReadAlongOverlay
+                                segments={speechController.activeSegments!}
+                                activeIndex={speechController.visibleSegmentIndex}
+                                spokenProgress={speechController.activeSegmentProgress}
+                                textClass="text-[0.8125rem]"
+                              />
+                            {/await}
                           {:else}
                             <!-- The agent's closing statement is the turn's answer;
                                  the running commentary it wrote between tool calls

@@ -303,8 +303,7 @@ function withRail(inner) {
   return `<div class="window-with-rail">${railMarkup()}<div class="window-body">${inner}<div class="window-fill"><span class="fill-label">conversation</span></div></div></div>`
 }
 
-function block({ platform, variant, width = 'full', options = {}, label = '' }) {
-  const heading = label || `${LABELS[platform]} · ${NOTES[platform]}`
+function block({ platform, variant, width = 'full', options = {} }) {
   const panelNote = options.panelWidth
     ? ` · panel ${options.panelWidth}px`
     : options.panelHidden

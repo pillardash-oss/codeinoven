@@ -9,7 +9,6 @@
   import { getAnnotationToolbarHost, hasAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { Popover } from 'bits-ui'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
-  import ColorSwatches from '../shared/ColorSwatches.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import {
     MARK_FRAME_TOLERANCE_SECONDS,
@@ -447,14 +446,18 @@
       >
         <div>
           <span class="mb-2 block text-xs font-medium text-muted">Colour</span>
-          <ColorSwatches
-            size="sm"
-            allowNone={false}
-            value={annotationTool.color}
-            oncolorchange={(color) => {
-              if (color) annotationTool.setColor(color)
-            }}
-          />
+          <!-- The palette only exists while the pen popover is open, so its chunk
+               waits for the popover instead of loading with the first screen. -->
+          {#await import('../shared/ColorSwatches.svelte') then { default: ColorSwatches }}
+            <ColorSwatches
+              size="sm"
+              allowNone={false}
+              value={annotationTool.color}
+              oncolorchange={(color) => {
+                if (color) annotationTool.setColor(color)
+              }}
+            />
+          {/await}
         </div>
         <div>
           <label

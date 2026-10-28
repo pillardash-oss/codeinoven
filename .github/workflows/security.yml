@@ -128,6 +128,18 @@ jobs:
       #   for video matting) decodes a local file and runs local inference, opens
       #   no peer connection and takes no peer-supplied address.
       #
+      #   GHSA-gcqx-w48m-w2h4 (low), deepmerge >=4.2.0 <=4.3.1
+      #   reachable only through the devDependency @sveltejs/vite-plugin-svelte,
+      #   which merges the svelte config at build time. Upstream has published no
+      #   fix (`first_patched_version: null`; 4.3.1 is `latest`, the fix is still
+      #   an open issue in its repository), so `bun audit fix` reports "no
+      #   published version fixes" and suggests this same flag. Nothing here
+      #   reaches it at runtime: the only source it ever merges is this
+      #   repository's own svelte.config.js, no user or network input, and the
+      #   package ships no runtime code in the app bundle. The other dependency
+      #   this audit used to report, qs (GHSA-6pq8-jhm2-2vcw), is fixed rather
+      #   than accepted: the `qs` override in package.json pins 6.16.2.
+      #
       # Remove the flag from the `audit` script as soon as upstream ships a fix.
       - name: Audit dependencies
         run: bun run audit

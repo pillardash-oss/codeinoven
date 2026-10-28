@@ -166,7 +166,6 @@
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
   import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
-  import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
   import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
@@ -5523,12 +5522,16 @@
   onSelect={openSwitcherEntry}
 />
 
-<WorkspaceFullscreenTerminal
-  tabId={terminalFullscreenTab?.id ?? null}
-  onTabIdChange={(id) => (terminalFullscreenTabId = id)}
-  onNewTerminal={openNewTerminal}
-  onCloseTab={(id) => closeFullscreenTab('terminal', id)}
-/>
+{#if terminalFullscreenTab}
+  {#await import('./WorkspaceFullscreenTerminal.svelte') then { default: WorkspaceFullscreenTerminal }}
+    <WorkspaceFullscreenTerminal
+      tabId={terminalFullscreenTabId}
+      onTabIdChange={(id) => (terminalFullscreenTabId = id)}
+      onNewTerminal={openNewTerminal}
+      onCloseTab={(id) => closeFullscreenTab('terminal', id)}
+    />
+  {/await}
+{/if}
 {#if browserFullscreenTabId}
   {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
     <WorkspaceFullscreenBrowser
