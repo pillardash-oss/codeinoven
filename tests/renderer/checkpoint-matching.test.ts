@@ -145,15 +145,9 @@ describe('checkpoint card placement', () => {
 
   it('keeps one card per turn across mid-turn question answers', () => {
     const promptId = 'prompt-1'
-    // The turn stops on a question, so the user message after it answers that
-    // question and continues the turn instead of opening a new one.
-    const asked = msg('assistant', 110)
-    asked.parts = [
-      { type: 'question', id: 'q-1', messageID: asked.id, question: { prompt: 'Which file?' } }
-    ]
     const messages = [
       msg('user', 100, promptId),
-      asked,
+      msg('assistant', 110),
       msg('user', 115, 'question-answer-1'),
       msg('assistant', 120),
       msg('assistant', 130)

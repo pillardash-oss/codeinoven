@@ -152,7 +152,10 @@ export interface TranscriptIndex {
  *
  * A card states what a finished turn changed, so it only lands on the assistant
  * message that ends its own turn. A card sitting under a live trace reads as if
- * the work on screen already produced those files.
+ * the work on screen already produced those files. A prompt sent mid-turn (a
+ * steer, an answered question) belongs to the turn it interrupted, so it never
+ * ends that turn's window or takes its card: the card still reports the whole
+ * turn, once the turn is over.
  *
  * Checkpoints that predate `sourceMessageId`, or whose prompt is not in the
  * loaded transcript, keep the timestamp-window match as a fallback and only
@@ -195,23 +198,24 @@ function resolveCheckpointOwners(
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i]!
     const checkpoint = anchors.get(start)!
-    // The turn ends at its own last assistant message, never at one that joins
-    // the window later because the next prompt has no checkpoint of its own.
-    const limit = Math.min(
-      starts[i + 1] ?? messages.length,
-      nextTurnBoundaryIndex(messages, start + 1)
-    )
+    // The turn owns every message until the next anchored prompt, and it ends
+    // at the last assistant message before the first prompt that was sent once
+    // it had already finished. A prompt that arrives while the turn is still
+    // running is a steer of that same turn, so it never splits the turn or
+    // takes its card elsewhere.
+    const windowEnd = starts[i + 1] ?? messages.length
+    const turnEnd = nextTurnStartIndex(messages, start, windowEnd)
     let cardIndex = -1
-    for (let index = start; index < limit; index++) {
+    for (let index = start; index < windowEnd; index++) {
       const message = messages[index]
       if (!message || message.role !== 'assistant' || message.inlineArtifact) continue
-      // A run that is still working owns its indices for card placement but
-      // keeps them out of the fallback, so the attempt it replaced cannot
-      // leave its own card behind under the work being redone.
+      // A run that is still working claims its indices but places no card: the
+      // attempt it replaced must not leave a card behind under the work being
+      // redone, and a turn in flight reports its changes only once it ends.
       claimed[index] = true
       if (!isCompleted(checkpoint)) continue
       owners[index] = checkpoint
-      cardIndex = index
+      if (index < turnEnd) cardIndex = index
     }
     if (cardIndex >= 0 && isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
   }
@@ -233,43 +237,49 @@ function resolveCheckpointOwners(
 }
 
 /**
- * Index of the next prompt that opens its own turn at or after `from`, or the
- * message count when the turn runs to the end of the transcript. A user message
- * an app action produced, and one that answers the turn's own question, both
- * continue the turn they belong to instead of ending the window.
+ * Index of the first prompt at or after `from` that begins the next turn, or
+ * `limit` when the turn runs to the end of the transcript.
+ *
+ * A prompt sent while the turn's last assistant message was still open belongs
+ * to that turn: a steer continues it, and an answered question resumes it. Only
+ * a prompt written after that message closed begins the next turn, which is why
+ * this reads the message that was streaming rather than a checkpoint clock: the
+ * two orders are independent, and the turn a prompt interrupted is a fact of the
+ * transcript.
  */
-function nextTurnBoundaryIndex(messages: readonly AgentMessage[], from: number): number {
-  for (let index = from; index < messages.length; index++) {
+function nextTurnStartIndex(
+  messages: readonly AgentMessage[],
+  start: number,
+  limit: number
+): number {
+  for (let index = start + 1; index < limit; index++) {
     const message = messages[index]
     if (!message || message.role !== 'user' || isTurnTransparentUserMessage(message)) continue
-    if (isAppActionMessage(message) || isQuestionAnswer(messages, index)) continue
+    if (promptContinuesTurn(messages, index, start)) continue
     return index
   }
-  return messages.length
+  return limit
 }
 
-/**
- * A user message an app action produced   an answered question, a connection
- * retry, a spec apply   carries presentation parts and no authored text, so it
- * continues the turn that triggered it.
- */
-function isAppActionMessage(message: AgentMessage): boolean {
-  return (
-    message.parts.length > 0 && message.parts.every((part) => part.type === 'user-presentation')
-  )
-}
-
-/** Whether this user message answers the question the turn was waiting on. */
-function isQuestionAnswer(messages: readonly AgentMessage[], index: number): boolean {
+/** Whether this prompt arrived while the turn that owns `start` was still writing. */
+function promptContinuesTurn(
+  messages: readonly AgentMessage[],
+  index: number,
+  start: number
+): boolean {
+  const prompt = messages[index]
+  if (!prompt) return false
   for (let cursor = index - 1; cursor >= 0; cursor--) {
     const message = messages[cursor]
     if (!message) return false
     if (message.inlineArtifact) continue
     if (message.role === 'user') {
       if (isTurnTransparentUserMessage(message)) continue
-      return false
+      // A second prompt before the agent answered anything is the same turn's
+      // steer, not a turn of its own.
+      return cursor === start
     }
-    return turnEndsOnQuestion(messages, cursor)
+    return message.completedAt === undefined || message.completedAt > prompt.createdAt
   }
   return false
 }
