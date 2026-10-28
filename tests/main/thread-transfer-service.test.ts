@@ -12,6 +12,10 @@ import {
   ThreadTransferService,
   type ThreadTransferEngine
 } from '../../src/main/chat/thread-transfer-service'
+import type {
+  HandedOffWorker,
+  ThreadTransferRelease
+} from '../../src/main/chat/thread-transfer-service/thread-transfer-workers'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
 vi.mock('electron', () => ({
@@ -57,7 +61,7 @@ interface EngineStub {
 function engineStub(
   options: {
     ownerPid?: number | null
-    release?: { released: boolean; reason?: string } | Error
+    release?: ThreadTransferRelease | Error
     adopt?: ThreadTransferResult | Error
   } = {}
 ): EngineStub {
@@ -65,7 +69,7 @@ function engineStub(
     rootThreadId: THREAD_ID,
     ownerPid: options.ownerPid ?? null
   }))
-  const release = vi.fn(async (): Promise<{ released: boolean; reason?: string }> => {
+  const release = vi.fn(async (): Promise<ThreadTransferRelease> => {
     if (options.release instanceof Error) throw options.release
     return options.release ?? { released: true }
   })
@@ -116,7 +120,7 @@ async function harness(
   options: {
     ownerAlive?: boolean
     ownsTurn?: number | null
-    release?: { released: boolean; reason?: string } | Error
+    release?: ThreadTransferRelease | Error
     adopt?: ThreadTransferResult | Error
     startOwner?: boolean
   } = {}
@@ -249,6 +253,26 @@ describe('ThreadTransferService', () => {
     expect(adopterEngine.adopt).toHaveBeenCalledWith(PROJECT_ID, THREAD_ID)
     // Both sides retired their files: nothing is left for the sweep.
     expect(handoffFiles(directory)).toEqual([])
+  })
+
+  it('hands the workers the release stopped to the adopting instance', async () => {
+    const workers: HandedOffWorker[] = [
+      { agentId: 'cio-subagent-1', label: 'split chat-engine.ts', kind: 'nested' },
+      { agentId: 'cio-subagent-2', label: 'split ThreadView.svelte', kind: 'nested' }
+    ]
+    const { adopter, adopterEngine } = await harness({
+      release: { released: true, workers, pawnThreadIds: ['pawn1'] }
+    })
+
+    await expect(adopter.transferToThisInstance(PROJECT_ID, THREAD_ID)).resolves.toEqual({
+      ok: true
+    })
+    // The roster cannot be read back from the shared rows once those workers are
+    // settled, so it has to ride the hand-off itself.
+    expect(adopterEngine.adopt).toHaveBeenCalledWith(PROJECT_ID, THREAD_ID, {
+      workers,
+      pawnThreadIds: ['pawn1']
+    })
   })
 
   it("carries the owner's refusal back to the asking instance", async () => {

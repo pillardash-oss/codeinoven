@@ -10,6 +10,18 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
 import { homedir } from 'os'
 import { userSuppliedPaths } from './user-supplied-paths'
+import { stripAbortedRunErrors } from './stopped-run-errors'
+import {
+  handedOffWorkersNote,
+  isPawnWorkerThread,
+  runningWorkers,
+  withHandedOffWorkersNote
+} from './thread-transfer-service/thread-transfer-workers'
+import type {
+  HandedOffWorker,
+  ThreadTransferRelease
+} from './thread-transfer-service/thread-transfer-workers'
+import type { HandoffReleaseDetails } from '../system/instance-handoff-bus'
 import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
@@ -14350,7 +14362,7 @@ export class ChatEngine {
   async releaseThreadForTransfer(
     projectId: string,
     threadId: string
-  ): Promise<{ released: boolean; reason?: string }> {
+  ): Promise<ThreadTransferRelease> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
@@ -14361,61 +14373,132 @@ export class ChatEngine {
     if (coordinatorThreadId !== null) {
       return this.releaseWorkflowForTransfer(projectId, coordinatorThreadId)
     }
-    if (!thread.sessionId || !thread.settings) {
-      return { released: false, reason: 'This thread has no resumable session to transfer.' }
-    }
+    // The workers running under this thread die with the process that hosts
+    // them, and once they are settled the shared database can no longer say
+    // whether they finished or were stopped by this move. Read the roster before
+    // anything is stopped, and hand it to the adopting instance with the release.
+    const workers = await this.runningWorkersOf(projectId, threadId)
     const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
-    if (ownerPid !== process.pid) {
+    // A pawn agent runs on a thread of its own, so this thread's own turn can be
+    // idle while a pawn it spawned is still working here.
+    const pawns = await this.runningPawnThreads(projectId, threadId)
+    if (ownerPid !== process.pid && pawns.length === 0) {
       return { released: false, reason: 'This instance is no longer running that thread.' }
     }
-    const driverId =
-      this.sessionRegistry.get(thread.sessionId)?.driverId ??
-      thread.sessionHarnessId ??
-      thread.settings.harnessId
-    const accountId =
-      this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
-    // A Codex app-server can only be handed over once its thread's own turn has
-    // stopped, so the run is stopped first and the writer released second. Ask
-    // whether that release can succeed before anything is stopped: a refusal
-    // that arrived afterwards would cost the user a run this instance can no
-    // longer hand over and never restarts.
-    let writer: { driver: HarnessDriver; projectPath: string } | null = null
-    if (driverId === 'codex') {
-      const resolved = await this.resolve(projectId, driverId, threadId, accountId)
-      const probe = await resolved.driver.canHandOffIdleSession?.(
-        resolved.projectPath,
-        thread.sessionId
-      )
-      if (probe?.blocked) return { released: false, reason: probe.reason }
-      if (resolved.driver.releaseIdleSessionForTransfer) writer = resolved
-    }
-    await this.abort(projectId, threadId, { reason: 'transfer' })
-    await this.settleThreadTurnForTransfer(projectId, threadId)
-    instanceRegistry.publishTurnActivity()
-    if (writer) {
-      // The run is already stopped at this point, so a driver that throws here
-      // must not strand it: turn the failure into the same refusal path a
-      // delivered refusal uses, which puts the run back on this instance.
-      let refusal: string | null = null
-      try {
-        const writerRelease = await writer.driver.releaseIdleSessionForTransfer?.(
-          writer.projectPath,
+    if (ownerPid === process.pid) {
+      if (!thread.sessionId || !thread.settings) {
+        return { released: false, reason: 'This thread has no resumable session to transfer.' }
+      }
+      const driverId =
+        this.sessionRegistry.get(thread.sessionId)?.driverId ??
+        thread.sessionHarnessId ??
+        thread.settings.harnessId
+      const accountId =
+        this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+      // A Codex app-server can only be handed over once its thread's own turn has
+      // stopped, so the run is stopped first and the writer released second. Ask
+      // whether that release can succeed before anything is stopped: a refusal
+      // that arrived afterwards would cost the user a run this instance can no
+      // longer hand over and never restarts.
+      let writer: { driver: HarnessDriver; projectPath: string } | null = null
+      if (driverId === 'codex') {
+        const resolved = await this.resolve(projectId, driverId, threadId, accountId)
+        const probe = await resolved.driver.canHandOffIdleSession?.(
+          resolved.projectPath,
           thread.sessionId
         )
-        if (writerRelease?.owner && !writerRelease.released) {
-          refusal = writerRelease.reason ?? 'The Codex writer is still held by this instance.'
-        }
-      } catch (error) {
-        Logger.error('The Codex writer could not be released for a thread transfer:', {
-          projectId,
-          threadId,
-          error: rawErrorMessage(error)
-        })
-        refusal = 'This Codex session is no longer available to hand over.'
+        if (probe?.blocked) return { released: false, reason: probe.reason }
+        if (resolved.driver.releaseIdleSessionForTransfer) writer = resolved
       }
-      if (refusal !== null) return await this.resumeRunAfterRefusedHandOff(thread, refusal)
+      await this.abort(projectId, threadId, { reason: 'transfer' })
+      await this.settleThreadTurnForTransfer(projectId, threadId)
+      instanceRegistry.publishTurnActivity()
+      if (writer) {
+        // The run is already stopped at this point, so a driver that throws here
+        // must not strand it: turn the failure into the same refusal path a
+        // delivered refusal uses, which puts the run back on this instance.
+        let refusal: string | null = null
+        try {
+          const writerRelease = await writer.driver.releaseIdleSessionForTransfer?.(
+            writer.projectPath,
+            thread.sessionId
+          )
+          if (writerRelease?.owner && !writerRelease.released) {
+            refusal = writerRelease.reason ?? 'The Codex writer is still held by this instance.'
+          }
+        } catch (error) {
+          Logger.error('The Codex writer could not be released for a thread transfer:', {
+            projectId,
+            threadId,
+            error: rawErrorMessage(error)
+          })
+          refusal = 'This Codex session is no longer available to hand over.'
+        }
+        if (refusal !== null) return await this.resumeRunAfterRefusedHandOff(thread, refusal)
+      }
     }
-    return { released: true }
+    // A pawn thread really does move: it is a thread of its own, so stopping its
+    // run here lets the adopting instance continue the same persisted session.
+    // Leaving it running would strand work under a parent that has already left.
+    const pawnThreadIds: string[] = []
+    for (const pawn of pawns) {
+      await this.abort(projectId, pawn.id, { reason: 'transfer' })
+      await this.settleThreadTurnForTransfer(projectId, pawn.id)
+      pawnThreadIds.push(pawn.id)
+    }
+    if (pawnThreadIds.length > 0) instanceRegistry.publishTurnActivity()
+    return {
+      released: true,
+      ...(workers.length > 0 ? { workers } : {}),
+      ...(pawnThreadIds.length > 0 ? { pawnThreadIds } : {})
+    }
+  }
+
+  /**
+   * The workers a thread still has running, read from its persisted cards.
+   *
+   * A sub-agent runs as a nested session inside this process, so it cannot
+   * follow the thread across instances; the roster is what lets the resumed
+   * agent re-spawn it instead of reading its own trace back as a pile of
+   * failures.
+   */
+  private async runningWorkersOf(projectId: string, threadId: string): Promise<HandedOffWorker[]> {
+    try {
+      const records = await this.threadManager.loadMessageRecords(projectId, threadId)
+      return runningWorkers(records)
+    } catch (error) {
+      Logger.dev('Transferred-thread worker roster read failed:', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+      return []
+    }
+  }
+
+  /** The pawn threads `spawnerThreadId` owns, whose runs this process holds. */
+  private async runningPawnThreads(projectId: string, spawnerThreadId: string): Promise<Thread[]> {
+    const running: Thread[] = []
+    for (const pawn of await this.pawnThreadsOf(projectId, spawnerThreadId)) {
+      const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, pawn.id)
+      if (ownerPid === process.pid) running.push(pawn)
+    }
+    return running
+  }
+
+  /** The pawn threads one thread spawned, whoever is running them. */
+  private async pawnThreadsOf(projectId: string, spawnerThreadId: string): Promise<Thread[]> {
+    try {
+      const threads = await this.threadManager.listThreads(projectId)
+      return threads.filter((candidate) => isPawnWorkerThread(candidate, spawnerThreadId))
+    } catch (error) {
+      Logger.dev('Transferred-thread pawn lookup failed:', {
+        projectId,
+        spawnerThreadId,
+        error: rawErrorMessage(error)
+      })
+      return []
+    }
   }
 
   /**
@@ -14561,7 +14644,11 @@ export class ChatEngine {
    * would, with the busy probe and stop latch bypassed because the hand-off is
    * explicit and this process cannot see the sibling's harness.
    */
-  async adoptTransferredThread(projectId: string, threadId: string): Promise<ThreadTransferResult> {
+  async adoptTransferredThread(
+    projectId: string,
+    threadId: string,
+    released?: HandoffReleaseDetails
+  ): Promise<ThreadTransferResult> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
@@ -14574,8 +14661,18 @@ export class ChatEngine {
     if (!thread.sessionId || !thread.settings) {
       return { ok: false, reason: 'This thread has no resumable session.' }
     }
+    // The workers the departure had to stop cannot be resumed anywhere: they
+    // were sessions inside the process that has just released the thread. What
+    // the agent returning here must not do is read its own interrupted trace as
+    // a pile of failures, so the continuation names them.
+    const note = handedOffWorkersNote(released?.workers ?? [], {
+      pawnsResumed: (released?.pawnThreadIds?.length ?? 0) > 0
+    })
     try {
-      let resumed = await this.resumeThreadFromPersistedSession(thread, { force: true })
+      let resumed = await this.resumeThreadFromPersistedSession(thread, {
+        force: true,
+        ...(note ? { note } : {})
+      })
       if (!resumed && thread.settings.loopMode === true) {
         // An Achievement loop resumes through its own driver, not a plain
         // Continue; mirror the loop branch restart recovery uses.
@@ -14588,6 +14685,7 @@ export class ChatEngine {
       if (!resumed) {
         return { ok: false, reason: 'This thread cannot be resumed on this instance.' }
       }
+      await this.resumeTransferredPawns(projectId, threadId, released?.pawnThreadIds ?? [])
       instanceRegistry.publishTurnActivity()
       return { ok: true }
     } catch (error) {
@@ -14599,6 +14697,39 @@ export class ChatEngine {
       return {
         ok: false,
         reason: `The transfer could not resume this run: ${rawErrorMessage(error)}`
+      }
+    }
+  }
+
+  /**
+   * Restart the pawn threads a release handed over.
+   *
+   * A pawn runs on a thread of its own, so a hand-off really does move it: the
+   * departing instance stopped its run, and this instance continues the same
+   * persisted session. Only the threads the release names are resumed, because a
+   * pawn that had already finished must not be handed a fresh turn.
+   */
+  private async resumeTransferredPawns(
+    projectId: string,
+    threadId: string,
+    pawnThreadIds: readonly string[]
+  ): Promise<void> {
+    if (pawnThreadIds.length === 0) return
+    for (const pawn of await this.pawnThreadsOf(projectId, threadId)) {
+      if (!pawnThreadIds.includes(pawn.id)) continue
+      try {
+        await this.resumeThreadFromPersistedSession(pawn, {
+          force: true,
+          allowAgentOwnedThread: true
+        })
+      } catch (error) {
+        // A pawn that will not resume must not fail the transfer: the primary is
+        // already running here, and the pawn's thread is still open for the user.
+        Logger.error('A transferred pawn agent could not be resumed:', {
+          projectId,
+          pawnThreadId: pawn.id,
+          error: rawErrorMessage(error)
+        })
       }
     }
   }
@@ -14658,10 +14789,16 @@ export class ChatEngine {
     if (!thread) return { rootThreadId: threadId, ownerPid: null }
     const coordinatorThreadId = await this.workflowCoordinatorFor(projectId, thread)
     if (coordinatorThreadId === null) {
-      return {
-        rootThreadId: threadId,
-        ownerPid: await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+      const ownerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+      if (ownerPid !== null) return { rootThreadId: threadId, ownerPid }
+      // The thread's own turn can be idle while a pawn it spawned still works:
+      // a pawn is a thread of its own, and it moves with the primary, so while
+      // one runs under a sibling instance this thread is still foreign.
+      for (const pawn of await this.pawnThreadsOf(projectId, threadId)) {
+        const pawnOwner = await this.checkpointManager.activeTurnOwnerPid(projectId, pawn.id)
+        if (pawnOwner !== null) return { rootThreadId: threadId, ownerPid: pawnOwner }
       }
+      return { rootThreadId: threadId, ownerPid: null }
     }
     const claimOwner = await this.workflowOwnership.ownerPid(projectId, coordinatorThreadId)
     return {
@@ -22192,14 +22329,17 @@ export class ChatEngine {
    */
   private async resumeThreadFromPersistedSession(
     thread: Thread,
-    options: { force?: boolean } = {}
+    options: { force?: boolean; note?: string; allowAgentOwnedThread?: boolean } = {}
   ): Promise<boolean> {
     const force = options.force === true
     if (thread.archived) return false
     if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
       return false
     }
-    if (isOrchestrationChildThread(thread)) return false
+    // An agent-owned worker thread (a pawn) is normally left to the agent run
+    // that owns it. A transfer resumes it explicitly, because the release
+    // stopped it on the departing instance and nothing else would restart it.
+    if (!options.allowAgentOwnedThread && isOrchestrationChildThread(thread)) return false
     if (!thread.settings || !thread.sessionId) return false
     // A deliberate user stop before the restart vetoes the hidden Continue;
     // the user can still resume by hand (Retry or any prompt).
@@ -22242,11 +22382,18 @@ export class ChatEngine {
       thread.id,
       resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue'
     )
+    // A transfer can carry something the persisted request cannot say: what the
+    // move did to the workers this thread was running. It rides the same turn
+    // rather than a second one, so the agent sees it before it decides what
+    // finished and what failed.
+    const continuationText = options.note
+      ? withHandedOffWorkersNote(continuation.text, options.note)
+      : continuation.text
     await this.sendPrompt(
       thread.projectId,
       thread.id,
       validateThreadSettings(thread.settings),
-      continuation.text,
+      continuationText,
       continuation.attachments,
       resumesSpecContract ? 'implement' : undefined,
       createMessageId(),
@@ -28436,6 +28583,15 @@ export class ChatEngine {
         restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
         mirror
       )
+      // A stop is not a failure. When this process stopped the run itself (a
+      // user Stop, a transfer handing the thread to a sibling instance, or the
+      // sweep that stops a thread's nested workers with it) the harness still
+      // closes the interrupted attempt with its own abort text, and that text
+      // proves nothing: persisted, it paints an error card over work that was
+      // stopped on purpose and makes a worker stopped by a hand-off read as a
+      // failed worker. The thread's own status already says `interrupted`.
+      const userAborted = this.userAbortedSessions.has(sessionId)
+      if (userAborted) stripAbortedRunErrors(merged)
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
       // The provider transcript is the irreplaceable user data. Persist it
       // before Mermaid validation, usage accounting, specification parsing, or
@@ -28451,10 +28607,11 @@ export class ChatEngine {
       const liveThread = await this.idleTurnThread(info, sessionId)
       const superseded = liveThread === null
       let failure = lastAssistant?.error
-      // A deliberate user stop is not a failure: keep the thread on
-      // `interrupted` and never surface the abort error as a session failure.
-      const userAborted = this.userAbortedSessions.has(sessionId)
-      if (userAborted) failure = failure ?? 'Interrupted by user'
+      // A deliberate stop is not a failure: keep the thread on `interrupted` and
+      // never surface the abort of the run this process ended as a session
+      // failure. `userAborted` was resolved above, before the transcript was
+      // persisted, because it also decides whether that abort text may enter it.
+      if (userAborted) failure = undefined
       // A session that already errored during this turn (watchdog abort, session
       // error, failed dispatch) must never be flipped back to `completed` by the
       // idle finalization. The transcript is truncated by the abort, so the last
