@@ -483,7 +483,7 @@ import {
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from '../../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
-import { createTurnDispatchTimer } from './turn-dispatch-timer'
+import { createTurnDispatchTimer, type TurnStepTimer } from './turn-dispatch-timer'
 import { auxiliarySelectionFor } from '../../lib/auxiliary-agents'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import { createAutoTitleLauncher } from './title-generation-policy'
@@ -4335,7 +4335,13 @@ export class ChatEngine {
      * for a real project thread's turn, and left off for a chat, an assistant task
      * and an Assignment worker, which are offered none of those routes.
      */
-    artifactTools = false
+    artifactTools = false,
+    /**
+     * The dispatch's own clock, so the utility runtime reports what it spent and
+     * on what. This phase is where a slow project turn spends most of its wait,
+     * and one mark around the whole call cannot say which part owned it.
+     */
+    dispatchTimer?: TurnStepTimer
   ): Promise<string> {
     // A new turn begins, so a report declared by an earlier turn that never settled
     // must not be filed under this one.
@@ -4343,7 +4349,11 @@ export class ChatEngine {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
     // has to be able to rebuild its context from them.
-    await this.publishCompactionFallback(driver, projectId, threadId, sessionId, projectPath)
+    await this.timedStep(
+      dispatchTimer,
+      'compactionFallback',
+      this.publishCompactionFallback(driver, projectId, threadId, sessionId, projectPath)
+    )
     // A new agent turn begins here   re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
     this.computerUsePip?.notifyTurnStarted(threadId)
@@ -4370,62 +4380,75 @@ export class ChatEngine {
     // hook lands before the transport split so a direct-gateway harness (Pi,
     // codex) interpolates exactly the same file paths as a runtime harness, and
     // a thread that never asked for a secret pays one small read.
-    await this.agentSecrets
-      .materializeSecretFiles(threadId)
-      .catch((error: unknown) => Logger.dev('Agent secret files could not be written:', error))
-    const nativeCapabilities = await this.nativeCapabilitiesFor(driver, projectPath)
+    await this.timedStep(
+      dispatchTimer,
+      'secretFiles',
+      this.agentSecrets
+        .materializeSecretFiles(threadId)
+        .catch((error: unknown) => Logger.dev('Agent secret files could not be written:', error))
+    )
+    const nativeCapabilities = await this.timedStep(
+      dispatchTimer,
+      'nativeCapabilities',
+      this.nativeCapabilitiesFor(driver, projectPath)
+    )
     // A native bridge owns credentials internally. Other harnesses use their
     // existing MCP runtime; prompt prose is never a transport fallback.
     const useDirectGateway = Boolean(publishUtilityEndpoint)
-    await this.cleanupTurnUtilities(sessionId)
+    await this.timedStep(dispatchTimer, 'utilityCleanup', this.cleanupTurnUtilities(sessionId))
     let gateway: UtilityTurnGateway | undefined
     let runtime: PreparedUtilityRuntime | undefined
     try {
-      gateway = await this.utilityOrchestration.startTurn({
-        harnessId: driver.id,
-        projectId,
-        threadId,
-        sessionId,
-        threadTitle,
-        projectPath,
-        ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
-        nativeCapabilities,
-        permissionLevel: settings.permissionLevel,
-        resolveExecutingModelVisionCapable: () =>
-          this.executingModelVisionCapable(projectId, settings),
-        allowManagement,
-        designSession,
-        videoSession,
-        orchestrationSession,
-        artifactTools,
-        ...(brainstormInterview
-          ? {
-              saveBrainstormNotes: (markdown: string) =>
-                this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
-            }
-          : {}),
-        ...(authoringAssistantId
-          ? {
-              saveAssistantCheckpoint: (markdown: string) =>
-                this.saveAssistantCheckpoint(authoringAssistantId, markdown),
-              saveAssistantSchedule: (scheduled: boolean) =>
-                this.saveAssistantSchedule(authoringAssistantId, scheduled),
-              saveAssistantReporting: (reporting: AssistantReportingPatch) =>
-                this.saveAssistantReporting(authoringAssistantId, reporting),
-              saveAssistantIdentity: (identity: { name: string }) =>
-                this.saveAssistantIdentity(authoringAssistantId, identity)
-            }
-          : {}),
-        ...(assistantTurn === 'run'
-          ? {
-              saveAssistantReport: (title: string, markdown?: string) =>
-                Promise.resolve(this.declareAssistantReport(threadId, title, markdown))
-            }
-          : {}),
-        budgetContext,
-        attributeReinjectedResult: (attribution) =>
-          this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
-      })
+      gateway = await this.timedStep(
+        dispatchTimer,
+        'utilityTurn',
+        this.utilityOrchestration.startTurn({
+          harnessId: driver.id,
+          projectId,
+          threadId,
+          sessionId,
+          threadTitle,
+          projectPath,
+          ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
+          nativeCapabilities,
+          permissionLevel: settings.permissionLevel,
+          resolveExecutingModelVisionCapable: () =>
+            this.executingModelVisionCapable(projectId, settings),
+          allowManagement,
+          designSession,
+          videoSession,
+          orchestrationSession,
+          artifactTools,
+          ...(brainstormInterview
+            ? {
+                saveBrainstormNotes: (markdown: string) =>
+                  this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+              }
+            : {}),
+          ...(authoringAssistantId
+            ? {
+                saveAssistantCheckpoint: (markdown: string) =>
+                  this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+                saveAssistantSchedule: (scheduled: boolean) =>
+                  this.saveAssistantSchedule(authoringAssistantId, scheduled),
+                saveAssistantReporting: (reporting: AssistantReportingPatch) =>
+                  this.saveAssistantReporting(authoringAssistantId, reporting),
+                saveAssistantIdentity: (identity: { name: string }) =>
+                  this.saveAssistantIdentity(authoringAssistantId, identity)
+              }
+            : {}),
+          ...(assistantTurn === 'run'
+            ? {
+                saveAssistantReport: (title: string, markdown?: string) =>
+                  Promise.resolve(this.declareAssistantReport(threadId, title, markdown))
+              }
+            : {}),
+          budgetContext,
+          ...(dispatchTimer ? { telemetry: dispatchTimer } : {}),
+          attributeReinjectedResult: (attribution) =>
+            this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
+        })
+      )
       const resolvedUtilities = gateway.resolvedUtilities
       const skillInstructions = resolvedUtilities.flatMap(({ utility }) =>
         utility.kind === 'skill'
@@ -4491,7 +4514,15 @@ export class ChatEngine {
         // turn-scoped endpoint through a session-keyed handoff so their
         // gateway extension can route tools without a per-turn relaunch.
         if (gateway.directEndpoint && publishUtilityEndpoint) {
-          await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
+          await this.timedStep(
+            dispatchTimer,
+            'gatewayEndpoint',
+            // The endpoint handoff can wait on the harness's own extension being
+            // materialized (`Pi utility gateway endpoint deferred: extension not
+            // yet materialized`), which is exactly the wait that used to hide in
+            // the turnContext phase.
+            publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
+          )
         }
         this.utilityTurns.set(sessionId, { driver, projectId, projectPath, gateway, threadId })
         return [
@@ -4516,11 +4547,20 @@ export class ChatEngine {
           ? { gatewayRequestTimeoutMs: gateway.directEndpoint.timeoutMs }
           : {})
       }
-      const overlay = (await driver.prepareUtilityRuntime?.(request)) ?? {}
+      const overlay =
+        (await this.timedStep(
+          dispatchTimer,
+          'utilityRuntimeOverlay',
+          Promise.resolve(driver.prepareUtilityRuntime?.(request))
+        )) ?? {}
       if (overlay.gatewayAvailable === false) {
         // Also clear any overlay left by an interrupted prior turn before the
         // harness launches against its normal authenticated profile.
-        await applyRuntime(projectPath, null, sessionId)
+        await this.timedStep(
+          dispatchTimer,
+          'utilityRuntimeClear',
+          applyRuntime(projectPath, null, sessionId)
+        )
         await gateway.cleanup()
         gateway = undefined
         return [
@@ -4538,9 +4578,11 @@ export class ChatEngine {
         // Free-standing secrets the app launchers must expose for this thread.
         // Pi and codex never reach this branch: Pi applies the same values to
         // its own session environment through the gateway extension instead.
-        ...(await this.agentSecrets
-          .secretEnvironment(threadId)
-          .catch(() => ({}) as Record<string, string>))
+        ...(await this.timedStep(
+          dispatchTimer,
+          'secretEnvironment',
+          this.agentSecrets.secretEnvironment(threadId).catch(() => ({}) as Record<string, string>)
+        ))
       }
       for (const { utility } of resolvedUtilities) {
         for (const credential of utility.credentials) {
@@ -4554,11 +4596,19 @@ export class ChatEngine {
           }
         }
       }
-      runtime = await this.utilityRuntime.prepare(request, {
-        ...overlay,
-        env: environment
-      })
-      await applyRuntime(projectPath, runtime, sessionId)
+      runtime = await this.timedStep(
+        dispatchTimer,
+        'utilityRuntimePrepare',
+        this.utilityRuntime.prepare(request, {
+          ...overlay,
+          env: environment
+        })
+      )
+      await this.timedStep(
+        dispatchTimer,
+        'utilityRuntimeApply',
+        applyRuntime(projectPath, runtime, sessionId)
+      )
       this.utilityTurns.set(sessionId, {
         driver,
         projectId,
@@ -4588,6 +4638,21 @@ export class ChatEngine {
       await Promise.allSettled(cleanups)
       throw error
     }
+  }
+
+  /**
+   * Time one unit of turn preparation, when the caller passed a dispatch timer.
+   *
+   * The turn's context build is one phase that used to hide everything inside it,
+   * so every awaited unit reports its own step whether the dispatch was timed or
+   * not: an untimed caller (older tests, an isolated session) simply runs the work.
+   */
+  private timedStep<T>(
+    timer: TurnStepTimer | undefined,
+    step: string,
+    work: Promise<T>
+  ): Promise<T> {
+    return timer ? timer.step(step, work) : work
   }
 
   private async cleanupTurnUtilities(sessionId: string, expectedGatewayId?: string): Promise<void> {
@@ -10788,7 +10853,8 @@ export class ChatEngine {
         !isAssistantTask &&
         targetThread !== null &&
         targetThread.assignmentRole === undefined &&
-        projectId !== INBOX_PROJECT_ID
+        projectId !== INBOX_PROJECT_ID,
+      dispatchTimer
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -10809,19 +10875,25 @@ export class ChatEngine {
         ? 'assistant'
         : 'project-thread'
     const [checkpointId, utilityInstructions, behaviorPrompt, rawRecap] = await Promise.all([
-      checkpointPromise,
-      utilityInstructionsPromise,
-      this.getBehaviorPrompt(
-        projectId,
-        threadId,
-        projectPath,
-        behaviorMode,
-        settings,
-        behaviorScope,
-        messageId
+      dispatchTimer.step('checkpoint', checkpointPromise),
+      dispatchTimer.step('utilityRuntime', utilityInstructionsPromise),
+      dispatchTimer.step(
+        'behaviorPrompt',
+        this.getBehaviorPrompt(
+          projectId,
+          threadId,
+          projectPath,
+          behaviorMode,
+          settings,
+          behaviorScope,
+          messageId
+        )
       ),
-      this.buildHistoryRecap(projectId, threadId, driverId, undefined, messageId),
-      transportPromise
+      dispatchTimer.step(
+        'historyRecap',
+        this.buildHistoryRecap(projectId, threadId, driverId, undefined, messageId)
+      ),
+      dispatchTimer.step('promptTransport', transportPromise)
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
     dispatchTimer.mark('turnContext')
@@ -15119,9 +15191,7 @@ export class ChatEngine {
       // The app's record is not what the harness reads, so a report that only
       // landed there would leave the next turn replacing the image again. Repair
       // the catalog entry the report says is wrong.
-      const repaired = await new NativeProviderConfigService(
-        this.storage
-      ).markModelVisionCapable(
+      const repaired = await new NativeProviderConfigService(this.storage).markModelVisionCapable(
         requestingModel.harnessId,
         requestingModel.providerId,
         requestingModel.modelId

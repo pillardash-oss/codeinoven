@@ -1,4 +1,5 @@
 import { invokeGatewayCapability } from './utility-orchestration/utility-gateway-discovery'
+import type { TurnStepTimer } from '../chat/turn-dispatch-timer'
 import { normalizePlanDelivery, normalizePlanPriority } from '../../lib/assistant-reporting'
 import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { randomBytes, randomUUID } from 'crypto'
@@ -276,6 +277,16 @@ export interface UtilityTurnRequest {
   ) => Promise<{ status: 'queued'; title: string }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
+  /**
+   * The dispatching turn's own clock.
+   *
+   * Preparing a turn's utilities is where a project turn spends its largest
+   * unaccounted wait (a registry pass over every installed utility, the Cua
+   * Driver's install scan and spawn, the thread bank, the gateway server and the
+   * audit trail). Reporting each of them as a step of the same dispatch keeps that
+   * wait attributable in the dev log instead of leaving it inside one phase mark.
+   */
+  telemetry?: TurnStepTimer
 }
 
 export interface UtilityTurnBudgetContext {
@@ -1147,15 +1158,30 @@ export class UtilityOrchestrationService {
     return eligible
   }
 
+  /**
+   * Time one unit of turn-utility preparation into the dispatching turn's clock.
+   *
+   * An untimed caller (a refresh, a test, an isolated session) simply runs the
+   * work: the clock is a diagnostic, never a dependency.
+   */
+  private timed<T>(request: UtilityTurnRequest, step: string, work: Promise<T>): Promise<T> {
+    return request.telemetry ? request.telemetry.step(step, work) : work
+  }
+
   async startTurn(request: UtilityTurnRequest): Promise<UtilityTurnGateway> {
     const id = randomUUID()
-    const eligible = await this.resolveEligibleUtilities(request)
+    const eligible = await this.timed(
+      request,
+      'utilityRegistry',
+      this.resolveEligibleUtilities(request)
+    )
     if (!this.hasNativeComputerUse(request)) {
       // Resolved once per turn: it inspects the installed Cua Driver binary, which
       // is far too expensive for the mid-turn refresh below to repeat.
-      const cuaUtility = await this.cuaBridge.resolveUtility(
-        request.harnessId,
-        request.permissionLevel
+      const cuaUtility = await this.timed(
+        request,
+        'cuaDriver',
+        this.cuaBridge.resolveUtility(request.harnessId, request.permissionLevel)
       )
       if (cuaUtility) eligible.push(cuaUtility)
     }
@@ -1179,7 +1205,11 @@ export class UtilityOrchestrationService {
     if (request.designSession && request.designSession !== 'off') {
       const design = eligible.find(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
       if (design && !always.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)) {
-        const instructions = await this.designPlaybook(request.threadId)
+        const instructions = await this.timed(
+          request,
+          'designPlaybook',
+          this.designPlaybook(request.threadId)
+        )
         always.push({
           binding: design.binding,
           utility: { ...design.utility, kind: 'skill', config: { instructions } }
@@ -1194,7 +1224,11 @@ export class UtilityOrchestrationService {
     if (request.videoSession && request.videoSession !== 'off') {
       const video = eligible.find(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
       if (video && !always.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)) {
-        const instructions = await this.videoPlaybook(request.threadId)
+        const instructions = await this.timed(
+          request,
+          'videoPlaybook',
+          this.videoPlaybook(request.threadId)
+        )
         always.push({
           binding: video.binding,
           utility: {
@@ -1315,16 +1349,24 @@ export class UtilityOrchestrationService {
     // Surface the thread's durable utilities bank so later turns can go
     // straight to usage: only banked utilities that are still eligible this
     // turn are advertised (the rest would fail the eligibility gate anyway).
-    const bankEntries = await this.loadThreadBank(request.threadId)
+    const bankEntries = await this.timed(
+      request,
+      'threadBank',
+      this.loadThreadBank(request.threadId)
+    )
     for (const entry of bankEntries) {
       if (state.eligible.has(entry.id)) state.bank.set(entry.id, entry)
     }
-    const bridgeUrl = await this.ensureGatewayServer()
+    const bridgeUrl = await this.timed(request, 'gatewayServer', this.ensureGatewayServer())
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
-    await this.storage.writeRaw(
-      scriptPath,
-      buildUtilityGatewayScript(initialGatewayTools(gatewayTools))
+    await this.timed(
+      request,
+      'gatewayScript',
+      this.storage.writeRaw(
+        scriptPath,
+        buildUtilityGatewayScript(initialGatewayTools(gatewayTools))
+      )
     )
     this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
@@ -1432,10 +1474,14 @@ export class UtilityOrchestrationService {
           ]
         : [])
     ].join('\n')
-    await this.audit(state, 'turn.started', {
-      eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
-      alwaysUtilityIds: always.map(({ utility }) => utility.id)
-    })
+    await this.timed(
+      request,
+      'turnAudit',
+      this.audit(state, 'turn.started', {
+        eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
+        alwaysUtilityIds: always.map(({ utility }) => utility.id)
+      })
+    )
 
     let cleanupPromise: Promise<void> | null = null
     const cleanup = async (): Promise<void> => {

@@ -28,6 +28,7 @@ import type { BaseUrlProvider } from '../../lib/types'
 import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
+import { DevStepClock } from '../system/dev-timing'
 import type {
   CompactionFallbackContext,
   GenerateTitleOptions,
@@ -899,6 +900,10 @@ export class PiDriver extends PersistentCliDriver {
     // separates "our process was cold" from "the provider is thinking" when a
     // follow-up turn feels slow (see `turn-dispatch-timer` on the engine side).
     const dispatchStartedAt = performance.now()
+    // Step clock for the harness half: the spawn admission wait, the session
+    // lookup, the extension rewrites and the bootstrap round-trips are all
+    // inside the single `client` phase, which is 4-10 s on a project turn.
+    const dispatchSteps = new DevStepClock(dispatchStartedAt)
     let dispatchPhaseAt = dispatchStartedAt
     const dispatchPhases: { phase: string; ms: number }[] = []
     const markDispatch = (phase: string): void => {
@@ -906,7 +911,7 @@ export class PiDriver extends PersistentCliDriver {
       dispatchPhases.push({ phase, ms: Math.round(now - dispatchPhaseAt) })
       dispatchPhaseAt = now
     }
-    const client = await this.ensureRpcClient(projectPath, session.id) // A real user turn is not a continuation of a stop: clear the stop request
+    const client = await this.ensureRpcClient(projectPath, session.id, dispatchSteps) // A real user turn is not a continuation of a stop: clear the stop request
     markDispatch('client')
     // the extension applies to worker sessions, and re-arm pi's automatic retry
     // that the stop disarmed.
@@ -1015,8 +1020,18 @@ export class PiDriver extends PersistentCliDriver {
     Logger.dev('Pi dispatch phases', {
       sessionId: session.id,
       totalMs: Math.round(performance.now() - dispatchStartedAt),
-      phases: dispatchPhases
+      phases: dispatchPhases,
+      steps: dispatchSteps.records()
     })
+  }
+
+  /** Time one unit of the client bootstrap when a dispatch clock is present. */
+  private timedStep<T>(
+    steps: DevStepClock | undefined,
+    step: string,
+    work: Promise<T>
+  ): Promise<T> {
+    return steps ? steps.step(step, work) : work
   }
 
   private resolveModel(
@@ -1662,7 +1677,11 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  private async ensureRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
+  private async ensureRpcClient(
+    projectPath: string,
+    sessionId: string,
+    steps?: DevStepClock
+  ): Promise<PiRpcClient> {
     // The in-flight bootstrap wins over the published client: `rpcClients` holds
     // the client from the moment it is spawned (Pi's events, UI requests, exit
     // handling and the task manager all need that reference), but the client is
@@ -1671,7 +1690,7 @@ export class PiDriver extends PersistentCliDriver {
     if (bootstrap) return bootstrap
     const existing = this.rpcClients.get(sessionId)
     if (existing) return existing
-    const started = this.startRpcClient(projectPath, sessionId)
+    const started = this.startRpcClient(projectPath, sessionId, steps)
     this.rpcClientBootstraps.set(sessionId, started)
     try {
       return await started
@@ -1708,20 +1727,34 @@ export class PiDriver extends PersistentCliDriver {
    * machine and then starts alone. Four one-shot sessions once spawned beside a
    * real turn and turned its 1.5 s pi start into 5.4 s.
    */
-  private async startRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
+  private async startRpcClient(
+    projectPath: string,
+    sessionId: string,
+    steps?: DevStepClock
+  ): Promise<PiRpcClient> {
+    const finishAdmissionWait = steps?.begin('spawnAdmission')
     const releaseSpawn = await this.spawnAdmission.enter(
       this.isTitleSession(sessionId) ? 'background' : 'interactive'
     )
+    finishAdmissionWait?.()
     try {
-      return await this.launchRpcClient(projectPath, sessionId)
+      return await this.launchRpcClient(projectPath, sessionId, steps)
     } finally {
       releaseSpawn()
     }
   }
 
   /** The spawn itself. `startRpcClient` owns the admission slot around it. */
-  private async launchRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
-    const session = await this.requireSession(projectPath, sessionId)
+  private async launchRpcClient(
+    projectPath: string,
+    sessionId: string,
+    steps?: DevStepClock
+  ): Promise<PiRpcClient> {
+    const session = await this.timedStep(
+      steps,
+      'sessionLookup',
+      this.requireSession(projectPath, sessionId)
+    )
     const currentTurnState = this.turnStates.get(sessionId)
     this.turnStates.set(sessionId, {
       assistantMessageId: currentTurnState?.assistantMessageId ?? null,
@@ -1742,7 +1775,11 @@ export class PiDriver extends PersistentCliDriver {
           ])
         )
       : {}
-    const resolvedRuntime = await resolveHarnessRuntime('pi', projectPath)
+    const resolvedRuntime = await this.timedStep(
+      steps,
+      'harnessRuntime',
+      resolveHarnessRuntime('pi', projectPath)
+    )
     if (!resolvedRuntime) {
       throw new Error(
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
@@ -1752,9 +1789,10 @@ export class PiDriver extends PersistentCliDriver {
     // utility gateway, and core tools into ONE module loaded through ONE
     // `--extension` flag, so pi's process boot pays a single extension load
     // instead of four. The checkpoint policy is required for every session.
-    const cioCoreToolsExtensionPath = await this.materializeCioCoreToolsExtension(
-      sessionId,
-      resolvedRuntime.target.kind === 'bundled'
+    const cioCoreToolsExtensionPath = await this.timedStep(
+      steps,
+      'coreToolsExtension',
+      this.materializeCioCoreToolsExtension(sessionId, resolvedRuntime.target.kind === 'bundled')
     )
     if (!cioCoreToolsExtensionPath) {
       throw new Error(
@@ -1765,14 +1803,18 @@ export class PiDriver extends PersistentCliDriver {
     // Custom providers (app-store entries plus, inside managed containers, the
     // harness-global models.json providers) must be registered in THIS process
     // too, or `set_model` rejects models the model picker offered.
-    const providersExtensionPath = await this.materializeCioProvidersExtension(sessionId)
+    const providersExtensionPath = await this.timedStep(
+      steps,
+      'providersExtension',
+      this.materializeCioProvidersExtension(sessionId)
+    )
     if (providersExtensionPath) {
       extensionArgs.push('--extension', providersExtensionPath)
     }
-    const invocation = await prepareHarnessInvocation(
-      'pi',
-      ['--mode', 'rpc', ...extensionArgs, ...args],
-      {
+    const invocation = await this.timedStep(
+      steps,
+      'harnessInvocation',
+      prepareHarnessInvocation('pi', ['--mode', 'rpc', ...extensionArgs, ...args], {
         cwd: projectPath,
         env: {
           ...(await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })),
@@ -1785,7 +1827,7 @@ export class PiDriver extends PersistentCliDriver {
           // service. It is the same marker every other CLI harness stamps.
           [OWNED_SESSION_MARKER]: sessionId
         }
-      }
+      })
     )
     // Account environments can resolve a different executable than discovery.
     // Use the prepared invocation as the authority before starting the process.
@@ -1832,7 +1874,7 @@ export class PiDriver extends PersistentCliDriver {
     )
     try {
       this.compactionReadySessions.delete(sessionId)
-      await client.newSession()
+      await this.timedStep(steps, 'newSession', client.newSession())
       if (!this.compactionReadySessions.has(sessionId)) {
         throw new Error(
           'The CodeInOven compaction extension did not load. Pi was stopped to prevent fallback to its default compaction.'
@@ -1842,18 +1884,26 @@ export class PiDriver extends PersistentCliDriver {
       // session id: `switch_session` makes the resumed session current, so the
       // sync below then records the same id the thread was already bound to.
       // A transient failure here must never block the turn.
-      await this.resumeNativePiSession(projectPath, sessionId, client)
-      await Promise.allSettled([
-        client.setAutoRetry(true),
-        // CodeInOven owns compaction for this session. Pi's own threshold is
-        // `contextWindow - reserveTokens` (a flat 16k), which is far above what
-        // a provider that bills the completion budget against the same window
-        // actually accepts, so it never fires in time; leaving it on would race
-        // our page checkpoints and could rewrite the transcript we keep. Manual
-        // compaction (the `compact` RPC) is unaffected by this switch.
-        client.setAutoCompaction(false),
-        this.syncNativeSessionId(projectPath, sessionId)
-      ])
+      await this.timedStep(
+        steps,
+        'resumeTranscript',
+        this.resumeNativePiSession(projectPath, sessionId, client)
+      )
+      await this.timedStep(
+        steps,
+        'sessionSync',
+        Promise.allSettled([
+          client.setAutoRetry(true),
+          // CodeInOven owns compaction for this session. Pi's own threshold is
+          // `contextWindow - reserveTokens` (a flat 16k), which is far above what
+          // a provider that bills the completion budget against the same window
+          // actually accepts, so it never fires in time; leaving it on would race
+          // our page checkpoints and could rewrite the transcript we keep. Manual
+          // compaction (the `compact` RPC) is unaffected by this switch.
+          client.setAutoCompaction(false),
+          this.syncNativeSessionId(projectPath, sessionId)
+        ])
+      )
     } catch (error) {
       client.dispose()
       this.rpcClients.delete(sessionId)
