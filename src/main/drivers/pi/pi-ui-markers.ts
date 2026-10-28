@@ -28,12 +28,19 @@ export function permissionMarkerPayload(record: Record<string, unknown>): {
   surface?: string
   review?: string
   matchedPatterns?: string[]
+  justification?: string
+  reason?: string
 } | null {
-  if (stringValue(record['method']) !== 'confirm') return null
-  const message = stringValue(record['message'])
-  if (!message?.startsWith(CIO_PERMISSION_MARKER)) return null
+  const method = stringValue(record['method'])
+  // The gate asks through an input dialog so the user's written alternative
+  // comes back as text; an older extension still asks with a confirm dialog and
+  // carries the marker in its message.
+  const statement =
+    method === 'input' ? stringValue(record['title']) : stringValue(record['message'])
+  if (method !== 'input' && method !== 'confirm') return null
+  if (!statement?.startsWith(CIO_PERMISSION_MARKER)) return null
   try {
-    const payload = JSON.parse(message.slice(CIO_PERMISSION_MARKER.length)) as {
+    const payload = JSON.parse(statement.slice(CIO_PERMISSION_MARKER.length)) as {
       permission?: unknown
       patterns?: unknown
       tool?: unknown
@@ -41,6 +48,8 @@ export function permissionMarkerPayload(record: Record<string, unknown>): {
       surface?: unknown
       review?: unknown
       matchedPatterns?: unknown
+      justification?: unknown
+      reason?: unknown
     }
     const permission = typeof payload.permission === 'string' ? payload.permission : ''
     if (!permission) return null
@@ -62,7 +71,13 @@ export function permissionMarkerPayload(record: Record<string, unknown>): {
       ...(typeof payload.command === 'string' ? { command: payload.command } : {}),
       ...(typeof payload.review === 'string' ? { review: payload.review.slice(0, 12100) } : {}),
       ...(typeof payload.surface === 'string' ? { surface: payload.surface } : {}),
-      ...(matchedPatterns.length > 0 ? { matchedPatterns } : {})
+      ...(matchedPatterns.length > 0 ? { matchedPatterns } : {}),
+      ...(typeof payload.justification === 'string' && payload.justification.trim()
+        ? { justification: payload.justification.trim().slice(0, 1200) }
+        : {}),
+      ...(typeof payload.reason === 'string' && payload.reason.trim()
+        ? { reason: payload.reason.trim().slice(0, 600) }
+        : {})
     }
   } catch {
     return null

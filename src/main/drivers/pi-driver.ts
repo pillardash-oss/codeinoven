@@ -3065,7 +3065,13 @@ export class PiDriver extends PersistentCliDriver {
             ...(permissionPayload.matchedPatterns
               ? { matchedPatterns: permissionPayload.matchedPatterns }
               : {}),
-            reason: stringValue(record['title']) ?? 'Destructive action requires approval'
+            ...(permissionPayload.justification
+              ? { justification: permissionPayload.justification }
+              : {}),
+            reason:
+              permissionPayload.reason ??
+              stringValue(record['title']) ??
+              'Destructive action requires approval'
           }
         }
       })
@@ -3129,6 +3135,16 @@ export class PiDriver extends PersistentCliDriver {
     // The engine persists the alternative for display, but does not send a
     // second prompt. Queue it while the tool is still blocked so Pi sees the
     // user's correction before continuing after the denial.
+    const dialogMethod = stringValue(request.request['method'])
+    const answer = reply === 'reject' ? (message?.trim() ? message.trim() : 'deny') : 'allow'
+    if (dialogMethod === 'input') {
+      // The input dialog is how the user's own words reach the blocked tool
+      // result, so the model continues from their alternative rather than a
+      // generic refusal. No second prompt is needed.
+      request.client.respondToExtensionUiRequest(rawId, { value: answer })
+      this.pendingUiRequests.delete(requestId)
+      return
+    }
     if (reply === 'reject' && message?.trim()) {
       await request.client.steer(
         [

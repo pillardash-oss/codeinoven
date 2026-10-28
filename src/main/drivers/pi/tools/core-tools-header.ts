@@ -13,6 +13,7 @@ import {
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 import { unmanagedCuaShellReason } from '../../../../lib/agent-control-policy'
 import { sensitiveFileTargets } from '../../../../lib/sensitive-file-targets'
+import { CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME } from '../../../../lib/core-tools'
 import {
   DEFAULT_BUNDLED_PI_FILE_PATTERNS,
   PERMANENT_BUNDLED_PI_FILE_PATTERNS
@@ -59,11 +60,86 @@ const CIO_PERMANENT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(
 
 const sensitiveFileTargets = ${sensitiveFileTargets.toString()}
 
+// Why the run says it needs a protected file, recorded before the card asks and
+// spent once when that card appears. A reason is only accepted for a path this
+// session was already blocked on, so nothing can be pre-approved silently.
+const sensitiveAccessJustifications = new Map()
+const sensitiveAccessBlockedPaths = new Set()
+
+function sensitiveAccessPathKey(path) {
+  return String(path).replaceAll('\\\\', '/')
+}
+
+function rememberBlockedSensitivePaths(paths) {
+  for (const path of paths || []) sensitiveAccessBlockedPaths.add(sensitiveAccessPathKey(path))
+}
+
+function recordSensitiveAccessReason(paths, reason) {
+  const text = typeof reason === 'string' ? reason.trim().slice(0, 600) : ''
+  if (!text) return { recorded: [], ignored: [], error: 'A reason is required.' }
+  const recorded = []
+  const ignored = []
+  for (const path of paths || []) {
+    const key = sensitiveAccessPathKey(path)
+    if (!sensitiveAccessBlockedPaths.has(key)) {
+      ignored.push(String(path))
+      continue
+    }
+    sensitiveAccessJustifications.set(key, text)
+    recorded.push(String(path))
+  }
+  return { recorded, ignored }
+}
+
+function takeSensitiveAccessJustification(paths) {
+  const keys = []
+  const reasons = []
+  for (const path of paths || []) {
+    const key = sensitiveAccessPathKey(path)
+    const reason = sensitiveAccessJustifications.get(key)
+    if (reason === undefined) return undefined
+    keys.push(key)
+    reasons.push(reason)
+  }
+  if (keys.length === 0) return undefined
+  for (const key of keys) sensitiveAccessJustifications.delete(key)
+  return Array.from(new Set(reasons)).join('\\n\\n')
+}
+
+function sensitiveAccessReasonRequest(paths) {
+  return (
+    'Access to a protected file needs a stated reason before the user is asked.\\n' +
+    'Call ${CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME} once with the paths below and one or two sentences on why this run needs them, then retry this exact call:\\n' +
+    JSON.stringify({ paths: paths || [], reason: 'why this run needs the file' })
+  )
+}
+
+/** The tool result the model sees after a denial. When the user wrote an
+ *  alternative, it is the result text itself: the model must continue from the
+ *  user's own words, not from a generic refusal. */
+function permissionDenialReason(reason, answer) {
+  const alternative = typeof answer === 'string' ? answer.trim() : ''
+  if (alternative && alternative !== 'deny') {
+    return (
+      'The user denied this action (' +
+      reason +
+      ') and provided this alternative:\\n\\n' +
+      alternative +
+      '\\n\\nFollow the alternative instead of retrying the denied action.'
+    )
+  }
+  return (
+    'The user denied this action (' +
+    reason +
+    '). Do not retry it as-is; continue the turn with a safe alternative.'
+  )
+}
+
 function bundledPiSensitiveFileGate(toolName, input, cwd) {
   if (!CIO_SENSITIVE_FILE_POLICY_PATH) return null
   // Code-mode orchestration is not itself a file read. Its inner tools reach
   // this gate with their actual arguments, like tools called directly.
-  if (['cio_ask_user', 'cio_todo_write', 'cio_agent_status', 'cio_agent_output'].includes(toolName)) return null
+  if (['cio_ask_user', 'cio_todo_write', 'cio_agent_status', 'cio_agent_output', '${CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME}'].includes(toolName)) return null
   let patterns = CIO_DEFAULT_SENSITIVE_FILE_PATTERNS
   try {
     if (statSync(CIO_SENSITIVE_FILE_POLICY_PATH).size > 262144) throw new Error('Oversized file policy')
