@@ -16,6 +16,7 @@ export interface VideoControl {
   max?: number
 }
 export interface VideoCaption {
+  trackId?: string
   text: string
   start: number
   end: number
@@ -125,6 +126,8 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
     if (start < previous) throw new Error('Captions must be ordered and must not overlap')
     previous = end
     const caption: VideoCaption = { text: videoText(entry.text, 'caption text', 2048), start, end }
+    if (entry.trackId !== undefined)
+      caption.trackId = videoText(entry.trackId, 'Caption track ID', 96)
     if (entry.appearance !== undefined)
       caption.appearance = validateCaptionAppearance(entry.appearance)
     if (entry.words !== undefined) {
@@ -153,13 +156,20 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
       gain: videoNumber(track.gain ?? 1, 'track gain', 0, 1)
     }
   })
+  const edit = value.edit === undefined ? undefined : validateVideoEdit(value.edit)
+  if (edit)
+    for (const caption of captions) {
+      caption.trackId ??= edit.tracks.find((track) => track.kind === 'caption')!.id
+      if (!edit.tracks.some((track) => track.id === caption.trackId && track.kind === 'caption'))
+        throw new Error('Captions require a caption track')
+    }
   return {
     version: 1,
     controls,
     captions,
     captionStyle: style,
     audioTracks,
-    ...(value.edit === undefined ? {} : { edit: validateVideoEdit(value.edit) }),
+    ...(edit ? { edit } : {}),
     ...(value.captionAppearance === undefined
       ? {}
       : { captionAppearance: validateCaptionAppearance(value.captionAppearance) })

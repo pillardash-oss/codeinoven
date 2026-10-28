@@ -5,6 +5,11 @@
   import { createAttachmentKey } from 'svelte/attachments'
   import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import StudioSidebarResizeHandle from '$lib/components/specs/StudioSidebarResizeHandle.svelte'
+  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
+  import CioCaptions from '@pdslng/cio-icon/CioCaptions.svelte'
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
+  import type { VideoEditTrack } from '$shared/video/edit'
   import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioLockOpen from '@pdslng/cio-icon/CioLockOpen.svelte'
   import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
@@ -23,7 +28,13 @@
     tools,
     contextActions
   }: { editor: VideoEditorController; tools?: Snippet; contextActions?: Snippet } = $props()
-  let labelWidth = $state(160)
+  const trackTypes = {
+    video: { icon: CioClapper, label: 'Video' },
+    audio: { icon: CioAudioLines, label: 'Audio' },
+    caption: { icon: CioCaptions, label: 'Captions' },
+    overlay: { icon: CioLayers, label: 'Overlays' }
+  }
+  let labelWidth = $state(208)
   let rowHeights = $state<Record<string, number>>({})
   let contextTrack = $state('')
   let draggedTrack = ''
@@ -251,6 +262,11 @@
     to: number
   ): void {
     if (event.button !== 0) return
+    const item =
+      kind === 'caption'
+        ? editor.document?.captions[index]
+        : editor.edit?.regions.find((item) => item.id === id)
+    if (editor.edit?.tracks.find((track) => track.id === item?.trackId)?.locked) return
     event.preventDefault()
     event.stopPropagation()
     const target =
@@ -365,19 +381,68 @@
   }
 </script>
 
-{#snippet bandSizer(id: string, label: string)}
-  <StudioSidebarResizeHandle
-    sidebarLabel={label}
-    axis="y"
-    value={trackHeight(id)}
-    min={40}
-    max={220}
-    onResize={(value) => (rowHeights[id] = value)}
-    onCommit={rememberRows}
-    class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
-  />
+{#snippet captionItems(track: VideoEditTrack)}
+  {#each visibleCaptions.filter(({ caption }) => caption.trackId === track.id) as { caption, index } (index)}
+    {#if caption.end >= start && caption.start <= end}
+      <button
+        type="button"
+        class={[
+          'absolute top-1 touch-none overflow-hidden border px-2 text-left text-[0.5625rem]',
+          editor.selection?.kind === 'caption' && editor.selection.index === index
+            ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
+            : 'border-warning/30 bg-warning/10 text-foreground'
+        ]}
+        style:left={`${caption.start * scale}px`}
+        style:width={`${Math.max(4, (caption.end - caption.start) * scale)}px`}
+        title={`${caption.text} · drag to move or trim`}
+        aria-label={`Caption: ${caption.text}`}
+        data-video-caption={index}
+        aria-pressed={editor.selection?.kind === 'caption' && editor.selection.index === index}
+        style:height={`${trackHeight(track.id) - 12}px`}
+        onpointerdown={(event) =>
+          startBand(event, 'caption', '', index, caption.start, caption.end)}
+        onclick={() => editor.select({ kind: 'caption', index }, caption.start)}
+      >
+        <span class="absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-warning/30" data-trim="start"
+        ></span><span class="pointer-events-none whitespace-nowrap">{caption.text}</span><span
+          class="absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-warning/30"
+          data-trim="end"
+        ></span>
+      </button>
+    {/if}
+  {/each}
 {/snippet}
-
+{#snippet overlayItems(track: VideoEditTrack)}
+  {#each (editor.edit?.regions ?? []).filter((region) => region.trackId === track.id) as region (region.id)}
+    {#if region.start + region.duration >= start && region.start <= end}
+      <button
+        type="button"
+        class={[
+          'absolute top-1 touch-none overflow-hidden border px-2 text-left text-[0.5625rem]',
+          editor.selection?.kind === 'region' && editor.selection.id === region.id
+            ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
+            : 'border-danger/30 bg-danger/10 text-foreground'
+        ]}
+        style:left={`${region.start * scale}px`}
+        style:width={`${Math.max(4, region.duration * scale)}px`}
+        title={`${region.kind} · drag to move or trim`}
+        aria-label={`${region.kind} region at ${videoTimecode(region.start)}`}
+        data-video-region={region.id}
+        aria-pressed={editor.selection?.kind === 'region' && editor.selection.id === region.id}
+        style:height={`${trackHeight(track.id) - 12}px`}
+        onpointerdown={(event) =>
+          startBand(event, 'region', region.id, -1, region.start, region.start + region.duration)}
+        onclick={() => editor.select({ kind: 'region', id: region.id }, region.start)}
+      >
+        <span class="absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-danger/30" data-trim="start"
+        ></span><span class="pointer-events-none">{region.kind}</span><span
+          class="absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-danger/30"
+          data-trim="end"
+        ></span>
+      </button>
+    {/if}
+  {/each}
+{/snippet}
 <ContextMenu.Root>
   <ContextMenu.Trigger
     {...stageContext}
@@ -469,6 +534,7 @@
       >
         <div class="sticky top-0 z-30 h-6 border-b border-border bg-surface"></div>
         {#each editor.edit?.tracks ?? [] as track (track.id)}
+          {@const type = trackTypes[track.kind]}
           <div
             class="relative flex items-center gap-1 border-b border-border px-1"
             style:height={`${trackHeight(track.id)}px`}
@@ -498,18 +564,23 @@
               }}
               ondragend={() => (draggedTrack = '')}><CioGrip size={12} /></button
             >
-            <input
-              class="min-w-0 flex-1 bg-transparent text-[0.625rem] outline-none focus:bg-elevated"
-              value={track.name}
-              aria-label="Track name"
-              title={`Rename ${track.name}`}
-              onchange={(event) =>
-                editor.mutate((_doc, edit) => {
-                  const target = edit.tracks.find((item) => item.id === track.id)
-                  if (target) target.name = event.currentTarget.value
-                })}
-            />
-            {#each [{ key: 'locked', icon: CioLockOpen, activeIcon: CioLock, label: 'Lock', activeLabel: 'Unlock' }, { key: 'hidden', icon: CioEye, activeIcon: CioEyeOff, label: 'Hide', activeLabel: 'Show' }, { key: 'muted', icon: CioVolume, activeIcon: CioVolumeX, label: 'Mute', activeLabel: 'Unmute' }] as control (control.key)}
+            <div class="min-w-0 flex-1">
+              <input
+                class="w-full min-w-0 bg-transparent text-[0.625rem] outline-none focus:bg-elevated"
+                value={track.name}
+                aria-label="Track name"
+                title={`Rename ${track.name}`}
+                onchange={(event) =>
+                  editor.mutate((_doc, edit) => {
+                    const target = edit.tracks.find((item) => item.id === track.id)
+                    if (target) target.name = event.currentTarget.value
+                  })}
+              />
+              <div class="flex items-center gap-1 text-[0.5625rem] text-dimmed">
+                <type.icon size={12} /><span>{type.label}</span>
+              </div>
+            </div>
+            {#each [{ key: 'locked', icon: CioLockOpen, activeIcon: CioLock, label: 'Lock', activeLabel: 'Unlock' }, { key: 'hidden', icon: CioEye, activeIcon: CioEyeOff, label: 'Hide', activeLabel: 'Show' }, { key: 'muted', icon: CioVolume, activeIcon: CioVolumeX, label: 'Mute', activeLabel: 'Unmute' }].filter((control) => control.key !== 'muted' || track.kind === 'video' || track.kind === 'audio') as control (control.key)}
               {@const key = control.key as 'locked' | 'hidden' | 'muted'}
               <button
                 type="button"
@@ -539,20 +610,6 @@
             />
           </div>
         {/each}
-        <div
-          class="relative flex items-center border-b border-border px-2 text-[0.625rem] text-muted"
-          style:height={`${trackHeight('captions')}px`}
-        >
-          Captions
-          {@render bandSizer('captions', 'caption track height')}
-        </div>
-        <div
-          class="relative flex items-center border-b border-border px-2 text-[0.625rem] text-muted"
-          style:height={`${trackHeight('regions')}px`}
-        >
-          Blur / privacy
-          {@render bandSizer('regions', 'privacy track height')}
-        </div>
         <div class="flex h-6 items-center px-2 text-[0.625rem] text-muted">Agent review</div>
       </div>
       <StudioSidebarResizeHandle
@@ -621,6 +678,8 @@
               }}
               ondrop={(event) => drop(event, track.id)}
             >
+              {#if track.kind === 'caption'}{@render captionItems(track)}{/if}
+              {#if track.kind === 'overlay'}{@render overlayItems(track)}{/if}
               {#each visibleClips.filter((clip) => clip.trackId === track.id) as clip (clip.id)}
                 {@const asset = editor.edit?.assets.find((asset) => asset.id === clip.assetId)}
                 <button
@@ -696,94 +755,6 @@
               />
             </div>
           {/each}
-          <div
-            class="relative border-b border-border"
-            style:height={`${trackHeight('captions')}px`}
-            role="group"
-            aria-label="Caption timing"
-          >
-            {#each visibleCaptions as { caption, index } (index)}
-              {#if caption.end >= start && caption.start <= end}
-                <button
-                  type="button"
-                  class={[
-                    'absolute top-1 touch-none overflow-hidden border px-2 text-left text-[0.5625rem]',
-                    editor.selection?.kind === 'caption' && editor.selection.index === index
-                      ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
-                      : 'border-warning/30 bg-warning/10 text-foreground'
-                  ]}
-                  style:left={`${caption.start * scale}px`}
-                  style:width={`${Math.max(4, (caption.end - caption.start) * scale)}px`}
-                  title={`${caption.text} · drag to move or trim`}
-                  aria-label={`Caption: ${caption.text}`}
-                  data-video-caption={index}
-                  aria-pressed={editor.selection?.kind === 'caption' &&
-                    editor.selection.index === index}
-                  style:height={`${trackHeight('captions') - 12}px`}
-                  onpointerdown={(event) =>
-                    startBand(event, 'caption', '', index, caption.start, caption.end)}
-                  onclick={() => editor.select({ kind: 'caption', index }, caption.start)}
-                >
-                  <span
-                    class="absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-warning/30"
-                    data-trim="start"
-                  ></span><span class="pointer-events-none whitespace-nowrap">{caption.text}</span
-                  ><span
-                    class="absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-warning/30"
-                    data-trim="end"
-                  ></span>
-                </button>
-              {/if}
-            {/each}
-            {@render bandSizer('captions', 'caption track height')}
-          </div>
-          <div
-            class="relative border-b border-border"
-            style:height={`${trackHeight('regions')}px`}
-            role="group"
-            aria-label="Blur and privacy regions"
-          >
-            {#each editor.edit?.regions ?? [] as region (region.id)}
-              {#if region.start + region.duration >= start && region.start <= end}
-                <button
-                  type="button"
-                  class={[
-                    'absolute top-1 touch-none overflow-hidden border px-2 text-left text-[0.5625rem]',
-                    editor.selection?.kind === 'region' && editor.selection.id === region.id
-                      ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
-                      : 'border-danger/30 bg-danger/10 text-foreground'
-                  ]}
-                  style:left={`${region.start * scale}px`}
-                  style:width={`${Math.max(4, region.duration * scale)}px`}
-                  title={`${region.kind} · drag to move or trim`}
-                  aria-label={`${region.kind} region at ${videoTimecode(region.start)}`}
-                  data-video-region={region.id}
-                  aria-pressed={editor.selection?.kind === 'region' &&
-                    editor.selection.id === region.id}
-                  style:height={`${trackHeight('regions') - 12}px`}
-                  onpointerdown={(event) =>
-                    startBand(
-                      event,
-                      'region',
-                      region.id,
-                      -1,
-                      region.start,
-                      region.start + region.duration
-                    )}
-                  onclick={() => editor.select({ kind: 'region', id: region.id }, region.start)}
-                >
-                  <span
-                    class="absolute inset-y-0 left-0 w-1 cursor-ew-resize bg-danger/30"
-                    data-trim="start"
-                  ></span><span class="pointer-events-none">{region.kind}</span><span
-                    class="absolute inset-y-0 right-0 w-1 cursor-ew-resize bg-danger/30"
-                    data-trim="end"
-                  ></span>
-                </button>
-              {/if}
-            {/each}
-            {@render bandSizer('regions', 'privacy track height')}
-          </div>
           <div class="relative h-6" role="group" aria-label="Agent edit review markers">
             {#each pendingChanges as change (change.id)}
               <button

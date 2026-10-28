@@ -2,7 +2,7 @@ import { FONT_STACKS } from '../app-fonts'
 
 /** Source-preserving editing data shared by the UI, agent tools and renderer. */
 export type VideoAssetKind = 'video' | 'audio' | 'image'
-export type VideoTrackKind = 'video' | 'audio' | 'overlay'
+export type VideoTrackKind = 'video' | 'audio' | 'caption' | 'overlay'
 export interface VideoEditAsset {
   id: string
   name: string
@@ -54,6 +54,7 @@ export interface VideoEditClip {
   duration: number
   speed: number
   volume: number
+  audioDetached?: boolean
   opacity: number
   rect: VideoEditRect
   crop: VideoEditRect
@@ -64,6 +65,7 @@ export interface VideoEditClip {
   transition: VideoEditTransition
 }
 export interface VideoEditRegion extends VideoEditRect {
+  trackId?: string
   id: string
   start: number
   duration: number
@@ -261,13 +263,31 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
     const t = record(raw)
     return {
       id: id(t.id),
-      name: text(t.name, 'Track name'),
-      kind: choice(t.kind, ['video', 'audio', 'overlay']),
+      name:
+        t.kind === 'audio' && (t.name === 'Dialogue' || t.name === 'Music / effects')
+          ? 'Audio'
+          : text(t.name, 'Track name'),
+      kind: choice(t.kind, ['video', 'audio', 'caption', 'overlay']),
       locked: bool(t.locked),
       muted: bool(t.muted),
       hidden: bool(t.hidden)
     }
   })
+  // Earlier documents stored captions and privacy masks in implicit rows.
+  for (const kind of ['caption', 'overlay'] as const)
+    if (!tracks.some((track) => track.kind === kind)) {
+      if (tracks.length >= 24) throw new Error('Track limit reached while restoring typed tracks')
+      let trackId: string = kind
+      while (tracks.some((track) => track.id === trackId)) trackId += '-track'
+      tracks.push({
+        id: trackId,
+        kind,
+        name: kind === 'caption' ? 'Captions' : 'Overlays',
+        locked: false,
+        hidden: false,
+        muted: false
+      })
+    }
   const assetIds = new Map(assets.map((asset) => [asset.id, asset]))
   const trackIds = new Map(tracks.map((track) => [track.id, track]))
   const clips = entries(r.clips, 4000).map((raw): VideoEditClip => {
@@ -314,6 +334,7 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
         temperature: number(grade.temperature, 'Temperature', -1, 1, 0),
         hue: number(grade.hue, 'Hue', -180, 180, 0)
       },
+      ...(c.audioDetached === true ? { audioDetached: true } : {}),
       audio: {
         highpass: number(audio.highpass, 'High pass', 20, 2000, 20),
         lowpass: number(audio.lowpass, 'Low pass', 2000, 20000, 20000),
@@ -339,6 +360,10 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
     const b = record(raw)
     return {
       ...validateVideoEditRect(b),
+      trackId:
+        b.trackId === undefined
+          ? tracks.find((track) => track.kind === 'overlay')!.id
+          : text(b.trackId, 'Overlay track ID', 96),
       id: id(b.id),
       start: number(b.start, 'Region start', 0, duration),
       duration: number(b.duration, 'Region duration', 0.001, duration),
@@ -353,6 +378,9 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
         : {})
     }
   })
+  for (const region of regions)
+    if (!tracks.some((track) => track.id === region.trackId && track.kind === 'overlay'))
+      throw new Error('Privacy items require an overlay track')
   const changes = entries(r.changes, 100).map((raw): VideoEditChange => {
     const c = record(raw)
     return {
@@ -621,7 +649,7 @@ export function applyVideoEditOperations(
       edit.tracks.push({
         id: crypto.randomUUID(),
         name: text(operation.name, 'Track name'),
-        kind: choice(operation.trackKind, ['video', 'audio', 'overlay']),
+        kind: choice(operation.trackKind, ['video', 'audio', 'caption', 'overlay']),
         locked: false,
         muted: false,
         hidden: false

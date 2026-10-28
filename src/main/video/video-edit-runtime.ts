@@ -293,6 +293,14 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     if (dragRect) return dragRect
     if (!studio || !selection || selection.kind === 'brush') return null
     const target = selection
+    const trackId =
+      target.kind === 'clip'
+        ? studio.edit?.clips.find((item) => item.id === target.id)?.trackId
+        : target.kind === 'region'
+          ? studio.edit?.regions.find((item) => item.id === target.id)?.trackId
+          : studio.captions[target.index]?.trackId
+    const track = studio.edit?.tracks.find((item) => item.id === trackId)
+    if (track?.hidden || track?.locked) return null
     if (target.kind === 'clip')
       return studio.edit?.clips.find((clip) => clip.id === target.id)?.rect ?? null
     if (target.kind === 'region')
@@ -403,7 +411,10 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       )
         return selection
       const caption = studio.captions.findIndex(
-        (caption) => currentTime >= caption.start && currentTime < caption.end
+        (caption) =>
+          currentTime >= caption.start &&
+          currentTime < caption.end &&
+          !studio?.edit?.tracks.find((track) => track.id === caption.trackId)?.hidden
       )
       const captionRect =
         caption >= 0 && canvas ? hooks.captionBounds(caption, canvas.width, canvas.height) : null
@@ -412,6 +423,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
         (region) =>
           currentTime >= region.start &&
           currentTime < region.start + region.duration &&
+          !studio?.edit?.tracks.find((track) => track.id === region.trackId)?.hidden &&
           contains(region)
       )
       if (region) return { kind: 'region', id: region.id }
@@ -856,7 +868,11 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       ctx.restore()
     }
     for (const region of edit.regions)
-      if (time >= region.start && time < region.start + region.duration) {
+      if (
+        !tracks.get(region.trackId ?? '')?.hidden &&
+        time >= region.start &&
+        time < region.start + region.duration
+      ) {
         const x = clamp(region.x) * canvas.width,
           y = clamp(region.y) * canvas.height,
           width = Math.min(region.width * canvas.width, canvas.width - x),

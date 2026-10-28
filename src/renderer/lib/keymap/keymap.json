@@ -949,6 +949,13 @@
           "scenario": "Focus is inside the video editor, outside a text field."
         },
         {
+          "id": "video-edit-extract-audio",
+          "keys": [],
+          "label": "Extract audio",
+          "description": "Detach selected video clip audio to a new synchronized audio track.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
           "id": "video-edit-copy",
           "keys": ["mod", "c"],
           "label": "Copy the selected clip",

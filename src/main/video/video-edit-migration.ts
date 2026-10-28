@@ -33,7 +33,7 @@ export async function migrateVideoEdit(
       { id: 'picture', name: 'Video', kind: 'video', locked: false, muted: false, hidden: false },
       {
         id: 'dialogue',
-        name: 'Dialogue',
+        name: 'Audio',
         kind: 'audio',
         locked: false,
         muted: false,
@@ -49,7 +49,7 @@ export async function migrateVideoEdit(
       },
       {
         id: 'music',
-        name: 'Music / effects',
+        name: 'Audio',
         kind: 'audio',
         locked: false,
         muted: false,

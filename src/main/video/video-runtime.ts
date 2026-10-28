@@ -179,7 +179,8 @@ function installVideoRuntime(
         break
       }
     }
-    if (!caption) return
+    if (!caption || studio.edit?.tracks.find((track) => track.id === caption.trackId)?.hidden)
+      return
     ctx.save()
     const { appearance, lines, lineHeight, top, gap } = captionLayout(ctx, caption, width, height)
     ctx.textAlign = 'center'

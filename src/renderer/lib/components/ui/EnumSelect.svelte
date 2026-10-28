@@ -1,4 +1,5 @@
 <script module lang="ts">
+  import type { Component } from 'svelte'
   /** One selectable value. `id` is the value the caller receives back. */
   export interface EnumSelectOption<Value extends string = string> {
     id: Value
@@ -11,6 +12,7 @@
     accent?: string
     /** An image drawn instead of the dot, for an entity with a picked icon. */
     iconUrl?: string | null
+    icon?: Component<{ size?: number; class?: string }>
   }
 </script>
 
@@ -169,7 +171,8 @@
             textValue={option.label}
             onSelect={() => onChange(option.id)}
           >
-            {#if option.iconUrl}
+            {#if option.icon}<option.icon size={14} class="mt-0.5 shrink-0 text-dimmed" />
+            {:else if option.iconUrl}
               <img src={option.iconUrl} alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0 object-contain" />
             {:else if option.accent}
               <span class="mt-0.5 h-2 w-2 shrink-0" style="background-color: {option.accent}"

@@ -2,6 +2,10 @@
   import { onMount, type Component, type Snippet } from 'svelte'
   import { on } from 'svelte/events'
   import { ContextMenu } from 'bits-ui'
+  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
+  import CioCaptions from '@pdslng/cio-icon/CioCaptions.svelte'
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
@@ -94,9 +98,10 @@
     { id: 'review', label: 'Agent review' }
   ] as const
   const additions = [
-    { id: 'video', label: 'Video track' },
-    { id: 'audio', label: 'Audio track' },
-    { id: 'overlay', label: 'Overlay track' }
+    { id: 'video', label: 'Video', icon: CioClapper },
+    { id: 'audio', label: 'Audio', icon: CioAudioLines },
+    { id: 'caption', label: 'Captions', icon: CioCaptions },
+    { id: 'overlay', label: 'Overlays', icon: CioLayers }
   ] as const
 
   async function save(): Promise<void> {
@@ -130,7 +135,8 @@
       editor.remove(ripple)
   }
   function add(value: (typeof additions)[number]['id']): void {
-    if (value === 'video' || value === 'audio' || value === 'overlay') editor.addTrack(value)
+    if (value === 'video' || value === 'audio' || value === 'caption' || value === 'overlay')
+      editor.addTrack(value)
   }
   function keydown(event: KeyboardEvent): void {
     if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
@@ -176,6 +182,7 @@
       ['video-edit-split', () => editor.split()],
       ['video-edit-split-all', () => editor.split(true)],
       ['video-edit-duplicate', () => editor.duplicate()],
+      ['video-edit-extract-audio', () => editor.extractAudio()],
       ['video-edit-copy', () => editor.copy()],
       ['video-edit-paste', () => editor.paste()],
       [
@@ -314,7 +321,7 @@
       void remove()
     }}>Cut clip</ContextMenu.Item
   >
-  {#each [{ label: 'Undo', run: () => editor.undo(), disabled: !editor.canUndo }, { label: 'Redo', run: () => editor.redo(), disabled: !editor.canRedo }, { label: 'Split at playhead', run: () => editor.split(), disabled: !editor.selectedClip }, { label: 'Split all unlocked tracks', run: () => editor.split(true), disabled: !editor.edit }, { label: 'Duplicate selected item', run: () => editor.duplicate(), disabled: !editor.selection }, { label: 'Remove selected item', run: () => {
+  {#each [{ label: 'Extract audio', run: () => editor.extractAudio(), disabled: !editor.canExtractAudio }, { label: 'Undo', run: () => editor.undo(), disabled: !editor.canUndo }, { label: 'Redo', run: () => editor.redo(), disabled: !editor.canRedo }, { label: 'Split at playhead', run: () => editor.split(), disabled: !editor.selectedClip }, { label: 'Split all unlocked tracks', run: () => editor.split(true), disabled: !editor.edit }, { label: 'Duplicate selected item', run: () => editor.duplicate(), disabled: !editor.selection }, { label: 'Remove selected item', run: () => {
         void remove()
       }, disabled: !editor.selection }, { label: 'Import media', run: () => {
         void editor.importFiles()

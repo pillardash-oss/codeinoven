@@ -436,6 +436,7 @@ export class VideoEditorController {
       const next = JSON.parse(before) as VideoStudioDocument
       change(next, next.edit!)
       const after = validateVideoStudio(next)
+      this.assertLockedTracks(this.document!, after)
       if (before === JSON.stringify(after)) return
       this.pushUndo(before)
       this.document = after
@@ -459,7 +460,9 @@ export class VideoEditorController {
       const next = JSON.parse(this.gestureBefore) as VideoStudioDocument
       if (!next.edit) return
       change(next, next.edit)
-      this.document = validateVideoStudio(next)
+      const after = validateVideoStudio(next)
+      this.assertLockedTracks(JSON.parse(this.gestureBefore) as VideoStudioDocument, after)
+      this.document = after
       this.dirty = true
       this.queuePreview()
     } catch {
@@ -608,7 +611,10 @@ export class VideoEditorController {
   ): void {
     if (this.magneticScope !== 'all' || delta === 0) return
     for (const caption of doc.captions)
-      if (caption.start >= anchor - 0.000001) {
+      if (
+        !edit.tracks.find((track) => track.id === caption.trackId)?.locked &&
+        caption.start >= anchor - 0.000001
+      ) {
         caption.start = Math.max(0, caption.start + delta)
         caption.end = Math.max(0, caption.end + delta)
         for (const word of caption.words ?? []) {
@@ -617,7 +623,11 @@ export class VideoEditorController {
         }
       }
     for (const region of edit.regions)
-      if (region.start >= anchor - 0.000001) region.start = Math.max(0, region.start + delta)
+      if (
+        !edit.tracks.find((track) => track.id === region.trackId)?.locked &&
+        region.start >= anchor - 0.000001
+      )
+        region.start = Math.max(0, region.start + delta)
     for (const change of edit.changes)
       if (change.start >= anchor - 0.000001) {
         change.start = Math.max(0, change.start + delta)
@@ -643,18 +653,22 @@ export class VideoEditorController {
           const shift = (time: number): number =>
             time <= clip.start ? time : Math.max(clip.start, time - clip.duration)
           doc.captions = doc.captions
-            .map((caption) => ({
-              ...caption,
-              start: shift(caption.start),
-              end: shift(caption.end),
-              words: caption.words
-                ?.map((word) => ({
-                  ...word,
-                  start: shift(word.start),
-                  end: shift(word.end)
-                }))
-                .filter((word) => word.end > word.start)
-            }))
+            .map((caption) =>
+              edit.tracks.find((track) => track.id === caption.trackId)?.locked
+                ? caption
+                : {
+                    ...caption,
+                    start: shift(caption.start),
+                    end: shift(caption.end),
+                    words: caption.words
+                      ?.map((word) => ({
+                        ...word,
+                        start: shift(word.start),
+                        end: shift(word.end)
+                      }))
+                      .filter((word) => word.end > word.start)
+                  }
+            )
             .filter((caption) => caption.end > caption.start)
           edit.changes = edit.changes.map((change) => ({
             ...change,
@@ -662,11 +676,15 @@ export class VideoEditorController {
             end: shift(change.end)
           }))
           edit.regions = edit.regions
-            .map((region) => ({
-              ...region,
-              start: shift(region.start),
-              duration: shift(region.start + region.duration) - shift(region.start)
-            }))
+            .map((region) =>
+              edit.tracks.find((track) => track.id === region.trackId)?.locked
+                ? region
+                : {
+                    ...region,
+                    start: shift(region.start),
+                    duration: shift(region.start + region.duration) - shift(region.start)
+                  }
+            )
             .filter((region) => region.duration > 0.001)
         }
         removeVideoEditClip(edit, selection.id, ripple)
@@ -818,12 +836,80 @@ export class VideoEditorController {
       edit.duration = Math.max(edit.duration, clip.start + clip.duration)
     })
   }
-  addTrack(kind: 'video' | 'audio' | 'overlay'): void {
+  get canExtractAudio(): boolean {
+    const clip = this.selectedClip
+    const asset = this.edit?.assets.find((item) => item.id === clip?.assetId)
+    return (
+      !!clip &&
+      asset?.kind === 'video' &&
+      asset.hasAudio &&
+      !clip.audioDetached &&
+      !this.edit?.tracks.find((track) => track.id === clip.trackId)?.locked
+    )
+  }
+  extractAudio(): void {
+    if (!this.canExtractAudio) return
+    const selected = this.selectedClip!.id
+    this.mutate((_doc, edit) => {
+      const clip = edit.clips.find((item) => item.id === selected)!
+      const source = edit.assets.find((item) => item.id === clip.assetId)!
+      const track = {
+        id: crypto.randomUUID(),
+        name: 'Audio',
+        kind: 'audio' as const,
+        locked: false,
+        muted: false,
+        hidden: false
+      }
+      const index = edit.tracks.findIndex((item) => item.id === clip.trackId)
+      edit.tracks.splice(index + 1, 0, track)
+      const asset = {
+        ...source,
+        id: crypto.randomUUID(),
+        kind: 'audio' as const,
+        width: 0,
+        height: 0
+      }
+      edit.assets.push(asset)
+      const audio = structuredClone(clip)
+      audio.id = crypto.randomUUID()
+      audio.assetId = asset.id
+      audio.trackId = track.id
+      delete audio.audioDetached
+      edit.clips.push(audio)
+      clip.volume = 0
+      clip.audioDetached = true
+    })
+  }
+  private assertLockedTracks(before: VideoStudioDocument, after: VideoStudioDocument): void {
+    for (const track of before.edit?.tracks ?? []) {
+      if (!track.locked) continue
+      const content = (doc: VideoStudioDocument): string =>
+        JSON.stringify({
+          clips: doc.edit?.clips.filter((item) => item.trackId === track.id),
+          regions: doc.edit?.regions.filter((item) => item.trackId === track.id),
+          captions: doc.captions.filter((item) => item.trackId === track.id),
+          ...(track.kind === 'caption'
+            ? { appearance: doc.captionAppearance, style: doc.captionStyle }
+            : {})
+        })
+      if (content(before) !== content(after))
+        throw new Error(`Unlock ${track.name} before editing its items`)
+    }
+  }
+  addTrack(kind: 'video' | 'audio' | 'caption' | 'overlay'): void {
     this.mutate((_doc, edit) => {
       const track = {
         id: crypto.randomUUID(),
         kind,
-        name: kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : 'Overlays',
+        name:
+          kind === 'video'
+            ? 'Video'
+            : kind === 'audio'
+              ? 'Audio'
+              : kind === 'caption'
+                ? 'Captions'
+                : 'Overlays',
         locked: false,
         muted: false,
         hidden: false
@@ -853,6 +939,7 @@ export class VideoEditorController {
     this.mutate((_doc, edit) => {
       const region: VideoEditRegion = {
         id: crypto.randomUUID(),
+        trackId: edit.tracks.find((track) => track.kind === 'overlay' && !track.locked)?.id,
         kind,
         start: Math.min(this.time, edit.duration - 0.01),
         duration: Math.min(5, Math.max(0.01, edit.duration - this.time)),
@@ -871,7 +958,10 @@ export class VideoEditorController {
     if (gesture.kind === 'paint' && gesture.selection.kind === 'region' && gesture.stroke?.length) {
       this.mutate((_doc, edit) => {
         const id = gesture.selection.kind === 'region' ? gesture.selection.id : crypto.randomUUID()
+        const overlayTrack = edit.tracks.find((track) => track.kind === 'overlay' && !track.locked)
+        if (!overlayTrack) throw new Error('Unlock an overlay track before painting')
         edit.regions.push({
+          trackId: overlayTrack.id,
           id,
           kind: 'blur',
           start: Math.min(this.time, edit.duration - 0.01),
