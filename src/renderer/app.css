@@ -454,10 +454,15 @@ body {
  * whole lines before the reader decides whether to expand it. Five of those
  * lines have to be five of the lines the text is set in, so the clamp
  * multiplies these numbers instead of copying them.
+ *
+ * The leading is Tailwind's `leading-loose` step (2). It is a token rather than
+ * the utility class because `.markdown-body` is emitted unlayered and so
+ * outranks every layered utility: a `leading-loose` on the element would lose
+ * to the rule below and change nothing.
  */
 :root {
   --prose-size: 0.8125rem;
-  --prose-leading: 1.8;
+  --prose-leading: 2;
 }
 
 .markdown-body {
@@ -1129,9 +1134,10 @@ html body vite-error-overlay {
    are intercepted in the editor so composing never navigates. Footnote
    references render as superscript numbers like GitHub. */
 .rich-markdown-editor {
-  /* The composer mirrors chat prose: same comfortable reading size. */
-  font-size: 0.8125rem;
-  line-height: 1.8;
+  /* The composer mirrors chat prose: same comfortable reading size, including
+     the loose leading the transcript is set in. */
+  font-size: var(--prose-size);
+  line-height: var(--prose-leading);
   font-family: var(--font-app);
 }
 
