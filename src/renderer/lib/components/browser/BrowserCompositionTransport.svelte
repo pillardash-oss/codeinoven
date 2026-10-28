@@ -16,6 +16,7 @@
   import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
   import { VideoFrameSeeker } from '$lib/video-frame-seeker'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
   import { snapVideoFrame } from '$shared/video/frame-grid'
   import { videoTimecode } from '$shared/video/timeline'
@@ -86,8 +87,8 @@
   let scrubValue = $state(0)
   let pendingFrame = $state<number | null>(null)
   let seekRevision = 0
-  /** True while the remembered looping preference is being handed to the page. */
-  const muted = $derived(compositionPlaybackPrefs.mutedTabs[tabId] ?? false)
+  /** Mute follows the native tab across sidebar and fullscreen surfaces. */
+  const muted = $derived(contextSidebarState.browserRuntime(tabId).muted)
   let muteBusy = $state(false)
   async function toggleMuted(): Promise<void> {
     if (muteBusy) return
@@ -95,7 +96,6 @@
     try {
       const next = !muted
       await invoke('browser:setMuted', tabId, next)
-      compositionPlaybackPrefs.mutedTabs[tabId] = next
     } finally {
       muteBusy = false
     }
@@ -136,7 +136,7 @@
    * until it does: a new tab starts from what the reader chose on the last video
    * rather than from the default the page boots with.
    */
-  const loop = $derived(playback?.loop ?? compositionPlaybackPrefs.loop)
+  const loop = $derived(playback?.loop ?? compositionPlaybackPrefs.loopFor(tabId))
   const error = $derived(playback?.error ?? null)
   const shown = $derived(Math.min(scrubbing ? scrubValue : (pendingFrame ?? time), duration))
   const seeker = new VideoFrameSeeker(
@@ -185,7 +185,7 @@
     if (!next) return
     if (next.loop === observedLoop) return
     observedLoop = next.loop
-    const wanted = compositionPlaybackPrefs.loop
+    const wanted = compositionPlaybackPrefs.loopFor(tabId)
     if (loopSyncing || next.loop === wanted) return
     loopSyncing = true
     void invoke('browser:transport', tabId, 'loop', wanted)
@@ -241,7 +241,7 @@
 
   function toggleLoop(): void {
     const next = !loop
-    compositionPlaybackPrefs.setLoop(next)
+    compositionPlaybackPrefs.setLoop(tabId, next)
     void send('loop', next)
   }
 

@@ -23,8 +23,6 @@
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
-  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
-  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -45,7 +43,7 @@
   import { usesThreadWorkspaceMount } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
-  import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
+  import type { BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
@@ -232,9 +230,6 @@
    *  never spins the other's button. */
   let openingCanvas = $state(false)
   let error = $state('')
-  /** The tab holding the work, so the board can reach its own controls. Empty
-   *  until the first capture opens one, and an empty id reads as idle state. */
-  let tabId = $state('')
 
   /**
    * Whether the history pane is on screen.
@@ -338,19 +333,6 @@
   /** The folder this project writes new work of this kind into. */
   let workRoot = $derived(projectWorkState.rootsFor(projectId)[kind] || designState?.root || '')
 
-  /**
-   * The tab's live audio state, read from the same store the tab strip reads.
-   *
-   * A composition's mute is a property of its tab, so the board drives that one
-   * rather than keeping its own: the speaker in this panel and the speaker on the
-   * tab can then never disagree about whether the work is audible.
-   */
-  let tabRuntime = $derived(contextSidebarState.browserRuntime(tabId))
-  /** What the mute button does next, in this board's own words. */
-  let muteLabel = $derived(
-    tabRuntime.muted ? `Unmute the ${noun} preview` : `Mute the ${noun} preview`
-  )
-
   /** Every folder of this kind the project holds, newest first.
    *
    * A rail-opened board lists the project's folders for its own kind, so the
@@ -399,7 +381,7 @@
       ? picked
       : (items.find((item) => item.directory === inherited)?.directory ??
         current?.directory ??
-        items.find((item) => item.creatorThreadId === threadId)?.directory ??
+        items.find((item) => item.creatorThreadId === selectionThreadId)?.directory ??
         items.find(
           (item) => item.directory === projectWorkState.focusedDirectory(projectId, requestedKind)
         )?.directory ??
@@ -539,13 +521,13 @@
    * control, so it stays disabled with a title that says why.
    */
   let canRevealCreator = $derived(
-    selectedCreatorThreadId !== '' && selectedCreatorThreadId !== threadId
+    selectedCreatorThreadId !== '' && selectedCreatorThreadId !== selectionThreadId
   )
   /** What the reveal control says, whether it acts or explains why it cannot. */
   let revealLabel = $derived.by(() => {
     const name = selectedName === '' ? nounTitle : selectedName
     if (canRevealCreator) return `Reveal the thread that created ${name}`
-    if (selectedCreatorThreadId === threadId) return `This thread created ${name}`
+    if (selectedCreatorThreadId === selectionThreadId) return `This thread created ${name}`
     return 'Thread unavailable'
   })
 
@@ -671,7 +653,6 @@
     try {
       if (video && liveTab !== null) {
         gallery = []
-        tabId = boardTabId
       } else if (video) {
         const shot = await invoke(
           'design:thumbnail',
@@ -692,7 +673,6 @@
             updatedAt: selectedItem?.updatedAt ?? 0
           }
         ]
-        tabId = shot.tabId ?? ''
       } else {
         gallery = await invoke(
           'design:screens',
@@ -1644,7 +1624,7 @@
                       {#if item.missing}<span class="shrink-0 text-[0.625rem] text-warning"
                           >Not found</span
                         >{/if}
-                      {#if item.creatorThreadId === threadId}
+                      {#if item.creatorThreadId === selectionThreadId}
                         <span
                           class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
                         >
@@ -1700,26 +1680,14 @@
           </span>
         {/if}
       {/if}
+      {#if selectedCreatorThreadId !== '' && selectedCreatorThreadId === selectionThreadId}
+        <span
+          class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+          title="This conversation created this work">Current</span
+        >
+      {/if}
       <span class="min-w-0 flex-1"></span>
       <span class="flex shrink-0 items-center gap-0.5">
-        {#if video && tabId !== ''}
-          <button
-            type="button"
-            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
-              ? 'text-accent'
-              : ''}"
-            aria-pressed={tabRuntime.muted}
-            title={muteLabel}
-            aria-label={muteLabel}
-            onclick={() => contextSidebarState.toggleBrowserTabMute(tabId)}
-          >
-            {#if tabRuntime.muted}
-              <CioVolumeX size={12} />
-            {:else}
-              <CioVolume size={12} />
-            {/if}
-          </button>
-        {/if}
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
