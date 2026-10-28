@@ -14831,11 +14831,11 @@
              names what it does instead of showing a bare chevron in a pill.
 
              Its rung is deliberate: above everything the transcript paints, which
-             reaches z-20 on a working trace's sticky header, and below the panels
-             and menus at z-40, so the context meter's popover opens over it and a
-             card's own menu is never covered by it. The click-away scrims sit at
-             this same rung and paint after it, which is what a scrim should do to
-             a control. -->
+             reaches z-20 on a working trace's sticky header, and below the
+             composer (z-40), whose own menus and popovers open upward across this
+             spot so they must never be cut off by it. The click-away scrims sit
+             below it inside the composer, which is what a scrim should do to a
+             control above the surface it guards. -->
         <button
           type="button"
           class="group absolute left-1/2 z-30 inline-flex h-7 -translate-x-1/2 items-center gap-1 border border-border-strong bg-surface px-2 text-[0.6875rem] font-medium whitespace-nowrap text-foreground shadow-md transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
