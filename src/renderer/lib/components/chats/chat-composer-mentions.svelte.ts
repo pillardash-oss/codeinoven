@@ -84,13 +84,18 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
             .some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
         })
         .map((entry) => ({ type: 'task', entry }))
-      const assistantEntries: ComposerMentionEntry[] = (options.getAssistantTags?.() ?? [])
-        .filter(
-          (tag) =>
-            (tag.kind !== 'thread' || cioSearchVisibility.includeThreads) &&
-            assistantTagMatches(tag, normalizedQuery)
-        )
-        .map((entry) => ({ type: 'assistant' as const, entry }))
+      // Kept as tags rather than as menu entries: the thread search below reads
+      // their ids, and a widened `ComposerMentionEntry` union would only carry
+      // file and task rows that have no id at all.
+      const assistantTags = (options.getAssistantTags?.() ?? []).filter(
+        (tag) =>
+          (tag.kind !== 'thread' || cioSearchVisibility.includeThreads) &&
+          assistantTagMatches(tag, normalizedQuery)
+      )
+      const assistantEntries: ComposerMentionEntry[] = assistantTags.map((entry) => ({
+        type: 'assistant' as const,
+        entry
+      }))
       // Local tags must remain usable while the filesystem index warms or fails.
       query = nextQuery
       entries = [...utilityEntries, ...assistantEntries, ...taskEntries].slice(0, 40)
@@ -116,7 +121,9 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
           ? invoke('threads:search', nextQuery, { family: 'projects', limit: 20 }).catch(() => [])
           : Promise.resolve([])
       ])
-      const knownThreadIds = new SvelteSet(assistantEntries.map(({ entry }) => entry.id))
+      const knownThreadIds = new SvelteSet(
+        assistantTags.filter((tag) => tag.kind === 'thread').map((tag) => tag.id)
+      )
       const threadEntries: ComposerMentionEntry[] = threadResults
         .filter(({ thread }) => !knownThreadIds.has(thread.id))
         .map(({ thread }) => ({
