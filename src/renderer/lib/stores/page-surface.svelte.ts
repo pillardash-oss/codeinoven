@@ -18,6 +18,7 @@
  * drift from the navigation state.
  */
 
+import { SvelteSet } from 'svelte/reactivity'
 import { isOverlayOpen } from '../overlay-close.svelte'
 import { isSettingsView, rendererRecovery } from './renderer-recovery.svelte'
 
@@ -47,4 +48,28 @@ export function isWorkspaceCovered(): boolean {
 export function isEscapeClaimed(event?: KeyboardEvent): boolean {
   if (event?.defaultPrevented) return true
   return workspaceCovered || isOverlayOpen()
+}
+
+/**
+ * Inline surfaces inside the shell that hold Escape while they are open.
+ *
+ * The composer's `@` menu is the case this exists for: Escape closes it, and
+ * the surfaces behind it listen for the same key at the window level (a
+ * dictation stops on Escape, a running turn arms its stop). While one of them
+ * is claimed, those listeners stay inert: Escape closes the tag menu and
+ * nothing else.
+ */
+const inlineEscapeClaims = new SvelteSet<string>()
+
+/** Claim Escape for an inline surface. Returns the release function. */
+export function claimInlineEscape(owner: string): () => void {
+  inlineEscapeClaims.add(owner)
+  return () => {
+    inlineEscapeClaims.delete(owner)
+  }
+}
+
+/** Whether an inline surface inside the shell is holding Escape right now. */
+export function isInlineEscapeClaimed(): boolean {
+  return inlineEscapeClaims.size > 0
 }

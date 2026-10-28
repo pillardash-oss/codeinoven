@@ -76,6 +76,7 @@
     normalizeComposerMessage,
     COMPOSER_BUILT_IN_TAGS,
     composerAssistantTagToken,
+    composerMentionReplacePattern,
     composerMentionStart,
     type ComposerAssistantTag,
     type ComposerMentionEntry
@@ -97,6 +98,7 @@
   import ComposerShoe, { type ComposerShoeData, type ComposerUsage } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { sessionTagKind } from '$shared/session-tags'
   import { expertSessionFor, shouldOfferExpertCard, type ExpertSummary } from '$shared/experts'
@@ -501,37 +503,14 @@
     }
   })
 
-  let projectReferenceBadges = $derived<RichInlineBadge[]>([
-    ...COMPOSER_BUILT_IN_TAGS.filter((tag) => value.includes(tag.token)).map((tag) => ({
-      iconSvg: codeInOvenIconSvg,
-      label: tag.chipLabel,
-      title: `${tag.token} · ${tag.description}`,
-      value: tag.token
-    })),
-    ...projectReferences.map((reference) => ({
-      iconSvg: projectReferenceIcons[projectReferenceToken(reference)],
-      label: reference.name,
-      title: `${reference.kind === 'directory' ? 'Directory' : 'File'}: ${reference.path}`,
-      value: projectReferenceToken(reference)
-    })),
-    ...taskReferences.map((reference) => ({
-      label: abbreviatedTaskTitle(reference.title),
-      title: `Task: ${reference.title} · Worker: ${reference.workerName ?? 'Unassigned'}`,
-      value: taskReferenceToken(reference)
-    })),
-    // A tagged assistant or thread reads as its mark plus its name, never as the
-    // id the token carries: the id is what the agent needs, not what the writer
-    // should have to look at.
-    ...assistantTags
-      .filter((tag) => value.includes(composerAssistantTagToken(tag)))
-      .map((tag) => ({
-        iconSvg: tag.iconHtml,
-        accentColor: tag.color,
-        label: abbreviatedTaskTitle(tag.name),
-        title: `Open ${tag.detail}: ${tag.name}`,
-        value: composerAssistantTagToken(tag)
-      }))
-  ])
+  /**
+   * Whether a mention query may span spaces.
+   *
+   * Thread search is the only thing that needs it: a thread is named by its
+   * title, so a query that ended at the first space could never name one.
+   */
+  const mentionSpansSpaces = $derived(cioSearchVisibility.includeThreads)
+
   let isDragging = $state(false)
   /** Root element of the composer, used to find the conversation region it sits in. */
   let composerRoot = $state<HTMLElement | null>(null)
@@ -634,6 +613,52 @@
     getFileTagProjectId: () => fileTagProjectId,
     getAssistantTags: () => assistantTags
   })
+  /**
+   * Every tag this composer can draw, by token.
+   *
+   * The Assistant tab hands its own assistants and threads over as props; a
+   * thread picked from another project comes from the mention search instead,
+   * which keeps the tag it found, so both read as a badge with their title and
+   * their mark rather than as the raw token.
+   */
+  const composerTags = $derived<ComposerAssistantTag[]>([
+    ...assistantTags,
+    ...mentions.knownThreadTags.filter(
+      (tag) => !assistantTags.some((known) => known.kind === tag.kind && known.id === tag.id)
+    )
+  ])
+
+  let projectReferenceBadges = $derived<RichInlineBadge[]>([
+    ...COMPOSER_BUILT_IN_TAGS.filter((tag) => value.includes(tag.token)).map((tag) => ({
+      iconSvg: codeInOvenIconSvg,
+      label: tag.chipLabel,
+      title: `${tag.token} · ${tag.description}`,
+      value: tag.token
+    })),
+    ...projectReferences.map((reference) => ({
+      iconSvg: projectReferenceIcons[projectReferenceToken(reference)],
+      label: reference.name,
+      title: `${reference.kind === 'directory' ? 'Directory' : 'File'}: ${reference.path}`,
+      value: projectReferenceToken(reference)
+    })),
+    ...taskReferences.map((reference) => ({
+      label: abbreviatedTaskTitle(reference.title),
+      title: `Task: ${reference.title} · Worker: ${reference.workerName ?? 'Unassigned'}`,
+      value: taskReferenceToken(reference)
+    })),
+    // A tagged assistant or thread reads as its mark plus its name, never as the
+    // id the token carries: the id is what the agent needs, not what the writer
+    // should have to look at.
+    ...composerTags
+      .filter((tag) => value.includes(composerAssistantTagToken(tag)))
+      .map((tag) => ({
+        iconSvg: tag.iconHtml,
+        accentColor: tag.color,
+        label: abbreviatedTaskTitle(tag.name),
+        title: `Open ${tag.detail}: ${tag.name}`,
+        value: composerAssistantTagToken(tag)
+      }))
+  ])
   /**
    * The `@` the user dismissed with Escape. While the caret stays inside that
    * one token the menu stays shut, so a dismissed suggestion list cannot pop
@@ -1616,7 +1641,9 @@
     }
     lastCaretText = textBeforeCaret
     lastCaretSupportsCommands = supportsCommands
-    const mentionStart = supportsCommands ? composerMentionStart(textBeforeCaret) : null
+    const mentionStart = supportsCommands
+      ? composerMentionStart(textBeforeCaret, { allowSpaces: mentionSpansSpaces })
+      : null
     if (mentionStart === null || mentionStart !== dismissedMentionStart) {
       dismissedMentionStart = null
     }
@@ -1659,16 +1686,29 @@
     }
   }
 
+  /**
+   * The pattern that swaps the mention being typed for a picked token.
+   *
+   * It matches the query the caret is really in, so a thread title typed with
+   * its spaces is replaced as one mention instead of being left in the draft
+   * beside the token the pick inserts.
+   */
+  function mentionReplacePattern(): RegExp {
+    return composerMentionReplacePattern(lastCaretText ?? value, {
+      allowSpaces: mentionSpansSpaces
+    })
+  }
+
   function selectMention(mention: ComposerMentionEntry): void {
     mentions.open = false
     if (mention.type === 'utility') {
       const token = `${mention.entry.token} `
       const inserted = richEditor.replaceTextBeforeCaret(
-        /(^|\s)@[^\s@]*$/u,
+        mentionReplacePattern(),
         (_match, prefix) => `${prefix}${token}`
       )
       if (!inserted) {
-        value = value.replace(/(^|\s)@[^\s@]*$/u, (_, prefix: string) => {
+        value = value.replace(mentionReplacePattern(), (_, prefix: string) => {
           return `${prefix}${token}`
         })
         onValueChange?.(value)
@@ -1682,11 +1722,11 @@
     if (mention.type === 'assistant') {
       const token = `${composerAssistantTagToken(mention.entry)} `
       const inserted = richEditor.replaceTextBeforeCaret(
-        /(^|\s)@[^\s@]*$/u,
+        mentionReplacePattern(),
         (_match, prefix) => `${prefix}${token}`
       )
       if (!inserted) {
-        value = value.replace(/(^|\s)@[^\s@]*$/u, (_, prefix: string) => {
+        value = value.replace(mentionReplacePattern(), (_, prefix: string) => {
           return `${prefix}${token}`
         })
         onValueChange?.(value)
@@ -1707,11 +1747,11 @@
       onProjectReferencesChange?.(projectReferences)
     }
     const inserted = richEditor.replaceTextBeforeCaret(
-      /(^|\s)@[^\s@]*$/u,
+      mentionReplacePattern(),
       (_match, prefix) => `${prefix}${projectReferenceToken(reference)} `
     )
     if (!inserted) {
-      value = value.replace(/(^|\s)@[^\s@]*$/u, (_, prefix: string) => {
+      value = value.replace(mentionReplacePattern(), (_, prefix: string) => {
         return `${prefix}${projectReferenceToken(reference)} `
       })
       onValueChange?.(value)
@@ -1744,11 +1784,11 @@
       onTaskReferencesChange?.(taskReferences)
     }
     const inserted = richEditor.replaceTextBeforeCaret(
-      /(^|\s)@[^\s@]*$/u,
+      mentionReplacePattern(),
       (_match, prefix) => `${prefix}${taskReferenceToken(reference)} `
     )
     if (!inserted) {
-      value = value.replace(/(^|\s)@[^\s@]*$/u, (_, prefix: string) => {
+      value = value.replace(mentionReplacePattern(), (_, prefix: string) => {
         return `${prefix}${taskReferenceToken(reference)} `
       })
       onValueChange?.(value)
@@ -2038,7 +2078,10 @@
     closeMentions: () => {
       // Escape dismisses the suggestions for the token being typed, so the
       // menu does not spring back while the user finishes that tag by hand.
-      dismissedMentionStart = lastCaretText === null ? null : composerMentionStart(lastCaretText)
+      dismissedMentionStart =
+        lastCaretText === null
+          ? null
+          : composerMentionStart(lastCaretText, { allowSpaces: mentionSpansSpaces })
       mentions.open = false
     },
     selectMention,
@@ -2267,9 +2310,10 @@
       onInlineBadgeActivate={(value) => {
         // Only an assistant tag opens something on click; a file or task badge
         // stays the inert reference it has always been, and the click falls
-        // through to the caret.
-        const tag = assistantTags.find((entry) => composerAssistantTagToken(entry) === value)
-        if (!tag) return false
+        // through to the caret. A thread from another project has no opener
+        // here, so its badge is as inert as a file's.
+        const tag = composerTags.find((entry) => composerAssistantTagToken(entry) === value)
+        if (!tag || !assistantTags.includes(tag)) return false
         onOpenAssistantTag?.(tag)
         return true
       }}

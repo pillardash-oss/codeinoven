@@ -1,6 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
+import { isEscapeClaimed, isInlineEscapeClaimed } from '$lib/stores/page-surface.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-activity.svelte'
@@ -261,6 +261,11 @@ class SpeechController {
     // palette (spotlight). Escape there closes the surface on top and must
     // never kill a recording happening underneath.
     if (isEscapeClaimed()) return false
+    // A tag is being named, not a recording ended: the composer's `@` menu
+    // closes on Escape and this listener runs before it (capture phase), so
+    // without this the menu would swallow the key and the dictation behind it
+    // would stop anyway.
+    if (isInlineEscapeClaimed()) return false
     const scope = active.scope
     if (scope.kind === 'global' || scope.threadId === undefined) return true
     // Temporary side chats render a synthetic thread that is never the

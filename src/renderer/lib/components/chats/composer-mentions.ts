@@ -115,9 +115,30 @@ export type ComposerMentionEntry =
 
 const COMPOSER_MENTION_PATTERN = /(^|\s)@([^\s@]*)$/u
 
+/**
+ * The same mention, with spaces allowed in its query.
+ *
+ * Only thread search needs this: a thread is named by its title, and a title has
+ * spaces in it, so a query that ended at the first space could never name one.
+ * The bound keeps a whole paragraph after an `@` from reading as a query.
+ */
+const COMPOSER_MENTION_PATTERN_WITH_SPACES = /(^|\s)@(?!\s)([^\n@]{0,120})$/u
+
+/** How the mention at the caret reads its token. */
+export interface ComposerMentionOptions {
+  /** Let the query span spaces, so a thread title can be typed whole. */
+  allowSpaces?: boolean
+}
+
 /** The mention at the caret, or null when the caret is not in one. */
-function composerMentionMatch(textBeforeCaret: string): { query: string; start: number } | null {
-  const match = COMPOSER_MENTION_PATTERN.exec(textBeforeCaret)
+function composerMentionMatch(
+  textBeforeCaret: string,
+  options: ComposerMentionOptions = {}
+): { query: string; start: number } | null {
+  const pattern = options.allowSpaces
+    ? COMPOSER_MENTION_PATTERN_WITH_SPACES
+    : COMPOSER_MENTION_PATTERN
+  const match = pattern.exec(textBeforeCaret)
   if (!match || match.index === undefined) return null
 
   const start = match.index + (match[1]?.length ?? 0)
@@ -142,21 +163,40 @@ function composerMentionMatch(textBeforeCaret: string): { query: string; start: 
  * keep the menu shut for exactly one token: moving on to another `@` (or out of
  * the token) is a new mention and opens it again.
  */
-export function composerMentionStart(textBeforeCaret: string): number | null {
-  return composerMentionMatch(textBeforeCaret)?.start ?? null
+export function composerMentionStart(
+  textBeforeCaret: string,
+  options: ComposerMentionOptions = {}
+): number | null {
+  return composerMentionMatch(textBeforeCaret, options)?.start ?? null
 }
 
-export function composerMentionQuery(textBeforeCaret: string): string | null {
-  return composerMentionMatch(textBeforeCaret)?.query ?? null
+export function composerMentionQuery(
+  textBeforeCaret: string,
+  options: ComposerMentionOptions = {}
+): string | null {
+  return composerMentionMatch(textBeforeCaret, options)?.query ?? null
+}
+
+/**
+ * The pattern that swaps the mention at the caret for a picked token.
+ *
+ * The query it matches is the one the caret is actually in, spaces included, so
+ * picking a thread named `Nightly build check` replaces that whole title instead
+ * of leaving it in the draft beside the inserted token.
+ */
+export function composerMentionReplacePattern(
+  textBeforeCaret: string,
+  options: ComposerMentionOptions = {}
+): RegExp {
+  const query = composerMentionMatch(textBeforeCaret, options)?.query ?? ''
+  return new RegExp(`(^|\\s)@${escapeRegex(query)}$`, 'u')
 }
 
 /**
  * The token a picked assistant or thread inserts. The id is the whole payload:
  * the agent reads the thread itself, so nothing else has to travel with it.
  */
-export function composerAssistantTagToken(
-  tag: Pick<ComposerAssistantTag, 'kind' | 'id'>
-): string {
+export function composerAssistantTagToken(tag: Pick<ComposerAssistantTag, 'kind' | 'id'>): string {
   return tag.kind === 'assistant' ? `@assistant:${tag.id}` : `@thread:${tag.id}`
 }
 
