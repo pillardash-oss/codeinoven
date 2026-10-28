@@ -62,10 +62,11 @@ export function visibleClipFrames(
         clip.start,
         Math.min(
           clip.start + clip.duration - 1 / fps,
-          Math.floor((from + index * step) * fps) / fps
+          clip.start + Math.floor((from - clip.start + index * step) * fps + 1e-7) / fps
         )
       )
-      const key = `${clip.id}:${time}`,
+      const sourceTime = clip.sourceStart + (time - clip.start) * clip.speed
+      const key = `${clip.id}:${Math.round(sourceTime * 1_000_000)}`,
         previous = cells.at(-1)
       if (previous?.key === key) {
         previous.end = Math.max(previous.end, Math.min(to, from + (index + 1) * step))

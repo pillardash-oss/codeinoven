@@ -105,9 +105,7 @@
   async function exportMovie(): Promise<void> {
     if (!editor.dirty || (await editor.save())) onExport()
   }
-  async function remove(
-    ripple: boolean | 'all' = editor.rippleMode === 'all' ? 'all' : editor.rippleMode === 'track'
-  ): Promise<void> {
+  async function remove(ripple: boolean | 'all' = editor.magneticDeleteMode): Promise<void> {
     if (!editor.selection) return
     if (
       await appConfirm.request({
@@ -251,8 +249,8 @@
   </div>
   <label class="flex shrink-0 items-center gap-1 px-2 text-xs text-muted"
     ><Switch
-      title="Snap clip edges"
-      aria-label="Snap clip edges"
+      title="Magnetic timeline: move following clips together and close gaps on delete"
+      aria-label="Magnetic timeline"
       checked={editor.snapEnabled}
       onchange={(value) => (editor.snapEnabled = value)}
     />Snap</label
@@ -260,17 +258,17 @@
   <div class="w-40 shrink-0">
     <EnumSelect
       options={[
-        { id: 'off', label: 'Ripple off' },
-        { id: 'track', label: 'Ripple track' },
-        { id: 'all', label: 'Ripple all tracks' }
+        { id: 'all', label: 'All tracks' },
+        { id: 'track', label: 'This track' }
       ]}
-      value={editor.rippleMode}
-      placeholder="Delete gaps"
-      ariaLabel="Ripple delete mode"
-      title="Choose whether deleting closes gaps on this track or all unlocked tracks"
+      value={editor.magneticScope}
+      placeholder="Magnetic scope"
+      ariaLabel="Magnetic editing scope"
+      title="Apply magnetic dragging, trimming and deletion to this track or all unlocked tracks"
       menuMinWidth="18rem"
       compact
-      onChange={(value) => (editor.rippleMode = value)}
+      disabled={!editor.snapEnabled}
+      onChange={(value) => (editor.magneticScope = value)}
     />
   </div>
   {@render action(
@@ -318,9 +316,7 @@
   >
   {#each [{ label: 'Undo', run: () => editor.undo(), disabled: !editor.canUndo }, { label: 'Redo', run: () => editor.redo(), disabled: !editor.canRedo }, { label: 'Split at playhead', run: () => editor.split(), disabled: !editor.selectedClip }, { label: 'Split all unlocked tracks', run: () => editor.split(true), disabled: !editor.edit }, { label: 'Duplicate selected item', run: () => editor.duplicate(), disabled: !editor.selection }, { label: 'Remove selected item', run: () => {
         void remove()
-      }, disabled: !editor.selection }, { label: 'Ripple delete clip', run: () => {
-        void remove(true)
-      }, disabled: !editor.selectedClip }, { label: 'Import media', run: () => {
+      }, disabled: !editor.selection }, { label: 'Import media', run: () => {
         void editor.importFiles()
       }, disabled: editor.importing }] as item (item.label)}
     <ContextMenu.Item

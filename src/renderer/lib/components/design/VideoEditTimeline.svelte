@@ -238,15 +238,14 @@
         editor.trimClip(
           active.id,
           active.edge,
-          (active.edge === 'start' ? active.start : active.end) + delta,
-          8 / scale
+          (active.edge === 'start' ? active.start : active.end) + delta
         )
       else {
         const track =
           document
             .elementFromPoint(event.clientX, event.clientY)
             ?.closest<HTMLElement>('[data-video-track]')?.dataset.videoTrack ?? active.trackId
-        editor.moveClip(active.id, active.start + delta, track, 8 / scale)
+        editor.moveClip(active.id, active.start + delta, track)
       }
     } else
       editor.updateGesture((doc, edit) => {

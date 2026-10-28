@@ -972,8 +972,8 @@
         {
           "id": "video-edit-snap",
           "keys": [],
-          "label": "Toggle video clip snapping",
-          "description": "Toggle snapping clip edges to nearby timeline boundaries.",
+          "label": "Toggle magnetic video editing",
+          "description": "Move following clips together and close gaps on delete when magnetic editing is enabled.",
           "scenario": "Video editor is focused."
         },
         {

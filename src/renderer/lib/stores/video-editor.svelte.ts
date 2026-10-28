@@ -44,10 +44,6 @@ function frameSignature(
     clip
       ? {
           source: edit?.assets.find((asset) => asset.id === clip.assetId)?.source,
-          start: clip.start,
-          duration: clip.duration,
-          sourceStart: clip.sourceStart,
-          speed: clip.speed,
           crop: clip.crop,
           grade: clip.grade
         }
@@ -61,7 +57,7 @@ export class VideoEditorController {
   manifest = $state.raw<VideoProjectManifest | null>(null)
   selection = $state.raw<VideoEditorSelection>(null)
   snapEnabled = $state(true)
-  rippleMode = $state<'off' | 'track' | 'all'>('off')
+  magneticScope = $state<'track' | 'all'>('all')
   contextRequest = $state.raw<{ x: number; y: number } | null>(null)
   private copiedClip = $state.raw<VideoEditClip | null>(null)
   time = $state(0)
@@ -149,7 +145,11 @@ export class VideoEditorController {
             const clipId =
               frame.clipId ?? samples.find((sample) => sample.time === frame.time)?.clipId
             if (!clipId) return
-            const key = `${clipId}:${frame.time}`
+            const sample = samples.find(
+              (sample) => sample.clipId === clipId && sample.time === frame.time
+            )
+            if (!sample) return
+            const key = sample.key
             const signature = frameSignature(document, frame.time, clipId)
             if (this.disposed || signature !== frameSignature(this.document, frame.time, clipId))
               return
@@ -583,9 +583,56 @@ export class VideoEditorController {
       this.selection = { kind: 'clip', id: clone.id }
     })
   }
-  remove(
-    ripple: boolean | 'all' = this.rippleMode === 'all' ? 'all' : this.rippleMode === 'track'
+  get magneticDeleteMode(): boolean | 'all' {
+    return this.snapEnabled ? (this.magneticScope === 'all' ? 'all' : true) : false
+  }
+  private magneticFollowers(
+    edit: VideoEditDocument,
+    id: string,
+    trackId: string,
+    anchor: number
+  ): VideoEditClip[] {
+    return edit.clips.filter(
+      (item) =>
+        item.id !== id &&
+        item.start >= anchor - 0.000001 &&
+        (this.magneticScope === 'all' || item.trackId === trackId) &&
+        !edit.tracks.find((track) => track.id === item.trackId)?.locked
+    )
+  }
+  private shiftMagneticMetadata(
+    doc: VideoStudioDocument,
+    edit: VideoEditDocument,
+    anchor: number,
+    delta: number
   ): void {
+    if (this.magneticScope !== 'all' || delta === 0) return
+    for (const caption of doc.captions)
+      if (caption.start >= anchor - 0.000001) {
+        caption.start = Math.max(0, caption.start + delta)
+        caption.end = Math.max(0, caption.end + delta)
+        for (const word of caption.words ?? []) {
+          word.start = Math.max(0, word.start + delta)
+          word.end = Math.max(0, word.end + delta)
+        }
+      }
+    for (const region of edit.regions)
+      if (region.start >= anchor - 0.000001) region.start = Math.max(0, region.start + delta)
+    for (const change of edit.changes)
+      if (change.start >= anchor - 0.000001) {
+        change.start = Math.max(0, change.start + delta)
+        change.end = Math.max(0, change.end + delta)
+      }
+  }
+  private fitMagneticDuration(doc: VideoStudioDocument, edit: VideoEditDocument): void {
+    edit.duration = Math.max(
+      0.001,
+      ...edit.clips.map((item) => item.start + item.duration),
+      ...doc.captions.map((item) => item.end),
+      ...edit.regions.map((item) => item.start + item.duration)
+    )
+  }
+  remove(ripple: boolean | 'all' = this.magneticDeleteMode): void {
     const selection = this.selection
     if (!selection) return
     this.mutate((doc, edit) => {
@@ -630,58 +677,76 @@ export class VideoEditorController {
       this.selection = null
     })
   }
-  moveClip(id: string, start: number, trackId: string, tolerance = 0.1): void {
-    this.updateGesture((_doc, edit) => {
-      const clip = edit.clips.find((clip) => clip.id === id),
-        track = edit.tracks.find((track) => track.id === trackId)
+  moveClip(id: string, start: number, trackId: string): void {
+    this.updateGesture((doc, edit) => {
+      const clip = edit.clips.find((item) => item.id === id),
+        track = edit.tracks.find((item) => item.id === trackId)
       if (
         !clip ||
         !track ||
         track.locked ||
         track.kind !== edit.tracks.find((item) => item.id === clip.trackId)?.kind ||
-        edit.tracks.find((track) => track.id === clip.trackId)?.locked
+        edit.tracks.find((item) => item.id === clip.trackId)?.locked
       )
         return
+      const anchor = clip.start
       if (this.snapEnabled) {
-        let distance = Math.min(0.5, tolerance),
-          best = start
-        for (const edge of [
-          0,
-          this.time,
-          ...edit.clips
-            .filter((item) => item.id !== id)
-            .flatMap((item) => [item.start, item.start + item.duration])
-        ])
-          for (const candidate of [edge, edge - clip.duration])
-            if (Math.abs(candidate - start) < distance) {
-              distance = Math.abs(candidate - start)
-              best = candidate
-            }
-        start = best
-      }
-      clip.start = Math.max(0, Math.min(3600 - clip.duration, snapEditTime(start, this.fps)))
+        const followers = this.magneticFollowers(edit, id, clip.trackId, anchor)
+        const last = Math.max(
+          anchor + clip.duration,
+          ...followers.map((item) => item.start + item.duration),
+          ...(this.magneticScope === 'all'
+            ? doc.captions.filter((item) => item.start >= anchor).map((item) => item.end)
+            : []),
+          ...(this.magneticScope === 'all'
+            ? edit.regions
+                .filter((item) => item.start >= anchor)
+                .map((item) => item.start + item.duration)
+            : [])
+        )
+        const delta = Math.max(
+          -anchor,
+          Math.min(3600 - last, snapEditTime(start, this.fps) - anchor)
+        )
+        clip.start += delta
+        for (const follower of followers) follower.start = Math.max(0, follower.start + delta)
+        this.shiftMagneticMetadata(doc, edit, anchor, delta)
+      } else clip.start = Math.max(0, Math.min(3600 - clip.duration, snapEditTime(start, this.fps)))
       clip.trackId = trackId
-      edit.duration = Math.max(edit.duration, clip.start + clip.duration)
+      if (this.snapEnabled) this.fitMagneticDuration(doc, edit)
+      else edit.duration = Math.max(edit.duration, clip.start + clip.duration)
     })
   }
-  trimClip(id: string, edge: 'start' | 'end', at: number, tolerance = 0.1): void {
-    if (this.snapEnabled) {
-      let distance = Math.min(0.5, tolerance),
-        nearest = at
-      for (const boundary of [
-        0,
-        this.time,
-        ...(this.edit?.clips ?? [])
-          .filter((item) => item.id !== id)
-          .flatMap((item) => [item.start, item.start + item.duration])
-      ])
-        if (Math.abs(boundary - at) < distance) {
-          distance = Math.abs(boundary - at)
-          nearest = boundary
-        }
-      at = nearest
-    }
-    this.updateGesture((_doc, edit) => trimVideoEditClip(edit, id, edge, at, this.fps))
+  trimClip(id: string, edge: 'start' | 'end', at: number): void {
+    this.updateGesture((doc, edit) => {
+      const clip = edit.clips.find((item) => item.id === id)
+      if (!clip || edit.tracks.find((item) => item.id === clip.trackId)?.locked) return
+      const anchor = clip.start + clip.duration
+      const followers =
+        this.snapEnabled && edge === 'end'
+          ? this.magneticFollowers(edit, id, clip.trackId, anchor)
+          : []
+      const last = Math.max(
+        anchor,
+        ...followers.map((item) => item.start + item.duration),
+        ...(this.magneticScope === 'all'
+          ? doc.captions.filter((item) => item.start >= anchor).map((item) => item.end)
+          : []),
+        ...(this.magneticScope === 'all'
+          ? edit.regions
+              .filter((item) => item.start >= anchor)
+              .map((item) => item.start + item.duration)
+          : [])
+      )
+      if (this.snapEnabled && edge === 'end') at = Math.min(at, anchor + 3600 - last)
+      trimVideoEditClip(edit, id, edge, at, this.fps)
+      if (this.snapEnabled && edge === 'end') {
+        const delta = clip.start + clip.duration - anchor
+        for (const follower of followers) follower.start = Math.max(0, follower.start + delta)
+        this.shiftMagneticMetadata(doc, edit, anchor, delta)
+        this.fitMagneticDuration(doc, edit)
+      }
+    })
   }
   editClip(id: string, change: (clip: VideoEditClip) => void): void {
     this.mutate((_doc, edit) => {
