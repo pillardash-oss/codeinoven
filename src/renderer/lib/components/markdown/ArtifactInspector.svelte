@@ -328,15 +328,30 @@
   }
 
   /**
-   * Keep the artifact's own links from leaving the app.
+   * Let the artifact itself keep its own clicks.
    *
-   * An inline artifact has no sandbox around it, so an anchor it carries would
-   * navigate this window if its default action were left alone. An artifact is a
-   * preview of the conversation's own content, not a place to follow links from:
-   * a click on it means a pick, and the navigation is cancelled either way.
+   * While inspecting, a click is a pick and nothing inside the artifact may
+   * react to it.
+   *
+   * Otherwise this surface is the same preview the conversation draws inline, so
+   * it has to behave like one: a disclosure, a label bound to its control, a
+   * checkbox, a styled button or a focusable field in the document all get their
+   * own default action. Cancelling every click here is what made a fullscreen
+   * HTML artifact inert while the very same artifact was usable in the chat.
+   *
+   * The one action still refused is navigation. An inline artifact has no
+   * sandbox around it, so an anchor it carries would navigate the app's own
+   * window if its default action were left alone.
    */
   function handleArtifactClick(event: MouseEvent): void {
-    event.preventDefault()
+    if (enabled) {
+      event.preventDefault()
+      return
+    }
+    const navigating = event
+      .composedPath()
+      .some((node) => node instanceof HTMLAnchorElement || node instanceof HTMLAreaElement)
+    if (navigating) event.preventDefault()
   }
 
   /**
