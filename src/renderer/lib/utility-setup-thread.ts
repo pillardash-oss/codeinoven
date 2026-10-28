@@ -2,7 +2,10 @@ import { ASSISTANT_SPACE_ID, type Project, type Assistant, type Thread } from '$
 import { DEFAULT_HARNESS } from '$shared/harness-default'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '$shared/assistant-agents'
 import { invoke } from '$lib/ipc.svelte'
-import { composerBuiltInTag } from '$lib/components/chats/composer-mentions'
+import {
+  composerBuiltInTag,
+  type ComposerBuiltInTag
+} from '$lib/components/chats/composer-mentions'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { chatEffectiveSettings, threadSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -214,11 +217,19 @@ function openSeededSetupThread(thread: Thread, project: Project, request?: strin
   workspaceState.openThreadInOwningView(thread, project)
 }
 
-/** Open a reviewable setup draft without utility-specific tags or auto-sending. */
+/**
+ * Open a reviewable setup draft without utility-specific tags or auto-sending.
+ *
+ * `tag` names a built-in composer tag the setup cannot work without: driving the
+ * app's own settings needs the app-control tools, and those reach a turn only
+ * through the workstation-control tag (or full access). The tag leads the draft
+ * so the request still reads as one sentence the user can edit before sending.
+ */
 export async function openSetupConversation(
   project: Project | null,
   title: string,
-  draft: string
+  draft: string,
+  tag?: ComposerBuiltInTag['id']
 ): Promise<Thread> {
   let target = project
   let thread: Thread
@@ -245,7 +256,11 @@ export async function openSetupConversation(
       settings: chatEffectiveSettings(threadSettings.lastUsed)
     })
   }
-  rendererRecovery.setDraft(thread.projectId, thread.id, draft)
+  rendererRecovery.setDraft(
+    thread.projectId,
+    thread.id,
+    tag ? `${composerBuiltInTag(tag).token} ${draft}` : draft
+  )
   workspaceState.openThreadInOwningView(thread, target)
   return thread
 }
