@@ -90,6 +90,27 @@ const UPDATER_TERMINATION_SIGNAL_HINT =
 let permissionCache: { status: CuaPermissionStatus; at: number } | null = null
 
 /**
+ * The probed bridge status, and the probes in flight, shared by every instance.
+ *
+ * Four places construct this service (the utility surface, the computer-use
+ * preview, the turn orchestrator and the utilities IPC), so a per-instance
+ * cache made the prompt path pay a full probe once per instance instead of once
+ * per change. The snapshot lives at module scope for the same reason
+ * `permissionCache` and `daemonClaims` do.
+ */
+let statusCache: { at: number; status: CuaBridgeStatus } | null = null
+/** One probe per shape of probe, keyed by whether it may start a daemon. */
+const statusInFlight = new Map<boolean, Promise<CuaBridgeStatus>>()
+/**
+ * The bridge's own config, read once per process.
+ *
+ * The turn path asks whether the bridge is enabled before it does anything
+ * else, and a storage read before every prompt is exactly the kind of small
+ * repeated cost this service exists to stop paying. Every write replaces it.
+ */
+let configCache: CuaBridgeConfig | null = null
+
+/**
  * Every daemon claim in this process, keyed by the run that took it.
  *
  * The driver's daemon is one process per machine, so its claims have to be one
@@ -198,38 +219,96 @@ export class CuaBridgeService {
    */
   private updateState: CuaUpdateProgress | null = null
 
-  /** Last probed status, and the probe in flight, so a turn never pays twice. */
-  private statusCache: { at: number; status: CuaBridgeStatus } | null = null
-  private statusInFlight: Promise<CuaBridgeStatus> | null = null
-
   /**
-   * The bridge's current state, from memory when it was probed a moment ago.
+   * The bridge's current state for a surface the user opened: a probe when the
+   * snapshot is stale, the snapshot otherwise.
    *
-   * See `STATUS_CACHE_TTL_MS`: this is read once per turn by the utility
-   * resolution, and a repeated probe there is latency the user feels before the
-   * agent has received anything at all.
+   * A settings read is a user action, so it is one of the two places allowed to
+   * verify macOS permissions by briefly starting the driver's daemon. Nothing on
+   * the turn path may do that: see `statusForTurn`.
    */
   async getStatus(): Promise<CuaBridgeStatus> {
-    const cached = this.statusCache
+    const cached = statusCache
     if (cached && Date.now() - cached.at < STATUS_CACHE_TTL_MS) return { ...cached.status }
-    if (this.statusInFlight) return { ...(await this.statusInFlight) }
-    const probe = this.probeStatus()
-    this.statusInFlight = probe
+    return this.probeStatusShared(true)
+  }
+
+  /**
+   * The bridge's state on the prompt's critical path, or null when this turn
+   * must not be offered computer use.
+   *
+   * Three rules keep a capability the user may never touch off the chat's
+   * timeline:
+   *
+   * 1. A bridge that was never enabled is answered from the config alone. No
+   *    install scan, no driver subprocess, no daemon: the capability they did
+   *    not ask for has to cost them nothing.
+   * 2. A warm snapshot is served without waiting, even when it has aged out. A
+   *    stale read refreshes itself in the background for the next turn instead
+   *    of making this one wait for a subprocess.
+   * 3. A cold snapshot (the first turn after launch, before the boot warm-up
+   *    settles) joins the warm-up probe, which happens once per process.
+   */
+  async statusForTurn(): Promise<CuaBridgeStatus | null> {
+    const config = await this.loadConfig()
+    if (!config.enabled) return null
+    const cached = statusCache
+    if (cached) {
+      if (Date.now() - cached.at >= STATUS_CACHE_TTL_MS) this.refreshStatusInBackground()
+      return { ...cached.status }
+    }
+    try {
+      return await this.probeStatusShared(true)
+    } catch (error) {
+      Logger.dev('Cua bridge status could not be read for this turn:', error)
+      return null
+    }
+  }
+
+  /**
+   * Probe the bridge once while the app boots.
+   *
+   * Every turn reads the snapshot, so paying for the only probe that may verify
+   * macOS permissions by starting the driver's daemon here is what keeps the
+   * prompt path free of install scans and subprocess spawns. A bridge the user
+   * never enabled is not probed at all.
+   */
+  async warmStatus(): Promise<void> {
+    const config = await this.loadConfig()
+    if (!config.enabled || statusCache !== null) return
+    await this.probeStatusShared(true).catch((error: unknown) => {
+      Logger.dev('Cua bridge warm-up probe failed:', error)
+    })
+  }
+
+  /** Refresh a stale snapshot without a daemon, and without making anyone wait. */
+  private refreshStatusInBackground(): void {
+    if (statusInFlight.size > 0) return
+    void this.probeStatusShared(false).catch((error: unknown) => {
+      Logger.dev('Cua bridge status refresh failed:', error)
+    })
+  }
+
+  private async probeStatusShared(allowDaemonStart: boolean): Promise<CuaBridgeStatus> {
+    const inFlight = statusInFlight.get(allowDaemonStart)
+    if (inFlight) return { ...(await inFlight) }
+    const probe = this.probeStatus(allowDaemonStart)
+    statusInFlight.set(allowDaemonStart, probe)
     try {
       const status = await probe
-      this.statusCache = { at: Date.now(), status }
+      statusCache = { at: Date.now(), status }
       return { ...status }
     } finally {
-      this.statusInFlight = null
+      statusInFlight.delete(allowDaemonStart)
     }
   }
 
   /** Drop the cached probe after anything that can change what it reports. */
   private invalidateStatus(): void {
-    this.statusCache = null
+    statusCache = null
   }
 
-  private async probeStatus(): Promise<CuaBridgeStatus> {
+  private async probeStatus(allowDaemonStart: boolean): Promise<CuaBridgeStatus> {
     const config = await this.loadConfig()
     const platform = platformName()
     const { installations, selected } = await this.selectedInstallation()
@@ -250,7 +329,11 @@ export class CuaBridgeService {
     try {
       const version = selected.version
       const compatible = selected.compatible
-      const permissionStatus = await this.permissionStatus(binaryPath, platform)
+      const permissionStatus = await this.permissionStatus(
+        binaryPath,
+        platform,
+        allowDaemonStart
+      )
       const [mcpAvailable, daemonRunning] = await Promise.all([
         this.hasMcpSurface(binaryPath),
         this.daemonRunning(binaryPath)
@@ -324,6 +407,7 @@ export class CuaBridgeService {
       if (!status.ready) throw new Error(status.detail ?? 'Cua Driver is not ready')
     }
     await this.storage.write(CONFIG_PATH, { enabled } satisfies CuaBridgeConfig)
+    configCache = { enabled }
     this.invalidateStatus()
     return this.getStatus()
   }
@@ -533,8 +617,8 @@ export class CuaBridgeService {
     harnessId: string,
     permissionLevel: PermissionLevel
   ): Promise<ResolvedUtility | null> {
-    const status = await this.getStatus()
-    if (!status.enabled || !status.ready || !status.binaryPath) return null
+    const status = await this.statusForTurn()
+    if (!status || !status.ready || !status.binaryPath) return null
     const fullAccess = permissionLevel === 'full_access'
     const now = Date.now()
     const binding: HarnessUtilityBinding = {
@@ -575,9 +659,14 @@ export class CuaBridgeService {
   }
 
   private async loadConfig(): Promise<CuaBridgeConfig> {
+    const cached = configCache
+    if (cached) return cached
     const value = await this.storage.read<unknown>(CONFIG_PATH)
-    if (!isRecord(value) || typeof value['enabled'] !== 'boolean') return { enabled: false }
-    return { enabled: value['enabled'] }
+    configCache =
+      isRecord(value) && typeof value['enabled'] === 'boolean'
+        ? { enabled: value['enabled'] }
+        : { enabled: false }
+    return configCache
   }
 
   private async hasMcpSurface(binaryPath: string): Promise<boolean> {
@@ -605,13 +694,18 @@ export class CuaBridgeService {
    */
   private async permissionStatus(
     binaryPath: string,
-    platform: CuaBridgeStatus['platform']
+    platform: CuaBridgeStatus['platform'],
+    allowDaemonStart: boolean
   ): Promise<CuaPermissionStatus> {
     if (platform !== 'macos') return 'not_required'
     const running = await this.daemonRunning(binaryPath)
     if (running) return this.readPermissionStatus(binaryPath)
     const cached = permissionCache
     if (cached && Date.now() - cached.at < PERMISSION_CACHE_TTL_MS) return cached.status
+    // A background refresh must never spawn a daemon of its own: the last verdict
+    // this process observed is the best answer it is allowed to give, and macOS
+    // permissions only change when the user changes them.
+    if (!allowDaemonStart) return statusCache?.status.permissionStatus ?? 'unknown'
     const probe = await this.startDaemonTransiently(binaryPath)
     if (!probe) return 'unknown'
     try {
