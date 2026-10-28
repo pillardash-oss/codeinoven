@@ -24,6 +24,15 @@ You MUST run it over every Svelte file you write or change before reporting the 
 Generates a Svelte Playground link with the provided code.
 After completing the code, ask the user if they want a playground link. Only call this tool after user confirmation, and NEVER when the code was written into files in their project, which is the normal case here.
 
+## File Size And Class Decomposition (hard rule)
+
+- NO FILE IN THIS REPOSITORY MAY EXCEED 2000 LINES OF CODE. This is a hard limit, not a target. `src/**` and `tests/**`, TypeScript, Svelte, scripts and styles all count. A change that pushes a file past 2000 lines is rejected, and a file that is already past the limit must be split before you leave it.
+- A class or component is a leaf, never a god object. When one file has grown to hold several concerns, split it into a folder named after the file (`chat/chat-engine.ts` becomes `chat/chat-engine.ts` plus `chat/chat-engine/`), where the original file is the composition root and each smaller unit in the folder owns exactly one concern (`chat-engine-sessions.ts`, `chat-engine-turns.ts`, ...).
+- Split by concern, never by line count. Every unit owns one job with a name a reader can predict, and the composition root stays the only public surface. Keep the public API stable: the same import path exports the same names as before the split.
+- Move code, do not rewrite it. A structural split changes no behaviour, no prop, no export and no signature. New cross-unit access goes through a typed host/context interface, never `as any` and never a widened `unknown` escape hatch.
+- Same shape in every layer: pure logic in a plain `.ts` module, reactive state plus its operations in a `.svelte.ts` controller, cohesive markup in a child `.svelte` component with typed props.
+- Validate a split with scoped `bun run check`, `bun run lint` and `bun run format` on the files you touched plus their importers, and `bun run test` for the matching tests. A split that cannot be verified is not finished.
+
 ## Rules You Must Follow
 
 - CodeInOven stores all threads, sessions, and app data in `~/.config/pillardash/codeinoven/`. When asked to inspect a thread, session, logs, or any stored app data, look there. NEVER use `~/Library/Application Support/CodeInOven` for app data — it contains only Electron/Chromium runtime junk (caches, cookies, an empty db) and inspecting it is always wrong.
