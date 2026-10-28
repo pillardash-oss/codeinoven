@@ -192,8 +192,16 @@
    * asking, so it is asked on a slow beat for exactly as long as there is
    * something to press: which is nothing next to drawing it, and the price of a
    * control that always answers.
+   *
+   * Windows gets the quicker beat, because the window does not forward mouse
+   * moves into this document there at all (`main/browser/browser-overlay-window.ts`:
+   * a forwarded move makes this document answer with its own cursor while the
+   * window underneath answers with the one the user is actually pointing at, and
+   * the OS cursor flickers between them). That leaves this poll as the only input
+   * that sees the pointer reach or leave drawn content on that platform, so it
+   * has to answer inside the time a hand takes to move onto a control and press.
    */
-  const POINTER_WATCH_INTERVAL_MS = 120
+  const POINTER_WATCH_INTERVAL_MS = window.api?.windowInfo?.platform === 'win32' ? 40 : 120
 
   let pointerWatch: ReturnType<typeof setInterval> | undefined
 

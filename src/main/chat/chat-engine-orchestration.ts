@@ -3,6 +3,7 @@ import type {
   ModelProfile,
   PermissionLevel,
   ProviderCatalog,
+  ProviderModel,
   Thread,
   ThreadSettings,
   ThinkingLevel
@@ -78,10 +79,28 @@ export class OrchestrationDispatches {
   }
 }
 
+/** A project a dispatch may target, as the agent sees it. */
+export interface ProjectTarget {
+  id: string
+  name: string
+  path: string
+}
+
 /** Everything the executor reads or performs, supplied by the chat engine. */
 export interface OrchestrationDeps {
   /** The provider catalogs the model picker uses for a project. */
   listProviderCatalogs: (projectId: string) => Promise<ProviderCatalog[]>
+  /**
+   * Discover a project's provider catalogs again, bypassing the snapshot the
+   * model picker holds.
+   *
+   * A launch that has not discovered its catalogs yet reports every model id as
+   * unknown, and `cio_orchestrate_targets` reads that same empty snapshot, so a
+   * dispatch retries once through this instead of sending the agent in a circle.
+   */
+  refreshProviderCatalogs: (projectId: string) => Promise<ProviderCatalog[]>
+  /** Every project the app knows, so a dispatch can name one other than this thread's. */
+  listProjects: () => Promise<readonly ProjectTarget[]>
   /** Every saved harness account, with `isDefault` on the user's chosen one. */
   listAccounts: () => Promise<HarnessAccount[]>
   /** Every configured Oven, plus the app's default. */
@@ -167,11 +186,12 @@ async function readTargets(
   const ovenFilter = optionalString(input, 'ovenId')
   const includeModels = input['includeModels'] !== false
 
-  const [state, catalogs, accounts, profiles] = await Promise.all([
+  const [state, catalogs, accounts, profiles, projects] = await Promise.all([
     deps.listOvens(),
     includeModels ? deps.listProviderCatalogs(context.projectId) : Promise.resolve([]),
     deps.listAccounts(),
-    deps.listModelProfiles()
+    deps.listModelProfiles(),
+    deps.listProjects()
   ])
 
   const ovens = state.ovens
@@ -205,6 +225,11 @@ async function readTargets(
 
   return {
     project: { id: context.projectId, path: context.projectPath },
+    projects: projects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      path: project.path
+    })),
     defaults: {
       ovenId: state.defaultOvenId,
       harnessId: DEFAULT_HARNESS,
@@ -260,9 +285,30 @@ async function readTargets(
       idsAreExact:
         'Every id returned here is the exact value cio_orchestrate_dispatch accepts. Never invent one.',
       localHarnessAvailability:
-        'This computer is not probed for installed harnesses; a remote Oven reports health per harness.'
+        'This computer is not probed for installed harnesses; a remote Oven reports health per harness.',
+      projectDefaults:
+        "A dispatch's projectId defaults to `project`, this thread's own project. Pass another id from `projects` to start a thread there.",
+      startingAThread:
+        'cio_orchestrate_dispatch both creates the thread and sends the prompt, so it is the way to start a thread with a first message. Do not hand-build the thread:create plus agent:sendPrompt pair.'
     }
   }
+}
+
+/**
+ * The provider catalog and model a dispatch names, or null when this snapshot
+ * does not carry them.
+ */
+function findCatalogModel(
+  catalogs: readonly ProviderCatalog[],
+  harnessId: string,
+  providerId: string,
+  modelId: string
+): { catalog: ProviderCatalog; model: ProviderModel } | null {
+  const catalog = catalogs.find(
+    (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+  )
+  const model = catalog?.models.find((candidate) => candidate.id === modelId)
+  return catalog && model ? { catalog, model } : null
 }
 
 /** Resolve and start a real run, refusing anything the catalog does not confirm. */
@@ -292,15 +338,24 @@ async function dispatchWork(
     deps.getThread(context.projectId, context.threadId)
   ])
 
-  const catalog = catalogs.find(
-    (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
-  )
-  const model = catalog?.models.find((candidate) => candidate.id === modelId)
-  if (!catalog || !model) {
-    throw new Error(
-      `The ${harnessId} catalog has no ${providerId}/${modelId} model. Read cio_orchestrate_targets for the exact ids.`
+  let resolved = findCatalogModel(catalogs, harnessId, providerId, modelId)
+  if (!resolved) {
+    // The snapshot the model picker holds is the only source dispatch checks, and
+    // it is empty until the app has discovered once. Discover here rather than
+    // telling the agent to re-read a target list built from the same snapshot.
+    resolved = findCatalogModel(
+      await deps.refreshProviderCatalogs(projectId),
+      harnessId,
+      providerId,
+      modelId
     )
   }
+  if (!resolved) {
+    throw new Error(
+      `The ${harnessId} catalog has no provider "${providerId}" with model "${modelId}", even after discovering the catalogs again. Read cio_orchestrate_targets and copy an id from it exactly.`
+    )
+  }
+  const { catalog, model } = resolved
 
   const oven = state.ovens.find((candidate) => candidate.id === ovenId)
   if (!oven) throw new Error(`Unknown Oven "${ovenId}". Read cio_orchestrate_targets.`)

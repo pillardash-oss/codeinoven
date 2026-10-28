@@ -108,6 +108,12 @@ export function registerUtilityIpc(
     }
     pip?.setRequestedFrameWidth(requested)
   })
+  ipcMain.handle('computerUse:pipSetVisible', (_, visible: unknown) => {
+    if (typeof visible !== 'boolean') {
+      throw new TypeError('Computer-use preview visibility must be a boolean')
+    }
+    pip?.setPreviewVisible(visible)
+  })
   ipcMain.handle('computerUse:pipBringToFront', () => pip?.bringToFront() ?? Promise.resolve())
   ipcMain.handle('computerUse:pipDismiss', () => pip?.dismiss() ?? Promise.resolve())
   ipcMain.handle('utilities:list', async (_, options?: UtilitySearchOptions) => ({

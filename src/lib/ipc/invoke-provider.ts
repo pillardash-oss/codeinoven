@@ -284,6 +284,9 @@ export const invokeProviderContract = {
   /** Device pixels of preview the overlay is about to paint, so the captured
    *  frame is never upscaled. Sent whenever the preview footprint changes. */
   'computerUse:pipSetFrameWidth': {} as Contract<[deviceWidth: number], void>,
+  /** Whether a preview would be painted at all. Main stops capturing frames while
+   *  it is false, so a run the user is not watching costs nothing to preview. */
+  'computerUse:pipSetVisible': {} as Contract<[visible: boolean], void>,
   'computerUse:pipBringToFront': {} as Contract<[], void>,
   'computerUse:pipDismiss': {} as Contract<[], void>
 }

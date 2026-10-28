@@ -1,4 +1,6 @@
 import type {
+  BranchDeletionOutcome,
+  BranchDeletionState,
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
@@ -66,6 +68,7 @@ import type {
   PullRequestPage,
   PullRequestReference,
   PullRequestReviewComment,
+  PullRequestSummary,
   PrReactionContent,
   PrReactionGroup,
   PullRequestReviewResult,
@@ -363,6 +366,20 @@ export const invokeGitContract = {
     GitHubMutationResult<PullRequestReference>
   >,
   /**
+   * What a branch is as far as deleting it goes: deletable, protected, or gone.
+   * Null when the read itself failed, so the merged reader draws no action rather
+   * than one that may be refused.
+   */
+  'pr:branchState': {} as Contract<
+    [projectId: string, owner: string, repo: string, branch: string],
+    BranchDeletionState | null
+  >,
+  /** Delete a merged pull request's head branch. Protected branches refuse this. */
+  'pr:deleteBranch': {} as Contract<
+    [projectId: string, owner: string, repo: string, branch: string],
+    GitHubMutationResult<BranchDeletionOutcome>
+  >,
+  /**
    * Replace the labels a pull request carries, returning the labels it now has.
    * One write for the whole set rather than an add or a remove per label, so a
    * picker that toggles several chips costs one round trip and its result is the
@@ -422,6 +439,16 @@ export const invokeGitContract = {
    * to compute mergeability, so it is used as the authoritative mergeability
    * probe when a list payload reported `mergeable`/`mergeable_state` as null.
    */
+  /**
+   * The repository's pull requests matching a text, for the PR view's own find.
+   *
+   * The state comes from the listing the reader is on, so a search from the Closed
+   * listing can reach merged work and one from Open cannot answer with it.
+   */
+  'pr:search': {} as Contract<
+    [projectId: string, owner: string, repo: string, state: PrState, text: string],
+    PullRequestSummary[]
+  >,
   'pr:detail': {} as Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
     /** null when the provider request fails (timeout, rate limit, network). */

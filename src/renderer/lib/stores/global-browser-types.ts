@@ -37,6 +37,9 @@ export interface GlobalBrowserRuntime {
   audible: boolean
   muted: boolean
   capturing: boolean
+  microphoneActive?: boolean
+  cameraActive?: boolean
+  screenActive?: boolean
   loading: boolean
   /** The failure that left this tab with no page, or null while it has one. */
   loadError: BrowserLoadError | null

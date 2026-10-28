@@ -35,7 +35,8 @@
     ConflictResolutionStatus
   } from './conflict-resolution'
   import { motionDuration } from '$lib/motion'
-  import { supportsFilePreview } from '$lib/mime'
+  import { mimeFromPath, supportsFilePreview } from '$lib/mime'
+  import { hasNoTextSource } from '$lib/stores/project-files-state'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -69,7 +70,6 @@
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
   import ProjectFilesPanelReadAlong from './ProjectFilesPanelReadAlong.svelte'
-  import { ProjectFilesPanelSvgPreview } from './project-files-panel-svg-preview.svelte'
   import { ProjectFilesPanelFind } from './project-files-panel-find.svelte'
   import { ProjectFilesPanelDocumentPreview } from './project-files-panel-document-preview.svelte'
   import {
@@ -163,6 +163,10 @@
   )
   let activeSession = $derived(activeTab ? (projectState.sessions[activeTab.path] ?? null) : null)
   let dirty = $derived(activeSession ? activeSession.draft !== activeSession.source.content : false)
+  /** The mime of the file on screen, and whether it has any text form at all.
+   *  A rendered type with a text form (SVG, which is XML) keeps its source view. */
+  let activeMime = $derived(activeTab ? mimeFromPath(activeTab.path) : null)
+  let renderOnlyFile = $derived(activeMime !== null && hasNoTextSource(activeMime))
   let checkpointDiff = $derived(activeTab?.checkpointDiff ?? null)
   const diffComputation = new FileDiffState(() =>
     activeTab?.view === 'diff' && checkpointDiff && !checkpointDiff.binary
@@ -324,14 +328,16 @@
   let htmlPreview = $derived(previewFlags.html)
   let pdf = $derived(previewFlags.pdf)
   let image = $derived(previewFlags.image)
-  let svg = $derived(previewFlags.svg)
   let video = $derived(previewFlags.video)
   let audio = $derived(previewFlags.audio)
   let previewReloadToken = $derived(
     activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
   )
+  /** Every rendered file streams from disk through `appfile://`, SVG included:
+   *  its response carries `default-src 'none'` and the `<img>` this feeds never
+   *  runs the document's scripts, so no blob round-trip is needed. */
   let previewUrl = $derived(
-    activeTab && (pdf || image || video || audio) && !svg
+    activeTab && (pdf || image || video || audio)
       ? projectFilePreviewUrl(
           projectId,
           activeTab.path,
@@ -340,25 +346,6 @@
         )
       : null
   )
-  // SVG is rendered natively in the renderer via a blob URL (animated SVGs
-  // play), instead of the privileged `appfile://` scheme, which intentionally
-  // refuses to serve project-controlled SVG.
-  const svgPreview = new ProjectFilesPanelSvgPreview()
-  $effect(() =>
-    svgPreview.sync({
-      projectId,
-      activePath: activeTab?.path ?? null,
-      isSvg: svg,
-      // Reading the reload token keeps the effect reactive to explicit reloads:
-      // bumping it revokes the stale blob and re-reads the file from disk.
-      currentReloadToken: () =>
-        activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0,
-      scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
-      mountThreadId
-    })
-  )
-  let imagePreviewSrc = $derived(svg ? svgPreview.url : previewUrl)
-  let imagePreviewFailed = $derived(svg ? svgPreview.failed : false)
   /** Office/CSV documents render as sanitized converted HTML (no PDF path). */
   let documentPreview = $derived(previewFlags.document)
   let previewKindLabel = $derived(previewKindLabelFor(previewFlags))
@@ -1302,8 +1289,6 @@
           {visibleContent}
           {htmlPreviewSrcdoc}
           {previewUrl}
-          {imagePreviewSrc}
-          {imagePreviewFailed}
           documentLoading={docPreview.loading}
           documentHtml={docPreview.html}
           documentFailed={docPreview.failed}
@@ -1317,11 +1302,7 @@
         </div>
       {:else if activeTab && !activeSession && !deletedAtCheckpoint}
         {#if image}
-          <FileImagePreview
-            src={imagePreviewSrc}
-            alt={activeTab.path}
-            failed={imagePreviewFailed}
-          />
+          <FileImagePreview src={previewUrl} alt={activeTab.path} />
         {:else if video || audio}
           <FileMediaPreview
             src={previewUrl}
@@ -1711,8 +1692,6 @@
             {visibleContent}
             {htmlPreviewSrcdoc}
             {previewUrl}
-            {imagePreviewSrc}
-            {imagePreviewFailed}
             documentLoading={docPreview.loading}
             documentHtml={docPreview.html}
             documentFailed={docPreview.failed}
@@ -1720,13 +1699,9 @@
             showDocumentError={false}
           />
         {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
-          {#if image}
-            <FileImagePreview
-              src={imagePreviewSrc}
-              alt={activeTab.path}
-              failed={imagePreviewFailed}
-            />
-          {:else if video || audio}
+          {#if image && (renderOnlyFile || activeTab.view !== 'source')}
+            <FileImagePreview src={previewUrl} alt={activeTab.path} />
+          {:else if (video || audio) && (renderOnlyFile || activeTab.view !== 'source')}
             <FileMediaPreview
               src={previewUrl}
               alt={activeTab.path}
@@ -1742,6 +1717,14 @@
               onStatusChange={(next) => handleConflictStatus('fullscreen', next)}
               onOpenOriginal={() => void openRawConflictSource()}
             />
+          {:else if projectState.loadingPaths[activeTab.path] && !activeSession}
+            <div
+              class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed"
+              role="status"
+            >
+              <CioSpinner size={13} class="animate-spin" />
+              Loading file
+            </div>
           {:else}
             {#key activeTab.id}
               <ProjectTextEditor

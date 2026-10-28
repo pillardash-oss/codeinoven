@@ -3,7 +3,6 @@
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
-  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import type { Component } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
@@ -105,14 +104,6 @@
         label: 'Name',
         title: 'The name you gave it',
         value: plan.name
-      })
-    }
-    if (plan?.personality) {
-      entries.push({
-        icon: CioSparkles,
-        label: 'Personality',
-        title: 'How it behaves and sounds',
-        value: plan.personality
       })
     }
     entries.push({

@@ -80,6 +80,18 @@ class BrowserInspectorSession {
   >()
   /** Last theme read from the stylesheet, reused while a token is unavailable. */
   private themeCache: BrowserInspectorTheme | null = null
+  /**
+   * Tabs whose page state has been answered, so the list is read once per tab.
+   *
+   * A tab the app has not asked about yet is a tab whose design report may
+already have come and gone, which is why the list is watched rather than read
+   * once. A tab main cannot answer for yet (a restored tab whose page it has not
+   * created) is deliberately *not* recorded here, so the next change of the list
+   * asks again instead of the session going blind.
+   */
+  private readonly statesRead = new SvelteSet<string>()
+  /** Reads in flight, so one tab is never asked about twice at once. */
+  private readonly reading = new SvelteSet<string>()
 
   /**
    * Whether {@link start} has wired the session. Inspection is a browser-only
@@ -105,9 +117,21 @@ class BrowserInspectorSession {
     // load before this session was started (the browser is lazy, and this is the
     // seam that starts it). A tab the session never heard of is neither
     // inspectable nor reopenable, and a pick made on it carries no folder, so the
-    // state every open tab already has is read once here instead of waiting for a
-    // page reload to report it again.
-    this.readOpenTabs()
+    // state every open tab already has is read here instead of waiting for a page
+    // reload to report it again.
+    //
+    // Read as a subscription to the tab list rather than once at this seam. The
+    // list itself is restored from storage a moment after the runtime starts, and
+    // main only announces a tab's design when it *changes*, so a session that
+    // asked once, too early, learned about no tab at all and never asked again:
+    // the design was never mirrored, no pins were published for it, and the only
+    // thing that could publish them was an edit from the composer, which reopens
+    // the design and marks it again. That is the pins that would not come back
+    // after a reload, however many times the page itself was refreshed.
+    this.readTabStates()
+    $effect.root(() => {
+      $effect(() => this.readTabStates())
+    })
     // Pins and the open comment are consequences of the reference list, which is
     // written by the page, the composer and the panel alike, so the session
     // follows the list rather than being told by each writer.
@@ -209,16 +233,26 @@ class BrowserInspectorSession {
   }
 
   /**
-   * Read the page state of every browser tab that is already open.
+   * Ask main what every tab the session does not know yet is serving.
    *
-   * Bounded by the number of open tabs (a handful), and each read is one IPC
-   * round trip, so this costs nothing at a seam that runs once per renderer.
+   * Bounded by the number of open tabs (a handful) and by one question per tab:
+   * a tab main answers for is recorded, and a tab it cannot answer for yet is
+   * asked again the next time the list changes. This runs on the tab list, so a
+   * tab restored after the session started is mirrored when it arrives instead of
+   * being unknown until its page reloads.
    */
-  private readOpenTabs(): void {
+  private readTabStates(): void {
+    const open = new SvelteSet<string>()
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
+      open.add(tab.id)
+      if (this.designs.has(tab.id) || this.statesRead.has(tab.id)) continue
+      if (this.reading.has(tab.id)) continue
       void this.readPageState(tab.id)
     }
+    // A closed tab's record goes with it, so a long session does not keep the id
+    // of every tab it ever showed.
+    for (const id of this.statesRead) if (!open.has(id)) this.statesRead.delete(id)
   }
 
   /**
@@ -228,15 +262,21 @@ class BrowserInspectorSession {
    * than waited for: that report is a broadcast, and a listener that starts after
    * the page loaded never receives it.
    */
-  private async readPageState(tabId: string): Promise<BrowserDesignTab | null> {
+  private async readPageState(tabId: string): Promise<void> {
+    if (this.reading.has(tabId)) return
+    this.reading.add(tabId)
     try {
       const state = await invoke('browser:pageState', tabId)
-      if (!state) return null
+      // No report means main has no page for this tab yet, which is the answer a
+      // restored tab gives until it is shown. It is not recorded, so the next
+      // change of the tab list asks again rather than treating it as answered.
+      if (!state) return
+      this.statesRead.add(tabId)
       this.notePageState(state.tabId, state.design)
-      return state.design
     } catch (failure: unknown) {
       logRendererError("A browser tab's page state could not be read.", failure)
-      return null
+    } finally {
+      this.reading.delete(tabId)
     }
   }
 

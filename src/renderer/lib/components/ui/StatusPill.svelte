@@ -11,6 +11,12 @@
     title?: string
     'aria-label'?: string
     class?: string
+    /**
+     * Let the pill give way before the controls beside it do. The label clips
+     * inside its own box instead of pushing the row wider, which matters where
+     * the pill shares a fixed column with the app's name.
+     */
+    truncate?: boolean
     /** Renders the pill text; falls back to `label`. */
     children?: Snippet
   }
@@ -21,6 +27,7 @@
     title,
     'aria-label': ariaLabel,
     class: className = '',
+    truncate = false,
     children
   }: Props = $props()
 
@@ -32,6 +39,9 @@
     danger: 'border-danger/30 bg-danger/10 text-danger',
     warning: 'border-warning/30 bg-warning/10 text-warning',
     info: 'border-info/30 bg-info/10 text-info',
+    /* The specification's own colour. A build marker wears it for probe runs so a
+       pill narrowed to a couple of letters still says which build it is. */
+    spec: 'border-thread-spec/30 bg-thread-spec/10 text-thread-spec',
     neutral: 'border-border bg-elevated text-dimmed'
   }
 
@@ -40,14 +50,15 @@
     danger: 'bg-danger',
     warning: 'bg-warning',
     info: 'bg-info',
+    spec: 'bg-thread-spec',
     neutral: 'bg-dimmed'
   }
 </script>
 
 <span
-  class="inline-flex shrink-0 items-center gap-1 border px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {tones[
-    tone
-  ]} {className}"
+  class="inline-flex items-center gap-1 border px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {truncate
+    ? 'min-w-0 shrink'
+    : 'shrink-0'} {tones[tone]} {className}"
   {title}
   aria-label={ariaLabel}
 >
@@ -55,6 +66,10 @@
     <span class="h-1.5 w-1.5 shrink-0 {dotTones[tone]}" aria-hidden="true"></span>
   {/if}
   {#if children}
-    {@render children()}
+    {#if truncate}
+      <span class="min-w-0 truncate">{@render children()}</span>
+    {:else}
+      {@render children()}
+    {/if}
   {/if}
 </span>

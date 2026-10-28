@@ -29,6 +29,7 @@ import {
 } from '../drivers/opencode-account-usage'
 import { openCodeAuthPaths } from '../drivers/opencode/opencode-values'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
+import { holdAntigravitySelfUpdate } from '../drivers/antigravity/antigravity-self-update'
 import {
   HarnessCommandError,
   prepareHarnessTerminalHandoff,
@@ -472,8 +473,10 @@ async function readAntigravityStatus(
 ): Promise<HarnessAuthStatus> {
   let result: { succeeded: boolean; stdout: string; stderr: string }
   try {
+    const probeEnvironment = await buildProcessEnvironmentAsync({ ...process.env, ...environment })
+    await holdAntigravitySelfUpdate(probeEnvironment)
     const output = await runHarnessCommand('agy', ['models'], {
-      env: await buildProcessEnvironmentAsync({ ...process.env, ...environment }),
+      env: probeEnvironment,
       timeoutMs: STATUS_TIMEOUT_MS,
       maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
     })
@@ -1560,6 +1563,12 @@ export class ProviderAccountOrchestrator {
   ): Promise<HarnessLoginHandoff> {
     const definition = await this.resolveDefinition(harnessId)
     const loginOptions: HarnessLoginOptions = { ...options }
+    // Antigravity signs in through an interactive CLI session, which is also
+    // where its background auto-updater would start; hold that so a sign-in
+    // never changes the harness version behind CodeInOven's back.
+    if (harnessId === 'antigravity') {
+      await holdAntigravitySelfUpdate({ ...process.env, ...environment })
+    }
     // A custom base-URL provider lives in CodeInOven's own id namespace and means
     // nothing to a harness CLI, so it never reaches a login command.
     if (

@@ -17,6 +17,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
+  import { projectFileCopyTags } from '$lib/project-file-copy-tags'
   import { openInBrowser } from '$lib/open-in-browser'
   import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
@@ -426,6 +427,31 @@
 
   function canPaste(): boolean {
     return projectFilesWorkspace.clipboard !== null
+  }
+
+  /** Refresh the tree's listings whenever this explorer becomes visible.
+   *
+   *  The sidebar keeps a panel mounted and hides it with `display: none`, so
+   *  returning to it does not remount this component. Visibility is what makes
+   *  "the tree was opened" observable, and an intersection callback is the
+   *  signal that reports it without polling. The refresh is background work: it
+   *  never blocks the open and never replaces the listing on screen until a
+   *  fresh read answers, so files created outside the app are already there
+   *  instead of waiting for the Refresh button. */
+  function attachOpenRefresh(node: HTMLElement): () => void {
+    if (typeof IntersectionObserver === 'undefined') {
+      projectFilesWorkspace.refreshOnOpen(projectId)
+      return () => undefined
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return
+        projectFilesWorkspace.refreshOnOpen(projectId)
+      },
+      { threshold: 0 }
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
   }
 
   /** Track the scroll viewport without making every tree row reactive. */
@@ -860,9 +886,20 @@
   async function copyForPaste(paths: string[], mode: ProjectFileTransferMode): Promise<void> {
     const label = selectionLabel(paths)
     projectFilesWorkspace.setClipboard(projectId, paths, mode)
-    // The notice describes the in-app clipboard, which is already set. A failed OS
-    // clipboard write changes nothing about it, so that copy stays quiet.
-    void copyText(paths.map((path) => `@${path}`).join('\n'), null).catch(() => {})
+    const tags = projectFileCopyTags(paths)
+    // The in-app clipboard is already set, so a failed OS write changes nothing
+    // about the copy and stays quiet.
+    const writeToOs = async (): Promise<void> => {
+      // A cut writes tags only: the files are about to move, so handing the OS
+      // paths that will no longer exist would be worse than the text. A remote
+      // tree has no local files to hand out at all.
+      if (mode === 'copy' && !ovenTree) {
+        await projectFilesWorkspace.copyPathsToClipboard(projectId, paths, tags)
+        return
+      }
+      await copyText(tags, null)
+    }
+    void writeToOs().catch(() => copyText(tags, null).catch(() => {}))
     notifyClipboard(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
   }
 
@@ -1005,11 +1042,14 @@
   }
 
   function handleFileDragStart(entry: ProjectFileEntry, event: DragEvent): void {
+    // A remote checkout has no local paths to hand the OS, and the tree already
+    // offers no Finder hand-off there.
+    if (ovenTree) return
     const paths = [...selectionPathsFor(entry, projectState.selectedPaths)].map(String)
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
     event.preventDefault()
     try {
-      window.api.startFileDrag(projectId, paths)
+      projectFilesWorkspace.startFileDrag(projectId, paths)
     } catch (error) {
       reportError(error, 'Native dragging is unavailable')
     }
@@ -1305,6 +1345,7 @@
 </script>
 
 <aside
+  {@attach attachOpenRefresh}
   class="relative flex h-full min-h-0 min-w-44 shrink-0 flex-col border-l border-border bg-surface"
   style:width={`${projectState.explorerWidth}px`}
   aria-label="Project file explorer"

@@ -1,6 +1,6 @@
 <script lang="ts">
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import type { CompositionFrameSnapshot } from '$shared/ipc-contract'
   import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import {
@@ -124,7 +124,7 @@
 >
   <!-- A chrome-less lightbox, so this band is the header: it reserves the same
        inset the app header occupies over the top-left corner, names the exact
-       moment, and carries the pen and the close control. -->
+       moment, and carries the pen and the dismiss control. -->
   <div
     class="titlebar-drag flex h-12 shrink-0 items-center gap-2 border-b border-white/10 pr-3"
     style={trafficLightInsetStyle()}
@@ -160,7 +160,7 @@
       title="Close (Esc)"
       onclick={onClose}
     >
-      <CioClose size={14} />
+      <CioMinimize size={14} />
     </button>
   </div>
   <div class="relative flex min-h-0 flex-1 items-center justify-center">

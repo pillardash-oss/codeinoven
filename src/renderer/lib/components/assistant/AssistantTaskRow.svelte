@@ -8,12 +8,20 @@
   import CioSwap from '@pdslng/cio-icon/CioSwap.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import { Portal } from 'bits-ui'
-  import { createSubscriber } from 'svelte/reactivity'
+  import { relativeTimeClock } from '$lib/relative-time.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
+  import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
+  import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
+  import {
+    threadUsesEngineeringTooling,
+    type ThreadIndicator
+  } from '$lib/components/threads/thread-indicator'
+  import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
-  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -35,6 +43,7 @@
   import { runRowLine, taskPopoverState, taskRowIconKey, taskRunLine } from './assistant-view'
 
   interface Props {
+    media?: readonly import('$shared/media-activity').MediaActivity[]
     task: Thread
     active: boolean
     /**
@@ -93,6 +102,7 @@
 
   let {
     task,
+    media,
     active,
     variant = 'task',
     runWorking = false,
@@ -122,11 +132,10 @@
   const renameFormId = $derived(`${componentId}-task-${task.id}-rename-form`)
   const renameInputId = $derived(`${componentId}-task-${task.id}-rename-input`)
 
-  /** Coarse clock so relative run lines stay current without a render storm. */
-  const subscribeMinute = createSubscriber((update) => {
-    const timer = window.setInterval(update, 60_000)
-    return () => window.clearInterval(timer)
-  })
+  /** Keep the shared relative-age clock live while this row is on screen. One
+   *  timer serves every row on the list, and the on-demand line's "8m" stays
+   *  honest the way a project or thread row's stamp does. */
+  $effect(() => relativeTimeClock.hold())
 
   const taskIcon = $derived(
     task.assistantIconType ? getIconSvgDataUrl(task.assistantIconType, color ?? '#8b95a5') : null
@@ -140,13 +149,11 @@
   const runLine = $derived.by(() => {
     const working = runWorking || isThreadLiveWorking(task)
     if (isRun) {
-      subscribeMinute()
-      const line = working ? 'Running now' : runRowLine(task, Date.now())
+      const line = working ? 'Running now' : runRowLine(task, relativeTimeClock.now)
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
     if (knowledgeThread) return 'Assistant behavior'
-    subscribeMinute()
-    return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now(), !scheduled)
+    return working ? 'Running now' : taskRunLine(task, nextRunAt, relativeTimeClock.now, !scheduled)
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
@@ -235,6 +242,27 @@
     if (voiceSendStage === 'send') return 'transcribing-send'
     return 'transcribing'
   })
+  /**
+   * The marks a task or run carries that are not media activity: the agent
+   * driving the computer, and the Engineering tooling the thread engaged.
+   *
+   * A task row lists a thread, and a thread row reports everything that thread
+   * is doing. Resolving these here keeps that true for assistant work too, so an
+   * assistant task cannot look idle while its thread is painting a project's
+   * screen or sitting on an audit report.
+   */
+  const liveMarks = $derived.by((): ThreadIndicator[] => {
+    const live: ThreadIndicator[] = []
+    if (pipState.isThreadUsingComputerUse(task.id)) live.push('computer-use')
+    if (threadUsesEngineeringTooling(task)) live.push('engineering')
+    return live
+  })
+  /** The authored-work sessions this thread has entered, in canonical order, so
+   *  a task that designed something and then cut a video about it wears both
+   *  marks instead of the last one over the first. */
+  const authoredWorkKinds = $derived(
+    task.authoredWorkKinds ?? (task.authoredWorkKind ? [task.authoredWorkKind] : [])
+  )
 
   /** A task's own menu only; a run keeps the identical thread menu (rename, pin,
    *  fork, notes, copy id, delete), since a run is a thread too. */
@@ -397,7 +425,13 @@
         >
           {foreignTransfer?.error ?? runLine}
         </span>
-        {#if indicator}
+        <ThreadNoteMark threadId={task.id} />
+        <AuthoredWorkMarks kinds={authoredWorkKinds} />
+        <MediaActivityTrail activities={media ?? threadMediaActivity(task.id)} label={task.title} />
+        {#each liveMarks as live (live)}
+          <ThreadIndicatorSlot indicator={live} />
+        {/each}
+        {#if indicator && indicator !== 'recording' && indicator !== 'speaking'}
           <ThreadIndicatorSlot {indicator} />
         {/if}
       </span>

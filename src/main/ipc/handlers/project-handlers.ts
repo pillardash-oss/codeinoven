@@ -35,6 +35,8 @@ import {
   validateWorktreeDefaults
 } from '../ipc-validation'
 import { requireString, validateStringArray } from './shared'
+import { mapInBatches } from '../../../lib/bounded-work'
+import { writeFilePathsToClipboard } from '../../system/file-clipboard'
 import { EDITOR_IDS } from './config-helpers'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type {
@@ -963,6 +965,49 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         threadIdArg(threadId)
       )
   )
+  // Copy project entries to the OS clipboard as the files they are, so the copy
+  // can leave the app (Finder, Mail, another editor), while the same payload
+  // keeps the `@tag` text an in-app composer turns into a file reference.
+  ipcMain.handle(
+    'projectFiles:copyToClipboard',
+    async (
+      _,
+      projectId: unknown,
+      relativePaths: unknown,
+      text: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
+      const validatedProjectId = validateEntityId(projectId, 'Project ID')
+      const paths = validateStringArray(relativePaths, 'Project file paths')
+      const clipboardText = requireString(text, 'Clipboard text', true)
+      const validatedScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      const validatedThreadId = threadIdArg(threadId)
+      // Absolute paths are resolved here rather than in the renderer: one round
+      // trip and a bounded batch of stats beats a stat per entry over IPC for a
+      // large selection.
+      const absolutePaths = await mapInBatches(paths, 8, async (path) => {
+        try {
+          const info = await projectFilesService.getInfo(
+            validatedProjectId,
+            path,
+            validatedScopeBucketId,
+            validatedThreadId
+          )
+          return info.absolutePath
+        } catch {
+          // An entry that vanished between the copy and this write still belongs
+          // in the tags; it just has no file to hand the OS.
+          return null
+        }
+      })
+      await writeFilePathsToClipboard(
+        absolutePaths.filter((path): path is string => typeof path === 'string'),
+        clipboardText
+      )
+    }
+  )
   ipcMain.handle(
     'projectFiles:directorySize',
     (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown, threadId?: unknown) =>
@@ -1189,15 +1234,22 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   )
   ipcMain.on(
     'projectFiles:startDrag',
-    (event, projectId: unknown, relativePaths: unknown, scopeBucketId?: unknown) => {
+    (
+      event,
+      projectId: unknown,
+      relativePaths: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
       void (async () => {
         try {
-          const paths = projectFilesService.resolveForDragSync(
+          const paths = await projectFilesService.resolveForDrag(
             validateEntityId(projectId, 'Project ID'),
             validateStringArray(relativePaths, 'Dragged paths'),
             scopeBucketId === undefined
               ? undefined
-              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+              : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+            threadIdArg(threadId)
           )
           if (paths.length === 0) throw new Error('No files are available to drag')
           const icon = await resolveDragIcon(paths[0])

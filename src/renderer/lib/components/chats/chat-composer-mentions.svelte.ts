@@ -1,6 +1,11 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
-import { isEntryHiddenByVisibility } from '$lib/stores/cio-search-visibility.svelte'
+import { assistantTagIconHtml } from '../assistant/assistant-tag-badge'
+import {
+  cioSearchVisibility,
+  isEntryHiddenByVisibility
+} from '$lib/stores/cio-search-visibility.svelte'
+import { scopeState } from '$lib/stores/scope.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
   composerMentionQuery,
@@ -79,32 +84,65 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
             .some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
         })
         .map((entry) => ({ type: 'task', entry }))
-      const assistantEntries: ComposerMentionEntry[] = (
-        options.getAssistantTags?.() ?? []
+      // Kept as tags rather than as menu entries: the thread search below reads
+      // their ids, and a widened `ComposerMentionEntry` union would only carry
+      // file and task rows that have no id at all.
+      const assistantTags = (options.getAssistantTags?.() ?? []).filter(
+        (tag) =>
+          (tag.kind !== 'thread' || cioSearchVisibility.includeThreads) &&
+          assistantTagMatches(tag, normalizedQuery)
       )
-        .filter((tag) => assistantTagMatches(tag, normalizedQuery))
-        .map((entry) => ({ type: 'assistant' as const, entry }))
+      const assistantEntries: ComposerMentionEntry[] = assistantTags.map((entry) => ({
+        type: 'assistant' as const,
+        entry
+      }))
       // Local tags must remain usable while the filesystem index warms or fails.
       query = nextQuery
       entries = [...utilityEntries, ...assistantEntries, ...taskEntries].slice(0, 40)
       index = 0
       open = true
       const fileTagProjectId = options.getFileTagProjectId()
-      const files = fileTagProjectId
-        ? (
-            await invoke(
-              'projectFiles:search',
-              fileTagProjectId,
-              nextQuery,
-              'all',
-              workspaceState.activeScopeBucketIdFor(fileTagProjectId)
+      const filesPromise = fileTagProjectId
+        ? invoke(
+            'projectFiles:search',
+            fileTagProjectId,
+            nextQuery,
+            'all',
+            workspaceState.activeScopeBucketIdFor(fileTagProjectId)
+          )
+            .then((files) =>
+              files.filter((entry) => !isEntryHiddenByVisibility(entry.path, entry.ignored))
             )
-          ).filter((entry) => !isEntryHiddenByVisibility(entry.path, entry.ignored))
+            .catch(() => [])
         : []
+      const [files, threadResults] = await Promise.all([
+        filesPromise,
+        cioSearchVisibility.includeThreads && normalizedQuery
+          ? invoke('threads:search', nextQuery, { family: 'projects', limit: 20 }).catch(() => [])
+          : Promise.resolve([])
+      ])
+      const knownThreadIds = new SvelteSet(
+        assistantTags.filter((tag) => tag.kind === 'thread').map((tag) => tag.id)
+      )
+      const threadEntries: ComposerMentionEntry[] = threadResults
+        .filter(({ thread }) => !knownThreadIds.has(thread.id))
+        .map(({ thread }) => ({
+          type: 'assistant',
+          entry: {
+            kind: 'thread',
+            id: thread.id,
+            name: thread.title.trim() || 'Untitled thread',
+            detail: `Thread · ${scopeState.projects.find((project) => project.id === thread.projectId)?.name ?? thread.projectId}`,
+            iconHtml: assistantTagIconHtml({}),
+            color: 'var(--color-primary)',
+            keywords: []
+          }
+        }))
       const nextEntries: ComposerMentionEntry[] = [
         ...utilityEntries,
         ...assistantEntries,
         ...taskEntries,
+        ...threadEntries,
         ...files.map((entry) => ({ type: 'project' as const, entry }))
       ]
       if (currentRequestId !== requestId) return

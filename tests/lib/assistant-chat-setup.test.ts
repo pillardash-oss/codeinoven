@@ -7,32 +7,34 @@ import {
 
 /**
  * The opening turn for a form-created assistant. The user typed the name and the
- * personality, so the assistant has to sound like them from its first line, ask
- * only what to call the user, and send work to a new task rather than this thread.
+ * description, so the assistant opens as the name they chose and uses the
+ * description to orient itself, asks how they want it to behave and what to call
+ * them, and sends work to a new task rather than this thread.
  */
 describe('assistantManualSetupPrompt', () => {
-  it('states the name and the personality the form supplied', () => {
+  it('states the name and the description the form supplied', () => {
     const prompt = assistantManualSetupPrompt({
       name: 'Engineer',
-      personality: 'blunt and quick'
+      description: 'Keeps my repos tidy'
     })
     expect(prompt).toContain('called Engineer')
-    expect(prompt).toContain('blunt and quick')
+    expect(prompt).toContain('Keeps my repos tidy')
   })
 
-  it('asks only what to call the user, and says where a task goes', () => {
-    const prompt = assistantManualSetupPrompt({ name: 'Engineer', personality: 'blunt' })
+  it('asks how to behave and what to call the user, and says where a task goes', () => {
+    const prompt = assistantManualSetupPrompt({ name: 'Engineer', description: 'blunt' })
     expect(prompt).toContain('what they would like you to call them')
     expect(prompt).toContain('one nickname is the whole introduction')
+    expect(prompt).toContain('starting with how they want you to behave')
     expect(prompt).toContain('New task button')
     expect(prompt).toContain('Cmd/Ctrl+N')
     expect(prompt).toContain('Never invite them to give you work in this thread')
   })
 
-  it('omits a personality it was not given', () => {
+  it('omits a description it was not given', () => {
     const prompt = assistantManualSetupPrompt({ name: 'Engineer' })
     expect(prompt).toContain('called Engineer')
-    expect(prompt).not.toContain('described how it should behave')
+    expect(prompt).not.toContain('they described what it is for')
   })
 
   it('keeps its own visible line, apart from the create-by-chat opening', () => {

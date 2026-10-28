@@ -50,6 +50,22 @@
 import { readManifestObject, writeManifest, stringArray } from './browser-extension-source'
 
 /**
+ * Permission names this runtime reports as unknown but the app implements anyway.
+ *
+ * They are kept in the installed manifest rather than stripped, because an
+ * extension's own copy is what it reads back with `getManifest()`: a download
+ * manager that only turns its capture on when it declared `downloads` would find
+ * the permission missing here and stay quiet, even though the compatibility
+ * preamble gives it the namespace. Keeping the name costs the one warning the
+ * loader prints and buys an extension whose own view of itself is true.
+ *
+ * `downloads` is the first entry: the app's download manager owns every download
+ * the browser starts, feeds the four events, and forwards cancel, pause, resume and
+ * erase (see `browser-download-extension.ts`).
+ */
+export const IMPLEMENTED_EXTENSION_PERMISSIONS: readonly string[] = ['downloads']
+
+/**
  * Permission names this runtime's extension loader reports as unknown.
  *
  * Declaring one cannot enable anything: Chromium ignores the name rather than
@@ -188,6 +204,7 @@ export function stripUnknownPermissions(manifest: Record<string, unknown>): stri
     const declared = stringArray(manifest[key])
     if (declared.length === 0) continue
     const kept = declared.filter((permission) => {
+      if (IMPLEMENTED_EXTENSION_PERMISSIONS.includes(permission)) return true
       if (!RUNTIME_UNKNOWN_EXTENSION_PERMISSIONS.includes(permission)) return true
       if (!removed.includes(permission)) removed.push(permission)
       return false

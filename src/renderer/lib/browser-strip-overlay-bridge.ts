@@ -51,6 +51,9 @@ export function projectStripTabs(): BrowserStripOverlayTab[] {
       pinned: tab.pinned,
       hibernated: tab.hibernated,
       audible: runtime.audible,
+      microphoneActive: runtime.microphoneActive,
+      cameraActive: runtime.cameraActive,
+      screenActive: runtime.screenActive,
       muted: runtime.muted
     }
   })

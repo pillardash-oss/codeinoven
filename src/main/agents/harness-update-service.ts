@@ -39,6 +39,9 @@ type UpdateSource = NpmSource | GitHubSource
  * verified against the harnesses' real install channels:
  *  - npm-distributed CLIs query the registry `latest` tag.
  *  - Antigravity ships a standalone binary; its releases are published on GitHub.
+ *    Its own background auto-updater is held by CodeInOven so updates stay under
+ *    the Harnesses page (see drivers/antigravity/antigravity-self-update.ts), so
+ *    this release feed is the truth about how far behind an install is.
  */
 const UPDATE_SOURCES: Record<string, UpdateSource> = {
   // OpenCode V2 is the current release and installs under the same `opencode`

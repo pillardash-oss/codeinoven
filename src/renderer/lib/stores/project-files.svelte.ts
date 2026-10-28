@@ -18,6 +18,7 @@ import {
   isDocumentPreviewMime,
   isImageMime,
   isPdfMime,
+  isSvgMime,
   mimeFromPath,
   supportsFilePreview
 } from '$lib/mime'
@@ -28,7 +29,7 @@ import {
   documentViewFor,
   errorMessage,
   followingDocumentView,
-  isPreviewableBinary,
+  hasNoTextSource,
   type ProjectFileClipboard,
   type ProjectFileTab,
   type ProjectFileView,
@@ -163,6 +164,15 @@ class ProjectFilesWorkspace {
     return this.explorer.listingsMatchMount(projectId)
   }
 
+  /** Refresh the explorer's listings in the background whenever the tree shows
+   *  up, so the files it lists are the ones on disk now instead of the ones that
+   *  were there when it was last open. Deliberately fire-and-forget: the tree
+   *  keeps its current listing on screen while the reads run, and nothing about
+   *  opening the panel waits on them. */
+  refreshOnOpen(projectId: string): void {
+    void this.explorer.refreshOpenListings(projectId)
+  }
+
   toggleDirectory(projectId: string, directory: string): Promise<void> {
     return this.explorer.toggleDirectory(projectId, directory)
   }
@@ -263,6 +273,20 @@ class ProjectFilesWorkspace {
 
   fileInfo(projectId: string, path: string): Promise<ProjectFileInfo> {
     return this.explorer.fileInfo(projectId, path)
+  }
+
+  /** Offer copied entries to the OS clipboard as real files, so the copy can
+   *  leave the app; the tags travel with them for the in-app composer. */
+  copyPathsToClipboard(projectId: string, paths: string[], text: string): Promise<void> {
+    return this.explorer.copyPathsToClipboard(projectId, paths, text)
+  }
+
+  /** Start a native drag of the given entries, addressed the way every other
+   *  file operation addresses this tree: the scope it is showing and, for a
+   *  chat, an assistant task or a browser tab, the mounted conversation whose
+   *  own workspace directory is the root. */
+  startFileDrag(projectId: string, paths: string[]): void {
+    window.api.startFileDrag(projectId, paths, this.scopeFor(projectId), this.threadArg(projectId))
   }
 
   /** Total bytes plus file and folder counts below a directory, walked on
@@ -481,7 +505,7 @@ class ProjectFilesWorkspace {
       const session = state.sessions[path]
       if (
         diff.kind !== 'deleted' &&
-        !isPreviewableBinary(mimeFromPath(path)) &&
+        this.loadsTextOnOpen(mimeFromPath(path), preferredView) &&
         (!session || session.draft === session.source.content)
       ) {
         await this.loadCurrentFile(projectId, path)
@@ -559,7 +583,7 @@ class ProjectFilesWorkspace {
       void this.reconcileFile(projectId, nextPath)
       return
     }
-    if (isPreviewableBinary(nextMime)) return
+    if (!this.loadsTextOnOpen(nextMime, tab.view)) return
 
     try {
       await this.loadCurrentFile(projectId, nextPath)
@@ -597,7 +621,7 @@ class ProjectFilesWorkspace {
       void this.reconcileFile(projectId, nextPath)
       return
     }
-    if (isPreviewableBinary(nextMime)) return
+    if (!this.loadsTextOnOpen(nextMime, tab.view)) return
 
     try {
       await this.loadCurrentFile(projectId, nextPath)
@@ -658,7 +682,9 @@ class ProjectFilesWorkspace {
   setView(projectId: string, tabId: string, view: ProjectFileView): void {
     const state = this.ensureState(projectId)
     const tab = state.tabs.find((candidate) => candidate.id === tabId)
-    if (tab) tab.view = view
+    if (!tab) return
+    tab.view = view
+    this.readTextForSourceView(projectId, tab)
   }
 
   /**
@@ -675,7 +701,9 @@ class ProjectFilesWorkspace {
       (candidate) => candidate.id === state.activeTabId && candidate.path === path
     )
     const tab = active ?? state.tabs.find((candidate) => candidate.path === path)
-    if (tab) tab.view = view
+    if (!tab) return
+    tab.view = view
+    this.readTextForSourceView(projectId, tab)
   }
 
   requestFullscreen(projectId: string): void {
@@ -725,6 +753,9 @@ class ProjectFilesWorkspace {
       if (session.draft === submittedDraft) session.draft = source.content
       // After saving, the session matches the disk version by construction.
       delete this.ensureState(projectId).staleFiles[path]
+      // An SVG is text in the editor but renders from its own blob, so a save
+      // has to re-read that blob or the viewer keeps showing the old artwork.
+      if (isSvgMime(mimeFromPath(path))) this.reloadPreview(projectId, path)
       await this.reconcileConflictAfterSave(projectId, path)
     } catch (error) {
       session.error = errorMessage(error)
@@ -841,7 +872,7 @@ class ProjectFilesWorkspace {
     const threadId = contextSidebarState.threadIdForProject(projectId)
     if (threadId) contextSidebarState.openProjectFile(projectId, threadId, tabId, path, preview)
     if (state.sessions[path]) return
-    if (isPreviewableBinary(mime)) return
+    if (!this.loadsTextOnOpen(mime, preferredView)) return
 
     try {
       await this.loadCurrentFile(projectId, path)
@@ -889,13 +920,61 @@ class ProjectFilesWorkspace {
       void this.reconcileFile(projectId, nextPath)
       return
     }
-    if (isPreviewableBinary(nextMime)) return
+    if (!this.loadsTextOnOpen(nextMime, tab.view)) return
 
     try {
       await this.loadCurrentFile(projectId, nextPath)
     } catch (error) {
       tab.error = errorMessage(error)
     }
+  }
+
+  /**
+   * Asking for a file's source reads its text when nothing read it before.
+   *
+   * Only the rendered types with a text form get here: an SVG opens in the
+   * preview view, whose blob the panel builds itself, so the editor's session
+   * is read the moment the source view is asked for and never on a plain look.
+   */
+  private readTextForSourceView(projectId: string, tab: ProjectFileTab): void {
+    if (tab.view !== 'source') return
+    if (hasNoTextSource(mimeFromPath(tab.path))) return
+    if (this.ensureState(projectId).sessions[tab.path]) return
+    void this.ensureTextSession(projectId, tab.path)
+  }
+
+  /**
+   * Read the text of a file that was opened in a rendered view and therefore
+   * has no session yet, so its source can be shown when the reader asks for it.
+   *
+   * SVG is the one type this happens to: it opens in the preview view, so its
+   * session is never read at open time, yet it is XML and stays editable. The
+   * read is deferred to the source view so a reader who only wanted to look at
+   * the icon never pays for a second read of the file.
+   */
+  async ensureTextSession(projectId: string, path: string): Promise<void> {
+    const state = this.ensureState(projectId)
+    if (state.sessions[path] || state.loadingPaths[path]) return
+    try {
+      await this.loadCurrentFile(projectId, path)
+    } catch (error) {
+      const tab = state.tabs.find((candidate) => candidate.path === path)
+      if (tab) tab.error = errorMessage(error)
+    }
+  }
+
+  /**
+   * Whether opening a file has to read its text right now.
+   *
+   * Every type with a text form does, except a rendered view of an SVG: its
+   * preview builds its own blob, and the editor reads the file when the reader
+   * opens the source view, so looking at an icon never costs two reads of it.
+   * A rendered type with no text form never loads a session at all.
+   */
+  private loadsTextOnOpen(mime: string, view: ProjectFileView): boolean {
+    if (hasNoTextSource(mime)) return false
+    if (isSvgMime(mime) && view === 'preview') return false
+    return true
   }
 
   private async loadCurrentFile(projectId: string, path: string): Promise<void> {

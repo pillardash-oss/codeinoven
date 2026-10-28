@@ -51,13 +51,20 @@ const KIND_MAX_BYTES: Readonly<Record<PreviewKind, number>> = {
 
 /**
  * Default MIME types by extension, not an audio/video streaming allowlist.
- * Explicit audio/video MIME metadata works independently. Two deliberate omissions:
+ * Explicit audio/video MIME metadata works independently. One deliberate
+ * omission:
  *
- * - `.svg` is `image/svg+xml` and is never served through the privileged
- *   `appfile://` scheme, because project-controlled active XML must not run in a
- *   custom-scheme document. It renders from a blob URL instead.
  * - `.tif`/`.tiff` resolve to a media type no renderer here displays, so serving
  *   them would promise a preview that cannot appear. They stay file downloads.
+ *
+ * `.svg` is served, and it is the one active format on this list. That is safe
+ * only because of how it is used: `appfile://` answers every response with
+ * `Content-Security-Policy: default-src 'none'; script-src 'none'` and
+ * `X-Content-Type-Options: nosniff` (see `previewHeaders` in
+ * `src/main/editor/file-preview-protocol.ts`), and the renderer only ever puts
+ * it in an `<img>`, which never runs an SVG's scripts. Never navigate to an
+ * `appfile://` SVG, mount it in an iframe, or open it as an object: that is
+ * the line this table entry depends on staying on the right side of.
  */
 const PREVIEW_MEDIA: Readonly<Record<string, { kind: PreviewKind; mime: string }>> = {
   // Images
@@ -69,6 +76,8 @@ const PREVIEW_MEDIA: Readonly<Record<string, { kind: PreviewKind; mime: string }
   '.avif': { kind: 'image', mime: 'image/avif' },
   '.ico': { kind: 'image', mime: 'image/x-icon' },
   '.bmp': { kind: 'image', mime: 'image/bmp' },
+  // Active XML: `<img>` only, see the note above the table
+  '.svg': { kind: 'image', mime: 'image/svg+xml' },
   // A document with a viewer of its own
   '.pdf': { kind: 'document', mime: 'application/pdf' },
   // Audio

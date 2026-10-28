@@ -3,7 +3,6 @@
   import CioCalendarClock from '@pdslng/cio-icon/CioCalendarClock.svelte'
   import CioCalendarPlus from '@pdslng/cio-icon/CioCalendarPlus.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
-  import CioLink from '@pdslng/cio-icon/CioLink.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import { formatDateTime } from '$shared/date-time-format'
@@ -37,11 +36,6 @@
   const scheduleAt = $derived(
     !scheduled || nextRunAt === null ? null : `Next ${formatDateTime(nextRunAt)}`
   )
-  const behaviorPreview = $derived.by(() => {
-    const text = assistant.knowledge.trim().replace(/\s+/g, ' ')
-    if (text.length === 0) return 'No behavior written yet.'
-    return text.length > 180 ? `${text.slice(0, 180)}…` : text
-  })
   const description = $derived(assistant.description?.trim() ?? '')
   const createdLabel = $derived(formatDateTime(assistant.createdAt))
   const updatedLabel = $derived(formatDateTime(assistant.updatedAt))
@@ -115,13 +109,6 @@
     <dd class="flex min-w-0 items-center gap-1 text-muted">
       <CioThreads size={12} class="shrink-0" />
       <span>{threadCount === 1 ? '1 thread' : `${threadCount} threads`}</span>
-    </dd>
-  </div>
-  <div class="flex gap-2">
-    <dt class="w-16 shrink-0 text-dimmed">Behavior</dt>
-    <dd class="flex min-w-0 items-start gap-1 text-muted">
-      <CioLink size={12} class="mt-0.5 shrink-0" />
-      <span class="min-w-0 break-words">{behaviorPreview}</span>
     </dd>
   </div>
   <div class="flex gap-2">

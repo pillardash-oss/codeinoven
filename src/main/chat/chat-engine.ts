@@ -131,7 +131,7 @@ import {
   pendingContinuationRequest,
   type PendingContinuationRequest
 } from '../../lib/pending-request'
-import { ASSISTANT_VOICE_INSTRUCTION, assistantPersonalityContext } from '../../lib/assistant-voice'
+import { ASSISTANT_VOICE_INSTRUCTION } from '../../lib/assistant-voice'
 import { composeAssistantInstruction, assistantRunContext } from '../../lib/assistant-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
@@ -154,6 +154,7 @@ import {
 } from './memory/memory-decision'
 import { estimateTypesafeTokens, typesafeCostUsd } from '../../lib/typesafe/policy'
 import type { TypesafeDecisionService } from '../typesafe/typesafe-decision-service'
+import type { TypesafeDecisionStatus } from '../../lib/types/typesafe'
 import { isGreetingOnly } from './greeting-filter'
 import type { StorageEngine } from '../storage/storage-engine'
 import type {
@@ -406,7 +407,6 @@ import {
   assistantKnowledgeComplete,
   workerReportsToCoordinator
 } from '../../lib/types'
-import type { Assistant } from '../../lib/types'
 import {
   resolveWorkflowCoordinatorThreadId,
   workflowGroupThreads
@@ -1676,6 +1676,15 @@ export class ChatEngine {
    */
   private typesafeDecision: TypesafeDecisionService | null = null
 
+  /**
+   * Fall-through outcomes already reported, so a standing one logs once.
+   *
+   * An unconfigured capability falls through on every single grade, and the log
+   * line that describes it is identical every time. Recording the outcome once
+   * is what keeps a configuration fact out of the per-turn noise.
+   */
+  private readonly reportedTypesafeFallthroughs = new Set<string>()
+
   /** Last reading of whether the capability is currently in a state that answers. */
   private typesafeAnswerable: { value: boolean; checkedAt: number } | null = null
 
@@ -2364,25 +2373,8 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:refreshProviderCatalog',
-      async (_, projectId: string, options: ProviderCatalogRefreshOptions = {}) => {
-        const force = options.force ?? true
-        if (force) {
-          // A forced picker refresh also re-probes every custom provider's model
-          // endpoint so newly added/removed upstream models reach the catalog.
-          // An explicit user refresh additionally forces each harness to
-          // re-fetch its own model catalog from upstream first; the two are
-          // independent network passes, so they run together.
-          await Promise.all([
-            refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
-              // Per-provider failures already preserve their old model lists.
-            }),
-            options.refreshModelCatalogs === true
-              ? this.refreshHarnessModelCatalogs()
-              : Promise.resolve()
-          ])
-        }
-        return this.listProviders(projectId, force)
-      }
+      async (_, projectId: string, options: ProviderCatalogRefreshOptions = {}) =>
+        this.refreshProviderCatalog(projectId, options)
     )
     ipcMain.handle(
       'agent:refreshModelContext',
@@ -4417,7 +4409,7 @@ export class ChatEngine {
                 this.saveAssistantSchedule(authoringAssistantId, scheduled),
               saveAssistantReporting: (reporting: AssistantReportingPatch) =>
                 this.saveAssistantReporting(authoringAssistantId, reporting),
-              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+              saveAssistantIdentity: (identity: { name: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
@@ -4761,7 +4753,7 @@ export class ChatEngine {
                 this.saveAssistantSchedule(authoringAssistantId, scheduled),
               saveAssistantReporting: (reporting: AssistantReportingPatch) =>
                 this.saveAssistantReporting(authoringAssistantId, reporting),
-              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+              saveAssistantIdentity: (identity: { name: string }) =>
                 this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
@@ -5500,6 +5492,38 @@ export class ChatEngine {
     } catch {
       return null
     }
+  }
+
+  /**
+   * Discover a project's provider catalogs, optionally forcing every upstream
+   * model list to be fetched again first.
+   *
+   * Shared by the model picker's refresh channel and by an orchestration
+   * dispatch that named a model the current snapshot does not carry: a launch
+   * before the first discovery reports every id as unknown, and discovery is the
+   * actual fix, not a different id.
+   */
+  async refreshProviderCatalog(
+    projectId: string,
+    options: ProviderCatalogRefreshOptions = {}
+  ): Promise<ProviderCatalog[]> {
+    const force = options.force ?? true
+    if (force) {
+      // A forced picker refresh also re-probes every custom provider's model
+      // endpoint so newly added/removed upstream models reach the catalog.
+      // An explicit user refresh additionally forces each harness to
+      // re-fetch its own model catalog from upstream first; the two are
+      // independent network passes, so they run together.
+      await Promise.all([
+        refreshCustomProviderModels(this.baseUrlProviders, this.secretVault).catch(() => {
+          // Per-provider failures already preserve their old model lists.
+        }),
+        options.refreshModelCatalogs === true
+          ? this.refreshHarnessModelCatalogs()
+          : Promise.resolve()
+      ])
+    }
+    return this.listProviders(projectId, force)
   }
 
   /**
@@ -8649,7 +8673,7 @@ export class ChatEngine {
     // is what the agent revises. The interview checkpoint belongs to the authoring
     // conversation, so it is neither read nor injected here.
     if (conversation === 'update') {
-      return [this.assistantPersonaContext(assistant), assistantKnowledgeUpdateContext(assistant)]
+      return [this.assistantPersonaContext(), assistantKnowledgeUpdateContext(assistant)]
         .filter(Boolean)
         .join('\n\n')
     }
@@ -8664,7 +8688,7 @@ export class ChatEngine {
     ])
     const decisions = formatInterviewDecisions(messages, ASSISTANT_AUTHORING_DECISION_LIMIT)
     return [
-      this.assistantPersonaContext(assistant),
+      this.assistantPersonaContext(),
       assistantAuthoringContext(assistant),
       assistantAuthoringProgressContext({ checkpoint, decisions })
     ]
@@ -8694,20 +8718,22 @@ export class ChatEngine {
   }
 
   /**
-   * Record who the assistant is, the moment the conversation settles it.
+   * Record the name the conversation settles for the assistant.
    *
    * The user names their assistant in the first answer of the setup conversation,
    * and waiting for the recap to save would leave every surface calling it "New
-   * assistant" for the whole interview. This writes the name, and the personality
-   * once they have described how they want it to behave, straight onto the row and
-   * broadcasts the assistant list, so the sidebar, the panel, the tab and the
-   * thread's own head start rename themselves as the answer lands. The capability
-   * that calls it is bound to the live authoring turn, so the write is app-owned
-   * and the agent never names an id.
+   * assistant" for the whole interview. This writes the name straight onto the row
+   * and broadcasts the assistant list, so the sidebar, the panel, the tab and the
+   * thread's own head rename themselves as the answer lands. The capability that
+   * calls it is bound to the live authoring turn, so the write is app-owned and the
+   * agent never names an id.
+   *
+   * How the assistant behaves is not written here: it is the `Personality` section
+   * of the knowledge, which the recap saves with the rest of the instructions.
    */
   private async saveAssistantIdentity(
     assistantId: string,
-    identity: { name?: string; personality?: string }
+    identity: { name: string }
   ): Promise<void> {
     const updated = this.assistantRepo.updateIdentity(assistantId, identity, Date.now())
     if (!updated) return
@@ -8758,19 +8784,20 @@ export class ChatEngine {
   }
 
   /**
-   * The persona layers for any turn on an assistant's own threads: who the user
-   * asked the assistant to be, and how it talks. They ride ahead of the
-   * knowledge, so an assistant sounds like itself while it is setting up, while
-   * the user is changing what it knows, and when it runs.
+   * The persona layer for any turn on an assistant's own threads: how it talks.
+   * It rides ahead of the knowledge, so an assistant sounds like itself while it is
+   * setting up, while the user is changing what it knows, and when it runs.
+   *
+   * Who the user asked the assistant to be is not a layer of its own: it is the
+   * `Personality` section at the top of the knowledge, so it arrives with the
+   * document the user edits.
    *
    * The voice rule is unconditional: it is what makes an assistant's answer read
    * as a message from a person rather than a report, and the Assistant view is
    * used by people who did not come here to read a report.
    */
-  private assistantPersonaContext(assistant: Assistant): string {
-    return [assistantPersonalityContext(assistant.personality), ASSISTANT_VOICE_INSTRUCTION].join(
-      '\n\n'
-    )
+  private assistantPersonaContext(): string {
+    return ASSISTANT_VOICE_INSTRUCTION
   }
 
   /**
@@ -8789,7 +8816,7 @@ export class ChatEngine {
     if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.assistantId) return undefined
     const assistant = this.assistantRepo.get(thread.assistantId)
     if (!assistant || !assistantKnowledgeComplete(assistant)) return undefined
-    return [this.assistantPersonaContext(assistant), assistant.knowledge.trim()]
+    return [this.assistantPersonaContext(), assistant.knowledge.trim()]
       .filter((layer) => layer.length > 0)
       .join('\n\n')
   }
@@ -25536,7 +25563,22 @@ export class ChatEngine {
 
     const session = this.sessionRegistry.get(event.sessionId)
     const childOwner = this.childSessionOwners.get(event.sessionId)
+    // A driver session the engine never registered has no project, thread or
+    // turn to report. Ten of fifteen idle records in one day's file were exactly
+    // that, each with three fields silently dropped by `JSON.stringify`, so the
+    // row now says which kind of unattributed session it was: a reader can
+    // filter the probes out instead of meeting a half-written record.
+    const attribution =
+      !session && !childOwner
+        ? (this.drivers.get(driverId) ?? this.accountDrivers.get(driverId))?.isAuxiliarySession?.(
+            event.sessionId
+          )
+          ? 'auxiliary'
+          : 'unregistered'
+        : undefined
     const identifiers: Record<string, string> = {}
+
+    if (attribution) identifiers.attribution = attribution
 
     if (event.type === 'message.completed') {
       identifiers.messageId = event.messageId
@@ -26617,6 +26659,16 @@ export class ChatEngine {
     const ovenHarness = new OvenHarnessService(new OvenService(ovenRegistry), this.storage)
     this.orchestration = createOrchestrationRuntime({
       listProviderCatalogs: (projectId) => this.listProviderSnapshot(projectId),
+      // A dispatch that cannot find its model discovers once instead of
+      // bouncing the agent back to a target list built from the same snapshot.
+      refreshProviderCatalogs: (projectId) =>
+        this.refreshProviderCatalog(projectId, { force: true }),
+      listProjects: async () =>
+        (await this.projectManager.listProjects()).map((project) => ({
+          id: project.id,
+          name: project.name,
+          path: project.path
+        })),
       listAccounts: () => this.accountRegistry.list(),
       listOvens: () => ovenRegistry.state(),
       harnessInventory: async (ovenId) => {
@@ -27566,7 +27618,10 @@ export class ChatEngine {
     // block list never asks about a file inside it: that name is the session's
     // own work, not a secret it is reaching for. The card still covers
     // everything that leaves the workspace, and a project thread keeps the list
-    // everywhere because its cwd holds the project's real secrets.
+    // everywhere because its cwd holds the project's real secrets. A project
+    // thread that runs in its own scope worktree is the same case as a chat
+    // workspace: the `.env` it writes there next to `.env.example` is its own
+    // work, so that directory is exempt while the project root stays gated.
     const workspaceRoots = isAssistant ? [resolve(info.projectPath)] : []
     // A thread in a real project also owns that project's `.cio` scratch folder:
     // it is where the agent stages its own work, so deletes and confined shell
@@ -27574,6 +27629,11 @@ export class ChatEngine {
     // the policy, because the platform owns those.
     if (!isChat && !isAssistant) {
       scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
+      const projectThread = await this.threadManager.getThread(info.projectId, info.threadId)
+      const workingDirectory = projectThread?.workingDirectory
+      if (workingDirectory && resolve(workingDirectory) !== resolve(info.projectPath)) {
+        workspaceRoots.push(resolve(workingDirectory))
+      }
     }
     // Reuse the allowlist until a user message invalidates it; permission
     // requests must not rescan the conversation for every file operation.
@@ -30168,12 +30228,7 @@ export class ChatEngine {
       thresholds: { noul: 0, confidence: 0 }
     })
     if (decision.status !== 'answered') {
-      Logger.dev('Ranking grading fell through from TypeSafe:', {
-        harnessId: candidate.harnessId,
-        modelId: candidate.modelId,
-        status: decision.status,
-        detail: decision.detail
-      })
+      this.reportTypesafeFallthrough(decision.status, decision.detail, candidate)
       return null
     }
     const grade = readTurnGrade(decision.answers)
@@ -30198,6 +30253,31 @@ export class ChatEngine {
       judgeModelId: decision.model,
       viaAuxiliary: false
     }
+  }
+
+  /**
+   * Report a TypeSafe fall-through once per distinct outcome.
+   *
+   * The first occurrence carries the information; every later one only proves
+   * the first was not a blip, and a durable log that repeats a standing
+   * `not-configured` on each graded turn is noise an operator learns to skip.
+   * It is logged at `info` because the fall-through is a supported behaviour
+   * (the harness lanes below take over), not a failure.
+   */
+  private reportTypesafeFallthrough(
+    status: Exclude<TypesafeDecisionStatus, 'answered'>,
+    detail: string | undefined,
+    candidate: RankingGradeCandidate
+  ): void {
+    const key = `${status}:${detail ?? ''}`
+    if (this.reportedTypesafeFallthroughs.has(key)) return
+    this.reportedTypesafeFallthroughs.add(key)
+    Logger.info('Ranking grading falls through from TypeSafe', {
+      harnessId: candidate.harnessId,
+      modelId: candidate.modelId,
+      status,
+      detail
+    })
   }
 
   /**
@@ -31340,6 +31420,12 @@ export class ChatEngine {
       .activeTurnThreadIds(info.projectId)
       .catch(() => undefined)
     const foreignLive = this.liveForeignClaimedPaths(info, ownThreadIds, activeTurnThreadIds)
+    // Another thread with a turn in flight here or in a sibling instance makes
+    // the project-wide diff ambiguous: its writes look exactly like this turn's.
+    // Only this turn's own evidence may claim a path in that state.
+    const contestedDiff = [...(activeTurnThreadIds ?? [])].some(
+      (threadId) => threadId !== info.threadId && !ownThreadIds.has(threadId)
+    )
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -31358,6 +31444,7 @@ export class ChatEngine {
           foreignPrecisePaths: foreignLive.claimed,
           foreignWindowPaths: foreignLive.window,
           foreignClaimants: foreignLive.claimants,
+          contestedDiff,
           // Worker sub-agent threads dispatched by this thread are part of the
           // same logical turn: their captured checkpoints must never mark the
           // turn's real changes as foreign concurrent edits.

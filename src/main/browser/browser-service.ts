@@ -23,6 +23,7 @@ import {
   clipboard,
   ipcMain as electronIpcMain,
   Menu,
+  nativeImage,
   screen,
   session,
   shell,
@@ -36,9 +37,11 @@ import {
   type WebFrameMain
 } from 'electron'
 import type { Database } from '../database/database'
+import { authoredWorkRoot } from '../design/authored-work-root'
 import { createHash } from 'node:crypto'
 import { videoTimecode } from '../../lib/video/timeline'
 import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
@@ -294,6 +297,11 @@ import {
   validateViewportRequest
 } from './browser-service/browser-validation'
 import { designScreenEntryFromUrl } from '../../lib/design/screens'
+import {
+  browserIdentityPreload,
+  coherentClientHintHeaders,
+  toStringHeaders
+} from './browser-service/browser-client-hints'
 import { compositionBoardTabId } from './browser-service/composition-board-tab'
 import { designScreenTabId } from './browser-service/design-screen-tab'
 
@@ -374,6 +382,7 @@ import {
   type TabMarkRecogniser
 } from './browser-service/browser-tab-mark'
 import {
+  EXTENSION_PAGE_COMMAND_CHANNEL,
   EXTENSION_PAGE_TABS_CHANNEL,
   EXTENSION_PAGE_TABS_PRELOAD_FILE,
   extensionPageTabsPreloadSource,
@@ -428,6 +437,32 @@ interface BrowserExtensionTabInfo {
   url: string
   title: string
   status: 'loading' | 'complete'
+}
+
+/** What a menu row is high, in points. An extension publishes its icon at store
+ *  size, so the menu reduces it to the one line it is drawn on. */
+const MENU_ICON_POINTS = 16
+
+/**
+ * An extension's published icon as a menu image.
+ *
+ * Two pixel representations are built from the one data URL, a single-scale and a
+ * double-scale copy of the same picture, so the icon is sharp on a retina menu and
+ * still drawn one row high everywhere. A data URL that does not decode answers
+ * undefined, which leaves a row with its label and no image rather than no item.
+ */
+function extensionMenuIcon(dataUrl: string): MenuItemConstructorOptions['icon'] | undefined {
+  const source = nativeImage.createFromDataURL(dataUrl)
+  if (source.isEmpty()) return undefined
+  const image = nativeImage.createEmpty()
+  for (const scaleFactor of [1, 2]) {
+    const pixels = MENU_ICON_POINTS * scaleFactor
+    const resized = source.resize({ width: pixels, height: pixels, quality: 'best' })
+    const buffer = resized.toPNG()
+    if (buffer.byteLength === 0) continue
+    image.addRepresentation({ scaleFactor, width: pixels, height: pixels, buffer })
+  }
+  return image.isEmpty() ? undefined : image
 }
 
 function menuPageFor(tabId: string, tab: BrowserTab): BrowserMenuPage {
@@ -574,6 +609,19 @@ export type BrowserAgentActionApprover = (
 const FRAME_CAPTURE_ATTEMPTS = 4
 /** Gap between frame requests, so a page still parsing gets time to define one. */
 const FRAME_CAPTURE_RETRY_MS = 150
+/**
+ * The preload that makes a browser page's view of its own client hints agree with the
+ * brand hints its requests carry. Written into the config root on every launch.
+ */
+const BROWSER_IDENTITY_PRELOAD_FILE = 'browser-identity-preload.cjs'
+/**
+ * Ceiling on one encoded composition frame.
+ *
+ * A PNG of a 4K canvas is a few megabytes; past this the canvas answered with
+ * something other than a frame, and writing it would waste the user's disk on a
+ * picture nobody can read.
+ */
+const MAX_COMPOSITION_FRAME_BASE64 = 48 * 1024 * 1024
 
 /**
  * A readable, stable folder for one composition's captured frames.
@@ -625,6 +673,8 @@ export class BrowserService {
    */
   private readonly threadBrowserPages = new Map<string, BrowserThreadBrowserPage>()
   private readonly configuredSessions = new Set<string>()
+  /** Where the browser page's identity preload was written, or null if it could not be. */
+  private browserIdentityPreloadPath: string | null = null
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
@@ -713,6 +763,7 @@ export class BrowserService {
    * the page has had its turn.
    */
   private appShortcutChords: BrowserShortcutChord[] = []
+  private compositionShortcutChords: BrowserShortcutChord[] = []
   /**
    * Whether a page may keep a chord the app also binds.
    *
@@ -926,7 +977,7 @@ export class BrowserService {
 
   constructor(
     private readonly window: BrowserWindow,
-    db: Database,
+    private readonly db: Database,
     permissionPersistence: PermissionMemoryPersistence,
     private readonly downloads: BrowserDownloadManager
   ) {
@@ -1020,8 +1071,29 @@ export class BrowserService {
       },
       closeSidePanel: (extensionId, extensionTabId) =>
         this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it'),
-      openPopup: (request) => this.openExtensionWindowFromWorker(request)
+      openPopup: (request) => this.openExtensionWindowFromWorker(request),
+      // A capture extension stops the browser's own transfer to fetch the file
+      // with its own manager, and the app's download manager is the only thing
+      // that can stop it.
+      downloadCommand: (command) => this.downloads.applyExtensionCommand(command),
+      // `chrome.runtime.openOptionsPage()` from a worker has no window of its own,
+      // so the page it asks for opens as a tab in the jar the extension runs in.
+      openExtensionPage: (projectId, boxId, extensionId, page) =>
+        this.openExtensionPageFromWorker({ projectId, boxId, extensionId, page })
     })
+    // Every download this browser starts is also reported to the extensions that
+    // declared the `downloads` permission, which is what a download manager
+    // extension captures. Nothing crosses into a worker when no extension asked.
+    this.downloads.setExtensionObserver((event) => {
+      const args: unknown[] = event.item ? [event.item] : [event.id]
+      this.extensions.onDownloadEvent(event.projectId, event.boxId, event.name, args)
+    })
+    // An extension that watches downloads captures them by cancelling, so a new
+    // download in that jar starts without a save dialog: it would be a dialog for
+    // a file the extension is about to discard.
+    this.downloads.setDownloadWatcher((projectId, boxId) =>
+      this.extensions.watchesDownloadsInJar(projectId, boxId)
+    )
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
       // published on the same state event the tab strip already listens to.
@@ -1262,6 +1334,17 @@ export class BrowserService {
         protocol === 'chrome-extension:' && frame && frame.url.startsWith('chrome-extension://')
           ? this.extensionPageTabForContents(event.sender.id)
           : null
+    })
+    // An extension page cannot reach main on its own, so the preload forwards the
+    // one command a page asks for: `chrome.runtime.openOptionsPage` from a popup's
+    // "More settings". Only a document the app hosts for an extension can make this
+    // request, and only for itself.
+    electronIpcMain.removeAllListeners(EXTENSION_PAGE_COMMAND_CHANNEL)
+    electronIpcMain.on(EXTENSION_PAGE_COMMAND_CHANNEL, (event, command) => {
+      const frame = event.senderFrame
+      if (!frame || !frame.url.startsWith('chrome-extension://')) return
+      if (command !== 'open-options') return
+      this.openOptionsPageFromPage(event.sender.id)
     })
     // Started here so the file exists long before the first extension popup or
     // panel is created; every path that can wait for it does.
@@ -1589,7 +1672,15 @@ export class BrowserService {
       return tab ? this.stateFor(tabId, tab) : null
     })
     replaceHandler('browser:reload', (_event, rawTabId) => {
-      this.liveTab(validateTabId(rawTabId))?.view.webContents.reload()
+      const tabId = validateTabId(rawTabId)
+      const tab = this.liveTab(tabId)
+      if (!tab) return
+      // A composition resumes where it was instead of jumping back to its first
+      // frame, which is what makes an editor-triggered refresh (a saved caption
+      // style, a moved track) safe to do while the user is watching.
+      void this.reloadKeepingPlayhead(tabId, tab).catch((error: unknown) => {
+        Logger.error('A browser tab could not reload:', error)
+      })
     })
     replaceHandler('browser:transport', async (_event, rawTabId, rawCommand, rawValue) => {
       const tabId = validateTabId(rawTabId)
@@ -1623,6 +1714,7 @@ export class BrowserService {
       if (typeof rawMuted !== 'boolean') {
         throw new TypeError('Browser mute state must be a boolean')
       }
+      tab.transportMuted = false
       tab.view.webContents.setAudioMuted(rawMuted)
       // Publish rather than trust the caller: `isAudioMuted` is the state the
       // renderer's indicator must show, including for a muted tab that the page
@@ -1645,8 +1737,9 @@ export class BrowserService {
     replaceHandler('browser:setSwitcherBindings', (_event, rawBindings) => {
       this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
     })
-    replaceHandler('browser:setAppShortcutChords', (_event, rawChords) => {
+    replaceHandler('browser:setAppShortcutChords', (_event, rawChords, rawCompositionChords) => {
       this.appShortcutChords = validateBrowserAppShortcutChords(rawChords)
+      this.compositionShortcutChords = validateBrowserAppShortcutChords(rawCompositionChords ?? [])
     })
     replaceHandler('browser:setSiteKeymapOverride', (_event, rawAllows) => {
       if (typeof rawAllows !== 'boolean') {
@@ -2030,6 +2123,8 @@ export class BrowserService {
     // tab lookup from being consulted. The manager survives and keeps the
     // records, the live items and the bytes.
     this.downloads.setTabResolver(null)
+    this.downloads.setExtensionObserver(null)
+    this.downloads.setDownloadWatcher(null)
     this.configuredSessions.clear()
     // Extensions are unloaded from every jar before the sessions go: a loaded
     // extension holds a renderer and an open file inside a partition this service
@@ -2922,6 +3017,17 @@ export class BrowserService {
     )
     const tabId =
       movedTab?.[0] ?? compositionBoardTabId({ projectId, threadId, directory: input.directory })
+    // A board owns one selected video. Dispose earlier compositions, including
+    // views left behind before the renderer acquired lifecycle cleanup.
+    for (const [previousId, previous] of this.tabs) {
+      if (
+        previousId !== tabId &&
+        previousId.startsWith('browser:board:') &&
+        previous.projectId === projectId &&
+        previous.threadId === threadId
+      )
+        this.destroy(previousId, 'closed')
+    }
     const existing = this.tabs.get(tabId)
     if (existing) {
       // A view already on this page is the one being asked for again, so it is
@@ -3187,23 +3293,26 @@ export class BrowserService {
     if (!tab.transport) await this.armCompositionTransport(tabId, tab)
     await this.sendTransport(tabId, 'pause', 0).catch(() => null)
     let rendered = false
+    let reason = 'The composition did not render the requested frame.'
     for (let attempt = 0; attempt < FRAME_CAPTURE_ATTEMPTS && !rendered; attempt += 1) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FRAME_CAPTURE_RETRY_MS))
-      rendered = (await this.renderTabFrame(tabId, at).catch(() => ({ rendered: false }))).rendered
+      const result = await this.renderTabFrame(tabId, at).catch((cause: unknown) => ({
+        rendered: false,
+        reason: cause instanceof Error ? cause.message : String(cause)
+      }))
+      rendered = result.rendered
+      if (result.reason) reason = result.reason
     }
-    if (!rendered) return null
-    const image = await tab.view.webContents.capturePage()
-    const size = image.getSize()
-    if (size.width < 1 || size.height < 1) return null
-    const project = this.projects.get(tab.projectId)
-    const root = project?.source === 'local' ? project.path : null
-    if (!root) return null
+    if (!rendered) throw new Error(`Cannot capture the frame: ${reason}`)
+    const frame = await this.readCompositionFrame(tabId, tab, at)
+    if (!frame) throw new Error('The composition rendered but supplied no readable frame image.')
+    const { path: root } = await authoredWorkRoot(this.db, tab.projectId, tab.threadId)
     const folder = `video-frames/${frameFolderName(composition.directory)}`
     const relative = `.cio/work/${folder}/frame-${Math.round(at * 1000)}.png`
     const absolute = join(root, relative)
     try {
       await mkdir(dirname(absolute), { recursive: true })
-      await writeFile(absolute, image.toPNG())
+      await writeFile(absolute, frame.bytes)
     } catch (error) {
       Logger.error('A composition frame could not be written:', error)
       return null
@@ -3214,16 +3323,97 @@ export class BrowserService {
       .join('/')
     return {
       path: relative,
-      url: `appfile://project/${tab.projectId}/${served}`,
+      url: `appfile://thread/${tab.projectId}/${tab.threadId}/${served}`,
       seconds: at,
       timecode: videoTimecode(at),
       frame: Math.round(at * (composition.fps > 0 ? composition.fps : 30)),
       fps: composition.fps,
       duration: composition.duration,
       directory: composition.directory,
-      width: size.width,
-      height: size.height
+      width: frame.width,
+      height: frame.height
     }
+  }
+
+  /**
+   * The pixels of one composition frame, from the page's own canvas.
+   *
+   * A picture of the native view is what the compositor happens to have on screen,
+   * and that is the wrong source twice over: a view that is mid-attach, parked, or
+   * covered captures blank (Chromium answers `capturePage` with `UnknownVizError`,
+   * which is exactly the failure the pen reported as "this frame could not be
+   * captured"), and when it does answer it is the view scaled to the window rather
+   * than the frame at its own size. The composition draws into a canvas it names
+   * with `CIOVideo.useCanvas`, so reading that canvas is the frame itself, at full
+   * resolution, whether or not anything is on screen.
+   *
+   * The view capture stays as the fallback for a composition that draws only with
+   * DOM and names no canvas, and every step of it is guarded: a failed capture must
+   * answer null for this click, never throw out of the IPC.
+   */
+  private async readCompositionFrame(
+    tabId: string,
+    tab: BrowserTab,
+    at: number
+  ): Promise<{ bytes: Buffer; width: number; height: number } | null> {
+    const contents = tab.view.webContents
+    // Re-asking for the frame guarantees the canvas holds this second, not the one
+    // the transport happened to stop on.
+    await contents
+      .executeJavaScript(`Promise.resolve(globalThis.cioRenderFrame?.(${JSON.stringify(at)}))`)
+      .catch(() => undefined)
+    const encoded = await contents
+      .executeJavaScript(
+        `(() => {
+          const named = globalThis.cioVideoCanvas;
+          const canvas = named instanceof HTMLCanvasElement ? named : document.querySelector('canvas');
+          if (!canvas || canvas.width < 1 || canvas.height < 1) return '';
+          try { return canvas.toDataURL('image/png'); } catch { return ''; }
+        })()`
+      )
+      .catch(() => '')
+    if (typeof encoded === 'string' && encoded.startsWith('data:image/png;base64,')) {
+      const base64 = encoded.slice('data:image/png;base64,'.length)
+      if (base64.length > 1 && base64.length <= MAX_COMPOSITION_FRAME_BASE64) {
+        const size = await contents
+          .executeJavaScript(
+            `(() => {
+              const named = globalThis.cioVideoCanvas;
+              const canvas = named instanceof HTMLCanvasElement ? named : document.querySelector('canvas');
+              return canvas ? { width: canvas.width, height: canvas.height } : null;
+            })()`
+          )
+          .catch(() => null)
+        const bytes = Buffer.from(base64, 'base64')
+        return {
+          bytes,
+          width: typeof size?.width === 'number' ? size.width : 0,
+          height: typeof size?.height === 'number' ? size.height : 0
+        }
+      }
+      Logger.dev('A composition frame canvas returned no usable image at', at)
+    }
+    // A view that has just changed hands can still be mid-attach, and a detached
+    // view captures blank, so ask for the attach, nudge the page and retry.
+    // The tab record is keyed by id and carries none, so the caller's id is the
+    // only way to tell whether this view is the one that just changed hands.
+    if (this.activeTabId === tabId) {
+      this.showActiveView()
+      contents.invalidate()
+    }
+    for (let attempt = 0; attempt < FRAME_CAPTURE_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FRAME_CAPTURE_RETRY_MS))
+      try {
+        const shot = await contents.capturePage()
+        const size = shot.getSize()
+        if (size.width >= 1 && size.height >= 1) {
+          return { bytes: shot.toPNG(), width: size.width, height: size.height }
+        }
+      } catch (error) {
+        Logger.dev('A composition view could not be captured:', error)
+      }
+    }
+    return null
   }
 
   /**
@@ -3547,7 +3737,13 @@ export class BrowserService {
    * deliberately do not, because the page must keep the keyboard after them.
    */
   private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
-    if (this.window.webContents.isDestroyed()) return
+    // A page's captured chord can land after its window closed, because the
+    // `before-input-event` listener outlives the window by one turn. Reading
+    // `webContents` on a destroyed window throws "Object has been destroyed",
+    // which reached the durable log as an uncaught exception on 2026-10-27.
+    // The window and its contents are destroyed in that order, so both are
+    // checked here.
+    if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) return
     if (action === 'focus-address' || action === 'new-tab') {
       this.window.webContents.focus()
     }
@@ -3584,6 +3780,10 @@ export class BrowserService {
       }
     } else {
       const owner = this.tabForContents(contents.id)
+      if (owner?.tab.composition && matchesBrowserChord(input, this.compositionShortcutChords)) {
+        this.dispatchPageKey(key)
+        return
+      }
       if (
         owner &&
         action &&
@@ -3898,6 +4098,14 @@ export class BrowserService {
         event.preventDefault()
         return
       }
+      if (
+        this.tabs.get(tabId)?.composition &&
+        matchesBrowserChord(input, this.compositionShortcutChords)
+      ) {
+        event.preventDefault()
+        this.dispatchPageKey(pageKeyFromInput(input))
+        return
+      }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
       const usable =
         action &&
@@ -3930,6 +4138,16 @@ export class BrowserService {
     // the browser's own right-click menu is produced: link, image, media,
     // selection, editing and page actions, decided from the point clicked.
     view.webContents.on('context-menu', (_event, params) => {
+      if (this.tabs.get(tabId)?.composition) {
+        void view.webContents
+          .executeJavaScript('globalThis.CIOVideo?.editing === true')
+          .then((editing: unknown) => {
+            if (editing !== true && !view.webContents.isDestroyed())
+              this.showTabContextMenu(tabId, params)
+          })
+          .catch(() => {})
+        return
+      }
       this.showTabContextMenu(tabId, params)
     })
     // Audio the page emits is a tab-level fact the strip renders, so the state
@@ -4058,6 +4276,14 @@ export class BrowserService {
       // kept (a live preview reloads itself mid-session), but the outstanding
       // event promise is void and the next arm installs into the new document.
       this.inspector.reset(tabId)
+      // A design tab announces what it is serving on every commit, not only when
+      // the answer changes. The renderer decides which pins the page draws, and
+      // the answer it needs for that is the design, so a reload that says nothing
+      // left a session that had lost that answer unable to ask for it again: the
+      // pins stayed away until something else marked the tab, which is what a
+      // refresh used to fix and could no longer. A commit off the design's own
+      // origin says nothing here: the mark is about to be cleared for it.
+      if (tab.design && url.startsWith(tab.design.origin)) this.publishState(tabId)
       // Recognition is decided from the page that just committed, not from a record
       // of who opened the tab last: that is what keeps a design a design across a
       // restart, and what covers a tab the agent opened itself.
@@ -4345,6 +4571,96 @@ export class BrowserService {
   }
 
   /** Resolve a worker window request and route it to the surface it belongs on. */
+  /**
+   * Open one extension's own page because the extension asked for it, which today
+   * means `chrome.runtime.openOptionsPage()` from its worker.
+   *
+   * The app hosts extension pages as browser tabs, so this reaches the same surface
+   * the extensions panel offers, from a click in the extension's own popup instead
+   * of from the panel. The tab lands in the jar the extension asked from, beside
+   * whatever page is already open there, because that page is what its settings
+   * usually act on.
+   */
+  private openExtensionPageFromWorker(request: {
+    projectId: string
+    boxId: string | null
+    extensionId: string
+    page: 'options'
+  }): void {
+    this.openExtensionOptionsTab(request.projectId, request.boxId, request.extensionId, null)
+  }
+
+  /**
+   * Open an extension's settings page because the extension's own popup asked for
+   * it, and close that popup the way a browser does.
+   *
+   * A popup's "More settings" row is a page this app hosts rather than a worker
+   * call, so the settings page takes the popup's place: the popup closes, and the
+   * tab opens beside the page it was acting on. Leaving it up would stack two
+   * surfaces asking the same question.
+   */
+  private openOptionsPageFromPage(contentsId: number): void {
+    const record = this.popupWindows.recordForContents(contentsId)
+    if (!record || !record.extensionId) return
+    const tab = this.tabs.get(record.tabId)
+    const owner: BrowserPageOwner | null =
+      tab && tab.projectId === record.projectId && tab.boxId === record.boxId
+        ? {
+            tabId: record.tabId,
+            projectId: tab.projectId,
+            threadId: tab.threadId,
+            boxId: tab.boxId
+          }
+        : null
+    this.openExtensionOptionsTab(record.projectId, record.boxId, record.extensionId, owner)
+    this.popupWindows.dismiss(record.id)
+  }
+
+  /**
+   * Put one extension's options page in a tab of the jar it runs in.
+   *
+   * `owner` is the tab to open beside when the caller knows it, which a popup does
+   * because it is acting on that page. Otherwise the jar's active tab is used, and a
+   * jar with no page open has nowhere to put the tab: the extensions panel is then
+   * the way in.
+   */
+  private openExtensionOptionsTab(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    owner: BrowserPageOwner | null
+  ): void {
+    const url = this.extensions.optionsUrlFor(extensionId, projectId, boxId)
+    if (!url) {
+      Logger.dev('An extension asked for a settings page it does not have:', { extensionId })
+      return
+    }
+    const target = owner ?? this.extensionPageOwner(projectId, boxId)
+    if (!target) return
+    try {
+      this.openNewTabFor(target, this.validateTabNavigationUrl(projectId, boxId, url))
+    } catch (error: unknown) {
+      Logger.dev('An extension settings page could not be opened:', { extensionId, error })
+    }
+  }
+
+  /**
+   * The tab an extension page should open beside: the jar's active tab when the
+   * user is looking at one, otherwise the first tab of that jar.
+   *
+   * Null when the jar has no page open at all, which is the one case where there is
+   * no window the tab could belong to; the extensions panel is then the way in.
+   */
+  private extensionPageOwner(projectId: string, boxId: string | null): BrowserPageOwner | null {
+    const entries = [...this.tabs.entries()].filter(
+      ([, candidate]) => candidate.projectId === projectId && candidate.boxId === boxId
+    )
+    const entry = entries.find(([tabId]) => tabId === this.activeTabId) ?? entries[0]
+    if (!entry) return null
+    const [tabId, tab] = entry
+    return { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId }
+  }
+
   private openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
     const owner = this.tabForContents(request.extensionTabId)
     if (!owner) return
@@ -5428,6 +5744,35 @@ export class BrowserService {
   }
 
   /**
+   * Write the preload a browser page is created with, once per run.
+   *
+   * The file has to exist before a jar's first page, and `sessionForProject` cannot wait
+   * on disk, so this write is synchronous and tiny. Its content comes from the same
+   * module that rewrites the request's brand hints, so the page and its headers can
+   * never describe the browser differently. See `browser-client-hints.ts`.
+   */
+  private ensureBrowserIdentityPreload(): string | null {
+    if (this.browserIdentityPreloadPath !== null) return this.browserIdentityPreloadPath
+    const file = join(getConfigRoot(), BROWSER_IDENTITY_PRELOAD_FILE)
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(
+        file,
+        browserIdentityPreload({
+          chromeVersion: process.versions.chrome,
+          platform: process.platform
+        }),
+        'utf8'
+      )
+      this.browserIdentityPreloadPath = file
+      return file
+    } catch (error: unknown) {
+      Logger.error('The browser identity preload could not be written:', error)
+      return null
+    }
+  }
+
+  /**
    * One navigation fact for a tab's main frame, aimed at the extensions loaded
    * in that tab's jar.
    *
@@ -5594,9 +5939,14 @@ export class BrowserService {
   ): MenuItemConstructorOptions[] {
     const sections = this.extensions.menuRecordsFor(page.owner.projectId, page.owner.boxId)
     if (sections.length === 0) return []
-    return buildExtensionMenuItems(sections, extensionClickContexts(params), (section, item) => {
-      this.dispatchExtensionMenuClick(page, params, section.extensionId, item)
-    })
+    return buildExtensionMenuItems(
+      sections,
+      extensionClickContexts(params),
+      (section, item) => {
+        this.dispatchExtensionMenuClick(page, params, section.extensionId, item)
+      },
+      extensionMenuIcon
+    )
   }
 
   /** Hand one chosen extension item back to the worker that recorded it. */
@@ -5789,6 +6139,58 @@ export class BrowserService {
       },
       { useSystemPicker: true }
     )
+    // A site asking "sign in with a passkey"   a discoverable request, `get()` with an
+    // empty `allowCredentials`   makes Electron ask the app which account to use. A
+    // request nothing answers is not refused: the ceremony never settles, the page
+    // waits on a promise that no prompt will ever resolve, and every later ceremony
+    // on that page rejects with "A request is already pending". Google's sign-in is
+    // this exact shape, and the Windows Hello prompt it raises belongs to the OS, so
+    // the page has no way back from it on its own.
+    //
+    // The app draws no account picker, so this answers the two cases it can answer
+    // honestly instead of leaving both to hang: a request offering exactly one
+    // account completes with that account, and a request that would need the user to
+    // choose is declined, which lets the site fall back to its own sign-in.
+    browserSession.on('select-webauthn-account', (_event, details, callback) => {
+      const chosen =
+        details.accounts.length === 1 ? Reflect.get(details.accounts[0], 'credentialId') : null
+      Logger.info('Browser passkey account request answered', {
+        partition,
+        relyingPartyId: details.relyingPartyId,
+        offered: details.accounts.length,
+        chosen: typeof chosen === 'string'
+      })
+      callback(typeof chosen === 'string' ? chosen : null)
+    })
+    // One identity across everything a site can read. The user agent already names a
+    // plain Chrome, while Chromium's own client hints and `navigator.userAgentData` name
+    // Chromium, so a site that reads both is told two browsers rendered the page: that
+    // mismatch is what Google's account pages answer with "This browser or app may not
+    // be secure". The hints are rewritten on the way out, and the preload that makes the
+    // page's own object agree has to be registered before the jar's first page exists.
+    // See `browser-client-hints.ts`.
+    const identityPreload = this.ensureBrowserIdentityPreload()
+    if (identityPreload !== null) {
+      browserSession.registerPreloadScript({
+        type: 'frame',
+        id: 'codeinoven-browser-identity',
+        filePath: identityPreload
+      })
+    }
+    browserSession.webRequest.onBeforeSendHeaders(
+      { urls: ['http://*/*', 'https://*/*'] },
+      (details, done) => {
+        const rewritten = coherentClientHintHeaders(details.requestHeaders, process.versions.chrome)
+        done({
+          requestHeaders: rewritten === null ? details.requestHeaders : toStringHeaders(rewritten)
+        })
+      }
+    )
+    Logger.info('Browser jar presents one coherent Chrome identity', {
+      partition,
+      chromeVersion: process.versions.chrome,
+      preload: identityPreload !== null
+    })
     this.configuredSessions.add(partition)
     return browserSession
   }
@@ -6241,6 +6643,11 @@ export class BrowserService {
       .then(() => {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
         return contents.loadURL(url).catch((error: unknown) => {
+          // Reloads and folder switches cancel the earlier loadURL promise.
+          // Its rejection belongs to the replaced navigation, not the page
+          // now loading, and must never cover that page with an error card.
+          if (isAbortedNavigation(error) || this.tabs.get(tabId) !== tab || contents.isDestroyed())
+            return
           // A media document commits and plays without ever reporting a finished
           // load, so Electron rejects `loadURL` with `ERR_FAILED` over a page that
           // is already on screen. The rejection is read against what the tab
@@ -6853,6 +7260,7 @@ export class BrowserService {
       audible: contents.isCurrentlyAudible(),
       muted: contents.isAudioMuted(),
       capturing: this.capture.isCapturing(tabId),
+      ...this.capture.activity(tabId),
       design: tab.design,
       composition: tab.composition,
       canGoBack: contents.navigationHistory.canGoBack(),
@@ -6913,7 +7321,8 @@ export class BrowserService {
 
   /**
    * Detach the native view when the app renderer goes away, so a reload can never
-   * leave the browser floating over the app.
+   * leave the browser floating over the app, and take down every overlay surface
+   * that renderer had published.
    *
    * The renderer is the only thing that knows which tab belongs on screen and at
    * which frame, and the compositor paints the view ABOVE every DOM surface. A
@@ -6932,9 +7341,38 @@ export class BrowserService {
   private guardAgainstStrandedView(): void {
     const contents = this.window.webContents
     contents.on('did-start-navigation', (details) => {
-      if (details.isMainFrame && !details.isSameDocument) this.detachDisplayedView()
+      if (details.isMainFrame && !details.isSameDocument) this.releaseRendererSurfaces()
     })
-    contents.on('render-process-gone', () => this.detachDisplayedView())
+    contents.on('render-process-gone', () => this.releaseRendererSurfaces())
+  }
+
+  /**
+   * Take down everything the app renderer had put on screen natively, so a reload
+   * or a renderer that died can never leave a native surface behind.
+   *
+   * The page view is only one of them. Toasts, the floating tab strip, tooltips
+   * and the modals the app draws over a page all live in views and child windows
+   * that outlive the document which published them, and only that document ever
+   * takes them down (each surface sends its own `null` when its component
+   * unmounts, which a document reload never runs). Nothing in the new document
+   * knows they exist: svelte-sonner starts empty and does not publish an empty
+   * stack at boot, and no panel re-opens itself, so a stale toast card sits over
+   * the app and a stale modal keeps its whole window opaque to the mouse, which
+   * reads as an app that stopped responding until it is restarted.
+   */
+  private releaseRendererSurfaces(): void {
+    this.detachDisplayedView()
+    // The toast card is bounded but its own dismissal lives in the renderer that
+    // published it, so it would otherwise stay until something else raised one.
+    this.nativeToasts.apply(null)
+    this.nativeToasts.setHeight(0)
+    // One call retires the floating strip and the panel dock it hosts, because a
+    // dock leaving re-applies the strip that came with it.
+    this.nativeStrip.applyDock(null)
+    this.overlay.clearRendererSurfaces()
+    // The permission prompt is deliberately left alone: it is the main process
+    // asking a question the main process still owns, and hiding it would leave a
+    // pending decision nobody can answer.
   }
 
   /**

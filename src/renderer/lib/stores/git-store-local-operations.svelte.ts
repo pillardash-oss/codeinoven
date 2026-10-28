@@ -526,7 +526,7 @@ export class GitLocalOperations {
     remote: string,
     branch: string,
     strategy: GitPullStrategy
-  ): Promise<void> {
+  ): Promise<GitStatus | null> {
     const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('pull', true)
     this.error = null
@@ -539,6 +539,9 @@ export class GitLocalOperations {
       // Same reason as pull: a pull moves remote-tracking refs, so the branch
       // list and its ahead/behind counts have to be re-read.
       await this.access.refresh(projectId)
+      // The status the pull left behind, so a docked run can report what moved
+      // (and whether it stopped on conflicts) without reading the panel's state.
+      return this.status
     } catch (reason) {
       const fallback =
         strategy === 'rebase'
@@ -547,6 +550,7 @@ export class GitLocalOperations {
             ? 'Fast-forward pull failed'
             : 'Pull with merge failed'
       this.failRemoteOperation(projectId, reason, fallback, scopeBucketId)
+      return null
     } finally {
       this.access.markBusy('pull', false)
     }

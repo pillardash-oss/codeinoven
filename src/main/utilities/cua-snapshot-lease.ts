@@ -10,7 +10,7 @@
  * client's zoom reports `screenshot_context_missing` until it snapshots again.
  *
  * The app is several of those clients. The computer-use preview photographs the
- * window a run is driving at up to 15 frames a second to show the work, and every
+ * window a run is driving once per action to show the work, and every
  * thread driving computer use has its own gateway turn. So when a gateway has to
  * take a fresh snapshot and act on it   because the reference the model read was
  * superseded   its own preview, or another thread's gateway, would otherwise be

@@ -241,6 +241,21 @@ export function filterEntries(entries: ModelEntry[], value: string): ModelEntry[
 }
 
 /**
+ * The provider name a picker prints.
+ *
+ * A harness may qualify a provider with the account that serves it: the OpenCode
+ * catalog reports its own provider as `"codeinoven-2 / OpenCode"`, naming the Zen
+ * workspace before the provider. A picker already names the harness beside the
+ * provider, and the account is a credential detail rather than part of the
+ * provider's identity, so the qualifier is dropped here. A name without one is
+ * returned exactly as the harness reported it.
+ */
+export function providerDisplayName(name: string): string {
+  const qualified = /^(?<account>[^/]+?)\s+\/\s+(?<provider>.+)$/u.exec(name.trim())
+  return qualified?.groups?.['provider']?.trim() || name
+}
+
+/**
  * Collapse duplicate resolved model entries so duplicate catalog entries do
  * not render duplicate `each` keys. Keeps the first occurrence, preserving
  * display order.

@@ -91,9 +91,27 @@
      * picture there, and this surface is the one that owns the clock.
      */
     controls?: Snippet<[EditorSection, (seconds: number) => void]>
+    /**
+     * The one save control, drawn at the far right of the section strip.
+     *
+     * The document belongs to the controls and the strip belongs to the
+     * timeline, so the action is handed in rather than the strip reaching into
+     * the editor. It sits on the tab row because that row is in the same place
+     * whichever section is open: a save button that moved when the user switched
+     * tabs would be a button the user has to look for.
+     */
+    saveAction?: Snippet
   }
 
-  let { projectId, threadId, directory, tabId = '', revision = 0, controls }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    directory,
+    tabId = '',
+    revision = 0,
+    controls,
+    saveAction
+  }: Props = $props()
 
   /** How often the playhead catches up with the page that owns the clock. */
   const POLL_MS = 200
@@ -735,12 +753,9 @@
     {:else}
       <span></span>
     {/if}
-    {#if openSection === 'timeline'}
-      <div
-        class="ml-auto flex shrink-0 items-center gap-1"
-        role="group"
-        aria-label="Timeline tools"
-      >
+    <div class="ml-auto flex shrink-0 items-center gap-1.5">
+      {#if openSection === 'timeline'}
+        <div class="flex shrink-0 items-center gap-1" role="group" aria-label="Timeline tools">
         <button
           type="button"
           class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
@@ -793,8 +808,12 @@
             </Popover.Content>
           </Popover.Portal>
         </Popover.Root>
-      </div>
-    {/if}
+        </div>
+      {/if}
+      {#if saveAction}
+        {@render saveAction()}
+      {/if}
+    </div>
   </div>
   {#if error}
     <p class="shrink-0 bg-danger/10 px-2 py-1 text-xs text-danger" role="alert">{error}</p>

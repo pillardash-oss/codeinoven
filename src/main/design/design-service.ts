@@ -1,4 +1,8 @@
-import { WorkFolderRegistry, withWorkRegistryLock } from './work-folder-registry'
+import {
+  WorkFolderRegistry,
+  listConversationWorkFolders,
+  withWorkRegistryLock
+} from './work-folder-registry'
 import { updateWorkDetails } from './work-details-service'
 import { rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -25,7 +29,7 @@ import type {
   UpdateWorkDetails
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
-import { authoredWorkRoot } from './authored-work-root'
+import { authoredWorkRoot, type AuthoredWorkRoot } from './authored-work-root'
 import type { BrowserService } from '../browser/browser-service'
 import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/browser-tab-mark'
 import type { Database } from '../database/database'
@@ -794,12 +798,10 @@ export class DesignService {
     const origins = scope.appOwned
       ? new Map<string, string>()
       : await this.designs.originsViaWorker(projectId)
-    const items = (await this.listProjectFolders(projectId, scope.path, kind, scope.appOwned)).map(
-      (item) => ({
-        ...item,
-        creatorThreadId: origins.get(item.directory) ?? null
-      })
-    )
+    const items = (await this.listProjectFolders(projectId, threadId, scope, kind)).map((item) => ({
+      ...item,
+      creatorThreadId: origins.get(item.directory) ?? null
+    }))
     return {
       projectId,
       threadId,
@@ -899,7 +901,16 @@ export class DesignService {
       ? new Map<string, string>()
       : await this.designs.originsViaWorker(projectId)
     const list = async (kind: AuthoredWorkKind): Promise<DesignEntry[]> =>
-      (await this.listProjectFolders(projectId, scope.path, kind, scope.appOwned)).map((item) => ({
+      (
+        await this.listProjectFolders(
+          projectId,
+          // A conversation scope always names a thread: its workspace is the thread's
+          // (or its assistant's), so `authoredWorkRoot` refused above without one.
+          threadId ?? '',
+          scope,
+          kind
+        )
+      ).map((item) => ({
         ...item,
         creatorThreadId: origins.get(item.directory) ?? null
       }))
@@ -1116,24 +1127,42 @@ export class DesignService {
     })
   }
 
-  /** Refresh exact registered folders and discover only the canonical default directories. */
+  /**
+   * The folders one scope's board lists.
+   *
+   * A checkout answers from the registry, which discovers the canonical default
+   * directories and remembers every exact folder the project was pointed at. A
+   * conversation's workspace answers from itself instead: its threads' records
+   * stand in for the registry, because the registry is keyed by project id and
+   * every assistant task shares one container id.
+   */
   private async listProjectFolders(
     projectId: string,
-    path: string,
-    kind: AuthoredWorkKind,
+    threadId: string,
     /**
-     * Whether `path` is a conversation's own workspace rather than a checkout.
-     * The registry exists to remember a project's folders, including ones a
-     * preview has visited and ones the user pointed somewhere unusual, and it is
-     * keyed by project id. Every assistant task shares one project id, so a
-     * registry read there would answer for whichever assistant happened to write
-     * a folder of that name first. A conversation workspace is listed from disk
-     * instead, which is the whole truth about it.
+     * The scope the board is listing: a project checkout, or a conversation's own
+     * workspace. The workspace is what a conversation's records are scoped to,
+     * because the workspace is the only thing that separates one assistant's work
+     * from another's under the shared container id.
      */
-    appOwned = false
+    scope: AuthoredWorkRoot,
+    kind: AuthoredWorkKind
   ): Promise<DesignEntry[]> {
-    if (appOwned) return listProjectWorkFolders(path, DEFAULT_WORK_ROOTS[kind])
-    return new WorkFolderRegistry(this.options.database).list(projectId, path, kind)
+    // A conversation workspace has no registry it can trust: the registry is keyed
+    // by project id, and every assistant task shares one container id, so a
+    // registry read there would answer for whichever assistant happened to write
+    // a folder of that name first. Its threads' own records are scoped to the
+    // workspace, so those stand in for the registry (see `listConversationWorkFolders`).
+    if (scope.appOwned)
+      return listConversationWorkFolders({
+        database: this.options.database,
+        projectId,
+        threadId,
+        assistantId: scope.assistantId,
+        workspacePath: scope.path,
+        kind
+      })
+    return new WorkFolderRegistry(this.options.database).list(projectId, scope.path, kind)
   }
 
   async listWorkFolders(projectPath: string, root: string): Promise<DesignEntry[]> {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -529,7 +530,7 @@
       role="group"
       aria-label={ariaLabel}
     >
-      {#each previewRuns(runs, expandedRuns.has(key)) as run (run.id)}
+      {#each [...new SvelteSet( [...runs.filter((run) => threadMediaActivity(run.id).length > 0), ...previewRuns(runs, expandedRuns.has(key))] )] as run (run.id)}
         {@const runForeignThread = foreignRuns.isForeign(run.projectId, run.id) ? run : null}
         <SidebarListRow
           rowKey={run.id}
@@ -579,6 +580,11 @@
   <SidebarListRow rowKey={task.id} createdAt={task.createdAt} attachedAt={assistantListAttachedAt}>
     <AssistantTaskRow
       {task}
+      media={[
+        ...new SvelteSet(
+          [task, ...runsFor(task.id)].flatMap((thread) => threadMediaActivity(thread.id))
+        )
+      ]}
       foreignThread={assistantForeignThread(task, runsFor(task.id), (projectId, threadId) =>
         foreignRuns.isForeign(projectId, threadId)
       )}
@@ -649,6 +655,13 @@
         {@const isExpanded = assistantExpanded(assistant, siblingRunRows)}
         <AssistantRow
           {assistant}
+          media={[
+            ...new SvelteSet(
+              [...assistantTaskList, ...runsOfAssistant(assistant.id)].flatMap((thread) =>
+                threadMediaActivity(thread.id)
+              )
+            )
+          ]}
           expanded={isExpanded}
           stateCounts={assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
           attention={attentionAssistantIds.has(assistant.id)}

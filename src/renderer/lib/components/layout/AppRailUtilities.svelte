@@ -211,6 +211,7 @@
   <AppRailButton
     label={`${feature('task-manager').name}: running processes`}
     icon={feature('task-manager').icon}
+    active={taskManagerOpen}
     shortcut={taskManagerShortcut}
     onHover={preloadTaskManagerChunk}
     onSelect={() => (taskManagerOpen = true)}
@@ -219,6 +220,7 @@
   <AppRailButton
     label={`${feature('utilities').name}: Skills, MCP, Plugins`}
     icon={feature('utilities').icon}
+    active={activeView === 'settings-utilities'}
     shortcut={settingsShortcut}
     onHover={preloadSettingsChunk}
     onSelect={() => navigate('settings-utilities')}
@@ -228,7 +230,7 @@
     <AppRailButton
       label={feature('settings').name}
       icon={feature('settings').icon}
-      active={isSettingsView(activeView)}
+      active={isSettingsView(activeView) && activeView !== 'settings-utilities'}
       shortcut={settingsShortcut}
       onHover={preloadSettingsChunk}
       onSelect={() => navigate('settings')}

@@ -1,9 +1,4 @@
 <script lang="ts">
-  // Windows and Linux hide the native title bar, so the header itself is the only
-  // place the application name can live there. macOS keeps 'cio' beside the icon
-  // because the traffic lights and the menu bar already name the app.
-  const captionOverlayChrome = hasCaptionOverlay(window.api?.windowInfo.platform)
-
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
@@ -13,16 +8,15 @@
   import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
+  import type { StatusTone } from '$lib/components/ui/status-tone'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { buildEnvironmentLabel } from '$shared/build-environment'
-  import { hasCaptionOverlay } from '$shared/traffic-light'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
@@ -30,14 +24,14 @@
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
-  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { trafficLightInsetStyle, trafficLightState } from '$lib/stores/traffic-light.svelte'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
   import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
 
   import AppHeaderCenter from './AppHeaderCenter.svelte'
-  import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
   import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
@@ -56,10 +50,98 @@
 
   let { activeView, goBack, goForward, navigation }: Props = $props()
 
+  /** Whether this layout keeps the window controls on the left. A bar that
+   *  already names the app in its own decoration needs only the short name,
+   *  while a bar whose controls sit on the right carries the wordmark. */
+  let controlsOnLeft = $derived(trafficLightState.side === 'left')
+
+  /** Space the window controls take from this bar's own left edge. */
+  let leftInset = $derived(trafficLightState.side === 'left' ? trafficLightState.offset : 0)
+
+  /** The width the thread panel owns in this bar: the sidebar plus the rail it
+   *  sits after, minus whatever the window controls hold on this edge. Zero when
+   *  no sidebar is docked, which is also the state a view without one lives in. */
+  let panelColumnWidth = $derived.by(() => {
+    const docked = layoutPanelState.dockedWidth
+    if (docked <= 0) return 0
+    return Math.max(0, layoutPanelState.railWidth + docked - leftInset)
+  })
+
+  /**
+   * Which form the app's name takes in this bar. Only the name ever gives way:
+   * the mark, the navigation pair and every view action keep their places at
+   * every panel width, so the column follows the panel only until it is as narrow
+   * as the chrome itself.
+   *
+   * `none` is the view without a sidebar (nothing to align to) and the column
+   * past the width the chrome needs: the mark alone. `long` needs the room the
+   * name itself takes beside three actions; below that the bar falls back to the
+   * short name rather than to an ellipsis.
+   */
+  /** The bar's controls at their narrowest: the mark, the navigation pair and
+   *  three view actions. Nothing in the chrome shrinks, so this is what the
+   *  panel has to be able to hold. */
+  const CHROME_WIDTH = 182
+  /** The same column with the short name beside the mark. */
+  const CHROME_WIDTH_WITH_SHORT_NAME = 203
+  /** And with the whole wordmark. */
+  const CHROME_WIDTH_WITH_LONG_NAME = 252
+
+  let brandForm = $derived.by((): 'long' | 'short' | 'none' => {
+    const column = panelColumnWidth
+    if (column <= 0 || column < CHROME_WIDTH_WITH_SHORT_NAME) return 'none'
+    if (controlsOnLeft) return 'short'
+    return column >= CHROME_WIDTH_WITH_LONG_NAME ? 'long' : 'short'
+  })
+
+  /** The narrowest panel that still contains the header's chrome, so a drag can
+   *  never pull the action buttons out of the panel's column and into the
+   *  thread's. */
+  let minimumPanelWidth = $derived(
+    Math.max(0, CHROME_WIDTH + leftInset - layoutPanelState.railWidth)
+  )
+
+  $effect(() => {
+    layoutPanelState.minimumWidth = minimumPanelWidth
+  })
+
+  /** The chrome's measured width. The column it owns is a target, not a fact: with
+   *  no panel docked the cluster is content-sized, and using the worst-case width
+   *  there pushed the title a few pixels right of the line it was aligning to. */
+  let clusterWidth = $state(0)
+
+  /** How far the thread's block sits from the end of the chrome so that its left
+   *  edge lands on the conversation page's own left edge. The page is the thing
+   *  being read, so it is the bounding box the title aligns to; the panel only
+   *  decides how much room the page has. */
+  let titleInset = $derived.by(() => {
+    if (!layoutPanelState.contentVisible) return 0
+    const contentLeft = layoutPanelState.conversationLeft
+    if (contentLeft <= 0) return 0
+    const chromeEnd = leftInset + (clusterWidth > 0 ? clusterWidth : CHROME_WIDTH)
+    return Math.max(0, Math.round(contentLeft - chromeEnd))
+  })
+
+  /** The page's own width, less the distance the block had to move to reach it:
+   *  the thread's name never runs wider than the text the reader is reading. */
+  let titleMaxWidth = $derived.by(() => {
+    if (!layoutPanelState.contentVisible) return 0
+    const width = layoutPanelState.conversationWidth
+    if (width <= 0) return 0
+    return Math.max(0, width - titleInset)
+  })
+
   /** A checkout and a probe run the same source, so the one thing that tells
    *  them apart is where their data lives. The header says which this is, and a
    *  shipped build says nothing at all. */
   let buildLabel = $derived(buildEnvironmentLabel(window.api?.windowInfo.buildEnvironment) ?? null)
+
+  /** A probe runs the same source as a checkout, so its marker wears the
+   *  specification's colour: narrowed to two letters it still says which build
+   *  this is. */
+  let buildTone: StatusTone = $derived(
+    window.api?.windowInfo.buildEnvironment === 'probe' ? 'spec' : 'neutral'
+  )
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -212,10 +294,6 @@
     memoryProposalState.setContext(workspaceState.selectedThread?.projectId ?? null)
   })
 
-  // ─── Editor preference ───────────────────────────────────────────────
-
-  void editorPreference.load()
-
   // ─── Git status chip ─────────────────────────────────────────────────────
 
   /** Refresh git status whenever the active thread's project changes. */
@@ -240,9 +318,16 @@
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
   data-guide="header"
+  data-controls={controlsOnLeft ? 'left' : 'right'}
+  data-panel={panelColumnWidth > 0 ? 'docked' : 'hidden'}
   style={trafficLightInsetStyle({ mirrorRightInset: false, rightPadding: '0.25rem' })}
 >
-  <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
+  <nav
+    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1"
+    aria-label="Primary navigation"
+    style:width={panelColumnWidth > 0 ? `${panelColumnWidth}px` : undefined}
+    bind:clientWidth={clusterWidth}
+  >
     <button
       type="button"
       class="flex shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
@@ -251,25 +336,26 @@
       onclick={() => threadSwitcherRequest.requestOpen()}
     >
       <VendorIcon name="CodeInOven" size={20} />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"
-        >{captionOverlayChrome ? 'CodeInOven' : 'cio'}</span
-      >
+      {#if brandForm !== 'none'}
+        <span class="header-brand-name">{brandForm === 'long' ? 'CodeInOven' : 'cio'}</span>
+      {/if}
     </button>
 
     {#if buildLabel}
       <StatusPill
-        tone="neutral"
+        tone={buildTone}
         dot
+        truncate
         title="CodeInOven {buildLabel} build"
         aria-label="CodeInOven build: {buildLabel}"
-        class="px-1 py-0">{buildLabel}</StatusPill
+        class="min-w-0 px-1 py-0">{buildLabel}</StatusPill
       >
     {/if}
 
     <!-- Global navigation: back / forward -->
-    <div class="flex items-center gap-0.5">
+    <div class="header-cluster-nav flex items-center gap-0.5">
       <button
-        class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
         aria-label="Go back"
         title="Go back"
         disabled={!navigationHistoryState.canGoBack}
@@ -278,7 +364,7 @@
         <CioBack size={ICON_SIZE.control} />
       </button>
       <button
-        class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
         aria-label="Go forward"
         title="Go forward"
         disabled={!navigationHistoryState.canGoForward}
@@ -294,7 +380,7 @@
       <button
         class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {settingsUiState.searchOpen
           ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+          : 'text-dimmed hover:bg-elevated hover:text-muted'}"
         aria-label="Search settings"
         title="Search settings"
         onclick={() => (settingsUiState.searchOpen = true)}
@@ -302,7 +388,13 @@
         <CioSearch size={ICON_SIZE.control} />
       </button>
     {:else}
-      <AppHeaderViewActions />
+      <div class="header-cluster-actions">
+        <!-- Folded only when the bar genuinely has no room for them: no panel
+             column to spend, and the context panel open, which is what narrows the
+             conversation and the title with it. Both panels closed, or a panel
+             docked on the left, and the actions stay in the bar. -->
+        <AppHeaderViewActions compact={panelColumnWidth === 0 && contextSidebarState.visible} />
+      </div>
     {/if}
   </nav>
 
@@ -317,18 +409,12 @@
       <AppHeaderBrowserCenter />
     {/await}
   {:else}
-    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} />
+    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} {titleMaxWidth} />
   {/if}
 
   <AppHeaderThreadModals menu={threadActionsMenu} />
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- Editor preference   hidden in chat mode, scope view, the browser view,
-         and when no project is selected -->
-    {#if !chatMode && !onScope && !onBrowser && workspaceState.activeProject}
-      <AppHeaderEditorMenu />
-    {/if}
-
     <!-- Spec studio   only for an existing document or an eligible final-response retry -->
     {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
@@ -336,7 +422,7 @@
           ? 'bg-elevated text-foreground'
           : workspaceState.specStudioRetryable
             ? 'text-danger hover:bg-danger/10'
-            : 'text-muted hover:bg-elevated hover:text-foreground'} disabled:opacity-50"
+            : 'text-dimmed hover:bg-elevated hover:text-muted'} disabled:opacity-50"
         disabled={workspaceState.specStudioBusy}
         aria-label={workspaceState.specStudioBusy
           ? 'Formulating specification'
@@ -392,9 +478,9 @@
 
     <!-- Sticky notes and notifications stay available in every view. -->
     <button
-      class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {stickyNotesPanelActive
-        ? 'bg-elevated text-foreground'
-        : ''}"
+      class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {stickyNotesPanelActive
+        ? 'bg-elevated text-primary'
+        : 'text-dimmed hover:bg-elevated hover:text-muted'}"
       aria-label={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
       aria-pressed={stickyNotesPanelActive}
       title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
@@ -404,10 +490,11 @@
     </button>
 
     <button
-      class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
-        ? 'bg-elevated text-foreground'
-        : ''}"
+      class="relative flex h-8 w-8 items-center justify-center transition-colors duration-150 {notificationsPanelActive
+        ? 'bg-elevated text-primary'
+        : 'text-dimmed hover:bg-elevated hover:text-muted'}"
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
+      aria-pressed={notificationsPanelActive}
       title="Open notifications"
       data-onboarding="notifications"
       data-guide="notifications"
@@ -446,7 +533,9 @@
 
 <style>
   .app-header {
-    container-type: inline-size;
+    /* Named, because the navigation cluster inside it is a container of its own
+       and its queries must not borrow the bar's width. */
+    container: header / inline-size;
     /* The centre of the header (the open thread's title, or the browser page's
        title) is capped to this width: a long title truncates inside the middle
        band of the bar instead of stretching towards the view switcher and the
@@ -455,9 +544,33 @@
     --app-header-center-max-width: min(100%, 32rem);
   }
 
-  @container (max-width: 1100px) {
+  @container header (max-width: 1100px) {
     .header-control-label {
       display: none;
     }
+  }
+
+  /* ─── The panel's column in the bar ─────────────────────────────────────
+     Everything left of the boundary is app chrome at the thread panel's width,
+     so that boundary is the sidebar's right edge and the header and the body
+     share one line instead of two that nearly meet. The column is queried on its
+     own width, not on the window's, because it is the panel that squeezes it. */
+
+  .header-cluster {
+    /* The bar is never narrower than the controls it carries: the mark, the
+       navigation pair and every action stay on screen at every panel width, and
+       only the name gives way. */
+    min-width: max-content;
+  }
+
+  .header-brand-name {
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+
+  .header-cluster-actions {
+    display: contents;
   }
 </style>

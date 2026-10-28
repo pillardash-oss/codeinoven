@@ -130,6 +130,13 @@ const CHANNEL_ARG_HINTS: Readonly<Record<string, string>> = {
   'providers:getStatus': 'no arguments',
   'project:list': 'no arguments',
   'thread:listRecentPerProject': 'no arguments',
+  'thread:create':
+    'a single input object: { projectId, providerId (the harness id, e.g. "pi"), title, workingDirectory?, settings?, scopeBucketId? }. This creates an empty thread: prefer cio_orchestrate_dispatch, which creates the thread and sends its first prompt in one call.',
+  'agent:sendPrompt':
+    'projectId, threadId, settings (ThreadSettings), text, attachments (array, may be []), specAction (null), userMessageId (an id you generate), promptContext?, promptReferences?, projectReferences?, presentation?, taskReferences?',
+  'agent:listProviderSnapshot': 'projectId',
+  'agent:refreshProviderCatalog':
+    'projectId, options? ({ force?, refreshModelCatalogs? }). Run it when the catalog looks empty before concluding a model id is wrong.',
   'config:get': 'no arguments',
   'config:update': 'patch (AppConfigPatch)',
   'shell:openExternal': 'url'
@@ -220,6 +227,12 @@ export function createAppControlExecutor(
       windowCapture:
         'The interface only exists inside Electron, so the in-app browser cannot render it. Pass capture: true to this tool to see the live app window as an image and verify what you changed.',
       destructiveChannels: CHANNEL_NAMES.filter((channel) => isDestructiveAppControl(channel)),
+      recipes: {
+        startAThreadWithMessage:
+          'Read cio_orchestrate_targets, then call cio_orchestrate_dispatch with a target project id: it creates the thread and sends its first prompt in one call, for this project or any other one in `projects`. Use thread:create plus agent:sendPrompt only when the thread must open empty.',
+        targetAnotherProject:
+          "context.projectId is this thread's project. `project:list` names every project, and most channels take a projectId argument, so a different project needs no new thread."
+      },
       domains,
       channelArgs,
       actions: uiActions

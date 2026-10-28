@@ -100,7 +100,7 @@ export const APP_CONTROL_TOOLS: GatewayToolDefinition[] = [
   {
     name: APP_CONTROL_CATALOG_TOOL_NAME,
     description:
-      'Read the CodeInOven app surface an @cio-hey agent may drive: the app IPC channels grouped by domain (git, deployment, cloudDeploy, browser, providers, thread, project, config and more), the declared argument order for the channels that matter most (`channelArgs`), the renderer UI actions (navigate, open a panel, open the browser, open a project or thread), and the current project and thread. Call this before cio_app_call: it is the only source of the exact channel names and action ids.',
+      'Read the CodeInOven app surface an @cio-hey agent may drive: the app IPC channels grouped by domain (git, deployment, cloudDeploy, browser, providers, thread, project, config and more), the declared argument order for the channels that matter most (`channelArgs`), recipes for the sequences that come up most (`recipes`), the renderer UI actions (navigate, open a panel, open the browser, open a project or thread), and the current project and thread. Call this before cio_app_call: it is the only source of the exact channel names and action ids.',
     inputSchema: CATALOG_INPUT_SCHEMA,
     outputSchema: APP_CONTROL_RESULT_SCHEMA,
     route: '/app-catalog',

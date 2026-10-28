@@ -66,16 +66,32 @@ function isUnpainted(value: string): boolean {
 
 const SVG_NUMBER = /-?\d*\.?\d+(?:e[-+]?\d+)?/gi
 
-/** Round every number in a geometry string, so an icon keeps icon precision. */
-function roundNumbers(value: string, precision = 2): string {
+/**
+ * Digits kept per number in a geometry string: relative precision, never
+ * absolute decimal places.
+ *
+ * Fixed decimal rounding is destructive at both ends of the range, and a pasted
+ * icon is free to sit at either one. An icon exported from a vector editor
+ * carries huge absolute coordinates (a logo path at `x=26724.9` under a
+ * `matrix(1.07278, …)`), where cutting the matrix factor to two decimals moves
+ * that path by ~70 units   enough to push it out of the viewBox and scatter the
+ * glyph. A path drawn in a `0 0 1 1` box loses its whole shape the same way,
+ * because `0.003` rounds to `0`. Six significant digits keep the drawing exact
+ * to a millionth of its own scale, which is far below one pixel of a 16 px slot,
+ * while still dropping the noise rows a serializer leaves behind.
+ */
+const GEOMETRY_SIGNIFICANT_DIGITS = 6
+
+/** Trim every number in a geometry string to icon precision, relative to its own scale. */
+function roundNumbers(value: string): string {
   return value.replace(SVG_NUMBER, (match) => {
     const number = Number(match)
-    if (!Number.isFinite(number)) return match
-    return String(Number(number.toFixed(precision)))
+    if (!Number.isFinite(number) || number === 0) return match
+    return String(Number(number.toPrecision(GEOMETRY_SIGNIFICANT_DIGITS)))
   })
 }
 
-/** Geometry attributes whose numbers are safe to round and whose spaces we trim. */
+/** Geometry attributes whose numbers are trimmed to icon precision. */
 const NUMERIC_ATTRIBUTES = new Set([
   'viewBox',
   'd',
@@ -108,10 +124,17 @@ function cleanTree(node: Element): void {
   const style = node.getAttribute('style')
   if (style) {
     for (const declaration of style.split(';')) {
-      const match = declaration.match(/^\s*(fill|stroke)\s*:\s*([^;]+)\s*$/i)
+      const match = declaration.match(/^\s*(fill|stroke|fill-rule)\s*:\s*([^;]+)\s*$/i)
       if (!match) continue
       const property = match[1].toLowerCase()
       const value = match[2].replace(/\s*!important\s*$/i, '').trim()
+      if (property === 'fill-rule') {
+        // Paint stays tintable, but the rule that decides which subpaths become
+        // holes is part of the drawing: dropping it fills a counter that the
+        // source cut out, which is exactly how an exported letterform breaks.
+        if (/^(evenodd|nonzero)$/i.test(value)) node.setAttribute(property, value.toLowerCase())
+        continue
+      }
       node.setAttribute(property, isUnpainted(value) ? 'none' : 'currentColor')
     }
   }

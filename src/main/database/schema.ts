@@ -1026,9 +1026,10 @@ CREATE INDEX IF NOT EXISTS idx_sticky_notes_updated ON sticky_notes(updated_at D
 
 /**
  * Assistants: the top-level grouping for assistant tasks. An assistant owns the
- * personality its owner gave it, the knowledge the agent wrote with them, a
- * default schedule, and its connection picks; tasks are threads in the assistant
- * space that reference `assistants.id`.
+ * description its owner wrote, the knowledge the agent wrote with them (which is
+ * where how it behaves lives, as the `Personality` section), a default schedule,
+ * and its connection picks; tasks are threads in the assistant space that
+ * reference `assistants.id`.
  */
 export const ASSISTANTS_SQL = `
 -- ─── Assistants ─────────────────────────────────────────────────
@@ -1036,7 +1037,6 @@ CREATE TABLE IF NOT EXISTS assistants (
   id                  TEXT PRIMARY KEY NOT NULL,
   name                TEXT NOT NULL,
   description         TEXT,
-  personality         TEXT,
   scheduled           INTEGER NOT NULL DEFAULT 1,
   schedule_name       TEXT,
   color               TEXT,

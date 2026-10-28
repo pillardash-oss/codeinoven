@@ -109,6 +109,14 @@ export interface TurnCompletionOptions {
   /** Paths the user edited themselves (in-app editor saves, user-terminal
    *  activity) while the turn ran. These are never the thread's changes. */
   excludedPaths?: ReadonlySet<string>
+  /**
+   * Another thread in this project had a turn in flight when this one finished,
+   * in this process or another instance. The project-wide diff then cannot tell
+   * that turn's writes from this turn's, so only paths this turn recorded write
+   * evidence for may be claimed. Without this, a turn that touched nothing still
+   * reported every file a concurrent turn was writing at the time.
+   */
+  contestedDiff?: boolean
 }
 
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
@@ -283,6 +291,10 @@ export class CheckpointManager {
       // evidence to stay.
       const keepChange = (path: string): boolean => {
         if (excludedPaths?.has(path) ?? false) return false
+        // A concurrent turn elsewhere in this project poisons the project-wide
+        // diff: a path it wrote looks exactly like a path this turn wrote. Only
+        // this turn's own evidence may claim a path in that state.
+        if (options.contestedDiff && !claimedByThisTurn(path)) return false
         if (foreign === undefined) return true
         const precise = precisePaths.has(path)
         if (foreign.claimed.has(path) && !precise) return false
@@ -323,6 +335,7 @@ export class CheckpointManager {
           windowed: windowedElsewhere,
           borrowed: borrowedElsewhere,
           userOwned,
+          contested: options.contestedDiff === true,
           claimFiltered: changedPaths !== undefined,
           claimants: [...claimants].slice(0, 3),
           sample: allChanges.slice(0, 3).map((change) => change.path)
@@ -455,21 +468,23 @@ export class CheckpointManager {
               json_array_length(je.value) AS refs
        FROM turn_checkpoints tc, json_each(json_extract(tc.data, '$.changeSourceRefs')) je
        WHERE tc.project_id = ? AND tc.thread_id != ?
-         AND json_extract(tc.data, '$.status') = 'completed'
+         AND json_extract(tc.data, '$.status') IN ('completed', 'failed', 'interrupted')
          AND json_extract(tc.data, '$.completedAt') >= ?`,
       [checkpoint.projectId, checkpoint.threadId, turnStart],
       FOREIGN_CHECKPOINT_SCAN_LIMIT
     )
     // Checkpoints written before per-path evidence existed only carry the diff.
     // Their paths are unattributable, so they count as borrowed rather than as
-    // proof that the other thread wrote the file.
+    // proof that the other thread wrote the file. A failed or interrupted turn
+    // still wrote its files: its writes stay in the working tree, so its claims
+    // must count exactly like a completed turn's.
     const legacyRows = await this.queryRows(
       `SELECT json_extract(tc.data, '$.threadId') AS tid,
               json_extract(tc.data, '$.completedAt') AS completed_at,
               json_extract(je.value, '$.path') AS path
        FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je
        WHERE tc.project_id = ? AND tc.thread_id != ?
-         AND json_extract(tc.data, '$.status') = 'completed'
+         AND json_extract(tc.data, '$.status') IN ('completed', 'failed', 'interrupted')
          AND json_extract(tc.data, '$.completedAt') >= ?
          AND json_type(tc.data, '$.changeSourceRefs') IS NULL`,
       [checkpoint.projectId, checkpoint.threadId, turnStart],

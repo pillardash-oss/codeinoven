@@ -459,6 +459,17 @@ export interface HarnessDriver {
    */
   readonly retainsRecapInTranscript?: boolean
 
+  /**
+   * Whether this session exists only to run one auxiliary completion (title,
+   * grade, probe) rather than a user turn.
+   *
+   * The engine asks before it writes a driver audit row it cannot attribute: an
+   * auxiliary session is opened outside the session registry, so the row has no
+   * project, thread or turn, and saying "this was a probe" is the difference
+   * between a filterable audit trail and one with silent gaps.
+   */
+  isAuxiliarySession?(sessionId: string): boolean
+
   /** Attach task-level process tracking after driver construction. */
   setProcessObserver?(observer: AgentProcessObserver): void
 

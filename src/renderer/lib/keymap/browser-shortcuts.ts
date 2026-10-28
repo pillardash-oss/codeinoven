@@ -137,6 +137,7 @@ export function appShortcutChords(source: BrowserShortcutKeySource): BrowserShor
   }
   for (const category of KEYMAP.categories) {
     for (const shortcut of category.shortcuts) {
+      if (shortcut.id.startsWith('video-edit-')) continue
       if (BROWSER_OWNED_IDS.has(shortcut.id)) continue
       if (PAGE_OWNED_EDITOR_IDS.has(shortcut.id)) continue
       if (PAGE_FORBIDDEN_IDS.has(shortcut.id)) continue
@@ -148,6 +149,17 @@ export function appShortcutChords(source: BrowserShortcutKeySource): BrowserShor
     }
   }
   return chords
+}
+
+/** Composition editor bindings are only replayed from composition pages. */
+export function videoEditorShortcutChords(
+  source: BrowserShortcutKeySource
+): BrowserShortcutChord[] {
+  return KEYMAP.categories
+    .flatMap((category) => category.shortcuts)
+    .filter((shortcut) => shortcut.id.startsWith('video-edit-'))
+    .flatMap((shortcut) => resolveChords(source.keysFor(shortcut.id), isMacPlatform()))
+    .filter((chord) => chord.meta || chord.control || chord.alt)
 }
 
 /** A chord's identity, for de-duplication and for comparing two tables. */
@@ -212,7 +224,11 @@ export function browserSwitcherChords(source: BrowserShortcutKeySource): Browser
 export function publishBrowserShortcutBindings(source: BrowserShortcutKeySource): void {
   void invoke('browser:setShortcutBindings', browserShortcutBindings(source)).catch(() => {})
   void invoke('browser:setSwitcherBindings', browserSwitcherChords(source)).catch(() => {})
-  void invoke('browser:setAppShortcutChords', appShortcutChords(source)).catch(() => {})
+  void invoke(
+    'browser:setAppShortcutChords',
+    appShortcutChords(source),
+    videoEditorShortcutChords(source)
+  ).catch(() => {})
 }
 
 /**

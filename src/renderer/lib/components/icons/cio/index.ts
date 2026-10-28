@@ -11,11 +11,13 @@ import AssistantIcon from './AssistantIcon.svelte'
 import AssistantDefaultIcon from './AssistantDefaultIcon.svelte'
 import AssistantKnowledgeIcon from './AssistantKnowledgeIcon.svelte'
 import AssistantTaskIcon from './AssistantTaskIcon.svelte'
+import CioMonogram from './CioMonogram.svelte'
 import TriangleQuestionMark from './TriangleQuestionMark.svelte'
 
 export const CIO_ICONS = {
   ...SHARED_CIO_ICONS,
   assistant: AssistantIcon,
+  monogram: CioMonogram,
   'assistant-default': AssistantDefaultIcon,
   'assistant-knowledge': AssistantKnowledgeIcon,
   'assistant-task': AssistantTaskIcon,

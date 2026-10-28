@@ -14,10 +14,12 @@
   } from '$lib/components/icons/cio/AssistantIcon.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import AssistantKnowledgeHistory from './AssistantKnowledgeHistory.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { getAssistantIcon } from '$lib/assistant-icons'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -57,14 +59,21 @@
     ASSISTANT_TIMELINESS_OPTIONS
   } from '$shared/assistant-reporting'
   import {
+    ASSISTANT_PERSONALITY_HEADING,
+    ASSISTANT_PERSONALITY_SECTION_TITLE
+  } from '$shared/assistant-personality'
+  import {
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
+    isPersonalitySection,
     knowledgeSectionSummary,
     parseKnowledgeSections,
     previewRuns,
+    readKnowledgePersonality,
     resolveConnections,
     serializeKnowledgeSections,
+    withKnowledgePersonality,
     missedRunReasonText,
     TASK_RUN_PREVIEW,
     type ConnectionSetupRequest,
@@ -199,6 +208,16 @@
   )
 
   /**
+   * The mark this assistant wears: the image or SVG icon the user picked for it,
+   * tinted with its accent, resolved exactly as the sidebar row resolves it. The
+   * panel used to draw the default mark for every assistant, so the icon the user
+   * chose never appeared on the one surface that documents it.
+   */
+  const assistantIcon = $derived(
+    assistant ? getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null) : null
+  )
+
+  /**
    * The count a tab carries, or null when it has nothing worth counting. A zero
    * is noise on a tab label, so every empty section reads as a bare label instead
    * of a badge that says nothing.
@@ -214,7 +233,21 @@
 
   // ─── Assistant content ──────────────────────────────────────────────────────
 
-  const sections = $derived(assistant ? parseKnowledgeSections(assistant.knowledge) : [])
+  /** Every row of the behavior card: the personality first, then what it knows. */
+  const PERSONALITY_SECTION_ID = 'personality'
+  /** The authored sections, without the personality, which is always shown first. */
+  const authoredSections = $derived(
+    assistant ? parseKnowledgeSections(assistant.knowledge) : ([] as KnowledgeSection[])
+  )
+  const sections = $derived<KnowledgeSection[]>([
+    {
+      id: PERSONALITY_SECTION_ID,
+      heading: ASSISTANT_PERSONALITY_HEADING,
+      title: ASSISTANT_PERSONALITY_SECTION_TITLE,
+      body: assistant ? readKnowledgePersonality(assistant.knowledge) : ''
+    },
+    ...authoredSections.filter((section) => !isPersonalitySection(section))
+  ])
 
   /** The one-line summary a folded section shows in place of its body. */
   const sectionSummary = knowledgeSectionSummary
@@ -222,6 +255,12 @@
   const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
   /** Whether this assistant runs on a clock at all; drives the schedule copy. */
   const scheduled = $derived(assistant ? assistantIsScheduled(assistant) : true)
+  /**
+   * Whether a clock actually exists, which is what the countdown rows are about.
+   * An assistant whose flag is on but whose schedule was never agreed has nothing to
+   * show, so the section offers the conversation instead of empty rows.
+   */
+  const scheduleAgreed = $derived(Boolean(assistant?.schedule))
   /**
    * The schedule line everywhere in the panel: what the user named the clock,
    * then the cadence the assistant agreed, or "runs on demand" when it has none.
@@ -234,6 +273,11 @@
   })
 
   const collapsed = new SvelteSet<string>()
+  /** The user turned the clock on: the panel holds that intent until the agent agrees it. */
+  let scheduleRequest = $state(false)
+  /** The confirmation that stands between the user and dropping the clock. */
+  let scheduleOffConfirm = $state(false)
+  let scheduleOffBusy = $state(false)
   /**
    * The assistant's name, for copy that would otherwise repeat "this assistant".
    * An assistant that has not been named yet (the create-by-chat flow starts with
@@ -265,14 +309,21 @@
 
   async function saveSection(sectionId: string): Promise<void> {
     if (!assistant) return
-    const next = sections.map((section) =>
-      section.id === sectionId ? { ...section, body: editDraft.trim() } : section
-    )
+    const body = editDraft.trim()
     editingId = null
-    await persistAssistant(
-      { knowledge: serializeKnowledgeSections(next) },
-      'Could not save the assistant behavior'
-    )
+    // The personality is written into the knowledge as its own section; every other
+    // row rewrites the section it was opened from, in the document's own order. The
+    // whole parsed document is rewritten, not the filtered rows, so a save can never
+    // drop the personality section it did not edit.
+    const knowledge =
+      sectionId === PERSONALITY_SECTION_ID
+        ? withKnowledgePersonality(assistant.knowledge, body)
+        : serializeKnowledgeSections(
+            parseKnowledgeSections(assistant.knowledge).map((section) =>
+              section.id === sectionId ? { ...section, body } : section
+            )
+          )
+    await persistAssistant({ knowledge }, 'Could not save the assistant behavior')
   }
 
   // ─── Persistence ──────────────────────────────────────────────────────────
@@ -295,6 +346,66 @@
       { paused: !assistant.paused },
       assistant.paused ? 'Could not resume the assistant' : 'Could not pause the assistant'
     )
+  }
+
+  /**
+   * Turn the assistant's clock on or off.
+   *
+   * On is never written here. The panel knows nothing about the cadence or the
+   * times, and a schedule nobody agreed fires at hours the user never chose, so the
+   * switch only records that they want one and hands them the button that agrees it
+   * with the agent. Off is written, but only after a confirmation, because it drops
+   * the clock and its name and putting them back means agreeing a new one with the
+   * agent.
+   */
+  function setScheduledSwitch(next: boolean): void {
+    if (next) {
+      if (!scheduled) scheduleRequest = true
+      return
+    }
+    if (scheduleRequest) {
+      scheduleRequest = false
+      return
+    }
+    if (scheduled) scheduleOffConfirm = true
+  }
+
+  /** Hand the clock to the agent: it asks for the name, the cadence and the times. */
+  async function scheduleWithAgent(): Promise<void> {
+    const target = assistant
+    if (!target) return
+    const thread = knowledgeThread
+    if (!thread) {
+      toast.error('This assistant has no behavior thread to schedule in')
+      return
+    }
+    scheduleRequest = false
+    openKnowledgeTask()
+    try {
+      await invoke('assistant:scheduleWithAgent', target.id)
+    } catch (error) {
+      reportError(error, 'Could not start the schedule with your assistant')
+    }
+  }
+
+  /** Drop the clock, once the user has been told what dropping it costs. */
+  async function confirmScheduleOff(): Promise<void> {
+    if (!assistant) return
+    scheduleOffBusy = true
+    try {
+      await persistAssistant({ scheduled: false }, 'Could not turn the schedule off')
+      scheduleOffConfirm = false
+    } finally {
+      scheduleOffBusy = false
+    }
+  }
+
+  /** Commit the name the user gives the assistant's clock. Typed, so it writes on blur. */
+  function commitScheduleName(raw: string): void {
+    if (!assistant) return
+    const name = raw.trim()
+    if (name === (assistant.scheduleName ?? '')) return
+    void persistAssistant({ scheduleName: name || null }, 'Could not save the schedule name')
   }
 
   function setAgents(agents: AssistantAgents): void {
@@ -799,8 +910,12 @@
     -->
     <header class="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2.5">
       <div class="flex items-center gap-2.5">
-        <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-on-primary">
-          <AssistantIcon size={20} />
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-elevated">
+          {#if assistantIcon}
+            <img src={assistantIcon} alt="" class="h-5 w-5 object-contain" draggable="false" />
+          {:else}
+            <AssistantIcon size={20} />
+          {/if}
         </span>
         <div class="min-w-0 flex-1">
           <h1 class="truncate text-[0.875rem] font-semibold tracking-tight text-foreground">
@@ -1136,17 +1251,6 @@
           {#if !knowledgeComplete}
             {@render assistantEmptyState()}
           {:else}
-            {#if assistant.personality?.trim()}
-              <div class="border border-border bg-surface px-2.5 py-2">
-                <p
-                  class="mb-1 text-[0.625rem] font-medium text-dimmed"
-                  title="How this assistant behaves and sounds"
-                >
-                  Personality
-                </p>
-                <p class="text-[0.6875rem] leading-relaxed text-muted">{assistant.personality}</p>
-              </div>
-            {/if}
             <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
               <div class="flex items-center justify-between gap-2">
                 <h2 class="text-[0.875rem] font-semibold text-foreground">Assistant behavior</h2>
@@ -1166,14 +1270,25 @@
                 </div>
               </div>
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                The instructions this assistant follows on every run. The agent follows them
+                The instructions this assistant follows on every run. Personality is how it behaves
+                and sounds, and the sections under it are what it does. The agent follows them
                 literally, so anything not written here does not happen.
               </p>
               <ol class="flex flex-col gap-2">
                 {#each sections as section (section.id)}
                   {@const folded = collapsed.has(section.id) && editingId !== section.id}
                   <li class="border-t border-border first:border-t-0">
-                    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+                    <!--
+                      While this section is being edited its header sticks to the top of
+                      the panel and carries the actions, so Save and Cancel are always
+                      under the pointer instead of at the end of a long document the user
+                      would have to scroll back down to reach.
+                    -->
+                    <div
+                      class="flex items-center gap-1.5 px-2.5 py-1.5 {editingId === section.id
+                        ? 'sticky top-0 z-10 border-b border-border bg-surface'
+                        : ''}"
+                    >
                       <button
                         type="button"
                         class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
@@ -1192,7 +1307,26 @@
                           {section.title}
                         </span>
                       </button>
-                      {#if editingId !== section.id}
+                      {#if editingId === section.id}
+                        <div class="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            title="Discard these changes"
+                            onclick={cancelEdit}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                            title="Save {section.title}"
+                            onclick={() => void saveSection(section.id)}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      {:else}
                         <button
                           type="button"
                           class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -1222,22 +1356,6 @@
                           containerClass="border border-border bg-surface"
                           class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
                         />
-                        <div class="mt-1.5 flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                            onclick={cancelEdit}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                            onclick={() => void saveSection(section.id)}
-                          >
-                            Save
-                          </button>
-                        </div>
                       </div>
                     {:else if !folded}
                       <div class="border-t border-border px-2.5 py-2">
@@ -1257,28 +1375,88 @@
           {/if}
 
           <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-            <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
-            <dl class="flex flex-col">
-              <div
-                class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"
-              >
-                <dt class="text-[0.75rem] text-muted">Runs</dt>
-                <dd class="text-right text-[0.75rem] text-foreground">{scheduleLabel}</dd>
+            <!--
+              The switch sits on the section's own title, so nothing here repeats
+              what the heading already says. The clock is a decision, not a readout:
+              it is agreed with the agent during setup, and the panel is where the
+              user turns it on or off afterwards, exactly like the reporting rows
+              below. Turning it off drops the schedule outright, so turning it back
+              on makes the assistant agree a fresh one instead of silently restoring
+              a cadence nobody remembers.
+            -->
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
+              <Switch
+                checked={scheduled || scheduleRequest}
+                onchange={setScheduledSwitch}
+                aria-label="Run this assistant on a schedule"
+                title={scheduled
+                  ? 'Runs on the clock it agreed with you'
+                  : scheduleRequest
+                    ? 'Waiting for the clock it will agree with you'
+                    : 'Runs only when you ask'}
+              />
+            </div>
+            {#if !scheduleAgreed && (scheduleRequest || scheduled)}
+              <div class="flex flex-col gap-2 border-t border-border py-2">
+                <p class="text-[0.6875rem] leading-relaxed text-muted">
+                  A clock is agreed, not typed: {assistantLabel} has to ask what you want to call it,
+                  how often it runs, and at what times. Nothing is scheduled until you save what it proposes.
+                </p>
+                <div class="flex justify-end">
+                  <button
+                    type="button"
+                    class="bg-primary px-2.5 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                    title="Agree this assistant's schedule with it"
+                    onclick={() => void scheduleWithAgent()}
+                  >
+                    Schedule with {assistantLabel}
+                  </button>
+                </div>
               </div>
-              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
-                <dt class="text-[0.75rem] text-muted">Next run</dt>
-                <dd class="text-right text-[0.75rem] text-foreground">
-                  {nextRunLabel}
-                  {#if nextRunRelative && nextRunRelative !== 'now'}
-                    <span class="ml-1 text-dimmed">{nextRunRelative}</span>
-                  {/if}
-                </dd>
+            {/if}
+            {#if scheduleAgreed}
+              <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
+                <label class="shrink-0 text-[0.75rem] text-muted" for="assistant-schedule-name"
+                  >Schedule name</label
+                >
+                <input
+                  id="assistant-schedule-name"
+                  type="text"
+                  class="min-w-0 flex-1 border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
+                  placeholder={assistant.name}
+                  title="What you call this assistant's clock"
+                  aria-label="Schedule name"
+                  value={assistant.scheduleName ?? ''}
+                  onchange={(event: Event) =>
+                    commitScheduleName((event.currentTarget as HTMLInputElement).value)}
+                />
               </div>
-              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
-                <dt class="text-[0.75rem] text-muted">If a run is missed</dt>
-                <dd class="text-right text-[0.75rem] text-foreground">{missedRunPolicyLabel}</dd>
-              </div>
-            </dl>
+              <!-- The countdown is only worth its space when there is a clock to
+                   count down to, so these three rows appear with the schedule and
+                   not before it. -->
+              <dl class="flex flex-col">
+                <div
+                  class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"
+                >
+                  <dt class="text-[0.75rem] text-muted">Runs</dt>
+                  <dd class="text-right text-[0.75rem] text-foreground">{scheduleLabel}</dd>
+                </div>
+                <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                  <dt class="text-[0.75rem] text-muted">Next run</dt>
+                  <dd class="text-right text-[0.75rem] text-foreground">
+                    {nextRunLabel}
+                    {#if nextRunRelative && nextRunRelative !== 'now'}
+                      <span class="ml-1 text-dimmed">{nextRunRelative}</span>
+                    {/if}
+                  </dd>
+                </div>
+                <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                  <dt class="text-[0.75rem] text-muted">If a run is missed</dt>
+                  <dd class="text-right text-[0.75rem] text-foreground">{missedRunPolicyLabel}</dd>
+                </div>
+              </dl>
+            {/if}
           </div>
 
           <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
@@ -1665,6 +1843,20 @@
     onSaved={() => void loadConnectionLibrary()}
   />
 {/if}
+
+<ConfirmDialog
+  open={scheduleOffConfirm}
+  title="Turn the schedule off"
+  confirmLabel="Turn it off"
+  busy={scheduleOffBusy}
+  onCancel={() => (scheduleOffConfirm = false)}
+  onConfirm={confirmScheduleOff}
+>
+  <p>
+    Turning the schedule off drops the clock and its name. {assistantLabel} will only run when you ask,
+    and putting it back on a clock means agreeing a new one with it.
+  </p>
+</ConfirmDialog>
 
 <ConfirmDialog
   open={connectionRemoveTarget !== null}

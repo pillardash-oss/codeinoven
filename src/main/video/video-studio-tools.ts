@@ -35,6 +35,42 @@ export function videoStudioTools(): McpTool[] {
     ' Returns a running job immediately. Poll jobs for progress, files and errors. One expensive video job runs at a time. The user can cancel in Video controls.'
   const tools: McpTool[] = [
     tool(
+      'editor',
+      'Open/read a source-preserving editable timeline, import local media into assets/, or apply up to 64 incremental commands at the saved revision. Read first. action:read enables legacy cut-map conversion with Undo history. action:apply requires revision and operations. Commands: addTrack{name,trackKind:video|audio|caption|overlay}, addClip{assetId,trackId,start,duration?}, split{id,at}, trim{id,edge:start|end,at}, move{id,start,trackId?}, remove{id,ripple?}, patchClip{id,patch}, addRegion{region:{start,duration,x,y,width,height,kind:blur|pixelate|cover,amount,color}}, removeRegion{id}, review{id?}. Clips carry sourceStart, speed, volume, opacity, normalized rect/crop, grade{exposure,contrast,saturation,temperature,hue}, audio{highpass,lowpass,deess,compression,pan}, fadeIn/fadeOut, transition{kind:none|dissolve|fade|slide|zoom,duration}. Original assets are never deleted. Unreviewed agent saves are marked by changed time range. action:import accepts composition-relative sources and returns assets; use addClip to place them.',
+      {
+        directory,
+        action: { type: 'string', enum: ['read', 'apply', 'import'] },
+        revision: { type: 'string' },
+        sources: { type: 'array', maxItems: 16, items: { type: 'string' } },
+        operations: {
+          type: 'array',
+          maxItems: 64,
+          items: {
+            type: 'object',
+            properties: {
+              kind: {
+                type: 'string',
+                enum: [
+                  'addTrack',
+                  'addClip',
+                  'split',
+                  'trim',
+                  'move',
+                  'remove',
+                  'patchClip',
+                  'addRegion',
+                  'removeRegion',
+                  'review'
+                ]
+              }
+            },
+            required: ['kind']
+          }
+        }
+      },
+      ['directory']
+    ),
+    tool(
       'probe',
       'Read source duration, frame size, frame rate and streams using the bundled decoder.',
       { source },
@@ -115,7 +151,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'studio',
-      'Read or atomically update studio.json. Read first and send its revision with document to avoid overwriting concurrent user edits. Fields: version:1, controls:[{key,label,kind:text|number|color|switch,value,min?,max?}], captions:[{text,start,end,words?:[{text,start,end}]}], captionStyle:plain|highlight|karaoke, audioTracks:[{source,start,trim,duration,gain}]. Times are seconds. The runtime reads these values and the user can edit controls in the video panel.',
+      'Read or atomically update studio.json. Read first and send its revision with document to avoid overwriting concurrent user edits. Preserve existing edit and appearance fields. Fields: version:1, controls:[{key,label,kind:text|number|color|switch,value,min?,max?}], captions:[{text,start,end,words?:[{text,start,end}],appearance?}], captionStyle:none|plain|highlight|karaoke, captionAppearance?, audioTracks:[{source,start,trim,duration,gain}], edit?:source-preserving tracks/assets/clips/regions/changes. Times are seconds. Appearance includes normalized x/y/width, relative size, app font id, weight, color/background/backgroundOpacity. The shared runtime renders preview and export. Saves create history checkpoints.',
       { directory, document: { type: 'object' }, revision: { type: 'string' } },
       ['directory']
     ),
@@ -128,7 +164,7 @@ export function videoStudioTools(): McpTool[] {
         from: start,
         to: start,
         at: start,
-        style: { type: 'string', enum: ['plain', 'highlight', 'karaoke'] }
+        style: { type: 'string', enum: ['plain', 'highlight', 'karaoke', 'none'] }
       },
       ['directory']
     ),

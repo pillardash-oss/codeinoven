@@ -27,6 +27,7 @@ import {
   Menu,
   MenuItem,
   app,
+  clipboard,
   session,
   shell,
   type BrowserWindow,
@@ -47,6 +48,10 @@ import {
   stagedDownloadPath
 } from './browser-download-files'
 import { downloadFileName } from './browser-download-name'
+import {
+  extensionDownloadItem,
+  type BrowserDownloadExtensionItem
+} from './browser-download-extension'
 import { hasResumeValidator, recoverDownloadRecord } from './browser-download-recovery'
 import {
   BrowserDownloadStore,
@@ -100,6 +105,9 @@ interface TrackedDownload {
    *  moved out of Chromium's reach. Empty when there are none. */
   stagedPath: string
   lastEmittedAt: number
+  /** When this download was last described to a watching extension, so a fast
+   *  transfer does not spend one worker push per progress tick. */
+  lastExtensionEmitAt: number
 }
 
 /**
@@ -121,6 +129,37 @@ interface PendingAdoption {
 export interface BrowserDownloadOwner {
   projectId: string
   boxId: string | null
+}
+
+/** The `chrome.downloads` event names an installed download manager listens on. */
+export type BrowserDownloadExtensionEventName =
+  'onCreated' | 'onDeterminingFilename' | 'onChanged' | 'onErased'
+
+/**
+ * One download fact, shaped for an installed extension.
+ *
+ * `item` is present for every event but `onErased`, which names the numeric id
+ * alone: the record it described is already gone from the map by then, so there
+ * is no download left to describe.
+ */
+export interface BrowserDownloadExtensionEvent {
+  name: BrowserDownloadExtensionEventName
+  projectId: string
+  /** The box the download's page ran in, so the event reaches the jar that
+   *  actually holds the extension. */
+  boxId: string | null
+  id: number
+  item?: BrowserDownloadExtensionItem
+}
+
+/**
+ * One `chrome.downloads` call an installed extension made about a download it
+ * saw. `id` is the numeric id the extension was given, mapped back to the
+ * tracked download it stands for.
+ */
+export interface BrowserDownloadExtensionCommand {
+  method: 'cancel' | 'pause' | 'resume' | 'erase'
+  id: number
 }
 
 export interface BrowserDownloadManagerDeps {
@@ -148,6 +187,17 @@ export class BrowserDownloadManager {
   private readonly removedRecords = new Set<string>()
   private findTabId: ((projectId: string, contentsId: number) => string | undefined) | null
   private findOwnerTab: ((contentsId: number) => BrowserDownloadOwner | null) | null
+  /** The installed extensions that watch downloads. Wired by the browser
+   *  service, because nothing below this manager knows an extension exists. */
+  private extensionObserver: ((event: BrowserDownloadExtensionEvent) => void) | null = null
+  /** Whether any extension in a jar watches downloads; null when the browser
+   *  service is not attached, which leaves every save a user's own choice. */
+  private downloadWatcher: ((projectId: string, boxId: string | null) => boolean) | null = null
+  /** The numeric id an extension sees for a download, and the counter behind it.
+   *  Chrome's own ids are integers, so the app's string ids are mapped instead of
+   *  being handed over as something a listener cannot pass back to the API. */
+  private readonly extensionIds = new Map<string, number>()
+  private nextExtensionId = 1
   private hydrated = false
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private persisting = false
@@ -172,6 +222,50 @@ export class BrowserDownloadManager {
    *  page ran in, rather than against whichever context opened the jar first. */
   setOwnerResolver(resolver: ((contentsId: number) => BrowserDownloadOwner | null) | null): void {
     this.findOwnerTab = resolver
+  }
+
+  /**
+   * Point download reporting at the installed extensions, or at nothing when the
+   * browser service is released.
+   *
+   * This is what makes a download-capturing extension work at all: it sees each
+   * download arrive, and can cancel it to fetch the file itself. Nothing is
+   * delivered when no extension declared the `downloads` permission, because the
+   * service drops the event before it crosses into a worker.
+   */
+  setExtensionObserver(observer: ((event: BrowserDownloadExtensionEvent) => void) | null): void {
+    this.extensionObserver = observer
+  }
+
+  /**
+   * Point the manager at the question it has to ask before a new download
+   * starts: whether any extension in that jar watches downloads.
+   *
+   * A capture extension takes a download over by cancelling it, so this is what
+   * keeps the save dialog from opening for a file that is about to be thrown
+   * away. The answer belongs to the extension service, so it is asked rather than
+   * owned here.
+   */
+  setDownloadWatcher(watcher: ((projectId: string, boxId: string | null) => boolean) | null): void {
+    this.downloadWatcher = watcher
+  }
+
+  /**
+   * Apply one `chrome.downloads` call an extension made.
+   *
+   * `cancel` is a handoff rather than a cancellation: a capturing extension stops
+   * the browser's copy so it can download the file itself, which is not something
+   * the user asked for and must not appear as a cancelled row. `erase` drops a
+   * download from the list the same way removal does.
+   */
+  applyExtensionCommand(command: BrowserDownloadExtensionCommand): void {
+    const record = this.recordForExtensionId(command.id)
+    if (!record) return
+    const downloadId = record.download.id
+    if (command.method === 'cancel') this.handOff(downloadId)
+    else if (command.method === 'pause') this.pause(downloadId)
+    else if (command.method === 'resume') this.resume(downloadId)
+    else this.forget(downloadId)
   }
 
   /**
@@ -243,7 +337,8 @@ export class BrowserDownloadManager {
         lastModified: record.lastModified,
         eTag: record.eTag,
         stagedPath: record.stagedPath,
-        lastEmittedAt: 0
+        lastEmittedAt: 0,
+        lastExtensionEmitAt: 0
       })
     }
     if (changed) await this.persist()
@@ -309,6 +404,7 @@ export class BrowserDownloadManager {
     item.pause()
     record.download = { ...record.download, paused: true, speedBytes: 0 }
     this.emit(downloadId, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
   }
 
@@ -323,6 +419,7 @@ export class BrowserDownloadManager {
       item.resume()
       record.download = { ...record.download, paused: false }
       this.emit(downloadId, true)
+      this.notifyChanged(record, true)
       this.schedulePersist()
       return
     }
@@ -355,6 +452,7 @@ export class BrowserDownloadManager {
     }
     this.watchAdoption(`retry:${url}`, record, previous)
     this.emit(downloadId, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
     this.sessionFor(projectId, record.boxId).downloadURL(url)
   }
@@ -383,6 +481,7 @@ export class BrowserDownloadManager {
       error: ''
     }
     this.emit(downloadId, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
   }
 
@@ -391,11 +490,7 @@ export class BrowserDownloadManager {
   remove(downloadId: string): void {
     const record = this.downloads.get(downloadId)
     if (!record || record.download.state === 'progressing') return
-    this.downloads.delete(downloadId)
-    this.removedRecords.add(downloadId)
-    if (record.stagedPath.length > 0) void removeFileQuietly(record.stagedPath)
-    this.emitRemoved(downloadId)
-    this.schedulePersist()
+    this.forget(downloadId)
   }
 
   open(downloadId: string): void {
@@ -449,17 +544,11 @@ export class BrowserDownloadManager {
   /** Forget a project's downloads, because the project itself is gone. Kept
    *  bytes are this app's own artifacts and go with the records. */
   forgetProject(projectId: string): void {
-    let removed = false
     for (const [id, record] of [...this.downloads]) {
       if (record.download.projectId !== projectId) continue
       if (record.download.state === 'progressing') continue
-      if (record.stagedPath.length > 0) void removeFileQuietly(record.stagedPath)
-      this.downloads.delete(id)
-      this.removedRecords.add(id)
-      this.emitRemoved(id)
-      removed = true
+      this.forget(id)
     }
-    if (removed) this.schedulePersist()
   }
 
   /**
@@ -527,6 +616,7 @@ export class BrowserDownloadManager {
     if (this.persistTimer) clearTimeout(this.persistTimer)
     this.persistTimer = null
     this.downloads.clear()
+    this.extensionIds.clear()
     this.watchedPartitions.clear()
   }
 
@@ -564,13 +654,21 @@ export class BrowserDownloadManager {
         item.setSavePath(record.download.savePath)
       }
     } else {
-      item.setSaveDialogOptions({
-        title: 'Save downloaded file',
-        // Chromium's own filename determination (the `download` attribute, a
-        // Content-Disposition header, the URL's last segment) is what makes the
-        // suggestion right during a save, so it is kept for every new download.
-        defaultPath: join(app.getPath('downloads'), safeBasename(item.getFilename()))
-      })
+      // A download an extension watches belongs to that extension: it cancels the
+      // browser's copy and fetches the file itself. Asking the user where to put a
+      // file that is about to be discarded would be a dialog that closes itself.
+      const watched = this.downloadWatcher?.(projectId, boxId) === true
+      if (watched) {
+        item.setSavePath(join(app.getPath('downloads'), safeBasename(item.getFilename())))
+      } else {
+        item.setSaveDialogOptions({
+          title: 'Save downloaded file',
+          // Chromium's own filename determination (the `download` attribute, a
+          // Content-Disposition header, the URL's last segment) is what makes the
+          // suggestion right during a save, so it is kept for every new download.
+          defaultPath: join(app.getPath('downloads'), safeBasename(item.getFilename()))
+        })
+      }
     }
 
     const id = retry?.id ?? crypto.randomUUID()
@@ -603,11 +701,15 @@ export class BrowserDownloadManager {
       lastModified: item.getLastModifiedTime(),
       eTag: item.getETag(),
       stagedPath: '',
-      lastEmittedAt: 0
+      lastEmittedAt: 0,
+      lastExtensionEmitAt: 0
     }
     this.downloads.set(id, record)
     this.trackItem(id, item)
     this.emit(id, true)
+    // Announced before anything else is written, because a capturing extension
+    // acts on the download it just saw and its answer is what stops this one.
+    this.notifyCreated(record)
     this.schedulePersist()
   }
 
@@ -640,6 +742,7 @@ export class BrowserDownloadManager {
     }
     this.trackItem(id, item)
     this.emit(id, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
     // The download Chromium created for a resume waits for this call.
     setImmediate(() => item.resume())
@@ -678,6 +781,7 @@ export class BrowserDownloadManager {
     const eTag = item.getETag()
     if (eTag.length > 0) record.eTag = eTag
     this.emit(id)
+    this.notifyChanged(record)
     this.schedulePersist()
   }
 
@@ -747,6 +851,7 @@ export class BrowserDownloadManager {
       }
     }
     this.emit(id, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
     if (finished === 'interrupted') void this.measureInterruptedBytes(id, savePath, receivedBytes)
     this.trimDownloads()
@@ -777,6 +882,7 @@ export class BrowserDownloadManager {
         error: ''
       }
       this.emit(id, true)
+      this.notifyChanged(record, true)
       this.schedulePersist()
       return
     }
@@ -794,6 +900,7 @@ export class BrowserDownloadManager {
           : 'The download was interrupted and nothing was kept, so it has to start over.'
     }
     this.emit(id, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
   }
 
@@ -844,6 +951,7 @@ export class BrowserDownloadManager {
     }
     this.watchAdoption(`resume:${savePath}`, record, previous)
     this.emit(downloadId, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
     try {
       this.sessionFor(projectId, record.boxId).createInterruptedDownload({
@@ -910,6 +1018,7 @@ export class BrowserDownloadManager {
       record.download = { ...pending.previous, error }
     }
     this.emit(record.download.id, true)
+    this.notifyChanged(record, true)
     this.schedulePersist()
   }
 
@@ -939,6 +1048,16 @@ export class BrowserDownloadManager {
       }
       actions.push({ label: 'Remove from list', click: () => this.remove(download.id) })
     }
+    // The address is the one action that works for a download in any state, and
+    // it is what a user needs to hand the file to their own download manager.
+    actions.push(
+      { type: 'separator' },
+      {
+        label: 'Copy link',
+        enabled: download.url.length > 0,
+        click: () => clipboard.writeText(download.url)
+      }
+    )
     return new MenuItem({
       label: download.fileName,
       submenu: [
@@ -1068,9 +1187,125 @@ export class BrowserDownloadManager {
     while (this.downloads.size > MAX_TRACKED_DOWNLOADS && terminal.length > 0) {
       const [id] = terminal.shift() ?? []
       if (!id) continue
-      this.downloads.delete(id)
-      this.removedRecords.add(id)
-      this.emitRemoved(id)
+      this.forget(id)
     }
+  }
+
+  /**
+   * Take one record out of the list, with its kept bytes and its extension id.
+   *
+   * Every path that drops a record goes through here so the three things a
+   * removal has to do stay together: the map loses it, the file it was written to
+   * learns about it, and any extension watching downloads is told it is erased.
+   */
+  private forget(downloadId: string): void {
+    const record = this.downloads.get(downloadId)
+    if (!record) return
+    const extensionId = this.extensionIds.get(downloadId)
+    if (record.stagedPath.length > 0) void removeFileQuietly(record.stagedPath)
+    this.downloads.delete(downloadId)
+    this.extensionIds.delete(downloadId)
+    this.removedRecords.add(downloadId)
+    this.emitRemoved(downloadId)
+    if (extensionId !== undefined) {
+      this.dispatchExtension({
+        name: 'onErased',
+        projectId: record.download.projectId,
+        boxId: record.boxId,
+        id: extensionId
+      })
+    }
+    this.schedulePersist()
+  }
+
+  /**
+   * An extension took this download over: it cancels the browser's copy and
+   * fetches the file itself, so the row goes with it.
+   *
+   * Chromium deletes the partial file when the item is cancelled, and the record
+   * is already out of the map by then, so the `done` event it reports finds
+   * nothing to settle and no cancelled row ever appears for a handoff.
+   */
+  private handOff(downloadId: string): void {
+    const record = this.downloads.get(downloadId)
+    if (!record) return
+    const item = record.item
+    this.forget(downloadId)
+    item?.cancel()
+  }
+
+  /** The tracked download an extension's numeric id stands for. */
+  private recordForExtensionId(id: number): TrackedDownload | null {
+    for (const [downloadId, extensionId] of this.extensionIds) {
+      if (extensionId !== id) continue
+      return this.downloads.get(downloadId) ?? null
+    }
+    return null
+  }
+
+  /** The numeric id an extension knows one download by, allocated on first use. */
+  private extensionIdFor(downloadId: string): number {
+    const existing = this.extensionIds.get(downloadId)
+    if (existing !== undefined) return existing
+    const id = this.nextExtensionId
+    this.nextExtensionId += 1
+    this.extensionIds.set(downloadId, id)
+    return id
+  }
+
+  /** Hand one download fact to whatever is watching downloads, if anything is. */
+  private dispatchExtension(event: BrowserDownloadExtensionEvent): void {
+    const observer = this.extensionObserver
+    if (!observer) return
+    try {
+      observer(event)
+    } catch (error: unknown) {
+      Logger.dev('A browser download could not be reported to an extension:', {
+        error: String(error)
+      })
+    }
+  }
+
+  /**
+   * Announce a download an extension may want to capture, in both shapes the API
+   * uses for it: `onCreated`, and the `onDeterminingFilename` a listener that
+   * names the file waits on. Both carry the same item, so a listener that cancels
+   * from either event stops the browser's copy the same way.
+   */
+  private notifyCreated(record: TrackedDownload): void {
+    const id = this.extensionIdFor(record.download.id)
+    const item = extensionDownloadItem(record.download, id)
+    for (const name of ['onCreated', 'onDeterminingFilename'] as const) {
+      this.dispatchExtension({
+        name,
+        projectId: record.download.projectId,
+        boxId: record.boxId,
+        id,
+        item
+      })
+    }
+  }
+
+  /**
+   * Report one download's current state to the extensions watching downloads.
+   *
+   * Progress is coalesced on the same interval the renderer is, because each
+   * report is a push into a worker through `executeJavaScript` and a fast
+   * transfer would otherwise spend one per tick. A state change is forced: an
+   * extension that missed a completion would keep showing a download in flight.
+   */
+  private notifyChanged(record: TrackedDownload, force = false): void {
+    if (!this.extensionObserver) return
+    const now = Date.now()
+    if (!force && now - record.lastExtensionEmitAt < DOWNLOAD_EVENT_INTERVAL_MS) return
+    record.lastExtensionEmitAt = now
+    const id = this.extensionIdFor(record.download.id)
+    this.dispatchExtension({
+      name: 'onChanged',
+      projectId: record.download.projectId,
+      boxId: record.boxId,
+      id,
+      item: extensionDownloadItem(record.download, id)
+    })
   }
 }

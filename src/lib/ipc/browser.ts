@@ -199,6 +199,9 @@ export interface BrowserPageState {
   /** True while the page holds a live microphone, camera or screen capture.
    *  Drives the tab's recording indicator. */
   capturing: boolean
+  microphoneActive?: boolean
+  cameraActive?: boolean
+  screenActive?: boolean
   /** The design folder this tab is rendering, when the design capability opened
    *  it. Non-null is what arms the element inspector, so a tab showing a normal
    *  site never offers it. */

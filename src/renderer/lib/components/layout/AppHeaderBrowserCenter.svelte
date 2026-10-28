@@ -1,11 +1,10 @@
 <script lang="ts">
+  import MediaActivityIndicator from '$lib/components/speech/MediaActivityIndicator.svelte'
+  import { captureActivities } from '$shared/media-activity'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
-  import CioMic from '@pdslng/cio-icon/CioMic.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
-  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
+  import { browserTabMuteLabel } from '$lib/stores/browser-tab-status'
 
   /**
    * The header's centre while the global browser is the active view.
@@ -44,13 +43,10 @@
         {tab.title}
       </h1>
       {#if runtime.capturing}
-        <span
-          role="img"
-          class="flex h-5 w-5 shrink-0 items-center justify-center text-accent"
-          title={BROWSER_TAB_CAPTURE_LABEL}
-          aria-label={BROWSER_TAB_CAPTURE_LABEL}
-        >
-          <CioMic size={13} />
+        <span class="flex shrink-0 items-center justify-center gap-0.5">
+          {#each captureActivities(runtime) as kind (kind)}
+            <MediaActivityIndicator {kind} />
+          {/each}
         </span>
       {/if}
       {#if runtime.audible || runtime.muted}
@@ -63,9 +59,9 @@
           onclick={() => globalBrowser.toggleMute(tab.id)}
         >
           {#if runtime.muted}
-            <CioVolumeX size={13} />
+            <MediaActivityIndicator kind="audio" muted decorative />
           {:else}
-            <CioVolume size={13} />
+            <MediaActivityIndicator kind="audio" decorative />
           {/if}
         </button>
       {/if}

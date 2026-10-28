@@ -1,4 +1,6 @@
 import type {
+  BranchDeletionOutcome,
+  BranchDeletionState,
   GitHubDeployment,
   GitHubDeploymentDetail,
   GitHubDeploymentJob,
@@ -48,10 +50,15 @@ import type {
   WorkflowRerunMode,
   WorkflowRunFilter
 } from '../../lib/types'
-import type { IssueLinkInput, SearchIssueCandidatesInput } from '../git/git-provider.interface'
+import type {
+  IssueLinkInput,
+  SearchIssueCandidatesInput,
+  SearchPullRequestsInput
+} from '../git/git-provider.interface'
 import { capJobLogText } from '../../lib/github-job-log'
 import { isReactionContent } from '../../lib/github-reactions'
 import type {
+  BranchTarget,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreatePrCommentInput,
@@ -265,6 +272,14 @@ const PULL_REQUEST_LIST_QUERY = `query PullRequestList($q: String!, $first: Int!
 const ISSUE_CANDIDATE_LIMIT = 20
 
 /**
+ * How many pull requests the panel's find offers.
+ *
+ * Bounded like the issue picker, and for the same reason: a find is one item out of
+ * a list the reader is already looking at, and typing is how they narrow it.
+ */
+const PR_SEARCH_LIMIT = 20
+
+/**
  * The relationship mutations.
  *
  * Every one of them takes the two issues by GraphQL node id and answers with the
@@ -390,6 +405,28 @@ const WORKFLOW_RUN_FILTER_STATUS: Record<WorkflowRunFilter, string | null> = {
   all: null,
   failed: 'failure',
   succeeded: 'success'
+}
+
+/**
+ * A branch name as a URL path, keeping its slashes as separators.
+ *
+ * A branch is spelled in a URL the way it is spelled in git (`feature/thing`),
+ * so each segment is encoded on its own: encoding the whole name turns the
+ * separators into `%2F`, which GitHub's router does not read back as a branch.
+ */
+function branchPath(input: { branch: string }): string {
+  return input.branch.split('/').map(encodeURIComponent).join('/')
+}
+
+/**
+ * Whether GitHub refused a branch delete because the ref is already gone.
+ *
+ * The refusal is a 422 carrying "Reference does not exist", which is the same
+ * status a protected branch refusal uses, so the message is what separates a
+ * branch that was already deleted from a write that was denied.
+ */
+function isMissingRefRefusal(failure: ProviderHttpError): boolean {
+  return failure.status === 422 && /Reference does not exist/iu.test(failure.message)
 }
 
 /**
@@ -532,6 +569,48 @@ export class GitHubProvider implements GitProvider {
     return this.toReference(response)
   }
 
+  /**
+   * What a branch is as far as deleting it goes.
+   *
+   * The branch endpoint reports protection beside the commit it points at, and a
+   * branch GitHub cannot find comes back 404. The three answers are kept apart
+   * rather than collapsed into "may delete": a missing branch reading as
+   * deletable is exactly the race that offers an action which cannot land.
+   */
+  async readBranchDeletionState(input: BranchTarget): Promise<BranchDeletionState> {
+    try {
+      const response = await this.request(`${this.repoPath(input)}/branches/${branchPath(input)}`, {
+        method: 'GET'
+      })
+      const record = Array.isArray(response) ? {} : response
+      return record['protected'] === true ? 'protected' : 'deletable'
+    } catch (failure) {
+      if (failure instanceof ProviderHttpError && failure.status === 404) return 'missing'
+      throw failure
+    }
+  }
+
+  /**
+   * Delete a branch from the repository.
+   *
+   * A branch that is already gone reports `missing`: GitHub answers a delete for
+   * an absent ref with a 422 "Reference does not exist", and that is the outcome
+   * the caller asked for, not a failure to report. A protected branch answers
+   * with a different 422, which stays an error, so the refusal is never mistaken
+   * for success.
+   */
+  async deleteBranch(input: BranchTarget): Promise<BranchDeletionOutcome> {
+    try {
+      await this.request(`${this.repoPath(input)}/git/refs/heads/${branchPath(input)}`, {
+        method: 'DELETE'
+      })
+      return 'deleted'
+    } catch (failure) {
+      if (failure instanceof ProviderHttpError && isMissingRefRefusal(failure)) return 'missing'
+      throw failure
+    }
+  }
+
   /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
   async updatePullRequest(
     input: PullRequestTarget & {
@@ -620,6 +699,44 @@ export class GitHubProvider implements GitProvider {
       // The IPC handler tells a repository the App cannot see apart from a
       // transient outage by HTTP status, so a GraphQL access failure has to
       // arrive as the same `ProviderHttpError` the REST calls raise.
+      if (failure instanceof ProviderGraphqlError) {
+        if (failure.type === 'FORBIDDEN') throw new ProviderHttpError(403, failure.message)
+        if (failure.type === 'NOT_FOUND') throw new ProviderHttpError(404, failure.message)
+      }
+      throw failure
+    }
+  }
+
+  /**
+   * Search the repository's pull requests for the panel's find.
+   *
+   * Shares `PULL_REQUEST_LIST_QUERY` and its mapper with the listing, so a result is
+   * a row the PR list itself would have drawn and opening it needs no second read.
+   * Stack counts are left unset on purpose: a find is a jump to one pull request, and
+   * the reader reads the stack when it opens.
+   */
+  async searchPullRequests(input: SearchPullRequestsInput): Promise<PullRequestSummary[]> {
+    const qualifiers = ['is:pr', `repo:${input.owner}/${input.repo}`]
+    if (input.state === 'open') qualifiers.push('is:open')
+    else if (input.state === 'closed') qualifiers.push('is:closed')
+    const text = input.text.trim()
+    if (text) qualifiers.push(text)
+    qualifiers.push(LIST_SORTS['updated'])
+    try {
+      const data = await this.runGraphql(PULL_REQUEST_LIST_QUERY, {
+        q: qualifiers.join(' '),
+        first: PR_SEARCH_LIMIT,
+        after: null
+      })
+      const search = this.readRecord(data, 'search')
+      const nodes: unknown[] = search && Array.isArray(search['nodes']) ? search['nodes'] : []
+      return nodes.flatMap((node) => {
+        const summary = this.toGraphqlSummary(node, input.owner, input.repo)
+        return summary ? [summary] : []
+      })
+    } catch (failure) {
+      // Same translation as the listing: the handler tells a repository this App
+      // cannot see apart from a transient outage by HTTP status.
       if (failure instanceof ProviderGraphqlError) {
         if (failure.type === 'FORBIDDEN') throw new ProviderHttpError(403, failure.message)
         if (failure.type === 'NOT_FOUND') throw new ProviderHttpError(404, failure.message)

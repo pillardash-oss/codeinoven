@@ -74,6 +74,7 @@
     GitDiff,
     GitFileChange,
     GitPullStrategy,
+    GitPullPreference,
     GitSyncDirection,
     GitRebaseAction,
     GitHubDeployment,
@@ -100,15 +101,23 @@
   import GitStatusPanelConfirmDialogs from './GitStatusPanelConfirmDialogs.svelte'
   import GitStatusPanelChangesView from './GitStatusPanelChangesView.svelte'
   import GitStatusPanelCommitComposer from './GitStatusPanelCommitComposer.svelte'
-  import GitStatusPanelCommitSearch from './GitStatusPanelCommitSearch.svelte'
+  import GitStatusPanelFind from './GitStatusPanelFind.svelte'
+  import {
+    GIT_FIND_WORDS,
+    gitFindScopeFor,
+    type GitFindRow,
+    type GitFindScope
+  } from './git-panel-find'
   import GitStatusPanelNotices from './GitStatusPanelNotices.svelte'
   import OvenSurfaceOverlay from '../shared/OvenSurfaceOverlay.svelte'
   import GitStatusPanelRepoStates from './GitStatusPanelRepoStates.svelte'
   import GitStatusPanelDialogs from './GitStatusPanelDialogs.svelte'
   import GitStatusPanelStashesView from './GitStatusPanelStashesView.svelte'
   import GitSyncButton from './GitSyncButton.svelte'
+  import GitPullButton from './GitPullButton.svelte'
   import GitSyncPeerDialog from './GitSyncPeerDialog.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
+  import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
   import GitGraphView from './GitGraphView.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitIssuesView from './GitIssuesView.svelte'
@@ -151,6 +160,7 @@
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+  import { issuePanelView } from '$lib/stores/issue-panel-view.svelte'
   import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
@@ -221,9 +231,8 @@
   let identityName = $state('')
   let identityEmail = $state('')
   let pushConfirm = $state(false)
-  /** Pull strategy chooser, opened by the default `ask` preference or a failed strategy. */
+  /** Pull strategy chooser, opened by the default `ask` preference. */
   let pullStrategyOpen = $state(false)
-  let pullStrategyError = $state('')
   /**
    * Main-sync strategy chooser, opened by the `ask` preference, a failure, or
    * always when sending commits out of this checkout (that mutates a branch the
@@ -285,11 +294,18 @@
   let remoteUpdatesRequestId = 0
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
-  let commitSearchQuery = $state('')
-  let commitSearchResults = $state.raw<GitCommitInfo[]>([])
-  let commitSearchLoading = $state(false)
-  let commitSearchActiveIndex = $state(0)
-  let commitSearchRequestId = 0
+  let findQuery = $state('')
+  let findRows = $state.raw<GitFindRow[]>([])
+  let findLoading = $state(false)
+  let findActiveIndex = $state(0)
+  let findRequestId = 0
+  /** Why the last search could not be answered, when it could not. */
+  let findError = $state<string | null>(null)
+  /** How many matches the bar offers: a find is a jump to one item, not a listing. */
+  const FIND_LIMIT = 20
+  /** What the bar searches, which the view in focus decides. */
+  const findScope = $derived(gitFindScopeFor(activeTab))
+  const findWords = $derived(GIT_FIND_WORDS[findScope])
   /** Invalidated whenever the panel swaps scope buckets, so a history page
    *  fetched for the previous worktree can never land in the new one's list. */
   let historyRequestId = 0
@@ -521,20 +537,44 @@
   const stashOpBusy = $derived(gitState.isBusy(['stash-pop', 'stash-drop']))
 
   /**
-   * The refresh button: git status, the History pages, and the view in focus.
+   * The refresh button: the view in focus, then the repository behind it.
    *
    * The view's reload goes through the store rather than through a signal the
    * view watches. A view that watched a signal had to call a store method that
    * reads the very record it writes, so a forced reload re-ran its own effect:
    * the PR list and the deployments view refetched forever. The store is what
    * every view renders from, so reloading it is enough.
+   *
+   * Only the view is awaited, because it is the answer the click was about and
+   * the one the control reports on. The repository half (working tree, chrome,
+   * remote-tracking refs) is started first and left to land on its own: every
+   * step of it publishes through the store, so a late answer still repaints the
+   * panel instead of being dropped, and a slow network round trip can never turn
+   * Refresh into a stalled control.
    */
   async function refreshPanel(): Promise<void> {
-    // The button exists to make the panel trustworthy again, and the one thing a
-    // cache can be wrong about is whether the directory is still a repository at
-    // all, so this re-asks instead of trusting the stored answer.
-    await loadRepoState(true)
+    void refreshRepository().catch(() => undefined)
     await refreshFocusedView()
+  }
+
+  /**
+   * The repository half of Refresh, deliberately never awaited by the button.
+   *
+   * `loadRepoState` re-asks whether this is still a repository at all (the one
+   * thing a cache can be wrong about), then reads the working tree, the
+   * branches and the History pages, which is what the Changes, History and
+   * Branches views render from. The fetch then makes `ahead`/`behind` true
+   * again. An explicit click skips the age gate that throttles the automatic
+   * fetch, because the user asked for the newest answer there is; only a
+   * repository with no remote is skipped, since there is nothing to ask.
+   */
+  async function refreshRepository(): Promise<void> {
+    await loadRepoState(true)
+    // A fetch already in flight is already answering this click, and a
+    // repository with no remote has nothing to ask: either way a second round
+    // trip would only repeat a question that is being asked.
+    if (remotes.length === 0 || gitState.isBusy('fetch')) return
+    await gitState.fetch(projectId)
   }
 
   /** Force a reload of whatever the active view shows, when the store has it. */
@@ -1032,7 +1072,11 @@
 
   /** Switch the panel's view. History is the one view that pages its data in. */
   function selectTab(id: GitPanelTabId): void {
+    // The find bar follows the view, so a subject change drops the answers that
+    // belonged to the old one while leaving the bar open if it was open.
+    const subjectChanged = gitFindScopeFor(id) !== findScope
     activeTab = id
+    if (subjectChanged && findNavState.gitFindOpen) resetFindResults()
     if (id === 'history') void loadHistory()
     // Notifications arrive from GitHub rather than the repository, so the view
     // asks for its own data the first time it is shown.
@@ -1255,55 +1299,289 @@
     }
   }
 
-  function openCommitSearch(): void {
+  function openFind(): void {
     findNavState.openGitFind()
   }
 
-  function closeCommitSearch(): void {
-    commitSearchRequestId++
-    commitSearchQuery = ''
-    commitSearchResults = []
-    commitSearchLoading = false
-    commitSearchActiveIndex = 0
+  function closeFind(): void {
+    findRequestId++
+    findQuery = ''
+    findRows = []
+    findLoading = false
+    findActiveIndex = 0
+    findError = null
     findNavState.closeGitFind()
   }
 
-  async function searchCommits(rawQuery: string): Promise<void> {
+  /**
+   * Drop what the previous view answered, keeping the bar open.
+   *
+   * Switching views switches the subject of the search, and results from the old
+   * subject would be a list of things this view does not show.
+   */
+  function resetFindResults(): void {
+    findRequestId++
+    findQuery = ''
+    findRows = []
+    findLoading = false
+    findActiveIndex = 0
+    findError = null
+  }
+
+  async function runFind(rawQuery: string): Promise<void> {
     const query = rawQuery.trim()
-    commitSearchQuery = query
-    commitSearchActiveIndex = 0
-    const requestId = ++commitSearchRequestId
+    findQuery = query
+    findActiveIndex = 0
+    findError = null
+    const requestId = ++findRequestId
     if (!query) {
-      commitSearchResults = []
-      commitSearchLoading = false
+      findRows = []
+      findLoading = false
       return
     }
 
-    commitSearchResults = []
-    commitSearchLoading = true
-    const results = await gitState.getLog(projectId, 50, 0, query)
-    if (requestId !== commitSearchRequestId) return
-    commitSearchResults = results
-    commitSearchLoading = false
+    findRows = []
+    findLoading = true
+    try {
+      const rows = await findRowsFor(findScope, query)
+      if (requestId !== findRequestId) return
+      findRows = rows
+    } catch (reason) {
+      if (requestId !== findRequestId) return
+      findRows = []
+      findError = reason instanceof Error ? reason.message : 'The search could not be run'
+    } finally {
+      if (requestId === findRequestId) findLoading = false
+    }
   }
 
-  function moveCommitSearch(direction: -1 | 1): void {
-    if (commitSearchResults.length === 0) return
-    commitSearchActiveIndex =
-      (commitSearchActiveIndex + direction + commitSearchResults.length) %
-      commitSearchResults.length
+  /**
+   * The rows the active view's search answers with.
+   *
+   * Every scope reads the same data its view draws, so a result is a thing the
+   * view can open: the commit list reads commits, the PR search asks GitHub for
+   * `is:pr`, and the views whose lists are already resident filter what is loaded
+   * rather than making a request per keystroke.
+   */
+  async function findRowsFor(scope: GitFindScope, query: string): Promise<GitFindRow[]> {
+    switch (scope) {
+      case 'commits': {
+        const commits = await gitState.getLog(projectId, 50, 0, query)
+        return commits.map((commit) => ({
+          kind: 'commit',
+          key: commit.hash,
+          title: commit.message.split('\n')[0] ?? commit.shortHash,
+          detail: `${commit.shortHash} · ${commit.author} · ${formatCompactAge(commit.date)}`,
+          commit
+        }))
+      }
+      case 'branches': {
+        const needle = query.toLowerCase()
+        return gitState.branches
+          .filter(
+            (branch) =>
+              branch.name.toLowerCase().includes(needle) ||
+              branch.ref.toLowerCase().includes(needle)
+          )
+          .slice(0, FIND_LIMIT)
+          .map((branch) => ({
+            kind: 'branch',
+            key: branch.ref,
+            title: branch.name,
+            detail: branch.remote ? `${branch.remote} · ${branch.kind}` : branch.kind,
+            badge: branch.current ? 'current' : undefined,
+            branch
+          }))
+      }
+      case 'pulls': {
+        const identity = requireFindIdentity('pull requests')
+        const pulls = await gitState.searchPullRequests(
+          projectId,
+          identity.owner,
+          identity.repo,
+          prListState,
+          query
+        )
+        return pulls.map((pull) => ({
+          kind: 'pull',
+          key: String(pull.number),
+          title: `#${String(pull.number)} ${pull.title}`,
+          detail: `${pull.headRef} → ${pull.baseRef} · @${pull.authorLogin}`,
+          badge: pull.state,
+          pull
+        }))
+      }
+      case 'issues': {
+        const identity = requireFindIdentity('issues')
+        const issues = await gitState.searchIssueCandidates(
+          projectId,
+          identity.owner,
+          identity.repo,
+          query
+        )
+        return issues.map((issue) => ({
+          kind: 'issue',
+          key: String(issue.number),
+          title: `#${String(issue.number)} ${issue.title}`,
+          detail: `@${issue.authorLogin} · ${formatCompactAge(Date.parse(issue.updatedAt))}`,
+          badge: issue.state,
+          issue
+        }))
+      }
+      case 'notifications': {
+        const needle = query.toLowerCase()
+        return githubNotifications.items
+          .filter((item) =>
+            `${item.title} ${item.repositoryFullName}`.toLowerCase().includes(needle)
+          )
+          .slice(0, FIND_LIMIT)
+          .map((notification) => ({
+            kind: 'notification',
+            key: notification.id,
+            title: notification.title,
+            detail: `${notification.repositoryFullName} · ${formatCompactAge(Date.parse(notification.updatedAt))}`,
+            badge: notification.unread ? 'unread' : undefined,
+            notification
+          }))
+      }
+      case 'stashes': {
+        const needle = query.toLowerCase()
+        return gitState.stashes
+          .filter((stash) =>
+            `${stash.message} ${stash.branch ?? ''}`.toLowerCase().includes(needle)
+          )
+          .slice(0, FIND_LIMIT)
+          .map((stash) => ({
+            kind: 'stash',
+            key: stash.id,
+            title: stash.message,
+            detail: stash.branch ? `${stash.id} · ${stash.branch}` : stash.id,
+            badge: formatCompactAge(stash.date),
+            stash
+          }))
+      }
+      case 'deployments': {
+        const identity = requireFindIdentity('deploys')
+        const prefix = `${identity.owner}/${identity.repo}#`
+        const needle = query.toLowerCase()
+        const runs: GitHubWorkflowRun[] = []
+        const seenRuns: Record<number, true> = {}
+        for (const [key, cached] of Object.entries(gitState.deploymentRunPages)) {
+          if (!key.startsWith(`${prefix}runs:`)) continue
+          for (const run of cached.page.items) {
+            if (seenRuns[run.id]) continue
+            seenRuns[run.id] = true
+            runs.push(run)
+          }
+        }
+        const deployments: GitHubDeployment[] = []
+        const seenDeployments: Record<number, true> = {}
+        for (const [key, cached] of Object.entries(gitState.deploymentPages)) {
+          if (!key.startsWith(`${prefix}deployments:`)) continue
+          for (const deployment of cached.page.items) {
+            if (seenDeployments[deployment.id]) continue
+            seenDeployments[deployment.id] = true
+            deployments.push(deployment)
+          }
+        }
+        const runRows: GitFindRow[] = runs
+          .filter((run) =>
+            `${run.displayTitle} ${run.name} ${run.branch} ${run.headSha}`
+              .toLowerCase()
+              .includes(needle)
+          )
+          .map((run) => ({
+            kind: 'run',
+            key: `run-${String(run.id)}`,
+            title: run.displayTitle || run.name,
+            detail: `${run.name} · ${run.branch} · ${run.headSha.slice(0, 7)}`,
+            badge: run.conclusion ?? run.status,
+            run
+          }))
+        const deploymentRows: GitFindRow[] = deployments
+          .filter((deployment) =>
+            `${deployment.environment} ${deployment.ref} ${deployment.sha}`
+              .toLowerCase()
+              .includes(needle)
+          )
+          .map((deployment) => ({
+            kind: 'deployment',
+            key: `deployment-${String(deployment.id)}`,
+            title: deployment.environment,
+            detail: `${deployment.ref} · ${deployment.sha.slice(0, 7)}`,
+            badge: deployment.latestStatus?.state,
+            deployment
+          }))
+        return [...runRows, ...deploymentRows].slice(0, FIND_LIMIT)
+      }
+    }
   }
 
-  function openActiveCommitSearchResult(): void {
-    const commit = commitSearchResults[commitSearchActiveIndex]
-    if (!commit) return
-    closeCommitSearch()
-    void selectCommit(commit)
+  /**
+   * The repository a GitHub-backed search reads from, or the reason there is none.
+   *
+   * A view that searches GitHub has nothing to search when origin is not a GitHub
+   * remote, and an empty answer would claim the repository holds no matches.
+   */
+  function requireFindIdentity(subject: string): { owner: string; repo: string } {
+    const identity = githubIdentity
+    if (!identity)
+      throw new Error(`Git origin is not a GitHub repository, so ${subject} cannot be searched`)
+    return identity
   }
 
-  function selectCommitSearchResult(commit: GitCommitInfo): void {
-    closeCommitSearch()
-    void selectCommit(commit)
+  function moveFind(direction: -1 | 1): void {
+    if (findRows.length === 0) return
+    findActiveIndex = (findActiveIndex + direction + findRows.length) % findRows.length
+  }
+
+  function openActiveFindResult(): void {
+    const row = findRows[findActiveIndex]
+    if (!row) return
+    selectFindRow(row)
+  }
+
+  /**
+   * Open the row the bar answered with, in the view it came from.
+   *
+   * Each kind has one action the view already offers for that kind of row: a
+   * commit opens its diff, a pull request opens the reader, and a deploy opens the
+   * record the Deployments view shows.
+   */
+  function selectFindRow(row: GitFindRow): void {
+    closeFind()
+    switch (row.kind) {
+      case 'commit':
+        void selectCommit(row.commit)
+        return
+      case 'branch':
+        requestCheckout(row.branch)
+        return
+      case 'pull':
+        selectedPullRequest = row.pull
+        prDetailTab = 'conversation'
+        return
+      case 'issue':
+        issuePanelView.set(projectId, {
+          ...issuePanelView.get(projectId),
+          selectedIssue: row.issue
+        })
+        return
+      case 'notification':
+        githubNotifications.openThread(row.notification)
+        return
+      case 'run':
+        selectedRun = row.run
+        selectedDeployment = null
+        return
+      case 'deployment':
+        selectedDeployment = row.deployment
+        selectedRun = null
+        return
+      case 'stash':
+        void selectStash(row.stash)
+        return
+    }
   }
 
   async function selectCommit(commit: GitCommitInfo): Promise<void> {
@@ -1569,7 +1847,7 @@
     historyRequestId += 1
     remoteUpdatesRequestId += 1
     remoteUpdates = []
-    closeCommitSearch()
+    closeFind()
     selectedCommit = null
     selectedStash = null
     selectedPaths = {}
@@ -1607,7 +1885,6 @@
     pushDiverged = false
     pushRecoverMode = null
     pullStrategyOpen = false
-    pullStrategyError = ''
     syncMainOpen = false
     showIntegrateModal = false
     showStashModal = false
@@ -1738,7 +2015,7 @@
       unsubscribePullRequestOpen()
       unsubscribeThreadUpdates()
       unsubscribeGitHubSignIn()
-      if (findNavState.gitFindOpen) closeCommitSearch()
+      if (findNavState.gitFindOpen) closeFind()
     }
   })
 
@@ -2178,9 +2455,7 @@
   })
 
   function closePullStrategy(): void {
-    if (gitState.isBusy('pull')) return
     pullStrategyOpen = false
-    pullStrategyError = ''
   }
 
   function resolvePullTarget(): { remote: string; branch: string } | null {
@@ -2200,32 +2475,60 @@
     return { remote: primaryRemote.name, branch: currentStatus.branch }
   }
 
-  async function performPull(strategy: GitPullStrategy): Promise<void> {
-    const target = resolvePullTarget()
-    if (!target) {
-      pullStrategyError = 'No tracked branch is available to pull'
-      pullStrategyOpen = true
-      return
-    }
-
-    pullStrategyError = ''
-    await gitState.pullIntegrate(projectId, target.remote, target.branch, strategy)
-    if (gitState.error) {
-      pullStrategyError = gitState.error
-      gitState.error = null
-      pullStrategyOpen = true
-      return
-    }
-    pullStrategyOpen = false
+  /**
+   * Remember the preference the user just chose, so the next pull uses it without
+   * asking. `ask` is a preference too: it puts the chooser back.
+   */
+  function savePullPreference(preference: GitPullPreference): void {
+    if (appConfigState.defaultPullStrategy === preference) return
+    void invoke('config:update', { defaultPullStrategy: preference }).catch(() => undefined)
   }
 
-  async function pullAction(): Promise<void> {
+  /**
+   * A pull leaves the panel as a background job the moment a strategy is chosen,
+   * exactly like a sync between checkouts: the round trip and the integration
+   * report in the docked run panel, so the chooser never holds the window and a
+   * conflict is answered where the work continues.
+   */
+  function startPull(strategy: GitPullStrategy): void {
+    const target = resolvePullTarget()
+    if (!target) {
+      toast.error('No tracked branch is available to pull')
+      return
+    }
+
+    savePullPreference(strategy)
+    pullStrategyOpen = false
+    gitPullJobs.start({
+      projectId,
+      remote: target.remote,
+      branch: target.branch,
+      strategy,
+      incoming: commitsBehind,
+      onSettled: () => void refreshStatus()
+    })
+  }
+
+  /** The wide half of the Pull control: the saved strategy, or the chooser. */
+  function pullAction(): void {
+    const target = resolvePullTarget()
+    if (!target) {
+      toast.error('No tracked branch is available to pull')
+      return
+    }
     if (appConfigState.defaultPullStrategy === 'ask') {
-      pullStrategyError = ''
       pullStrategyOpen = true
       return
     }
-    await performPull(appConfigState.defaultPullStrategy)
+    startPull(appConfigState.defaultPullStrategy)
+  }
+
+  /**
+   * Stop choosing for the user: the next pull opens the chooser again, the same
+   * preference the Settings page writes.
+   */
+  function askEveryPull(): void {
+    savePullPreference('ask')
   }
 
   /**
@@ -2975,14 +3278,17 @@
 
 {#snippet refreshStatusButton()}
   <!--
-    Multipurpose on purpose: it refreshes the git status *and* whatever view is
-    in focus, so one control is enough to trust the panel again.
+    Multipurpose on purpose: it refreshes the view in focus *and* the repository
+    behind it (status, branches, History, remote-tracking refs), so one control is
+    enough to trust the panel again. The repository half never disables the
+    control: only the view the click asked for is awaited, the rest lands on its
+    own, which is why the fetch spins below without blocking a second click.
   -->
   <button
     type="button"
     class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-    aria-label="Refresh the git status and the current view"
-    title="Refresh the git status and the current view"
+    aria-label="Refresh the current view, the git status and the remote refs"
+    title="Refresh the current view, the git status and the remote refs"
     disabled={busy}
     onclick={() => void refreshPanel()}
   >
@@ -2990,6 +3296,7 @@
       size={12}
       class={gitState.isBusy([
         'refresh',
+        'fetch',
         'pr-list',
         'pr-detail',
         'deployment-runs',
@@ -3887,19 +4194,21 @@
 {/snippet}
 
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-panel">
-  <GitStatusPanelCommitSearch
+  <GitStatusPanelFind
     open={findNavState.gitFindOpen}
-    query={commitSearchQuery}
-    bind:activeIndex={commitSearchActiveIndex}
+    scope={findScope}
+    query={findQuery}
+    bind:activeIndex={findActiveIndex}
     focusTrigger={findNavState.gitFindFocusTrigger}
-    loading={commitSearchLoading}
-    results={commitSearchResults}
-    onQueryChange={searchCommits}
-    onNext={() => moveCommitSearch(1)}
-    onPrev={() => moveCommitSearch(-1)}
-    onSubmit={openActiveCommitSearchResult}
-    onClose={closeCommitSearch}
-    onSelectResult={selectCommitSearchResult}
+    loading={findLoading}
+    rows={findRows}
+    error={findError}
+    onQueryChange={runFind}
+    onNext={() => moveFind(1)}
+    onPrev={() => moveFind(-1)}
+    onSubmit={openActiveFindResult}
+    onClose={closeFind}
+    onSelectResult={selectFindRow}
   />
 
   <!--
@@ -3978,10 +4287,10 @@
                 ? 'bg-elevated text-foreground'
                 : 'text-dimmed hover:bg-elevated hover:text-foreground'
             ]}
-            aria-label="Search commits"
-            title="Search commits"
+            aria-label={findWords.label}
+            title={findWords.label}
             aria-pressed={findNavState.gitFindOpen}
-            onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
+            onclick={() => (findNavState.gitFindOpen ? closeFind() : openFind())}
           >
             <CioSearch size={12} aria-hidden="true" />
           </button>
@@ -4117,8 +4426,10 @@
         conflict controls, and Pull and Push. Pull and Push are independent   a
         diverged branch needs both   so each gets a share of the row's width
         instead of one hiding the other, and they are the only items here that
-        stretch. While conflicts are open they stand aside entirely (see
-        `conflictsOpen`) so the row can hold the controls that end them.
+        stretch. Pull is split at its right edge so a one-off strategy is a
+        click away from the saved one. While conflicts are open they stand aside
+        entirely (see `conflictsOpen`) so the row can hold the controls that end
+        them.
       -->
       <div
         class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-2"
@@ -4126,20 +4437,15 @@
         {@render viewContext()}
         {#if showsRemoteActions}
           {#if showsPull}
-            <button
-              type="button"
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
-              title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
-              disabled={branchSyncBusy}
-              onclick={() => void pullAction()}
-            >
-              {#if gitState.isBusy('pull')}
-                <CioSpinner size={11} class="animate-spin" />
-              {:else}
-                <CioDownload size={11} />
-              {/if}
-              <span class="min-w-0 truncate">Pull {commitsBehind}</span>
-            </button>
+            <GitPullButton
+              behind={commitsBehind}
+              busy={gitState.isBusy('pull')}
+              blocked={branchSyncBusy}
+              preference={appConfigState.defaultPullStrategy}
+              onPull={pullAction}
+              onPullWith={startPull}
+              onAskEveryPull={askEveryPull}
+            />
           {/if}
           {#if showsPush}
             <button
@@ -4481,7 +4787,6 @@
     {remoteBranchExists}
     {pushBlocked}
     {pullStrategyOpen}
-    {pullStrategyError}
     {syncMainOpen}
     {syncDirection}
     {integrationOpen}
@@ -4525,7 +4830,7 @@
     {confirmPushUpstream}
     {recoverPush}
     {closePullStrategy}
-    {performPull}
+    {startPull}
     {closeSyncMain}
     {performSyncMain}
     {confirmCompleteMerge}

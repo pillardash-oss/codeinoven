@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>App header variants · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-theme="light">
+    <main class="page">
+      <header class="topline">
+        <div class="brand-mini">
+          <svg viewBox="0 0 96 96" aria-hidden="true">
+            <path
+              d="M49 17a31 31 0 1 0 0 62"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="8"
+              stroke-linecap="square"
+            />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <span>CodeInOven / header study</span>
+        </div>
+        <div class="top-links">
+          <a class="top-meta" href="./recommendation.html">Recommendation</a>
+          <div class="theme-switch" role="group" aria-label="Preview theme">
+            <button type="button" data-theme-choice="light" aria-pressed="true">Light</button>
+            <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="intro">
+        <div>
+          <div class="eyebrow">Eight variants · one bar</div>
+          <h1>The header has to survive four different windows.</h1>
+          <p>
+            macOS draws three lights inside the left edge. Windows overlays three caption buttons
+            on the right. A Linux desktop can do either, and some distributions flip it per user.
+            Everything else in the bar is ours, and it has to look deliberate in all four cases.
+          </p>
+        </div>
+        <aside class="intro-aside">
+          <strong>What the study fixes</strong>
+          The OS zones never move, so the design job is deciding what of ours sits next to them.
+          Eight answers below, each drawn on macOS, Windows and a narrow window. The detail screens
+          add both Linux directions.
+        </aside>
+      </section>
+
+      <nav class="toolbar" aria-label="Screens">
+        <a class="pill-link" href="./index.html" aria-current="page">Overview</a>
+        <a class="pill-link" href="./v1-reserved-edge.html">V1 edge</a>
+        <a class="pill-link" href="./v2-split-center.html">V2 split</a>
+        <a class="pill-link" href="./v3-rail-actions.html">V3 rail</a>
+        <a class="pill-link" href="./v4-command-field.html">V4 command</a>
+        <a class="pill-link" href="./v5-two-tiers.html">V5 tiers</a>
+        <a class="pill-link" href="./v6-priority-ladder.html">V6 ladder</a>
+        <a class="pill-link" href="./v7-fixed-spine.html">V7 spine</a>
+        <a class="pill-link" href="./v8-icon-as-menu.html">V8 icon menu</a>
+        <a class="pill-link" href="./recommendation.html">Recommendation</a>
+      </nav>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V1 · Reserved edge</h2>
+          <span class="meta">closest to today</span>
+        </div>
+        <p class="lede">
+          The bar keeps two fixed gutters and a hairline seam where each one ends. Our controls sit
+          strictly inside the remaining width, with a 4px floor before any seam. Predictable, and
+          the seam makes the reserved space read as intentional rather than as padding nobody
+          accounted for.
+        </p>
+        <div class="frames" id="frames-v1"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v1-reserved-edge.html"
+          >All four platforms</a
+        >
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V2 · Split centre</h2>
+          <span class="meta">edge-independent</span>
+        </div>
+        <p class="lede">
+          Thread actions stop anchoring to a window edge and ride at the end of the centred band.
+          Measure from the middle of the bar and the cluster lands in the same visual place whether
+          the lights are left or the captions are right. Only the bell and the notes button touch an
+          edge, and only the edge the OS has left free.
+        </p>
+        <div class="frames" id="frames-v2"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v2-split-center.html"
+          >All four platforms</a
+        >
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V3 · The rail owns the actions</h2>
+          <span class="meta">fewest moving parts</span>
+        </div>
+        <p class="lede">
+          Spec, git, notes and the view's quick actions move to the left rail, which the OS never
+          touches. The bar keeps identity, the thread title, and the bell. Nothing can collide
+          because nothing is left to collide with.
+        </p>
+        <div class="frames" id="frames-v3"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v3-rail-actions.html"
+          >All four platforms</a
+        >
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V4 · Command field</h2>
+          <span class="meta">shell-like</span>
+        </div>
+        <p class="lede">
+          One field in the middle. Thread state and the right-hand actions become chips inside it,
+          so the bar holds three controls no matter how much the thread needs. The field is centred,
+          so it is the one element that looks identical on every platform.
+        </p>
+        <div class="frames" id="frames-v4"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v4-command-field.html"
+          >All four platforms</a
+        >
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V5 · Two tiers</h2>
+          <span class="meta">costs 32px of height</span>
+        </div>
+        <p class="lede">
+          The 48px drag row belongs to the window: OS zone, identity, title, bell. A 32px strip
+          below belongs to the app: view actions left, thread actions right, full width. The OS
+          never shares a row with an app action, at the price of a taller chrome.
+        </p>
+        <div class="frames" id="frames-v5"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v5-two-tiers.html"
+          >All four platforms</a
+        >
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V6 · Priority ladder</h2>
+          <span class="meta">fixed slot count</span>
+        </div>
+        <p class="lede">
+          Three slots, filled in priority order: the view's actions, then the thread's, then the
+          global pair. Everything else goes to one overflow menu that opens away from the OS zone.
+          Labels ride along while there is room and drop before the icons do.
+        </p>
+        <div class="frames" id="frames-v6"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v6-priority-ladder.html"
+          >All four platforms</a
+        >
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V7 · Fixed spine</h2>
+          <span class="meta">one column, left-aligned</span>
+        </div>
+        <p class="lede">
+          A fixed-width column holds the mark, the name, back and forward, and the view's actions,
+          closed by one rule. The thread title starts exactly at that rule and is aligned left. Only
+          the action slot reserves its width, so the title starts on the same pixel however many
+          actions a view registers, with no leftover space in front of the rule. Both edges stay flush to the window.
+        </p>
+        <div class="frames" id="frames-v7"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v7-fixed-spine.html"
+          >Both gutters, all four platforms</a
+        >
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>V8 · Icon as menu, panel-aligned bar</h2>
+          <span class="meta">one control, two menus, the rule is the panel edge</span>
+        </div>
+        <p class="lede">
+          The project icon left-clicks to the project dropdown and right-clicks to the thread's
+          actions, so the ellipsis disappears. The working state drops under the title as a small
+          badge. The identity stays in the bar, and the bar's leading cluster is the thread panel, so
+          the rule between chrome and title is the panel's edge and moves with it.
+        </p>
+        <div class="frames" id="frames-v8"></div>
+        <a class="pill-link" style="margin-top: 0.75rem" href="./v8-icon-as-menu.html"
+          >Both menus, and the rail</a
+        >
+      </section>
+
+      <p class="footnote">
+        Study files: <span class="inline-code">docs/designs/app-header-variants/</span>. One frame
+        renderer, six variants, four platform geometries. Open a variant screen for the Linux pair
+        and the reserved-width ruler.
+      </p>
+    </main>
+
+    <script src="./header.js"></script>
+    <script>
+      const overview = [
+        { platform: 'mac' },
+        { platform: 'win' },
+        { platform: 'mac', width: 'narrow' }
+      ]
+      const variants = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8']
+      for (const variant of variants) {
+        window.CIOHeader.mount(`#frames-${variant}`, variant, overview)
+      }
+    </script>
+      <script src="./checks.js"></script>
+  </body>
+</html>

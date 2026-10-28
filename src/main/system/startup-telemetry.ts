@@ -38,6 +38,30 @@ export interface StartupPhaseRecord {
   deltaMs: number
 }
 
+/**
+ * One named stretch of startup work whose own duration is recorded.
+ *
+ * Phase marks answer "when did the boot reach X". A gap between two marks is
+ * often several things running at once (storage, database and the platform
+ * probe warm up concurrently), so a flat phase delta can never say which of
+ * them owned the gap. A step is the missing half: it is timed from its own
+ * start, so concurrent work reports concurrent numbers.
+ */
+export type StartupStep =
+  | 'splash:barrier'
+  | 'storage:directories'
+  | 'storage:migrations'
+  | 'storage:config'
+  | 'database:init'
+  | 'trafficLight:warm'
+
+export interface StartupStepRecord {
+  step: StartupStep
+  /** Milliseconds after process entry when the step started. */
+  startedAtMs: number
+  durationMs: number
+}
+
 export interface EventLoopDelaySnapshot {
   meanMs: number
   p50Ms: number
@@ -49,6 +73,8 @@ export interface EventLoopDelaySnapshot {
 
 export interface StartupTelemetrySnapshot {
   phases: StartupPhaseRecord[]
+  /** Timed work inside the phases, including work that ran concurrently. */
+  steps: StartupStepRecord[]
   eventLoop: EventLoopDelaySnapshot
 }
 
@@ -68,6 +94,7 @@ export class StartupTelemetry {
   private readonly now: () => number
   private readonly marked = new Set<StartupPhase>()
   private phases: StartupPhaseRecord[] = []
+  private steps: StartupStepRecord[] = []
   private previousAt: number
   // Derived from the API rather than naming the histogram interface directly:
   // @types/node renamed it (IntervalHistogram -> ELDHistogram), and a rename
@@ -115,6 +142,28 @@ export class StartupTelemetry {
     return this.marked.has(phase)
   }
 
+  /**
+   * Time one named step and return the closure that reports its duration.
+   *
+   * Call the returned function from a `finally` so a step that throws is still
+   * measured: the boot has to keep going, and a step that failed halfway is
+   * exactly the one whose duration explains the delay. Calling it twice records
+   * once, because a `finally` and a success path must never double-count.
+   */
+  beginStep(step: StartupStep): () => void {
+    const startedAt = this.now()
+    let recorded = false
+    return () => {
+      if (recorded) return
+      recorded = true
+      this.steps.push({
+        step,
+        startedAtMs: startedAt - this.origin,
+        durationMs: this.now() - startedAt
+      })
+    }
+  }
+
   /** Ordered list of recorded phases, newest last. */
   get recordedPhases(): StartupPhaseRecord[] {
     return [...this.phases]
@@ -134,7 +183,7 @@ export class StartupTelemetry {
           samples
         }
       : { meanMs: 0, p50Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0, samples: 0 }
-    return { phases: [...this.phases], eventLoop }
+    return { phases: [...this.phases], steps: [...this.steps], eventLoop }
   }
 
   /**
@@ -143,13 +192,22 @@ export class StartupTelemetry {
    * durations leave the process.
    */
   report(label = 'startup'): void {
-    const { phases, eventLoop } = this.snapshot()
+    const { phases, steps, eventLoop } = this.snapshot()
     Logger.info(`${label} phases`, {
       phases: phases.map((record) => ({
         phase: record.phase,
         atMs: round(record.atMs),
         deltaMs: round(record.deltaMs)
       })),
+      // Slowest first: the reader of a slow boot wants the top of this list, and
+      // a concurrent warm-up reports several steps inside one phase gap.
+      steps: [...steps]
+        .sort((left, right) => right.durationMs - left.durationMs)
+        .map((record) => ({
+          step: record.step,
+          startedAtMs: round(record.startedAtMs),
+          durationMs: round(record.durationMs)
+        })),
       eventLoop: {
         meanMs: eventLoop.meanMs,
         p50Ms: eventLoop.p50Ms,
@@ -167,6 +225,7 @@ export class StartupTelemetry {
     this.loopHistogram = null
     this.marked.clear()
     this.phases = []
+    this.steps = []
     this.previousAt = 0
   }
 }

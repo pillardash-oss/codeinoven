@@ -9,11 +9,8 @@
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
-  import {
-    AUTHORED_WORK_ICON_BY_KIND,
-    AUTHORED_WORK_NAME_BY_KIND
-  } from '$lib/authored-work-presentation'
-  import { feature } from '$lib/feature-registry'
+  import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
+  import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -73,7 +70,6 @@
   import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { AuthoredWorkKind } from '$shared/ipc-contract'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
   import type { Thread } from '$shared/types'
   import {
@@ -529,6 +525,16 @@
     }
     if (isUsingComputerUse) live.push('computer-use')
     if (browserAudioAt !== null) live.push('browser-audio')
+    for (const kind of browserAudio.activitiesForThread(thread.id)) {
+      if (kind !== 'audio')
+        live.push(
+          kind === 'microphone'
+            ? 'browser-microphone'
+            : kind === 'camera'
+              ? 'browser-camera'
+              : 'browser-screen'
+        )
+    }
     // The Engineering mark covers both halves of the tooling: the lifecycle
     // marker, and the independent audit, which is locked out of that lifecycle
     // and therefore carries its own durable flags.
@@ -991,19 +997,6 @@
   {/if}
 {/snippet}
 
-{#snippet authoredWorkMarker(kinds: readonly AuthoredWorkKind[])}
-  {#each kinds as kind (kind)}
-    {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
-    <span
-      class="flex shrink-0 items-center text-muted"
-      title="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
-      aria-label="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
-    >
-      <WorkIcon size={11} strokeWidth={1.8} aria-hidden="true" />
-    </span>
-  {/each}
-{/snippet}
-
 {#snippet temporaryChatMarker()}
   {#if hasTemporaryChat}
     <!-- The context sidebar's temporary-chat tab mark, carried onto the row so a
@@ -1159,6 +1152,7 @@
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
+              class="text-muted opacity-50 grayscale"
               name={currentModelProviderName}
               id={currentModelProviderId ?? undefined}
               size={13}
@@ -1170,6 +1164,7 @@
       {:else if currentModelProviderName}
         <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
           <VendorIcon
+            class="text-muted opacity-50 grayscale"
             name={currentModelProviderName}
             id={currentModelProviderId ?? undefined}
             size={13}
@@ -1196,7 +1191,12 @@
         {#if harnessIds.length > 0}
           <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
             {#each harnessIds.slice(0, 3) as harnessId (harnessId)}
-              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+              <AgentIcon
+                class="opacity-50 grayscale"
+                agentId={harnessId}
+                label={harnessName(harnessId)}
+                size={14}
+              />
             {/each}
             {#if harnessIds.length > 3}
               <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
@@ -1231,16 +1231,8 @@
               <span>{branchLabel}</span>
             </span>
           {/if}
-          {#if hasNote}
-            {@const ThreadNoteIcon = feature('thread-note').icon}
-            <span
-              class="flex shrink-0 items-center text-warning"
-              title={`${feature('thread-note').name} attached`}
-            >
-              <ThreadNoteIcon size={11} />
-            </span>
-          {/if}
-          {@render authoredWorkMarker(authoredWorkKinds)}
+          <ThreadNoteMark threadId={thread.id} />
+          <AuthoredWorkMarks kinds={authoredWorkKinds} />
           {#each activeIndicators as live (live)}
             <ThreadIndicatorSlot indicator={live} />
           {/each}
@@ -1352,7 +1344,7 @@
         </span>
         {#if spineGlyphVisible}
           <span
-            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
+            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center opacity-60"
             style="color: {glyphMark.colour};"
             role="img"
             title={markLabel}
@@ -1378,7 +1370,7 @@
                  row that also draws a glyph says its state there, and a second copy
                  here would have the reader hear it twice. -->
             <span
-              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
               bind:clientHeight={spineRailHeight}
               role={spineGlyphVisible ? undefined : 'img'}
               title={spineGlyphVisible ? undefined : markLabel}
@@ -1406,7 +1398,7 @@
             </span>
           {:else}
             <span
-              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
               style="background: {spineRailPaint};"
               aria-hidden="true"
             ></span>
@@ -1459,6 +1451,7 @@
               title={thread.settings?.modelId ?? 'Model'}
             >
               <VendorIcon
+                class="text-muted opacity-50 grayscale"
                 name={currentModelProviderName}
                 id={currentModelProviderId ?? undefined}
                 size={13}
@@ -1483,6 +1476,7 @@
               title={thread.settings?.modelId ?? 'Model'}
             >
               <VendorIcon
+                class="text-muted opacity-50 grayscale"
                 name={currentModelProviderName}
                 id={currentModelProviderId ?? undefined}
                 size={13}
@@ -1505,7 +1499,12 @@
               class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
             >
               {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
-                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+                <AgentIcon
+                  class="opacity-50 grayscale"
+                  agentId={harnessId}
+                  label={harnessName(harnessId)}
+                  size={14}
+                />
               {/each}
               {#if visibleHarnessCount < harnessIds.length}
                 <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
@@ -1542,17 +1541,9 @@
                 <span>{branchLabel}</span>
               </span>
             {/if}
-            {#if hasNote}
-              {@const ThreadNoteIcon = feature('thread-note').icon}
-              <span
-                class="flex shrink-0 items-center text-warning"
-                title={`${feature('thread-note').name} attached`}
-              >
-                <ThreadNoteIcon size={11} />
-              </span>
-            {/if}
+            <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKinds)}
+            <AuthoredWorkMarks kinds={authoredWorkKinds} />
             {#each activeIndicators as live (live)}
               <ThreadIndicatorSlot indicator={live} />
             {/each}
@@ -1650,6 +1641,7 @@
             title={thread.settings?.modelId ?? 'Model'}
           >
             <VendorIcon
+              class="text-muted opacity-50 grayscale"
               name={currentModelProviderName}
               id={currentModelProviderId ?? undefined}
               size={13}
@@ -1679,7 +1671,12 @@
           {#if harnessIds.length > 0}
             <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
               {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
-                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+                <AgentIcon
+                  class="opacity-50 grayscale"
+                  agentId={harnessId}
+                  label={harnessName(harnessId)}
+                  size={14}
+                />
               {/each}
               {#if harnessIds.length > MAX_HARNESS_ICONS}
                 <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
@@ -1715,17 +1712,9 @@
                 <span class="truncate">{branchLabel}</span>
               </span>
             {/if}
-            {#if hasNote}
-              {@const ThreadNoteIcon = feature('thread-note').icon}
-              <span
-                class="flex shrink-0 items-center text-warning"
-                title={`${feature('thread-note').name} attached`}
-              >
-                <ThreadNoteIcon size={11} />
-              </span>
-            {/if}
+            <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKinds)}
+            <AuthoredWorkMarks kinds={authoredWorkKinds} />
             <span
               class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
               title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span

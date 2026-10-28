@@ -46,7 +46,6 @@ import type {
   BrowserExtensionActivity,
   BrowserExtensionActivityUpdate,
   BrowserExtensionInstallInput,
-  BrowserExtensionMenuRecord,
   BrowserExtensionProgress
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
@@ -58,9 +57,13 @@ import { BrowserExtensionNativeMessaging } from './browser-native-messaging'
 import { BrowserExtensionOffscreenDocuments } from './browser-extension-offscreen-documents'
 import type { NativeHostLookupOptions } from './browser-native-host-manifest'
 import { nativeMessagingCommand } from './browser-extension-bridge'
+import type { BrowserDownloadExtensionEventName } from '../browser-service/browser-downloads'
+import type { BrowserExtensionMenuSection } from '../browser-service/browser-context-menu'
 import {
   BrowserExtensionBridge,
   type BrowserExtensionActionPopupRequest,
+  type BrowserExtensionCookieRequest,
+  type BrowserExtensionCookieResult,
   type BrowserExtensionInstalledDetails,
   type BrowserExtensionMailbox,
   type BrowserExtensionNotificationRecord,
@@ -97,6 +100,13 @@ import {
   type BrowserExtensionRecord,
   type BrowserExtensionRegistryPersistence
 } from './browser-extension-registry'
+import { toCookieQuery, toExtensionCookie } from './browser-extension-cookies'
+import {
+  toWebRequestDetails,
+  type BrowserExtensionWebRequestDetails,
+  type BrowserExtensionWebRequestEventName,
+  type BrowserExtensionWebRequestSource
+} from './browser-extension-web-request'
 import { filterManifestForSiteRules } from '../../../lib/browser/browser-extension-site-rules'
 import {
   DARK_READER_EXTENSION_ID,
@@ -155,6 +165,17 @@ interface QueuedInstall {
   context: InstallContext
   resolve: (extension: BrowserExtension) => void
   reject: (error: unknown) => void
+}
+
+/** One jar whose session carries the five `webRequest` listeners the app feeds
+ *  extensions from. Held apart from the loaded set because the listeners outlive
+ *  one reconcile and must be detached exactly once: attaching twice would deliver
+ *  every request twice, and an extension that counts requests would see double. */
+interface WebRequestJar {
+  session: Session
+  /** The extensions loaded in this jar that declared `webRequest`, which is the
+   *  only set their events are pushed into. */
+  extensionIds: Set<string>
 }
 
 /** One jar with extensions loaded in it. The session is held, not looked up on
@@ -234,6 +255,27 @@ export interface BrowserExtensionHost {
   closeSidePanel(extensionId: string, extensionTabId: number | null): void
   /** Apply a popup surface request for the tab named by the extension runtime. */
   openPopup(request: BrowserExtensionActionPopupOpenRequest): void
+  /**
+   * Open one of an extension's own pages in the jar it runs in.
+   *
+   * `chrome.runtime.openOptionsPage` has no implementation in this runtime: the
+   * worker can name its options page but cannot raise a window, and the app is the
+   * only side that owns one. The page is opened in a tab of the jar the extension
+   * is loaded in, so it reads that jar's storage and answers its worker.
+   */
+  openExtensionPage(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    page: 'options'
+  ): void
+  /**
+   * Apply one `chrome.downloads` call an extension made.
+   *
+   * The extension service only carries the call: the downloads belong to the
+   * app's download manager, which is the one place that can stop a transfer.
+   */
+  downloadCommand(command: { method: 'cancel' | 'pause' | 'resume' | 'erase'; id: number }): void
 }
 
 /** One extension popup request carried from the worker to the browser host. */
@@ -315,6 +357,10 @@ export class BrowserExtensionService {
   private readonly ready: Promise<void>
   /** partition -> the extension ids loaded in it. */
   private readonly loaded = new Map<string, LoadedJar>()
+  /** partition -> the session whose webRequest listeners this service attached.
+   *  Empty for every jar where nothing declared `webRequest`, which is also the
+   *  state in which no listener exists and no request costs anything. */
+  private readonly webRequestJars = new Map<string, WebRequestJar>()
   /** partition -> an in-flight reconcile, so two shows cannot race a load. */
   private readonly loading = new Map<string, Promise<void>>()
   /** Installs accepted but not started, oldest first. */
@@ -731,6 +777,7 @@ export class BrowserExtensionService {
       this.stopBridge(state, id)
       this.removeFromSession(state, id)
     }
+    this.detachWebRequest(partition)
     this.loaded.delete(partition)
   }
 
@@ -765,6 +812,7 @@ export class BrowserExtensionService {
         this.stopBridge(state, id)
         this.removeFromSession(state, id)
       }
+      this.detachWebRequest(partition)
       this.loaded.delete(partition)
     }
     this.loading.clear()
@@ -1215,7 +1263,13 @@ export class BrowserExtensionService {
     const toLoad = desired.filter(
       (record) => !current.has(record.id) && !this.updatingIds.has(record.id)
     )
-    if (toUnload.length === 0 && toLoad.length === 0) return
+    if (toUnload.length === 0 && toLoad.length === 0) {
+      // Nothing loaded changed, but an update can rewrite what a loaded extension
+      // declared, and the traffic listeners follow that declaration.
+      const existing = this.loaded.get(partition)
+      if (existing) this.syncWebRequest(partition, existing)
+      return
+    }
 
     // Only now is a session asked for, which is what creates its profile directory.
     // A jar nobody enables anything in never reaches this line.
@@ -1226,12 +1280,14 @@ export class BrowserExtensionService {
       this.removeFromSession(state, id)
     }
     for (const id of toUnload) state.ids.delete(id)
+    this.syncWebRequest(partition, state)
     if (toLoad.length === 0) return
 
     let changed = false
     for (const record of toLoad) {
       if (await this.loadIntoSession(state, record)) changed = true
     }
+    this.syncWebRequest(partition, state)
     if (changed) this.host.publish()
   }
 
@@ -1605,6 +1661,7 @@ export class BrowserExtensionService {
       this.stopBridge(state, extensionId)
       this.removeFromSession(state, extensionId)
       state.ids.delete(extensionId)
+      this.syncWebRequest(partition, state)
       if (state.ids.size === 0) this.loaded.delete(partition)
     }
   }
@@ -1694,6 +1751,187 @@ export class BrowserExtensionService {
     }
   }
 
+  /**
+   * One download fact, delivered into every extension in that jar that asked to
+   * watch downloads.
+   *
+   * The runtime compiles `chrome.downloads` out, so a listener written against it
+   * waits forever unless the app feeds it. Each download arrives in the shapes the
+   * API documents, but only at extensions that declared the `downloads` permission:
+   * a download is the user's traffic, and an extension that never asked to see one
+   * has no business being told about it.
+   */
+  onDownloadEvent(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserDownloadExtensionEventName,
+    args: unknown[]
+  ): void {
+    const state = this.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state || state.bridges.size === 0) return
+    for (const [extensionId, bridge] of state.bridges) {
+      if (!this.watchesDownloads(extensionId)) continue
+      void bridge.push({ kind: 'downloads', name, args })
+    }
+  }
+
+  /** Whether one installed extension declared the permission the download events
+   *  belong to. The installed copy has the permission stripped to keep the
+   *  runtime from refusing it, so the record's own reading of its manifest is the
+   *  one that answers. */
+  private watchesDownloads(extensionId: string): boolean {
+    return this.registry.get(extensionId)?.declaredPermissions.includes('downloads') ?? false
+  }
+
+  /**
+   * Whether any extension loaded in one jar watches downloads.
+   *
+   * A watcher captures by cancelling, so the download manager asks this before it
+   * opens a save dialog: a dialog for a file the extension is about to take over
+   * is a dialog that closes by itself.
+   */
+  watchesDownloadsInJar(projectId: string, boxId: string | null): boolean {
+    const state = this.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state) return false
+    for (const extensionId of state.bridges.keys()) {
+      if (this.watchesDownloads(extensionId)) return true
+    }
+    return false
+  }
+
+  /** Whether one installed extension declared the permission its traffic events
+   *  belong to. Like `downloads`, the name is stripped from the installed copy so
+   *  the runtime does not warn about it, so the record's own reading of its
+   *  manifest is the one that answers here. */
+  private watchesWebRequests(extensionId: string): boolean {
+    return this.registry.get(extensionId)?.declaredPermissions.includes('webRequest') ?? false
+  }
+
+  /**
+   * Keep one jar's `webRequest` listeners in step with what is loaded in it.
+   *
+   * Chromium compiles `chrome.webRequest` out, so its events never fire and an
+   * extension that captures downloads cannot see a response arrive. The session's
+   * own listeners are the only observation the app has, and they are attached for
+   * a jar only while something loaded in it declared `webRequest`: a jar whose
+   * extensions never asked costs nothing at all, and one where the last watcher
+   * was unloaded is detached rather than left forwarding into no bridge.
+   *
+   * The set is recomputed on every reconcile rather than appended to, because an
+   * update can rewrite an extension's declared permissions while its id stays the
+   * same.
+   */
+  private syncWebRequest(partition: string, state: LoadedJar): void {
+    const extensionIds = new Set([...state.ids].filter((id) => this.watchesWebRequests(id)))
+    const attached = this.webRequestJars.get(partition)
+    if (extensionIds.size === 0) {
+      if (attached) this.detachWebRequest(partition)
+      return
+    }
+    if (attached && attached.session === state.session) {
+      attached.extensionIds = extensionIds
+      return
+    }
+    if (attached) this.detachWebRequest(partition)
+    this.attachWebRequest(partition, state.session, extensionIds)
+  }
+
+  /**
+   * Put the five traffic listeners on one jar's session.
+   *
+   * Only the events Chrome documents are wired, and only for as long as a watcher
+   * is loaded: every request in the jar passes through these, so the work done per
+   * event is one map lookup and a bridge push per interested extension. The
+   * mapping from Electron's details to Chrome's happens inside the forward, so a
+   * jar with no interested bridge never builds one.
+   */
+  private attachWebRequest(partition: string, session: Session, extensionIds: Set<string>): void {
+    this.webRequestJars.set(partition, { session, extensionIds })
+    const filter = { urls: ['*://*/*'] }
+    session.webRequest.onSendHeaders(filter, (details) =>
+      this.forwardWebRequest(partition, 'onSendHeaders', details)
+    )
+    session.webRequest.onHeadersReceived(filter, (details, done) => {
+      this.forwardWebRequest(partition, 'onHeadersReceived', details)
+      // The listener holds the request until the callback answers, so the pass
+      // through is given back immediately after it has been reported.
+      done({})
+    })
+    session.webRequest.onResponseStarted(filter, (details) =>
+      this.forwardWebRequest(partition, 'onResponseStarted', details)
+    )
+    session.webRequest.onCompleted(filter, (details) =>
+      this.forwardWebRequest(partition, 'onCompleted', details)
+    )
+    session.webRequest.onErrorOccurred(filter, (details) =>
+      this.forwardWebRequest(partition, 'onErrorOccurred', details)
+    )
+  }
+
+  /** Take the five listeners off one jar's session, once, so a re-reconcile that
+   *  reloads nothing cannot leave a second copy behind. `null` clears every
+   *  listener on that event, which is why these five belong to this service and
+   *  nothing else in the app registers them. */
+  private detachWebRequest(partition: string): void {
+    const attached = this.webRequestJars.get(partition)
+    if (!attached) return
+    this.webRequestJars.delete(partition)
+    try {
+      attached.session.webRequest.onSendHeaders(null)
+      attached.session.webRequest.onHeadersReceived(null)
+      attached.session.webRequest.onResponseStarted(null)
+      attached.session.webRequest.onCompleted(null)
+      attached.session.webRequest.onErrorOccurred(null)
+    } catch (error: unknown) {
+      // A session already torn down has nothing left to detach from.
+      Logger.dev('Browser extension webRequest listeners could not be detached:', {
+        partition,
+        error
+      })
+    }
+  }
+
+  /** Hand one traffic fact to every extension in the jar that asked to watch it,
+   *  in the details shape `chrome.webRequest` documents. */
+  private forwardWebRequest(
+    partition: string,
+    name: BrowserExtensionWebRequestEventName,
+    source: BrowserExtensionWebRequestSource
+  ): void {
+    const state = this.loaded.get(partition)
+    const attached = this.webRequestJars.get(partition)
+    if (!state || !attached || state.bridges.size === 0) return
+    let details: BrowserExtensionWebRequestDetails | null = null
+    for (const [extensionId, bridge] of state.bridges) {
+      if (!attached.extensionIds.has(extensionId)) continue
+      details ??= toWebRequestDetails(name, source)
+      void bridge.push({ kind: 'web-request', name, details })
+    }
+  }
+
+  /**
+   * Answer one `chrome.cookies` query from the jar the extension runs in.
+   *
+   * The namespace is compiled out, so a download manager that needs the site's
+   * session to fetch a captured file asks the preamble and waits for this. The
+   * answer can only come from the extension's own jar: a jar is one identity, and
+   * reading another one's cookies would hand code in one box the session of
+   * another. A jar that is no longer loaded answers an empty list rather than
+   * being read after it was released.
+   */
+  private async answerCookieRequest(
+    state: LoadedJar,
+    extensionId: string,
+    request: BrowserExtensionCookieRequest
+  ): Promise<BrowserExtensionCookieResult> {
+    const partition = browserPartitionFor(state.projectId, state.boxId)
+    if (this.disposed || this.loaded.get(partition) !== state || !state.ids.has(extensionId)) {
+      return { cookies: [] }
+    }
+    const cookies = await state.session.cookies.get(toCookieQuery(request.filter))
+    return { cookies: cookies.map(toExtensionCookie) }
+  }
+
   /** Open the channel into one extension's worker, beside its load. */
   private startBridge(state: LoadedJar, record: BrowserExtensionRecord): void {
     if (state.bridges.has(record.id)) return
@@ -1740,7 +1978,20 @@ export class BrowserExtensionService {
       // `chrome.userScripts.register` takes code and this runtime only registers
       // files, so the preamble asks for the write and waits for the answer.
       materializeUserScripts: (request) =>
-        materializeUserScriptFiles(extensionSourceDirectory(this.configRoot, record.id), request)
+        materializeUserScriptFiles(extensionSourceDirectory(this.configRoot, record.id), request),
+      // A capture extension stops the browser's own transfer to fetch the file
+      // itself, so this is the one media type of extension call that reaches the
+      // download manager rather than staying inside the extension's own jar.
+      downloadCommand: (command) => this.host.downloadCommand(command),
+      // The runtime compiles `chrome.cookies` out, so a capture that must send the
+      // site's session reads it from the jar it runs in, through this answer.
+      cookieRequest: (request) => this.answerCookieRequest(state, record.id, request),
+      // `chrome.runtime.openOptionsPage` names a page the worker cannot raise; the
+      // host opens it in the jar the extension is loaded in.
+      extensionPageRequest: (request) => {
+        this.host.openExtensionPage(state.projectId, state.boxId, record.id, request.page)
+        return Promise.resolve({})
+      }
     })
     state.bridges.set(record.id, bridge)
     bridge.start()
@@ -2187,18 +2438,18 @@ export class BrowserExtensionService {
    * Read straight from the last mailbox rather than kept in a second structure:
    * the tree only changes when the extension rebuilds it, and the native menu
    * asks for it on the one click that needs it.
+   *
+   * Each section carries the icon the extension published, which the registry
+   * already holds in memory, so a right-click never reads an icon off disk.
    */
-  menuRecordsFor(
-    projectId: string,
-    boxId: string | null
-  ): { extensionId: string; items: BrowserExtensionMenuRecord[] }[] {
+  menuRecordsFor(projectId: string, boxId: string | null): BrowserExtensionMenuSection[] {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state) return []
-    const sections: { extensionId: string; items: BrowserExtensionMenuRecord[] }[] = []
+    const sections: BrowserExtensionMenuSection[] = []
     for (const record of this.desiredForJar(projectId, boxId)) {
       const mail = state.mail.get(record.id)
       if (!mail || mail.menus.length === 0) continue
-      sections.push({ extensionId: record.id, items: mail.menus })
+      sections.push({ extensionId: record.id, iconDataUrl: record.iconDataUrl, items: mail.menus })
     }
     return sections
   }

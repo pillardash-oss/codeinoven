@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { onMount, tick } from 'svelte'
@@ -65,9 +68,29 @@
      * moved its active tab.
      */
     onTabReplaced?: (tabId: string) => void
+    /**
+     * The way out of this surface, when the surface draws no strip of its own.
+     *
+     * A composition opened full screen is watched, not browsed: it carries the
+     * playback controls where a browser would carry its address bar, so the
+     * minimize button has to sit on that row, and only the caller owns the
+     * surface that closes.
+     */
+    onMinimize?: () => void
+    playerInEditor?: boolean
+    onExpandVideo?: () => void
+    minimizeTitle?: string
   }
 
-  let { tab, fullscreen = false, onTabReplaced }: Props = $props()
+  let {
+    tab,
+    fullscreen = false,
+    onTabReplaced,
+    onMinimize,
+    playerInEditor = false,
+    onExpandVideo,
+    minimizeTitle = 'Leave full screen'
+  }: Props = $props()
 
   /** The surface this instance renders on. A fullscreen instance outranks every
    *  sidebar instance, so the store resolves which one owns the single native
@@ -128,6 +151,15 @@
    *  opened is a gesture, not a state this panel holds. */
   let addressBar = $state<BrowserAddressBar | undefined>(undefined)
   let pageState = $state<BrowserPageState>(initialPageState())
+  /**
+   * A composition watched full screen is a player, not a browser.
+   *
+   * The surface then carries the playback row where an address bar would sit and
+   * nothing else: no back/forward, no reload, no address field, no find bar. The
+   * user came here to watch and to place notes on frames, and every browser control
+   * around the picture is one more thing between them and the film.
+   */
+  let compositionPlayer = $derived(fullscreen && pageState.composition !== null)
   let stateRevision = 0
   /** The panel's current on-screen content rectangle, refreshed by the same
    *  observers that align the native view. */
@@ -362,6 +394,24 @@
     if (!contentElement) return null
     const rect = contentElement.getBoundingClientRect()
     if (rect.width < 1 || rect.height < 1) return null
+    // A composition draws at the size its manifest declares, so it is fitted into
+    // the content box at that aspect and centred, exactly as the board's own stage
+    // fits it. Handing a 16:9 page a window-shaped view made the picture arrive
+    // stretched or cropped, and the page's `100vw` sizing then drew it at the wrong
+    // shape rather than merely at the wrong scale.
+    const composition = pageState.composition
+    if (composition && composition.width > 0 && composition.height > 0) {
+      const ratio = composition.width / composition.height
+      const boxRatio = rect.width / rect.height
+      const width = ratio > boxRatio ? rect.width : rect.height * ratio
+      const height = ratio > boxRatio ? rect.width / ratio : rect.height
+      return {
+        x: Math.max(0, Math.round(rect.x + (rect.width - width) / 2)),
+        y: Math.max(0, Math.round(rect.y + (rect.height - height) / 2)),
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height))
+      }
+    }
     return {
       x: Math.max(0, Math.round(rect.x)),
       y: Math.max(0, Math.round(rect.y)),
@@ -597,145 +647,147 @@
   {@attach panelVisible && !pageState.loadError && !isBlank && manageNativeBrowserView}
   class="flex h-full min-h-0 flex-col bg-app"
 >
-  <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
-      disabled={!pageState.canGoBack}
-      aria-label="Go back"
-      title="Go back"
-      onclick={() => void invoke('browser:goBack', tabId).catch(() => {})}
-    >
-      <CioArrowLeft size={14} />
-    </button>
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
-      disabled={!pageState.canGoForward}
-      aria-label="Go forward"
-      title="Go forward"
-      onclick={() => void invoke('browser:goForward', tabId).catch(() => {})}
-    >
-      <CioArrowRight size={14} />
-    </button>
-    <!-- Reload is shown only when there is a page to act on: an empty tab has
-         nothing to reload, and the button becomes the stop affordance while a
-         load is in flight. -->
-    {#if pageState.loading || pageState.url !== ''}
+  {#if !compositionPlayer}
+    <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
-        title={pageState.loading ? 'Stop loading' : 'Reload page'}
-        onclick={onReloadButton}
-        oncontextmenu={onReloadContextMenu}
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+        disabled={!pageState.canGoBack}
+        aria-label="Go back"
+        title="Go back"
+        onclick={() => void invoke('browser:goBack', tabId).catch(() => {})}
       >
-        {#if pageState.loading}
-          <CioClose size={14} />
-        {:else}
-          <CioRefresh size={13} />
+        <CioArrowLeft size={14} />
+      </button>
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
+        disabled={!pageState.canGoForward}
+        aria-label="Go forward"
+        title="Go forward"
+        onclick={() => void invoke('browser:goForward', tabId).catch(() => {})}
+      >
+        <CioArrowRight size={14} />
+      </button>
+      <!-- Reload is shown only when there is a page to act on: an empty tab has
+         nothing to reload, and the button becomes the stop affordance while a
+         load is in flight. -->
+      {#if pageState.loading || pageState.url !== ''}
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
+          title={pageState.loading ? 'Stop loading' : 'Reload page'}
+          onclick={onReloadButton}
+          oncontextmenu={onReloadContextMenu}
+        >
+          {#if pageState.loading}
+            <CioClose size={14} />
+          {:else}
+            <CioRefresh size={13} />
+          {/if}
+        </button>
+      {/if}
+      <BrowserAddressBar
+        bind:this={addressBar}
+        {tabId}
+        url={address}
+        projectId={tabProjectId}
+        threadId={tabThreadId}
+        boxId={tabBoxId}
+        {secure}
+        loading={pageState.loading}
+        {siteMenuOpen}
+        onOpenSiteMenu={openSiteMenu}
+        onNavigate={navigate}
+      />
+      <BrowserBoxButton
+        projectId={tabProjectId}
+        threadId={tabThreadId}
+        boxId={tabBoxId}
+        labelled={fullscreen}
+        onChange={(boxId) => {
+          const replacementId = contextSidebarState.setBrowserTabBox(tabId, boxId)
+          if (replacementId) onTabReplaced?.(replacementId)
+        }}
+      />
+      <button
+        type="button"
+        class="relative flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Browser downloads"
+        title="Browser downloads"
+        onclick={openDownloadsMenu}
+      >
+        <CioDownload size={13} />
+        {#if unfinishedDownloadCount > 0}
+          <span
+            class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
+          >
+            {unfinishedDownloadCount}
+          </span>
         {/if}
       </button>
-    {/if}
-    <BrowserAddressBar
-      bind:this={addressBar}
-      {tabId}
-      url={address}
-      projectId={tabProjectId}
-      threadId={tabThreadId}
-      boxId={tabBoxId}
-      {secure}
-      loading={pageState.loading}
-      {siteMenuOpen}
-      onOpenSiteMenu={openSiteMenu}
-      onNavigate={navigate}
-    />
-    <BrowserBoxButton
-      projectId={tabProjectId}
-      threadId={tabThreadId}
-      boxId={tabBoxId}
-      labelled={fullscreen}
-      onChange={(boxId) => {
-        const replacementId = contextSidebarState.setBrowserTabBox(tabId, boxId)
-        if (replacementId) onTabReplaced?.(replacementId)
-      }}
-    />
-    <button
-      type="button"
-      class="relative flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label="Browser downloads"
-      title="Browser downloads"
-      onclick={openDownloadsMenu}
-    >
-      <CioDownload size={13} />
-      {#if unfinishedDownloadCount > 0}
-        <span
-          class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
-        >
-          {unfinishedDownloadCount}
-        </span>
-      {/if}
-    </button>
-    <button
-      type="button"
-      class={[
-        'relative flex h-7 shrink-0 items-center justify-center transition-colors',
-        fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-        devToolsOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-foreground'
-      ]}
-      aria-label="Toggle browser DevTools"
-      aria-pressed={devToolsOpen}
-      title="Toggle browser DevTools"
-      onclick={() => void toggleDevTools()}
-    >
-      <CioTerminal size={13} />
-      {#if fullscreen}
-        <span>Console</span>
-      {/if}
-    </button>
-    {#if authoredWork}
-      <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-      {#if screenEntry}
-        {#key `${authoredWork.directory}:${screenEntry}`}
-          <DesignScreenHistoryControls
-            projectId={tabProjectId}
-            threadId={tabThreadId}
-            {tabId}
-            directory={authoredWork.directory}
-            entry={screenEntry}
-            labelled={fullscreen}
-            active={panelVisible}
-          />
-        {/key}
-      {/if}
-    {/if}
-    {#if pageState.design}
       <button
         type="button"
         class={[
           'relative flex h-7 shrink-0 items-center justify-center transition-colors',
           fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-          inspectArmed
-            ? 'bg-accent/15 text-accent'
+          devToolsOpen
+            ? 'bg-elevated text-foreground'
             : 'text-dimmed hover:bg-elevated hover:text-foreground'
         ]}
-        aria-label={inspectArmed ? 'Stop inspecting elements' : 'Pick an element to comment on'}
-        aria-pressed={inspectArmed}
-        title={inspectArmed
-          ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
-          : 'Pick an element in this design to comment on'}
-        onclick={toggleInspect}
+        aria-label="Toggle browser DevTools"
+        aria-pressed={devToolsOpen}
+        title="Toggle browser DevTools"
+        onclick={() => void toggleDevTools()}
       >
-        <CioMarquee size={13} />
+        <CioTerminal size={13} />
         {#if fullscreen}
-          <span>Inspect</span>
+          <span>Console</span>
         {/if}
       </button>
-    {/if}
-  </div>
-  {#if findOpen && panelVisible}
+      {#if authoredWork}
+        <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        {#if screenEntry}
+          {#key `${authoredWork.directory}:${screenEntry}`}
+            <DesignScreenHistoryControls
+              projectId={tabProjectId}
+              threadId={tabThreadId}
+              {tabId}
+              directory={authoredWork.directory}
+              entry={screenEntry}
+              labelled={fullscreen}
+              active={panelVisible}
+            />
+          {/key}
+        {/if}
+      {/if}
+      {#if pageState.design}
+        <button
+          type="button"
+          class={[
+            'relative flex h-7 shrink-0 items-center justify-center transition-colors',
+            fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
+            inspectArmed
+              ? 'bg-accent/15 text-accent'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-label={inspectArmed ? 'Stop inspecting elements' : 'Pick an element to comment on'}
+          aria-pressed={inspectArmed}
+          title={inspectArmed
+            ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
+            : 'Pick an element in this design to comment on'}
+          onclick={toggleInspect}
+        >
+          <CioMarquee size={13} />
+          {#if fullscreen}
+            <span>Inspect</span>
+          {/if}
+        </button>
+      {/if}
+    </div>
+  {/if}
+  {#if findOpen && panelVisible && !compositionPlayer}
     <!-- The bar is a row of this column rather than an overlay: the page is a
          native view composited above the DOM, so a row above it shrinks the
          content rect and the observers place the page under the bar.
@@ -751,15 +803,46 @@
     </div>
   {/if}
   {#if pageState.composition}
-    <BrowserCompositionTransport
-      {tabId}
-      composition={pageState.composition}
-      projectId={pageState.projectId}
-      threadId={pageState.threadId}
-      active={panelVisible}
-    />
+    <div
+      class={[
+        'titlebar-no-drag flex shrink-0 items-stretch bg-surface',
+        compositionPlayer && !playerInEditor && 'h-10'
+      ]}
+      style={compositionPlayer && !playerInEditor ? trafficLightInsetStyle() : undefined}
+    >
+      <div class="min-w-0 flex-1">
+        <BrowserCompositionTransport
+          {tabId}
+          composition={pageState.composition}
+          compact={!fullscreen}
+          titlebar={compositionPlayer && !playerInEditor}
+          projectId={pageState.projectId}
+          threadId={pageState.threadId}
+          active={panelVisible}
+        />
+      </div>
+      {#if compositionPlayer && onExpandVideo}
+        <button
+          type="button"
+          class="titlebar-no-drag flex w-9 shrink-0 items-center justify-center border-b border-border bg-surface text-dimmed hover:bg-elevated hover:text-foreground"
+          title="Watch the video in full screen"
+          aria-label="Watch the video in full screen"
+          onclick={onExpandVideo}><CioMaximize size={14} /></button
+        >
+      {:else if compositionPlayer && onMinimize}
+        <button
+          type="button"
+          class="flex w-9 shrink-0 items-center justify-center border-b border-border bg-surface text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={minimizeTitle}
+          title={minimizeTitle}
+          onclick={onMinimize}
+        >
+          <CioMinimize size={14} />
+        </button>
+      {/if}
+    </div>
   {/if}
-  {#if inspectArmed}
+  {#if inspectArmed && !compositionPlayer}
     <p
       class="shrink-0 border-b border-accent/20 bg-accent/10 px-3 py-1 text-[0.6875rem] text-foreground"
       role="status"

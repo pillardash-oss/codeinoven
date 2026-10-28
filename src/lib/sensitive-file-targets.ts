@@ -13,9 +13,13 @@ export function sensitiveFileTargets(
   input: unknown,
   cwd: string,
   patterns: readonly string[],
-  canonicalize?: (path: string) => string
+  canonicalize?: (path: string) => string,
+  exists?: (path: string) => boolean
 ): SensitiveFileTarget[] {
   const targets = new Map<string, string>()
+  // Templates are committed on purpose and carry no values, so an example or
+  // sample file never needs consent even when its name matches `.env.*`.
+  const templateBasename = /(?:^|\.)(?:example|sample|template|dist|defaults)$/iu
   const fields = new Set([
     'path',
     'paths',
@@ -81,6 +85,7 @@ export function sensitiveFileTargets(
     if (!pattern) return false
     const subtree = pattern.endsWith('/**') ? pattern.slice(0, -3) : pattern
     const pieces = path.split('/').filter(Boolean)
+    const basename = pieces.at(-1) ?? ''
     const candidates = pattern.includes('/')
       ? [path, ...pieces.map((_, index) => pieces.slice(index).join('/'))]
       : pieces
@@ -89,9 +94,15 @@ export function sensitiveFileTargets(
         glob(candidate, pattern) ||
         candidate === subtree ||
         candidate.startsWith(`${subtree}/`) ||
-        (/[?*]/u.test(candidate) &&
-          candidate.replace(/[?*]/gu, '').length >= 2 &&
-          glob(pattern.replaceAll('*', 'sample').replaceAll('?', 'x'), candidate))
+        // A bare-name pattern can catch a glob operand that would expand onto
+        // it (`cat *env*`). The reverse test is meaningless against a path
+        // pattern, and comparing a glob candidate to a full path is how
+        // `/…/codeinoven/*ode*n*oven*` once looked like `agent-secrets/**`.
+        (!pattern.includes('/') &&
+          /[?*]/u.test(basename) &&
+          basename.replace(/[?*]/gu, '').length >= 2 &&
+          candidate === basename &&
+          glob(pattern.replaceAll('*', 'sample').replaceAll('?', 'x'), basename))
     )
   }
 
@@ -106,6 +117,10 @@ export function sensitiveFileTargets(
       }
     }
     if (!candidate || candidate.startsWith('-') || candidate.includes('://')) return
+    // Expression punctuation means program text, not an operand: a sed
+    // expression, a JS snippet, or a quoted fragment reaches the token stream
+    // with parentheses, quotes, or operators that no path contains.
+    if (/[()'"=!;${}<>|`,]/u.test(candidate)) return
     // Language identifiers, not filenames. These reach the token stream from
     // scripts, inline code, and quoted program text, never from an operand the
     // shell turns into a path.
@@ -125,7 +140,14 @@ export function sensitiveFileTargets(
     // canonicalizer's home-expanded path is the only truthful target.
     const homeRelative = candidate.startsWith('~') && canonical !== absolute
     const ordered = homeRelative ? [canonical, absolute] : [absolute, canonical]
-    for (const target of ordered) {
+    // A secret that is not on disk cannot leak, and a token that names no file
+    // is program text or a guess. A glob is unexpanded, so it keeps its card.
+    const reachable =
+      exists === undefined || /[*?]/u.test(candidate)
+        ? ordered
+        : ordered.filter((target) => exists(target))
+    for (const target of reachable) {
+      if (templateBasename.test(target.replaceAll('\\', '/').split('/').at(-1) ?? '')) continue
       const pattern = patterns.find((entry) => matches(target, entry))
       if (pattern === undefined) continue
       // Report the path that matched, so an alias shows the secret it reaches.

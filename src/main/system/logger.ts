@@ -26,10 +26,12 @@ interface LogDaySinks {
  * Every sink lives in the folder of the day it was written on, so one day of
  * debugging reads `logs/2026-09-24/` instead of one ever-growing file (the
  * layout itself is documented in `src/main/system/log-paths.ts`). Inside that
- * folder the machine-readable `main.jsonl` sink keeps every line, an
- * operator-friendly `debug.log` mirrors them, and every error also lands in
- * `error.log`, so production issues can be inspected on disk without decoding
- * the JSONL stream.
+ * folder the machine-readable `main.jsonl` sink keeps every line, and the
+ * operator-friendly `debug.log` mirrors the lines an operator acts on (info and
+ * error). Development diagnostics stay in the JSONL stream only: they are the
+ * majority of a typical day's lines, and a reader answering "what happened"
+ * gets nothing from them. Every error also lands in `error.log`, so production
+ * issues can be inspected on disk without decoding the JSONL stream.
  *
  * The day is resolved on every write rather than at initialization, so an app
  * left running overnight starts writing to the new day's folder at midnight
@@ -199,9 +201,16 @@ export class Logger {
       message: formatted.slice(level.length + 3)
     }
     Logger.enqueue(sinks, sinks.jsonl, `${JSON.stringify(record)}\n`)
-    const humanLine = `[${record.timestamp}] [${record.level}] ${record.message}\n`
-    Logger.enqueue(sinks, sinks.debug, humanLine)
-    if (level === 'error') Logger.enqueue(sinks, sinks.error, humanLine)
+    // `main.jsonl` is the complete record; the human mirror is what an operator
+    // reads to answer "what happened", and a dev diagnostic is not that. It was
+    // also the larger half of the mirror (20 of 32 lines on a real launch), so
+    // dropping it there halves the file without losing a single byte of evidence:
+    // the line is still in the JSONL stream, right where a developer greps it.
+    if (level !== 'dev') {
+      const humanLine = `[${record.timestamp}] [${record.level}] ${record.message}\n`
+      Logger.enqueue(sinks, sinks.debug, humanLine)
+      if (level === 'error') Logger.enqueue(sinks, sinks.error, humanLine)
+    }
   }
 
   /** Development-only log line. */

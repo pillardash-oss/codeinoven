@@ -1,0 +1,85 @@
+{
+  "columns": 2,
+  "frames": [
+    {
+      "entry": "./index.html",
+      "title": "Overview",
+      "caption": "Eight variants, macOS / Windows / narrow"
+    },
+    {
+      "entry": "./v8-icon-as-menu.html",
+      "title": "V8 Icon as menu",
+      "caption": "Icon owns both menus, state under the title, identity kept"
+    },
+    {
+      "entry": "./v8-icon-as-menu.html",
+      "title": "V8 panel at 200px",
+      "caption": "The floor: mark only, three actions",
+      "state": {
+        "search": "?panel=200",
+        "scroll": 900
+      }
+    },
+    {
+      "entry": "./v8-icon-as-menu.html",
+      "title": "V8 panel hidden",
+      "caption": "Mark alone, every action back, the rule closes on the chrome",
+      "state": {
+        "search": "?panel=0",
+        "scroll": 900
+      }
+    },
+    {
+      "entry": "./v8-icon-as-menu.html",
+      "title": "V8 panel at 264px",
+      "caption": "The app's default sidebar width",
+      "state": {
+        "search": "?panel=264",
+        "scroll": 900
+      }
+    },
+    {
+      "entry": "./v8-icon-as-menu.html",
+      "title": "V8 panel at 420px",
+      "caption": "The app's maximum sidebar width",
+      "state": {
+        "search": "?panel=420",
+        "scroll": 900
+      }
+    },
+    {
+      "entry": "./v7-fixed-spine.html",
+      "title": "V7 Fixed spine",
+      "caption": "Content-sized column, left-aligned title"
+    },
+    {
+      "entry": "./recommendation.html",
+      "title": "Recommendation",
+      "caption": "V2 split centre with V1's seam"
+    },
+    {
+      "entry": "./v1-reserved-edge.html",
+      "title": "V1 Reserved edge"
+    },
+    {
+      "entry": "./v2-split-center.html",
+      "title": "V2 Split centre"
+    },
+    {
+      "entry": "./v3-rail-actions.html",
+      "title": "V3 Rail owns the actions"
+    },
+    {
+      "entry": "./v4-command-field.html",
+      "title": "V4 Command field"
+    },
+    {
+      "entry": "./v5-two-tiers.html",
+      "title": "V5 Two tiers"
+    },
+    {
+      "entry": "./v6-priority-ladder.html",
+      "title": "V6 Priority ladder"
+    }
+  ]
+}

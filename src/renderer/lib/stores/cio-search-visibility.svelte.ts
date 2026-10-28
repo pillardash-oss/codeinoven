@@ -20,6 +20,8 @@ function loadFlag(key: string): boolean {
  * projects until the user flips the switch again.
  */
 class CioSearchVisibilityStore {
+  includeThreads = $state(false)
+
   includeCio = $state<boolean>(loadFlag(STORAGE_KEY))
   /** Whether git-ignored entries participate in file search surfaces. */
   includeIgnored = $state<boolean>(loadFlag(IGNORED_STORAGE_KEY))

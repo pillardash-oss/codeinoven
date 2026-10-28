@@ -1,8 +1,8 @@
 <script lang="ts">
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { workspaceState } from '$lib/stores/workspace.svelte'
 
   interface Props {
@@ -38,15 +38,18 @@
       <CioTerminal size={11} class="shrink-0" />
     {/snippet}
     {#if terminalTab?.kind === 'terminal'}
-      {#key tabId}
-        <TerminalPanel
-          terminalId={terminalTab.terminalId}
-          projectId={terminalTab.projectId}
-          threadId={terminalTab.threadId}
-          scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
-          directory={terminalTab.startingDirectory}
-        />
-      {/key}
+      <!-- The terminal chunk waits for a fullscreen terminal to be opened. -->
+      {#await loadCachedPanelModule(PANEL_KEYS.terminal, () => import('$lib/components/terminal/TerminalPanel.svelte')) then { default: TerminalPanel }}
+        {#key tabId}
+          <TerminalPanel
+            terminalId={terminalTab.terminalId}
+            projectId={terminalTab.projectId}
+            threadId={terminalTab.threadId}
+            scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
+            directory={terminalTab.startingDirectory}
+          />
+        {/key}
+      {/await}
     {/if}
   </FullscreenPanelDialog>
 {/if}

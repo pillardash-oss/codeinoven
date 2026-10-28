@@ -61,6 +61,7 @@ import type {
   PrMinimizeReason,
   PrReactionContent,
   PrResolveOptions,
+  PrState,
   PullRequestBundle,
   PullRequestPage,
   PullRequestSummary,
@@ -1209,7 +1210,7 @@ export class GitState {
     remote: string,
     branch: string,
     strategy: Parameters<GitLocalOperations['pullIntegrate']>[3]
-  ): Promise<void> {
+  ): Promise<GitStatus | null> {
     return this.local.pullIntegrate(projectId, remote, branch, strategy)
   }
 
@@ -1402,6 +1403,16 @@ export class GitState {
     return this.prOps.getDefaultBranch(projectId)
   }
 
+  /**
+   * Search this repository's pull requests, for the PR view's own find.
+   *
+   * The state is the listing the reader is on, so the find answers within the view
+   * rather than across every pull request the repository ever had.
+   */
+  searchPullRequests(projectId: string, owner: string, repo: string, state: PrState, text: string) {
+    return this.prOps.searchPullRequests(projectId, owner, repo, state, text)
+  }
+
   comparePullRequests(projectId: string, owner: string, repo: string, base: string, head: string) {
     return this.prOps.comparePullRequests(projectId, owner, repo, base, head)
   }
@@ -1412,6 +1423,16 @@ export class GitState {
 
   closePullRequest(projectId: string, owner: string, repo: string, pullNumber: number) {
     return this.prOps.closePullRequest(projectId, owner, repo, pullNumber)
+  }
+
+  /** What a merged pull request's head branch is as far as deleting it goes. */
+  branchDeletionState(projectId: string, owner: string, repo: string, branch: string) {
+    return this.prOps.branchDeletionState(projectId, owner, repo, branch)
+  }
+
+  /** Delete a merged pull request's head branch from the repository. */
+  deleteMergedBranch(projectId: string, owner: string, repo: string, branch: string) {
+    return this.prOps.deleteMergedBranch(projectId, owner, repo, branch)
   }
 
   /** Close a batch, one at a time, reporting what succeeded and what did not. */

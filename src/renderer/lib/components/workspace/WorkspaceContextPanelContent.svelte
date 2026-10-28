@@ -15,7 +15,6 @@
   // two heaviest residents, and the browser one drags the browser's whole model
   // with it. A browser panel can only appear once a browser tab exists, which is
   // also when its chunk is warmed, so nothing on the first paint waits for it.
-  import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
 
   import { getProjectIcon } from '$lib/project-icons'
@@ -406,13 +405,19 @@
               Terminal is open in fullscreen
             </div>
           {:else}
-            <TerminalPanel
-              terminalId={activeContextTab.terminalId}
-              projectId={activeContextTab.projectId}
-              threadId={activeContextTab.threadId}
-              scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
-              directory={activeContextTab.startingDirectory}
-            />
+            {#await loadCachedPanelModule(PANEL_KEYS.terminal, () => import('$lib/components/terminal/TerminalPanel.svelte'))}
+              {@render panelLoading('Terminal')}
+            {:then { default: TerminalPanel }}
+              <TerminalPanel
+                terminalId={activeContextTab.terminalId}
+                projectId={activeContextTab.projectId}
+                threadId={activeContextTab.threadId}
+                scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
+                directory={activeContextTab.startingDirectory}
+              />
+            {:catch error}
+              {@render panelLoadFailed(PANEL_KEYS.terminal, 'Terminal', error)}
+            {/await}
           {/if}
         {:else if activeContextTab.kind === 'actions'}
           {#await loadCachedPanelModule(PANEL_KEYS.actions, () => import('../actions/ActionsPanel.svelte'))}

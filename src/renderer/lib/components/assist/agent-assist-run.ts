@@ -21,15 +21,37 @@ export interface AgentAssistProgress {
   threadId?: string
 }
 
-/** Open the thread a handoff created, so its run is visible from the first token. */
-async function openAssistThread(projectId: string, threadId: string): Promise<void> {
+/** The selection a handoff started from, so it can tell whether the reader is still there. */
+interface AssistOrigin {
+  projectId: string
+  threadId: string
+}
+
+/**
+ * Open the thread a handoff created, so its run is visible from the first token.
+ *
+ * `stillWanted` is what keeps a slow handoff from taking the screen. Preparing a
+ * review checkout can take minutes, and the thread is only worth opening while
+ * the reader is still where they were when they confirmed it: opening it later
+ * pulled them off the conversation they had moved to since, and because a thread
+ * open is what the app remembers as its last selection, it also made the next
+ * start come back to that thread and its panels instead of the work they had
+ * actually gone to.
+ */
+async function openAssistThread(
+  projectId: string,
+  threadId: string,
+  stillWanted: () => boolean = () => true
+): Promise<void> {
   const project = await invoke('project:get', projectId).catch(() => null)
   // The thread was created optimistically a moment ago, so its row may not be
   // readable on the first attempt. Opening it is how the user watches the run
   // they paid for, so it is worth a few short retries rather than a silent miss.
   for (let attempt = 0; attempt < 12; attempt += 1) {
+    if (!stillWanted()) return
     const thread = await invoke('thread:get', projectId, threadId).catch(() => null)
     if (thread) {
+      if (!stillWanted()) return
       workspaceState.openThread(thread, project)
       return
     }
@@ -84,6 +106,12 @@ export async function runAgentAssist(
 ): Promise<void> {
   const project = await invoke('project:get', request.projectId)
   if (!project) throw new Error('This project is no longer available')
+  // The reader's place when they confirmed the handoff: the prepared thread only
+  // opens itself if they are still here (see `openAssistThread`).
+  const selectedAtStart = workspaceState.selectedThread
+  const origin: AssistOrigin | null = selectedAtStart
+    ? { projectId: selectedAtStart.projectId, threadId: selectedAtStart.id }
+    : null
   // The confirmed configuration seeds the next thread the user starts.
   threadSettings.commit(selection.settings)
 
@@ -107,7 +135,13 @@ export async function runAgentAssist(
       detail: delivery === 'draft' ? 'Opening the prompt' : 'Starting the agent',
       threadId: prepared.threadId
     })
-    await openAssistThread(request.projectId, prepared.threadId)
+    await openAssistThread(request.projectId, prepared.threadId, () => {
+      const current = workspaceState.selectedThread
+      if (!current) return origin === null
+      return (
+        origin !== null && current.projectId === origin.projectId && current.id === origin.threadId
+      )
+    })
     if (delivery === 'immediate') {
       try {
         // The confirmed configuration travels with the message: the turn runs

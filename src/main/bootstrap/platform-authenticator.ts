@@ -15,8 +15,10 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
  * Electron routes it through `select-webauthn-account` on the Session. Electron
  * cancels that request when no listener is registered, and it does not fail
  * fast: measured on this runtime against a stored credential, the page's promise
- * never settled at all, so the site shows a spinner forever. Nothing arms that
- * listener yet, and no amount of code here can substitute for it.
+ * never settled at all, so the site shows a spinner forever. The browser jar arms
+ * that listener when it configures a session (see `sessionForProject` in
+ * `browser-service.ts`); this file cannot substitute for it, because the ask is
+ * per session rather than per platform.
  *
  * On macOS, Electron services a platform passkey request only after
  * `app.configureWebAuthn` has been called. Until then

@@ -47,6 +47,7 @@ import { existsSync, statSync } from 'node:fs'
 import type { StorageEngine } from '../storage/storage-engine'
 import { runHarnessCommand } from './harness-runtime'
 import { readAntigravityAccountUsage } from '../usage/antigravity-quota'
+import { holdAntigravitySelfUpdate } from './antigravity/antigravity-self-update'
 import { Logger } from '../system/logger'
 import { parseBrainTraceLine } from './antigravity-brain-trace'
 import { presentProviderError } from '../../lib/provider-issue'
@@ -62,8 +63,13 @@ async function runAgy(
   accountEnvironment: NodeJS.ProcessEnv = {}
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
   try {
+    const environment = await buildProcessEnvironmentAsync({
+      ...process.env,
+      ...accountEnvironment
+    })
+    await holdAntigravitySelfUpdate(environment)
     const result = await runHarnessCommand('agy', args, {
-      env: await buildProcessEnvironmentAsync({ ...process.env, ...accountEnvironment }),
+      env: environment,
       timeoutMs
     })
     return { succeeded: true, ...result }
@@ -1101,10 +1107,17 @@ export class AntigravityDriver extends PersistentCliDriver {
         true
       )
     }
+    const environment = await buildProcessEnvironmentAsync({
+      ...process.env,
+      ...this.accountEnvironment
+    })
+    // Keep a turn from letting the CLI update itself mid-session: the stamp the
+    // CLI throttles its own updater with is refreshed right before it starts.
+    await holdAntigravitySelfUpdate(environment)
     return {
       command: 'agy',
       args,
-      env: await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment }),
+      env: environment,
       onJsonRecord: (value) => {
         if (turnState.conversationId) return
         const conversationId = stringValue(record(value)?.['conversation_id'])

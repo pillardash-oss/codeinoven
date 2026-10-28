@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
-  import CioGitMergeConflict from '@pdslng/cio-icon/CioGitMergeConflict.svelte'
   import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -19,6 +19,17 @@
   let gitPanelActive = $derived(
     contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git'
   )
+
+  const worktreeBucket = $derived(
+    workspaceState.selectedThread ? threadScopeBucket(workspaceState.selectedThread) : null
+  )
+  const inWorktree = $derived(worktreeBucket?.root.kind === 'worktree')
+
+  /** The branch the thread is on. The bar is quiet enough for the name again, and a
+   *  name says more than the icon alone ever did: the icon only promised that
+   *  something git-shaped was behind it. It also names the tree that branch is in,
+   *  which is why the worktree icon it used to sit beside is gone. */
+  let branchName = $derived(gitState.branch)
 
   function openGitPanel(): void {
     const thread = workspaceState.selectedThread
@@ -60,17 +71,11 @@
 <!-- Git status chip   only when a thread is open in a project view -->
 <button
   class={[
-    'relative flex h-8 max-w-40 items-center gap-1.5 px-2 transition-colors duration-150',
-    gitState.activePrConflictCount > 0
-      ? 'text-danger hover:bg-danger/10'
-      : gitState.conflicted.length > 0
-        ? 'text-warning hover:bg-warning/10'
-        : gitState.clean
-          ? 'text-dimmed hover:bg-elevated hover:text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground',
-    gitPanelActive ? 'bg-elevated' : ''
+    'relative flex h-8 min-w-8 items-center justify-center gap-1.5 px-2 transition-colors duration-150',
+    gitPanelActive ? 'bg-elevated text-primary' : 'text-dimmed hover:bg-elevated hover:text-muted'
   ]}
-  aria-label="Open Git panel"
+  aria-label={inWorktree ? `Open Git panel, worktree: ${worktreeBucket?.name}` : 'Open Git panel'}
+  aria-pressed={gitPanelActive}
   title={gitState.activePrConflictCount > 0
     ? `${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution   open Git panel`
     : 'Open Git panel'}
@@ -78,14 +83,12 @@
   onfocus={warmPanel}
   onclick={openGitPanel}
 >
-  {#if gitState.activePrConflictCount > 0}
-    <CioGitMergeConflict size={13} class="shrink-0" />
-  {:else}
-    <CioTabGit size={13} class="shrink-0" />
-  {/if}
-  {#if gitState.branch}
-    <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] font-medium">
-      {gitState.branch}
+  <CioTabGit size={13} class="shrink-0" />
+  {#if branchName}
+    <!-- Hidden by the header's own container rule on a narrow window, where the
+         chip keeps its icons and its counts. -->
+    <span class="header-control-label max-w-24 truncate text-[0.6875rem] font-medium">
+      {branchName}
     </span>
   {/if}
   {#if gitState.conflicted.length > 0}

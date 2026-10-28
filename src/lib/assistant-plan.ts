@@ -1,6 +1,5 @@
 import {
   ASSISTANT_NAME_LIMIT,
-  ASSISTANT_PERSONALITY_LIMIT,
   ASSISTANT_SCHEDULE_NAME_LIMIT,
   parseTimeOfDay,
   type AssistantSchedule,
@@ -54,11 +53,6 @@ export interface AssistantPlan {
    * left as the placeholder the create flow had to use.
    */
   name: string | null
-  /**
-   * How the user asked the assistant to behave, in their own words. It becomes
-   * the assistant's personality, which rides every turn of its threads.
-   */
-  personality: string | null
   /**
    * Whether the assistant keeps a clock at all. A conversation can settle either
    * way, so the answer travels with the plan: `false` makes the assistant
@@ -177,12 +171,6 @@ export const ASSISTANT_PLAN_JSON_SCHEMA: Record<string, unknown> = {
       description:
         'The name the user gave the assistant in the conversation, verbatim and nothing more ("Jenny"). Omit when they did not name it.'
     },
-    personality: {
-      type: 'string',
-      minLength: 1,
-      description:
-        'How the user asked the assistant to behave, in their own words, as a short paragraph. Omit when they left it to you.'
-    },
     scheduled: {
       type: 'boolean',
       description:
@@ -215,8 +203,6 @@ export const ASSISTANT_PLAN_SCHEMA_TEXT = JSON.stringify(ASSISTANT_PLAN_JSON_SCH
 
 /** Ceiling for the name a plan may carry, matching the store's own limit. */
 const MAX_PLAN_TEXT = ASSISTANT_NAME_LIMIT
-/** Ceiling for the personality a plan may carry, matching the IPC validator. */
-const MAX_PLAN_PERSONALITY = ASSISTANT_PERSONALITY_LIMIT
 /** Ceiling for the schedule name a plan may carry, matching the IPC validator. */
 const MAX_PLAN_SCHEDULE_NAME = ASSISTANT_SCHEDULE_NAME_LIMIT
 
@@ -321,7 +307,6 @@ export function normalizePlanConnections(value: unknown): AssistantPlanConnectio
 export function parseAssistantPlanValue(value: unknown): AssistantPlan | null {
   if (!isRecord(value)) return null
   const name = normalizeReadableText(value.name, MAX_PLAN_TEXT)
-  const personality = normalizeReadableText(value.personality, MAX_PLAN_PERSONALITY)
   const scheduleName = normalizeReadableText(value.scheduleName, MAX_PLAN_SCHEDULE_NAME)
   const scheduled = typeof value.scheduled === 'boolean' ? value.scheduled : null
   const schedule = normalizePlanSchedule(value.schedule)
@@ -334,13 +319,12 @@ export function parseAssistantPlanValue(value: unknown): AssistantPlan | null {
     !delivery &&
     !priority &&
     !name &&
-    !personality &&
     !scheduleName &&
     scheduled === null
   ) {
     return null
   }
-  return { name, personality, scheduled, schedule, scheduleName, connections, delivery, priority }
+  return { name, scheduled, schedule, scheduleName, connections, delivery, priority }
 }
 
 /** Parse a JSON plan body (the `assistant` fence) against the plan schema. */

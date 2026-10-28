@@ -3,6 +3,7 @@ import { join, relative } from 'node:path'
 import { atomicWrite } from '../../lib/utils'
 import { videoFile } from './video-paths'
 import { VIDEO_RUNTIME_MARKER, videoRuntimeSource } from './video-runtime'
+import { installVideoFonts } from './video-font-assets'
 
 /** The generated helper, installed beside a composition and never hand-authored. */
 export const VIDEO_RUNTIME_FILE = 'cio-video.js'
@@ -25,7 +26,9 @@ export interface VideoRuntimeInstall {
  * reaches authored work that already shipped with an older copy.
  */
 function isGeneratedRuntime(source: string): boolean {
-  return source.startsWith(VIDEO_RUNTIME_MARKER) || source.startsWith('(function installVideoRuntime')
+  return (
+    source.startsWith(VIDEO_RUNTIME_MARKER) || source.startsWith('(function installVideoRuntime')
+  )
 }
 
 function foreignRuntimeError(): Error {
@@ -48,6 +51,7 @@ export async function installVideoRuntime(
   root: string,
   folder: string
 ): Promise<VideoRuntimeInstall> {
+  await installVideoFonts(folder)
   const path = join(folder, VIDEO_RUNTIME_FILE)
   const source = videoRuntimeSource()
   const existing = await videoFile(folder, VIDEO_RUNTIME_FILE).catch(

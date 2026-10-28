@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
@@ -127,7 +128,7 @@
     onCloseShortcut?: () => void
     children: Snippet
     /**
-     * Actions that sit in the canonical header beside the close control.
+     * Actions that sit in the canonical header beside the dismiss control.
      *
      * A surface whose one or two actions belong to the panel itself (a viewer
      * that toggles a mode) puts them here rather than in a footer bar, which
@@ -148,7 +149,7 @@
      *  only one `max-w-*` is ever on the panel. Ignored by `fullscreen`, which
      *  is never width-capped. */
     panelWidth?: string
-    /** Draw the canonical header (title and close) and footer slot. Off for a
+    /** Draw the canonical header (title and dismiss) and footer slot. Off for a
      *  surface that owns its own layout, such as a full screen editor or a
      *  palette. */
     chrome?: boolean
@@ -515,7 +516,7 @@
                      have its header drawn over a drag strip. Without that a
                      header action such as the artifact viewer's inspect toggle
                      was painted above the drag strip yet dead to the mouse, while
-                     the close control (which happened to sit over a hole in the
+                     the dismiss control (which happened to sit over a hole in the
                      app header's own controls) still worked. -->
                 <div
                   class={[
@@ -540,12 +541,36 @@
                     {#if headerActions}
                       {@render headerActions()}
                     {/if}
+                    <!-- A full screen surface wears the collapse mark; every
+                         inset dialog keeps the X.
+
+                         The two glyphs answer two different worries. A dialog
+                         that covers the whole window draws its own title bar
+                         band exactly where the operating system draws the
+                         window's close button, so on Windows an X in that corner
+                         reads as "quit the app" and invites the wrong click. The
+                         collapse mark states the truth on that band: the surface
+                         folds away and the window stays. An inset dialog (a
+                         centred prompt, a side sheet, a bottom sheet, a
+                         palette) never stands in for the title bar, and it floats
+                         inside a window whose own close button is still visible
+                         elsewhere, so its X cannot be mistaken for the app's and
+                         stays the plainer, more conventional mark for a
+                         dismissal.
+
+                         The one full screen surface that really does close what
+                         it was handed (a file opened through the OS) draws its
+                         own header with the X it deserves. -->
                     <Dialog.Close
                       class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       aria-label="Close"
                       title="Close"
                     >
-                      <CioClose size={16} />
+                      {#if placement === 'fullscreen'}
+                        <CioMinimize size={16} />
+                      {:else}
+                        <CioClose size={16} />
+                      {/if}
                     </Dialog.Close>
                   </div>
                 </div>
