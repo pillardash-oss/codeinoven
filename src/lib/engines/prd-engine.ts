@@ -133,7 +133,11 @@ export class PrdEngine {
   }
 
   getWorkflowState(projectId: string, threadId: string): PrdWorkflowState | null {
-    this.assertScope(projectId, threadId)
+    // A thread that is gone has no PRD workflow, and a view that is still
+    // hydrating it can only render a rejection as a broken thread. Reads answer
+    // empty here; the mutations below keep `assertScope`, because writing PRD
+    // state for a thread that is not there is a real error.
+    if (!this.threadScopeExists(projectId, threadId)) return null
     const row = this.db.get<{
       entry_choice: PrdEntryChoice | null
       stage: PrdWorkflowState['stage']
@@ -173,7 +177,7 @@ export class PrdEngine {
     prdId: string,
     version: number
   ): PrdDocument | null {
-    this.assertScope(projectId, threadId)
+    if (!this.threadScopeExists(projectId, threadId)) return null
     this.assertId('PRD', prdId)
     this.assertVersion(version)
     const row = this.db.get<{ data: string }>(
@@ -187,7 +191,7 @@ export class PrdEngine {
   }
 
   listVersions(projectId: string, threadId: string, prdId: string): PrdDocument[] {
-    this.assertScope(projectId, threadId)
+    if (!this.threadScopeExists(projectId, threadId)) return []
     this.assertId('PRD', prdId)
     return this.db
       .all<{ data: string }>(
@@ -254,6 +258,9 @@ export class PrdEngine {
     content: PrdContent,
     provenance: NewPrdProvenance
   ): Promise<PrdDocument> {
+    // A version is a write: a thread that is gone must fail as a missing thread
+    // rather than as a workflow that happens to be in the wrong stage.
+    this.assertScope(projectId, threadId)
     const workflow = this.getWorkflowState(projectId, threadId)
     if (
       workflow?.stage !== 'drafting' ||
@@ -420,6 +427,7 @@ export class PrdEngine {
     prdId: string,
     version: number
   ): PrdDocument {
+    this.assertScope(projectId, threadId)
     const workflow = this.getWorkflowState(projectId, threadId)
     if (
       workflow?.stage !== 'drafting' ||
@@ -440,6 +448,7 @@ export class PrdEngine {
     prdId: string,
     version: number
   ): PrdDocument {
+    this.assertScope(projectId, threadId)
     const document = this.getVersion(projectId, threadId, prdId, version)
     if (!document) throw new PrdEngineError('not_found', `PRD not found: ${prdId} v${version}`)
     return document
@@ -503,15 +512,40 @@ export class PrdEngine {
   private assertScope(projectId: string, threadId: string): void {
     this.assertId('project', projectId)
     this.assertId('thread', threadId)
-    const row = this.db.get<{ project_id: string }>(
-      'SELECT project_id FROM threads WHERE id=?',
-      threadId
-    )
+    const row = this.threadRow(threadId)
     // Distinguish a missing row (an optimistic create whose persistence has not
     // landed, or a deleted thread) from a genuine cross-project mismatch, so the
     // error names the real problem instead of blaming the project.
     if (!row) throw new PrdEngineError('not_found', `Thread not found: ${threadId}`)
-    if (row.project_id !== projectId) {
+    this.assertProject(projectId, threadId, row.project_id)
+  }
+
+  /**
+   * Whether a read's thread still exists. Deleting a thread removes its PRD
+   * state with it (the workflow and version rows cascade), and the renderer
+   * hydrates Engineering state on turn boundaries, so a read that races the
+   * deletion must answer "nothing" instead of throwing a not-found error at a
+   * view that is only being torn down. A genuine cross-project call still
+   * throws, because that is a caller bug rather than a vanished thread.
+   */
+  private threadScopeExists(projectId: string, threadId: string): boolean {
+    this.assertId('project', projectId)
+    this.assertId('thread', threadId)
+    const row = this.threadRow(threadId)
+    if (!row) return false
+    this.assertProject(projectId, threadId, row.project_id)
+    return true
+  }
+
+  private threadRow(threadId: string): { project_id: string } | undefined {
+    return this.db.get<{ project_id: string }>(
+      'SELECT project_id FROM threads WHERE id=?',
+      threadId
+    )
+  }
+
+  private assertProject(projectId: string, threadId: string, ownerProjectId: string): void {
+    if (ownerProjectId !== projectId) {
       throw new PrdEngineError(
         'not_found',
         `Thread ${threadId} does not belong to the requested project`

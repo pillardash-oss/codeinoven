@@ -168,7 +168,7 @@ export class ThreadManager {
     private db: Database,
     private onChange?: (thread: Thread) => void,
     private onDelete?: (thread: Thread) => void | Promise<void>,
-    private onDeleted?: (threads: Thread[]) => void | Promise<void>,
+    private onDeleted?: (threads: Pick<Thread, 'projectId' | 'id'>[]) => void | Promise<void>,
     private scopeRoots?: ThreadScopeRootProvider
   ) {
     this.threadRepo = new ThreadRepo(db)
@@ -850,7 +850,18 @@ export class ThreadManager {
     const projectThreads = await this.threadRepo.listForDeletionViaWorker(projectId)
     const thread = projectThreads.find((candidate) => candidate.id === threadId)
     if (!thread) {
-      throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
+      // Deleting a thread that is already gone is a finished deletion, not a
+      // failure: the row and everything the cascade takes with it are exactly
+      // what the caller asked to remove, and reporting "not found" would show a
+      // cleanup warning for a delete that already succeeded. The broadcast still
+      // runs so every window drops a row it may have kept from a missed event;
+      // a thread owned by another project is still a caller bug and keeps
+      // failing with the ownership error above.
+      if (await this.threadRepo.getViaWorker(threadId)) {
+        throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
+      }
+      await this.onDeleted?.([{ projectId, id: threadId }])
+      return
     }
     // A task owns the runs it produced, exactly as a coordinator owns its
     // workers: both are swept with the thread so no orphan row survives.

@@ -8962,7 +8962,11 @@
   function scheduleReadySpecReconcile(): void {
     if (!shouldHydrateEngineeringState()) return
     window.setTimeout(() => {
-      if (alive) void reconcileReadySpec()
+      // A background refresh has no surface of its own: a rejection here would
+      // land in the app-wide unhandled-rejection panel with a raw IPC message,
+      // and the failures that actually matter are already reported by the mount
+      // and workflow-event paths that await this same reconcile.
+      if (alive) void reconcileReadySpec().catch(() => {})
     }, 100)
   }
 
