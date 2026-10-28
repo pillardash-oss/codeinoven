@@ -253,17 +253,34 @@ function resolveCheckpointOwners(
     }
   }
 
-  const fallbackLast = new Map<string, number>()
+  // Fallback for a checkpoint whose prompt is not in the loaded transcript: a
+  // long thread loads a window of its messages, and the prompt that opened the
+  // turn usually sits above it. Matching by timestamp then cut the turn at
+  // `completedAt`, so a final assistant message the harness flushed after the
+  // checkpoint settled fell outside the window, and the card lost its turn end
+  // and disappeared even though the checkpoint held the changes. A turn also
+  // runs until the next prompt that opens one, so the fallback adopts the run
+  // up to that prompt instead of stopping at the completion clock.
   for (let index = 0; index < messages.length; index++) {
     if (claimed[index] || owners[index]) continue
     const owner = checkpointForTurn(messages, checkpoints, index)
+    if (!owner) continue
     owners[index] = owner
-    if (owner) fallbackLast.set(owner.id, index)
-  }
-  // The fallback can match a trailing assistant of a run a later attempt
-  // replaced, so it too places a card only where a turn actually ends.
-  for (const index of fallbackLast.values()) {
-    if (isTurnEndIndex(messages, index)) card[index] = true
+    let cardIndex = index
+    for (let next = index + 1; next < messages.length; next++) {
+      const message = messages[next]
+      // An index another turn already decided belongs to that turn, so the run
+      // ends here rather than adopting someone else's answer.
+      if (!message || claimed[next] || owners[next]) break
+      if (message.role === 'user' && !isTurnTransparentUserMessage(message)) break
+      if (message.role !== 'assistant' || message.inlineArtifact) continue
+      owners[next] = owner
+      cardIndex = next
+    }
+    // The fallback can match a trailing assistant of a run a later attempt
+    // replaced, so it too places a card only where a turn actually ends.
+    if (isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
+    index = cardIndex
   }
 
   return { messageIndexById: indexByMessageId, owners, card, steer }
@@ -398,10 +415,7 @@ export function buildTranscriptIndex(
     }
   }
 
-  const { messageIndexById, owners, card, steer } = resolveCheckpointOwners(
-    messages,
-    checkpoints
-  )
+  const { messageIndexById, owners, card, steer } = resolveCheckpointOwners(messages, checkpoints)
   for (let index = 0; index < count; index++) {
     const opens = isTurnStartIndex(messages, index)
     const closes = isTurnEndIndex(messages, index)

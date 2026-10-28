@@ -191,6 +191,22 @@ describe('checkpoint card placement', () => {
     expect(cardIndices(messages, checkpoints)).toEqual([2, 5])
   })
 
+  // Regression: a long thread loads only a window of its messages, so the prompt
+  // that opened the turn is not in the transcript and the card falls back to the
+  // timestamp window. The harness flushed the final assistant 5.8s after the
+  // checkpoint settled (real values below), so the window cut the turn short and
+  // the card vanished although the checkpoint held eleven files.
+  it('keeps the card when a windowed transcript hides the prompt and the final assistant lands late', () => {
+    const messages = [
+      msg('assistant', 1793228215900),
+      msg('assistant', 1793229000000),
+      msg('assistant', 1793229257430),
+      msg('assistant', 1793229264500)
+    ]
+    const cp = checkpoint('cp-1', 1793228092680, 1793229258699, { changes: 11 })
+    expect(cardIndices(messages, [cp])).toEqual([3])
+  })
+
   it('ignores active checkpoints', () => {
     const messages = [msg('user', 100, 'prompt-1'), msg('assistant', 150)]
     const cp = checkpoint('cp-1', 110, 160, {
