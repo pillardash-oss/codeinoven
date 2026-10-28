@@ -127,8 +127,12 @@
   let titleMaxWidth = $derived.by(() => {
     if (!layoutPanelState.contentVisible) return 0
     const width = layoutPanelState.conversationWidth
-    if (width <= 0) return 0
-    return Math.max(0, width - titleInset)
+    /* A conversation screen narrower than this is a measurement of the wrong box,
+       not a screen: refusing it keeps a misread from trimming the title while the
+       page beside it obviously has room. */
+    if (width < 240) return 0
+    const available = Math.round(width - titleInset)
+    return available < 240 ? 0 : available
   })
 
   /** A checkout and a probe run the same source, so the one thing that tells

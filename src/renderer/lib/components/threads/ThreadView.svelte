@@ -41,7 +41,12 @@
          width the message column happens to be: a column that is narrower than the
          pane it sits in must not shorten the thread's name before the name has
          actually reached the screen. */
-      const screenRight = (element.parentElement ?? element).getBoundingClientRect().right
+      /* The conversation screen itself, not whatever wrapper the column happens to
+         sit in: the scroller is the element whose right edge is the reader's width,
+         and it is the one that stops short of the context panel. */
+      const screen =
+        element.closest('[data-region="conversation"]') ?? element.parentElement ?? element
+      const screenRight = screen.getBoundingClientRect().right
       layoutPanelState.conversationLeft =
         onScreen && layoutPanelState.contentVisible ? Math.round(textLeft) : 0
       layoutPanelState.conversationWidth =

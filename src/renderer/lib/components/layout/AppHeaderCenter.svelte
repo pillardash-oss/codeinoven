@@ -137,8 +137,11 @@
     {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
     <!-- The block is as wide as the room the bar leaves it, so a long thread name
          uses the whole column before it gives up any of itself. -->
+    <!-- `max-w-none` because the only width this block may have is the one the
+         conversation gives it: any inherited cap from the bar trimmed the name
+         while the page beside it still had room. -->
     <div
-      class="titlebar-no-drag relative flex min-w-0 items-center gap-2"
+      class="titlebar-no-drag relative flex min-w-0 max-w-none items-center gap-2"
       style:max-width={titleMaxWidth > 0 ? `${titleMaxWidth}px` : undefined}
     >
       {#if thread.projectId === ASSISTANT_SPACE_ID}
