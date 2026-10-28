@@ -19,6 +19,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { openSetupConversation } from '$lib/utility-setup-thread'
+  import { ideServerSetupRequest, ideSetupRequest } from '$shared/ide-setup-request'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { AppConfig, AppConfigPatch } from '$shared/types'
   import {
@@ -221,19 +222,10 @@
     busy = true
     error = ''
     try {
-      const project = workspaceState.activeProject ?? null
       await openSetupConversation(
-        project,
-        server ? `Set up ${server.name} for IDE Mode` : 'Set up IDE Mode language servers',
-        `Help me set up standard stdio language servers for IDE Mode. ${server ? `Set up ${server.name}, executable ${server.command}, for ${server.languages.map((mapping) => mapping.languageId).join(', ')}. Latest setup result: ${status[server.id] ?? 'Not checked'}.` : 'Inspect the project languages and ask which existing editor configuration I want to reuse.'} Inspect this project's languages and existing server installations. Help install missing language servers using the appropriate tools. Return a JSON array I can import into Settings > IDE Mode. Each server has id, name, enabled, command (executable only), args (string array), languages ([{extension:'.go',languageId:'go'}]), env (string record supporting inherited variable references), rootMarkers (file/directory names), initializationOptions (object), and settings (object). Keep credentials in environment variables. Use one enabled server per extension. Return only the new or modified entries; preserve other server configurations. Do not turn on IDE Mode globally or modify project source to remember configuration. Existing server identities and languages:\n${JSON.stringify(
-          servers.map((server) => ({
-            id: server.id,
-            name: server.name,
-            languages: server.languages.slice(0, 12).map((mapping) => mapping.languageId)
-          })),
-          null,
-          2
-        )}`
+        workspaceState.activeProject ?? null,
+        server ? `Set up ${server.name} for IDE Mode` : 'Set up a language server',
+        server ? ideServerSetupRequest(server, servers) : ideSetupRequest(servers)
       )
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason)
