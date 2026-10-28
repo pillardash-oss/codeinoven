@@ -8,6 +8,7 @@
   import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
+  import type { StatusTone } from '$lib/components/ui/status-tone'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -138,7 +139,9 @@
   /** A probe runs the same source as a checkout, so its marker wears the
    *  specification's colour: narrowed to two letters it still says which build
    *  this is. */
-  let buildTone = $derived(window.api?.windowInfo.buildEnvironment === 'probe' ? 'spec' : 'neutral')
+  let buildTone: StatusTone = $derived(
+    window.api?.windowInfo.buildEnvironment === 'probe' ? 'spec' : 'neutral'
+  )
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -390,9 +393,7 @@
              column to spend, and the context panel open, which is what narrows the
              conversation and the title with it. Both panels closed, or a panel
              docked on the left, and the actions stay in the bar. -->
-        <AppHeaderViewActions
-          compact={panelColumnWidth === 0 && contextSidebarState.visible}
-        />
+        <AppHeaderViewActions compact={panelColumnWidth === 0 && contextSidebarState.visible} />
       </div>
     {/if}
   </nav>
@@ -408,13 +409,7 @@
       <AppHeaderBrowserCenter />
     {/await}
   {:else}
-    <AppHeaderCenter
-      {activeView}
-      {chatMode}
-      {threadActionsMenu}
-      {titleInset}
-      {titleMaxWidth}
-    />
+    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} {titleMaxWidth} />
   {/if}
 
   <AppHeaderThreadModals menu={threadActionsMenu} />

@@ -537,20 +537,44 @@
   const stashOpBusy = $derived(gitState.isBusy(['stash-pop', 'stash-drop']))
 
   /**
-   * The refresh button: git status, the History pages, and the view in focus.
+   * The refresh button: the view in focus, then the repository behind it.
    *
    * The view's reload goes through the store rather than through a signal the
    * view watches. A view that watched a signal had to call a store method that
    * reads the very record it writes, so a forced reload re-ran its own effect:
    * the PR list and the deployments view refetched forever. The store is what
    * every view renders from, so reloading it is enough.
+   *
+   * Only the view is awaited, because it is the answer the click was about and
+   * the one the control reports on. The repository half (working tree, chrome,
+   * remote-tracking refs) is started first and left to land on its own: every
+   * step of it publishes through the store, so a late answer still repaints the
+   * panel instead of being dropped, and a slow network round trip can never turn
+   * Refresh into a stalled control.
    */
   async function refreshPanel(): Promise<void> {
-    // The button exists to make the panel trustworthy again, and the one thing a
-    // cache can be wrong about is whether the directory is still a repository at
-    // all, so this re-asks instead of trusting the stored answer.
-    await loadRepoState(true)
+    void refreshRepository().catch(() => undefined)
     await refreshFocusedView()
+  }
+
+  /**
+   * The repository half of Refresh, deliberately never awaited by the button.
+   *
+   * `loadRepoState` re-asks whether this is still a repository at all (the one
+   * thing a cache can be wrong about), then reads the working tree, the
+   * branches and the History pages, which is what the Changes, History and
+   * Branches views render from. The fetch then makes `ahead`/`behind` true
+   * again. An explicit click skips the age gate that throttles the automatic
+   * fetch, because the user asked for the newest answer there is; only a
+   * repository with no remote is skipped, since there is nothing to ask.
+   */
+  async function refreshRepository(): Promise<void> {
+    await loadRepoState(true)
+    // A fetch already in flight is already answering this click, and a
+    // repository with no remote has nothing to ask: either way a second round
+    // trip would only repeat a question that is being asked.
+    if (remotes.length === 0 || gitState.isBusy('fetch')) return
+    await gitState.fetch(projectId)
   }
 
   /** Force a reload of whatever the active view shows, when the store has it. */
@@ -3254,14 +3278,17 @@
 
 {#snippet refreshStatusButton()}
   <!--
-    Multipurpose on purpose: it refreshes the git status *and* whatever view is
-    in focus, so one control is enough to trust the panel again.
+    Multipurpose on purpose: it refreshes the view in focus *and* the repository
+    behind it (status, branches, History, remote-tracking refs), so one control is
+    enough to trust the panel again. The repository half never disables the
+    control: only the view the click asked for is awaited, the rest lands on its
+    own, which is why the fetch spins below without blocking a second click.
   -->
   <button
     type="button"
     class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-    aria-label="Refresh the git status and the current view"
-    title="Refresh the git status and the current view"
+    aria-label="Refresh the current view, the git status and the remote refs"
+    title="Refresh the current view, the git status and the remote refs"
     disabled={busy}
     onclick={() => void refreshPanel()}
   >
@@ -3269,6 +3296,7 @@
       size={12}
       class={gitState.isBusy([
         'refresh',
+        'fetch',
         'pr-list',
         'pr-detail',
         'deployment-runs',
