@@ -578,7 +578,7 @@
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
     title={muted ? 'Unmute video playback' : 'Mute video playback'}
     aria-label={muted ? 'Unmute video playback' : 'Mute video playback'}
     aria-pressed={muted}

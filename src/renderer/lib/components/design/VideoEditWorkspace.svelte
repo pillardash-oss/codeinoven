@@ -171,6 +171,21 @@
       else void exportMovie()
       return
     }
+    const propertyInput =
+      event.target instanceof HTMLInputElement &&
+      ['number', 'range', 'color'].includes(event.target.type)
+    const undo = keymapState.matches('video-edit-undo', event)
+    const redo = keymapState.matches('video-edit-redo', event)
+    if (propertyInput && (undo || redo)) {
+      event.preventDefault()
+      event.stopPropagation()
+      // Number fields commit on change. Commit the focused draft before undoing it.
+      if (event.target instanceof HTMLInputElement && event.target.type === 'number')
+        event.target.dispatchEvent(new Event('change', { bubbles: true }))
+      if (redo) editor.redo()
+      else editor.undo()
+      return
+    }
     if (
       event.target instanceof HTMLElement &&
       (event.target.isContentEditable || event.target.closest('input,textarea,select'))

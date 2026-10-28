@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { Popover } from 'bits-ui'
+  import { createAttachmentKey } from 'svelte/attachments'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import ColorPicker from '$lib/components/shared/ColorPicker.svelte'
@@ -14,6 +17,7 @@
     captions = false,
     expanded = false
   }: { editor: VideoEditorController; captions?: boolean; expanded?: boolean } = $props()
+  const colorOcclusion = { [createAttachmentKey()]: trackBrowserOcclusion }
   let section = $state<'clip' | 'colour' | 'sound'>('clip')
   let colorTarget = $state<'color' | 'background' | null>(null)
   const clip = $derived(editor.selectedClip)
@@ -176,29 +180,40 @@
     <div class="mt-2 flex items-center gap-2">
       {#each [{ key: 'color', label: 'Text colour' }, { key: 'background', label: 'Box colour' }] as option (option.key)}
         {@const key = option.key as 'color' | 'background'}
-        <button
-          type="button"
-          class="flex flex-1 items-center justify-between gap-2 border border-border px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
-          title={option.label}
-          onclick={() => {
-            colorTarget = colorTarget === key ? null : key
-          }}
-          ><span>{option.label}</span><span
-            class="h-3 w-3 border border-border"
-            style:background-color={appearance[key]}
-          ></span></button
+        <Popover.Root
+          open={colorTarget === key}
+          onOpenChange={(open) => (colorTarget = open ? key : null)}
         >
+          <Popover.Trigger
+            class="flex flex-1 items-center justify-between gap-2 border border-border px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+            title={option.label}
+            aria-label={option.label}
+            ><span>{option.label}</span><span
+              class="h-3 w-3 border border-border"
+              style:background-color={appearance[key]}
+            ></span></Popover.Trigger
+          >
+          <Popover.Portal>
+            <Popover.Content
+              {...colorOcclusion}
+              data-layer-above-modal
+              side="top"
+              align="start"
+              sideOffset={6}
+              collisionPadding={12}
+              class="z-80 w-64 max-w-[calc(100vw-1.5rem)] border border-border bg-surface p-3 text-foreground shadow-lg"
+              aria-label={option.label}
+            >
+              <ColorPicker
+                value={appearance[key]}
+                oncolorchange={(value) => captionStyle({ [key]: value })}
+                onclose={() => (colorTarget = null)}
+              />
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       {/each}
     </div>
-    {#if colorTarget}<div class="mt-2">
-        <ColorPicker
-          value={appearance[colorTarget]}
-          oncolorchange={(value) => {
-            if (colorTarget) captionStyle({ [colorTarget]: value })
-          }}
-          onclose={() => (colorTarget = null)}
-        />
-      </div>{/if}
     {#if captions && !caption}
       <div class="mt-2 max-h-36 overflow-y-auto border-t border-border">
         {#each (editor.document.captions ?? []).slice(0, 200) as item, index (index)}
