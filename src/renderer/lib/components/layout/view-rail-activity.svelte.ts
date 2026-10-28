@@ -228,12 +228,17 @@ export class ViewRailActivity {
 
   /**
    * The Browser view's own rail activity: the global browser profile's
-   * outstanding downloads.
+   * downloads, split into what is transferring and what is waiting.
    *
    * A download is the one thing the browser keeps doing after the user leaves
    * it. The transfer runs on while another view is on screen, and the list that
    * shows it lives inside the view they left, so the rail's Browser item is the
    * only surface that can say a download is still running.
+   *
+   * Only the running half reaches the rail badge ({@link browserTransferBadge}):
+   * a paused download is not movement, and a number that added the two together
+   * read as more downloads in flight than there were. Every download, stopped
+   * ones included, still appears in the panels that list them.
    *
    * Counted for the global profile, which is the browser the Browser view opens
    * and therefore the exact set its own downloads panel lists: a badge that
@@ -418,31 +423,33 @@ function browserAssistantLabel(count: number, verb: string): string {
 }
 
 /**
- * The Browser item's badge: the profile's outstanding downloads, in the working
- * tone while any of them is transferring and in the attention tone once every
- * one of them is stopped and waiting on the user.
+ * The Browser item's badge: only the profile's downloads that are transferring
+ * bytes right now.
+ *
+ * A paused or interrupted download is outstanding, but the rail speaks for what
+ * is happening, not for what is waiting. Counting stopped downloads here made the
+ * badge claim five downloads were running when two were moving and three were
+ * paused, so the number on the rail now matches exactly what is moving. The
+ * surfaces that list downloads still show every one of them, stopped included.
  *
  * It stays up while the Browser is the view on screen, exactly as a thread
  * family's badge does: a download outlives the visit, and the rail is what says
  * the browser is still busy once the user looks away.
  */
 function browserTransferBadge(transfers: BrowserDownloadOutstanding): ViewBadge | null {
-  const count = transfers.running + transfers.stopped
-  if (count === 0) return null
+  if (transfers.running === 0) return null
   return {
-    tone: transfers.running > 0 ? 'working' : 'attention',
-    count,
-    label: browserTransferLabel(transfers),
+    tone: 'working',
+    count: transfers.running,
+    label: browserTransferLabel(transfers.running),
     icon: CioDownload
   }
 }
 
-/** Tooltip/aria text for the Browser badge: how much is transferring, and how
- *  much is stopped and waiting on a resume or a restart. */
-function browserTransferLabel(transfers: BrowserDownloadOutstanding): string {
-  const count = transfers.running + transfers.stopped
-  const head = count === 1 ? '1 browser download' : `${count} browser downloads`
-  if (transfers.stopped === 0) return `${head} in progress`
-  if (transfers.running === 0) return `${head} stopped, waiting to resume or restart`
-  return `${head}: ${transfers.running} in progress, ${transfers.stopped} stopped`
+/** Tooltip/aria text for the Browser badge: how many downloads are transferring.
+ *  Stopped ones are left out, so the badge never reads as more than is moving. */
+function browserTransferLabel(running: number): string {
+  return running === 1
+    ? '1 browser download in progress'
+    : `${running} browser downloads in progress`
 }
