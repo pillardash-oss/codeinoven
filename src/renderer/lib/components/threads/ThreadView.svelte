@@ -36,11 +36,17 @@
         element.getClientRects().length > 0 &&
         getComputedStyle(element).visibility !== 'hidden'
       const box = element.getBoundingClientRect()
+      const textLeft = box.left + padding
+      /* The room is measured to the edge of the conversation screen, not to the
+         width the message column happens to be: a column that is narrower than the
+         pane it sits in must not shorten the thread's name before the name has
+         actually reached the screen. */
+      const screenRight = (element.parentElement ?? element).getBoundingClientRect().right
       layoutPanelState.conversationLeft =
-        onScreen && layoutPanelState.contentVisible ? Math.round(box.left + padding) : 0
+        onScreen && layoutPanelState.contentVisible ? Math.round(textLeft) : 0
       layoutPanelState.conversationWidth =
         onScreen && layoutPanelState.contentVisible
-          ? Math.round(box.width - padding - paddingRight)
+          ? Math.round(screenRight - textLeft - paddingRight)
           : 0
     }
     reportConversationColumnNow = report
