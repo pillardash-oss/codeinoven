@@ -27,6 +27,7 @@ import {
   Menu,
   MenuItem,
   app,
+  clipboard,
   session,
   shell,
   type BrowserWindow,
@@ -939,6 +940,16 @@ export class BrowserDownloadManager {
       }
       actions.push({ label: 'Remove from list', click: () => this.remove(download.id) })
     }
+    // The address is the one action that works for a download in any state, and
+    // it is what a user needs to hand the file to their own download manager.
+    actions.push(
+      { type: 'separator' },
+      {
+        label: 'Copy link',
+        enabled: download.url.length > 0,
+        click: () => clipboard.writeText(download.url)
+      }
+    )
     return new MenuItem({
       label: download.fileName,
       submenu: [
