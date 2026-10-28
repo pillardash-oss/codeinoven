@@ -115,12 +115,12 @@
   let clusterWidth = $state(0)
 
   /** How far the thread's block sits from the end of the chrome so that its left
-   *  edge lands on the conversation page's own left edge. The page is the thing
-   *  being read, so it is the bounding box the title aligns to; the panel only
-   *  decides how much room the page has. */
+   *  edge lands on the reading column's own left edge. The page being read is the
+   *  bounding box the title aligns to, whether that page is the conversation or the
+   *  document a studio is showing; the panel only decides how much room it has. */
   let titleInset = $derived.by(() => {
     if (!layoutPanelState.contentVisible) return 0
-    const contentLeft = layoutPanelState.conversationLeft
+    const contentLeft = layoutPanelState.readingColumnLeft
     if (contentLeft <= 0) return 0
     const chromeEnd = leftInset + (clusterWidth > 0 ? clusterWidth : CHROME_WIDTH)
     return Math.max(0, Math.round(contentLeft - chromeEnd))

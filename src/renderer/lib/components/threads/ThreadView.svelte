@@ -1,77 +1,7 @@
 <script lang="ts">
   import { isMacPlatform } from '$lib/shortcut-display'
   import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
-  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
-  import type { Attachment } from 'svelte/attachments'
-
-  /**
-   * The conversation page column reports where it begins, so the header's thread
-   * block can put its left edge on the same line as the text a reader is reading.
-   * The pane resizes with the sidebar, so the column moves without the window
-   * changing, and a size observer catches both.
-   */
-  /** The live reporter, so the page column can be re-measured when the shell it
-   *  lives in becomes the one on screen again instead of waiting for a resize that
-   *  will never come. */
-  let reportConversationColumnNow: (() => void) | null = null
-
-  $effect(() => {
-    /* Read so this effect re-runs when the shell comes back on screen: the page
-       column has not resized, so nothing else would tell it to measure again. */
-    void layoutPanelState.contentVisible
-    reportConversationColumnNow?.()
-  })
-
-  const reportConversationColumn: Attachment<HTMLElement> = (element) => {
-    const report = () => {
-      /* The column's own padding is inside its box, and the text starts after it:
-         aligning the header to the box edge leaves the title a few pixels left of
-         the line the messages start on. */
-      const styles = getComputedStyle(element)
-      const padding = Number.parseFloat(styles.paddingLeft) || 0
-      const paddingRight = Number.parseFloat(styles.paddingRight) || 0
-      /* A conversation the reader cannot see has a position but not a meaning:
-         reporting it would align the header to a page nobody is looking at. */
-      const onScreen =
-        element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden'
-      const box = element.getBoundingClientRect()
-      const textLeft = box.left + padding
-      /* The room is measured to the edge of the conversation screen, not to the
-         width the message column happens to be: a column that is narrower than the
-         pane it sits in must not shorten the thread's name before the name has
-         actually reached the screen. */
-      /* The conversation screen itself, not whatever wrapper the column happens to
-         sit in: the scroller is the element whose right edge is the reader's width,
-         and it is the one that stops short of the context panel. */
-      const screen =
-        element.closest('[data-region="conversation"]') ?? element.parentElement ?? element
-      const screenRight = screen.getBoundingClientRect().right
-      layoutPanelState.conversationLeft =
-        onScreen && layoutPanelState.contentVisible ? Math.round(textLeft) : 0
-      layoutPanelState.conversationWidth =
-        onScreen && layoutPanelState.contentVisible
-          ? Math.round(screenRight - textLeft - paddingRight)
-          : 0
-    }
-    reportConversationColumnNow = report
-    report()
-    const observer = new ResizeObserver(report)
-    observer.observe(element)
-    /* The page keeps its width while the pane around it narrows, so observing the
-       column alone misses every panel that opens or closes beside it: the column
-       moves without resizing. The pane it is centred in is what actually changes
-       size, and observing that catches both. */
-    const pane = element.parentElement
-    if (pane) observer.observe(pane)
-    window.addEventListener('resize', report)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', report)
-      if (reportConversationColumnNow === report) reportConversationColumnNow = null
-      layoutPanelState.conversationLeft = 0
-      layoutPanelState.conversationWidth = 0
-    }
-  }
+  import { createReadingColumn } from '$lib/reading-column.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -205,7 +135,7 @@
   import { actionContext } from '$lib/stores/action-context.svelte'
   import { permissionLevelActions, permissionLevelForAction } from '$lib/actions'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
-  import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
+  import { loadCachedPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -2828,6 +2758,17 @@
   let lastCheckpointThreadId = ''
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
+  /**
+   * Where the conversation's page column starts, reported to the header so the
+   * thread's name sits on the same line as the text the reader is reading.
+   *
+   * A studio that takes the pane hides this conversation rather than replacing it
+   * (see the visibility pane at the bottom of this view), and a hidden surface keeps
+   * the coordinate it measured while it was on screen. That is what holds the name
+   * still through the toggle: it neither jumps to the chrome nor to a column nobody
+   * chose.
+   */
+  const conversationColumn = createReadingColumn()
   /**
    * Bumped by a studio's Retry to rebuild its `{#key}` and re-run its `{#await}`.
    * The studio documents are Engineering-only surfaces, so their chunks load on
@@ -10464,6 +10405,16 @@
   }
 
   async function openSpecStudio(): Promise<void> {
+    // The workspace already holds the active specification, with its versions and
+    // its validation: opening is a visibility change, not a fetch. Asking main for
+    // the same document again put two round trips in front of the first paint of a
+    // studio whose module was already loaded.
+    if (spec) {
+      workspaceState.specAgentSidebarOpen = false
+      studioDocument = 'spec'
+      showSpecStudio = true
+      return
+    }
     specBusy = true
     specError = ''
     try {
@@ -13583,7 +13534,7 @@
     {/if}
     {#if studioDocument === 'brainstorm' && studioBrainstorm}
       {#key `${studioBrainstorm.id}:${studioBrainstorm.version}:${studioReloadNonce}`}
-        {#await loadPanelModule(PANEL_KEYS.brainstormStudio, () => import('../specs/BrainstormStudio.svelte'))}
+        {#await loadCachedPanelModule(PANEL_KEYS.brainstormStudio, () => import('../specs/BrainstormStudio.svelte'))}
           {@render studioModuleLoading('Brainstorm')}
         {:then { default: BrainstormStudio }}
           <BrainstormStudio
@@ -13628,7 +13579,7 @@
       {/key}
     {:else if studioDocument === 'prd' && studioPrd}
       {#key `${studioPrd.id}:${studioPrd.version}:${studioPrd.updatedAt}:${studioReloadNonce}`}
-        {#await loadPanelModule(PANEL_KEYS.prdStudio, () => import('../specs/PrdStudio.svelte'))}
+        {#await loadCachedPanelModule(PANEL_KEYS.prdStudio, () => import('../specs/PrdStudio.svelte'))}
           {@render studioModuleLoading('PRD')}
         {:then { default: PrdStudio }}
           <PrdStudio
@@ -13664,7 +13615,7 @@
       {/key}
     {:else if studioDocument === 'audit' && auditReport}
       {#key `${auditReport.id}:${auditReport.version}:${studioReloadNonce}`}
-        {#await loadPanelModule(PANEL_KEYS.auditStudio, () => import('../specs/AuditStudio.svelte'))}
+        {#await loadCachedPanelModule(PANEL_KEYS.auditStudio, () => import('../specs/AuditStudio.svelte'))}
           {@render studioModuleLoading('Audit')}
         {:then { default: AuditStudio }}
           <AuditStudio
@@ -13706,7 +13657,7 @@
       {/key}
     {:else if studioDocument === 'assignment' && assignment && studioAssignment}
       {#key `${studioAssignment.id}:${studioAssignment.version}:${studioReloadNonce}`}
-        {#await loadPanelModule(PANEL_KEYS.assignmentStudio, () => import('../specs/AssignmentStudio.svelte'))}
+        {#await loadCachedPanelModule(PANEL_KEYS.assignmentStudio, () => import('../specs/AssignmentStudio.svelte'))}
           {@render studioModuleLoading('Assignment')}
         {:then { default: AssignmentStudio }}
           <AssignmentStudio
@@ -13776,7 +13727,7 @@
       {/key}
     {:else if spec}
       {#key `${spec.id}:${spec.version}:${studioReloadNonce}`}
-        {#await loadPanelModule(PANEL_KEYS.specStudio, () => import('../specs/SpecStudio.svelte'))}
+        {#await loadCachedPanelModule(PANEL_KEYS.specStudio, () => import('../specs/SpecStudio.svelte'))}
           {@render studioModuleLoading('Spec')}
         {:then { default: SpecStudio }}
           <SpecStudio
@@ -13847,7 +13798,21 @@
         {specBusy ? 'Loading specification…' : specError || 'No specification is available.'}
       </div>
     {/if}
-  {:else}
+  {/if}
+
+  <!-- The conversation stays mounted and only its visibility flips while a studio
+       is open. Tearing it down to build the studio's document, and building it
+       again on the way back, is every message component in this thread: with a
+       long thread that was the whole second the toggle took. `contents` keeps the
+       block's children layout children of this column exactly as they were, so
+       nothing about the conversation's own layout changes; a hidden block is out
+       of layout, out of the accessibility tree, out of the focus order, and out of
+       find (which skips `[hidden]`), so it is inert without any bookkeeping. -->
+  <div
+    class={showSpecStudio ? 'hidden' : 'contents'}
+    hidden={showSpecStudio}
+    data-conversation-pane
+  >
     {#if showFind}
       <FindInSurface
         container={threadViewElement}
@@ -13869,11 +13834,11 @@
       onpointerup={handleResponsePointerUp}
       role="log"
       aria-label="Conversation"
-      data-region="conversation"
+      data-region={showSpecStudio ? undefined : 'conversation'}
     >
       <div
         class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
-        {@attach reportConversationColumn}
+        {@attach conversationColumn.attachment}
       >
         {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
@@ -15852,7 +15817,7 @@
         </div>
       </div>
     </div>
-  {/if}
+  </div>
 </div>
 
 <!--
