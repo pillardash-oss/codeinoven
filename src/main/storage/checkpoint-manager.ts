@@ -146,6 +146,14 @@ const ABANDONED_CHECKPOINT_SCAN_LIMIT = 200
 const ABANDONED_CHECKPOINT_SETTLE_LIMIT = 50
 const ABANDONED_CHECKPOINT_MESSAGE =
   'No process was left to finish this turn, so its checkpoint was closed without a file diff.'
+/** A checkpoint younger than this may still be waiting for the turn that owns
+ *  it: the row and the checkpoint are written together, but the ledger insert
+ *  is a separate statement, so a just-started turn is never settled. */
+const ORPHANED_CHECKPOINT_MIN_AGE_MS = 60_000
+/** One settlement pass closes at most this many rows for one thread. */
+const ORPHANED_CHECKPOINT_SETTLE_LIMIT = 20
+const ORPHANED_CHECKPOINT_MESSAGE =
+  'This turn stopped before the agent finished, so its checkpoint closed with the changes recorded at that point.'
 
 /** How recent a completed checkpoint must be for a late file-tool claim to
  *  reopen it. Bounds the risk of resurrecting an old turn for an unrelated
@@ -904,6 +912,65 @@ export class CheckpointManager {
 
   async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
     return (await this.list(projectId, threadId)).map((checkpoint) => this.toSummary(checkpoint))
+  }
+
+  /**
+   * Close the active checkpoints of one thread that no turn owns any more.
+   *
+   * A checkpoint and its `active_turns` row are written together at turn start,
+   * so a checkpoint still marked `active` while no row names its turn is a run
+   * nothing can ever finalize: the next turn took the ledger slot, a stale
+   * driver registration swallowed the terminal idle, or a late-claim reopen
+   * never saw another claim. Until it is settled the renderer hides the turn's
+   * file card (a card is only honest once the turn is over) and a sibling
+   * instance keeps reading the thread as work in progress.
+   *
+   * The diff is deliberately not recomputed: the working tree has moved on since
+   * that turn ran, so a fresh `before` → now comparison would charge later turns'
+   * edits to it. The changes recorded live during the run are kept as they are,
+   * and the stop is reported as `app-closed` because the app simply stopped
+   * tracking the turn rather than the provider failing it.
+   */
+  async settleOrphanedThreadCheckpoints(projectId: string, threadId: string): Promise<number> {
+    assertId(projectId)
+    assertId(threadId)
+    const cutoff = Date.now() - ORPHANED_CHECKPOINT_MIN_AGE_MS
+    const rows = await this.queryRows(
+      `SELECT tc.turn_id AS turn_id
+         FROM turn_checkpoints tc
+        WHERE tc.project_id = ? AND tc.thread_id = ?
+          AND json_extract(tc.data, '$.status') = 'active'
+          AND json_extract(tc.data, '$.createdAt') <= ?
+          AND NOT EXISTS (SELECT 1 FROM active_turns at WHERE at.turn_id = tc.turn_id)
+        ORDER BY json_extract(tc.data, '$.createdAt') ASC`,
+      [projectId, threadId, cutoff],
+      ORPHANED_CHECKPOINT_SETTLE_LIMIT
+    )
+    let settled = 0
+    for (const row of rows) {
+      const turnId = row['turn_id']
+      if (typeof turnId !== 'string') continue
+      try {
+        await this.writeRow(
+          `UPDATE turn_checkpoints
+              SET data = json_set(data,
+                    '$.status', 'interrupted',
+                    '$.completedAt', json_extract(data, '$.createdAt'),
+                    '$.stopReason', 'app-closed',
+                    '$.failure', json_quote(?))
+            WHERE turn_id = ? AND json_extract(data, '$.status') = 'active'`,
+          [ORPHANED_CHECKPOINT_MESSAGE, turnId]
+        )
+        settled += 1
+      } catch (error) {
+        Logger.error('Orphaned checkpoint settlement failed (non-fatal):', error)
+        continue
+      }
+      // A settled row rewrites its stored snapshots, so one pass must never
+      // hold the main process: yield between rows.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return settled
   }
 
   /**

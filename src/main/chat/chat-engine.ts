@@ -21823,7 +21823,11 @@ export class ChatEngine {
     for (const [sessionId, status] of this.sessionStatuses) {
       if (status.state !== 'working') continue
       const session = this.sessionRegistry.get(sessionId)
-      if (session) running.add(`${session.projectId}:${session.threadId}`)
+      // A temporary (side) chat is this process's own: it has no thread row and
+      // no sibling can open or resume it, so announcing its parent thread as
+      // running would claim work that exists nowhere else.
+      if (!session || session.ephemeral) continue
+      running.add(`${session.projectId}:${session.threadId}`)
     }
     const signature = [...running].sort().join(',')
     if (signature === this.localRunSignature) return

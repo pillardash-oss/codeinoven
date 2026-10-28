@@ -81,7 +81,7 @@ function isPersistedNotification(value: unknown): value is PersistedAgentNotific
  * `temporary-chat` source instead forced every side chat onto the Chats tab and
  * rail, whichever entity had actually spawned it.
  */
-function familyOf(notification: AgentNotificationPayload): NotificationFamily {
+export function familyOf(notification: AgentNotificationPayload): NotificationFamily {
   if (notification.source === 'chat' || notification.projectId === INBOX_PROJECT_ID) {
     return 'chat'
   }
