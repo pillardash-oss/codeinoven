@@ -46,7 +46,6 @@ import type {
   BrowserExtensionActivity,
   BrowserExtensionActivityUpdate,
   BrowserExtensionInstallInput,
-  BrowserExtensionMenuRecord,
   BrowserExtensionProgress
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
@@ -59,6 +58,7 @@ import { BrowserExtensionOffscreenDocuments } from './browser-extension-offscree
 import type { NativeHostLookupOptions } from './browser-native-host-manifest'
 import { nativeMessagingCommand } from './browser-extension-bridge'
 import type { BrowserDownloadExtensionEventName } from '../browser-service/browser-downloads'
+import type { BrowserExtensionMenuSection } from '../browser-service/browser-context-menu'
 import {
   BrowserExtensionBridge,
   type BrowserExtensionActionPopupRequest,
@@ -2438,18 +2438,18 @@ export class BrowserExtensionService {
    * Read straight from the last mailbox rather than kept in a second structure:
    * the tree only changes when the extension rebuilds it, and the native menu
    * asks for it on the one click that needs it.
+   *
+   * Each section carries the icon the extension published, which the registry
+   * already holds in memory, so a right-click never reads an icon off disk.
    */
-  menuRecordsFor(
-    projectId: string,
-    boxId: string | null
-  ): { extensionId: string; items: BrowserExtensionMenuRecord[] }[] {
+  menuRecordsFor(projectId: string, boxId: string | null): BrowserExtensionMenuSection[] {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state) return []
-    const sections: { extensionId: string; items: BrowserExtensionMenuRecord[] }[] = []
+    const sections: BrowserExtensionMenuSection[] = []
     for (const record of this.desiredForJar(projectId, boxId)) {
       const mail = state.mail.get(record.id)
       if (!mail || mail.menus.length === 0) continue
-      sections.push({ extensionId: record.id, items: mail.menus })
+      sections.push({ extensionId: record.id, iconDataUrl: record.iconDataUrl, items: mail.menus })
     }
     return sections
   }
