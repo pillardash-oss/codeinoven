@@ -92,6 +92,9 @@ export class VideoEditorController {
   private disposed = false
   private gestureBefore: string | null = null
   private gestureWasDirty = false
+  /** Why the last intermediate frame of a gesture was refused, so a gesture that
+   *  never lands can say so instead of looking like an unresponsive control. */
+  private gestureBlocked: string | null = null
   waveforms = $state.raw<Record<string, string | null>>({})
   private waveformBusy = false
   readonly frames = new SvelteMap<string, VideoFrameThumbnail>()
@@ -451,6 +454,7 @@ export class VideoEditorController {
     if (this.document && !this.gestureBefore) {
       this.gestureBefore = JSON.stringify(this.document)
       this.gestureWasDirty = this.dirty
+      this.gestureBlocked = null
     }
   }
   updateGesture(change: DocumentEdit): void {
@@ -465,8 +469,9 @@ export class VideoEditorController {
       this.document = after
       this.dirty = true
       this.queuePreview()
-    } catch {
+    } catch (cause) {
       /* Keep the last valid frame while the pointer is outside the range. */
+      this.gestureBlocked = cause instanceof Error ? cause.message : String(cause)
     }
   }
   finishGesture(cancel = false): void {
@@ -477,6 +482,12 @@ export class VideoEditorController {
       this.document = JSON.parse(before) as VideoStudioDocument
       this.dirty = this.gestureWasDirty
     } else if (before !== JSON.stringify(this.document)) this.pushUndo(before)
+    else if (this.gestureBlocked) {
+      // The gesture was refused frame by frame and nothing landed, which is the
+      // one case where the user needs to be told why the edit did not happen.
+      this.error = this.gestureBlocked
+    }
+    this.gestureBlocked = null
     this.queuePreview()
   }
   undo(): void {
@@ -610,18 +621,28 @@ export class VideoEditorController {
     delta: number
   ): void {
     if (this.magneticScope !== 'all' || delta === 0) return
-    for (const caption of doc.captions)
+    // Captions are ordered and may not overlap, so their shift is clamped against
+    // the caption before them. Shifting a suffix by a raw delta made back-to-back
+    // captions overlap, the whole document failed validation, and the gesture was
+    // dropped in silence.
+    let previousEnd = 0
+    for (const caption of doc.captions) {
       if (
         !edit.tracks.find((track) => track.id === caption.trackId)?.locked &&
         caption.start >= anchor - 0.000001
       ) {
-        caption.start = Math.max(0, caption.start + delta)
-        caption.end = Math.max(0, caption.end + delta)
+        const length = Math.max(0, caption.end - caption.start)
+        const start = Math.max(previousEnd, caption.start + delta)
+        const applied = start - caption.start
+        caption.start = start
+        caption.end = start + length
         for (const word of caption.words ?? []) {
-          word.start = Math.max(0, word.start + delta)
-          word.end = Math.max(0, word.end + delta)
+          word.start = Math.max(start, word.start + applied)
+          word.end = Math.max(word.start, word.end + applied)
         }
       }
+      previousEnd = caption.end
+    }
     for (const region of edit.regions)
       if (
         !edit.tracks.find((track) => track.id === region.trackId)?.locked &&
@@ -817,7 +838,10 @@ export class VideoEditorController {
             )
             .map((item) => item.start)
         )
-        at = Math.min(at, fixedNext, anchor + 3600 - last)
+        // These limits stop this edge running into a fixed neighbour, so they bound
+        // growth only: a neighbour already sitting at this clip's end must never
+        // freeze an inward trim.
+        if (at > anchor) at = Math.min(at, fixedNext, anchor + 3600 - last)
       }
       trimVideoEditClip(edit, id, edge, at, this.fps, this.snapEnabled && edge === 'end')
       if (this.snapEnabled && edge === 'end') {

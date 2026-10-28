@@ -572,8 +572,11 @@ export function trimVideoEditClip(
       nextStart,
       asset.kind === 'image' ? 3600 : clip.start + (asset.duration - clip.sourceStart) / clip.speed
     )
-    clip.duration =
-      Math.min(maximum, Math.max(clip.start + frame, snapEditTime(seconds, fps))) - clip.start
+    const target = Math.max(clip.start + frame, snapEditTime(seconds, fps))
+    // The neighbour and source limits bound growth only. A neighbour that starts
+    // exactly where this clip ends is the normal contiguous case, so treating that
+    // limit as a cap made every inward end trim a no-op.
+    clip.duration = (target < end ? target : Math.min(maximum, target)) - clip.start
   }
   clip.fadeIn = Math.min(clip.fadeIn, clip.duration)
   clip.fadeOut = Math.min(clip.fadeOut, clip.duration)
