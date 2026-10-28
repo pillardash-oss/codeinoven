@@ -314,7 +314,9 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
     if (start + clipDuration > duration + 0.05)
       throw new Error('A clip extends past the edit duration')
     if (asset.kind !== 'image' && sourceStart + clipDuration * speed > asset.duration + 0.1)
-      throw new Error('A clip extends past its source media')
+      throw new Error(
+        `${asset.name} is ${asset.duration.toFixed(2)}s long, so the clip at ${start.toFixed(2)}s cannot read ${clipDuration.toFixed(2)}s from ${sourceStart.toFixed(2)}s`
+      )
     return {
       id: id(c.id),
       assetId,
