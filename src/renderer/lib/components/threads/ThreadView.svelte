@@ -13431,7 +13431,9 @@
         projectId={thread.projectId}
         threadId={thread.id}
         url={item.url}
+        src={imageUrls.getUrl(item.url)}
         filename={item.filename}
+        startAt={messageViewer?.startAt}
         messageId={messageViewer?.messageId}
         marks={marksFor(item.url)}
         editingId={imageMarkEditorId}

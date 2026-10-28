@@ -5,6 +5,7 @@
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
+  import type { Snippet } from 'svelte'
   import SeekBar from './SeekBar.svelte'
 
   /**
@@ -39,6 +40,33 @@
     onError?: (element: HTMLVideoElement) => void
     /** `fill` takes the whole viewer; `inline` is capped so a message stays readable. */
     fit?: 'inline' | 'fill'
+    /**
+     * Drawn over the picture, for a surface that answers the video rather than
+     * only watching it: the artifact video's mark layer lands here.
+     */
+    overlay?: Snippet
+    /**
+     * Whether pressing the picture plays it.
+     *
+     * Off when an overlay owns the pointer, because a surface that draws on the
+     * picture cannot also treat every press as play, and a mark layer inside a
+     * play button is neither valid markup nor a working gesture.
+     */
+    interactive?: boolean
+    /** The media element, so a caller can drive it (pause, seek) of its own accord. */
+    onElement?: (element: HTMLVideoElement) => void
+    /** The playhead, in seconds, on every update. */
+    onTime?: (seconds: number) => void
+    /** Metadata arrived: duration and intrinsic picture size are known. */
+    onMetadata?: (element: HTMLVideoElement) => void
+    /**
+     * Whether the picture carries the centred play/pause mark.
+     *
+     * It is the player's own statement that this is a picture that plays, and it
+     * is drawn in the conversation and in the viewer alike. A surface that has
+     * armed a pen over the picture turns it off while the pen is in hand.
+     */
+    showCenterControl?: boolean
     /** Layout classes from the caller. */
     class?: string
   }
@@ -50,6 +78,12 @@
     onExpand,
     onError,
     fit = 'inline',
+    overlay,
+    interactive = true,
+    onElement,
+    onTime,
+    onMetadata,
+    showCenterControl = true,
     class: layout = ''
   }: Props = $props()
 
@@ -116,6 +150,103 @@
   }
 </script>
 
+{#snippet picture()}
+  <video
+    bind:this={video}
+    class={['block w-full object-contain', fit === 'fill' ? 'h-full' : 'max-h-96']}
+    {src}
+    playsinline
+    preload="metadata"
+    onloadedmetadata={(event) => {
+      const element = event.currentTarget
+      onElement?.(element)
+      onMetadata?.(element)
+      duration = element.duration
+      // A caller that opened this from an inline player hands over the frame it
+      // had reached; playback resumes there rather than at the beginning.
+      if (startAt && startAt > 0 && startAt < element.duration) {
+        element.currentTime = startAt
+        currentTime = startAt
+      }
+    }}
+    ondurationchange={(event) => {
+      const value = event.currentTarget.duration
+      if (Number.isFinite(value)) duration = value
+    }}
+    ontimeupdate={(event) => {
+      if (scrubbing) return
+      currentTime = event.currentTarget.currentTime
+      onTime?.(currentTime)
+    }}
+    onplay={() => {
+      playing = true
+      started = true
+    }}
+    onpause={() => (playing = false)}
+    onended={() => {
+      playing = false
+      currentTime = duration
+    }}
+    onerror={(event) => {
+      failed = true
+      playing = false
+      const element = event.currentTarget
+      if (element instanceof HTMLVideoElement) onError?.(element)
+    }}
+  >
+    <track kind="captions" />
+  </video>
+
+  {#if overlay}
+    {@render overlay()}
+  {/if}
+
+  {#if showCenterControl && !failed}
+    <!-- The centre of the picture states the one thing a still frame cannot: that
+         it plays. It is a play mark at rest, a pause mark while the picture runs
+         and the pointer is over it, and it is drawn wherever the player is drawn:
+         the conversation and the fullscreen viewer behave the same way. A picture
+         whose pointer belongs to an overlay (the artifact mark layer) gets a real
+         button here instead, so a press in the middle still plays it. -->
+    {#if interactive}
+      <span
+        class={[
+          'pointer-events-none absolute inset-0 flex items-center justify-center transition-opacity duration-150',
+          playing ? 'opacity-0 group-hover/md-video:opacity-100' : 'opacity-100'
+        ]}
+        aria-hidden="true"
+      >
+        <span class="flex size-11 items-center justify-center bg-black/55 text-white shadow-lg">
+          {#if playing}
+            <CioPause size={18} />
+          {:else}
+            <CioPlay size={18} />
+          {/if}
+        </span>
+      </span>
+    {:else}
+      <button
+        type="button"
+        class={[
+          'absolute inset-0 flex items-center justify-center transition-opacity duration-150',
+          playing ? 'opacity-0 focus-visible:opacity-100 group-hover/md-video:opacity-100' : 'opacity-100'
+        ]}
+        aria-label={playing ? `Pause ${label}` : `Play ${label}`}
+        title={playing ? `Pause ${label}` : `Play ${label}`}
+        onclick={() => void togglePlay()}
+      >
+        <span class="flex size-11 items-center justify-center bg-black/55 text-white shadow-lg">
+          {#if playing}
+            <CioPause size={18} />
+          {:else}
+            <CioPlay size={18} />
+          {/if}
+        </span>
+      </button>
+    {/if}
+  {/if}
+{/snippet}
+
 <figure
   class={[
     'group/md-video relative min-w-0 max-w-full self-start bg-black',
@@ -125,72 +256,26 @@
 >
   <!-- The picture answers a press with play/pause and a double press with the big
        view, which is what every player does; the controls carry the same actions
-       for keyboard and for anyone who does not think to press the picture. -->
-  <button
-    type="button"
-    class="relative block min-h-0 w-full cursor-pointer"
-    class:h-full={fit === 'fill'}
-    aria-label={playing ? `Pause ${label}` : `Play ${label}`}
-    title={playing ? `Pause ${label}` : `Play ${label}`}
-    onclick={() => void togglePlay()}
-    ondblclick={() => onExpand?.(currentTime)}
-  >
-    <video
-      bind:this={video}
-      class={['block w-full object-contain', fit === 'fill' ? 'h-full' : 'max-h-96']}
-      {src}
-      playsinline
-      preload="metadata"
-      onloadedmetadata={(event) => {
-        const element = event.currentTarget
-        duration = element.duration
-        // A caller that opened this from an inline player hands over the frame it
-        // had reached; playback resumes there rather than at the beginning.
-        if (startAt && startAt > 0 && startAt < element.duration) {
-          element.currentTime = startAt
-          currentTime = startAt
-        }
-      }}
-      ondurationchange={(event) => {
-        const value = event.currentTarget.duration
-        if (Number.isFinite(value)) duration = value
-      }}
-      ontimeupdate={(event) => {
-        if (scrubbing) return
-        currentTime = event.currentTarget.currentTime
-      }}
-      onplay={() => {
-        playing = true
-        started = true
-      }}
-      onpause={() => (playing = false)}
-      onended={() => {
-        playing = false
-        currentTime = duration
-      }}
-      onerror={(event) => {
-        failed = true
-        playing = false
-        const element = event.currentTarget
-        if (element instanceof HTMLVideoElement) onError?.(element)
-      }}
+       for keyboard and for anyone who does not think to press the picture. A
+       surface with an overlay draws on the picture instead of playing it, so the
+       picture is a plain box there and the overlay owns the pointer. -->
+  {#if interactive}
+    <button
+      type="button"
+      class="relative block min-h-0 w-full cursor-pointer"
+      class:h-full={fit === 'fill'}
+      aria-label={playing ? `Pause ${label}` : `Play ${label}`}
+      title={playing ? `Pause ${label}` : `Play ${label}`}
+      onclick={() => void togglePlay()}
+      ondblclick={() => onExpand?.(currentTime)}
     >
-      <track kind="captions" />
-    </video>
-
-    {#if !playing && !failed}
-      <!-- A resting picture states the one thing a still frame cannot: that it
-           plays. The disc is the app's own mark, not a rounded platform control. -->
-      <span
-        class="pointer-events-none absolute inset-0 flex items-center justify-center"
-        aria-hidden="true"
-      >
-        <span class="flex size-10 items-center justify-center bg-black/55 text-white shadow-lg">
-          <CioPlay size={18} />
-        </span>
-      </span>
-    {/if}
-  </button>
+      {@render picture()}
+    </button>
+  {:else}
+    <div class="relative block min-h-0 w-full" class:h-full={fit === 'fill'}>
+      {@render picture()}
+    </div>
+  {/if}
 
   {#if failed}
     <div

@@ -1,5 +1,6 @@
 <script lang="ts">
   import AnnotationMarkLayer from './AnnotationMarkLayer.svelte'
+  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import { markContentBox, markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
     responseReferencesState,
@@ -29,8 +30,13 @@
   interface Props {
     projectId: string
     threadId: string
+    /** The artifact's own url, which is what a mark names. */
     url: string
+    /** The resolved source the player loads, which may be a scoped blob url. */
+    src: string
     filename: string
+    /** Where playback resumes, so a viewer opened from the inline player keeps its frame. */
+    startAt?: number
     /** The message the video arrived in, so a mark can be jumped back to. */
     messageId?: string
     /** Marks already drawn on this video, in composer order. */
@@ -47,7 +53,9 @@
     projectId,
     threadId,
     url,
+    src,
     filename,
+    startAt,
     messageId,
     marks,
     editingId,
@@ -57,14 +65,9 @@
 
   // Held rather than bound through `bind:this`: only `pause`, `seek` and the
   // playhead sync read the element, and turning the reference into state would
-  // turn those DOM writes into state writes.
+  // turn those DOM writes into state writes. The player owns it now, so it is
+  // taken from the player's own hand-over.
   let video: HTMLVideoElement | null = null
-  const videoAttachment = (node: HTMLVideoElement): (() => void) => {
-    video = node
-    return () => {
-      if (video === node) video = null
-    }
-  }
   /** Whether the pointer draws on the picture instead of driving the player. */
   let armed = $state(false)
   /** Bound to the element, so a scrubbed frame and a drawn mark agree on the second. */
@@ -112,10 +115,6 @@
     // frame they are looking at, and it has to still be that frame when the stroke
     // lands.
     if (next) video?.pause()
-  }
-
-  function handleMediaError(event: Event): void {
-    onLoadError?.(event.currentTarget as HTMLMediaElement)
   }
 
   function seek(seconds: number): void {
@@ -166,23 +165,8 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 w-full flex-col">
-  <div class="relative min-h-0 flex-1" bind:offsetWidth={boxWidth} bind:offsetHeight={boxHeight}>
-    <video
-      {@attach videoAttachment}
-      class="absolute inset-0 h-full w-full object-contain"
-      src={url}
-      controls={!armed}
-      preload="metadata"
-      playsinline
-      bind:currentTime
-      bind:duration
-      bind:videoWidth
-      bind:videoHeight
-      onerror={handleMediaError}
-    >
-      <track kind="captions" />
-    </video>
+{#snippet markOverlay()}
+  <div class="absolute inset-0" bind:offsetWidth={boxWidth} bind:offsetHeight={boxHeight}>
     {#if contentBox}
       <!-- The layer fills the picture rather than the player: outside this box
            there is letterbox, and a mark belongs on the picture. -->
@@ -208,9 +192,35 @@
       </div>
     {/if}
   </div>
+{/snippet}
+
+<div class="flex h-full min-h-0 w-full flex-col">
+  <!-- The artifact video is played by the app's own player, exactly like the
+       plain one in the conversation, so it shares its controls, its failure
+       state and the frame it was left on. The mark layer is drawn over the
+       picture: a surface that answers a video cannot also turn every press into
+       play, so the player leaves the pointer to the pen here. -->
+  <VideoPlayer
+    {src}
+    label={filename}
+    {startAt}
+    fit="fill"
+    interactive={false}
+    showCenterControl={!armed}
+    overlay={markOverlay}
+    class="min-h-0 flex-1"
+    onElement={(element) => (video = element)}
+    onMetadata={(element) => {
+      videoWidth = element.videoWidth
+      videoHeight = element.videoHeight
+      duration = element.duration
+    }}
+    onTime={(seconds) => (currentTime = seconds)}
+    onError={(element) => onLoadError?.(element)}
+  />
   {#if armed}
-    <div class="flex shrink-0 items-center gap-2 border-t border-white/10 px-3 py-2 text-white/80">
-      <span class="shrink-0 font-mono text-xs">{videoTimecode(currentTime)}</span>
+    <div class="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-3 py-2 text-foreground">
+      <span class="shrink-0 font-mono text-xs tabular-nums">{videoTimecode(currentTime)}</span>
       <input
         type="range"
         class="min-w-0 flex-1"
@@ -222,7 +232,7 @@
         aria-label="Frame to annotate"
         oninput={(event) => seek(Number(event.currentTarget.value))}
       />
-      <span class="shrink-0 text-xs">Frame {Math.round(currentTime * 1000)}ms</span>
+      <span class="shrink-0 text-xs tabular-nums">Frame {Math.round(currentTime * 1000)}ms</span>
     </div>
   {/if}
 </div>
