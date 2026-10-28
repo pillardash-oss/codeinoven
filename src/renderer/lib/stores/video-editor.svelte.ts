@@ -10,7 +10,10 @@ import {
   VIDEO_CAPTION_APPEARANCE,
   newVideoEditClip,
   removeVideoEditClip,
+  mergeVideoEditClips,
+  canMergeVideoEditClips,
   snapEditTime,
+  snapVideoEditGaps,
   splitVideoEditClip,
   trimVideoEditClip,
   type VideoEditClip,
@@ -56,6 +59,10 @@ export class VideoEditorController {
   document = $state.raw<VideoStudioDocument | null>(null)
   manifest = $state.raw<VideoProjectManifest | null>(null)
   selection = $state.raw<VideoEditorSelection>(null)
+  /** The clips highlighted together, so one gesture can act on many at once. The
+   *  single `selection` stays the item the inspector edits. */
+  readonly selectedIds = new SvelteSet<string>()
+  private selectionAnchor: string | null = null
   snapEnabled = $state(true)
   magneticScope = $state<'track' | 'all'>('all')
   contextRequest = $state.raw<{ x: number; y: number } | null>(null)
@@ -250,6 +257,34 @@ export class VideoEditorController {
       ? (this.edit?.clips.find((clip) => clip.id === selection.id) ?? null)
       : null
   }
+  /** The clips highlighted together, in timeline order. */
+  get selectedClips(): VideoEditClip[] {
+    return (this.edit?.clips ?? [])
+      .filter((clip) => this.selectedIds.has(clip.id))
+      .sort((left, right) => left.start - right.start)
+  }
+  get selectedTrackIds(): string[] {
+    return this.selectedClips
+      .map((clip) => clip.trackId)
+      .filter((id, index, all) => all.indexOf(id) === index)
+  }
+  isClipSelected(id: string): boolean {
+    return this.selectedIds.has(id)
+  }
+  get canSnapClips(): boolean {
+    return this.selectedTrackIds.length > 0
+  }
+  get canMergeClips(): boolean {
+    return this.selectedIds.size > 1 && this.mergeableIds.length > 0
+  }
+  /** The selected ids that Merge would consider, which is the set when it holds
+   *  a continuous pair, otherwise nothing. */
+  private get mergeableIds(): string[] {
+    const edit = this.edit
+    const ids = [...this.selectedIds]
+    if (!edit || ids.length < 2) return []
+    return canMergeVideoEditClips(edit, ids) ? ids : []
+  }
   waveformKey(clip: VideoEditClip): string {
     return `${clip.assetId}:${clip.sourceStart}:${clip.duration * clip.speed}`
   }
@@ -386,6 +421,7 @@ export class VideoEditorController {
       this.revision = result.revision
       this.dirty = false
       this.externalChange = false
+      this.selectedIds.clear()
       if (enable && this.tabId) await invoke('browser:reload', this.tabId)
       this.queuePreview()
     } catch (cause) {
@@ -396,8 +432,120 @@ export class VideoEditorController {
   }
   select(selection: VideoEditorSelection, seekTo?: number): void {
     this.selection = selection
+    if (selection?.kind === 'clip') {
+      // A clip chosen through the ordinary single-item path keeps an existing
+      // multi-selection only when it is already part of it.
+      if (!this.selectedIds.has(selection.id)) {
+        this.selectedIds.clear()
+        this.selectedIds.add(selection.id)
+      }
+      this.selectionAnchor = selection.id
+    } else this.selectedIds.clear()
     if (seekTo !== undefined) this.seek(seekTo)
     this.queuePreview()
+  }
+  /** Highlight one clip, keeping, extending or replacing the current set. */
+  selectClip(id: string, mode: 'replace' | 'toggle' | 'range' = 'replace'): void {
+    const edit = this.edit
+    const clip = edit?.clips.find((item) => item.id === id)
+    if (!edit || !clip) return
+    if (mode === 'toggle') {
+      if (this.selectedIds.delete(id)) {
+        if (this.selection?.kind === 'clip' && this.selection.id === id) {
+          const next = [...this.selectedIds].at(-1)
+          this.selection = next ? { kind: 'clip', id: next } : null
+          this.selectionAnchor = next ?? null
+        }
+      } else {
+        this.selectedIds.add(id)
+        this.selection = { kind: 'clip', id }
+        this.selectionAnchor = id
+      }
+      this.queuePreview()
+      return
+    }
+    if (mode === 'range') {
+      const anchor = edit.clips.find((item) => item.id === this.selectionAnchor)
+      const siblings = edit.clips
+        .filter((item) => item.trackId === clip.trackId)
+        .sort((left, right) => left.start - right.start)
+      const from = anchor && anchor.trackId === clip.trackId ? siblings.indexOf(anchor) : -1
+      const to = siblings.indexOf(clip)
+      if (from >= 0 && to >= 0) {
+        this.selectedIds.clear()
+        for (const item of siblings.slice(Math.min(from, to), Math.max(from, to) + 1))
+          this.selectedIds.add(item.id)
+        this.selection = { kind: 'clip', id }
+        this.queuePreview()
+        return
+      }
+    }
+    this.select({ kind: 'clip', id })
+  }
+  /** Highlight every clip on one track: the track of the current selection, the
+   *  track asked for, or the first unlocked video track. */
+  selectAllOnTrack(trackId?: string): void {
+    const edit = this.edit
+    if (!edit) return
+    const selectedTrack = this.selection?.kind === 'clip' ? this.selectedClip?.trackId : undefined
+    const target =
+      edit.tracks.find((track) => track.id === (trackId ?? selectedTrack) && !track.locked) ??
+      edit.tracks.find((track) => track.kind === 'video' && !track.locked)
+    if (!target) return
+    const clips = edit.clips
+      .filter((clip) => clip.trackId === target.id)
+      .sort((left, right) => left.start - right.start)
+    if (clips.length === 0) return
+    this.selectedIds.clear()
+    for (const clip of clips) this.selectedIds.add(clip.id)
+    this.selection = { kind: 'clip', id: clips[0].id }
+    this.selectionAnchor = clips[0].id
+    this.queuePreview()
+  }
+  /** Close every gap on the selected clips' tracks, or on one track. */
+  snapClips(trackIds: readonly string[] = this.selectedTrackIds): boolean {
+    if (trackIds.length === 0) return false
+    let moved = 0
+    this.mutate((doc, edit) => {
+      moved = snapVideoEditGaps(edit, trackIds)
+      if (moved === 0) return
+      this.fitMagneticDuration(doc, edit)
+    })
+    return moved > 0
+  }
+  /** Join the selected clips where they are genuinely one continuous take, or
+   *  every eligible neighbour on the selected clips' tracks. */
+  mergeClips(all = false): boolean {
+    const edit = this.edit
+    if (!edit) return false
+    const ids = all
+      ? edit.clips
+          .filter((clip) => this.selectedTrackIds.includes(clip.trackId))
+          .map((clip) => clip.id)
+      : [...this.selectedIds]
+    if (ids.length < 2) return false
+    let merged = 0
+    this.mutate((doc, next) => {
+      merged = mergeVideoEditClips(next, ids)
+      if (merged === 0) return
+      this.fitMagneticDuration(doc, next)
+    })
+    if (merged > 0) this.pruneClipSelection()
+    else
+      this.error =
+        'Nothing to merge here: only clips cut from one continuous take of the same asset can join back into a single clip.'
+    return merged > 0
+  }
+  private pruneClipSelection(): void {
+    const edit = this.edit
+    if (!edit) return
+    const live = new SvelteSet(edit.clips.map((clip) => clip.id))
+    for (const id of [...this.selectedIds]) if (!live.has(id)) this.selectedIds.delete(id)
+    if (this.selection?.kind === 'clip' && !live.has(this.selection.id)) {
+      const next = [...this.selectedIds][0]
+      this.selection = next ? { kind: 'clip', id: next } : null
+    }
+    if (this.selectionAnchor && !live.has(this.selectionAnchor)) this.selectionAnchor = null
   }
   seek(seconds: number): void {
     this.time = Math.min(this.duration, snapEditTime(seconds, this.fps))
@@ -521,7 +669,9 @@ export class VideoEditorController {
   }
   private retainSelection(): void {
     const selection = this.selection
-    if (!selection || !this.document?.edit) return
+    if (!this.document?.edit) return
+    this.pruneClipSelection()
+    if (!selection) return
     if (
       selection.kind === 'clip' &&
       !this.document.edit.clips.some((clip) => clip.id === selection.id)
@@ -665,6 +815,20 @@ export class VideoEditorController {
   }
   remove(ripple: boolean | 'all' = this.magneticDeleteMode): void {
     const selection = this.selection
+    const clips = this.selectedClips
+    // A set of clips leaves gaps where each one stood: rippling a group would move
+    // later clips into each other, so the gap stays and Undo can put the group back.
+    if (clips.length > 1) {
+      this.mutate((doc, edit) => {
+        for (const clip of clips)
+          if (!edit.tracks.find((track) => track.id === clip.trackId)?.locked)
+            removeVideoEditClip(edit, clip.id, false)
+        this.fitMagneticDuration(doc, edit)
+        this.selection = null
+        this.selectedIds.clear()
+      })
+      return
+    }
     if (!selection) return
     this.mutate((doc, edit) => {
       if (selection.kind === 'clip') {
@@ -714,6 +878,7 @@ export class VideoEditorController {
         edit.regions = edit.regions.filter((region) => region.id !== selection.id)
       if (selection.kind === 'caption') doc.captions.splice(selection.index, 1)
       this.selection = null
+      this.selectedIds.clear()
     })
   }
   moveClip(id: string, start: number, trackId: string): void {

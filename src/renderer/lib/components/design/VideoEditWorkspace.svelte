@@ -113,6 +113,22 @@
   }
   async function remove(ripple: boolean | 'all' = editor.magneticDeleteMode): Promise<void> {
     if (!editor.selection) return
+    const count = editor.selectedIds.size
+    if (count > 1) {
+      if (
+        await appConfirm.request({
+          title: `Remove ${count} selected clips?`,
+          body: [
+            'The clips are removed from the timeline and leave their gaps behind. Original media stays in assets, and Undo restores the whole group.'
+          ],
+          confirmLabel: 'Remove',
+          cancelLabel: 'Cancel',
+          tone: 'danger'
+        })
+      )
+        editor.remove(false)
+      return
+    }
     if (
       await appConfirm.request({
         title:
@@ -157,6 +173,32 @@
   function timelineMenuRows(): (TimelineMenuRow & { keys: readonly string[] })[][] {
     const groups: TimelineMenuRow[][] = [
       [
+        {
+          label: 'Snap all on track',
+          id: 'video-edit-snap-all',
+          run: () => editor.snapClips(),
+          disabled: !editor.canSnapClips
+        },
+        {
+          label: 'Merge selected clips',
+          id: 'video-edit-merge-selected',
+          run: () => editor.mergeClips(),
+          disabled: !editor.canMergeClips
+        },
+        {
+          label: 'Merge all on track',
+          id: 'video-edit-merge-all',
+          run: () => editor.mergeClips(true),
+          disabled: !editor.selectedClip
+        }
+      ],
+      [
+        {
+          label: 'Select all on track',
+          id: 'video-edit-select-all',
+          run: () => editor.selectAllOnTrack(),
+          disabled: !editor.edit
+        },
         {
           label: 'Extract audio',
           id: 'video-edit-extract-audio',
@@ -281,6 +323,10 @@
       return
     const actions: [string, () => void][] = [
       ['video-edit-snap', () => (editor.snapEnabled = !editor.snapEnabled)],
+      ['video-edit-select-all', () => editor.selectAllOnTrack()],
+      ['video-edit-snap-all', () => editor.snapClips()],
+      ['video-edit-merge-selected', () => editor.mergeClips()],
+      ['video-edit-merge-all', () => editor.mergeClips(true)],
       ['video-edit-paint-blur', () => void editor.paintBlur()],
       ['video-edit-undo', () => editor.undo()],
       ['video-edit-redo', () => editor.redo()],

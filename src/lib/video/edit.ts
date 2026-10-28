@@ -584,6 +584,99 @@ export function trimVideoEditClip(
   edit.duration = Math.max(edit.duration, clip.start + clip.duration)
 }
 
+/**
+ * Close every gap on the affected tracks so their clips butt together.
+ *
+ * Clips keep their order, their duration and their source range: only the empty
+ * space in front of each one is removed, which pulls the ones after it left. A
+ * locked track is left exactly as it is. Returns how many clips moved.
+ */
+export function snapVideoEditGaps(edit: VideoEditDocument, trackIds: readonly string[]): number {
+  let moved = 0
+  for (const trackId of new Set(trackIds)) {
+    const track = edit.tracks.find((item) => item.id === trackId)
+    if (!track || track.locked) continue
+    const clips = edit.clips
+      .filter((clip) => clip.trackId === trackId)
+      .sort((left, right) => left.start - right.start)
+    let cursor = 0
+    for (const clip of clips) {
+      if (clip.start > cursor + 0.000001) {
+        clip.start = cursor
+        moved += 1
+      }
+      cursor = Math.max(cursor, clip.start + clip.duration)
+    }
+  }
+  return moved
+}
+
+/**
+ * Join adjacent selected clips that are really one continuous piece of the same
+ * asset: same track, same asset, same speed, no gap on the timeline and no jump
+ * in the source. This heals a cut instead of fabricating a clip that would need
+ * a transition between two different sources. Returns how many clips were absorbed.
+ */
+export function mergeVideoEditClips(edit: VideoEditDocument, ids: readonly string[]): number {
+  const wanted = new Set(ids)
+  let merged = 0
+  for (const track of edit.tracks) {
+    if (track.locked) continue
+    const clips = edit.clips
+      .filter((clip) => clip.trackId === track.id)
+      .sort((left, right) => left.start - right.start)
+    const kept: VideoEditClip[] = []
+    const absorbed: string[] = []
+    for (const clip of clips) {
+      const previous = kept.at(-1)
+      const continuousSource =
+        previous !== undefined &&
+        previous.assetId === clip.assetId &&
+        previous.speed === clip.speed &&
+        Math.abs(previous.start + previous.duration - clip.start) < 0.02 &&
+        Math.abs(previous.sourceStart + previous.duration * previous.speed - clip.sourceStart) < 0.5
+      if (previous && wanted.has(previous.id) && wanted.has(clip.id) && continuousSource) {
+        previous.duration += clip.duration
+        previous.fadeOut = Math.min(clip.fadeOut, previous.duration)
+        previous.transition.duration = Math.min(previous.transition.duration, previous.duration)
+        absorbed.push(clip.id)
+        merged += 1
+        continue
+      }
+      kept.push(clip)
+    }
+    if (absorbed.length > 0) {
+      const dropped = new Set(absorbed)
+      edit.clips = edit.clips.filter((clip) => !dropped.has(clip.id))
+    }
+  }
+  return merged
+}
+
+/** True when at least one neighbouring pair in `ids` is really one continuous
+ *  piece of the same asset, so Merge has something honest to join. */
+export function canMergeVideoEditClips(edit: VideoEditDocument, ids: readonly string[]): boolean {
+  const wanted = new Set(ids)
+  for (const track of edit.tracks) {
+    if (track.locked) continue
+    const clips = edit.clips
+      .filter((clip) => clip.trackId === track.id)
+      .sort((left, right) => left.start - right.start)
+    for (const [index, clip] of clips.entries()) {
+      const previous = clips[index - 1]
+      if (!previous || !wanted.has(previous.id) || !wanted.has(clip.id)) continue
+      if (
+        previous.assetId === clip.assetId &&
+        previous.speed === clip.speed &&
+        Math.abs(previous.start + previous.duration - clip.start) < 0.02 &&
+        Math.abs(previous.sourceStart + previous.duration * previous.speed - clip.sourceStart) < 0.5
+      )
+        return true
+    }
+  }
+  return false
+}
+
 /** Record actual changed ranges, rather than labelling every frame as changed. */
 export function recordVideoEditChange(
   previous: VideoEditDocument | undefined,

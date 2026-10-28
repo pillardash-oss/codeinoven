@@ -122,11 +122,7 @@
         (clip) => clip.start + clip.duration >= start && clip.start <= end
       ) ?? []
     const stride = Math.max(1, Math.ceil(items.length / 500))
-    return items.filter(
-      (clip, index) =>
-        index % stride === 0 ||
-        (editor.selection?.kind === 'clip' && editor.selection.id === clip.id)
-    )
+    return items.filter((clip, index) => index % stride === 0 || editor.isClipSelected(clip.id))
   })
   const visibleCaptions = $derived.by(() => {
     const items: {
@@ -238,6 +234,13 @@
       event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-trim]') : null
     const edge =
       target?.dataset.trim === 'start' ? 'start' : target?.dataset.trim === 'end' ? 'end' : null
+    // Shift extends from the last clicked clip, mod toggles one in or out, and a
+    // plain press replaces the set. A modifier press never starts a drag, so the
+    // gesture cannot move a clip the user only meant to add to the selection.
+    if (!edge && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+      editor.selectClip(id, event.shiftKey ? 'range' : 'toggle')
+      return
+    }
     drag = {
       kind: 'clip',
       id,
@@ -249,7 +252,7 @@
       edge,
       trackId: clip.trackId
     }
-    editor.select({ kind: 'clip', id })
+    editor.selectClip(id)
     editor.beginGesture()
     captureDrag(event)
   }
@@ -688,9 +691,11 @@
                     'absolute top-1 flex min-w-1 touch-none items-center overflow-hidden border px-2 text-left text-[0.625rem]',
                     editor.selection?.kind === 'clip' && editor.selection.id === clip.id
                       ? 'border-primary bg-primary/25 text-foreground ring-2 ring-primary ring-inset'
-                      : track.kind === 'audio'
-                        ? 'border-success/35 bg-success/10 text-foreground'
-                        : 'border-border bg-elevated text-foreground',
+                      : editor.isClipSelected(clip.id)
+                        ? 'border-primary bg-primary/15 text-foreground'
+                        : track.kind === 'audio'
+                          ? 'border-success/35 bg-success/10 text-foreground'
+                          : 'border-border bg-elevated text-foreground',
                     track.locked
                       ? 'cursor-not-allowed opacity-50'
                       : 'cursor-grab active:cursor-grabbing'
@@ -699,13 +704,15 @@
                   style:width={`${Math.max(4, clip.duration * scale)}px`}
                   style:height={`${trackHeight(track.id) - 12}px`}
                   data-video-clip={clip.id}
-                  aria-pressed={editor.selection?.kind === 'clip' &&
-                    editor.selection.id === clip.id}
+                  aria-pressed={editor.isClipSelected(clip.id)}
                   title={`${asset?.name ?? 'Clip'} · ${videoTimecode(clip.start)} · drag to move; drag an edge to trim`}
                   aria-label={`${asset?.name ?? 'Clip'} at ${videoTimecode(clip.start)}`}
                   ondragstart={(event) => event.preventDefault()}
                   onpointerdown={(event) => startClip(event, clip.id)}
-                  onclick={() => editor.select({ kind: 'clip', id: clip.id })}
+                  onclick={(event) => {
+                    if (event.shiftKey || event.metaKey || event.ctrlKey) return
+                    if (!editor.isClipSelected(clip.id)) editor.selectClip(clip.id)
+                  }}
                   ondblclick={(event) => {
                     editor.seek(at(event))
                     editor.split()
@@ -784,7 +791,7 @@
     <ContextMenu.Content
       data-layer-above-modal
       {...occlusion}
-      class="z-80 flex min-w-64 flex-col border border-border bg-surface py-1 shadow-lg"
+      class="z-80 flex max-h-[min(70vh,32rem)] min-w-64 flex-col overflow-y-auto overscroll-contain border border-border bg-surface py-1 shadow-lg"
     >
       {@render contextActions?.()}
       {#if contextTrack}

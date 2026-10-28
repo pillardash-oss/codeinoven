@@ -984,6 +984,34 @@
           "scenario": "Video editor is focused."
         },
         {
+          "id": "video-edit-select-all",
+          "keys": ["mod", "a"],
+          "label": "Select every clip on the track",
+          "description": "Highlight all clips on the selected track so one menu action can edit them together.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-snap-all",
+          "keys": [],
+          "label": "Snap all clips on the track",
+          "description": "Close every gap on the tracks of the selected clips so the clips butt together.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-merge-selected",
+          "keys": [],
+          "label": "Merge selected clips",
+          "description": "Join selected clips that come from one continuous take into a single clip.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-merge-all",
+          "keys": [],
+          "label": "Merge all clips on the track",
+          "description": "Join every eligible neighbouring clip on the selected track.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
           "id": "video-edit-paint-blur",
           "keys": [],
           "label": "Paint blur on video",
