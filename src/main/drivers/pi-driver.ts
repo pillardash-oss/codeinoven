@@ -59,6 +59,7 @@ import {
 import { PI_USAGE_EXTENSION_KEY } from './pi-usage-extension'
 import { fetchPiProviderUsage } from './pi-provider-usage'
 import { PiRpcClient, type PiRpcImage } from './pi-rpc-client'
+import { SpawnAdmission } from './spawn-admission'
 import {
   prepareHarnessInvocation,
   resolveHarnessRuntime,
@@ -306,6 +307,11 @@ export class PiDriver extends PersistentCliDriver {
   /** Tickets prevent duplicate compactions and continuation after user cancellation. */
   private readonly pageCompactions = new Map<string, { resume: boolean }>()
   private readonly compactionReadySessions = new Set<string>()
+  /**
+   * Admission for pi process spawns, so a turn never races the app's own
+   * background one-shot sessions. See `SpawnAdmission`.
+   */
+  private readonly spawnAdmission = new SpawnAdmission()
   readonly id = 'pi'
   readonly name = 'Pi'
   // The recap rides the core-tools context hook for the turn it belongs to and
@@ -1696,8 +1702,25 @@ export class PiDriver extends PersistentCliDriver {
   /**
    * Spawn this session's Pi process and bootstrap the session itself. Never call
    * this directly   `ensureRpcClient` owns the one-bootstrap-per-session rule.
+   *
+   * The spawn is admitted first: a user's turn takes a slot immediately, while a
+   * disposable one-shot session (title, summary, verdict) waits for an idle
+   * machine and then starts alone. Four one-shot sessions once spawned beside a
+   * real turn and turned its 1.5 s pi start into 5.4 s.
    */
   private async startRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
+    const releaseSpawn = await this.spawnAdmission.enter(
+      this.isTitleSession(sessionId) ? 'background' : 'interactive'
+    )
+    try {
+      return await this.launchRpcClient(projectPath, sessionId)
+    } finally {
+      releaseSpawn()
+    }
+  }
+
+  /** The spawn itself. `startRpcClient` owns the admission slot around it. */
+  private async launchRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
     const session = await this.requireSession(projectPath, sessionId)
     const currentTurnState = this.turnStates.get(sessionId)
     this.turnStates.set(sessionId, {
