@@ -1,3 +1,4 @@
+import { APP_DESIGN_TOKEN_CATALOG } from './design-tokens'
 import { previewExtensionsForKind } from './preview-types'
 
 /** Shared generation and delivery contract for requested media and inline output. */
@@ -35,11 +36,19 @@ Images: ${previewExtensionsForKind('image')}. Audio: ${previewExtensionsForKind(
 
 Write a complete self-contained document smaller than 64000 UTF-8 bytes. Inline styles are allowed; scripts and external URLs are not. The app owns sanitization, preview selection, theme updates and fullscreen display. These are static previews; executable websites belong in the design/browser workflow.
 
-Use live tokens from src/renderer/app.css by default: var(--color-app), var(--color-surface), var(--color-elevated), var(--color-foreground), var(--color-muted), var(--color-border), var(--color-primary), var(--color-on-primary), and semantic status colors. Use var(--font-app) and var(--font-mono), inherit base font size/weight, and use rem for typography and spacing. SVG fills/strokes can use tokens; text can use currentColor. Do not redefine app tokens or hardcode a light/dark palette. Use different colors or typography only when the user requests them. Raster image/video pixels cannot react to CSS theme changes.
+Compose from the app's own tokens rather than a palette of your own. Every token below is read from src/renderer/app.css and is live inside the artifact, so var(--color-surface) follows the app's active theme and a redesign of the app reaches a new artifact without being rewritten. Use the token names, never raw hex values, use rem for typography and spacing, and use a different palette or typeface only when the user asks for one.
 
-Match the app's shape language: CodeInOven has no rounded corners. Never write border-radius, a rounded pill, a rounded card or a rounded button. Structure comes from a 1px border in var(--color-border) on var(--color-surface) or var(--color-elevated), an uppercase micro-label in var(--color-muted) for a section header, and one rule per table row and none per column. A shadow belongs only to a surface that genuinely floats. The app chamfers interactive elements to 2px and squares everything else, so an authored radius is both overridden and off-brand.
+An SVG artifact composes the same way: fills and strokes can use the tokens, and text can use currentColor. Raster pixels cannot react to a theme change, so an asset that has to follow the theme is authored as HTML or SVG.
 
-Do not frame the artifact itself. The app draws it flush in the conversation with no card, border or padding of its own, so a page that opens with its own outer box reads as a second box inside the message. Open with the content and let the app own the surrounding chrome.
+${APP_DESIGN_TOKEN_CATALOG}
+
+The app's own rules for interactive elements apply inside the artifact too, so a button, input, select or dialog you author is shaped exactly the way the app shapes its own, whatever corner or focus treatment the app uses today.
+
+## Where the artifact is drawn
+
+The artifact is drawn flush in the conversation, inside the app's reading column: a max-w-3xl column (48rem of content) with 1.5rem gutters, and narrower than that when the window is small or the context rail is docked beside it. The same artifact can be opened full screen by the reader. Design for both without knowing the exact pixel width: percentage and fluid widths, max-width: 100% on media, flex or grid that wraps, clamp() for type that has to scale, and no fixed page width and no viewport units that assume a browser window.
+
+The document's own html and body margin and padding are dropped in the conversation, because the message column already owns the gutter, so a page that opens with its own outer card or frame reads as a second box inside the message. Put any inset you want on your own wrappers, and open with the content itself.
 
 Generation and presentation are separate responsibilities. The model creates the asset and supplies its path. The app renders it. Do not open a browser tab as a substitute for inline delivery.
 `

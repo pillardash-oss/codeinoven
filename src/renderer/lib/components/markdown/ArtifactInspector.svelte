@@ -19,6 +19,7 @@
   import { artifactInspectorChatContext, openAnnotationChat } from '$lib/annotation-chat'
   import { MARK_TAP_SLOP_PX } from '$lib/annotation-marks'
   import type { PanZoom } from '$lib/pan-zoom.svelte'
+  import { appInteractiveElementRules } from '$shared/design-tokens'
 
   /**
    * The element inspector for one inline artifact, HTML or SVG.
@@ -551,13 +552,11 @@
    the page. */
 :host(:not([data-fill])) .${ARTIFACT_STAGE_CLASS} { margin: 0 !important; padding: 0 !important; }
 :host([data-inspecting]) .${ARTIFACT_STAGE_CLASS}, :host([data-inspecting]) .${ARTIFACT_STAGE_CLASS} * { cursor: pointer !important; }
-/* The app's square language, restated for the artifact's own document. A shadow
-   tree is a document of its own, so the app's corner rules do not reach into it,
-   and an authored pill or card would otherwise be the one rounded surface in the
-   whole application. A control keeps the same 2px chamfer the app gives its own
-   controls; everything else is a right angle. */
-* { border-radius: 0 !important; }
-button, input, textarea, select, [role='menu'], [role='dialog'] { border-radius: 2px !important; }`
+/* The app's own rules for interactive elements, taken from its stylesheet rather
+   than copied here, so an artifact's control is shaped the way every other
+   control in the app is shaped, and keeps following the app through a redesign.
+   Nothing else is restyled: the artifact's own layout and shapes are its own. */
+${appInteractiveElementRules()}`
 
   /**
    * A picture is centred and contained; a document is laid out.
