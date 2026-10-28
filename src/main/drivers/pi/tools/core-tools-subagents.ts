@@ -21,7 +21,12 @@ export function piCoreToolsSubagentSource(): string {
   // recurse; their permission requests ride the parent's extension-UI
   // context so the permission card appears on the primary thread.
   const CIO_SUBAGENT_MARKER = 'cio-subagent:'
-  const CIO_SUBAGENT_MAX_CONCURRENT = 4
+  // Workers running at the same time in this one harness process. Each is a
+  // full nested session with its own model stream and tool loop, so this caps
+  // the fan-out the user's machine and provider quota see at once   kept in
+  // parity with PI_CHILD_STREAM_MAX, so a full fan-out never evicts a running
+  // worker's live transcript.
+  const CIO_SUBAGENT_MAX_CONCURRENT = 20
   const CIO_SUBAGENT_OUTPUT_CAP = 20000
   const CIO_SUBAGENT_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
   const subAgents = new Map()
