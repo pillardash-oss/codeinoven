@@ -2,6 +2,7 @@ import { resolveIdeExecutable } from './ide-executables'
 import { ideInstallations } from './ide-installations'
 import {
   DEFAULT_IDE_LANGUAGE_SERVERS,
+  type IdeLanguageMapping,
   type IdeLanguageServer
 } from '../../lib/ide-language-servers'
 import { StringDecoder } from 'node:string_decoder'
@@ -18,7 +19,15 @@ const MAX_BYTES = 2 * 1024 * 1024
 const sessions = new Map<string, Promise<Session>>()
 const liveSessions = new Set<Session>()
 let configuredServers: IdeLanguageServer[] | undefined
-const owners = new Map<string, { session: Session; uri: string }>()
+const owners = new Map<string, OwnedDocument[]>()
+interface OwnedDocument {
+  session: Session
+  uri: string
+}
+interface Selection {
+  server: IdeLanguageServer
+  mapping: IdeLanguageMapping
+}
 const searches = new Map<string, ReturnType<typeof spawn>>()
 const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
@@ -210,31 +219,36 @@ class Session {
   }
 }
 
-function selectDefinition(path: string, servers: IdeLanguageServer[]) {
-  return servers
-    .flatMap((server) =>
-      server.enabled
-        ? server.languages
-            .filter((mapping) => path.toLowerCase().endsWith(mapping.extension))
-            .map((mapping) => ({ server, mapping }))
-        : []
-    )
-    .sort((left, right) => right.mapping.extension.length - left.mapping.extension.length)[0]
+/**
+ * Every enabled server that handles this file, most specific extension first.
+ *
+ * A file routinely needs more than one server: Svelte or TypeScript structure
+ * plus Tailwind class documentation, exactly as a full editor runs them side by
+ * side. One server is listed once even when two of its extensions match.
+ */
+function selectDefinitions(path: string, servers: IdeLanguageServer[]): Selection[] {
+  const lower = path.toLowerCase()
+  const byServer = new Map<string, Selection>()
+  for (const server of servers) {
+    if (!server.enabled) continue
+    for (const mapping of server.languages) {
+      if (!lower.endsWith(mapping.extension)) continue
+      const existing = byServer.get(server.id)
+      if (existing && existing.mapping.extension.length >= mapping.extension.length) continue
+      byServer.set(server.id, { server, mapping })
+    }
+  }
+  return [...byServer.values()].sort(
+    (left, right) => right.mapping.extension.length - left.mapping.extension.length
+  )
 }
 
 async function sessionFor(
   root: string,
   path: string,
   env: NodeJS.ProcessEnv,
-  servers: IdeLanguageServer[]
-): Promise<{ session: Session; language: string }> {
-  const selected = selectDefinition(path, servers)
-  if (!selected)
-    throw new Error(
-      'No enabled language server for this file type. Configure one in Settings > IDE Mode.'
-    )
-  const definition = selected.server
-  const language = selected.mapping.languageId
+  definition: IdeLanguageServer
+): Promise<Session> {
   const { command, args } = definition
   let workspaceRoot = root
   if (definition.rootMarkers.length) {
@@ -261,8 +275,10 @@ async function sessionFor(
   const key = `${workspaceRoot}\0${JSON.stringify(definition)}`
   let pending = sessions.get(key)
   if (!pending) {
-    if (sessions.size >= 4)
-      throw new Error('IDE Mode supports four active language servers. Close unused editors first.')
+    if (sessions.size >= 8)
+      throw new Error(
+        'IDE Mode supports eight active language servers. Close unused editors first.'
+      )
     pending = (async () => {
       const overrides = Object.fromEntries(
         Object.entries(definition.env).map(([key, value]) => [
@@ -327,24 +343,28 @@ async function sessionFor(
       if (sessions.get(key) === pending) sessions.delete(key)
     })
   }
-  return { session: await pending, language }
+  return pending
 }
 
-function closeOwner(owner: string): void {
+function closeOwner(owner: string, keep?: ReadonlySet<Session>, nextUri?: string): void {
   searches.get(owner)?.kill()
   searches.delete(owner)
-  const owned = owners.get(owner)
+  const owned = owners.get(owner) ?? []
   owners.delete(owner)
-  if (!owned) return
-  if (
-    ![...owners.values()].some(
-      (value) => value.session === owned.session && value.uri === owned.uri
+  if (!owned.length) return
+  const remaining = [...owners.values()].flat()
+  for (const entry of owned) {
+    const kept = keep?.has(entry.session) ?? false
+    const shared = remaining.some(
+      (value) => value.session === entry.session && value.uri === entry.uri
     )
-  ) {
-    owned.session.notify('textDocument/didClose', { textDocument: { uri: owned.uri } })
-    owned.session.documents.delete(owned.uri)
+    // A kept session still has to drop the document this editor is leaving.
+    if (!(kept ? entry.uri === nextUri : shared)) {
+      entry.session.notify('textDocument/didClose', { textDocument: { uri: entry.uri } })
+      entry.session.documents.delete(entry.uri)
+    }
+    if (!kept && !remaining.some((value) => value.session === entry.session)) entry.session.stop()
   }
-  if (![...owners.values()].some((value) => value.session === owned.session)) owned.session.stop()
 }
 async function locations(root: string, result: unknown): Promise<IdeLocation[]> {
   const values = Array.isArray(result) ? result : result ? [result] : []
@@ -459,6 +479,50 @@ async function grep(
 }
 
 const chains = new Map<string, Promise<unknown>>()
+
+/** The actions a file offers when any of its servers advertises them. */
+function capabilitiesOf(sessions: Session[]) {
+  return {
+    definition: sessions.some((session) => Boolean(session.capabilities.definitionProvider)),
+    references: sessions.some((session) => Boolean(session.capabilities.referencesProvider)),
+    hover: sessions.some((session) => Boolean(session.capabilities.hoverProvider))
+  }
+}
+
+/** Keep one server's copy of a document current, in the sync mode it asked for. */
+function syncDocument(session: Session, uri: string, language: string, text: string): void {
+  const previous = session.documents.get(uri)
+  if (!previous) {
+    session.notify('textDocument/didOpen', {
+      textDocument: { uri, languageId: language, version: 1, text }
+    })
+    session.documents.set(uri, { text, version: 1 })
+    return
+  }
+  if (text === previous.text) return
+  const version = previous.version + 1
+  const sync = session.capabilities.textDocumentSync
+  const kind = typeof sync === 'number' ? sync : record(sync).change
+  const change =
+    kind === 2
+      ? {
+          range: {
+            start: { line: 0, character: 0 },
+            end: {
+              line: previous.text.split('\n').length - 1,
+              character: previous.text.slice(previous.text.lastIndexOf('\n') + 1).length
+            }
+          },
+          text
+        }
+      : { text }
+  if (kind !== 0)
+    session.notify('textDocument/didChange', {
+      textDocument: { uri, version },
+      contentChanges: [change]
+    })
+  session.documents.set(uri, { text, version })
+}
 async function handle(
   root: string,
   request: IdeRequest,
@@ -485,108 +549,117 @@ async function handle(
   if (request.action === 'check') {
     const definition = servers.find((server) => server.id === request.serverId)
     if (!definition) throw new Error('Language server configuration not found')
-    const { session } = await sessionFor(
+    const session = await sessionFor(
       root,
       join(root, `__ide_check${definition.languages[0].extension}`),
       env,
-      [{ ...definition, enabled: true }]
+      { ...definition, enabled: true }
     )
-    const capabilities = {
-      definition: Boolean(session.capabilities.definitionProvider),
-      references: Boolean(session.capabilities.referencesProvider),
-      hover: Boolean(session.capabilities.hoverProvider)
-    }
-    if (![...owners.values()].some((owner) => owner.session === session)) session.stop()
+    const capabilities = capabilitiesOf([session])
+    if (![...owners.values()].flat().some((owner) => owner.session === session)) session.stop()
     return { capabilities }
   }
   if (request.action === 'grep') return grep(root, request, env)
   validateRelativePath(request.path, false)
   const path = await realpath(resolve(root, request.path))
   if (!isWithinRoot(root, path)) throw new Error('File is outside the project')
-  const currentOwner = owners.get(request.owner)
-  const selected = selectDefinition(path, servers)
-  if (currentOwner && currentOwner.session.configurationKey !== JSON.stringify(selected?.server))
-    closeOwner(request.owner)
-  const { session, language } = await sessionFor(root, path, env, servers)
-  if (
-    selected &&
-    (!currentOwner || currentOwner.session.configurationKey !== JSON.stringify(selected.server))
-  )
-    void ideInstallations(env, [selected.server], true).catch(() => undefined)
+  const selections = selectDefinitions(path, servers)
+  if (!selections.length)
+    throw new Error(
+      'No enabled language server for this file type. Configure one in Settings > IDE Mode.'
+    )
   const uri = pathToFileURL(path).href
-  const owned = owners.get(request.owner)
-  owners.set(request.owner, { session, uri })
-  if (owned && (owned.session !== session || owned.uri !== uri)) {
-    const previousOwner = `${request.owner}:previous`
-    owners.set(previousOwner, owned)
-    closeOwner(previousOwner)
-  }
   const text = request.text ?? (await readFile(path, 'utf8'))
   if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('File is too large for IDE Mode')
-  const previous = session.documents.get(uri)
-  if (!previous) {
-    session.notify('textDocument/didOpen', {
-      textDocument: { uri, languageId: language, version: 1, text }
-    })
-    session.documents.set(uri, { text, version: 1 })
-  } else if (text !== previous.text) {
-    const version = previous.version + 1
-    const sync = session.capabilities.textDocumentSync
-    const kind = typeof sync === 'number' ? sync : record(sync).change
-    const change =
-      kind === 2
-        ? {
-            range: {
-              start: { line: 0, character: 0 },
-              end: {
-                line: previous.text.split('\n').length - 1,
-                character: previous.text.slice(previous.text.lastIndexOf('\n') + 1).length
-              }
-            },
-            text
-          }
-        : { text }
-    if (kind !== 0)
-      session.notify('textDocument/didChange', {
-        textDocument: { uri, version },
-        contentChanges: [change]
-      })
-    session.documents.set(uri, { text, version })
-  }
-  const capabilities = {
-    definition: Boolean(session.capabilities.definitionProvider),
-    references: Boolean(session.capabilities.referencesProvider),
-    hover: Boolean(session.capabilities.hoverProvider)
-  }
-  const connected = [
-    {
-      id: selected!.server.id,
-      name: selected!.server.name,
-      executable: session.child.spawnfile,
-      root: session.root,
-      language,
-      languages:
-        selected!.server.command === 'svelteserver'
-          ? ['Svelte', 'HTML', 'CSS', 'JavaScript', 'TypeScript']
-          : [language]
+  const entries: { session: Session; selection: Selection }[] = []
+  let failure: unknown
+  for (const selection of selections) {
+    try {
+      entries.push({ session: await sessionFor(root, path, env, selection.server), selection })
+    } catch (error) {
+      // One server that is missing or broken must not disable the rest.
+      failure ??= error
     }
-  ]
+  }
+  if (!entries.length)
+    throw failure instanceof Error
+      ? failure
+      : new Error(String(failure ?? 'No language server could be started'))
+  const currentOwner = owners.get(request.owner) ?? []
+  const settled =
+    currentOwner.length === entries.length &&
+    currentOwner.every(
+      (entry, index) => entry.session === entries[index].session && entry.uri === uri
+    )
+  if (currentOwner.length && !settled)
+    closeOwner(request.owner, new Set(entries.map((entry) => entry.session)), uri)
+  if (!settled) void ideInstallations(env, [selections[0].server], true).catch(() => undefined)
+  for (const entry of entries)
+    syncDocument(entry.session, uri, entry.selection.mapping.languageId, text)
+  owners.set(
+    request.owner,
+    entries.map((entry) => ({ session: entry.session, uri }))
+  )
+  const capabilities = capabilitiesOf(entries.map((entry) => entry.session))
+  const connected = entries.map(({ session, selection }) => ({
+    id: selection.server.id,
+    name: selection.server.name,
+    executable: session.child.spawnfile,
+    root: session.root,
+    language: selection.mapping.languageId,
+    languages:
+      selection.server.command === 'svelteserver'
+        ? ['Svelte', 'HTML', 'CSS', 'JavaScript', 'TypeScript']
+        : [selection.mapping.languageId]
+  }))
   if (request.action === 'capabilities' || request.action === 'sync')
     return {
       capabilities,
       servers: connected,
-      installations: await ideInstallations(env, selected ? [selected.server] : [], false)
+      installations: await ideInstallations(
+        env,
+        selections.map((selection) => selection.server),
+        false
+      )
     }
   if (!capabilities[request.action]) return { capabilities, locations: [] }
-  const result = await session.request(`textDocument/${request.action}`, {
+  const params = {
     textDocument: { uri },
     position: { line: request.line ?? 0, character: request.character ?? 0 },
     ...(request.action === 'references' ? { context: { includeDeclaration: true } } : {})
-  })
-  if (!result || (Array.isArray(result) && result.length === 0)) session.explainEmptyResult()
-  return request.action === 'hover'
-    ? { capabilities, documentation: documentation(record(result).contents).slice(0, 32_000) }
-    : { capabilities, locations: await locations(root, result) }
+  }
+  const providers = entries.filter((entry) =>
+    Boolean(entry.session.capabilities[`${request.action}Provider`])
+  )
+  const results = await Promise.allSettled(
+    providers.map((entry) => entry.session.request(`textDocument/${request.action}`, params))
+  )
+  const answers: unknown[] = []
+  let rejection: unknown
+  for (const result of results) {
+    if (result.status === 'fulfilled') answers.push(result.value)
+    else rejection ??= result.reason
+  }
+  // One server failing must not hide the answers the others already produced.
+  if (!answers.length && rejection !== undefined)
+    throw new Error(rejection instanceof Error ? rejection.message : String(rejection))
+  if (request.action === 'hover') {
+    const docs = [
+      ...new Set(
+        answers
+          .map((answer) => documentation(record(answer).contents).trim())
+          .filter((value) => value.length > 0)
+      )
+    ]
+    if (!docs.length) entries[0].session.explainEmptyResult()
+    return { capabilities, documentation: docs.join('\n\n---\n\n').slice(0, 32_000) }
+  }
+  const merged = new Map<string, IdeLocation>()
+  for (const answer of answers)
+    for (const location of await locations(root, answer))
+      merged.set(`${location.path}:${location.line}:${location.character}`, location)
+  if (!merged.size) entries[0].session.explainEmptyResult()
+  return { capabilities, locations: [...merged.values()].slice(0, 200) }
 }
 port.on(
   'message',
@@ -605,7 +678,7 @@ port.on(
         message.configure.filter((server) => server.enabled).map((server) => JSON.stringify(server))
       )
       for (const [owner, owned] of owners)
-        if (!allowed.has(owned.session.configurationKey)) closeOwner(owner)
+        if (owned.some((entry) => !allowed.has(entry.session.configurationKey))) closeOwner(owner)
       for (const session of liveSessions) if (!allowed.has(session.configurationKey)) session.stop()
       return
     }

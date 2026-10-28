@@ -1,65 +1,64 @@
 import type { IdeLanguageServer } from './ide-language-servers'
 
 /**
- * What a "set up with agent" draft asks for.
+ * What the "set up with agent" buttons seed into a conversation.
  *
  * The agent is the one who knows the language server landscape, the user is the
- * one who knows which language they actually want, so the draft opens a
- * conversation instead of handing over a specification: the agent asks first,
- * proposes the options it can install or find, and only configures the server
- * the user picked.
+ * one who knows which language they care about, and the app is the thing that
+ * has to end up configured. So the draft is one sentence of intent plus the
+ * steps that make the setup real: ask, install, write the configuration through
+ * the app's own IPC, then prove navigation works. Nothing here asks the user to
+ * carry a configuration back into Settings by hand.
  */
 
-/** The import shape the IDE Mode settings page accepts, shared by every draft. */
-const IMPORT_CONTRACT = `End your work with a JSON array I can paste into Settings > IDE Mode > Import. Each entry has id, name, enabled, command (executable only), args (string array), languages ([{extension: '.go', languageId: 'go'}]), env (string record, inherited variables referenced as \${NAME}), rootMarkers (file or directory names that locate the project root), initializationOptions (object) and settings (object). Return only the new or modified entries, keep one enabled server per extension, put credentials in environment variables, and do not enable IDE Mode or write configuration into project source.`
+/** The request the user sends, kept as the sentence they would type themselves. */
+const SETUP_GOAL =
+  'I want to set up an LSP for CIO so I can use it to edit files in IDE Mode. Ask me the LSP I want and set it up for me after I have given you an answer.'
+
+/** How the setup is actually completed, shared by both entry points. */
+const SETUP_WORK = `Set it up so it works when we are done, in this conversation, rather than handing me a configuration to import myself. You can read and change the app's own settings on this turn through cio_app_catalog and cio_app_call.
+
+1. Ask first: offer the language servers that fit this project, say which ones you can install yourself, and wait for my answer before configuring anything. Ask again before adding a second server.
+2. Write the configuration yourself: call the config:get channel, then the config:update channel with ideLanguageServers, merging into the servers already configured rather than replacing them. Each entry is { id, name, enabled, command, args, languages: [{ extension, languageId }], env, rootMarkers, initializationOptions, settings }, where ids are unique letters, numbers or dashes, every extension starts with a dot, and one enabled server owns each extension.
+3. Get the executable onto this machine: when the app can install the server itself, call the projectFiles:ide channel with this project's id and { owner: 'agent-setup', action: 'install', path: '', serverId }; otherwise install it with the toolchains this machine already has and give its absolute path if it will not resolve on PATH.
+4. Prove it works: call the projectFiles:ide channel with this project's id and { owner: 'agent-setup', action: 'check', path: '', serverId } and tell me what it reported. Fix what fails before calling the setup done.
+
+Do not enable IDE Mode for me and do not write any of this configuration into project source.`
 
 /** A short inventory so the agent extends the existing setup instead of duplicating it. */
 function inventory(servers: readonly IdeLanguageServer[]): string {
-  return `Language servers already configured: ${JSON.stringify(
+  return `Language servers in IDE Mode right now: ${JSON.stringify(
     servers.map((server) => ({
       id: server.id,
       name: server.name,
       command: server.command,
+      enabled: server.enabled,
       extensions: server.languages.slice(0, 12).map((mapping) => mapping.extension)
     }))
   )}`
 }
 
-/**
- * A draft that starts from the user's intent.
- *
- * Nothing is preselected here, so the question the agent asks comes first: which
- * language or language server does the user want. Everything after that is work
- * the agent does once it has an answer.
- */
+/** Nothing is preselected here, so the question the agent asks comes first. */
 export function ideSetupRequest(servers: readonly IdeLanguageServer[]): string {
-  return [
-    'Help me set up a language server for IDE Mode.',
-    'Ask me which language or language server I want before you configure anything: inspect this project and offer the options that make sense for it, including the servers you can install for me and any you would recommend I install myself. Then wait for my answer, and ask again before adding a second server.',
-    'Once I pick one, check whether it is already installed here or configured in another editor I use, install it if it is missing (into the app or system tool locations, never into the project), and confirm with me that navigation works before you finish.',
-    IMPORT_CONTRACT,
-    inventory(servers)
-  ].join('\n\n')
+  return [SETUP_GOAL, SETUP_WORK, inventory(servers)].join('\n\n')
 }
 
 /**
  * The same conversation for one server the user pointed at.
  *
- * The choice of server is already made, so the draft skips straight to the
- * questions that decision still leaves open, and the preset is offered as a
- * starting point rather than as a decision the user cannot revisit.
+ * The choice of server is already made, so the draft names it, hands over the
+ * preset as a starting point, and still leaves the decision with the user.
  */
 export function ideServerSetupRequest(
   server: IdeLanguageServer,
   servers: readonly IdeLanguageServer[]
 ): string {
-  const extensions = server.languages.map((mapping) => mapping.extension).join(', ')
   const executable = [server.command, ...server.args].join(' ').trim()
+  const extensions = server.languages.map((mapping) => mapping.extension).join(', ')
   return [
-    `Help me set up ${server.name} for IDE Mode.`,
-    `The preset I picked runs ${executable} for ${extensions}. Ask me what you still need to know before configuring it, and wait for my answer: whether I want this server or a better fit for the language, whether it is already installed, and how I want it installed if it is not. Do not guess.`,
-    `Then install it (into the app or system tool locations, never into the project), replace the preset if I choose something else, and confirm with me that navigation works before you finish.`,
-    IMPORT_CONTRACT,
+    `I want to set up ${server.name} for CIO so I can use it to edit files in IDE Mode. Ask me what you need to know, then set it up for me after I have given you an answer.`,
+    `The preset I picked runs ${executable} for ${extensions}; replace it if another server is the better fit for what I need.`,
+    SETUP_WORK,
     inventory(servers)
   ].join('\n\n')
 }
