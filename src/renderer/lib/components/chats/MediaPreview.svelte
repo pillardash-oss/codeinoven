@@ -7,6 +7,7 @@
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
+  import AudioPlayer from '../ui/AudioPlayer.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
@@ -21,6 +22,13 @@
     onClose: () => void
     /** Repair hook for a media element that failed to load (blob not ready yet). */
     onLoadError?: (element: HTMLMediaElement) => void
+    /**
+     * Where a video should start, in seconds.
+     *
+     * An inline player hands over the frame it had reached, so opening the video
+     * big resumes the recording instead of restarting it.
+     */
+    startAt?: number
     /**
      * Original `file://` url of the media being shown, when the caller has one.
      * `src` is usually a blob url, which has no path on disk, so the reveal
@@ -50,8 +58,18 @@
     annotate?: Snippet
   }
 
-  let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal, annotate }: Props =
-    $props()
+  let {
+    src,
+    filename,
+    mime,
+    onClose,
+    onLoadError,
+    revealUrl,
+    pager,
+    onReveal,
+    annotate,
+    startAt
+  }: Props = $props()
 
   let annotationToolbar = $state<HTMLDivElement>()
   setAnnotationToolbarHost({ target: () => annotationToolbar })
@@ -183,29 +201,36 @@
   >
     <div
       role="presentation"
-      class="relative flex h-full min-h-0 w-full flex-col items-center"
+      class="relative flex h-full min-h-0 w-full flex-col items-center justify-center"
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
       {#if annotate}
         {@render annotate()}
       {:else if kind === 'video'}
+        <!-- The player's own fullscreen control is hidden: this surface already is
+             the fullscreen view, so the button would only cover it with an element
+             fullscreen that carries no viewer chrome. -->
         <video
           {src}
           controls
+          controlslist="nofullscreen"
           preload="metadata"
           class="min-h-0 w-full flex-1 object-contain"
+          onloadedmetadata={(event) => {
+            const at = startAt
+            if (at && at > 0) event.currentTarget.currentTime = at
+          }}
           onerror={mediaError}
         >
           <track kind="captions" />
         </video>
       {:else if kind === 'audio'}
-        <audio
+        <AudioPlayer
           {src}
-          controls
-          preload="metadata"
-          class="w-full max-w-xl shadow-2xl"
-          onerror={mediaError}
-        ></audio>
+          label={filename}
+          class="w-full max-w-xl"
+          onError={(element) => onLoadError?.(element)}
+        />
       {:else}
         <div
           {@attach imageViewportAttachment}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { isMacPlatform } from '$lib/shortcut-display'
   import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
   import { createReadingColumn } from '$lib/reading-column.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
@@ -2770,6 +2771,37 @@
    */
   const conversationColumn = createReadingColumn()
   /**
+   * Where the studio's pane sits, so the header can centre the thread's name in it.
+   *
+   * A studio replaces the conversation and the context panel can stay open beside
+   * it, so the pane is narrower than the window: measuring this view is the only
+   * way the name lands in the middle of what the user is actually looking at. The
+   * box is watched rather than measured once, because a panel opening or closing
+   * moves it without the window changing.
+   */
+  $effect(() => {
+    if (!showSpecStudio) {
+      layoutPanelState.clearStudioPane()
+      return
+    }
+    const element = threadViewElement
+    if (!element) return
+    const report = () => {
+      const box = element.getBoundingClientRect()
+      if (box.width <= 0) return
+      layoutPanelState.setStudioPane(Math.round(box.left), Math.round(box.width))
+    }
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(element)
+    window.addEventListener('resize', report)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', report)
+      layoutPanelState.clearStudioPane()
+    }
+  })
+  /**
    * Bumped by a studio's Retry to rebuild its `{#key}` and re-run its `{#await}`.
    * The studio documents are Engineering-only surfaces, so their chunks load on
    * the first open instead of with the first screen, and a chunk that failed to
@@ -2816,6 +2848,12 @@
      * agent delivered, not for what the user attached themselves.
      */
     annotatable: boolean
+    /**
+     * Where the media was up to when it was opened: an inline video hands over
+     * its position, so the fullscreen player starts where the small one stopped
+     * instead of at the beginning.
+     */
+    startAt?: number
   } | null>(null)
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
@@ -8722,7 +8760,11 @@
    * the click behaviour for an image thumbnail and for a chip the preview can
    * render (PDF, document, Markdown, text); media chips land here too.
    */
-  function openMessageViewer(msg: AgentMessage, part: Extract<AgentPart, { type: 'file' }>): void {
+  function openMessageViewer(
+    msg: AgentMessage,
+    part: Extract<AgentPart, { type: 'file' }>,
+    startAt?: number
+  ): void {
     const items = previewableFileParts(msg)
     const index = items.findIndex((item) => item.url === part.url)
     if (index === -1) return
@@ -8730,7 +8772,8 @@
       items,
       index,
       messageId: msg.id,
-      annotatable: msg.inlineArtifact === true
+      annotatable: msg.inlineArtifact === true,
+      startAt
     }
     loadViewerItem(items[index])
   }
@@ -13418,6 +13461,7 @@
     <MediaPreview
       src={imageUrls.getUrl(viewerItem.url)}
       revealUrl={viewerItem.url}
+      startAt={messageViewer.startAt}
       filename={viewerItem.filename}
       mime={viewerItem.mime}
       pager={messageViewerPager}
@@ -14004,7 +14048,7 @@
                       src={part.url}
                       kind="video"
                       filename={part.filename ?? 'Video'}
-                      onExpand={() => openMessageViewer(msg, part)}
+                      onExpand={(startAt) => openMessageViewer(msg, part, startAt)}
                     />
                   {:else if part.type === 'file' && isAudioMime(part.mime)}
                     <InlineMediaFigure
@@ -14568,7 +14612,10 @@
                           steeredPromptIndex
                         )}
                         {#if steeredChanges.length > 0 && steeredChanges.length < turnCheckpoint.changes.length}
-                          {@const steeredCheckpoint = { ...turnCheckpoint, changes: steeredChanges }}
+                          {@const steeredCheckpoint = {
+                            ...turnCheckpoint,
+                            changes: steeredChanges
+                          }}
                           <div class="mt-3">
                             <RunChangesCard
                               checkpoint={steeredCheckpoint}
@@ -14576,7 +14623,8 @@
                               threadId={thread.id}
                               steered
                               onRevealFile={(path) => revealCheckpointFile(turnCheckpoint.id, path)}
-                              onOpenFile={(path) => void openCheckpointFile(turnCheckpoint.id, path)}
+                              onOpenFile={(path) =>
+                                void openCheckpointFile(turnCheckpoint.id, path)}
                               onReview={() => reviewCheckpoint(turnCheckpoint.id)}
                               onUndo={() => undoCheckpoint(turnCheckpoint)}
                               onRedo={() => redoCheckpoint(turnCheckpoint)}

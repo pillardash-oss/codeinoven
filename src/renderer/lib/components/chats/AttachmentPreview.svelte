@@ -7,6 +7,7 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
+  import AudioPlayer from '../ui/AudioPlayer.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
@@ -350,7 +351,7 @@
     >
       <div
         role="presentation"
-        class="relative flex h-full min-h-0 w-full flex-col items-center"
+        class="relative flex h-full min-h-0 w-full flex-col items-center justify-center"
         onclick={(e: MouseEvent) => e.stopPropagation()}
       >
         {#if kind === 'image' && src}
@@ -378,11 +379,20 @@
             />
           </div>
         {:else if kind === 'video' && src}
-          <video {src} controls preload="metadata" class="min-h-0 w-full flex-1 object-contain">
+          <!-- The player's own fullscreen control is hidden: this surface is the
+               fullscreen view, so it would only cover it with an element fullscreen
+               that carries no viewer chrome. -->
+          <video
+            {src}
+            controls
+            controlslist="nofullscreen"
+            preload="metadata"
+            class="min-h-0 w-full flex-1 object-contain"
+          >
             <track kind="captions" />
           </video>
         {:else if kind === 'audio' && src}
-          <audio {src} controls preload="metadata" class="w-full max-w-xl"></audio>
+          <AudioPlayer {src} label={filename} class="w-full max-w-xl" />
         {:else if kind === 'pdf' && src}
           <iframe {src} class="min-h-0 w-full flex-1 border-0" title={`Preview ${filename}`}
           ></iframe>
