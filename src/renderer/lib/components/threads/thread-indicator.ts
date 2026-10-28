@@ -1,4 +1,4 @@
-import type { Thread } from '$shared/types'
+import { isOrchestrationChildThread, type Thread } from '$shared/types'
 
 /**
  * The single indicator slot a thread row can show. Speech, browser sound and
@@ -81,4 +81,31 @@ export function threadUsesEngineeringTooling(
     thread.independentAudit === true ||
     thread.independentAuditInitialized === true
   )
+}
+
+/**
+ * Whether the conversation view must load this thread's Engineering state
+ * (lifecycle, Spec, Brainstorm, PRD, Assignment, audit).
+ *
+ * Engineering state exists only where the tooling was engaged, plus the
+ * orchestration children that carry a coordinator's work and never set the
+ * marker themselves. The old rule was "not a chat thread", which made every
+ * ordinary conversation ask six thread-scoped engines on mount and on every turn
+ * boundary for state that cannot exist there: IPC on the conversation's critical
+ * path, and a background read racing a deleted thread. Chat threads (Chats, the
+ * Assistant space, browser assistant chats) own no Engineering state at all.
+ */
+export function threadHydratesEngineeringState(
+  thread: Pick<
+    Thread,
+    | 'engineering'
+    | 'independentAudit'
+    | 'independentAuditInitialized'
+    | 'coordinatorThreadId'
+    | 'assignmentId'
+    | 'assignmentRole'
+    | 'achievementRole'
+  >
+): boolean {
+  return threadUsesEngineeringTooling(thread) || isOrchestrationChildThread(thread)
 }

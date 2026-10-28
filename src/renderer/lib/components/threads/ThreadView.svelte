@@ -162,6 +162,7 @@
     clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
   import type OvenControls from './OvenControls.svelte'
+  import { threadHydratesEngineeringState } from './thread-indicator'
   import {
     onEngineeringLifecycleInherited,
     withProjectOven
@@ -1158,8 +1159,21 @@
     hasController ? normalizeChatSettings(controller!.settings) : initialThreadSettings(thread)
   )
 
-  function shouldHydrateEngineeringState(): boolean {
-    return !chatMode
+  /** The thread this view draws, preferring the workspace's current copy: a
+   *  `thread:updated` handler runs before the prop it rendered from is replaced,
+   *  and Engineering turns on through exactly that event. */
+  function currentThreadSnapshot(): Thread {
+    const selected = workspaceState.selectedThread
+    return selected?.projectId === thread.projectId && selected.id === thread.id ? selected : thread
+  }
+
+  function shouldHydrateEngineeringState(candidate: Thread = currentThreadSnapshot()): boolean {
+    // Chat threads (Chats, the Assistant space, browser assistant chats) own no
+    // Engineering state, and neither does a conversation that never engaged the
+    // tooling. Both used to hydrate anyway, on the theory that any non-chat
+    // thread might be Engineering: that put six thread-scoped reads on every
+    // ordinary conversation's mount and turn boundary.
+    return !chatMode && threadHydratesEngineeringState(candidate)
   }
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
@@ -5522,6 +5536,12 @@
         .catch((error) => {
           reportError(error, 'Engineering lifecycle could not be loaded')
         })
+    }
+    if (!chatMode) {
+      // Staged choices are local intent, not durable Engineering state: a thread
+      // that has not engaged Engineering yet still has to show the switches the
+      // user staged on it, so this restore stays outside the hydration gate.
+      //
       // Restore a staged (not-yet-sent) Toolbox selection from a previous
       // session or thread switch so the switches keep the user's last choice.
       const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
@@ -5605,7 +5625,10 @@
       if (
         updatedThread.projectId === thread.projectId &&
         (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id) &&
-        shouldHydrateEngineeringState()
+        // The event itself is what turns Engineering on (selecting a stage sets
+        // the durable marker), so the gate reads the arriving thread instead of
+        // this view's not-yet-updated prop.
+        shouldHydrateEngineeringState(updatedThread)
       ) {
         scheduleReadySpecReconcile()
       }
