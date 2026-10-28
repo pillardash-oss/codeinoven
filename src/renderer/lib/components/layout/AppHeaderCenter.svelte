@@ -11,6 +11,7 @@
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
@@ -42,12 +43,7 @@
     titleInset?: number
   }
 
-  let {
-    activeView,
-    chatMode,
-    threadActionsMenu,
-    titleInset = 0
-  }: Props = $props()
+  let { activeView, chatMode, threadActionsMenu, titleInset = 0 }: Props = $props()
 
   const viewLabels: Record<string, string> = {
     projects: 'Projects',
@@ -88,6 +84,42 @@
   )
 
   /**
+   * Whether a studio is the surface on screen.
+   *
+   * A studio takes the pane the conversation was in, so there is no conversation
+   * column left to sit on and nothing on the right that shrinks it either: the name
+   * belongs in the middle of the bar, and it stays there while panels open and close
+   * around it. Closing the studio returns it to the reading column it was on.
+   */
+  let studioOpen = $derived(!onSettings && workspaceState.specStudioOpen)
+
+  /** The pane the studio owns, so its title centres on that pane and not on the
+   *  window: a context panel beside the studio narrows it. */
+  let studioPane = $derived(studioOpen ? layoutPanelState.studioPaneBox : null)
+
+  /**
+   * How the name is placed in the bar.
+   *
+   * Over a studio the block leaves the flow and sits on the middle of the studio's
+   * pane: the pane is what the user is looking at, and a context panel beside it
+   * moves that middle without the window changing. Its own width stays bounded by
+   * the pane, so a long name truncates inside the pane instead of running under the
+   * chrome or the trailing controls. Until the pane has been measured the block
+   * simply centres in the room the bar leaves it.
+   */
+  let titleLayout = $derived(
+    studioPane
+      ? 'absolute inset-y-0 -translate-x-1/2 justify-center'
+      : studioOpen
+        ? 'relative flex-1 justify-center'
+        : 'relative flex-1 justify-start'
+  )
+  let titleLeft = $derived(
+    studioPane ? `${studioPane.left + Math.round(studioPane.width / 2)}px` : undefined
+  )
+  let titleMaxWidth = $derived(studioPane ? `${studioPane.width}px` : undefined)
+
+  /**
    * The assistant an assistant thread belongs to, so the header can wear the same
    * assistant icon the sidebar row does. A run inherits its task's `assistantId`, so
    * this resolves for a task and each of its runs alike; an assistant-less task has
@@ -107,14 +139,18 @@
 
 <!-- The title block belongs to the thread column, not to the middle of the bar:
      it starts exactly where the header's chrome cluster ends, which is the
-     thread panel's edge, and takes the room the trailing controls leave. -->
+     thread panel's edge, and takes the room the trailing controls leave. A studio
+     is the exception: it replaces the conversation, so the name centres in the bar
+     while it is open and comes back here when it closes. -->
 <!-- Never flush against the end of the chrome: the thread block keeps its own
      gutter even when it is aligned to the conversation column, and that gap is
      the smallest one it will take. -->
 <div
-  class="flex min-w-0 flex-1 items-center justify-start pr-2"
-  style:padding-left={titleInset > 0 ? `${Math.max(titleInset, 8)}px` : undefined}
-  class:pl-2={titleInset <= 0}
+  class="flex min-w-0 items-center pr-2 {titleLayout}"
+  style:left={titleLeft}
+  style:max-width={titleMaxWidth}
+  style:padding-left={!studioOpen && titleInset > 0 ? `${Math.max(titleInset, 8)}px` : undefined}
+  class:pl-2={!studioOpen && titleInset <= 0}
 >
   {#if onSettings}
     <div class="pointer-events-none">

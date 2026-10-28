@@ -65,6 +65,45 @@ class LayoutPanelState {
   }
 
   /**
+   * Where the pane a studio owns sits, in window pixels, or null when no studio is
+   * on screen.
+   *
+   * The studio replaces the conversation, so the header has no reading column to
+   * put the thread's name on. Its name belongs in the middle of that pane instead,
+   * and the pane is not the window: a context panel beside the studio narrows it,
+   * which is exactly what the name has to follow.
+   */
+  private studioPane = $state<{ left: number; width: number } | null>(null)
+  /** The same box kept where no effect can see it, so a reporting effect never
+   *  reads the state it writes. */
+  private studioPaneReported = false
+  private studioPaneLeft = 0
+  private studioPaneWidth = 0
+
+  get studioPaneBox(): { left: number; width: number } | null {
+    return this.studioPane
+  }
+
+  /** Claim the studio pane's box for the surface that owns it. */
+  setStudioPane(left: number, width: number): void {
+    if (this.studioPaneReported && this.studioPaneLeft === left && this.studioPaneWidth === width)
+      return
+    this.studioPaneReported = true
+    this.studioPaneLeft = left
+    this.studioPaneWidth = width
+    this.studioPane = { left, width }
+  }
+
+  /** Give the studio pane up, which is what closing the studio does. */
+  clearStudioPane(): void {
+    if (!this.studioPaneReported) return
+    this.studioPaneReported = false
+    this.studioPaneLeft = 0
+    this.studioPaneWidth = 0
+    this.studioPane = null
+  }
+
+  /**
    * Claim the reading column for one surface.
    *
    * Ownership rather than a last-write-wins number: two reading surfaces can be
@@ -105,9 +144,7 @@ class LayoutPanelState {
   report(token: number, width: number): void {
     const current = this.panels.find((panel) => panel.token === token)
     if (!current || current.width === width) return
-    this.panels = this.panels.map((panel) =>
-      panel.token === token ? { token, width } : panel
-    )
+    this.panels = this.panels.map((panel) => (panel.token === token ? { token, width } : panel))
   }
 
   release(token: number): void {
