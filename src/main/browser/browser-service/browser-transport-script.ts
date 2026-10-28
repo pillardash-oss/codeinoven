@@ -179,7 +179,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     fps: FPS,
     time: 0,
     playing: false,
-    loop: true,
+    loop: false,
     error: null
   };
 

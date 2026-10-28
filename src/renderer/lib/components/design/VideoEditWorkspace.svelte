@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, type Component, type Snippet } from 'svelte'
+  import { on } from 'svelte/events'
   import { ContextMenu } from 'bits-ui'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
@@ -157,7 +158,12 @@
   function keydown(event: KeyboardEvent): void {
     if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
     const fromPage = event.target === document
-    if (!root?.contains(event.target) && !fromPage) return
+    if (
+      !root?.contains(event.target) &&
+      !fromPage &&
+      !(mode === 'fullscreen' && event.target === document.body)
+    )
+      return
     if (keymapState.matches('video-primary-action', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -332,10 +338,10 @@
   )}
 {/snippet}
 
-<svelte:window onkeydown={keydown} />
 <section
   {@attach (element) => {
     root = element
+    const releaseKeys = on(window, 'keydown', keydown, { capture: true })
     const observer = new ResizeObserver(() => {
       workspaceWidth = element.clientWidth
       workspaceHeight = element.clientHeight
@@ -344,6 +350,7 @@
     const release = editor.attach(tabId, active, onDirtyChange)
     return () => {
       if (root === element) root = undefined
+      releaseKeys()
       observer.disconnect()
       release()
     }

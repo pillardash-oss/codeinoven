@@ -6,6 +6,8 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import CompositionFrameNote from './CompositionFrameNote.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
@@ -85,6 +87,19 @@
   let pendingFrame = $state<number | null>(null)
   let seekRevision = 0
   /** True while the remembered looping preference is being handed to the page. */
+  const muted = $derived(compositionPlaybackPrefs.mutedTabs[tabId] ?? false)
+  let muteBusy = $state(false)
+  async function toggleMuted(): Promise<void> {
+    if (muteBusy) return
+    muteBusy = true
+    try {
+      const next = !muted
+      await invoke('browser:setMuted', tabId, next)
+      compositionPlaybackPrefs.mutedTabs[tabId] = next
+    } finally {
+      muteBusy = false
+    }
+  }
   let loopSyncing = false
   /** The looping answer the page gave last, so one arming is reconciled once. */
   let observedLoop: boolean | null = null
@@ -560,6 +575,17 @@
     onclick={toggleLoop}
   >
     <CioRefresh size={13} />
+  </button>
+  <button
+    type="button"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
+    title={muted ? 'Unmute video playback' : 'Mute video playback'}
+    aria-label={muted ? 'Unmute video playback' : 'Mute video playback'}
+    aria-pressed={muted}
+    disabled={muteBusy}
+    onclick={() => void toggleMuted()}
+  >
+    {#if muted}<CioVolumeX size={13} />{:else}<CioVolume size={13} />{/if}
   </button>
   <button
     type="button"

@@ -1654,6 +1654,7 @@ export class BrowserService {
       if (typeof rawMuted !== 'boolean') {
         throw new TypeError('Browser mute state must be a boolean')
       }
+      tab.transportMuted = false
       tab.view.webContents.setAudioMuted(rawMuted)
       // Publish rather than trust the caller: `isAudioMuted` is the state the
       // renderer's indicator must show, including for a muted tab that the page
