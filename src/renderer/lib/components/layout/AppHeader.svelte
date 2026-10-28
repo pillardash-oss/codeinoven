@@ -96,10 +96,14 @@
 
   /** The narrowest panel that still contains the header's chrome, so a drag can
    *  never pull the action buttons out of the panel's column and into the
-   *  thread's. */
-  let minimumPanelWidth = $derived(
-    Math.max(0, CHROME_WIDTH + leftInset - layoutPanelState.railWidth)
-  )
+   *  thread's. Measured, not estimated: a dev build carries a build pill the
+   *  production bar does not, and an estimate that ignores it lets the chrome
+   *  overflow the column by exactly that pill's width. */
+  let minimumPanelWidth = $derived.by(() => {
+    const chrome = clusterWidth > 0 ? clusterWidth : CHROME_WIDTH
+    const floor = chrome + leftInset - layoutPanelState.railWidth
+    return Math.max(0, Math.min(420, floor))
+  })
 
   $effect(() => {
     layoutPanelState.minimumWidth = minimumPanelWidth
