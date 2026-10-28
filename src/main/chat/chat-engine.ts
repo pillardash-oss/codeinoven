@@ -223,6 +223,7 @@ import { OvenService } from '../ovens/oven-service'
 import { OvenHarnessService } from '../ovens/oven-harness-service'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
+import { NativeProviderConfigService } from '../agents/native-provider-config-service'
 import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { currentWorkRoot } from '../design/work-roots-state'
@@ -15107,10 +15108,21 @@ export class ChatEngine {
         throw new Error('This report needs the model that was executing the turn')
       }
       await this.storage.addVisionModel(requestingModel.modelId)
+      // The app's record is not what the harness reads, so a report that only
+      // landed there would leave the next turn replacing the image again. Repair
+      // the catalog entry the report says is wrong.
+      const repaired = await new NativeProviderConfigService(
+        this.storage
+      ).markModelVisionCapable(
+        requestingModel.harnessId,
+        requestingModel.providerId,
+        requestingModel.modelId
+      )
       Logger.info('Vision capability recorded from user report', {
         modelId: requestingModel.modelId,
         providerId: requestingModel.providerId,
-        harnessId: requestingModel.harnessId
+        harnessId: requestingModel.harnessId,
+        catalogUpdated: repaired
       })
     }
     // A retry carries the vision model the user chose on the card, so it is

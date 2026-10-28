@@ -32,6 +32,7 @@ import {
   webFrameMain,
   WebContentsView,
   type MenuItemConstructorOptions,
+  type NativeImage,
   type Session,
   type WebContents,
   type WebFrameMain
@@ -85,6 +86,29 @@ import {
   type BrowserActionTarget,
   type BrowserActionReview
 } from './browser-service/browser-action-policy'
+import {
+  agentCheckScript,
+  agentCursorScript,
+  agentDomClickScript,
+  agentElementPointScript,
+  agentElementRectScript,
+  agentEvaluateScript,
+  agentFocusScript,
+  agentHitTestScript,
+  agentScrollScript,
+  agentSelectScript,
+  agentSnapshotScript,
+  agentTypeScript,
+  agentWaitScript,
+  AGENT_REF_ATTRIBUTE
+} from './browser-service/browser-agent-page'
+import {
+  agentCount,
+  dragAgentMouse,
+  normalizeAgentModifiers,
+  pressAgentKey,
+  sendAgentMouse
+} from './browser-service/browser-agent-input'
 import { isVideoCaptureUrl } from '../../lib/video/project'
 import {
   boundedBrowserTabHistory,
@@ -564,14 +588,21 @@ function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.han
  * mutations pass through action-aware Auto Review. File upload uses a native
  * file chooser or exact-file confirmation, while Full Access may name files.
  */
-const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console', 'wait'])
 const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
   'click',
   'type',
+  'press',
+  'select',
+  'check',
+  'mouse',
+  'drag',
+  'scroll',
   'navigate',
   'reload',
   'viewport',
-  'upload'
+  'upload',
+  'evaluate'
 ])
 
 /** Approval request for an agent mutation on the page the user is viewing. */
@@ -2491,54 +2522,189 @@ export class BrowserService {
       return { ...utilityContext, reloading: true }
     }
     if (operation === 'snapshot') {
-      const snapshot: unknown = await tab.view.webContents.executeJavaScript(`(() => ({
-        url: location.href,
-        title: document.title,
-        text: (document.body?.innerText ?? '').slice(0, 30000),
-        elements: Array.from(document.querySelectorAll('a, button, input, textarea, select, [role="button"], [contenteditable="true"]'))
-          .slice(0, 250)
-          .map((element) => ({
-            tag: element.tagName.toLowerCase(),
-            id: element.id || undefined,
-            name: element.getAttribute('name') || undefined,
-            role: element.getAttribute('role') || undefined,
-            type: element.getAttribute('type') || undefined,
-            text: (element.innerText || element.getAttribute('aria-label') || element.getAttribute('placeholder') || '').trim().slice(0, 300)
-          }))
-      }))()`)
-      return { ...utilityContext, snapshot }
+      const snapshot = await this.runAgentScript(
+        tab.view.webContents,
+        agentSnapshotScript({
+          interactiveOnly: input['interactiveOnly'] !== false,
+          maxElements: this.agentBoundedNumber(input['maxElements'], 300, 1, 1000),
+          maxText:
+            input['text'] === false
+              ? 0
+              : this.agentBoundedNumber(input['maxText'], 20000, 0, 40000)
+        })
+      )
+      return {
+        ...utilityContext,
+        snapshot,
+        detail:
+          'Each element carries ref (pass it as ref to act on that element), its unique CSS selector, its live value, checked state and box, so an action targets exactly what was read.'
+      }
     }
     if (operation === 'click') {
-      const selector = this.requiredInputString(input, 'selector')
-      const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
-        ${reviewedTarget ? `if (JSON.stringify(${browserActionTargetScript(selector)}) !== ${JSON.stringify(JSON.stringify(reviewedTarget))}) return { clicked: false, reason: 'target changed; inspect the page and retry' };` : ''}
-        const element = document.querySelector(${JSON.stringify(selector)});
-        if (!(element instanceof HTMLElement)) return { clicked: false, reason: 'not found' };
-        element.scrollIntoView({ block: 'center', inline: 'center' });
-        element.click();
-        return { clicked: true };
-      })()`)
-      return { ...utilityContext, result }
+      const selector = this.agentSelector(input)
+      const contents = tab.view.webContents
+      if (await this.agentTargetChanged(contents, selector, reviewedTarget)) {
+        return {
+          ...utilityContext,
+          result: { clicked: false, reason: 'target changed; inspect the page and retry' }
+        }
+      }
+      return { ...utilityContext, result: await this.clickAgentTarget(tab, selector, input) }
     }
     if (operation === 'type') {
-      const selector = this.requiredInputString(input, 'selector')
+      const selector = this.agentSelector(input)
       const text = this.requiredInputString(input, 'text', true)
-      const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
-        ${reviewedTarget ? `if (JSON.stringify(${browserActionTargetScript(selector)}) !== ${JSON.stringify(JSON.stringify(reviewedTarget))}) return { typed: false, reason: 'target changed; inspect the page and retry' };` : ''}
-        const element = document.querySelector(${JSON.stringify(selector)});
-        if (!(element instanceof HTMLElement)) return { typed: false, reason: 'not found' };
-        element.focus();
-        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
-          element.value = ${JSON.stringify(text)};
-        } else if (element.isContentEditable) {
-          element.textContent = ${JSON.stringify(text)};
-        } else {
-          return { typed: false, reason: 'element is not editable' };
+      const contents = tab.view.webContents
+      if (await this.agentTargetChanged(contents, selector, reviewedTarget)) {
+        return {
+          ...utilityContext,
+          result: { typed: false, reason: 'target changed; inspect the page and retry' }
         }
-        element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(text)} }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        return { typed: true };
-      })()`)
+      }
+      const result = await this.runAgentScript(
+        contents,
+        agentTypeScript({ selector, text, append: input['append'] === true })
+      )
+      await this.paintAgentCursorAtElement(tab, selector, false)
+      if (input['submit'] === true) {
+        await pressAgentKey(contents, { key: 'Enter', modifiers: [], times: 1 })
+      }
+      return { ...utilityContext, result }
+    }
+    if (operation === 'press') {
+      const contents = tab.view.webContents
+      const selector = this.optionalAgentSelector(input)
+      if (selector) {
+        const focused = await this.runAgentScript(contents, agentFocusScript(selector))
+        if (asObject(focused)?.['focused'] !== true) {
+          return {
+            ...utilityContext,
+            result: { pressed: false, reason: 'the target could not be focused', detail: focused }
+          }
+        }
+        await this.paintAgentCursorAtElement(tab, selector, false)
+      }
+      const result = await pressAgentKey(contents, {
+        key: this.requiredInputString(input, 'key'),
+        modifiers: normalizeAgentModifiers(input['modifiers']),
+        times: agentCount(input['times'], 1, 20)
+      })
+      return { ...utilityContext, result: { ...result, focused: selector ?? 'current focus' } }
+    }
+    if (operation === 'select') {
+      const selector = this.agentSelector(input)
+      const contents = tab.view.webContents
+      if (await this.agentTargetChanged(contents, selector, reviewedTarget)) {
+        return {
+          ...utilityContext,
+          result: { selected: false, reason: 'target changed; inspect the page and retry' }
+        }
+      }
+      const values = Array.isArray(input['values'])
+        ? (input['values'] as unknown[]).filter((value): value is string => typeof value === 'string')
+        : []
+      const result = await this.runAgentScript(
+        contents,
+        agentSelectScript({
+          selector,
+          ...(typeof input['value'] === 'string' ? { value: input['value'] } : {}),
+          ...(typeof input['label'] === 'string' ? { label: input['label'] } : {}),
+          ...(values.length > 0 ? { values } : {})
+        })
+      )
+      return { ...utilityContext, result }
+    }
+    if (operation === 'check') {
+      const selector = this.agentSelector(input)
+      const contents = tab.view.webContents
+      if (await this.agentTargetChanged(contents, selector, reviewedTarget)) {
+        return {
+          ...utilityContext,
+          result: { checked: false, reason: 'target changed; inspect the page and retry' }
+        }
+      }
+      const result = await this.runAgentScript(
+        contents,
+        agentCheckScript({ selector, checked: input['checked'] !== false })
+      )
+      return { ...utilityContext, result }
+    }
+    if (operation === 'scroll') {
+      const contents = tab.view.webContents
+      const selector = this.optionalAgentSelector(input)
+      const to = input['to'] === 'top' || input['to'] === 'bottom' ? input['to'] : undefined
+      const result = await this.runAgentScript(
+        contents,
+        agentScrollScript({
+          ...(selector ? { selector } : {}),
+          deltaX: this.agentSignedNumber(input['deltaX'], 0),
+          deltaY: this.agentSignedNumber(input['deltaY'], selector || to ? 0 : 600),
+          ...(to ? { to } : {})
+        })
+      )
+      return { ...utilityContext, result }
+    }
+    if (operation === 'mouse') {
+      const contents = tab.view.webContents
+      const action = input['action']
+      if (
+        action !== 'move' &&
+        action !== 'hover' &&
+        action !== 'click' &&
+        action !== 'down' &&
+        action !== 'up' &&
+        action !== 'wheel'
+      ) {
+        throw new TypeError('action must be move, hover, click, down, up, or wheel')
+      }
+      const point = await this.agentPointFrom(input, tab, 'point')
+      const button = input['button'] === 'right' || input['button'] === 'middle' ? input['button'] : 'left'
+      await sendAgentMouse(contents, {
+        action,
+        x: point.x,
+        y: point.y,
+        button,
+        clickCount: agentCount(input['clickCount'], 1, 3),
+        deltaX: this.agentSignedNumber(input['deltaX'], 0),
+        deltaY: this.agentSignedNumber(input['deltaY'], 0),
+        modifiers: normalizeAgentModifiers(input['modifiers'])
+      })
+      const pressed = action === 'click' || action === 'down'
+      await this.paintAgentCursor(tab, point, pressed)
+      return {
+        ...utilityContext,
+        result: { action, x: point.x, y: point.y, button, trusted: true }
+      }
+    }
+    if (operation === 'drag') {
+      const contents = tab.view.webContents
+      const from = await this.agentPointFrom(input, tab, 'from')
+      const to = await this.agentPointFrom(input, tab, 'to')
+      const modifiers = normalizeAgentModifiers(input['modifiers'])
+      const result = await dragAgentMouse(contents, { from, to, modifiers })
+      await this.paintAgentCursor(tab, to, true)
+      return { ...utilityContext, result: { ...result, from, to, trusted: true } }
+    }
+    if (operation === 'wait') {
+      const result = await this.runAgentScript(
+        tab.view.webContents,
+        agentWaitScript({
+          ...(typeof input['selector'] === 'string' ? { selector: input['selector'] } : {}),
+          ...(typeof input['text'] === 'string' ? { text: input['text'] } : {}),
+          ...(typeof input['urlIncludes'] === 'string' ? { urlIncludes: input['urlIncludes'] } : {}),
+          ...(input['gone'] === true ? { gone: true } : {}),
+          ...(input['visible'] === false ? { visible: false } : {}),
+          timeoutMs: this.agentBoundedNumber(input['timeoutMs'], 5000, 0, 30000)
+        })
+      )
+      return { ...utilityContext, result }
+    }
+    if (operation === 'evaluate') {
+      const expression = this.requiredInputString(input, 'expression')
+      const result = await this.runAgentScript(
+        tab.view.webContents,
+        agentEvaluateScript(expression)
+      )
       return { ...utilityContext, result }
     }
     if (operation === 'upload') {
@@ -2565,27 +2731,9 @@ export class BrowserService {
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
     const pageUrl = contents.getURL()
     const pageGeneration = tab.navigationGeneration
-    const target: BrowserActionTarget | null =
-      operation === 'click' || operation === 'type'
-        ? await contents.executeJavaScript(
-            browserActionTargetScript(this.requiredInputString(input, 'selector'))
-          )
-        : null
+    const target = await this.reviewedActionTarget(operation, input, tab)
     const review = reviewBrowserAction(operation, input, target)
-    let action: string
-    if (operation === 'click') {
-      action = `Click the first element matching this selector:\n${this.requiredInputString(input, 'selector')}`
-    } else if (operation === 'type') {
-      action = `Replace the value of this element:\n${this.requiredInputString(input, 'selector')}\n\nWith this text:\n${this.requiredInputString(input, 'text', true)}`
-    } else if (operation === 'navigate') {
-      action = `Navigate the current tab to:\n${validateBrowserUrl(this.requiredInputString(input, 'url'))}`
-    } else if (operation === 'reload') {
-      action = 'Reload the current page.'
-    } else if (operation === 'viewport') {
-      action = `Change the page viewport to:\n${JSON.stringify(input)}`
-    } else {
-      throw new Error(`Auto Review does not support the browser action "${operation}"`)
-    }
+    const action = this.describeAgentAction(operation, input)
 
     const approver = this.agentActionApprover
     if (!approver) throw new Error('Browser conversation approval is unavailable')
@@ -2615,6 +2763,80 @@ export class BrowserService {
   }
 
   /**
+   * The control a review is about: the one an element operation names, or the one
+   * under the pointer a coordinate operation aims at.
+   *
+   * A pointer operation carries no element, so the review has to ask the page what
+   * is at that point. Without it, clicking a Delete button by coordinate would be
+   * reviewed as an unidentified action and treated as high risk every time.
+   */
+  private async reviewedActionTarget(
+    operation: string,
+    input: Record<string, unknown>,
+    tab: BrowserTab
+  ): Promise<BrowserActionTarget | null> {
+    const contents = tab.view.webContents
+    const selector = this.optionalAgentSelector(input)
+    if (selector) {
+      return asBrowserActionTarget(
+        await contents.executeJavaScript(browserActionTargetScript(selector))
+      )
+    }
+    if (operation === 'mouse' || operation === 'drag') {
+      const point = await this.agentPointFrom(input, tab, operation === 'drag' ? 'to' : 'point').catch(
+        () => null
+      )
+      if (!point) return null
+      const hit = asObject(await contents.executeJavaScript(agentHitTestScript(point)))
+      const hitSelector = typeof hit?.['selector'] === 'string' ? hit['selector'] : ''
+      if (!hitSelector) return null
+      return asBrowserActionTarget(
+        await contents.executeJavaScript(browserActionTargetScript(hitSelector))
+      )
+    }
+    return null
+  }
+
+  /** The sentence the permission card shows for one agent action. */
+  private describeAgentAction(operation: string, input: Record<string, unknown>): string {
+    const target = (): string => this.agentSelector(input)
+    switch (operation) {
+      case 'click':
+        return `Click the element matching this selector:\n${target()}`
+      case 'type':
+        return `Replace the value of this element:\n${target()}\n\nWith this text:\n${this.requiredInputString(input, 'text', true)}`
+      case 'press': {
+        const selector = this.optionalAgentSelector(input)
+        const modifiers = normalizeAgentModifiers(input['modifiers'])
+        const chord = [...modifiers, this.requiredInputString(input, 'key')].join('+')
+        return selector
+          ? `Press ${chord} in this element:\n${selector}`
+          : `Press ${chord} on the focused element.`
+      }
+      case 'select':
+        return `Choose an option in this select:\n${target()}\n\nOption:\n${JSON.stringify({ value: input['value'], label: input['label'], values: input['values'] })}`
+      case 'check':
+        return `${input['checked'] === false ? 'Untick' : 'Tick'} this control:\n${target()}`
+      case 'scroll':
+        return 'Scroll the page.'
+      case 'mouse':
+        return `Move or press the pointer in the page:\n${JSON.stringify({ action: input['action'], x: input['x'], y: input['y'], selector: input['selector'], ref: input['ref'], button: input['button'] })}`
+      case 'drag':
+        return `Drag in the page:\n${JSON.stringify({ from: input['from'], to: input['to'] })}`
+      case 'evaluate':
+        return `Run this expression in the page:\n${this.requiredInputString(input, 'expression').slice(0, 2000)}`
+      case 'navigate':
+        return `Navigate the current tab to:\n${validateBrowserUrl(this.requiredInputString(input, 'url'))}`
+      case 'reload':
+        return 'Reload the current page.'
+      case 'viewport':
+        return `Change the page viewport to:\n${JSON.stringify(input)}`
+      default:
+        return `Open this file for the page to read:\n${JSON.stringify(input['paths'] ?? 'the file chooser')}`
+    }
+  }
+
+  /**
    * Fill a page's file input through a narrow main-process action. Auto Review
    * always asks the user to choose files in a native dialog; Full Access can use
    * paths directly. The site never receives a file until this operation is
@@ -2629,14 +2851,7 @@ export class BrowserService {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
 
-    const rawSelector = input['selector']
-    if (
-      rawSelector !== undefined &&
-      (typeof rawSelector !== 'string' || rawSelector.length === 0 || rawSelector.length > 1024)
-    ) {
-      throw new TypeError('selector must be a non-empty CSS selector under 1024 characters')
-    }
-    const selector = typeof rawSelector === 'string' ? rawSelector : 'input[type="file"]'
+    const selector = this.optionalAgentSelector(input) ?? 'input[type="file"]'
     const beforeUrl = contents.getURL()
     const beforeGeneration = tab.navigationGeneration
     const inputState: unknown = await contents.executeJavaScript(`(() => {
@@ -2760,7 +2975,7 @@ export class BrowserService {
     tab: BrowserTab,
     input: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const captured = await tab.view.webContents.capturePage()
+    const captured = await this.captureAgentImage(tab, input)
     const source = captured.getSize()
     const target = fitWithin(source.width, source.height, MAX_SCREENSHOT_DIMENSION)
     const capped = target.width !== source.width || target.height !== source.height
@@ -2771,7 +2986,10 @@ export class BrowserService {
     const lossless = png.byteLength <= SCREENSHOT_MAX_BYTES
     const encoded = lossless ? png : resized.toJPEG(SCREENSHOT_JPEG_QUALITY)
     const hash = createHash('sha256').update(encoded).digest('hex')
-    if (input['force'] !== true && this.lastScreenshot.get(tabId)?.hash === hash) {
+    // One capture record per target: a full-page capture must not be reported as
+    // unchanged because the viewport happened to look the same a moment ago.
+    const captureKey = `${tabId}:${this.optionalAgentSelector(input) ?? (input['fullPage'] === true ? 'page' : 'viewport')}`
+    if (input['force'] !== true && this.lastScreenshot.get(captureKey)?.hash === hash) {
       return {
         unchanged: true,
         width: target.width,
@@ -2780,7 +2998,7 @@ export class BrowserService {
           'The page has not changed since the previous screenshot, so it was not captured again. Pass {"force":true} to capture it anyway.'
       }
     }
-    this.lastScreenshot.set(tabId, { hash, width: target.width, height: target.height })
+    this.lastScreenshot.set(captureKey, { hash, width: target.width, height: target.height })
     return {
       dataUrl: `data:image/${lossless ? 'png' : 'jpeg'};base64,${encoded.toString('base64')}`,
       width: target.width,
@@ -2788,6 +3006,72 @@ export class BrowserService {
       // Report the render size only when it was capped, so a model reading a
       // screenshot knows the page it is reviewing was laid out larger.
       ...(capped ? { sourceWidth: source.width, sourceHeight: source.height } : {})
+    }
+  }
+
+  /**
+   * The pixels one screenshot asks for: the viewport, the whole page, or one
+   * element.
+   *
+   * `capturePage` only ever gives the visible viewport, which is not enough for a
+   * long page an agent has to read, so a full-page or element capture goes through
+   * the debugger's own `Page.captureScreenshot`, which paints beyond the viewport
+   * and clips to a page rectangle. Both fall back to the viewport capture when the
+   * debugger cannot answer, because a smaller picture beats no picture.
+   */
+  private async captureAgentImage(
+    tab: BrowserTab,
+    input: Record<string, unknown>
+  ): Promise<NativeImage> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+    const selector = this.optionalAgentSelector(input)
+    const fullPage = input['fullPage'] === true
+    if (!selector && !fullPage) return contents.capturePage()
+    const debuggerSession = contents.debugger
+    const attachedHere = !debuggerSession.isAttached()
+    try {
+      if (attachedHere) debuggerSession.attach('1.3')
+      await debuggerSession.sendCommand('Page.enable').catch(() => undefined)
+      let clip: { x: number; y: number; width: number; height: number; scale: number }
+      if (selector) {
+        const rect = asObject(await this.runAgentScript(contents, agentElementRectScript(selector)))
+        if (!rect) throw new Error('the element could not be measured')
+        clip = {
+          x: Number(rect['x']),
+          y: Number(rect['y']),
+          width: Number(rect['width']),
+          height: Number(rect['height']),
+          scale: 1
+        }
+      } else {
+        const metrics = asObject(await debuggerSession.sendCommand('Page.getLayoutMetrics'))
+        const size = asObject(metrics?.['cssContentSize']) ?? asObject(metrics?.['contentSize'])
+        if (!size) throw new Error('the page size is unavailable')
+        clip = {
+          x: 0,
+          y: 0,
+          width: Number(size['width']),
+          height: Number(size['height']),
+          scale: 1
+        }
+      }
+      const captured = asObject(
+        await debuggerSession.sendCommand('Page.captureScreenshot', {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip
+        })
+      )
+      const data = typeof captured?.['data'] === 'string' ? captured['data'] : ''
+      if (data.length === 0) throw new Error('the capture returned no image')
+      const image = nativeImage.createFromBuffer(Buffer.from(data, 'base64'))
+      return image.isEmpty() ? contents.capturePage() : image
+    } catch (error) {
+      Logger.dev('A full-page browser capture fell back to the viewport:', error)
+      return contents.capturePage()
+    } finally {
+      if (attachedHere && debuggerSession.isAttached()) debuggerSession.detach()
     }
   }
 
@@ -8204,6 +8488,184 @@ export class BrowserService {
     return conversationScopeId(projectId, threadId, assistantId)
   }
 
+  /**
+   * Run one page-side expression, with a readable failure.
+   *
+   * `executeJavaScript` rejects with the page's own exception text, which is
+   * useless to a model unless it is told what it was trying to do. A page that has
+   * already navigated away rejects too, and that is a real answer rather than a
+   * crash of the whole turn.
+   */
+  private async runAgentScript(contents: WebContents, script: string): Promise<unknown> {
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+    try {
+      return await contents.executeJavaScript(script)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `The page could not be read: ${message.slice(0, MAX_TRANSPORT_ERROR_LENGTH)}`,
+        { cause: error }
+      )
+    }
+  }
+
+  /**
+   * The element an action addresses: a snapshot reference, or a CSS selector.
+   *
+   * A reference is an attribute the page carries, so it is turned into a selector
+   * here and every later step works on a selector alone. That keeps one code path
+   * for both spellings, and a reference the page no longer has simply fails to
+   * resolve instead of acting on something else.
+   */
+  private agentSelector(input: Record<string, unknown>): string {
+    const reference = input['ref']
+    if (reference !== undefined) {
+      if (typeof reference !== 'string') {
+        throw new TypeError('ref must be the reference string a snapshot reported, such as "r12"')
+      }
+      const trimmed = reference.trim()
+      if (!/^r\d{1,6}$/u.test(trimmed)) {
+        throw new TypeError('ref must be a reference a snapshot reported, such as "r12"')
+      }
+      return `[${AGENT_REF_ATTRIBUTE}="${trimmed}"]`
+    }
+    if (input['selector'] === undefined) {
+      throw new TypeError('name the element to act on with ref (from a snapshot) or selector')
+    }
+    return this.requiredInputString(input, 'selector')
+  }
+
+  /** The element an optional action addresses, when it may address the page itself. */
+  private optionalAgentSelector(input: Record<string, unknown>): string | undefined {
+    if (input['ref'] === undefined && input['selector'] === undefined) return undefined
+    return this.agentSelector(input)
+  }
+
+  /** A whole number from tool input, clamped, with a default for an absent field. */
+  private agentBoundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+    return Math.max(min, Math.min(Math.round(value), max))
+  }
+
+  /** A signed offset from tool input, clamped to what a page could plausibly scroll. */
+  private agentSignedNumber(value: unknown, fallback: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+    return Math.max(-20000, Math.min(Math.round(value), 20000))
+  }
+
+  /**
+   * The point an action addresses: an element's centre, or explicit coordinates.
+   *
+   * Resolving an element to a point is what lets a click arrive as a pointer click
+   * instead of a DOM call, so the page's hover, focus, caret and pointer handlers
+   * all run exactly as they would for a person.
+   */
+  private async agentPointFrom(
+    input: Record<string, unknown>,
+    tab: BrowserTab,
+    label: 'point' | 'from' | 'to'
+  ): Promise<{ x: number; y: number }> {
+    const source = label === 'point' ? input : asObject(input[label])
+    if (!source) throw new TypeError(`${label} must carry x and y, or a selector/ref naming an element`)
+    const selector = this.optionalAgentSelector(source)
+    if (selector) {
+      const described = asObject(
+        await this.runAgentScript(tab.view.webContents, agentElementPointScript(selector))
+      )
+      if (described?.['found'] !== true) {
+        throw new Error(
+          `The element could not be reached: ${String(described?.['reason'] ?? 'not found')}`
+        )
+      }
+      return { x: Math.round(Number(described['x'])), y: Math.round(Number(described['y'])) }
+    }
+    const x = source['x']
+    const y = source['y']
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new TypeError(`${label} needs numeric x and y, or a selector/ref naming an element`)
+    }
+    return { x: Math.round(x), y: Math.round(y) }
+  }
+
+  /** Whether the element an approval was granted for has changed since. */
+  private async agentTargetChanged(
+    contents: WebContents,
+    selector: string,
+    reviewedTarget: BrowserActionTarget | null
+  ): Promise<boolean> {
+    if (!reviewedTarget) return false
+    const current = await contents.executeJavaScript(browserActionTargetScript(selector))
+    return JSON.stringify(current) !== JSON.stringify(reviewedTarget)
+  }
+
+  /**
+   * Click an element the way a pointer does, and say which way it landed.
+   *
+   * The pointer path is the real one: a move, a press and a release at the centre
+   * of the element, which is the sequence Chromium turns into a trusted click. An
+   * element a pointer cannot reach (hidden, or covered by an overlay) falls back to
+   * its own `click()`, reported as `via: "dom"` so a caller knows the difference.
+   */
+  private async clickAgentTarget(
+    tab: BrowserTab,
+    selector: string,
+    input: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const contents = tab.view.webContents
+    const clickCount = agentCount(input['clickCount'], 1, 3)
+    const modifiers = normalizeAgentModifiers(input['modifiers'])
+    const point = asObject(await this.runAgentScript(contents, agentElementPointScript(selector)))
+    if (point?.['found'] === true && point['coveredBy'] === null) {
+      const x = Math.round(Number(point['x']))
+      const y = Math.round(Number(point['y']))
+      await sendAgentMouse(contents, { action: 'click', x, y, clickCount, modifiers })
+      await this.paintAgentCursor(tab, { x, y }, true)
+      return { clicked: true, via: 'pointer', x, y, clickCount }
+    }
+    const fallback = asObject(await this.runAgentScript(contents, agentDomClickScript(selector))) ?? {}
+    return {
+      ...fallback,
+      via: 'dom',
+      ...(point?.['reason'] === undefined ? {} : { pointer: point['reason'] })
+    }
+  }
+
+  /** Draw the agent's own pointer at a point, so a capture shows where it acted. */
+  private async paintAgentCursor(
+    tab: BrowserTab,
+    point: { x: number; y: number },
+    press: boolean
+  ): Promise<void> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    try {
+      await contents.executeJavaScript(
+        agentCursorScript({ x: Math.round(point.x), y: Math.round(point.y), press, hide: false })
+      )
+    } catch (error) {
+      Logger.dev('The agent cursor overlay could not be drawn:', error)
+    }
+  }
+
+  /** Draw the agent's pointer on an element, when the element can be measured. */
+  private async paintAgentCursorAtElement(
+    tab: BrowserTab,
+    selector: string,
+    press: boolean
+  ): Promise<void> {
+    const described = asObject(
+      await this.runAgentScript(tab.view.webContents, agentElementPointScript(selector)).catch(
+        () => null
+      )
+    )
+    if (described?.['found'] !== true) return
+    await this.paintAgentCursor(
+      tab,
+      { x: Number(described['x']), y: Number(described['y']) },
+      press
+    )
+  }
+
   private requiredInputString(
     input: Record<string, unknown>,
     field: string,
@@ -8219,6 +8681,31 @@ export class BrowserService {
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+}
+
+/**
+ * The control description a page script reported, as a review target.
+ *
+ * The shape crosses a page boundary, so it is rebuilt field by field rather than
+ * trusted: a page that answers with something else yields `null`, which the review
+ * treats as an unidentified control.
+ */
+function asBrowserActionTarget(value: unknown): BrowserActionTarget | null {
+  const record = asObject(value)
+  if (!record) return null
+  const text = (field: string): string => (typeof record[field] === 'string' ? record[field] : '')
+  return {
+    tag: text('tag'),
+    type: text('type'),
+    role: text('role'),
+    label: text('label'),
+    name: text('name'),
+    href: text('href'),
+    download: record['download'] === true,
+    expanded: record['expanded'] === true,
+    formMethod: text('formMethod'),
+    formAction: text('formAction')
+  }
 }
 
 function safeOrigin(url: string): string {
