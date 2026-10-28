@@ -5,6 +5,10 @@
   import { createAttachmentKey } from 'svelte/attachments'
   import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import StudioSidebarResizeHandle from '$lib/components/specs/StudioSidebarResizeHandle.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
+  import CioLockOpen from '@pdslng/cio-icon/CioLockOpen.svelte'
+  import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
+  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
@@ -146,6 +150,33 @@
     edge: 'start' | 'end' | null
     trackId: string
   } | null = null
+  let releaseDrag: (() => void) | undefined
+  function captureDrag(event: PointerEvent): void {
+    releaseDrag?.()
+    const target = event.currentTarget as HTMLElement
+    const pointerId = event.pointerId
+    target.setPointerCapture(pointerId)
+    const offMove = on(window, 'pointermove', (next) => {
+      if (next.pointerId === pointerId) move(next)
+    })
+    const offUp = on(window, 'pointerup', (next) => {
+      if (next.pointerId === pointerId) finish(next)
+    })
+    const offCancel = on(window, 'pointercancel', (next) => {
+      if (next.pointerId === pointerId) finish(next, true)
+    })
+    releaseDrag = () => {
+      offMove()
+      offUp()
+      offCancel()
+      if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      releaseDrag = undefined
+    }
+  }
+  onMount(() => () => {
+    if (drag) editor.finishGesture(true)
+    releaseDrag?.()
+  })
   let scrubbing = false
   let gestureZoom = 1
   async function zoomAt(next: number, clientX?: number): Promise<void> {
@@ -207,7 +238,7 @@
     }
     editor.select({ kind: 'clip', id })
     editor.beginGesture()
-    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    captureDrag(event)
   }
   function startBand(
     event: PointerEvent,
@@ -227,7 +258,7 @@
     drag = { kind, id, index, x: event.clientX, start: from, end: to, edge, trackId: '' }
     editor.select(kind === 'caption' ? { kind, index } : { kind, id })
     editor.beginGesture()
-    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+    captureDrag(event)
   }
   function move(event: PointerEvent): void {
     if (!drag) return
@@ -245,7 +276,15 @@
           document
             .elementFromPoint(event.clientX, event.clientY)
             ?.closest<HTMLElement>('[data-video-track]')?.dataset.videoTrack ?? active.trackId
-        editor.moveClip(active.id, active.start + delta, track)
+        const source = editor.edit?.tracks.find((item) => item.id === active.trackId)
+        const destination = editor.edit?.tracks.find((item) => item.id === track)
+        editor.moveClip(
+          active.id,
+          active.start + delta,
+          destination && !destination.locked && destination.kind === source?.kind
+            ? track
+            : active.trackId
+        )
       }
     } else
       editor.updateGesture((doc, edit) => {
@@ -299,8 +338,7 @@
     if (!drag) return
     drag = null
     editor.finishGesture(cancel)
-    const target = event.currentTarget as HTMLElement
-    if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
+    releaseDrag?.()
   }
   function seekStart(event: PointerEvent): void {
     if (event.button !== 0) return
@@ -435,12 +473,6 @@
             data-video-track={track.id}
             role="group"
             aria-label={`${track.name} track controls`}
-            draggable="true"
-            title={`Drag to reorder ${track.name}`}
-            ondragstart={(event) => {
-              draggedTrack = track.id
-              event.dataTransfer?.setData('application/x-cio-video-track', track.id)
-            }}
             ondragover={(event) => {
               if (draggedTrack) event.preventDefault()
             }}
@@ -452,6 +484,18 @@
             }}
             ondragend={() => (draggedTrack = '')}
           >
+            <button
+              type="button"
+              draggable="true"
+              class="shrink-0 cursor-grab px-1 text-dimmed hover:text-foreground"
+              title={`Drag to reorder ${track.name}`}
+              aria-label={`Reorder ${track.name}`}
+              ondragstart={(event) => {
+                draggedTrack = track.id
+                event.dataTransfer?.setData('application/x-cio-video-track', track.id)
+              }}
+              ondragend={() => (draggedTrack = '')}><CioGrip size={12} /></button
+            >
             <input
               class="min-w-0 flex-1 bg-transparent text-[0.625rem] outline-none focus:bg-elevated"
               value={track.name}
@@ -463,18 +507,22 @@
                   if (target) target.name = event.currentTarget.value
                 })}
             />
-            {#each [{ key: 'locked', icon: CioLock, label: 'Lock' }, { key: 'hidden', icon: CioEye, label: 'Hide' }, { key: 'muted', icon: CioVolume, label: 'Mute' }] as control (control.key)}
+            {#each [{ key: 'locked', icon: CioLockOpen, activeIcon: CioLock, label: 'Lock', activeLabel: 'Unlock' }, { key: 'hidden', icon: CioEye, activeIcon: CioEyeOff, label: 'Hide', activeLabel: 'Show' }, { key: 'muted', icon: CioVolume, activeIcon: CioVolumeX, label: 'Mute', activeLabel: 'Unmute' }] as control (control.key)}
               {@const key = control.key as 'locked' | 'hidden' | 'muted'}
               <button
                 type="button"
                 class={[
-                  'flex h-5 w-5 shrink-0 items-center justify-center hover:bg-elevated',
+                  'flex h-6 w-6 shrink-0 items-center justify-center hover:bg-elevated',
                   track[key] ? 'text-primary' : 'text-dimmed'
                 ]}
-                title={`${track[key] ? 'Undo ' : ''}${control.label.toLowerCase()} ${track.name}`}
-                aria-label={`${control.label} ${track.name}`}
+                title={`${track[key] ? control.activeLabel : control.label} ${track.name}`}
+                aria-label={`${track[key] ? control.activeLabel : control.label} ${track.name}`}
+                data-track-control={key}
                 aria-pressed={track[key]}
-                onclick={() => toggleTrack(track.id, key)}><control.icon size={10} /></button
+                onclick={() => toggleTrack(track.id, key)}
+                >{#if track[key]}<control.activeIcon size={12} />{:else}<control.icon
+                    size={10}
+                  />{/if}</button
               >
             {/each}
             <StudioSidebarResizeHandle
@@ -594,10 +642,8 @@
                     editor.selection.id === clip.id}
                   title={`${asset?.name ?? 'Clip'} · ${videoTimecode(clip.start)} · drag to move; drag an edge to trim`}
                   aria-label={`${asset?.name ?? 'Clip'} at ${videoTimecode(clip.start)}`}
+                  ondragstart={(event) => event.preventDefault()}
                   onpointerdown={(event) => startClip(event, clip.id)}
-                  onpointermove={move}
-                  onpointerup={finish}
-                  onpointercancel={(event) => finish(event, true)}
                   onclick={() => editor.select({ kind: 'clip', id: clip.id })}
                   ondblclick={(event) => {
                     editor.seek(at(event))
@@ -611,12 +657,12 @@
                   {#each frameCells.filter((cell) => cell.clipId === clip.id) as cell (cell.key)}
                     {@const thumbnail = editor.frames.get(cell.key)}
                     {#if thumbnail}<img
+                        draggable="false"
                         class="pointer-events-none absolute inset-y-0 h-full object-cover opacity-70"
                         src={thumbnail.image}
                         alt=""
                         style:left={`${(cell.time - clip.start) * scale}px`}
                         style:width={`${Math.max(1, (cell.end - cell.time) * scale)}px`}
-                        draggable="false"
                       />{/if}
                   {/each}
                   {#if editor.waveforms[editor.waveformKey(clip)]}
@@ -674,9 +720,6 @@
                   style:height={`${trackHeight('captions') - 12}px`}
                   onpointerdown={(event) =>
                     startBand(event, 'caption', '', index, caption.start, caption.end)}
-                  onpointermove={move}
-                  onpointerup={finish}
-                  onpointercancel={(event) => finish(event, true)}
                   onclick={() => editor.select({ kind: 'caption', index }, caption.start)}
                 >
                   <span
@@ -725,9 +768,6 @@
                       region.start,
                       region.start + region.duration
                     )}
-                  onpointermove={move}
-                  onpointerup={finish}
-                  onpointercancel={(event) => finish(event, true)}
                   onclick={() => editor.select({ kind: 'region', id: region.id }, region.start)}
                 >
                   <span
