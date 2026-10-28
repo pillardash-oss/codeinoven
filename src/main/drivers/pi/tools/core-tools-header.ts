@@ -11,6 +11,7 @@ import {
   CIO_SPAWN_AGENT_TOOL_NAME
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
+import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
 import { unmanagedCuaShellReason } from '../../../../lib/agent-control-policy'
 import { sensitiveFileTargets } from '../../../../lib/sensitive-file-targets'
 import { CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME } from '../../../../lib/core-tools'
@@ -280,7 +281,8 @@ const CIO_SUBAGENT_PROMPT_GUIDELINES = [
   'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
   'When the user asks to split work across workers and wants to prompt those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead of ${CIO_SPAWN_AGENT_TOOL_NAME}: both can be monitored, but only Assignment workers can be prompted independently. Ask with cio_ask_user which the user wants when they have not already said, and do not ask again once they have.',
   'Every worker inherits the project rules you follow: scope its instructions to the files it owns, tell it to verify only those files (a project-wide check is forbidden for a worker), and never ask it to commit, stage or stash.',
-  'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
+  'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.',
+  'At most four sub-agents run at the same time and the fifth is refused, so keep the fan-out inside that and queue the remaining work behind it. Reach for a pawn agent (${PAWN_AGENT_TOOL_NAME}) only when the work genuinely needs five or more worker runs in flight at once and waiting for a free sub-agent slot would stall it, or when the user explicitly asks for pawns   then hand the overflow to a single pawn, never a batch of them, and never use a pawn to dodge the cap when the same work can simply run in sequence.'
 ]
 
 // Pi's own bundled system prompt opens with a "you are an assistant" framing

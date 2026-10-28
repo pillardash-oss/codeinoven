@@ -19,9 +19,9 @@ import { stringValue } from './pi-values'
  * Child sessions whose live transcript is retained in memory. Each entry is a
  * few dozen kilobytes for a long worker, and every entry is worth keeping for
  * as long as an open sub-agent tab might read it, so the map is bounded to the
- * recent few rather than the whole app session. Kept at the spawn cap
- * (CIO_SUBAGENT_MAX_CONCURRENT in the core-tools extension) so a fully saturated
- * fan-out still holds every running worker's transcript.
+ * recent few rather than the whole app session, with headroom over the spawn
+ * cap (CIO_SUBAGENT_MAX_CONCURRENT in the core-tools extension) because a
+ * worker's transcript is read until it settles.
  */
 const PI_CHILD_STREAM_MAX = 20
 
