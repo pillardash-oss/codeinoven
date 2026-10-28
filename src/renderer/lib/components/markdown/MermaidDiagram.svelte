@@ -218,12 +218,25 @@
   {/if}
 {/snippet}
 
+<!-- The reader's controls, in the header of the reading surface. The diagram
+     itself carries no chrome: hovering it is not a mode change in a full screen
+     reader, the tools sit where the surface's own tools sit. -->
+{#snippet fullscreenActions()}
+  <div
+    class="flex items-center gap-0.5 border border-border bg-elevated p-0.5"
+    role="group"
+    aria-label="Mermaid diagram controls"
+  >
+    {@render diagramControls(false, false)}
+  </div>
+{/snippet}
+
 <!-- The diagram is content of the message rather than a boxed widget beside it:
      no frame around it, no fixed height, and a control strip that appears while
      the diagram is under the pointer or holding focus. -->
 <div class="group/mermaid relative" {@attach renderDiagram(code.trim(), retryKey)}>
   <div
-    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5 opacity-0 shadow-sm transition-opacity duration-150 group-hover/mermaid:pointer-events-auto group-hover/mermaid:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-surface p-1 opacity-0 shadow-lg transition-opacity duration-150 group-hover/mermaid:pointer-events-auto group-hover/mermaid:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
     role="group"
     aria-label="Mermaid diagram controls"
   >
@@ -278,16 +291,10 @@
   placement="fullscreen"
   panelClass="bg-surface"
   contentClass="flex flex-col overflow-hidden p-0"
+  headerActions={fullscreenActions}
 >
   <div class="relative min-h-0 flex-1">
     {@render diagramContent(true)}
-    <div
-      class="absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5"
-      role="group"
-      aria-label="Mermaid diagram controls"
-    >
-      {@render diagramControls(false, false)}
-    </div>
   </div>
 </Modal>
 

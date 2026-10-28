@@ -679,23 +679,13 @@ body {
 }
 
 /* ─── Table controls (wrap, column resize) ──────────────────────────────── */
-/* Every table carries a small control rectangle at its top left. Both toggles
-   are opt-in and in memory only, so a wide table costs nothing until the reader
-   asks for one of them. */
+/* A table carries no strip of its own: its controls ride over it and appear on
+   hover, so the table sits flush in the message. Both toggles are opt-in and in
+   memory only, so a wide table costs nothing until the reader asks for one. */
 .markdown-body .md-table-block {
   display: flex;
   max-width: 100%;
   flex-direction: column;
-}
-
-.markdown-body .md-table-controls {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.125rem;
-  border: 1px solid var(--color-border);
-  background: var(--color-elevated);
-  padding: 0.0625rem;
 }
 
 .markdown-body .md-table-control {

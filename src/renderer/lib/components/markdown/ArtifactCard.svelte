@@ -189,107 +189,143 @@
      message does rather than inside a framed preview. -->
 <div bind:this={inlineHome} class="relative"></div>
 
+{#snippet viewToggle(withExpand: boolean)}
+  <div class="flex items-center" role="group" aria-label="{label} view">
+    <button
+      type="button"
+      class={[
+        'flex size-6 items-center justify-center transition-colors',
+        showSource ? 'text-dimmed hover:bg-overlay hover:text-foreground' : 'bg-overlay text-foreground'
+      ]}
+      aria-pressed={!showSource}
+      title="Show rendered {label} preview"
+      aria-label="Show rendered {label} preview"
+      onclick={() => (showSource = false)}
+    >
+      <CioEye size={13} />
+    </button>
+    <button
+      type="button"
+      class={[
+        'flex size-6 items-center justify-center transition-colors',
+        showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:bg-overlay hover:text-foreground'
+      ]}
+      aria-pressed={showSource}
+      title="Show {label} source"
+      aria-label="Show {label} source"
+      onclick={() => (showSource = true)}
+    >
+      <CioCode size={13} />
+    </button>
+  </div>
+  {#if showSource}
+    <button
+      class="flex size-6 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      aria-label={wrapToggleLabel(wrapped)}
+      title={wrapToggleLabel(wrapped)}
+      aria-pressed={wrapped}
+      onclick={() => wrapTextState.toggle()}
+    >
+      <CioWrapText size={13} class={wrapped ? 'text-primary' : ''} />
+    </button>
+  {/if}
+  <button
+    class="flex size-6 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+    aria-label="Copy {label} source"
+    title="Copy {label} source"
+    onclick={() => void copySource()}
+  >
+    {#if copied}
+      <CioCheck size={13} class="text-success" />
+    {:else}
+      <CioCopy size={13} />
+    {/if}
+  </button>
+  {#if withExpand}
+    <button
+      class="flex size-6 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      aria-label="Expand {label}"
+      title="Expand {label}"
+      onclick={() => (expanded = true)}
+    >
+      <CioMaximize size={13} />
+    </button>
+  {/if}
+{/snippet}
+
 <!-- The one surface. Rendered here first and moved to the viewer when it opens;
-     never rebuilt, so nothing inside it is lost on the way. -->
+     never rebuilt, so nothing inside it is lost on the way.
+
+     Both panes are mounted for the life of the card. The hidden one is taken out
+     of the flow and of the tab order rather than destroyed, so switching to the
+     source and back returns to the artifact the reader had already used, and the
+     swap can cross-fade instead of blinking. -->
 <div
   bind:this={surface}
   class={['group/md-artifact relative w-full', viewerOpen && 'h-full']}
   data-artifact-key={artifactKey}
 >
-  {#if showSource}
-    <div class={['[&>div]:border-0', viewerOpen && 'h-full']}>
+  <!-- In the conversation the controls ride on the artifact and appear while it is
+       under the pointer or holding focus, so the artifact reads as the content it
+       is instead of a widget with a toolbar. They are sticky as well: an artifact
+       taller than the window keeps its controls at the top of the conversation
+       while it scrolls under it, and they are marked `no-drag` because the strip
+       they meet there is the window's titlebar drag region. -->
+  {#if !viewerOpen}
+    <div class="pointer-events-none sticky top-3 z-30 h-0">
+      <div
+        class="titlebar-no-drag pointer-events-none ml-auto w-fit border border-border bg-surface p-1 opacity-0 shadow-lg transition-opacity duration-150 group-hover/md-artifact:pointer-events-auto group-hover/md-artifact:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+        role="group"
+        aria-label="{label} controls"
+      >
+        <div class="flex items-center gap-0.5">
+          {@render viewToggle(true)}
+        </div>
+      </div>
+    </div>
+  {/if}
+  <div class={['relative w-full', viewerOpen && 'h-full']}>
+    <div
+      class={[
+        'w-full transition-opacity duration-200 ease-out',
+        showSource
+          ? 'pointer-events-none absolute inset-0 overflow-hidden opacity-0'
+          : 'relative opacity-100',
+        viewerOpen && 'h-full'
+      ]}
+      inert={showSource}
+    >
+      <ArtifactInspector
+        {code}
+        {kind}
+        enabled={inspecting}
+        {artifactKey}
+        projectId={annotationScope?.projectId ?? ''}
+        threadId={annotationScope?.threadId ?? ''}
+        {picks}
+        editingId={inspectorEditingId}
+        onEditClosed={releaseFocusRequest}
+        {panZoom}
+        fill={viewerOpen}
+        onExit={() => {
+          releaseFocusRequest()
+          manualInspecting = false
+        }}
+      />
+    </div>
+    <div
+      class={[
+        'w-full transition-opacity duration-200 ease-out',
+        showSource ? 'relative opacity-100' : 'pointer-events-none absolute inset-0 overflow-hidden opacity-0',
+        viewerOpen && 'h-full'
+      ]}
+      inert={!showSource}
+    >
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
-  {:else}
-    <ArtifactInspector
-      {code}
-      {kind}
-      enabled={inspecting}
-      {artifactKey}
-      projectId={annotationScope?.projectId ?? ''}
-      threadId={annotationScope?.threadId ?? ''}
-      {picks}
-      editingId={inspectorEditingId}
-      onEditClosed={releaseFocusRequest}
-      {panZoom}
-      fill={viewerOpen}
-      onExit={() => {
-        releaseFocusRequest()
-        manualInspecting = false
-      }}
-    />
-  {/if}
-
-  <!-- The artifact's controls ride on top of it and appear while it is under the
-       pointer or holding focus, so the artifact reads as the content it is
-       instead of a widget with a toolbar. -->
-  <div
-    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5 opacity-0 shadow-sm transition-opacity duration-150 group-hover/md-artifact:pointer-events-auto group-hover/md-artifact:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
-    role="group"
-    aria-label="{label} controls"
-  >
-    <div class="flex items-center" role="group" aria-label="{label} view">
-      <button
-        type="button"
-        class={[
-          'flex items-center p-1 transition-colors',
-          showSource ? 'text-dimmed hover:text-foreground' : 'bg-overlay text-foreground'
-        ]}
-        aria-pressed={!showSource}
-        title="Show rendered {label} preview"
-        aria-label="Show rendered {label} preview"
-        onclick={() => (showSource = false)}
-      >
-        <CioEye size={13} />
-      </button>
-      <button
-        type="button"
-        class={[
-          'flex items-center p-1 transition-colors',
-          showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:text-foreground'
-        ]}
-        aria-pressed={showSource}
-        title="Show {label} source"
-        aria-label="Show {label} source"
-        onclick={() => (showSource = true)}
-      >
-        <CioCode size={13} />
-      </button>
-    </div>
-    {#if showSource}
-      <button
-        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-        aria-label={wrapToggleLabel(wrapped)}
-        title={wrapToggleLabel(wrapped)}
-        aria-pressed={wrapped}
-        onclick={() => wrapTextState.toggle()}
-      >
-        <CioWrapText size={13} class={wrapped ? 'text-primary' : ''} />
-      </button>
-    {/if}
-    <button
-      class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-      aria-label="Copy {label} source"
-      title="Copy {label} source"
-      onclick={() => void copySource()}
-    >
-      {#if copied}
-        <CioCheck size={13} class="text-success" />
-      {:else}
-        <CioCopy size={13} />
-      {/if}
-    </button>
-    {#if !viewerOpen}
-      <button
-        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-        aria-label="Expand {label}"
-        title="Expand {label}"
-        onclick={() => (expanded = true)}
-      >
-        <CioMaximize size={13} />
-      </button>
-    {/if}
   </div>
+
+
 </div>
 
 {#snippet inspectAction()}
@@ -311,6 +347,21 @@
   </button>
 {/snippet}
 
+{#snippet viewerActions()}
+  <div class="flex items-center gap-1.5">
+    <div
+      class="flex items-center gap-0.5 border border-border bg-elevated p-1"
+      role="group"
+      aria-label="{label} controls"
+    >
+      {@render viewToggle(false)}
+    </div>
+    {#if canInspect}
+      {@render inspectAction()}
+    {/if}
+  </div>
+{/snippet}
+
 <Modal
   open={viewerOpen}
   title={label}
@@ -326,7 +377,7 @@
   placement="fullscreen"
   panelClass="bg-app"
   contentClass="flex flex-col overflow-hidden p-0"
-  headerActions={canInspect ? inspectAction : undefined}
+  headerActions={viewerActions}
 >
   <!-- The viewer's own zoom surface, and the artifact's second home. The
        artifact inside it is the only element that carries the transform, so a

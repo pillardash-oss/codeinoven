@@ -37,5 +37,9 @@ Write a complete self-contained document smaller than 64000 UTF-8 bytes. Inline 
 
 Use live tokens from src/renderer/app.css by default: var(--color-app), var(--color-surface), var(--color-elevated), var(--color-foreground), var(--color-muted), var(--color-border), var(--color-primary), var(--color-on-primary), and semantic status colors. Use var(--font-app) and var(--font-mono), inherit base font size/weight, and use rem for typography and spacing. SVG fills/strokes can use tokens; text can use currentColor. Do not redefine app tokens or hardcode a light/dark palette. Use different colors or typography only when the user requests them. Raster image/video pixels cannot react to CSS theme changes.
 
+Match the app's shape language: CodeInOven has no rounded corners. Never write border-radius, a rounded pill, a rounded card or a rounded button. Structure comes from a 1px border in var(--color-border) on var(--color-surface) or var(--color-elevated), an uppercase micro-label in var(--color-muted) for a section header, and one rule per table row and none per column. A shadow belongs only to a surface that genuinely floats. The app chamfers interactive elements to 2px and squares everything else, so an authored radius is both overridden and off-brand.
+
+Do not frame the artifact itself. The app draws it flush in the conversation with no card, border or padding of its own, so a page that opens with its own outer box reads as a second box inside the message. Open with the content and let the app own the surrounding chrome.
+
 Generation and presentation are separate responsibilities. The model creates the asset and supplies its path. The app renders it. Do not open a browser tab as a substitute for inline delivery.
 `

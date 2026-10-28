@@ -544,7 +544,20 @@
 .${ARTIFACT_STAGE_CLASS} { position: relative; box-sizing: border-box; background: var(--color-app); font-family: var(--font-app); color: var(--color-foreground); }
 :host([data-fill]) .${ARTIFACT_STAGE_CLASS} { height: 100%; }
 .${ARTIFACT_STAGE_CLASS} img, .${ARTIFACT_STAGE_CLASS} video { max-width: 100%; height: auto; }
-:host([data-inspecting]) .${ARTIFACT_STAGE_CLASS}, :host([data-inspecting]) .${ARTIFACT_STAGE_CLASS} * { cursor: pointer !important; }`
+/* A document's own page padding and margin belong to a page. In the conversation
+   the message column already owns the gutter, so a page's body padding would be
+   a second inset inside it and a page's bottom padding would be a band of empty
+   space under the last line. The viewer keeps them: there the artifact really is
+   the page. */
+:host(:not([data-fill])) .${ARTIFACT_STAGE_CLASS} { margin: 0 !important; padding: 0 !important; }
+:host([data-inspecting]) .${ARTIFACT_STAGE_CLASS}, :host([data-inspecting]) .${ARTIFACT_STAGE_CLASS} * { cursor: pointer !important; }
+/* The app's square language, restated for the artifact's own document. A shadow
+   tree is a document of its own, so the app's corner rules do not reach into it,
+   and an authored pill or card would otherwise be the one rounded surface in the
+   whole application. A control keeps the same 2px chamfer the app gives its own
+   controls; everything else is a right angle. */
+* { border-radius: 0 !important; }
+button, input, textarea, select, [role='menu'], [role='dialog'] { border-radius: 2px !important; }`
 
   /**
    * A picture is centred and contained; a document is laid out.
@@ -555,7 +568,8 @@
    */
   const kindSheet = $derived(
     kind === 'svg'
-      ? `.${ARTIFACT_STAGE_CLASS} { display: flex; align-items: center; justify-content: center; padding: 1.25rem; }
+      ? `:host([data-fill]) .${ARTIFACT_STAGE_CLASS} { padding: 1.25rem; }
+.${ARTIFACT_STAGE_CLASS} { display: flex; align-items: center; justify-content: center; }
 .${ARTIFACT_STAGE_CLASS} > svg { max-width: 100%; width: 100%; height: auto; fill: currentColor; }
 :host([data-fill]) .${ARTIFACT_STAGE_CLASS} > svg { width: auto; max-height: 100%; }`
       : `:host([data-fill]) .${ARTIFACT_STAGE_CLASS} { overflow: auto; }`

@@ -147,9 +147,22 @@
   {/if}
 {/snippet}
 
+<!-- The reader's controls, in the header of the reading surface: a table opened
+     full screen is read there, so its tools sit where the surface's tools sit
+     rather than on a strip of their own above the rows. -->
+{#snippet fullscreenActions()}
+  <div
+    class="flex items-center gap-0.5 border border-border bg-elevated p-0.5"
+    role="group"
+    aria-label="Table controls"
+  >
+    {@render tableControls(true, false)}
+  </div>
+{/snippet}
+
 <div class="md-table-block group/md-table relative">
   <div
-    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5 opacity-0 shadow-sm transition-opacity duration-150 group-hover/md-table:pointer-events-auto group-hover/md-table:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-surface p-1 opacity-0 shadow-lg transition-opacity duration-150 group-hover/md-table:pointer-events-auto group-hover/md-table:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
     role="group"
     aria-label="Table controls"
   >
@@ -176,11 +189,9 @@
   placement="fullscreen"
   panelClass="bg-surface"
   contentClass="flex min-h-0 flex-col overflow-hidden p-0"
+  headerActions={fullscreenActions}
 >
   <div class="markdown-body md-table-fullscreen">
-    <div class="md-table-controls" role="group" aria-label="Table controls">
-      {@render tableControls(true, false)}
-    </div>
     <div
       class={[
         'md-table-wrap md-table-fullscreen-scroll',
