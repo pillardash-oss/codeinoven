@@ -814,6 +814,7 @@
         <BrowserCompositionTransport
           {tabId}
           composition={pageState.composition}
+          compact={!fullscreen}
           titlebar={compositionPlayer && !playerInEditor}
           projectId={pageState.projectId}
           threadId={pageState.threadId}

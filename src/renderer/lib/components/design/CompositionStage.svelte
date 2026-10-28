@@ -342,6 +342,7 @@
   <BrowserCompositionTransport
     tabId={placedTab.tabId}
     composition={placedTab}
+    compact
     projectId={placedTab.projectId}
     threadId={placedTab.threadId}
     active={active && placed}

@@ -19,7 +19,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
   import { snapVideoFrame } from '$shared/video/frame-grid'
-  import { videoTimecode } from '$shared/video/timeline'
+  import { videoClockLabel, videoTimecode } from '$shared/video/timeline'
   import {
     compositionFrameFocusState,
     type CompositionFrameFocusRequest
@@ -41,6 +41,8 @@
   interface Props {
     tabId: string
     titlebar?: boolean
+    /** Short clock labels and tighter spacing for sidebar playback. */
+    compact?: boolean
     /** The composition the tab is showing, from `browser:state`. */
     composition: BrowserCompositionTab
     /**
@@ -69,7 +71,8 @@
     pauseWhenHidden = false,
     projectId,
     threadId,
-    titlebar = false
+    titlebar = false,
+    compact = false
   }: Props = $props()
 
   /** How often the scrubber catches up with the page it is driving. */
@@ -498,7 +501,8 @@
 
 <div
   class={[
-    'titlebar-no-drag flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2',
+    'titlebar-no-drag flex shrink-0 items-center border-b border-border bg-surface px-2',
+    compact ? 'gap-1' : 'gap-2',
     titlebar ? 'h-10' : 'h-9'
   ]}
   role="group"
@@ -544,11 +548,15 @@
   >
     <CioForward size={14} />
   </button>
-  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed"
-    >{format(shown)} · f{Math.round(shown * composition.fps)}</span
+  <span
+    class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed"
+    title={`${format(shown)} · frame ${Math.round(shown * composition.fps)}`}
+    >{compact
+      ? videoClockLabel(shown)
+      : `${format(shown)} · f${Math.round(shown * composition.fps)}`}</span
   >
   <SeekBar
-    class="min-w-0 flex-1"
+    class={compact ? 'min-w-12 flex-1' : 'min-w-0 flex-1'}
     value={shown}
     min={0}
     max={duration}
@@ -562,7 +570,9 @@
     }}
     onCommit={() => commitScrub()}
   />
-  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed">{format(duration)}</span>
+  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed" title={format(duration)}
+    >{compact ? videoClockLabel(duration) : format(duration)}</span
+  >
   <button
     type="button"
     class={[
