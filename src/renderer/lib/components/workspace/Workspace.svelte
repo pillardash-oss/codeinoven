@@ -146,7 +146,6 @@
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
-  import { formatChangeSummary } from '$shared/change-breakdown'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import { fullscreenFileChatHost } from '$lib/fullscreen-file-chat-portal'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -1247,11 +1246,10 @@
       const changeFileCount = threadChangesState.fileCount
       const changeTotals = threadChangesState.totals
       const hasRecordedChanges = threadChangesState.current !== null && changeFileCount > 0
-      // The stored label doubles as the rail's tooltip, so it carries the same
-      // summary the hover flyout draws when a change set exists.
-      const changeLabel = hasRecordedChanges
-        ? `Changes · ${formatChangeSummary(threadChangesState.current?.breakdown, changeTotals, changeFileCount)}`
-        : 'Changes'
+      // The label doubles as the rail's tooltip and accessible name. The line
+      // changes live in the hover flyout, so repeating them here would show the
+      // same numbers twice on one hover.
+      const changeLabel = 'Changes'
       // While the turn runs, the icon itself carries the running insertions and
       // deletions as plain, colour-coded text on one line ("+128/-24"), so the
       // change is visible without a hover and without a badge frame.
