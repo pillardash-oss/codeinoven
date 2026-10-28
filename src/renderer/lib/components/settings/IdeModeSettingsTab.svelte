@@ -225,7 +225,7 @@
       await openSetupConversation(
         workspaceState.activeProject ?? null,
         server ? `Set up ${server.name} for IDE Mode` : 'Set up a language server',
-        server ? ideServerSetupRequest(server, servers) : ideSetupRequest(servers),
+        server ? ideServerSetupRequest(server.name) : ideSetupRequest(),
         'cio-orchestrate'
       )
     } catch (reason) {
