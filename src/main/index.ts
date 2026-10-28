@@ -26,7 +26,7 @@ import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar
 import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
-import { startupTelemetry } from './system/startup-telemetry'
+import { startupTelemetry, type StartupStep } from './system/startup-telemetry'
 import { startupBudgetViolation } from './system/startup-budget'
 import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
@@ -91,6 +91,24 @@ app.setName(APP_NAME)
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.
 app.userAgentFallback = brandUserAgent(app.userAgentFallback, process.versions.chrome)
+// Windows Hello is the platform authenticator on Windows, and Chromium reports it as
+// available without the app arming anything   unlike macOS, where
+// `installPlatformAuthenticator` has to ask first. A site offering "sign in with a
+// passkey" is therefore taken up on Windows and nowhere else in development, and the
+// ceremony is one the app cannot finish the way a real browser does: the prompt is a
+// Windows security dialog raised over an embedded page, and `accounts.google.com`
+// answers it with "This browser or app may not be secure" and refuses the sign-in.
+//
+// `WebAuthenticationUseNativeWinApi` is Chromium's own bridge to that Windows API, so
+// turning it off makes the platform authenticator unavailable and leaves such a page
+// with the password form it has always worked with. Hardware security keys keep
+// working, because their transport is built independently of this bridge. The
+// alternatives are worse: Electron delivers no PIN UI for a key that needs one, and an
+// embedded page has no way to present the Windows dialog it triggered.
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'WebAuthenticationUseNativeWinApi')
+  Logger.info('Windows Hello passkey bridge disabled, so sign-in pages fall back to a password')
+}
 
 configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
@@ -236,6 +254,46 @@ function releaseFeaturesAfterBootFailure(): void {
 }
 
 /**
+ * The GPU features Chromium actually enabled, attached to a paint that missed.
+ *
+ * Both startup paint barriers are Chromium's own first-frame work, so a boot that
+ * blows them on one machine and not another is usually a compositing difference
+ * rather than app code. A software-rendered VM reports
+ * `gpuCompositing: 'disabled_software'` here, which is what separates "chase a
+ * bundle-size regression" from "this machine has no GPU path". Without it the
+ * report only says how long the frame took, which is the question, not the answer.
+ */
+function paintPathFeatures(): Record<string, string> {
+  try {
+    const status = app.getGPUFeatureStatus()
+    return {
+      gpuCompositing: status.gpu_compositing,
+      canvas2d: status['2d_canvas'],
+      multipleRasterThreads: status.multiple_raster_threads
+    }
+  } catch {
+    // A GPU status that cannot be read must never replace the report it explains.
+    return {}
+  }
+}
+
+/**
+ * Time one concurrent warm-up task into the boot telemetry.
+ *
+ * Storage, the database and the platform probe run together, so the phase delta
+ * covering them is one number for three workloads. Naming each task is what
+ * turns "startup took six seconds" into "the database open took six seconds".
+ */
+async function trackStartupStep<T>(step: StartupStep, work: Promise<T>): Promise<T> {
+  const finish = startupTelemetry.beginStep(step)
+  try {
+    return await work
+  } finally {
+    finish()
+  }
+}
+
+/**
  * A packaged smoke pass proves more than script execution: the document must
  * load, Electron must report a rendered visual frame, and application
  * hydration must complete. The guard makes concurrent milestone callbacks
@@ -273,13 +331,26 @@ async function completeStartupIfReady(): Promise<void> {
     // smoke. It is recorded, never fatal: a slow machine, a cold cache and a
     // concurrently-running agent build all legitimately boot slowly, and the
     // app must still open. The hard failure lives in the packaged smoke gate.
-    const violation = startupBudgetViolation(startupTelemetry.snapshot())
+    const startupSnapshot = startupTelemetry.snapshot()
+    const violation = startupBudgetViolation(startupSnapshot)
     if (violation) {
       Logger.error('Startup exceeded the first-paint budget', {
         phase: violation.phase,
         atMs: Math.round(violation.atMs),
         overByMs: Math.round(violation.overByMs),
-        budgetMs: violation.budgetMs
+        budgetMs: violation.budgetMs,
+        ...paintPathFeatures(),
+        // The error a slow machine writes has to name the work that owned the
+        // time. Without this line the next reader re-derives the culprit by
+        // hand from a phase delta that several concurrent tasks share.
+        slowestSteps: [...startupSnapshot.steps]
+          .sort((left, right) => right.durationMs - left.durationMs)
+          .slice(0, 3)
+          .map((record) => ({
+            step: record.step,
+            startedAtMs: Math.round(record.startedAtMs),
+            durationMs: Math.round(record.durationMs)
+          }))
       })
     }
   }
@@ -881,7 +952,12 @@ void app
         isProduction
       )
       startupTelemetry.mark('splash:created')
-      splashOutcome = await splashVisualReady
+      // The barrier is waited on so the splash has a frame before synchronous
+      // database work can starve it. Waiting is therefore real elapsed time that
+      // the phase deltas would otherwise attribute to storage, so it is timed as
+      // its own step: on a machine where the splash never paints it costs the
+      // whole 5 s budget, and that has to be visible as what it is.
+      splashOutcome = await trackStartupStep('splash:barrier', splashVisualReady)
       if (splashOutcome === 'ready') {
         startupTelemetry.mark('splash:visualReady')
       }
@@ -903,7 +979,8 @@ void app
     logConfiguredDataRoot()
     if (!startHidden && splashOutcome !== 'ready') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
-        outcome: splashOutcome
+        outcome: splashOutcome,
+        ...paintPathFeatures()
       })
     }
 
@@ -915,11 +992,11 @@ void app
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([
       storage.initialize(),
-      database.init(),
+      trackStartupStep('database:init', database.init()),
       // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
       // here guarantees the flag is ready before `createWindow()` runs without
       // serializing behind the heavier startup work.
-      warmTrafficLightDetection()
+      trackStartupStep('trafficLight:warm', warmTrafficLightDetection())
     ])
     if (state.startupRecovery) return
     // Analytics never delays window creation and never runs in a probe.

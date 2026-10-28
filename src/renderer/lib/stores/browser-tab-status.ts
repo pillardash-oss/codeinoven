@@ -1,3 +1,4 @@
+import { captureActivities } from '$shared/media-activity'
 /**
  * Pure status rules for the audio and capture indicators a browser tab shows in
  * place of its favicon. Main reports the raw state through `browser:state`; this
@@ -13,6 +14,9 @@ export interface BrowserTabRuntime {
   muted: boolean
   /** True while the page holds a live microphone, camera or screen capture. */
   capturing: boolean
+  microphoneActive?: boolean
+  cameraActive?: boolean
+  screenActive?: boolean
 }
 
 /** The state of a tab nothing has been reported for, shared so an unknown tab
@@ -28,7 +32,7 @@ export const IDLE_BROWSER_TAB_RUNTIME: BrowserTabRuntime = Object.freeze({
  * - `capture`: the tab is recording (microphone, camera or screen).
  * - `audio`: the tab is playing audio, or the user muted it and can unmute it.
  */
-export type BrowserTabIndicator = 'capture' | 'audio' | 'peek'
+export type BrowserTabIndicator = 'microphone' | 'camera' | 'screen' | 'audio' | 'peek'
 
 /**
  * Which indicators a tab shows, in paint order. Capture leads, because a tab
@@ -43,7 +47,7 @@ export function browserTabIndicators(
 ): BrowserTabIndicator[] {
   const indicators: BrowserTabIndicator[] = []
   if (peek) indicators.push('peek')
-  if (runtime.capturing) indicators.push('capture')
+  for (const kind of captureActivities(runtime)) if (kind !== 'audio') indicators.push(kind)
   if (runtime.audible || runtime.muted) indicators.push('audio')
   return indicators
 }
@@ -61,7 +65,15 @@ export const BROWSER_TAB_CAPTURE_LABEL = 'This tab is recording audio or screen'
  * the tab's icon-to-title spacing.
  */
 export function browserTabIndicatorSlotClass(count: number): string {
-  return count > 2 ? 'w-[2.75rem]' : count > 1 ? 'w-[1.625rem]' : 'w-3'
+  return count > 4
+    ? 'w-[5rem]'
+    : count > 3
+      ? 'w-[3.875rem]'
+      : count > 2
+        ? 'w-[2.75rem]'
+        : count > 1
+          ? 'w-[1.625rem]'
+          : 'w-3'
 }
 
 /** Accessible name and tooltip of the audio indicator, which is also the mute

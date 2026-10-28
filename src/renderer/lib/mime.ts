@@ -85,9 +85,9 @@ export function isImageMime(mime: string): boolean {
   return mime.startsWith('image/')
 }
 
-/** SVG is `image/svg+xml` but it must NOT be served through the privileged
- *  `appfile://` scheme (project-controlled active XML). It is rendered natively
- *  in the renderer via a blob URL instead. */
+/** SVG is `image/svg+xml`. It streams through `appfile://` like any other image
+ *  and is only ever mounted in an `<img>`, which never runs its scripts; the
+ *  response also carries a `default-src 'none'` CSP. */
 export function isSvgMime(mime: string): boolean {
   return mime === 'image/svg+xml'
 }

@@ -373,9 +373,9 @@ class AssistantsState {
 
   /**
    * Open a form-created assistant's first conversation. The assistant already
-   * carries the name and personality the user typed, so this posts the opening
-   * turn in which it greets them, asks what to call them, and says where a task
-   * goes.
+   * carries the name and description the user typed, so this posts the opening
+   * turn in which it greets them, asks how they want it to behave and what to call
+   * them, and says where a task goes.
    */
   async startManualSetup(assistantId: string): Promise<void> {
     await invoke('assistant:startManualSetup', assistantId)

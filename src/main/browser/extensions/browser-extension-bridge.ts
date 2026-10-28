@@ -41,6 +41,10 @@ import {
   type UserScriptFileRequest,
   type UserScriptFileResult
 } from './browser-extension-user-scripts'
+import type {
+  BrowserExtensionCookie,
+  BrowserExtensionCookieFilter
+} from './browser-extension-cookies'
 
 /**
  * How often the mailbox is read.
@@ -185,6 +189,31 @@ export interface BrowserExtensionBridgeDeps {
    * closes every port.
    */
   nativeMessaging?: BrowserExtensionNativeMessaging
+  /**
+   * One `chrome.downloads` call an extension made about a download it saw.
+   *
+   * The `downloads` permission asks its owner to stop or keep the browser's own
+   * transfer, so the answer is the download manager's to give; this is only the
+   * way the call crosses from the worker to it.
+   */
+  downloadCommand?: (command: BrowserExtensionDownloadCommand) => void
+  /**
+   * One `chrome.cookies` query an extension made.
+   *
+   * Electron compiles the namespace out and never fires it, so a download capture
+   * that needs the site's cookies to fetch a file cannot get them from the worker.
+   * The answer can only come from the session of the jar the extension runs in,
+   * which is why the service supplies this rather than the bridge reading a
+   * session itself.
+   */
+  cookieRequest?: (request: BrowserExtensionCookieRequest) => Promise<BrowserExtensionCookieResult>
+  /**
+   * One of the extension's own pages a worker asked the app to open.
+   *
+   * `chrome.runtime.openOptionsPage` has no runtime implementation here: the app
+   * owns the window and the jar, so only it can put the page on screen.
+   */
+  extensionPageRequest?: (request: BrowserExtensionPageRequest) => Promise<{ error?: string }>
 }
 
 /** Chromium's details for the install/update event the app synthesizes. */
@@ -367,6 +396,76 @@ const MAX_NATIVE_HOST_NAME_LENGTH = 256
 /** A port id is the app's own UUID, so anything longer is not one of ours. */
 const MAX_NATIVE_PORT_ID_LENGTH = 64
 
+/** Whether an unknown value from the wire is a usable download command. Every
+ *  field is worker-supplied, so the method is checked against what the app can
+ *  actually do and the id against what a download id can be before either is
+ *  handed to the download manager. */
+export function toDownloadCommand(value: unknown): BrowserExtensionDownloadCommand | null {
+  const record = asRecord(value)
+  const method = record['method']
+  if (method !== 'cancel' && method !== 'pause' && method !== 'resume' && method !== 'erase') {
+    return null
+  }
+  const id = record['id']
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return null
+  return { method, id }
+}
+
+/** Whether an unknown value from the wire names a request the app can answer. A
+ *  request id the worker could not have minted is dropped rather than answered,
+ *  because answering it would post a command nothing is listening for. */
+function isRequestId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+/** One filter text the wire carried, or undefined when it is not a usable value. */
+function toFilterText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= MAX_COOKIE_FILTER_TEXT_LENGTH
+    ? value
+    : undefined
+}
+
+/** One boolean filter field the wire carried, or undefined when it is not one. */
+function toFilterFlag(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/** Whether an unknown value from the wire is a usable cookie query. Every field
+ *  is worker-supplied, so a key of the wrong type is dropped instead of being
+ *  handed to the session's own filter. */
+export function toCookieRequest(value: unknown): BrowserExtensionCookieRequest | null {
+  const record = asRecord(value)
+  const requestId = record['requestId']
+  if (!isRequestId(requestId)) return null
+  const rawFilter = record['filter']
+  if (typeof rawFilter !== 'object' || rawFilter === null || Array.isArray(rawFilter)) return null
+  const source = asRecord(rawFilter)
+  const filter: BrowserExtensionCookieFilter = {}
+  const url = toFilterText(source['url'])
+  if (url !== undefined) filter.url = url
+  const name = toFilterText(source['name'])
+  if (name !== undefined) filter.name = name
+  const domain = toFilterText(source['domain'])
+  if (domain !== undefined) filter.domain = domain
+  const path = toFilterText(source['path'])
+  if (path !== undefined) filter.path = path
+  const secure = toFilterFlag(source['secure'])
+  if (secure !== undefined) filter.secure = secure
+  const session = toFilterFlag(source['session'])
+  if (session !== undefined) filter.session = session
+  return { requestId, filter }
+}
+
+/** Whether an unknown value from the wire is a usable page request. Only the one
+ *  page the app can show is accepted, so a worker cannot ask for a surface the
+ *  host does not implement. */
+export function toPageRequest(value: unknown): BrowserExtensionPageRequest | null {
+  const record = asRecord(value)
+  const requestId = record['requestId']
+  if (!isRequestId(requestId)) return null
+  return record['page'] === 'options' ? { requestId, page: 'options' } : null
+}
+
 /** Whether an unknown value from the wire is a usable native messaging request. */
 export function toNativeRequest(value: unknown): BrowserExtensionNativeRequest | null {
   const record = asRecord(value)
@@ -401,6 +500,36 @@ export function toNativeRequest(value: unknown): BrowserExtensionNativeRequest |
   return null
 }
 
+/** One `chrome.downloads` call an extension made, carried from its worker to
+ *  main through the bridge page. `id` is the numeric id the app handed that
+ *  extension in a download item. */
+export interface BrowserExtensionDownloadCommand {
+  method: 'cancel' | 'pause' | 'resume' | 'erase'
+  id: number
+}
+
+/** One `chrome.cookies` query the worker left for the app, already checked so a
+ *  malformed filter cannot widen a read beyond the jar it names. */
+export interface BrowserExtensionCookieRequest {
+  requestId: number
+  filter: BrowserExtensionCookieFilter
+}
+
+/** What the app answers a cookie query with: the jar's cookies, or the reason it
+ *  could not answer. The worker is waiting on one of the two. */
+export type BrowserExtensionCookieResult = { cookies: BrowserExtensionCookie[] } | { error: string }
+
+/** One extension page the worker asked the app to open. `options` is the page
+ *  `chrome.runtime.openOptionsPage` names, and the only one defined here. */
+export interface BrowserExtensionPageRequest {
+  requestId: number
+  page: 'options'
+}
+
+/** The longest text a cookie filter may carry. A value longer than any URL or
+ *  cookie name the app will ever match is not worth holding in a poll loop. */
+const MAX_COOKIE_FILTER_TEXT_LENGTH = 4096
+
 /** One delivery from the app's native port manager, as the worker reads it. */
 export function nativeMessagingCommand(delivery: NativeMessagingDelivery): Record<string, unknown> {
   switch (delivery.kind) {
@@ -424,6 +553,9 @@ export class BrowserExtensionBridge {
   private draining = false
   private readingFrames = false
   private answeringNative = false
+  private answeringDownloads = false
+  private answeringCookies = false
+  private answeringPages = false
   private disposed = false
   /** The worker life the last snapshot came from. */
   private generation = ''
@@ -477,6 +609,9 @@ export class BrowserExtensionBridge {
           void this.drain()
           void this.answerFrameRequests()
           void this.answerNativeRequests()
+          void this.answerDownloadRequests()
+          void this.answerCookieRequests()
+          void this.answerPageRequests()
           void this.writeUserScriptFiles()
           void this.reassertUserScripts()
         }, MAILBOX_POLL_INTERVAL_MS)
@@ -650,6 +785,144 @@ export class BrowserExtensionBridge {
       })
     } finally {
       this.answeringNative = false
+    }
+  }
+
+  /**
+   * Apply the `chrome.downloads` calls the worker made.
+   *
+   * The worker cannot reach the download manager, so the preamble leaves each
+   * cancel, pause, resume and erase here and this drains them on the same poll as
+   * the frame and native-messaging requests. Dropping one is not harmless: a
+   * capture is a cancel, and a cancel that never arrives leaves the browser's own
+   * copy downloading beside the extension's.
+   */
+  private async answerDownloadRequests(): Promise<void> {
+    const view = this.view
+    if (!view || this.disposed || this.answeringDownloads) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    this.answeringDownloads = true
+    try {
+      const raw = await contents.executeJavaScript(
+        'globalThis.__cioBridgeDrainDownloadRequests ? globalThis.__cioBridgeDrainDownloadRequests() : "[]"',
+        true
+      )
+      if (typeof raw !== 'string') return
+      const requests: unknown = JSON.parse(raw)
+      if (!Array.isArray(requests)) return
+      for (const value of requests.slice(0, 16)) {
+        const command = toDownloadCommand(value)
+        if (!command) continue
+        this.deps.downloadCommand?.(command)
+      }
+    } catch (error: unknown) {
+      Logger.dev('Extension download requests could not be handled:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
+    } finally {
+      this.answeringDownloads = false
+    }
+  }
+
+  /**
+   * Answer the `chrome.cookies` queries the worker left for the app.
+   *
+   * The namespace is compiled out of this runtime, so an extension that forwards a
+   * site's session with a download asks the preamble instead and waits. Each query
+   * is answered from the jar's own session, one at a time so the answers arrive in
+   * the order they were asked, and a query the app cannot answer is told why rather
+   * than left pending until the worker's own timeout fires.
+   */
+  private async answerCookieRequests(): Promise<void> {
+    const answer = this.deps.cookieRequest
+    if (!answer) return
+    const view = this.view
+    if (!view || this.disposed || this.answeringCookies) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    this.answeringCookies = true
+    try {
+      const raw = await contents.executeJavaScript(
+        'globalThis.__cioBridgeDrainCookieRequests ? globalThis.__cioBridgeDrainCookieRequests() : "[]"',
+        true
+      )
+      if (typeof raw !== 'string') return
+      const requests: unknown = JSON.parse(raw)
+      if (!Array.isArray(requests)) return
+      for (const value of requests.slice(0, 16)) {
+        const request = toCookieRequest(value)
+        if (!request) continue
+        let result: BrowserExtensionCookieResult
+        try {
+          result = await answer(request)
+        } catch (error: unknown) {
+          result = { error: error instanceof Error ? error.message : String(error) }
+        }
+        await this.push(
+          'cookies' in result
+            ? { kind: 'cookies-result', requestId: request.requestId, cookies: result.cookies }
+            : { kind: 'cookies-result', requestId: request.requestId, error: result.error }
+        )
+      }
+    } catch (error: unknown) {
+      Logger.dev('Extension cookie requests could not be handled:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
+    } finally {
+      this.answeringCookies = false
+    }
+  }
+
+  /**
+   * Open the extension pages the worker asked for.
+   *
+   * `chrome.runtime.openOptionsPage` is another surface the runtime does not have:
+   * the app owns the window, so the worker asks here and the answer says whether
+   * the page was raised. Nothing is answered for a request the host cannot carry
+   * out; that one is reported back as an error so the worker's promise settles.
+   */
+  private async answerPageRequests(): Promise<void> {
+    const answer = this.deps.extensionPageRequest
+    if (!answer) return
+    const view = this.view
+    if (!view || this.disposed || this.answeringPages) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    this.answeringPages = true
+    try {
+      const raw = await contents.executeJavaScript(
+        'globalThis.__cioBridgeDrainPageRequests ? globalThis.__cioBridgeDrainPageRequests() : "[]"',
+        true
+      )
+      if (typeof raw !== 'string') return
+      const requests: unknown = JSON.parse(raw)
+      if (!Array.isArray(requests)) return
+      for (const value of requests.slice(0, 8)) {
+        const request = toPageRequest(value)
+        if (!request) continue
+        let error: string | undefined
+        try {
+          const outcome = await answer(request)
+          error = outcome.error
+        } catch (caught: unknown) {
+          error = caught instanceof Error ? caught.message : String(caught)
+        }
+        await this.push(
+          error === undefined
+            ? { kind: 'extension-page-result', requestId: request.requestId }
+            : { kind: 'extension-page-result', requestId: request.requestId, error }
+        )
+      }
+    } catch (error: unknown) {
+      Logger.dev('Extension page requests could not be handled:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
+    } finally {
+      this.answeringPages = false
     }
   }
 

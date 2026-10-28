@@ -447,11 +447,9 @@
     },
     ['onCreated', 'onRemoved', 'onChanged', 'onMoved', 'onImportBegan', 'onImportEnded']
   )
-  ensureNamespace(
-    'downloads',
-    { download: noop, search: answering([]), pause: noop, resume: noop, cancel: noop },
-    ['onCreated', 'onChanged', 'onErased', 'onDeterminingFilename']
-  )
+  // `downloads` is not ensured here: the app's download manager owns every
+  // download this browser starts and feeds the real namespace below, rather than
+  // leaving a stub whose events never fire (see the downloads section).
   ensureNamespace(
     'identity',
     {
@@ -650,6 +648,309 @@
       }
     }
   }
+
+  // ── downloads ───────────────────────────────────────────────────────────────
+  // The runtime compiles `chrome.downloads` out of the extension runtime, so a
+  // download manager extension (AB Download Manager, and every other tool that
+  // captures downloads) cannot see a download this browser starts, let alone take
+  // it over. The app's download manager owns them all instead and hands every fact
+  // here through the bridge, in the shapes the API documents, with a numeric id the
+  // extension passes back to stop the browser's copy.
+  //
+  // Real here: the four events, and `cancel`, `pause`, `resume` and `erase`. Not
+  // real: `search`, `download`, `open`, `show` and `removeFile`, which the app has
+  // no answer for   they keep the quiet shapes they had before, so an extension that
+  // calls one for a download it started itself does not throw.
+  const downloadEvents = {}
+  for (const name of ['onCreated', 'onChanged', 'onErased', 'onDeterminingFilename']) {
+    downloadEvents[name] = makeRealEvent()
+  }
+  const sendDownloadCommand = (method, id) => {
+    if (!Number.isSafeInteger(id) || !bridgePort) return
+    try {
+      bridgePort.postMessage({ kind: 'download-request', method, id })
+    } catch (error) {
+      state.errors.push('download-bridge: ' + String(error))
+      bridgePort = null
+    }
+  }
+  const downloadsMembers = {
+    cancel: (id) => sendDownloadCommand('cancel', id),
+    pause: (id) => sendDownloadCommand('pause', id),
+    resume: (id) => sendDownloadCommand('resume', id),
+    erase: (id) => sendDownloadCommand('erase', id),
+    search: answering([]),
+    download: answering(-1),
+    open: noop,
+    show: noop,
+    removeFile: noop,
+    acceptDanger: noop,
+    drag: noop,
+    setShelfEnabled: noop
+  }
+  for (const root of roots) {
+    if (!root) continue
+    try {
+      const existing = root.downloads
+      const api = existing && typeof existing === 'object' ? existing : {}
+      for (const key of Object.keys(downloadsMembers)) {
+        try {
+          Object.defineProperty(api, key, {
+            value: downloadsMembers[key],
+            configurable: true,
+            writable: true
+          })
+        } catch (error) {
+          state.errors.push('downloads.' + key + ': ' + String(error))
+        }
+      }
+      for (const key of Object.keys(downloadEvents)) {
+        try {
+          Object.defineProperty(api, key, {
+            value: downloadEvents[key],
+            configurable: true,
+            writable: true
+          })
+        } catch (error) {
+          state.errors.push('downloads.' + key + ': ' + String(error))
+        }
+      }
+      if (!existing) {
+        Object.defineProperty(root, 'downloads', { value: api, configurable: true, writable: true })
+      }
+      state.downloadsBridge = 'installed'
+    } catch (error) {
+      state.errors.push('downloads: ' + String(error))
+    }
+  }
+
+  // ── cookies, for real ───────────────────────────────────────────────────────
+  // `chrome.cookies` is compiled out of this runtime entirely, and the download
+  // manager extension this browser has to work with (AB Download Manager Browser
+  // Integration) forwards the browser's cookies to its own app before it takes a
+  // download over: with no namespace to read, every download it captured asked the
+  // user to sign in again. The jar belongs to main, so a read is a question: it is
+  // numbered here, posted over the bridge, and answered with the cookies in
+  // `chrome.cookies`' own shape.
+  //
+  // Read-only, and saying so is the honest half: the app does not let an extension
+  // rewrite its user's cookies, so `set`, `remove` and `removeAll` answer `false`
+  // and leave that refusal in `runtime.lastError`, which is where Chromium puts one
+  // and therefore where an extension already checks.
+  const cookieMaxPending = 64
+  const cookieTimeoutMs = 10000
+  const cookieRequests = new Map()
+  let cookieRequestSeq = 0
+  state.cookies = { requests: 0, answered: 0, timedOut: 0, refused: 0, lastError: null }
+  const cookieFilterTypes = {
+    url: 'string',
+    name: 'string',
+    domain: 'string',
+    path: 'string',
+    secure: 'boolean',
+    session: 'boolean'
+  }
+  /**
+   * The filter members `get` and `getAll` define, kept only where the caller gave
+   * the type the API documents. Main matches on these, and a stray value from an
+   * object an extension built loosely would either match nothing or match
+   * everything, and both answer a cookie list that is a lie about the jar.
+   */
+  const sanitizeCookieFilter = (filter) => {
+    const source = filter && typeof filter === 'object' ? filter : {}
+    const clean = {}
+    for (const key of Object.keys(cookieFilterTypes)) {
+      if (typeof source[key] === cookieFilterTypes[key]) clean[key] = source[key]
+    }
+    return clean
+  }
+  /**
+   * Ask main for cookies. Never rejects and never hangs: a worker whose read is
+   * never answered still has work to do, and ten seconds is longer than any read
+   * this app has to do, because main answers out of the session's own jar.
+   */
+  const requestCookies = (filter) =>
+    new Promise((resolve) => {
+      if (!bridgePort || cookieRequests.size >= cookieMaxPending) {
+        resolve([])
+        return
+      }
+      const requestId = ++cookieRequestSeq
+      const timer = setTimeout(() => {
+        cookieRequests.delete(requestId)
+        state.cookies.timedOut += 1
+        resolve([])
+      }, cookieTimeoutMs)
+      cookieRequests.set(requestId, { resolve, timer })
+      state.cookies.requests += 1
+      try {
+        bridgePort.postMessage({
+          kind: 'cookies-request',
+          requestId,
+          filter: sanitizeCookieFilter(filter)
+        })
+      } catch (error) {
+        state.errors.push('cookies-bridge: ' + String(error))
+        bridgePort = null
+        cookieRequests.delete(requestId)
+        clearTimeout(timer)
+        resolve([])
+      }
+    })
+  /**
+   * Main's answer, or the fact that it could not read the jar.
+   *
+   * An error reads as the empty answer rather than a rejection, because the API's
+   * own way of saying "no such cookie" is a value and not an exception, and an
+   * extension thrown out of `get` loses the whole download rather than its
+   * authentication. It is still recorded, so the capability report can name it.
+   */
+  const settleCookieRequest = (command) => {
+    const pending = cookieRequests.get(command.requestId)
+    if (!pending) return
+    cookieRequests.delete(command.requestId)
+    clearTimeout(pending.timer)
+    if (command.error) {
+      state.cookies.lastError = String(command.error)
+      state.errors.push('cookies: ' + String(command.error))
+      pending.resolve([])
+      return
+    }
+    state.cookies.answered += 1
+    pending.resolve(Array.isArray(command.cookies) ? command.cookies : [])
+  }
+  const refuseCookieWrite = (callback) => {
+    state.cookies.refused += 1
+    state.cookies.lastError = 'this app does not let an extension change its cookies'
+    setRuntimeLastError(state.cookies.lastError)
+    // Chromium's refusal is a `false` plus a `lastError`, and the error is cleared
+    // once the caller's turn ends. The callback here runs on a microtask, so this
+    // clear is queued behind the answer rather than before it.
+    return answerWith(callback, false).then((value) => {
+      setRuntimeLastError(null)
+      return value
+    })
+  }
+  const cookiesApi = {
+    get: (details, callback) =>
+      requestCookies(details).then((cookies) =>
+        answerWith(callback, cookies.length > 0 ? cookies[0] : null)
+      ),
+    getAll: (details, callback) =>
+      requestCookies(details).then((cookies) => answerWith(callback, cookies)),
+    // One jar in this runtime and no incognito windows, which is the shape the API
+    // answers for a browser that has never partitioned its cookies.
+    getAllCookieStores: (callback) => answerWith(callback, [{ id: '0', tabIds: [] }]),
+    set: (_details, callback) => refuseCookieWrite(callback),
+    remove: (_details, callback) => refuseCookieWrite(callback),
+    removeAll: (_details, callback) => refuseCookieWrite(callback),
+    // A change cannot be observed because a change cannot be made. The event is
+    // real rather than absent so an extension that registers on it while its own
+    // modules evaluate does not throw on a namespace that has the rest.
+    onChanged: makeRealEvent()
+  }
+  ensureNamespace('cookies', cookiesApi, [])
+  state.cookies.installed = state.namespaces.indexOf('cookies') !== -1
+
+  // ── webRequest, for real ────────────────────────────────────────────────────
+  // The stub block above installs the whole namespace as events that never fire,
+  // which is why AB Download Manager Browser Integration silently captured
+  // nothing: it decides whether a request is one to take over from what
+  // `chrome.webRequest` told it, and an event that never fires is
+  // indistinguishable from a browser that made no request at all. The app already
+  // watches its own session's network activity, so these five are dispatchers with
+  // the app's observations behind them, each called with the API's own details
+  // shape.
+  //
+  // Only these five. Redirects, auth challenges and the request bodies are not
+  // things the app reports, so those events stay the stubs they were rather than
+  // adding to what this file claims.
+  const webRequestEventNames = [
+    'onSendHeaders',
+    'onResponseStarted',
+    'onHeadersReceived',
+    'onCompleted',
+    'onErrorOccurred'
+  ]
+  const webRequestEvents = {}
+  for (const name of webRequestEventNames) {
+    const dispatcher = makeRealEvent()
+    webRequestEvents[name] = dispatcher
+    for (const root of roots) {
+      const api = root && root.webRequest
+      if (!api) continue
+      try {
+        // Enumerable, like the runtime's own events: an extension that discovers
+        // what it can listen to by iterating must see these.
+        Object.defineProperty(api, name, {
+          value: dispatcher,
+          configurable: true,
+          writable: true,
+          enumerable: true
+        })
+      } catch (error) {
+        state.errors.push('webRequest.' + name + ': ' + String(error))
+      }
+    }
+  }
+  state.webRequest = { events: webRequestEventNames.slice(), real: true }
+
+  // ── the extension's own options page ────────────────────────────────────────
+  // `chrome.runtime.openOptionsPage` is not part of this runtime, so the "More
+  // settings" item in AB Download Manager Browser Integration's popup did nothing
+  // at all: a call to an undefined method, kept alive only by the `try` around it.
+  // The page it means to show is the extension's own, and only the app can open a
+  // window for one, so the intent goes over the bridge. The call answers at once,
+  // the way a fire-and-forget method in Chrome does: nobody waits on a page
+  // appearing, and an `await` that never settled would stall the click handler.
+  let extensionPageSeq = 0
+  state.extensionPages = { requested: 0, failed: 0, lastError: null }
+  const requestExtensionPage = (page) => {
+    extensionPageSeq += 1
+    state.extensionPages.requested = extensionPageSeq
+    if (!bridgePort) {
+      state.extensionPages.failed += 1
+      state.extensionPages.lastError = 'the bridge page is not connected'
+      return false
+    }
+    try {
+      bridgePort.postMessage({
+        kind: 'extension-page-request',
+        requestId: extensionPageSeq,
+        page
+      })
+      return true
+    } catch (error) {
+      state.errors.push('extension-page-bridge: ' + String(error))
+      bridgePort = null
+      state.extensionPages.failed += 1
+      state.extensionPages.lastError = String(error)
+      return false
+    }
+  }
+  const openOptionsPage = (callback) => {
+    requestExtensionPage('options')
+    return answerWith(typeof callback === 'function' ? callback : null, undefined)
+  }
+  let openOptionsPageInstalled = 0
+  for (const root of roots) {
+    const runtime = root && root.runtime
+    if (!runtime) continue
+    // Only where the runtime has none: a future Electron that implements this
+    // itself is better than this shim and must not be shadowed by it.
+    if (typeof runtime.openOptionsPage === 'function') continue
+    try {
+      Object.defineProperty(runtime, 'openOptionsPage', {
+        value: openOptionsPage,
+        configurable: true,
+        writable: true
+      })
+      openOptionsPageInstalled += 1
+    } catch (error) {
+      state.errors.push('openOptionsPage: ' + String(error))
+    }
+  }
+  state.extensionPages.installed = openOptionsPageInstalled
 
   // The same treatment for navigation, and for the same reason: `chrome.webNavigation`
   // is compiled out entirely, so its nine events were no-op stubs that a listener
@@ -2012,6 +2313,42 @@
       }
     } else if (command.kind === 'notification-close') {
       notificationClosed.__cioEmit([String(command.id || ''), command.byUser === true])
+    } else if (command.kind === 'downloads') {
+      const dispatcher = downloadEvents[command.name]
+      if (dispatcher) {
+        const args = Array.isArray(command.args) ? command.args : []
+        // `onDeterminingFilename` hands its listener a `suggest` callback, and a
+        // listener that exists but never calls it leaves the filename to the app.
+        // The app already decided it, so this one only keeps the listener's own
+        // signature intact.
+        emitRecorded(
+          'downloads.' + command.name,
+          dispatcher,
+          command.name === 'onDeterminingFilename' ? [args[0], noop] : args
+        )
+      }
+    } else if (command.kind === 'cookies-result') {
+      settleCookieRequest(command)
+    } else if (command.kind === 'extension-page-result') {
+      // A page the app could not open is something the extension cannot see: it
+      // was told the call was made. Recording it here is what the capability
+      // report can name, and pushing it into `state.errors` is the whole of what
+      // this can do about it: a worker has nobody to throw to.
+      if (command.error) {
+        state.extensionPages.failed += 1
+        state.extensionPages.lastError = String(command.error)
+        state.errors.push('open-options-page: ' + String(command.error))
+      }
+    } else if (command.kind === 'web-request') {
+      const webRequestEvent = webRequestEvents[command.name]
+      if (webRequestEvent) {
+        // One argument, the details object: that is the whole listener signature
+        // this API has, so an extension that destructures `details` reads exactly
+        // what main built in the API's own shape.
+        emitRecorded('webRequest.' + command.name, webRequestEvent, [
+          command.details && typeof command.details === 'object' ? command.details : {}
+        ])
+      }
     } else if (command.kind === 'startup') {
       state.startupAt = Date.now()
       runtimeEvents.onStartup.__cioEmit([])

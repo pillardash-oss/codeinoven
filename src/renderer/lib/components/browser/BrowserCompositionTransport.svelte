@@ -6,6 +6,8 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import CompositionFrameNote from './CompositionFrameNote.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
@@ -14,9 +16,10 @@
   import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
   import { VideoFrameSeeker } from '$lib/video-frame-seeker'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
   import { snapVideoFrame } from '$shared/video/frame-grid'
-  import { videoTimecode } from '$shared/video/timeline'
+  import { videoClockLabel, videoTimecode } from '$shared/video/timeline'
   import {
     compositionFrameFocusState,
     type CompositionFrameFocusRequest
@@ -37,6 +40,9 @@
 
   interface Props {
     tabId: string
+    titlebar?: boolean
+    /** Short clock labels and tighter spacing for sidebar playback. */
+    compact?: boolean
     /** The composition the tab is showing, from `browser:state`. */
     composition: BrowserCompositionTab
     /**
@@ -58,7 +64,16 @@
     threadId?: string
   }
 
-  let { tabId, composition, active, pauseWhenHidden = false, projectId, threadId }: Props = $props()
+  let {
+    tabId,
+    composition,
+    active,
+    pauseWhenHidden = false,
+    projectId,
+    threadId,
+    titlebar = false,
+    compact = false
+  }: Props = $props()
 
   /** How often the scrubber catches up with the page it is driving. */
   const POLL_MS = 250
@@ -75,7 +90,19 @@
   let scrubValue = $state(0)
   let pendingFrame = $state<number | null>(null)
   let seekRevision = 0
-  /** True while the remembered looping preference is being handed to the page. */
+  /** Mute follows the native tab across sidebar and fullscreen surfaces. */
+  const muted = $derived(contextSidebarState.browserRuntime(tabId).muted)
+  let muteBusy = $state(false)
+  async function toggleMuted(): Promise<void> {
+    if (muteBusy) return
+    muteBusy = true
+    try {
+      const next = !muted
+      await invoke('browser:setMuted', tabId, next)
+    } finally {
+      muteBusy = false
+    }
+  }
   let loopSyncing = false
   /** The looping answer the page gave last, so one arming is reconciled once. */
   let observedLoop: boolean | null = null
@@ -101,7 +128,7 @@
 
   /** A composition always runs for something, and a zero-length timeline would
    *  make every fraction below divide by it. */
-  const duration = $derived(Math.max(composition.duration, 0.001))
+  const duration = $derived(Math.max(playback?.duration ?? composition.duration, 0.001))
   const frameStep = $derived(1 / Math.max(composition.fps, 1))
   const time = $derived(playback?.time ?? 0)
   const playing = $derived(playback?.playing ?? false)
@@ -112,7 +139,7 @@
    * until it does: a new tab starts from what the reader chose on the last video
    * rather than from the default the page boots with.
    */
-  const loop = $derived(playback?.loop ?? compositionPlaybackPrefs.loop)
+  const loop = $derived(playback?.loop ?? compositionPlaybackPrefs.loopFor(tabId))
   const error = $derived(playback?.error ?? null)
   const shown = $derived(Math.min(scrubbing ? scrubValue : (pendingFrame ?? time), duration))
   const seeker = new VideoFrameSeeker(
@@ -161,7 +188,7 @@
     if (!next) return
     if (next.loop === observedLoop) return
     observedLoop = next.loop
-    const wanted = compositionPlaybackPrefs.loop
+    const wanted = compositionPlaybackPrefs.loopFor(tabId)
     if (loopSyncing || next.loop === wanted) return
     loopSyncing = true
     void invoke('browser:transport', tabId, 'loop', wanted)
@@ -217,7 +244,7 @@
 
   function toggleLoop(): void {
     const next = !loop
-    compositionPlaybackPrefs.setLoop(next)
+    compositionPlaybackPrefs.setLoop(tabId, next)
     void send('loop', next)
   }
 
@@ -238,10 +265,9 @@
       await send('pause')
       const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
       if (snapshot) frameNote = { snapshot, armed: true }
-      else captureError = 'That frame could not be captured. Try again.'
-    } catch {
-      // The tab can be closed between the click and the capture.
-      captureError = 'That frame could not be captured. Try again.'
+      else captureError = 'This composition is no longer open. Reopen it before annotating.'
+    } catch (cause: unknown) {
+      captureError = cause instanceof Error ? cause.message : 'The frame could not be captured.'
     } finally {
       capturing = false
     }
@@ -474,7 +500,11 @@
 </script>
 
 <div
-  class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-2"
+  class={[
+    'titlebar-no-drag flex shrink-0 items-center border-b border-border bg-surface px-2',
+    compact ? 'gap-1' : 'gap-2',
+    titlebar ? 'h-10' : 'h-9'
+  ]}
   role="group"
   aria-label={`Playback of ${composition.directory}`}
 >
@@ -518,11 +548,15 @@
   >
     <CioForward size={14} />
   </button>
-  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed"
-    >{format(shown)} · f{Math.round(shown * composition.fps)}</span
+  <span
+    class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed"
+    title={`${format(shown)} · frame ${Math.round(shown * composition.fps)}`}
+    >{compact
+      ? videoClockLabel(shown)
+      : `${format(shown)} · f${Math.round(shown * composition.fps)}`}</span
   >
   <SeekBar
-    class="min-w-0 flex-1"
+    class={compact ? 'min-w-12 flex-1' : 'min-w-0 flex-1'}
     value={shown}
     min={0}
     max={duration}
@@ -536,7 +570,9 @@
     }}
     onCommit={() => commitScrub()}
   />
-  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed">{format(duration)}</span>
+  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed" title={format(duration)}
+    >{compact ? videoClockLabel(duration) : format(duration)}</span
+  >
   <button
     type="button"
     class={[
@@ -549,6 +585,17 @@
     onclick={toggleLoop}
   >
     <CioRefresh size={13} />
+  </button>
+  <button
+    type="button"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+    title={muted ? 'Unmute video playback' : 'Mute video playback'}
+    aria-label={muted ? 'Unmute video playback' : 'Mute video playback'}
+    aria-pressed={muted}
+    disabled={muteBusy}
+    onclick={() => void toggleMuted()}
+  >
+    {#if muted}<CioVolumeX size={13} />{:else}<CioVolume size={13} />{/if}
   </button>
   <button
     type="button"

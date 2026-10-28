@@ -11,11 +11,12 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
+  import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { invoke } from '$lib/ipc.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
-  import { isCodeModeToolName } from '$shared/agent-interactions'
+  import { isCioToolName, isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
@@ -127,6 +128,12 @@
   /** The tool-kind glyph: washed out with the row, brighter on hover. */
   const kindIconClass = 'shrink-0 text-dimmed transition-colors group-hover/tool:text-muted'
   const toolKind = $derived.by(() => {
+    // The app's own gateway tools outrank every heuristic: their names are the
+    // app's own vocabulary (`cio_util_use`, `cio_todo_write`), so the words in
+    // them must not be read as the tool's subject. `cio_todo_write` is not a
+    // file write, and the reader should see the app's mark on the call rather
+    // than a glyph that says otherwise.
+    if (isCioToolName(part.tool)) return 'cio'
     // Code mode outranks the name heuristics: a call a script made can carry
     // any inner tool name (read, bash, an MCP call), and it belongs to the
     // code-mode glyph wherever the harness reports it as such.
@@ -213,7 +220,9 @@
     {:else}
       <CioClock size={14} class="shrink-0 {statusMeta.class}" />
     {/if}
-    {#if toolKind === 'code'}
+    {#if toolKind === 'cio'}
+      <CioMonogram size={12} class={kindIconClass} />
+    {:else if toolKind === 'code'}
       <CioCode size={12} class={kindIconClass} />
     {:else if toolKind === 'read'}
       <CioCheckCircle size={12} class={kindIconClass} />

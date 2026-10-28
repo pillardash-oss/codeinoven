@@ -24,6 +24,7 @@ import { startVideoProcess } from './video-process'
 import type { VideoJobContext } from './video-jobs'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { servedFileUrl, resolveServedEntry } from '../preview/served-folder'
+import { audibleVideoEditClips, renderVideoEditAudio } from './video-edit-audio'
 
 async function bounded<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted()
@@ -162,6 +163,7 @@ export async function exportVideo(
   }
   context.signal.addEventListener('abort', abortWindow, { once: true })
   let encoder: Awaited<ReturnType<typeof startVideoProcess>> | undefined
+  let editedAudio: Awaited<ReturnType<typeof renderVideoEditAudio>> = null
   try {
     context.update(0, 'Loading composition')
     await bounded(
@@ -170,6 +172,8 @@ export async function exportVideo(
     )
     await bounded(
       window.webContents.executeJavaScript(`(async () => {
+      globalThis.__cioEditPreviewDisabled = true;
+      globalThis.CIOVideo?.stopEditing?.();
       await document.fonts.ready;
       if (globalThis.CIOVideo) await globalThis.CIOVideo.ready;
       const images = [...document.images];
@@ -206,35 +210,63 @@ export async function exportVideo(
             '-i',
             'pipe:0'
           ]
-    const tracks = studio.audioTracks.length
-      ? studio.audioTracks
-      : manifest.audio.map((source) => ({
-          source,
-          start: 0,
-          trim: 0,
-          duration: manifest.duration,
-          gain: 1
+    editedAudio = studio.edit
+      ? await renderVideoEditAudio(folder, directory, studio.edit, context)
+      : null
+    const tracks = studio.edit
+      ? audibleVideoEditClips(studio.edit).map((clip) => ({
+          source: studio.edit!.assets.find((asset) => asset.id === clip.assetId)!.source,
+          start: clip.start,
+          trim: clip.sourceStart,
+          duration: clip.duration,
+          gain: clip.volume
         }))
-    for (const track of tracks) args.push('-i', await videoFile(folder, track.source))
-    if (tracks.length) {
-      const filters = tracks.map(
-        (track, index) =>
-          `[${index + 1}:a]atrim=start=${track.trim}:duration=${track.duration},asetpts=PTS-STARTPTS,volume=${track.gain},adelay=${Math.round(track.start * 1000)}:all=1[a${index}]`
-      )
-      filters.push(
-        `${tracks.map((_, index) => `[a${index}]`).join('')}amix=inputs=${tracks.length}:normalize=0,alimiter=limit=0.95[audio]`
-      )
-      args.push(
-        '-filter_complex',
-        filters.join(';'),
-        '-map',
-        '0:v:0',
-        '-map',
-        '[audio]',
-        '-c:a',
-        'aac'
-      )
-    } else args.push('-an')
+      : studio.audioTracks.length
+        ? studio.audioTracks
+        : manifest.audio.map((source) => ({
+            source,
+            start: 0,
+            trim: 0,
+            duration: manifest.duration,
+            gain: 1
+          }))
+    if (studio.edit) {
+      if (editedAudio)
+        args.push(
+          '-i',
+          editedAudio.file,
+          '-map',
+          '0:v:0',
+          '-map',
+          '1:a:0',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '192k'
+        )
+      else args.push('-an')
+    } else {
+      for (const track of tracks) args.push('-i', await videoFile(folder, track.source))
+      if (tracks.length) {
+        const filters = tracks.map(
+          (track, index) =>
+            `[${index + 1}:a]atrim=start=${track.trim}:duration=${track.duration},asetpts=PTS-STARTPTS,volume=${track.gain},adelay=${Math.round(track.start * 1000)}:all=1[a${index}]`
+        )
+        filters.push(
+          `${tracks.map((_, index) => `[a${index}]`).join('')}amix=inputs=${tracks.length}:normalize=0,alimiter=limit=0.95[audio]`
+        )
+        args.push(
+          '-filter_complex',
+          filters.join(';'),
+          '-map',
+          '0:v:0',
+          '-map',
+          '[audio]',
+          '-c:a',
+          'aac'
+        )
+      } else args.push('-an')
+    }
     if (renderer.kind === 'renderer') args.push('-c:v', 'copy')
     else
       args.push(
@@ -440,6 +472,7 @@ export async function exportVideo(
     encoder?.child.kill('SIGKILL')
     if (encoder) await encoder.done.catch(() => undefined)
     if (!window.isDestroyed()) window.destroy()
+    await editedAudio?.cleanup()
     await rm(partial, { force: true })
     await rm(join(directory, 'export-evidence.pending.json'), { force: true })
     if (!published) await rm(reviewDirectory, { recursive: true, force: true })

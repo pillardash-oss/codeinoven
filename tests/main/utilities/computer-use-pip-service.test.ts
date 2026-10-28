@@ -85,10 +85,15 @@ vi.mock('../../../src/main/system/logger', () => ({
   Logger: { dev: vi.fn(), info: vi.fn(), error: vi.fn(), flush: vi.fn() }
 }))
 
-/** One frame's interval, the loop's own cadence. */
-const FRAME_MS = 67
+/** One loop tick. The preview is activity driven, so a tick only carries a frame
+ *  that something asked for. */
+const FRAME_MS = 100
 /** The monitor's pause between attempts while frames are failing. */
 const RETRY_MS = 250
+/** A tick plus the monitor's coalescing floor: what one operation's frame costs. */
+const COALESCE_MS = 350
+/** How long the driver's window refusal is respected. */
+const WINDOW_COOLDOWN_MS = 5_000
 
 interface DriverCall {
   name: string
@@ -176,6 +181,21 @@ async function nextFrame(ms = FRAME_MS): Promise<void> {
  *  frame tick that lands past it. */
 async function nextAttempt(): Promise<void> {
   await nextFrame(RETRY_MS + FRAME_MS)
+}
+
+/** One frame the way a run asks for it: an operation, then the ticks that carry
+ *  it past the coalescing floor. A run that performs nothing refreshes only on
+ *  the slow idle interval, so a test that expects a frame has to cause one. */
+async function operationFrame(pip: ComputerUsePipService, pid: number): Promise<void> {
+  pip.onActivity({
+    threadId: 'thread-1',
+    operation: 'click',
+    pid,
+    cursor: null,
+    permissionLevel: 'auto_review'
+  })
+  await settle()
+  await nextFrame(COALESCE_MS)
 }
 
 interface LatchOptions {
@@ -276,8 +296,18 @@ describe('computer-use PiP capture resilience', () => {
     await latch(pip, 7)
     expect(windowAttempts(driver)).toEqual([1, 2])
 
+    // Every frame the preview takes asks the driver for a preview frame: no
+    // accessibility walk (which also staled the agent's element tokens), no
+    // registered action capture, and an image capped at the painted size.
+    const previewCall = driver.calls.find((call) => call.name === 'get_window_state')
+    expect(previewCall?.input['include_accessibility_tree']).toBe(false)
+    expect(previewCall?.input['display_only']).toBe(true)
+    expect(previewCall?.input['max_dimension']).toBe(448)
+    expect(previewCall?.input['max_elements']).toBeUndefined()
+
     // Several healthy frames: the refused window stays out of the way.
-    await nextFrame(500)
+    for (let frame = 0; frame < 3; frame += 1) await operationFrame(pip, 7)
+    expect(windowAttempts(driver).length).toBeGreaterThan(2)
     expect(
       windowAttempts(driver)
         .slice(2)
@@ -286,7 +316,8 @@ describe('computer-use PiP capture resilience', () => {
 
     // Past the cooldown the ranking is honoured again, and the fall-through still
     // keeps the frame when the head is refused a second time.
-    await nextFrame(5_000)
+    await nextFrame(WINDOW_COOLDOWN_MS)
+    await operationFrame(pip, 7)
     const attempts = windowAttempts(driver)
     const retried = attempts.lastIndexOf(1)
     expect(retried).toBeGreaterThan(2)

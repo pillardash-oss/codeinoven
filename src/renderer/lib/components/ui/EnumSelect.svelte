@@ -1,4 +1,5 @@
 <script module lang="ts">
+  import type { Component } from 'svelte'
   /** One selectable value. `id` is the value the caller receives back. */
   export interface EnumSelectOption<Value extends string = string> {
     id: Value
@@ -11,6 +12,7 @@
     accent?: string
     /** An image drawn instead of the dot, for an entity with a picked icon. */
     iconUrl?: string | null
+    icon?: Component<{ size?: number; class?: string }>
   }
 </script>
 
@@ -33,6 +35,7 @@
    */
 
   import { DropdownMenu } from 'bits-ui'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
     options: readonly EnumSelectOption<T>[]
@@ -50,6 +53,8 @@
     inline?: boolean
     /** Layout classes for the trigger, e.g. a flex sizing class. */
     class?: string
+    /** Wider option menus for dense inspector and editor toolbars. */
+    menuMinWidth?: string
   }
 
   let {
@@ -62,10 +67,42 @@
     disabled = false,
     compact = false,
     inline = false,
-    class: className = ''
+    class: className = '',
+    menuMinWidth
   }: Props = $props()
 
   const selected = $derived(options.find((option) => option.id === value) ?? null)
+  let menuRef = $state<HTMLElement | null>(null)
+  let releaseOcclusion: (() => void) | undefined
+  function setMenuRef(element: HTMLElement | null): void {
+    releaseOcclusion?.()
+    releaseOcclusion = undefined
+    menuRef = element
+    if (!element) return
+    const key = `enum-menu-${crypto.randomUUID()}`
+    const place = (): void => {
+      const rect = element.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0)
+        browserVisibility.publishOcclusion(key, {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height
+        })
+    }
+    const resized = new ResizeObserver(place)
+    resized.observe(element)
+    const moved = new MutationObserver(place)
+    if (element.parentElement)
+      moved.observe(element.parentElement, { attributes: true, attributeFilter: ['style'] })
+    const frame = requestAnimationFrame(place)
+    releaseOcclusion = () => {
+      resized.disconnect()
+      moved.disconnect()
+      cancelAnimationFrame(frame)
+      browserVisibility.clearOcclusion(key)
+    }
+  }
 </script>
 
 {#if inline}
@@ -120,11 +157,13 @@
 
     <DropdownMenu.Portal>
       <DropdownMenu.Content
+        bind:ref={() => menuRef, setMenuRef}
         side="bottom"
         align="start"
         sideOffset={6}
         collisionPadding={8}
         class="z-60 w-[var(--bits-dropdown-menu-anchor-width)] border border-border bg-surface p-1 shadow-lg"
+        style={menuMinWidth ? `min-width:${menuMinWidth};max-width:calc(100vw - 1rem)` : undefined}
       >
         {#each options as option (option.id)}
           <DropdownMenu.Item
@@ -132,7 +171,8 @@
             textValue={option.label}
             onSelect={() => onChange(option.id)}
           >
-            {#if option.iconUrl}
+            {#if option.icon}<option.icon size={14} class="mt-0.5 shrink-0 text-dimmed" />
+            {:else if option.iconUrl}
               <img src={option.iconUrl} alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0 object-contain" />
             {:else if option.accent}
               <span class="mt-0.5 h-2 w-2 shrink-0" style="background-color: {option.accent}"

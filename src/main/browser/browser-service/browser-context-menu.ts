@@ -338,8 +338,26 @@ export function buildBrowserContextMenuItems(
 /** One extension's recorded tree, with the id a click has to come back to. */
 export interface BrowserExtensionMenuSection {
   extensionId: string
+  /**
+   * The icon that extension published, as a data URL, or null when it ships
+   * none. A browser draws it beside every item the extension contributes, so the
+   * user can tell which extension a row came from without reading the label.
+   */
+  iconDataUrl: string | null
   items: BrowserExtensionMenuRecord[]
 }
+
+/**
+ * An extension's published icon, ready for a native menu row.
+ *
+ * This module builds templates without Electron values, so the service supplies
+ * the conversion: it owns `nativeImage` and answers undefined for a data URL it
+ * cannot decode, which leaves that row without an image rather than without a
+ * label.
+ */
+export type BrowserExtensionMenuIconFactory = (
+  dataUrl: string
+) => MenuItemConstructorOptions['icon'] | undefined
 
 /**
  * Which `chrome.contextMenus` contexts one click belongs to, most specific first.
@@ -367,11 +385,16 @@ export function extensionClickContexts(params: ContextMenuParams): string[] {
  * radio carries its recorded state. A `parentId` cycle is broken rather than
  * followed, and an item whose parent is missing becomes a root, so nothing an
  * extension recorded can make the menu unbuildable.
+ *
+ * `iconFor` adds the extension's own icon to its top-level items, the way a
+ * browser signs the rows an extension contributed. Submenu rows stay plain: the
+ * icon says whose menu this is, and repeating it down a submenu says nothing.
  */
 export function buildExtensionMenuItems(
   sections: BrowserExtensionMenuSection[],
   contexts: string[],
-  onSelect: (section: BrowserExtensionMenuSection, item: BrowserExtensionMenuRecord) => void
+  onSelect: (section: BrowserExtensionMenuSection, item: BrowserExtensionMenuRecord) => void,
+  iconFor?: BrowserExtensionMenuIconFactory
 ): MenuItemConstructorOptions[] {
   const output: MenuItemConstructorOptions[] = []
   for (const section of sections) {
@@ -406,10 +429,12 @@ export function buildExtensionMenuItems(
       }
       return { label, enabled: item.enabled, click: () => onSelect(section, item) }
     }
+    const icon = section.iconDataUrl && iconFor ? iconFor(section.iconDataUrl) : undefined
     const roots = section.items.filter((item) => item.parentId === null || !ids.has(item.parentId))
     for (const item of roots) {
       const rendered = render(item, new Set())
-      if (rendered) output.push(rendered)
+      if (!rendered) continue
+      output.push(icon && rendered.type !== 'separator' ? { ...rendered, icon } : rendered)
     }
   }
   return output

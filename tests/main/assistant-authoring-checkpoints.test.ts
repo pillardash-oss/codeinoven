@@ -183,15 +183,17 @@ describe('assistantAuthoringContext', () => {
     expect(contract).toContain('cio_util_docs_lookup')
   })
 
-  it('does not ask again for a name and personality the user already gave', () => {
+  it('does not ask again for a name the user already gave, and still asks how to behave', () => {
     const settled = assistantAuthoringContext({
       name: 'Engineer',
-      scheduled: false,
-      personality: 'blunt and quick'
+      scheduled: false
     })
     expect(settled).not.toContain('Ask what they would like to name you')
-    expect(settled).toContain('are already settled')
-    expect(settled).toContain('blunt and quick')
+    expect(settled).toContain('Their name for you is already settled: you are Engineer')
+    // How the assistant behaves is the Personality section of the knowledge, which
+    // does not exist yet, so it is always asked.
+    expect(settled).toContain('How they want you to behave')
+    expect(settled).toContain('## Personality')
 
     // A create-by-chat assistant has no name yet, so the interview still opens
     // on the naming question.

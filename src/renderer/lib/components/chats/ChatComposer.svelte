@@ -97,6 +97,7 @@
   import ComposerShoe, { type ComposerShoeData, type ComposerUsage } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { sessionTagKind } from '$shared/session-tags'
   import { expertSessionFor, shouldOfferExpertCard, type ExpertSummary } from '$shared/experts'
   import { mediaProviderLabel } from '$shared/media-generation'
@@ -2008,6 +2009,17 @@
     getValue: () => value,
     getAttachmentStorage: () => attachmentStorage,
     getSelectedHarnessLacksAttachments: () => selectedHarnessLacksAttachments,
+    getOwnFileCopy: () => {
+      const copied = projectFilesWorkspace.clipboard
+      if (!copied) return null
+      // Tags only target a file when the copy came from the same project and the
+      // same scope bucket they are relative to; anything else has to travel as
+      // the files themselves.
+      const sameProject =
+        copied.projectId === projectId &&
+        (!projectId || copied.scopeBucketId === workspaceState.activeScopeBucketIdFor(projectId))
+      return { paths: copied.paths, sameProject }
+    },
     addPastedTextAttachment,
     addFileAttachment,
     setTextAttachmentError: (message) => (textAttachmentError = message),
@@ -2090,8 +2102,16 @@
   onClearDropState={clearDropState}
 />
 
+<!-- The composer owns a stacking context at z-40, one rung above everything the
+     transcript paints (its working trace header pins at z-20) and above the
+     scroll-to-latest button (z-30). Its own overlays all live inside this context
+     at z-30/z-40, so they were previously capped at the composer's old z-10 and
+     the pinned trace header painted straight through the slash and reference
+     menus when they opened upward into the transcript. Keeping the composer
+     below the app's menu and modal rungs (z-50/z-60) is what keeps those
+     overlays from escaping over unrelated panels. -->
 <div
-  class="chat-composer relative z-10 border bg-surface {stackedAbove
+  class="chat-composer relative z-40 border bg-surface {stackedAbove
     ? 'border-t border-dashed border-border-strong'
     : ''} {expansion.maximized ? 'composer-maximized' : ''}"
   data-onboarding="composer"
@@ -2459,8 +2479,9 @@
      composer's bottom border   only the lower half shows, like a shoe. It is
      rendered by every composer, in every mode: the properties of whatever is
      being written into are never a project-mode extra.
-     No z-index on the wrapper: the composer (z-10) paints over the card, but
-     the shoe's dropdown (z-40 inside) still opens above the composer.
+     No z-index on the wrapper: the composer (z-40) paints over the card, and the
+     shoe's dropdown (z-40 inside the composer's own stacking context) opens above
+     the composer and above the transcript's pinned trace header.
      The wrapper is the shoe's own inline-size query container: the composer
      cannot query a sibling, and the card must stay free of containment so it
      can size itself to its content. -->

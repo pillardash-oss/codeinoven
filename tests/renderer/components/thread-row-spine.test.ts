@@ -104,7 +104,11 @@ vi.mock('$lib/stores/pip.svelte', () => ({
 }))
 
 vi.mock('$lib/stores/browser-audio.svelte', () => ({
-  browserAudio: { threadAudioStartedAt: () => null }
+  browserAudio: {
+    threadAudioStartedAt: () => null,
+    threadIsCapturing: () => false,
+    activitiesForThread: () => []
+  }
 }))
 
 vi.mock('$lib/stores/browser-access.svelte', () => ({

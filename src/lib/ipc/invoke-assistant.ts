@@ -114,9 +114,15 @@ export const invokeAssistantContract = {
   'assistant:startChatSetup': {} as Contract<[assistantId: string], void>,
   /**
    * Open a form-created assistant's first conversation: the user sees one line,
-   * and the model is told its own name and personality and greets the user.
+   * and the model is told its own name and description and greets the user.
    */
   'assistant:startManualSetup': {} as Contract<[assistantId: string], void>,
+  /**
+   * Start the conversation that agrees this assistant's clock, from the panel's
+   * Schedule section. The app posts one line saying the schedule is being set up and
+   * the agent asks for the name, the cadence and the times.
+   */
+  'assistant:scheduleWithAgent': {} as Contract<[assistantId: string], void>,
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
   /** Read user-skipped scheduled slots used to calculate each task's next run. */
   'assistant:listSkippedRuns': {} as Contract<[], SkippedRun[]>,

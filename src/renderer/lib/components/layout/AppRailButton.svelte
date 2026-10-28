@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ICON_SIZE, RAIL_ICON_STROKE } from '$lib/components/icons/cio/scale'
   import { encodeShortcutTokens } from '$lib/keymap/keymap'
+  import type { MediaActivity } from '$shared/media-activity'
   import RailAudioBadge from './RailAudioBadge.svelte'
   import type { Component, Snippet } from 'svelte'
 
@@ -17,7 +18,7 @@
     disabled?: boolean
     /** Symbolic key tokens from the keymap registry, shown in the tooltip chip. */
     shortcut?: readonly string[]
-    /** Icon colour when the item is idle. */
+    /** Icon colour when the item is active. */
     tone?: 'default' | 'primary' | 'danger' | 'accent'
     /** Spins the icon, for in-flight states such as a download. */
     spin?: boolean
@@ -25,6 +26,8 @@
     progress?: number
     /** Corner mark saying a browser behind this item is playing sound. */
     playing?: boolean
+    recording?: boolean
+    media?: readonly MediaActivity[]
     onSelect: () => void
     onHover?: () => void
     /** Corner content, e.g. an activity badge. */
@@ -41,6 +44,8 @@
     spin = false,
     progress,
     playing = false,
+    recording = false,
+    media,
     onSelect,
     onHover,
     badge
@@ -54,21 +59,16 @@
         : 0
   )
 
-  /** Tonal items keep their colour in every state; the rest use the neutral
-   *  idle/active palette shared by the view rail and the context dock. */
-  const toneClass = $derived.by((): string => {
-    if (active) return 'text-foreground'
-    switch (tone) {
-      case 'primary':
-        return 'text-primary hover:bg-elevated'
-      case 'danger':
-        return 'text-danger hover:bg-elevated'
-      case 'accent':
-        return 'text-accent'
-      default:
-        return 'text-muted hover:bg-elevated hover:text-foreground'
-    }
-  })
+  /** Idle tools stay muted; only the current destination uses its active colour. */
+  const toneClass = $derived(
+    active
+      ? tone === 'danger'
+        ? 'text-danger'
+        : tone === 'accent'
+          ? 'text-accent'
+          : 'text-primary'
+      : 'text-dimmed hover:bg-elevated hover:text-muted'
+  )
 </script>
 
 <!-- One rail item: the 32px tool button shared by the view rail's views and its
@@ -118,13 +118,14 @@
       class={spin ? 'animate-spin' : undefined}
     />
   {/if}
-  {#if playing}
-    <!-- The speaker rides the opposite corner from the badge stack, so a view can
-         say "working" and "playing sound" at the same time without either mark
-         hiding the other. It is a status, not a control: the mute toggle lives
-         on the tab row the sound actually belongs to. Like the badge row above,
-         it clears the glyph band on the way out, so the item's icon reads. -->
-    <RailAudioBadge {label} />
+  {#if media?.length || playing || recording}
+    <RailAudioBadge
+      {label}
+      activities={media ?? [
+        ...(playing ? ['audio' as const] : []),
+        ...(recording ? ['microphone' as const] : [])
+      ]}
+    />
   {/if}
   {@render badge?.()}
 </button>

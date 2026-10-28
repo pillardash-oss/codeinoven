@@ -12,8 +12,6 @@
     visibleContent: string
     htmlPreviewSrcdoc: string | null
     previewUrl: string | null
-    imagePreviewSrc: string | null
-    imagePreviewFailed: boolean
     documentLoading: boolean
     documentHtml: string | null
     documentFailed: boolean
@@ -27,8 +25,6 @@
     visibleContent,
     htmlPreviewSrcdoc,
     previewUrl,
-    imagePreviewSrc,
-    imagePreviewFailed,
     documentLoading,
     documentHtml,
     documentFailed,
@@ -85,7 +81,7 @@
     {/if}
   </div>
 {:else if flags.image}
-  <FileImagePreview src={imagePreviewSrc} alt={path} failed={imagePreviewFailed} />
+  <FileImagePreview src={previewUrl} alt={path} />
 {:else if flags.video || flags.audio}
   <FileMediaPreview src={previewUrl} alt={path} kind={flags.video ? 'video' : 'audio'} />
 {/if}

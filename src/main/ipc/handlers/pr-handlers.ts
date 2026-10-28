@@ -1,4 +1,5 @@
 import { ProviderHttpError } from '../../providers/github-provider'
+import { Logger } from '../../system/logger'
 import { isNetworkError } from '../../util/network-error'
 import {
   MAX_GITHUB_NUMERIC_ID,
@@ -266,6 +267,50 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
     }
   )
 
+  /**
+   * What a merged pull request's head branch is as far as deleting it goes.
+   *
+   * Read beside the merge so the reader only draws "Delete branch" for a branch
+   * that is both unprotected and still there. A branch name is not a pull
+   * request, so it resolves the repository's provider itself rather than through
+   * `pullRequestTarget`.
+   *
+   * A failed read answers null rather than rejecting: the caller offers no action
+   * on an answer it does not have, and a transport blip on a merged pull request
+   * is weather rather than a defect worth a main-process error log.
+   */
+  ipcMain.handle(
+    'pr:branchState',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, branch: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      try {
+        return await provider.readBranchDeletionState({
+          owner: validateBoundedString(owner, 'PR owner', 1, 128),
+          repo: validateBoundedString(repo, 'PR repository', 1, 128),
+          branch: validateBranchName(branch)
+        })
+      } catch (reason) {
+        if (!isNetworkError(reason)) Logger.dev('Branch deletion state could not be read', reason)
+        return null
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'pr:deleteBranch',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, branch: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      const target = {
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        branch: validateBranchName(branch)
+      }
+      return runGitHubMutation(target.owner, target.repo, () => provider.deleteBranch(target))
+    }
+  )
+
   ipcMain.handle(
     'pr:update',
     async (
@@ -411,6 +456,22 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
         }
         throw error
       }
+    }
+  )
+
+  ipcMain.handle(
+    'pr:search',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, text: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.searchPullRequests({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        state: validatePrState(state),
+        // Bounded like every other search term that reaches the provider, so the
+        // query GitHub builds stays a query rather than a page of text.
+        text: typeof text === 'string' ? text.slice(0, 256) : ''
+      })
     }
   )
 

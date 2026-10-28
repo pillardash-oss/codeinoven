@@ -80,6 +80,19 @@ export interface PullRequestReference {
 }
 
 /**
+ * What a branch is, as far as deleting it goes.
+ *
+ * `missing` is an answer rather than a failure: a merged pull request whose head
+ * branch the repository already deleted (an automatic-delete-on-merge setting is
+ * the usual cause, deleting it by hand is the other) leaves nothing to remove, so
+ * the reader offers no action instead of one that cannot land.
+ */
+export type BranchDeletionState = 'deletable' | 'protected' | 'missing'
+
+/** What a branch delete actually did. `missing` means it was already gone. */
+export type BranchDeletionOutcome = 'deleted' | 'missing'
+
+/**
  * Pull request as shown in the sidebar list.
  *
  * No avatar field: the renderer CSP blocks remote image hosts, so the UI resolves a

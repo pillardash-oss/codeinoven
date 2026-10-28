@@ -136,16 +136,27 @@ export interface TranscriptIndex {
  *
  * A checkpoint records `sourceMessageId`, the prompt that opened its turn, so
  * the turn is anchored by identity instead of by clock. The turn runs until the
- * next checkpoint's own prompt, which keeps a turn that stops on a mid-turn
+ * next prompt that opens one, which keeps a turn that stops on a mid-turn
  * question   and resumes behind the reader's answer   as one turn. That also
  * survives the harness flushing its final assistant message after the
  * checkpoint was completed: the completion timestamp used to cut the window
  * short, so the turn end the card attaches to fell outside it and the card
  * silently disappeared.
  *
+ * Two checkpoints can share one prompt: a run that failed and was retried (or
+ * resumed after a dropped connection) starts over on the prompt it never
+ * finished. The newest checkpoint owns that slot whether or not it has finished
+ * yet, so the failed attempt's card can never surface again under the work that
+ * replaced it, and a slot whose newest run is still working shows no card at
+ * all.
+ *
+ * A card states what a finished turn changed, so it only lands on the assistant
+ * message that ends its own turn. A card sitting under a live trace reads as if
+ * the work on screen already produced those files.
+ *
  * Checkpoints that predate `sourceMessageId`, or whose prompt is not in the
  * loaded transcript, keep the timestamp-window match as a fallback and only
- * claim indices no anchored turn already owns.
+ * claim indices no anchored turn already claimed.
  */
 function resolveCheckpointOwners(
   messages: readonly AgentMessage[],
@@ -153,6 +164,8 @@ function resolveCheckpointOwners(
 ): { owners: (TurnCheckpointSummary | null)[]; card: boolean[] } {
   const owners: (TurnCheckpointSummary | null)[] = new Array(messages.length).fill(null)
   const card: boolean[] = new Array(messages.length).fill(false)
+  /** Assistant indices a turn already decided, whether or not it owns them. */
+  const claimed: boolean[] = new Array(messages.length).fill(false)
 
   const indexByMessageId = new Map<string, number>()
   for (let index = 0; index < messages.length; index++) {
@@ -161,10 +174,10 @@ function resolveCheckpointOwners(
   }
 
   // Two checkpoints for one prompt (a resumed or retried turn) share a slot;
-  // the newest one owns the turn.
+  // the newest one owns the turn, including while it is still running: an
+  // active run supersedes the attempt that failed before it.
   const anchors = new Map<number, TurnCheckpointSummary>()
   for (const checkpoint of checkpoints) {
-    if (!isCompleted(checkpoint)) continue
     const startId = checkpoint.sourceMessageId
     const start = startId === undefined ? undefined : indexByMessageId.get(startId)
     if (start === undefined) continue
@@ -182,27 +195,83 @@ function resolveCheckpointOwners(
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i]!
     const checkpoint = anchors.get(start)!
-    const limit = starts[i + 1] ?? messages.length
+    // The turn ends at its own last assistant message, never at one that joins
+    // the window later because the next prompt has no checkpoint of its own.
+    const limit = Math.min(
+      starts[i + 1] ?? messages.length,
+      nextTurnBoundaryIndex(messages, start + 1)
+    )
     let cardIndex = -1
     for (let index = start; index < limit; index++) {
       const message = messages[index]
       if (!message || message.role !== 'assistant' || message.inlineArtifact) continue
+      // A run that is still working owns its indices for card placement but
+      // keeps them out of the fallback, so the attempt it replaced cannot
+      // leave its own card behind under the work being redone.
+      claimed[index] = true
+      if (!isCompleted(checkpoint)) continue
       owners[index] = checkpoint
       cardIndex = index
     }
-    if (cardIndex >= 0) card[cardIndex] = true
+    if (cardIndex >= 0 && isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
   }
 
   const fallbackLast = new Map<string, number>()
   for (let index = 0; index < messages.length; index++) {
-    if (owners[index]) continue
+    if (claimed[index] || owners[index]) continue
     const owner = checkpointForTurn(messages, checkpoints, index)
     owners[index] = owner
     if (owner) fallbackLast.set(owner.id, index)
   }
-  for (const index of fallbackLast.values()) card[index] = true
+  // The fallback can match a trailing assistant of a run a later attempt
+  // replaced, so it too places a card only where a turn actually ends.
+  for (const index of fallbackLast.values()) {
+    if (isTurnEndIndex(messages, index)) card[index] = true
+  }
 
   return { owners, card }
+}
+
+/**
+ * Index of the next prompt that opens its own turn at or after `from`, or the
+ * message count when the turn runs to the end of the transcript. A user message
+ * an app action produced, and one that answers the turn's own question, both
+ * continue the turn they belong to instead of ending the window.
+ */
+function nextTurnBoundaryIndex(messages: readonly AgentMessage[], from: number): number {
+  for (let index = from; index < messages.length; index++) {
+    const message = messages[index]
+    if (!message || message.role !== 'user' || isTurnTransparentUserMessage(message)) continue
+    if (isAppActionMessage(message) || isQuestionAnswer(messages, index)) continue
+    return index
+  }
+  return messages.length
+}
+
+/**
+ * A user message an app action produced   an answered question, a connection
+ * retry, a spec apply   carries presentation parts and no authored text, so it
+ * continues the turn that triggered it.
+ */
+function isAppActionMessage(message: AgentMessage): boolean {
+  return (
+    message.parts.length > 0 && message.parts.every((part) => part.type === 'user-presentation')
+  )
+}
+
+/** Whether this user message answers the question the turn was waiting on. */
+function isQuestionAnswer(messages: readonly AgentMessage[], index: number): boolean {
+  for (let cursor = index - 1; cursor >= 0; cursor--) {
+    const message = messages[cursor]
+    if (!message) return false
+    if (message.inlineArtifact) continue
+    if (message.role === 'user') {
+      if (isTurnTransparentUserMessage(message)) continue
+      return false
+    }
+    return turnEndsOnQuestion(messages, cursor)
+  }
+  return false
 }
 
 /** Whether a checkpoint has finished its turn and may show a changes card. */

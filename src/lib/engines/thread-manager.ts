@@ -38,7 +38,8 @@ import {
   type UsageBearingMessage,
   type UserMessageSummary,
   isOrchestrationChildThread,
-  isAssistantSetupThread
+  isAssistantSetupThread,
+  ASSISTANT_SPACE_ID
 } from '../types'
 import {
   REGULAR_BUCKET,
@@ -65,6 +66,19 @@ export type { ThreadCapacity, ThreadListOptions } from './thread-manager-capacit
 
 /** Sidebar quota for the inbox (Chats) project: show all of its recent threads. */
 const INBOX_PROJECT_ID = 'inbox'
+
+/**
+ * How deep the assistant space hydrates.
+ *
+ * The assistant space is not a project: it holds every assistant's tasks and their
+ * runs, and the sidebar groups them per assistant. A project-sized slice cannot
+ * represent it, because the pinned `Getting started` host of every assistant sorts
+ * ahead of every task and fills the window on its own, so an assistant's older
+ * tasks never arrived and its row under-counted them. This is bounded rather than
+ * unlimited because runs accumulate: deep enough for a full assistant tree, small
+ * enough that one broadcast never carries a project's whole history.
+ */
+const ASSISTANT_SPACE_RECENT_THREADS = 120
 
 /**
  * How many eviction candidates one create may try before it gives up for that
@@ -1690,15 +1704,18 @@ export class ThreadManager {
 
   /**
    * Bounded per-project recent-thread list for sidebar hydration. The inbox
-   * (Chats) project gets its configured `thread_limit` quota; every other
-   * project gets `RECENT_THREADS_PER_PROJECT`. Older rows stay reachable via
-   * `listProjectThreads` paging. Unread threads bypass every quota so they
-   * always surface in the first-paint slice regardless of age.
+   * (Chats) project gets its configured `thread_limit` quota, the assistant space
+   * gets {@link ASSISTANT_SPACE_RECENT_THREADS} so every assistant's tasks are
+   * present, and every other project gets `RECENT_THREADS_PER_PROJECT`. Older rows
+   * stay reachable via `listProjectThreads` paging. Unread threads bypass every
+   * quota so they always surface in the first-paint slice regardless of age.
    */
   async listRecentPerProject(): Promise<Thread[]> {
-    return this.threadRepo.listRecentPerProjectViaWorker((projectId) =>
-      projectId === INBOX_PROJECT_ID ? Number.MAX_SAFE_INTEGER : RECENT_THREADS_PER_PROJECT
-    )
+    return this.threadRepo.listRecentPerProjectViaWorker((projectId) => {
+      if (projectId === INBOX_PROJECT_ID) return Number.MAX_SAFE_INTEGER
+      if (projectId === ASSISTANT_SPACE_ID) return ASSISTANT_SPACE_RECENT_THREADS
+      return RECENT_THREADS_PER_PROJECT
+    })
   }
 
   /** Paged threads for one project: the project filter is applied in SQL

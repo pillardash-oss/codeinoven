@@ -32,6 +32,13 @@
     open?: boolean
     /** Use a vertical ellipsis for multi-row thread rows; horizontal otherwise. */
     vertical?: boolean
+    /**
+     * Draw no trigger of its own. The caller owns the control that opens this
+     * menu (a project icon opening two menus, say) and opens it through `open`;
+     * the trigger stays in the layout as an invisible anchor so the menu still
+     * opens beside the control that asked for it.
+     */
+    anchorOnly?: boolean
   }
 
   let {
@@ -41,7 +48,8 @@
     onOpen = () => undefined,
     onClose = () => undefined,
     open = $bindable(false),
-    vertical = false
+    vertical = false,
+    anchorOnly = false
   }: Props = $props()
 </script>
 
@@ -53,8 +61,12 @@
   }}
 >
   <DropdownMenu.Trigger
-    class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-    aria-label={ariaLabel}
+    class={anchorOnly
+      ? 'pointer-events-none absolute inset-0 h-full w-full opacity-0'
+      : 'flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'}
+    aria-label={anchorOnly ? 'Thread actions' : ariaLabel}
+    aria-hidden={anchorOnly ? 'true' : undefined}
+    tabindex={anchorOnly ? -1 : undefined}
     {title}
     oncontextmenu={(e: MouseEvent) => {
       e.preventDefault()
@@ -62,10 +74,12 @@
       onOpen()
     }}
   >
-    {#if vertical}
-      <CioEllipsisVertical size={13} />
-    {:else}
-      <CioEllipsis size={13} />
+    {#if !anchorOnly}
+      {#if vertical}
+        <CioEllipsisVertical size={13} />
+      {:else}
+        <CioEllipsis size={13} />
+      {/if}
     {/if}
   </DropdownMenu.Trigger>
 

@@ -1500,6 +1500,9 @@ export function validateBrowserStripOverlayRequest(
       pinned: entry['pinned'] === true,
       hibernated: entry['hibernated'] === true,
       audible: entry['audible'] === true,
+      microphoneActive: entry['microphoneActive'] === true,
+      cameraActive: entry['cameraActive'] === true,
+      screenActive: entry['screenActive'] === true,
       muted: entry['muted'] === true
     })
   }

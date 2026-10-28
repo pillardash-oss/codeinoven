@@ -1,4 +1,5 @@
 <script lang="ts">
+  import MediaActivityIndicator from '$lib/components/speech/MediaActivityIndicator.svelte'
   import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
   import SpeakingIndicator from '$lib/components/speech/SpeakingIndicator.svelte'
   import VoiceSendIndicator from '$lib/components/speech/VoiceSendIndicator.svelte'
@@ -27,6 +28,14 @@
   <VoiceSendIndicator stage="steer" label="Transcribing: will steer the running turn" />
 {:else if indicator === 'browser-audio'}
   <SpeakingIndicator label="A browser tab on this thread is playing sound" />
+{:else if indicator === 'browser-microphone' || indicator === 'browser-camera' || indicator === 'browser-screen'}
+  <MediaActivityIndicator
+    kind={indicator === 'browser-microphone'
+      ? 'microphone'
+      : indicator === 'browser-camera'
+        ? 'camera'
+        : 'screen'}
+  />
 {:else if indicator === 'engineering'}
   <EngineeringIndicator label="Engineering thread" />
 {:else}

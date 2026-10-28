@@ -72,6 +72,7 @@
     withBrowser
   } from '$lib/stores/browser-access.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
   import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -109,6 +110,7 @@
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
+  import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
@@ -473,6 +475,13 @@
    *  Shared with the link pipeline, which routes by the same surface. */
   let showsContentView = $derived(viewShowsWorkspaceShell(activeView))
 
+  /* The header aligns the thread title to the conversation's page column, and the
+     shell that owns that column stays mounted while another view is on screen. Tell
+     the header when the column is actually the page being looked at. */
+  $effect(() => {
+    layoutPanelState.contentVisible = showsContentView
+  })
+
   /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
 
@@ -697,7 +706,7 @@
     }
   }
 
-  function navigate(view: View): void {
+  function navigate(view: View, options: { reconcileThread?: boolean } = {}): void {
     // Entering another section starts its Utilities page fresh; history
     // restores a recorded Utilities page after this navigation.
     if (view !== activeView) settingsRouteState.resetUtilities()
@@ -736,7 +745,12 @@
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
-    reconcileThreadForContentView(view)
+    // A navigation that is only a step on the way to a specific thread skips the
+    // reconcile: that step would open the family's remembered thread first, which
+    // records a visit, persists it, docks its panels, and leaves it on screen
+    // whenever the intended open cannot resolve. The caller opens the real thread
+    // immediately after this returns.
+    if (options.reconcileThread !== false) reconcileThreadForContentView(view)
     observeNavigationLocation()
   }
 
@@ -879,7 +893,9 @@
     // conversation, a spun-off passage, a process's thread) has to be shown by
     // the view that owns its family; only the shell may move the view.
     workspaceState.navigateToThreadView = (thread) => {
-      if (!viewShowsThread(activeView, thread)) navigate(contentViewForThread(thread))
+      if (!viewShowsThread(activeView, thread)) {
+        navigate(contentViewForThread(thread), { reconcileThread: false })
+      }
     }
     return () => {
       workspaceState.navigateToSettings = null
@@ -2330,6 +2346,13 @@
     <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
     {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
       <GitSyncDockHost />
+    {/await}
+  {/if}
+
+  {#if gitPullJobs.jobs.length}
+    <!-- Floats above every view so a pull reports itself after its chooser is gone, and its outcome is never a dialog. -->
+    {#await import('$lib/components/git/GitPullDockHost.svelte') then { default: GitPullDockHost }}
+      <GitPullDockHost />
     {/await}
   {/if}
 

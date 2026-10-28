@@ -18,6 +18,8 @@ import {
   missedTabVisible,
   parseKnowledgeSections,
   parsePlanTime,
+  readKnowledgePersonality,
+  withKnowledgePersonality,
   parseAssistantPlan,
   previewRuns,
   resolveConnections,
@@ -100,6 +102,17 @@ describe('assistant-view presentation helpers', () => {
     expect(taskRunLine({ lastRunAt: now - 1000 }, anHourLater, now)).toBe('Next run in 1h')
     expect(taskRunLine({ lastRunAt: now - 60 * 60 * 1000 }, null, now)).toBe('Last run 1h ago')
     expect(taskRunLine({}, null, now)).toBe('Not scheduled')
+  })
+
+  it('states how long ago an on-demand function worked beside its label', () => {
+    const now = new Date(2026, 2, 10, 10, 0).getTime()
+    expect(taskRunLine({ lastActivity: now - 8 * 60 * 1000 }, null, now, true)).toBe(
+      'On demand · 8m'
+    )
+    expect(taskRunLine({ lastActivity: now - 60 * 60 * 1000 }, null, now, true)).toBe(
+      'On demand · 1h'
+    )
+    expect(taskRunLine({ lastActivity: now - 30 * 1000 }, null, now, true)).toBe('On demand · Now')
   })
 
   it('uses a custom task icon only when one is set', () => {
@@ -380,6 +393,49 @@ const AUTHORED_KNOWLEDGE = [
   '- The report never contains tool names.'
 ].join('\n')
 
+describe('personality section', () => {
+  it('reads the section the agent wrote, wherever it sits', () => {
+    const knowledge = [
+      '# Ola',
+      '',
+      '## Personality',
+      'Brief and direct.',
+      '',
+      '## Rules',
+      'x'
+    ].join('\n')
+    expect(readKnowledgePersonality(knowledge)).toBe('Brief and direct.')
+    expect(readKnowledgePersonality('## Rules\nNothing about voice.')).toBe('')
+  })
+
+  it('rewrites the section in place without dropping the other ones', () => {
+    const knowledge = ['## Personality', 'Old.', '', '## Rules', 'Be careful.'].join('\n')
+    expect(withKnowledgePersonality(knowledge, 'New.')).toBe(
+      ['## Personality', 'New.', '', '## Rules', 'Be careful.'].join('\n')
+    )
+  })
+
+  it('puts the section first above a document that has headings of its own', () => {
+    const knowledge = ['# Ola', '', '## Identity', '- Name: Ola.'].join('\n')
+    expect(withKnowledgePersonality(knowledge, 'Brief.')).toBe(
+      ['## Personality', 'Brief.', '', knowledge].join('\n')
+    )
+  })
+
+  it('adds an Instructions boundary so a heading-less document is never swallowed', () => {
+    // A markdown heading owns everything under it, so the personality must not be
+    // dropped straight above prose: the whole document would read as one section
+    // called Personality, which is exactly the collapse this boundary prevents.
+    const knowledge = 'You are Ola.\n\nSupport the brand.'
+    expect(withKnowledgePersonality(knowledge, 'Brief.')).toBe(
+      ['## Personality', 'Brief.', '', '## Instructions', knowledge].join('\n')
+    )
+    expect(withKnowledgePersonality('', 'Only a voice.')).toBe(
+      ['## Personality', 'Only a voice.'].join('\n')
+    )
+  })
+})
+
 describe('knowledge section parsing', () => {
   it('splits ALL-CAPS titles, including a parenthesised one with lowercase inside', () => {
     const sections = parseKnowledgeSections(AUTHORED_KNOWLEDGE)
@@ -576,7 +632,6 @@ describe('assistant plan schema', () => {
       parseAssistantPlanValue({ schedule: { cadence: 'once', onceAt: 1_700_000_000_000 } })
     ).toEqual({
       name: null,
-      personality: null,
       scheduled: null,
       scheduleName: null,
       schedule: { cadence: 'once', times: [], onceAt: 1_700_000_000_000 },
@@ -586,23 +641,30 @@ describe('assistant plan schema', () => {
     })
   })
 
-  it('keeps the name, the personality and the clock the conversation settled', () => {
+  it('keeps the name and the clock the conversation settled', () => {
     const plan = parseAssistantPlanValue({
       name: '  Jenny  ',
-      personality: 'You keep my X and LinkedIn moving.',
       scheduled: false,
       scheduleName: 'Daily account check',
       connections: []
     })
     expect(plan?.name).toBe('Jenny')
-    expect(plan?.personality).toBe('You keep my X and LinkedIn moving.')
     expect(plan?.scheduled).toBe(false)
     expect(plan?.scheduleName).toBe('Daily account check')
-    // A plan that carries only the identity fields is still a plan: the
-    // conversation may settle who the assistant is in one turn and the schedule
-    // in the next.
+    // A plan that carries only the name is still a plan: the conversation may
+    // settle who the assistant is in one turn and the schedule in the next.
     expect(parseAssistantPlanValue({ name: 'Jenny' })?.name).toBe('Jenny')
     expect(parseAssistantPlanValue({ name: '   ' })).toBeNull()
+  })
+
+  it('carries no personality, which travels inside the knowledge', () => {
+    const plan = parseAssistantPlanValue({
+      name: 'Jenny',
+      personality: 'You keep my X and LinkedIn moving.',
+      connections: []
+    })
+    expect(plan?.name).toBe('Jenny')
+    expect(plan).not.toHaveProperty('personality')
   })
 
   it('ignores JSON that is not a plan and a non-JSON body', () => {
@@ -630,7 +692,6 @@ describe('assistant plan schema', () => {
     expect(schema.required).toEqual(['schedule', 'connections'])
     expect(Object.keys(schema.properties)).toEqual([
       'name',
-      'personality',
       'scheduled',
       'scheduleName',
       'schedule',

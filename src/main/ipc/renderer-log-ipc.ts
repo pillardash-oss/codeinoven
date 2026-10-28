@@ -6,6 +6,23 @@ const MAX_MESSAGE_CHARS = 8000
 const MAX_STACK_CHARS = 16000
 
 /**
+ * Engine warnings that reach `window.onerror` but describe browser bookkeeping.
+ *
+ * Chromium raises "ResizeObserver loop completed with undelivered notifications"
+ * whenever an observer's callback schedules more layout than a frame allows.
+ * There is nothing to fix on the app side, it fires from ordinary panel layout,
+ * and on 2026-10-27 it accounted for 8 of the 16 error lines in one day folder.
+ * It is still recorded, at `dev`, so a layout loop someone is actually chasing
+ * stays in `main.jsonl` while `error.log` keeps describing failures.
+ */
+const BENIGN_RENDERER_ERRORS = [/^ResizeObserver loop (?:completed|limit exceeded)/u]
+
+function isBenignRendererError(entry: RendererLogEntry): boolean {
+  if (entry.level !== 'error') return false
+  return BENIGN_RENDERER_ERRORS.some((pattern) => pattern.test(entry.message))
+}
+
+/**
  * Renderer-to-main durable logging bridge.
  *
  * The renderer runs in its own process and cannot import the main-process
@@ -49,6 +66,10 @@ export function registerRendererLogIpcHandler(): void {
     const entry = sanitize(raw)
     if (!entry) return
     const prefix = `[renderer:${entry.source}]`
+    if (isBenignRendererError(entry)) {
+      Logger.dev(prefix, entry.message)
+      return
+    }
     if (entry.stack) {
       Logger.error(prefix, entry.message, { stack: entry.stack })
       return

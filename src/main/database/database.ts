@@ -12,6 +12,13 @@ import {
   serializeAuthoredWorkKinds
 } from '../../lib/design/authored-work-kinds'
 import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
+import {
+  ASSISTANT_INSTRUCTIONS_HEADING,
+  ASSISTANT_PERSONALITY_HEADING,
+  assistantPersonalityDocument,
+  hasAssistantPersonalitySection,
+  hasKnowledgeHeading
+} from '../../lib/assistant-personality'
 import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
@@ -84,7 +91,10 @@ export class Database {
   private contextCostRepair: Promise<void> | null = null
 
   constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
-    this.path = path ?? getConfigRoot() + '/codeinoven.db'
+    // `join` rather than string concatenation: the config root is a platform
+    // path, and a hard-coded `/` here printed `C:\Users\...\codeinoven/codeinoven.db`
+    // in every log line and diagnostics export on Windows.
+    this.path = path ?? join(getConfigRoot(), 'codeinoven.db')
     this.workerFactory = workerFactory
   }
 
@@ -941,6 +951,7 @@ export class Database {
       this.migrateAssistantPinned(connection)
       this.migrateAssistantAgentsAndPause(connection)
       this.migrateAssistantIdentityColumns(connection)
+      this.repairCollapsedAssistantPersonality(connection)
       this.migrateAssistantDescription(connection)
       this.migrateAssistantReporting(connection)
       this.migrateCustomSvgIcons(connection)
@@ -1188,10 +1199,14 @@ export class Database {
   }
 
   /**
-   * Add the two columns an assistant is described by, to databases created
-   * before it had a voice of its own: the personality its owner wrote, and the
-   * name they gave its schedule. Fresh databases already carry both, and the
-   * guarded `ALTER TABLE`s are idempotent.
+   * Add the schedule-name column, and retire the personality column, on databases
+   * created before how an assistant behaves became a section of its knowledge.
+   *
+   * The personality its owner wrote used to be a column of its own that rode every
+   * turn ahead of the knowledge. It now lives inside the knowledge as the
+   * `Personality` section, where the user edits it beside every other section, so a
+   * stored personality is folded in first and the empty column is dropped. Fresh
+   * databases never carry it, and every step is guarded, so this is idempotent.
    */
   private migrateAssistantIdentityColumns(connection: DatabaseType): void {
     const columns = new Set<string>(
@@ -1199,11 +1214,83 @@ export class Database {
         (column) => column.name
       )
     )
-    if (columns.size > 0 && !columns.has('personality')) {
-      connection.exec('ALTER TABLE assistants ADD COLUMN personality TEXT')
-    }
     if (columns.size > 0 && !columns.has('schedule_name')) {
       connection.exec('ALTER TABLE assistants ADD COLUMN schedule_name TEXT')
+    }
+    if (!columns.has('personality')) return
+    this.foldAssistantPersonalityIntoKnowledge(connection)
+    try {
+      connection.exec('ALTER TABLE assistants DROP COLUMN personality')
+    } catch (error) {
+      // A SQLite build without DROP COLUMN leaves the retired column in place. It
+      // is never read or written again, so the only cost is an unused field.
+      Logger.dev('Could not drop the retired assistant personality column:', error)
+    }
+  }
+
+  /**
+   * Move every stored assistant personality into its knowledge as the
+   * `Personality` section, at the top, where the panel already shows the first
+   * section. A knowledge that already carries one is left untouched, so re-running
+   * this never duplicates it.
+   *
+   * The document keeps every word it had: `assistantPersonalityDocument` adds the
+   * `Instructions` boundary when the knowledge does not open with a heading of its
+   * own, because a markdown heading would otherwise own the whole document.
+   */
+  private foldAssistantPersonalityIntoKnowledge(connection: DatabaseType): void {
+    const rows = connection
+      .prepare(
+        `SELECT id, personality, knowledge FROM assistants
+          WHERE personality IS NOT NULL AND trim(personality) <> ''`
+      )
+      .all() as Array<{ id: string; personality: string; knowledge: string | null }>
+    if (rows.length === 0) return
+    const update = connection.prepare('UPDATE assistants SET knowledge = ? WHERE id = ?')
+    for (const row of rows) {
+      const knowledge = row.knowledge ?? ''
+      if (hasAssistantPersonalitySection(knowledge)) continue
+      update.run(assistantPersonalityDocument(row.personality, knowledge), row.id)
+    }
+  }
+
+  /**
+   * Repair a knowledge that an earlier build of the fold damaged.
+   *
+   * The first version of `foldAssistantPersonalityIntoKnowledge` put the
+   * personality heading directly above the document, so on a knowledge with no
+   * headings of its own the heading owned every line under it: the user's whole
+   * instruction set showed up as one section called `Personality`. This splits such
+   * a document back at the blank line the fold itself inserted, restoring the
+   * personality as the first section and the rest as `Instructions`.
+   *
+   * It only ever touches that exact shape (a document whose only heading is the
+   * leading personality one), so it is idempotent and cannot touch a knowledge that
+   * has since been repaired or authored properly.
+   */
+  private repairCollapsedAssistantPersonality(connection: DatabaseType): void {
+    const heading = `${ASSISTANT_PERSONALITY_HEADING}\n`
+    const rows = connection
+      .prepare(`SELECT id, knowledge FROM assistants WHERE knowledge LIKE ?`)
+      .all(`${ASSISTANT_PERSONALITY_HEADING}%`) as Array<{ id: string; knowledge: string }>
+    if (rows.length === 0) return
+    const update = connection.prepare('UPDATE assistants SET knowledge = ? WHERE id = ?')
+    for (const row of rows) {
+      const knowledge = row.knowledge ?? ''
+      if (!knowledge.startsWith(heading)) continue
+      const body = knowledge.slice(heading.length)
+      // A document with any heading of its own closed the personality block
+      // already, so there is nothing to repair.
+      if (hasKnowledgeHeading(body)) continue
+      const seam = body.search(/\n[ \t]*\n/)
+      if (seam === -1) continue
+      const personality = body.slice(0, seam).trim()
+      const rest = body.slice(seam).trim()
+      if (!personality || !rest) continue
+      update.run(
+        `${ASSISTANT_PERSONALITY_HEADING}\n${personality}\n\n${ASSISTANT_INSTRUCTIONS_HEADING}\n${rest}`,
+        row.id
+      )
     }
   }
 

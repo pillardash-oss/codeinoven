@@ -1,13 +1,12 @@
 <script lang="ts">
+  import MediaActivityIndicator from '$lib/components/speech/MediaActivityIndicator.svelte'
+  import { captureActivities } from '$shared/media-activity'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
-  import CioMic from '@pdslng/cio-icon/CioMic.svelte'
   import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
-  import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -17,7 +16,7 @@
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
   import ModelPickerVendorIcons from '$lib/components/shared/ModelPickerVendorIcons.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
+  import { browserTabMuteLabel } from '$lib/stores/browser-tab-status'
   import {
     browserTabLabel,
     MAX_GLOBAL_BROWSER_GROUPS,
@@ -460,13 +459,10 @@
       >
     {/if}
     {#if runtime.capturing}
-      <span
-        role="img"
-        class="flex h-6 w-6 items-center justify-center text-accent"
-        title={BROWSER_TAB_CAPTURE_LABEL}
-        aria-label={BROWSER_TAB_CAPTURE_LABEL}
-      >
-        <CioMic size={12} />
+      <span class="flex shrink-0 items-center justify-center gap-0.5">
+        {#each captureActivities(runtime) as kind (kind)}
+          <MediaActivityIndicator {kind} />
+        {/each}
       </span>
     {/if}
     {#if runtime.audible || runtime.muted}
@@ -482,9 +478,9 @@
         }}
       >
         {#if runtime.muted}
-          <CioVolumeX size={12} />
+          <MediaActivityIndicator kind="audio" muted decorative />
         {:else}
-          <CioVolume size={12} />
+          <MediaActivityIndicator kind="audio" decorative />
         {/if}
       </button>
     {:else if tab.hibernated}

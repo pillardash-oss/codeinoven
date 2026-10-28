@@ -12,6 +12,7 @@ import type {
   TitleAttemptAccounting,
   TitleModelCandidate
 } from './persistent-cli-types'
+import type { AuxiliaryCandidateVerdict, AuxiliaryVerdictBlockMap } from './auxiliary-verdict-store'
 import {
   buildTitleAttempt,
   describeTitleFailure,
@@ -25,12 +26,13 @@ export interface OneShotHost {
   driverName: string
   titleTurns: TitleTurnRegistry
   /**
-   * Auxiliary candidates this driver instance refuses to probe, shared by every
-   * auxiliary run. Keyed by `providerId/modelId` because a provider window
-   * closes per account and model, not per job, and because a hard rejection
-   * retires one provider or one model id rather than the whole app.
+   * Auxiliary candidates this driver refuses to probe, shared by every auxiliary
+   * run. Keyed by `providerId/modelId` because a provider window closes per
+   * account and model, not per job, and because a hard rejection retires one
+   * provider or one model id rather than the whole app. Durable when the driver
+   * supplies `AuxiliaryVerdictStore`, so a restart reuses what it already proved.
    */
-  quotaBlocks: Map<string, AuxiliaryQuotaBlock>
+  quotaBlocks: AuxiliaryVerdictBlockMap
   createSession: (projectPath: string, title: string) => Promise<string>
   sendPrompt: (projectPath: string, options: SendPromptOptions) => Promise<void>
   requireSession: (projectPath: string, sessionId: string) => Promise<PersistentCliSession>
@@ -38,40 +40,43 @@ export interface OneShotHost {
   deleteSession: (projectPath: string, sessionId: string) => Promise<void>
 }
 
-/** One candidate whose provider reported a usage reset, and when its window reopens. */
-export interface AuxiliaryQuotaBlock {
-  /** Epoch ms this candidate may be probed again. */
-  resetAt: number
-  /** Provider-reported reason, kept for the attempt ledger and diagnostics. */
-  reason: string
-}
+/**
+ * One candidate the provider already rejected (usage reset, auth, withdrawn
+ * model or region lock), and when it may be probed again.
+ */
+export type AuxiliaryQuotaBlock = AuxiliaryCandidateVerdict
 
 /**
  * Longest a blocked candidate is skipped. Providers report multi-day quota
- * windows and this memory is in-process only, so the block is capped rather
- * than honoured verbatim: the candidate is probed again once the cap passes,
- * which keeps a misparsed or already-lifted reset from retiring an auxiliary
- * path for days.
+ * windows and this verdict is persisted, so the block is capped rather than
+ * honoured verbatim: the candidate is probed again once the cap passes, which
+ * keeps a misparsed or already-lifted reset from retiring an auxiliary path for
+ * days.
  */
 const AUXILIARY_QUOTA_BLOCK_MAX_MS = 6 * 60 * 60 * 1000
 
 /**
  * How long one provider stays out of auxiliary routing after it rejected the
- * account itself (expired key, revoked OAuth, billing, free-tier gate). The
- * memory is in-process only and capped rather than honoured forever, so a
- * rejected provider is re-probed within the hour even if the user never fixes
- * the credential.
+ * account itself (expired key, revoked OAuth, billing, free-tier gate). Capped
+ * rather than honoured forever, so a rejected provider is re-probed within the
+ * hour even if the user never fixes the credential.
  */
 const AUXILIARY_AUTH_BLOCK_MAX_MS = 30 * 60 * 1000
 
 /**
  * How long one model id stays out of auxiliary routing after its provider
  * withdrew the id (deprecated, unsupported, region-locked, unavailable).
- * Shorter than the auth cap because "model unavailable" is also how a provider
- * phrases a temporary outage, and the probe must not stay blind to a model that
- * comes back.
+ *
+ * A week rather than an hour, because these are the two failure classes that are
+ * facts about the catalog instead of about a quota window: a deprecated model id
+ * does not come back, and a region lock is a property of the account's country.
+ * The verdict is also persisted now, so an hour-long cap only meant that every
+ * launch re-paid the probe to relearn the same permanent answer: on one Windows
+ * machine four such candidates cost about 37 seconds of harness processes per
+ * launch. A week still re-probes a temporarily unavailable model, because the
+ * store cannot tell a withdrawal from an outage the provider phrased that way.
  */
-const AUXILIARY_DEAD_MODEL_BLOCK_MAX_MS = 60 * 60 * 1000
+const AUXILIARY_DEAD_MODEL_BLOCK_MAX_MS = 7 * 24 * 60 * 60 * 1000
 
 /**
  * Failures that mean the model id itself is gone rather than the request being
@@ -153,8 +158,9 @@ function hardFailureBlock(
 
 /**
  * Retire the candidates one hard failure just proved unusable, so the rest of
- * this run and every later auxiliary run on the driver skip them without
- * spawning a harness process.
+ * this run skips them without spawning a harness process, and so does every
+ * later auxiliary run, in this process and after a restart (the driver's verdict
+ * store writes them through).
  *
  * A provider-scoped verdict retires every candidate of that provider in this
  * run's list, not only the failing one: the same credentials and region serve
@@ -327,6 +333,11 @@ export async function runOneShotWithCandidates(
   /** The run's own fallback model is never retired by a sibling's rejection. */
   const fallbackKey = auxiliaryCandidateKey(fallback)
   let authFailed = false
+  // Restore verdicts an earlier launch already proved before judging the first
+  // candidate. This is the one place the run waits on the verdict file, and it
+  // happens once per process, so a restored block skips its harness process
+  // exactly like an in-memory one.
+  await host.quotaBlocks.ready?.()
 
   for (let index = 0; index < attempts.length; index++) {
     const candidate = attempts[index]
@@ -334,9 +345,10 @@ export async function runOneShotWithCandidates(
     const block = host.quotaBlocks.get(candidateKey)
     if (block) {
       if (block.resetAt > Date.now()) {
-        // The account already reported this window as closed: skip it without
-        // spawning a harness process, and record the skip so the ledger shows a
-        // candidate that was deliberately passed over rather than one that ran.
+        // The account already reported this window as closed (now, or in a
+        // previous launch that persisted it): skip it without spawning a harness
+        // process, and record the skip so the ledger shows a candidate that was
+        // deliberately passed over rather than one that ran.
         accounted.push(buildTitleAttempt(index + 1, candidate, false, `Skipped: ${block.reason}`))
         continue
       }

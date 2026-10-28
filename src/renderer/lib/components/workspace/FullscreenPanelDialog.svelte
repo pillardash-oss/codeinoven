@@ -59,6 +59,13 @@
      *  under that child on every frame, which starves the GPU and makes the
      *  content tear under load. */
     scrim?: boolean
+    /** Draw no tab strip at all.
+     *
+     *  A surface showing one thing that is not a tab does not need a tab bar, and
+     *  a strip naming it would only repeat what the picture already says. The
+     *  caller then owns the way out through its own body, so this is only for a
+     *  body that draws its own controls and its own minimize. */
+    hideStrip?: boolean
   }
 
   let {
@@ -79,7 +86,8 @@
     onMoveTab,
     children,
     hostsBrowserView = false,
-    scrim = true
+    scrim = true,
+    hideStrip = false
   }: Props = $props()
 
   /** The dialog is named after the tab it is showing, which is also the label
@@ -158,21 +166,23 @@
   scrim={scrim && !hostsBrowserView}
   blocksBrowserView={!hostsBrowserView}
 >
-  <PanelTabStrip
-    {tabs}
-    {activeTabId}
-    {onSelect}
-    {newLabel}
-    {icon}
-    {tabIcon}
-    {tabIndicator}
-    {actions}
-    trailing={stripTrailing}
-    {onNew}
-    {onCloseTab}
-    {onTabContextMenu}
-    {onMoveTab}
-    titlebar
-  />
+  {#if !hideStrip}
+    <PanelTabStrip
+      {tabs}
+      {activeTabId}
+      {onSelect}
+      {newLabel}
+      {icon}
+      {tabIcon}
+      {tabIndicator}
+      {actions}
+      trailing={stripTrailing}
+      {onNew}
+      {onCloseTab}
+      {onTabContextMenu}
+      {onMoveTab}
+      titlebar
+    />
+  {/if}
   {@render children()}
 </Modal>

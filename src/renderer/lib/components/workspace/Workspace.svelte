@@ -44,6 +44,7 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { captureActivities } from '$shared/media-activity'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import {
@@ -165,7 +166,6 @@
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
   import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
-  import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
   import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
@@ -879,7 +879,12 @@
    */
   $effect(() => {
     const thread = selectedThread
-    if (!thread) return
+    if (!thread) {
+      // Nothing is on screen, so nothing may dock itself: a read still in flight
+      // for the thread that was just closed must not open its coordinator panel.
+      designCoordinatorState.release()
+      return
+    }
     // The sidebar's panels are scoped to the project it is docked on, so make
     // sure it is docked on the thread on screen before anything reads it. A
     // surface that moved the visible thread without activating the sidebar would
@@ -1386,7 +1391,7 @@
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in ${authoredWorkOwnerLabel(selectedThread.projectId)}`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
           active: authoredWorkActive(kind),
-          playing: kind === 'video' && browserAudio.videoIsPlaying(selectedThread.id),
+          media: browserAudio.boardActivities(selectedThread.id, kind),
           onSelect: () => openAuthoredWork(kind)
         })
       }
@@ -1441,6 +1446,17 @@
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: CioThreadBrowser,
         active: dockKindActive('browser'),
+        media: [
+          ...new SvelteSet(
+            browserTabs.flatMap((tab) => {
+              const runtime = contextSidebarState.browserRuntime(tab.id)
+              return [
+                ...captureActivities(runtime),
+                ...(runtime.audible && !runtime.muted ? ['audio' as const] : [])
+              ]
+            })
+          )
+        ],
         playing: browserTabs.some((tab) => {
           const runtime = contextSidebarState.browserRuntime(tab.id)
           return runtime.audible && !runtime.muted
@@ -4578,9 +4594,7 @@
     const agents = withDefaultAssistantPrimary({ fallbacks: [] }, currentAssistantModelSelection())
     const assistant = await assistants.createAssistant({
       name: draft.name,
-      personality: draft.personality || undefined,
-      scheduled: draft.scheduled,
-      scheduleName: draft.scheduleName || undefined,
+      description: draft.description || undefined,
       agents
     })
     // The seed task is created already inside the assistant: a follow-up regroup
@@ -4591,10 +4605,11 @@
     })
     await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
     await openAssistantKnowledgeFor(assistant)
-    // The assistant was given its name and personality on the form, so it opens
-    // the conversation itself: it greets the user by using them, asks what to
-    // call them, and says where a task goes. A failed opening turn is not fatal,
-    // because the conversation is open and the user can send the first message.
+    // The assistant was given its name and description on the form, so it opens
+    // the conversation itself: it greets them by name, asks how they want it to
+    // behave and what to call them, and says where a task goes. A failed opening
+    // turn is not fatal, because the conversation is open and the user can send the
+    // first message.
     try {
       await assistants.startManualSetup(assistant.id)
     } catch (error) {
@@ -5507,12 +5522,16 @@
   onSelect={openSwitcherEntry}
 />
 
-<WorkspaceFullscreenTerminal
-  tabId={terminalFullscreenTab?.id ?? null}
-  onTabIdChange={(id) => (terminalFullscreenTabId = id)}
-  onNewTerminal={openNewTerminal}
-  onCloseTab={(id) => closeFullscreenTab('terminal', id)}
-/>
+{#if terminalFullscreenTab}
+  {#await import('./WorkspaceFullscreenTerminal.svelte') then { default: WorkspaceFullscreenTerminal }}
+    <WorkspaceFullscreenTerminal
+      tabId={terminalFullscreenTabId}
+      onTabIdChange={(id) => (terminalFullscreenTabId = id)}
+      onNewTerminal={openNewTerminal}
+      onCloseTab={(id) => closeFullscreenTab('terminal', id)}
+    />
+  {/await}
+{/if}
 {#if browserFullscreenTabId}
   {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
     <WorkspaceFullscreenBrowser

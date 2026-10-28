@@ -2,7 +2,9 @@ import { stat } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { DEFAULT_WORK_ROOTS, normalizeWorkRoot } from '../../lib/design/work-roots'
 import type { AuthoredWorkKind, DesignEntry } from '../../lib/ipc/design'
+import { ASSISTANT_SPACE_ID } from '../../lib/types'
 import type { Database } from '../database/database'
+import { isInsideProject } from '../preview/served-folder'
 import { listProjectWorkFolders, readWorkFolder } from './design-listing'
 import { projectWorkRootPaths } from './work-roots-state'
 
@@ -27,6 +29,126 @@ export async function withWorkRegistryLock<T>(
   } finally {
     if (registryOperations.get(projectId) === operation) registryOperations.delete(projectId)
   }
+}
+
+/**
+ * Every folder a conversation workspace has authored.
+ *
+ * A conversation workspace is listed from disk, because the registry is keyed by
+ * project id and every assistant task shares one container id: a registry read
+ * there would answer for whichever assistant happened to write a folder of that
+ * name first. Disk under the canonical root is only half the truth, though. A
+ * folder the user moves elsewhere in the workspace still exists, and it sits
+ * outside the root this listing enumerates, so the board that answered from disk
+ * alone lost the design it was showing the moment it was relocated (the app had
+ * performed the move, told the agent the new path, and then could not draw it).
+ *
+ * The threads' own records are the other half: they are scoped to this workspace
+ * by the assistant that owns them, they are rebased by every move, and each one
+ * is verified on disk before it reaches the board, so a folder the user deleted
+ * never comes back from a stale row. Both records are read, because they answer
+ * different questions: the thread's current folder carries the authoritative kind,
+ * and the folder's creator keeps every folder that workspace ever authored even
+ * after its thread moved on to another one.
+ */
+export async function listConversationWorkFolders(input: {
+  database: Database
+  projectId: string
+  threadId: string
+  assistantId: string | null
+  workspacePath: string
+  kind: AuthoredWorkKind
+}): Promise<DesignEntry[]> {
+  const root = DEFAULT_WORK_ROOTS[input.kind]
+  const discovered = await listProjectWorkFolders(input.workspacePath, root)
+  const seen = new Set(discovered.map((entry) => entry.directory))
+  const recorded = await recordedWorkspaceFolders(input)
+  for (let index = 0; index < recorded.length; index += 8) {
+    const batch = await Promise.all(
+      recorded.slice(index, index + 8).map(async (directory) => ({
+        directory,
+        entry: await readWorkFolder(input.workspacePath, directory).catch(() => null)
+      }))
+    )
+    for (const { directory, entry } of batch) {
+      if (!entry || seen.has(directory)) continue
+      seen.add(directory)
+      discovered.push({ ...entry, creatorThreadId: null })
+    }
+    await new Promise<void>((resume) => setImmediate(resume))
+  }
+  return discovered.sort((left, right) => right.updatedAt - left.updatedAt)
+}
+
+/**
+ * Folders of one kind this workspace's threads recorded, however they are spelled now.
+ *
+ * An assistant workspace is shared by every task of that assistant, so the owner
+ * is the assistant the row's thread belongs to, falling back to the thread itself
+ * for a task that has no assistant. A chat or a browser tab owns its own
+ * workspace, so its own thread is the whole filter.
+ *
+ * Two kinds of record are read, because they answer different questions. The
+ * thread's current folder is written by every preview, so it carries the
+ * authoritative kind. A folder whose thread has since moved on keeps only its
+ * creator row, which does not say what it holds, so it has to be recognised as
+ * authored work of this kind by the registry first: previewing a scratch folder is
+ * not designing one, and the creator row alone would put every folder a thread
+ * ever opened on the board.
+ */
+async function recordedWorkspaceFolders(input: {
+  database: Database
+  projectId: string
+  threadId: string
+  assistantId: string | null
+  workspacePath: string
+  kind: AuthoredWorkKind
+}): Promise<string[]> {
+  const byAssistant = input.projectId === ASSISTANT_SPACE_ID
+  const owner = byAssistant ? (input.assistantId ?? input.threadId) : input.threadId
+  const owned = byAssistant ? 'COALESCE(t.assistant_id, t.id) = ?' : 't.id = ?'
+  const [current, registered, created] = await Promise.all([
+    input.database.queryViaWorker(
+      `SELECT DISTINCT td.directory AS directory FROM thread_designs td
+         JOIN threads t ON t.id = td.thread_id
+        WHERE td.project_id = ? AND td.kind = ? AND ${owned}`,
+      [input.projectId, input.kind, owner],
+      0
+    ),
+    input.database.queryViaWorker(
+      'SELECT directory FROM authored_work_folders WHERE project_id = ? AND kind = ?',
+      [input.projectId, input.kind],
+      0
+    ),
+    input.database.queryViaWorker(
+      `SELECT DISTINCT o.directory AS directory FROM design_origins o
+         JOIN threads t ON t.id = o.thread_id
+        WHERE o.project_id = ? AND ${owned}`,
+      [input.projectId, owner],
+      0
+    )
+  ])
+  if (!current.ok || !registered.ok || !created.ok)
+    throw new Error('Could not read this workspace’s folders')
+  const authored = new Set(
+    created.rows.map((row) => String((row as { directory: unknown }).directory))
+  )
+  const folders = new Set<string>(
+    current.rows.map((row) => String((row as { directory: unknown }).directory))
+  )
+  for (const row of registered.rows) {
+    const directory = String((row as { directory: unknown }).directory)
+    if (authored.has(directory)) folders.add(directory)
+  }
+  const root = DEFAULT_WORK_ROOTS[input.kind]
+  return [...folders].filter((directory) => isWorkspaceFolder(input.workspacePath, directory, root))
+}
+
+/** Whether a recorded spelling names a folder of work inside this workspace. */
+function isWorkspaceFolder(workspacePath: string, directory: string, root: string): boolean {
+  if (normalizeWorkRoot(directory) !== directory) return false
+  if (directory === '.cio' || directory === root) return false
+  return isInsideProject(workspacePath, resolve(workspacePath, directory))
 }
 
 /** Exact work folders, independent of the thread currently previewing them. */

@@ -44,7 +44,7 @@ function seed(id = 'judge'): Assistant {
   return {
     id,
     name: 'Judge',
-    personality: 'Be precise',
+    description: 'Watches products',
     knowledge: 'Watch products',
     scheduleUpdatedAt: 1,
     scheduled: true,
@@ -63,8 +63,8 @@ describe('assistant reporting persistence', () => {
     repo.updateReporting('judge', { delivery: { channel: 'in-app' } }, 2)
     repo.updateReporting('judge', { priority: { timeliness: 'today', impact: 'company' } }, 3)
     // A panel edit made between reporting answers must also survive.
-    db.run('UPDATE assistants SET personality = ? WHERE id = ?', [
-      'Panel-edited personality',
+    db.run('UPDATE assistants SET description = ? WHERE id = ?', [
+      'Panel-edited description',
       'judge'
     ])
     repo.updateReporting(
@@ -81,7 +81,7 @@ describe('assistant reporting persistence', () => {
     await db.init()
     expect(await new AssistantRepo(db).getViaWorker('judge')).toEqual({
       ...original,
-      personality: 'Panel-edited personality',
+      description: 'Panel-edited description',
       delivery: { channel: 'email', target: 'reports@example.com' },
       priority: { timeliness: 'today', impact: 'company' },
       updatedAt: 4

@@ -12,6 +12,7 @@ import { readOvenSurface, ovenSurfaceCacheKey, writeOvenSurface } from '$lib/ove
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import {
+  directoriesToRefresh,
   errorMessage,
   isWithinPath,
   orderDeletionPaths,
@@ -34,6 +35,16 @@ const RESTORE_MAX_DEPTH = 12
 /** How long a directory's background refresh may be debounced after an
  *  expand/collapse, so rapid toggles coalesce into a single re-read. */
 const BACKGROUND_REFRESH_DEBOUNCE_MS = 300
+
+/** How recently a directory listing must have been read to still count as
+ *  current when the explorer opens again. Reopening inside this window reuses
+ *  the read instead of asking the main process again, so flicking between
+ *  sidebar tabs never re-reads a large expanded tree. */
+const LISTING_FRESH_MS = 2000
+
+/** Upper bound on remembered listing read times before the stale ones are
+ *  dropped, so a long session over many projects cannot grow the map. */
+const LISTING_READ_LIMIT = 512
 
 /**
  * Directory-tree and selection state the explorer controller needs from the
@@ -62,10 +73,20 @@ export class ProjectFilesExplorer {
   private readonly listDirectory = createWorkQueue(2)
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private directoryLoads = new Map<string, Promise<void>>()
+  /** Keys of the in-flight loads that are silent background refreshes, so a
+   *  forced load can tell a stale read it should not reuse from a live one it
+   *  can. A plain Set keeps it off reactivity. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private silentLoads = new Set<string>()
   /** Pending debounced silent refreshes, keyed `projectId:directory`. A plain
    *  Map (not $state) keeps the scheduler allocation-free and off reactivity. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private backgroundRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** When each directory listing was last read successfully, keyed
+   *  `projectId:mountKey:directory`. A plain Map keeps it allocation-light and
+   *  off reactivity; it is only consulted by the open refresh. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private listingReadAt = new Map<string, number>()
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private focusGenerations = new Map<string, number>()
   /** Fresh project states whose persisted expansion still needs to be populated. */
@@ -94,7 +115,7 @@ export class ProjectFilesExplorer {
     projectId: string,
     directory: string,
     force = false,
-    options: { silent?: boolean } = {}
+    options: { silent?: boolean; surfaceErrors?: boolean } = {}
   ): Promise<void> {
     const state = this.host.stateFor(projectId)
     // A scope or chat-mount switch (thread opened in another bucket, sidebar
@@ -113,10 +134,21 @@ export class ProjectFilesExplorer {
       for (const key of [...this.directoryLoads.keys()]) {
         if (key.startsWith(`${projectId}:`)) this.directoryLoads.delete(key)
       }
+      for (const key of [...this.listingReadAt.keys()]) {
+        if (key.startsWith(`${projectId}:`)) this.listingReadAt.delete(key)
+      }
     }
     const loadKey = `${projectId}:${mountKey}:${directory}`
     const pending = this.directoryLoads.get(loadKey)
-    if (pending) return pending
+    if (pending) {
+      if (!force || !this.silentLoads.has(loadKey)) return pending
+      // A silent background read (the open refresh, an expand/collapse refresh)
+      // may have been sent before this call's own change landed on disk, so its
+      // answer predates that change. A forced load always follows a change, so
+      // it waits for the stale read to settle and then reads again rather than
+      // reusing a listing that misses what was just created.
+      return pending.then(() => this.loadDirectory(projectId, directory, true, options))
+    }
     if (!force && state.entriesByDirectory[directory]) return
 
     const load = (async (): Promise<void> => {
@@ -140,6 +172,7 @@ export class ProjectFilesExplorer {
         )
         if (this.host.mountKeyFor(projectId) !== mountKey) return
         state.entriesByDirectory[directory] = entries
+        this.markListingRead(loadKey)
         state.listingFromCache = false
         if (directory === '') this.rememberRoot(projectId, state, entries)
         state.listingMountKey = mountKey
@@ -153,7 +186,7 @@ export class ProjectFilesExplorer {
           await this.restoreRevealedPath(projectId, state)
         }
       } catch (error) {
-        if (options.silent) {
+        if (options.silent && !options.surfaceErrors) {
           // A failed silent refresh drops the stale cache (the entry may have
           // been deleted externally) without flashing an error banner; the next
           // user-driven load retries and surfaces any real error normally.
@@ -171,11 +204,60 @@ export class ProjectFilesExplorer {
       }
     })()
     this.directoryLoads.set(loadKey, load)
+    if (options.silent) this.silentLoads.add(loadKey)
     try {
       await load
     } finally {
-      this.directoryLoads.delete(loadKey)
+      this.silentLoads.delete(loadKey)
+      // Only the load still on record may clear the key: a forced re-read that
+      // chained after this one has already replaced it.
+      if (this.directoryLoads.get(loadKey) === load) this.directoryLoads.delete(loadKey)
     }
+  }
+
+  /** Remember that a directory listing is current as of now, keeping the map
+   *  bounded to the directories that are still plausibly fresh. */
+  private markListingRead(loadKey: string): void {
+    this.listingReadAt.set(loadKey, Date.now())
+    if (this.listingReadAt.size <= LISTING_READ_LIMIT) return
+    const cutoff = Date.now() - LISTING_FRESH_MS
+    for (const [key, readAt] of this.listingReadAt) {
+      if (readAt <= cutoff) this.listingReadAt.delete(key)
+    }
+  }
+
+  /**
+   * Re-read the listings the tree is already showing, so files that appeared
+   * outside the app are listed the moment the explorer opens instead of after a
+   * manual Refresh. Never blocks the caller and never shows a spinner: the
+   * cached tree stays on screen while the main process's async fs pipeline
+   * answers. A read that fails after the tree is open still surfaces its error
+   * over the last-known listing, because the user is looking at that tree.
+   *
+   * Only directories that already have a listing are asked again: a folder the
+   * tree has never read is already being read by the panel's own open flow, and
+   * forcing it here would send the same request twice. A listing younger than
+   * `LISTING_FRESH_MS` is reused, which is what keeps flicking between sidebar
+   * tabs cheap on a large expanded tree.
+   */
+  async refreshOpenListings(projectId: string): Promise<void> {
+    const state = this.host.existingState(projectId)
+    if (!state) return
+    const mountKey = this.host.mountKeyFor(projectId)
+    // The held entries describe another scope or chat mount; the panel's own
+    // mount flow swaps them out, and refreshing them would read a tree that is
+    // about to be replaced.
+    if (state.activeScope !== mountKey) return
+    const now = Date.now()
+    const directories = directoriesToRefresh(state).filter((directory) => {
+      if (state.entriesByDirectory[directory] === undefined) return false
+      const readAt = this.listingReadAt.get(`${projectId}:${mountKey}:${directory}`)
+      return readAt === undefined || now - readAt >= LISTING_FRESH_MS
+    })
+    if (directories.length === 0) return
+    await mapInBatches(directories, 2, (directory) =>
+      this.loadDirectory(projectId, directory, true, { silent: true, surfaceErrors: true })
+    )
   }
 
   /**
@@ -575,6 +657,22 @@ export class ProjectFilesExplorer {
         'projectFiles:info',
         projectId,
         path,
+        this.host.scopeFor(projectId),
+        this.host.threadArg(projectId)
+      )
+    )
+  }
+
+  /** Put the copied entries on the OS clipboard as the files they are, so a
+   *  paste outside the app (Finder, Mail, any editor) lands the files and not a
+   *  text clipping. The tags travel with them for the in-app composer. */
+  async copyPathsToClipboard(projectId: string, paths: string[], text: string): Promise<void> {
+    await this.runFileOperation(() =>
+      invoke(
+        'projectFiles:copyToClipboard',
+        projectId,
+        paths,
+        text,
         this.host.scopeFor(projectId),
         this.host.threadArg(projectId)
       )

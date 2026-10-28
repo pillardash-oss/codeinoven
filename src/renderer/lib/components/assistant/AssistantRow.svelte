@@ -1,4 +1,6 @@
 <script lang="ts">
+  import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
+  import type { MediaActivity } from '$shared/media-activity'
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
   import { archiveItem } from '$lib/archive-actions'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
@@ -29,6 +31,7 @@
   import AssistantHoverPopover from './AssistantHoverPopover.svelte'
 
   interface Props {
+    media?: readonly MediaActivity[]
     assistant: Assistant
     expanded: boolean
     /**
@@ -71,6 +74,7 @@
 
   let {
     assistant,
+    media = [],
     expanded,
     stateCounts,
     attention,
@@ -301,6 +305,7 @@
         {/if}
         <span class="truncate text-[0.8125rem] text-foreground">{assistant.name}</span>
         <ThreadStateCounts counts={stateCounts} class="shrink-0" />
+        <MediaActivityTrail activities={media} label={assistant.name} />
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
         <span
@@ -492,14 +497,7 @@
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
       style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
     >
-      <AssistantHoverPopover
-        {assistant}
-        {threadCount}
-        {working}
-        {missed}
-        {nextRunAt}
-        {attention}
-      />
+      <AssistantHoverPopover {assistant} {threadCount} {working} {missed} {nextRunAt} {attention} />
     </div>
   </Portal>
 {/if}

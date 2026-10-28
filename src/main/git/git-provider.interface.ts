@@ -1,4 +1,6 @@
 import type {
+  BranchDeletionOutcome,
+  BranchDeletionState,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentPage,
@@ -115,6 +117,13 @@ export interface PullRequestTarget {
   pullNumber: number
 }
 
+/** Address one branch in a repository. */
+export interface BranchTarget {
+  owner: string
+  repo: string
+  branch: string
+}
+
 /**
  * List issues for a repository, optionally filtered by state. State `all` asks
  * for both open and closed, which is the only way to read a closed issue.
@@ -188,6 +197,24 @@ export interface IssueCommentTarget {
   owner: string
   repo: string
   commentId: number
+}
+
+/**
+ * Search a repository's pull requests by text.
+ *
+ * The state is part of the query because the find belongs to the PR listing the
+ * reader is on: a search from the Closed listing has to reach merged work, and a
+ * search from the Open listing must not answer with it.
+ */
+export interface SearchPullRequestsInput {
+  owner: string
+  repo: string
+  /**
+   * Free text in GitHub's own search syntax. Empty lists the most recently updated
+   * pull requests in the requested state, which is what the bar shows before a key.
+   */
+  text: string
+  state: PrState
 }
 
 /** Search a repository's issues by text, for the relationship picker. */
@@ -301,6 +328,21 @@ export interface GitProvider {
   reopenPullRequest(input: PullRequestTarget): Promise<PullRequestReference>
   /** Close an open pull request without merging. */
   closePullRequest(input: PullRequestTarget): Promise<PullRequestReference>
+  /**
+   * What a branch is as far as deleting it goes: deletable, protected, or
+   * already gone.
+   *
+   * A surface that offers to delete a branch has to know this before it draws
+   * the action: a protected branch refuses the write, and a branch that no
+   * longer exists has nothing left to delete.
+   */
+  readBranchDeletionState(input: BranchTarget): Promise<BranchDeletionState>
+  /**
+   * Delete a branch from the repository, the way its own branches page does.
+   * A branch that is already gone reports `missing` rather than failing: the
+   * caller wanted it gone, and it is.
+   */
+  deleteBranch(input: BranchTarget): Promise<BranchDeletionOutcome>
   /** Update an open pull request's title and/or description. */
   updatePullRequest(
     input: PullRequestTarget & { title?: string; body?: string }
@@ -308,6 +350,14 @@ export interface GitProvider {
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]>
   /** Paginated listing with the detail the sidebar list needs. */
   listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage>
+  /**
+   * Search the repository's pull requests by text, for the panel's own find.
+   *
+   * Search-backed like the listing, and read with the same mapper, so a result is
+   * a row the PR list would have drawn: selecting one opens the reader directly.
+   * Bounded rather than paged, because a find is a jump to one item.
+   */
+  searchPullRequests(input: SearchPullRequestsInput): Promise<PullRequestSummary[]>
   /**
    * One page of the repository's issues, narrowed by the viewer's relationship
    * and ordered the way the sidebar draws it.

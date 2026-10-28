@@ -114,7 +114,6 @@ export class AssistantManager {
       id: generateId(),
       name: input.name.trim() || ASSISTANT_PLACEHOLDER_NAME,
       description: input.description?.trim() || undefined,
-      personality: input.personality?.trim() || undefined,
       scheduled,
       // A schedule's name only exists while there is a schedule to name, so an
       // unscheduled assistant never keeps one behind its flag.
@@ -192,8 +191,6 @@ export class AssistantManager {
       name: input.name?.trim() || existing.name,
       description:
         'description' in input ? input.description?.trim() || undefined : existing.description,
-      personality:
-        'personality' in input ? input.personality?.trim() || undefined : existing.personality,
       scheduled,
       scheduleName: scheduled
         ? 'scheduleName' in input

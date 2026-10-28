@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
+  import MediaActivityIndicator from './MediaActivityIndicator.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label?: string
@@ -20,7 +20,7 @@
   aria-label={label}
   title={label}
 >
-  <CioVolume {size} strokeWidth={2.5} class="text-info" aria-hidden="true" />
+  <MediaActivityIndicator kind="audio" {size} decorative />
 </span>
 
 <style>

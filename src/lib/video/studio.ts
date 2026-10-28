@@ -1,3 +1,10 @@
+import {
+  validateVideoEdit,
+  validateCaptionAppearance,
+  type VideoEditDocument,
+  type VideoCaptionAppearance
+} from './edit'
+
 /** File-backed video edits and bounded job records shared by the tools and UI. */
 export type VideoValue = string | number | boolean
 export interface VideoControl {
@@ -9,10 +16,12 @@ export interface VideoControl {
   max?: number
 }
 export interface VideoCaption {
+  trackId?: string
   text: string
   start: number
   end: number
   words?: { text: string; start: number; end: number }[]
+  appearance?: VideoCaptionAppearance
 }
 export interface VideoAudioTrack {
   source: string
@@ -25,8 +34,17 @@ export interface VideoStudioDocument {
   version: 1
   controls: VideoControl[]
   captions: VideoCaption[]
-  captionStyle: 'plain' | 'highlight' | 'karaoke'
+  /**
+   * How captions are drawn over the picture.
+   *
+   * `none` draws no captions at all: a composition can carry its words for a
+   * transcript and still show none of them, which is a real editorial choice and
+   * not the same as an empty caption list.
+   */
+  captionStyle: 'plain' | 'highlight' | 'karaoke' | 'none'
   audioTracks: VideoAudioTrack[]
+  edit?: VideoEditDocument
+  captionAppearance?: VideoCaptionAppearance
 }
 export interface VideoJob {
   id: string
@@ -108,6 +126,10 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
     if (start < previous) throw new Error('Captions must be ordered and must not overlap')
     previous = end
     const caption: VideoCaption = { text: videoText(entry.text, 'caption text', 2048), start, end }
+    if (entry.trackId !== undefined)
+      caption.trackId = videoText(entry.trackId, 'Caption track ID', 96)
+    if (entry.appearance !== undefined)
+      caption.appearance = validateCaptionAppearance(entry.appearance)
     if (entry.words !== undefined) {
       if (!Array.isArray(entry.words) || entry.words.length > 200)
         throw new Error('Too many caption words')
@@ -122,7 +144,7 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
     return caption
   })
   const style = value.captionStyle ?? 'plain'
-  if (style !== 'plain' && style !== 'highlight' && style !== 'karaoke')
+  if (style !== 'plain' && style !== 'highlight' && style !== 'karaoke' && style !== 'none')
     throw new Error('Unsupported caption style')
   const audioTracks = list('audioTracks', 24).map((raw): VideoAudioTrack => {
     const track = videoRecord(raw)
@@ -134,7 +156,24 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
       gain: videoNumber(track.gain ?? 1, 'track gain', 0, 1)
     }
   })
-  return { version: 1, controls, captions, captionStyle: style, audioTracks }
+  const edit = value.edit === undefined ? undefined : validateVideoEdit(value.edit)
+  if (edit)
+    for (const caption of captions) {
+      caption.trackId ??= edit.tracks.find((track) => track.kind === 'caption')!.id
+      if (!edit.tracks.some((track) => track.id === caption.trackId && track.kind === 'caption'))
+        throw new Error('Captions require a caption track')
+    }
+  return {
+    version: 1,
+    controls,
+    captions,
+    captionStyle: style,
+    audioTracks,
+    ...(edit ? { edit } : {}),
+    ...(value.captionAppearance === undefined
+      ? {}
+      : { captionAppearance: validateCaptionAppearance(value.captionAppearance) })
+  }
 }
 
 /** Retimes source captions after a cut. Supplied word timestamps remain exact. */

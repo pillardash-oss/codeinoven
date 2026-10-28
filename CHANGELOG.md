@@ -7,6 +7,21 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **A design's comment pins come back on their own, without an edit from the
+  composer.** The pins a design page draws are published by the renderer's
+  inspection session, and it only publishes for a tab whose design it has
+  mirrored. It learned that by reading each open tab once, at the seam that
+  starts the browser, which runs *before* the sidebar restores its persisted
+  tabs (`stores/browser-runtime.ts`): the read found no tabs, and main announces
+  a tab's design only when it changes, so nothing ever taught the session about
+  the tabs already on screen. Refreshing the design page did not help either,
+  because a reload of the same design is not a change. The only thing that
+  brought the pins back was editing the comment from the composer, which reopens
+  the design and marks it again. The session now reads the state of every tab as
+  the tab list appears, re-asking for a tab main cannot answer for yet, and a
+  design tab announces itself on every document commit rather than only when its
+  design changes.
+
 - **Downloading an inline artifact now opens the save dialog and copies the file
   where you choose.** The preview's download control was a plain link to the
   artifact's served `appfile://` URL, and the renderer's session guard refuses

@@ -177,24 +177,71 @@ export function markMessageCompleted(
   )
 }
 
+/**
+ * How CodeInOven frames the primary agent's words before they reach a worker
+ * session (see the pi spawn tool's worker prompt). The framing is app-owned
+ * instruction, never conversation, so this view never renders it.
+ */
+const WORKER_PROMPT_FRAMING = 'You are a CodeInOven sub-agent spawned by the primary agent'
+const WORKER_PROMPT_MARKER = 'Instructions from the primary agent:'
+
+/** The primary agent's own instructions inside a framed worker prompt, or
+ *  `undefined` when the text is not a framed worker prompt. */
+export function unwrapWorkerPrompt(text: string): string | undefined {
+  const trimmed = text.trim()
+  if (!trimmed.startsWith(WORKER_PROMPT_FRAMING)) return undefined
+  const marker = trimmed.lastIndexOf(WORKER_PROMPT_MARKER)
+  if (marker === -1) return undefined
+  return trimmed.slice(marker + WORKER_PROMPT_MARKER.length).trim()
+}
+
+/** Rewrite a framed worker prompt message to carry only the instructions. */
+function withoutWorkerFraming(message: AgentMessage, instructions: string): AgentMessage {
+  const parts: AgentPart[] = []
+  let replaced = false
+  for (const part of message.parts) {
+    if (part.type !== 'text') {
+      parts.push(part)
+      continue
+    }
+    if (replaced) continue
+    replaced = true
+    parts.push({ ...part, text: instructions })
+  }
+  return { ...message, parts }
+}
+
 /** Drop the duplicated delegated prompt from the transcript: the view renders
- *  the task once, in its own bubble above the conversation. */
+ *  the task once, in its own bubble above the conversation. A worker session's
+ *  first user message is the primary agent's instructions wrapped in the app's
+ *  own worker framing, so it is recognized by that framing as well as by an
+ *  exact match, instead of repeating the task with the internal prompt on show. */
 export function filterVisibleMessages(
   messages: AgentMessage[],
   prompt: string | undefined
 ): AgentMessage[] {
   const trimmedPrompt = prompt?.trim()
-  if (!trimmedPrompt) return messages
   let skippedPrompt = false
-  return messages.filter((message: AgentMessage) => {
-    if (skippedPrompt || message.role !== 'user') return true
+  const visible: AgentMessage[] = []
+  for (const message of messages) {
+    if (skippedPrompt || message.role !== 'user') {
+      visible.push(message)
+      continue
+    }
     const text = textParts(message)
       .map((part) => part.text.trim())
       .join('\n')
-    if (text !== trimmedPrompt) return true
+    const instructions = unwrapWorkerPrompt(text)
+    if (text !== trimmedPrompt && instructions === undefined) {
+      visible.push(message)
+      continue
+    }
     skippedPrompt = true
-    return false
-  })
+    // The task bubble above already carries the instructions.
+    if (trimmedPrompt) continue
+    visible.push(instructions === undefined ? message : withoutWorkerFraming(message, instructions))
+  }
+  return visible
 }
 
 /** True when the loaded transcript already carries assistant prose to render. */

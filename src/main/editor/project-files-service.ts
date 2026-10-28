@@ -475,8 +475,16 @@ export class ProjectFilesService {
     )
   }
 
-  resolveForDragSync(projectId: string, relativePaths: string[], scopeBucketId?: string): string[] {
-    return this.roots.resolveForDragSync(projectId, relativePaths, scopeBucketId)
+  /** Absolute paths a native drag carries out of a tree, resolved against the
+   *  same root every other file operation uses (thread workspace mount, scope
+   *  worktree, or project directory). */
+  async resolveForDrag(
+    projectId: string,
+    relativePaths: string[],
+    scopeBucketId?: string,
+    threadId?: string
+  ): Promise<string[]> {
+    return await this.roots.resolveForDrag(projectId, relativePaths, scopeBucketId, threadId)
   }
 
   async getInfo(

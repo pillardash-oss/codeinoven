@@ -22,6 +22,7 @@
 
 import pageTabsSource from './compat/cio-page-tabs.js?raw'
 import pagePermissionsSource from './compat/cio-page-permissions.js?raw'
+import pageRuntimeSource from './compat/cio-page-runtime.js?raw'
 import storageEventsSource from './compat/cio-storage-events.js?raw'
 import darkReaderStorageSource from './compat/cio-darkreader-storage.js?raw'
 
@@ -68,6 +69,18 @@ export const EXTENSION_PAGE_TABS_PRELOAD_FILE = 'cio-page-tabs-preload.js'
 export const EXTENSION_PAGE_TABS_CHANNEL = 'cio:page-tabs'
 
 /**
+ * The channel an extension page uses to ask the app for something the page itself
+ * cannot do, which today means `chrome.runtime.openOptionsPage`.
+ *
+ * One-way, unlike the tab channel: the answer is the page appearing beside the one
+ * the popup was acting on, not a value the page waits for.
+ */
+export const EXTENSION_PAGE_COMMAND_CHANNEL = 'cio:extension-page-command'
+
+/** The page-world messages the preload forwards on that channel. */
+export type BrowserExtensionPageCommand = 'open-options'
+
+/**
  * The preload an extension page is created with, which is what makes the wrappers
  * above land in time.
  *
@@ -102,8 +115,21 @@ if (location.protocol === 'chrome-extension:') {
     ${JSON.stringify(darkReaderStorageSource)} + '\\n;\\n' +
     ${JSON.stringify(storageEventsSource)} + '\\n;\\n' +
     ${JSON.stringify(pagePermissionsSource)} + '\\n;\\n' +
+    ${JSON.stringify(pageRuntimeSource)} + '\\n;\\n' +
     'globalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ' + JSON.stringify(tab) + '\\n' + ${JSON.stringify(pageTabsSource)}
   webFrame.executeJavaScript(source).catch(() => {})
+  // The page's own world cannot reach main, so a command it posts is forwarded
+  // from here, the one side of this document that holds ipcRenderer.
+  window.addEventListener('message', (event) => {
+    const data = event ? event.data : null
+    if (!data || typeof data !== 'object') return
+    if (data.__cioPageCommand !== 'open-options') return
+    try {
+      ipcRenderer.send(${JSON.stringify(EXTENSION_PAGE_COMMAND_CHANNEL)}, 'open-options')
+    } catch (error) {
+      // A page that has lost its preload has nothing left to forward through.
+    }
+  })
 }
 `
 }

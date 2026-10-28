@@ -239,6 +239,13 @@ export class InstanceRegistry {
 
   /** Remove this process's entry and stop heartbeating (called on shutdown). */
   stop(): void {
+    // Announce what this process wrote in its last moments before the entry
+    // disappears. A batch still waiting on the coalescing timer used to die
+    // with the process, so a turn that finished just before quit never reached
+    // a sibling's window: it kept the transcript it had cached from before the
+    // answer landed. The flush publishes over the live link as well as the
+    // registry entry, so a connected sibling hears it immediately.
+    this.flushThreadChanged()
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null

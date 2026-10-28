@@ -57,6 +57,8 @@ export type GitOperation =
   | 'pr-detail'
   | 'pr-reopen'
   | 'pr-close'
+  /** Deleting a merged pull request's head branch from the repository. */
+  | 'pr-branch-delete'
   | 'pr-update'
   | 'pr-metadata'
   | 'pr-catalog'

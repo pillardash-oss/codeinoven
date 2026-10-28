@@ -673,11 +673,14 @@
         {/if}
       </div>
 
-      <!-- Shrinkable footer: the row never lets one control paint over another.
-         Stepping through the questions and reading them aloud sit on the falsy
-         side, the model switch and the submit that ends the card on the truthy
-         side. The context actions live in the head, so the row stays short. -->
-      <CardFoot>
+      <!-- One row, and it never lets a control paint over another. Stepping
+         through the questions and reading them aloud sit together on the falsy
+         side; the model switch and the submit that ends the card sit on the
+         truthy side. The picker is the one control that gives way, so the seek
+         bar the read-aloud control expands into shortens the picker's labels
+         instead of adding a second row. The context actions live in the head,
+         so the row stays short. -->
+      <CardFoot yields="right">
         {#snippet left()}
           <CardStepper
             subject="question"
@@ -688,11 +691,6 @@
             onPrev={goPrev}
             onNext={goNext}
           />
-          {#if !allAnswered}
-            <p class="min-w-0 truncate text-[0.6875rem] text-muted" transition:fly={rowArrive()}>
-              {total > 1 ? 'Answer every question to send' : 'Answer this question to send'}
-            </p>
-          {/if}
           <!-- Self-hides when no TTS artifact is installed -->
           <QuestionSpeechControls
             messageId={speechMessageId}

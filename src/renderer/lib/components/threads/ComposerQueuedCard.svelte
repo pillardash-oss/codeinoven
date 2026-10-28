@@ -168,14 +168,17 @@ the head's menu. -->
         <CioEllipsis size={13} />
       </button>
       {#if queueMenuOpen}
+        <!-- The scrim and the menu ride one rung above the composer (z-40): the
+             card sits directly over the composer, so its click-away has to keep
+             catching the first click even on the composer surface. -->
         <button
           type="button"
-          class="fixed inset-0 z-30 cursor-default"
+          class="fixed inset-0 z-50 cursor-default"
           aria-label="Close menu"
           onclick={() => (queueMenuOpen = false)}
         ></button>
         <div
-          class="absolute bottom-8 right-0 z-40 w-36 border border-border-strong bg-surface p-1 shadow-lg"
+          class="absolute bottom-8 right-0 z-50 w-36 border border-border-strong bg-surface p-1 shadow-lg"
           role="menu"
         >
           {#if !presentation}

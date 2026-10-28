@@ -1,6 +1,67 @@
 <script lang="ts">
   import { isMacPlatform } from '$lib/shortcut-display'
   import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
+  import type { Attachment } from 'svelte/attachments'
+
+  /**
+   * The conversation page column reports where it begins, so the header's thread
+   * block can put its left edge on the same line as the text a reader is reading.
+   * The pane resizes with the sidebar, so the column moves without the window
+   * changing, and a size observer catches both.
+   */
+  /** The live reporter, so the page column can be re-measured when the shell it
+   *  lives in becomes the one on screen again instead of waiting for a resize that
+   *  will never come. */
+  let reportConversationColumnNow: (() => void) | null = null
+
+  $effect(() => {
+    /* Read so this effect re-runs when the shell comes back on screen: the page
+       column has not resized, so nothing else would tell it to measure again. */
+    void layoutPanelState.contentVisible
+    reportConversationColumnNow?.()
+  })
+
+  const reportConversationColumn: Attachment<HTMLElement> = (element) => {
+    const report = () => {
+      /* The column's own padding is inside its box, and the text starts after it:
+         aligning the header to the box edge leaves the title a few pixels left of
+         the line the messages start on. */
+      const styles = getComputedStyle(element)
+      const padding = Number.parseFloat(styles.paddingLeft) || 0
+      const paddingRight = Number.parseFloat(styles.paddingRight) || 0
+      /* A conversation the reader cannot see has a position but not a meaning:
+         reporting it would align the header to a page nobody is looking at. */
+      const onScreen =
+        element.getClientRects().length > 0 &&
+        getComputedStyle(element).visibility !== 'hidden'
+      const box = element.getBoundingClientRect()
+      layoutPanelState.conversationLeft =
+        onScreen && layoutPanelState.contentVisible ? Math.round(box.left + padding) : 0
+      layoutPanelState.conversationWidth =
+        onScreen && layoutPanelState.contentVisible
+          ? Math.round(box.width - padding - paddingRight)
+          : 0
+    }
+    reportConversationColumnNow = report
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(element)
+    /* The page keeps its width while the pane around it narrows, so observing the
+       column alone misses every panel that opens or closes beside it: the column
+       moves without resizing. The pane it is centred in is what actually changes
+       size, and observing that catches both. */
+    const pane = element.parentElement
+    if (pane) observer.observe(pane)
+    window.addEventListener('resize', report)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', report)
+      if (reportConversationColumnNow === report) reportConversationColumnNow = null
+      layoutPanelState.conversationLeft = 0
+      layoutPanelState.conversationWidth = 0
+    }
+  }
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -75,7 +136,6 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
-  import ReadAlongOverlay from '../speech/ReadAlongOverlay.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import { onVoiceComposerReset } from '../../speech/voice-send'
   import WorkingTrace from './WorkingTrace.svelte'
@@ -1849,25 +1909,22 @@
       ? harnessDisplayName(visibleProviderStatus.issue.harnessId)
       : providerName
   )
-  /** Settings frozen at the moment the visible provider status card appeared.
-   *  The composer must not mutate anything already on the conversation screen:
-   *  an error card keeps showing   and retrying from "Change" affects   the
-   *  configuration of the failed attempt until a new message is actually sent.
-   *  The snapshot is refreshed only when the card's identity changes, when the
-   *  user explicitly picks a model from the card itself, or when it clears. */
-  let statusCardSettings = $state<ThreadSettings | null>(null)
-  let seenProviderStatusKey: typeof visibleProviderStatus = null
-  $effect(() => {
-    if (visibleProviderStatus !== seenProviderStatusKey) {
-      seenProviderStatusKey = visibleProviderStatus
-      statusCardSettings = chatMode
+  /** Settings the visible provider status card renders.
+   *
+   *  The card outlives the failure it reports. Switching the thread to another
+   *  model or harness from the card's own picker (or from the composer) must
+   *  leave Retry on screen, because Retry re-sends the unanswered request
+   *  through the thread's current settings on the current session. A frozen
+   *  snapshot would leave the card showing the model that failed while the
+   *  button actually ran on the newly selected one, so the card mirrors the
+   *  live selection instead. */
+  const statusCardSettings = $derived<ThreadSettings | null>(
+    visibleProviderStatus === null
+      ? null
+      : chatMode
         ? { ...settings, assignmentMode: false, loopMode: false }
-        : { ...settings }
-    } else if (visibleProviderStatus === null && statusCardSettings !== null) {
-      statusCardSettings = null
-      seenProviderStatusKey = null
-    }
-  })
+        : settings
+  )
   const applicationActionSource = {
     id: 'application',
     label: APP_NAME,
@@ -5620,6 +5677,15 @@
         void sendMessage(draft, files, undefined, undefined, undefined, [], [], undefined, [], true)
       }
     })
+    // Coming back to the window is exactly when a transcript cached before
+    // leaving can have been overtaken: a sibling instance writes the shared
+    // mirror while this window sits in the background, and its announcement is
+    // only best effort. One bounded tail read keeps what the reader returns to
+    // honest without polling.
+    const onWindowFocus = (): void => {
+      void refreshMessages()
+    }
+    window.addEventListener('focus', onWindowFocus)
     return () => {
       alive = false
       queuedMessageDispatcher.markUnmounted(mountedProjectId, mountedThreadId)
@@ -5636,6 +5702,7 @@
       unsubscribeLifecycleInheritance?.()
       unsubscribeVoiceSend()
       window.removeEventListener('resize', onResize)
+      window.removeEventListener('focus', onWindowFocus)
       clearTimeout(copyResetTimer)
       cancelAnimationFrame(initialPaintRevealFrame)
       if (historyPrefetchHandle !== null) {
@@ -5838,8 +5905,15 @@
     try {
       const [threadData, , config] = await Promise.all([
         invoke('thread:get', projectId, id),
+        // A warm cache is re-read, never trusted. A sibling instance writes the
+        // same mirrored conversation this window holds, and its announcement is
+        // best effort: a batch still waiting on the coalescing timer when the
+        // sibling quits is lost, so a thread opened here after that write kept
+        // showing only the prompt it had cached. The refresh is the same bounded
+        // turn-aligned tail a cold open takes, and it merges additively, so
+        // nothing already on screen is dropped.
         threadMessages.loaded(projectId, id)
-          ? Promise.resolve()
+          ? threadMessages.mergeTurnAlignedTail(projectId, id, THREAD_MESSAGE_PRELOAD_WINDOW)
           : threadMessages.load(projectId, id, THREAD_MESSAGE_PRELOAD_WINDOW),
         invoke('config:get')
       ])
@@ -7814,6 +7888,42 @@
    *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
+  /** Whether this assistant runs on a clock at all, its own task's override
+   *  included, so the setup card states what the scheduler will actually do. */
+  const assistantScheduled = $derived(assistants.taskScheduled(thread))
+
+  /** The next fire a scheduled setup card counts down to, or null when nothing
+   *  will fire (an on-demand assistant, a paused one, or no clock to read). */
+  const assistantSetupNextRunAt = $derived(
+    assistant && assistantScheduled && !assistant.paused ? assistants.nextRunForTask(thread) : null
+  )
+
+  let assistantRunStarting = $state(false)
+
+  /**
+   * Run the assistant now from its setup card, ignoring the schedule, so the user
+   * can see what they just built instead of waiting for the next fire. It runs
+   * every task of the assistant, and the first fresh run is opened, since a run
+   * happens on its own thread.
+   */
+  async function runAssistantNow(): Promise<void> {
+    const current = assistant
+    if (!current || assistantRunStarting) return
+    assistantRunStarting = true
+    try {
+      const runs = await assistants.runNow(current.id)
+      toast.success(runs.length === 1 ? 'Run started' : `${runs.length} runs started`)
+      const first = runs[0]
+      if (!first) return
+      const targetProject = await invoke('project:get', first.projectId).catch(() => null)
+      workspaceState.openThreadInOwningView(first, targetProject)
+    } catch (error) {
+      reportError(error, 'Could not run the assistant')
+    } finally {
+      assistantRunStarting = false
+    }
+  }
+
   /**
    * Whether this conversation is authoring the assistant, so its text carries the
    * app's own draft payload: the knowledge block and the plan block. Both belong
@@ -8162,7 +8272,7 @@
       : assistantSetupRecapIssue(assistant, draft.plan)
     if (setupIssue) {
       await sendMessage(
-        `The application could not save this setup: ${setupIssue} Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block and an assistant block containing actual values for name, personality, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.`,
+        `The application could not save this setup: ${setupIssue} Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block, opening with the Personality section, and an assistant block containing actual values for name, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.`,
         [],
         undefined,
         undefined,
@@ -8183,10 +8293,10 @@
       const wasScheduled = assistant ? assistantIsScheduled(assistant) : true
       const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
       // A conversation settles who the assistant is as well as what it does, so a
-      // plan that carries the name the user gave it, the way they asked it to
-      // behave, or a clock they did or did not want is applied on the same save.
+      // plan that carries the name the user gave it, or a clock they did or did not
+      // want, is applied on the same save. How it behaves is not here: it is the
+      // `Personality` section of the knowledge the same save writes.
       if (plan?.name) patch.name = plan.name
-      if (plan?.personality) patch.personality = plan.personality
       if (typeof plan?.scheduled === 'boolean') patch.scheduled = plan.scheduled
       const scheduled = plan?.scheduled ?? wasScheduled
       // An on-demand assistant has no schedule, so a plan that still carries one
@@ -11295,8 +11405,8 @@
   }
 
   /** Switch the thread's text model from the provider-error card's picker.
-   *  This is an explicit mutation point on the card itself, so refresh the
-   *  card's frozen settings snapshot to reflect the user's own pick. */
+   *  The card renders the thread's live settings, so this only has to apply the
+   *  pick to the thread (which also updates the card's picker in place). */
   function changeThreadModel(selected: ThreadSettings): void {
     const normalized = normalizeFastInference(
       selected,
@@ -11309,17 +11419,6 @@
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
     )
-    statusCardSettings =
-      statusCardSettings !== null
-        ? chatMode
-          ? {
-              ...statusCardSettings,
-              ...normalized,
-              assignmentMode: false,
-              loopMode: false
-            }
-          : { ...statusCardSettings, ...normalized }
-        : null
     updateSettings({ ...settings, ...normalized })
   }
 
@@ -12158,22 +12257,14 @@
       // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
       accountUsageCache.markStale()
-      // A provider card produced by the previous harness no longer applies once
-      // the user switches to another harness   otherwise the stale issue's
-      // message and links (e.g. a Codex usage-limit URL) linger under the badge
-      // of the newly selected one. Dismiss it so the next send surfaces fresh
-      // status for the current configuration.
-      if (
-        providerStatus &&
-        (providerStatus.state === 'waiting' || providerStatus.state === 'error') &&
-        providerStatus.issue.harnessId &&
-        providerStatus.issue.harnessId !== normalized.harnessId
-      ) {
-        providerStatus = null
-      }
-      if (proactiveAuthIssue && proactiveAuthIssue.harnessId !== normalized.harnessId) {
-        proactiveAuthIssue = null
-      }
+      // The provider card survives the switch. Picking another model or harness
+      // is the user's fix for the failure, and Retry is the action that carries
+      // it out: it re-sends the unanswered request through the current settings
+      // on a fresh session, exactly as a "continue" message would. Dropping the
+      // card here used to hide that button the instant the pick landed, forcing
+      // the user to type the continuation by hand. The card keeps attributing
+      // the issue to the harness that reported it (`statusCardProviderName`),
+      // while its picker mirrors the newly selected configuration.
     }
     if (seniorModelChanged && engineeringOn) {
       syncAgentRole('seniorEngineer', {
@@ -13758,7 +13849,10 @@
       aria-label="Conversation"
       data-region="conversation"
     >
-      <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
+      <div
+        class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
+        {@attach reportConversationColumn}
+      >
         {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
             <CioSpinner size={16} class="animate-spin" />
@@ -14432,12 +14526,17 @@
                           data-message-id={msg.id}
                         >
                           {#if isReadingActiveLine}
-                            <ReadAlongOverlay
-                              segments={speechController.activeSegments!}
-                              activeIndex={speechController.visibleSegmentIndex}
-                              spokenProgress={speechController.activeSegmentProgress}
-                              textClass="text-[0.8125rem]"
-                            />
+                            <!-- The read-along only exists while a turn is being
+                                 spoken, so its chunk waits for playback instead
+                                 of riding along with the first screen. -->
+                            {#await import('../speech/ReadAlongOverlay.svelte') then { default: ReadAlongOverlay }}
+                              <ReadAlongOverlay
+                                segments={speechController.activeSegments!}
+                                activeIndex={speechController.visibleSegmentIndex}
+                                spokenProgress={speechController.activeSegmentProgress}
+                                textClass="text-[0.8125rem]"
+                              />
+                            {/await}
                           {:else}
                             <!-- The agent's closing statement is the turn's answer;
                                  the running commentary it wrote between tool calls
@@ -14714,11 +14813,11 @@
              names what it does instead of showing a bare chevron in a pill.
 
              Its rung is deliberate: above everything the transcript paints, which
-             reaches z-20 on a working trace's sticky header, and below the panels
-             and menus at z-40, so the context meter's popover opens over it and a
-             card's own menu is never covered by it. The click-away scrims sit at
-             this same rung and paint after it, which is what a scrim should do to
-             a control. -->
+             reaches z-20 on a working trace's sticky header, and below the
+             composer (z-40), whose own menus and popovers open upward across this
+             spot so they must never be cut off by it. The click-away scrims sit
+             below it inside the composer, which is what a scrim should do to a
+             control above the surface it guards. -->
         <button
           type="button"
           class="group absolute left-1/2 z-30 inline-flex h-7 -translate-x-1/2 items-center gap-1 border border-border-strong bg-surface px-2 text-[0.6875rem] font-medium whitespace-nowrap text-foreground shadow-md transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
@@ -15474,8 +15573,12 @@
                     <AssistantReadyCard
                       threadId={thread.id}
                       {active}
+                      scheduled={assistantScheduled}
+                      nextRunAt={assistantSetupNextRunAt}
+                      running={assistantRunStarting}
                       onModify={modifyAssistantBehavior}
                       onStartTask={() => workspaceState.requestAssistantTask()}
+                      onRunNow={() => void runAssistantNow()}
                     />
                   {/if}
                 {:else}

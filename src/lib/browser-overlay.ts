@@ -310,6 +310,9 @@ export interface BrowserStripOverlayTab {
   pinned: boolean
   hibernated: boolean
   audible: boolean
+  microphoneActive?: boolean
+  cameraActive?: boolean
+  screenActive?: boolean
   muted: boolean
 }
 

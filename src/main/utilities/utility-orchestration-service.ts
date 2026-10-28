@@ -137,7 +137,7 @@ import {
   ASSISTANT_REPORT_UTILITY_ID,
   assistantReportUtility
 } from '../../lib/assistant-reports'
-import { ASSISTANT_NAME_LIMIT, ASSISTANT_PERSONALITY_LIMIT } from '../../lib/types'
+import { ASSISTANT_NAME_LIMIT } from '../../lib/types'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   UtilityScopeFootprintService,
@@ -254,11 +254,12 @@ export interface UtilityTurnRequest {
   saveAssistantCheckpoint?: (markdown: string) => Promise<{ path: string }>
   /**
    * Present only for an assistant's Getting started interview; the callback writes
-   * the name and the personality the conversation settles onto the assistant and
-   * broadcasts the change, so every surface renames itself the moment the user
-   * answers rather than at the end of the interview.
+   * the name the conversation settles onto the assistant and broadcasts the change,
+   * so every surface renames itself the moment the user answers rather than at the
+   * end of the interview. How the assistant behaves has no callback: it is the
+   * `Personality` section of the knowledge.
    */
-  saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
+  saveAssistantIdentity?: (identity: { name: string }) => Promise<void>
   /** Persist the clock choice during the live setup interview. */
   saveAssistantSchedule?: (scheduled: boolean) => Promise<void>
   /** Persist settled reporting choices during the live setup interview. */
@@ -571,7 +572,7 @@ interface TurnState {
    *
    * A Cua action addresses elements and pixels inside one snapshot, and the
    * driver's registry keeps a single slot per window that the app's own
-   * computer-use preview refills at up to 15 frames a second. Keeping the view
+   * computer-use preview refills once per action. Keeping the view
    * here is what lets an action name the snapshot its index truly belongs to,
    * and re-anchor that reference onto a fresh one when the registry has moved
    * on. See `src/lib/cua-driver.ts`.
@@ -1344,7 +1345,7 @@ export class UtilityOrchestrationService {
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
-      `When a needed capability is missing, check first whether your own tools already cover the work: text, code, SVG and HTML are yours to author, and a missing generator is not a missing capability when the request is vector or written work. Only what you genuinely cannot produce yourself earns an installation card: load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer it. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
+      `When a needed capability is missing, check first whether your own tools already cover the work: text, code, SVG and HTML are yours to author, and a missing generator is not a missing capability when the request is vector or written work. That covers documents and assets only: an interface, a screen, a prototype or a set of design variations is not one of them and is never hand-written here, it is designed in the app's design session. Only what you genuinely cannot produce yourself earns an installation card: load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer it. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
       `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isPawnTool(name))
         ? [
@@ -1388,12 +1389,12 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasDesignCapability
         ? [
-            `For interface design or HTML prototypes, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate ${APP_DESIGN_UTILITY_ID}. Its playbook owns folders, screens, preview, checkpoints, delegation and media generation. Inspect its preview in ${APP_BROWSER_UTILITY_ID}. Follow project design language first.`
+            `Interface design is a session, not a file. When the user asks to design, redesign, mock up, prototype, explore or show variations of an interface, a screen, a panel, a header, a page, a dashboard or a site, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate ${APP_DESIGN_UTILITY_ID} before writing any markup. Activating it is what opens the thread's design session: it serves the folder, lists the work on the board and docks the panel the user is watching, so markup you write with your own write tool instead leaves the user with a design they will not find and a panel that never opens. Its playbook owns folders, screens, preview, checkpoints, delegation and media generation. Inspect its preview in ${APP_BROWSER_UTILITY_ID}. Follow project design language first.`
           ]
         : []),
       ...(hasVideoCapability
         ? [
-            `For video work, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate ${APP_VIDEO_UTILITY_ID}. Its playbook covers composition, preview, checkpoints and frame capture. Inspect every changed frame and use ${APP_BROWSER_UTILITY_ID} for motion. Follow project motion guidance first.`
+            `Video work is a session, not a file: before writing a composition, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate ${APP_VIDEO_UTILITY_ID}. Activating it is what opens the thread's video session, serves the folder, lists the composition on the board and docks the panel the user is watching. Its playbook covers composition, preview, checkpoints and frame capture. Inspect every changed frame and use ${APP_BROWSER_UTILITY_ID} for motion. Follow project motion guidance first.`
           ]
         : []),
       ...(hasOnDemand
@@ -2734,23 +2735,11 @@ export class UtilityOrchestrationService {
             'Renaming the assistant is only available while its knowledge is being written'
           )
         }
-        // Only the fields the user has actually settled are sent on, so naming the
-        // assistant never clears a personality the conversation agreed earlier.
-        const identity: { name?: string; personality?: string } = {}
-        if (operationInput['name'] !== undefined) {
-          identity.name = requiredString(operationInput['name'], 'name', ASSISTANT_NAME_LIMIT)
-        }
-        if (operationInput['personality'] !== undefined) {
-          identity.personality = requiredString(
-            operationInput['personality'],
-            'personality',
-            ASSISTANT_PERSONALITY_LIMIT
-          )
-        }
-        if (identity.name === undefined && identity.personality === undefined) {
-          throw new Error('save_identity needs a name or a personality')
-        }
-        result = await state.request.saveAssistantIdentity(identity)
+        // Only the name is settled here. How the assistant behaves is a section of
+        // the knowledge, so it arrives with the knowledge block instead.
+        result = await state.request.saveAssistantIdentity({
+          name: requiredString(operationInput['name'], 'name', ASSISTANT_NAME_LIMIT)
+        })
       } else {
         throw new Error(
           'The getting-started capability exposes save_checkpoint, save_identity, save_schedule and save_reporting'
@@ -3126,7 +3115,7 @@ export class UtilityOrchestrationService {
    * The driver refuses every element and pixel action whose snapshot has been
    * replaced, and a window's snapshot is replaced by the next snapshot of that
    * window from any client. The app is itself such a client: the computer-use
-   * preview photographs the window being driven at up to 15 frames a second, so
+   * preview photographs the window being driven after every action, so
    * a reference the model read on one call is normally superseded by the time it
    * acts on the next one.
    *

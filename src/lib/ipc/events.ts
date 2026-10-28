@@ -1,3 +1,4 @@
+import type { VideoEditorGesture } from '../video/edit'
 import type {
   NativeDockAck,
   NativeDockCommit,
@@ -54,6 +55,12 @@ import type {
 import type { AppControlRequest } from '../app-control'
 
 export const IPC_EVENT_CONTRACT = {
+  'video:gesture': [] as unknown as [
+    projectId: string,
+    threadId: string,
+    directory: string,
+    gesture: VideoEditorGesture
+  ],
   'oven:hostTrust:request': [] as unknown as [request: { requestId: string; prompt: string }],
   'oven:hostTrust:closed': [] as unknown as [requestId: string],
   'archive:changed': [] as unknown as [

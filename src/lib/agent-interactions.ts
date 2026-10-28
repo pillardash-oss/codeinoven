@@ -90,6 +90,19 @@ const CODE_MODE_TOOL_NAMES = new Set([
   'exec'
 ])
 
+/**
+ * The app's own gateway tools, which a harness exposes as `cio_*` calls and can
+ * also nest under a namespace (`utilities__cio_util_use` on a harness that
+ * prefixes MCP tools). They are named by this app rather than by the harness,
+ * so the trace draws them with the app's mark instead of a generic glyph.
+ */
+export function isCioToolName(value: string): boolean {
+  return value
+    .toLowerCase()
+    .split(/(?:__|[./:\s])/u)
+    .some((segment) => segment === 'cio' || segment.startsWith('cio_'))
+}
+
 export function isCodeModeToolName(value: string): boolean {
   // Match a namespace boundary, never arbitrary suffixes such as shell_exec.
   const name =

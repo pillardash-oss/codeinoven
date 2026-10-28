@@ -150,7 +150,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   const fps = Number.isFinite(options.fps) && options.fps > 0 ? options.fps : 30
   const autoplay = options.autoplay === false ? 'false' : 'true'
   return `(() => {
-  const DURATION = ${JSON.stringify(duration)};
+  let DURATION = ${JSON.stringify(duration)};
   const FPS = ${JSON.stringify(fps)};
   const AUTOPLAY = ${autoplay};
   const MAX_TICK = ${JSON.stringify(TRANSPORT_MAX_TICK_SECONDS)};
@@ -168,6 +168,10 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   // Negative until the first tick, rather than zero: a synthetic clock can hand
   // out a timestamp of exactly zero, and that must not read as "no baseline yet".
   let lastAt = -1;
+  /** One composition frame, which is the fastest a viewing can usefully draw. */
+  const FRAME = 1 / FPS;
+  /** Where the picture was last drawn, so a tick inside the same frame can wait. */
+  let drawnAt = -Infinity;
   let pendingFrame = null;
   let queuedFrame = null;
   const transport = {
@@ -175,7 +179,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     fps: FPS,
     time: 0,
     playing: false,
-    loop: true,
+    loop: false,
     error: null
   };
 
@@ -349,6 +353,13 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   function renderAt(seconds) {
     if (pendingFrame) { queuedFrame = seconds; return true; }
     try {
+      // A poster page reads cio-time instead of its render argument. Keep that
+      // capture time aligned while scrubbing before the first Play click.
+      const url = new URL(location.href);
+      if (url.searchParams.has('cio-capture')) {
+        url.searchParams.set('cio-time', String(seconds));
+        history.replaceState(history.state, '', url.href);
+      }
       const drawn = render(seconds);
       transport.error = null;
       if (drawn && typeof drawn.then === 'function') {
@@ -399,10 +410,11 @@ export function compositionTransportScript(options: CompositionTransportOptions)
         const trackStart = Number(element.dataset && element.dataset.cioTrackStart || 0);
         const trackTrim = Number(element.dataset && element.dataset.cioTrackTrim || 0);
         const trackDuration = Number(element.dataset && element.dataset.cioTrackDuration || Infinity);
+        const trackSpeed = Math.max(0.25, Number(element.dataset && element.dataset.cioTrackSpeed || 1));
         const local = transport.time - trackStart;
         if (playing && local >= 0 && local < trackDuration) {
-          if (Math.abs(element.currentTime - (local + trackTrim)) > RESYNC) {
-            element.currentTime = local + trackTrim;
+          if (Math.abs(element.currentTime - (local * trackSpeed + trackTrim)) > RESYNC) {
+            element.currentTime = local * trackSpeed + trackTrim;
           }
           const started = element.play();
           if (started && typeof started.catch === 'function') started.catch(() => {});
@@ -423,6 +435,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
       pending = 0;
     }
     lastAt = -1;
+    drawnAt = -Infinity;
   }
 
   function tick(now) {
@@ -436,7 +449,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     if (next >= DURATION) {
       if (!transport.loop) {
         transport.time = DURATION;
-        renderAt(DURATION);
+        drawAt(DURATION);
         transport.playing = false;
         syncMedia(false);
         return;
@@ -447,11 +460,27 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     } else {
       transport.time = next;
     }
-    if (!renderAt(next)) {
+    // A film has its own frame rate and the display usually has a higher one.
+    // Drawing at 120 Hz what the composition draws at 30 Hz spends four times the
+    // frame budget on the same picture, and the first draw that overruns its slot
+    // makes the playhead jump a frame's worth: that is the skipping a viewer sees.
+    // The clock still advances on every tick, and only the draw waits for the next
+    // frame boundary of the composition's own rate.
+    if (next - drawnAt < FRAME * 0.75) {
+      pending = raf(tick);
+      return;
+    }
+    if (!drawAt(next)) {
       transport.playing = false;
       return;
     }
     pending = raf(tick);
+  }
+
+  /** Draw one frame of a running viewing, and remember where the picture is. */
+  function drawAt(seconds) {
+    drawnAt = seconds;
+    return renderAt(seconds);
   }
 
   function play() {
@@ -501,6 +530,14 @@ export function compositionTransportScript(options: CompositionTransportOptions)
 
   function setLoop(on) {
     transport.loop = on === true;
+    return state();
+  }
+
+  function setDuration(seconds) {
+    const value = Number(seconds);
+    if (Number.isFinite(value) && value > 0 && value <= 3600) {
+      DURATION = value; transport.duration = value; transport.time = clampTime(transport.time);
+    }
     return state();
   }
 
@@ -572,6 +609,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   transport.seek = seek;
   transport.stop = stop;
   transport.setLoop = setLoop;
+  transport.setDuration = setDuration;
   transport.freezeAt = freezeAt;
   transport.settle = settle;
   transport.state = state;

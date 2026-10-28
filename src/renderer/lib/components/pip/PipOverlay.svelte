@@ -105,6 +105,21 @@
       pipState.threadId === workspaceState.selectedThread?.id
   )
 
+  /**
+   * Whether a preview would be painted for the thread on screen, which is what
+   * main needs to know: it takes no frames while nothing would show them.
+   *
+   * Deliberately independent of holding a frame, since the first capture is what
+   * gives the overlay one to paint: gating on `visible` would leave main with
+   * nothing to capture for and the overlay waiting for ever.
+   */
+  const wantsPreview = $derived(
+    pipState.active &&
+      isThreadView &&
+      pipState.threadId !== null &&
+      pipState.threadId === workspaceState.selectedThread?.id
+  )
+
   /** Aspect of the window being previewed, falling back to the allowance's own
    *  shape before the first frame reports its size. */
   const previewAspect = $derived.by(() => {
@@ -309,10 +324,11 @@
   }
 
   // Report the demand the preview implies so main captures at the resolution
-  // this footprint actually paints. Suppressed while hidden: an overlay the user
-  // cannot see must not make main encode larger frames.
+  // this footprint actually paints, and whether a preview is on screen at all: a
+  // preview the user cannot see must not make main capture frames.
   $effect(() => {
-    pipState.setFrameDemand(visible ? frameDemand : PREVIEW_ALLOWANCE_WIDTH * pixelRatio)
+    pipState.setPreviewWanted(wantsPreview)
+    pipState.setFrameDemand(wantsPreview ? frameDemand : PREVIEW_ALLOWANCE_WIDTH * pixelRatio)
   })
 
   // The preview floats above every DOM surface, but the in-app browser is a

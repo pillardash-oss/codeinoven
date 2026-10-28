@@ -107,8 +107,15 @@ export interface AppBridge {
   registerFileSelection: (file: File, scope?: AttachmentStorageScope) => Promise<string>
   /** Resolve the absolute path of a native File from a drop/paste gesture ('' when unavailable). */
   getPathForFile: (file: File) => string
-  /** Resolve and begin a native filesystem drag during the active drag gesture. */
-  startFileDrag: (projectId: string, relativePaths: string[]) => void
+  /** Resolve and begin a native filesystem drag during the active drag gesture.
+   *  The scope bucket and the mounted conversation thread are what let main
+   *  resolve the same root the tree is showing. */
+  startFileDrag: (
+    projectId: string,
+    relativePaths: string[],
+    scopeBucketId?: string,
+    threadId?: string
+  ) => void
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
@@ -214,11 +221,18 @@ const bridge: AppBridge = {
     return typeof registered === 'string' ? registered : ''
   },
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
-  startFileDrag: (projectId: string, relativePaths: string[]): void =>
+  startFileDrag: (
+    projectId: string,
+    relativePaths: string[],
+    scopeBucketId?: string,
+    threadId?: string
+  ): void =>
     ipcRenderer.send(
       'projectFiles:startDrag',
       projectId,
-      Array.from(relativePaths ?? []).map(String)
+      Array.from(relativePaths ?? []).map(String),
+      scopeBucketId,
+      threadId
     )
 }
 

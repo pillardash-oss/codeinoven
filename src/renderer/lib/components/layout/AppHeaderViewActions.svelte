@@ -1,9 +1,33 @@
 <script lang="ts">
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import { fade } from 'svelte/transition'
   import { viewActions } from '$lib/stores/view-actions.svelte'
   import { motionDuration } from '$lib/motion'
   import { encodeShortcutTokens } from '$lib/keymap/keymap'
+
+  interface Props {
+    /**
+     * No thread panel is docked, so the bar has no column to give these actions
+     * and the thread it names wants the room. They fold into one ellipsis and
+     * open as the same controls, one click away.
+     */
+    compact?: boolean
+  }
+
+  let { compact = false }: Props = $props()
+
+  let actionsOpen = $state(false)
+
+  $effect(() => {
+    if (!compact) actionsOpen = false
+  })
+
+  function onWindowKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && actionsOpen) actionsOpen = false
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <!--
   Per-view quick actions, registered by the workspace store. These stay in the
@@ -12,14 +36,51 @@
 -->
 <div class="actions-stack min-w-7" data-onboarding="view-actions" data-guide="view-actions">
   {#key viewActions.view}
-    <div
-      class="action-layer flex items-center gap-0.5"
-      transition:fade={{ duration: motionDuration(180) }}
-    >
-      {#each viewActions.items as item (item.id)}
-        {@render actionControl(item)}
-      {/each}
-    </div>
+    {#if compact}
+      <div class="action-layer relative flex items-center gap-0.5">
+        <button
+          class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {actionsOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
+          aria-label="View actions"
+          aria-haspopup="menu"
+          aria-expanded={actionsOpen}
+          title="View actions"
+          onclick={() => (actionsOpen = !actionsOpen)}
+        >
+          <CioEllipsis size={15} />
+        </button>
+        {#if actionsOpen}
+          <!-- The same controls, one click further: the bar keeps the room for the
+               thread's own name instead of spending it on buttons it can reach
+               from a menu. -->
+          <button
+            class="fixed inset-0 z-30 cursor-default"
+            aria-label="Close view actions"
+            title="Close view actions"
+            onclick={() => (actionsOpen = false)}
+          ></button>
+          <div
+            class="absolute top-full right-0 z-40 mt-1 flex items-center gap-0.5 border bg-surface p-1 shadow-lg"
+            role="menu"
+            aria-label="View actions"
+          >
+            {#each viewActions.items as item (item.id)}
+              {@render actionControl(item)}
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {:else}
+      <div
+        class="action-layer flex items-center gap-0.5"
+        transition:fade={{ duration: motionDuration(180) }}
+      >
+        {#each viewActions.items as item (item.id)}
+          {@render actionControl(item)}
+        {/each}
+      </div>
+    {/if}
   {/key}
 </div>
 

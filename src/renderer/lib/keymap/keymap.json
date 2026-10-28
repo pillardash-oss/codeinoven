@@ -914,6 +914,146 @@
           "scenario": "Focus is inside Video controls."
         },
         {
+          "id": "video-edit-play",
+          "keys": ["space"],
+          "label": "Play or pause the video",
+          "description": "Play or pause the video.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-split",
+          "keys": ["s"],
+          "label": "Split the selected clip at the playhead",
+          "description": "Split the selected clip at the playhead.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-split-all",
+          "keys": ["shift", "s"],
+          "label": "Split all unlocked tracks",
+          "description": "Split all unlocked tracks.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-delete",
+          "keys": ["backspace"],
+          "label": "Remove the selected timeline item",
+          "description": "Remove the selected timeline item.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-duplicate",
+          "keys": ["mod", "d"],
+          "label": "Duplicate the selected clip",
+          "description": "Duplicate the selected clip.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-extract-audio",
+          "keys": [],
+          "label": "Extract audio",
+          "description": "Detach selected video clip audio to a new synchronized audio track.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-copy",
+          "keys": ["mod", "c"],
+          "label": "Copy the selected clip",
+          "description": "Copy the selected clip.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-cut",
+          "keys": ["mod", "x"],
+          "label": "Cut the selected clip",
+          "description": "Copy and remove the selected clip with confirmation.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-paste",
+          "keys": ["mod", "v"],
+          "label": "Paste a clip at the playhead",
+          "description": "Paste a copied clip at the playhead on its matching track.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-snap",
+          "keys": [],
+          "label": "Toggle magnetic video editing",
+          "description": "Move following clips together and close gaps on delete when magnetic editing is enabled.",
+          "scenario": "Video editor is focused."
+        },
+        {
+          "id": "video-edit-select-all",
+          "keys": ["mod", "a"],
+          "label": "Select every clip on the track",
+          "description": "Highlight all clips on the selected track so one menu action can edit them together.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-snap-all",
+          "keys": [],
+          "label": "Snap all clips on the track",
+          "description": "Close every gap on the tracks of the selected clips so the clips butt together.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-merge-selected",
+          "keys": [],
+          "label": "Merge selected clips",
+          "description": "Join selected clips that come from one continuous take into a single clip.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-merge-all",
+          "keys": [],
+          "label": "Merge all clips on the track",
+          "description": "Join every eligible neighbouring clip on the selected track.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-paint-blur",
+          "keys": [],
+          "label": "Paint blur on video",
+          "description": "Paint an undoable privacy mask on the video preview.",
+          "scenario": "Video editor is focused."
+        },
+        {
+          "id": "video-edit-undo",
+          "keys": ["mod", "z"],
+          "label": "Undo an edit",
+          "description": "Undo an edit.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-redo",
+          "keys": ["mod", "shift", "z"],
+          "label": "Redo an edit",
+          "description": "Redo an edit.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-import",
+          "keys": ["mod", "i"],
+          "label": "Import video, music or stickers",
+          "description": "Import video, music or stickers.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-frame-back",
+          "keys": ["arrowleft"],
+          "label": "Step back one frame",
+          "description": "Step back one frame.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-frame-forward",
+          "keys": ["arrowright"],
+          "label": "Step forward one frame",
+          "description": "Step forward one frame.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
           "id": "ui-close-modal",
           "keys": ["escape"],
           "label": "Close modal / sheet",

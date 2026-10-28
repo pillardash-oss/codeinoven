@@ -1069,6 +1069,13 @@ export class SidebarTabContexts {
     context.activeTabIds[tab.kind] = id
     const project = this.ensureProjectContext(context.projectId)
     project.activeKind = tab.kind
+    // A panel focused on a thread that is not the one on screen is remembered
+    // where it belongs, but it must not surface the region: the tab lives in that
+    // thread's own context, so making the project region visible opened the
+    // sidebar with no active tab in it, out of nowhere, on an unrelated thread.
+    // Only the on-screen thread's own panel opens the region, and only it may
+    // clear what the user is looking at there.
+    if (!this.isOnScreenContext(context)) return
     project.visible = true
     this.host.clearNotifications()
     // Focusing a side chat is the act of reading its response, drop the
@@ -1076,6 +1083,14 @@ export class SidebarTabContexts {
     if (tab.kind === 'temporary-chat') {
       temporaryChatUnread.clear(context.projectId, context.threadId, tab.temporaryChatId)
     }
+  }
+
+  /** Whether a thread context is the one the sidebar is docked on right now. */
+  private isOnScreenContext(context: ThreadSidebarContext): boolean {
+    return (
+      context.projectId === this.host.activeProjectId() &&
+      context.threadId === this.host.activeThreadId()
+    )
   }
 
   private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {

@@ -4,4 +4,4 @@
  * Kept in a plain module (not inside `StatusPill.svelte`) so pure TypeScript
  * modules can reference the tone type without importing from a component.
  */
-export type StatusTone = 'success' | 'danger' | 'warning' | 'neutral' | 'info'
+export type StatusTone = 'success' | 'danger' | 'warning' | 'neutral' | 'info' | 'spec'

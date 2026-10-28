@@ -31,6 +31,8 @@ class PipState {
   /** Last device width reported to main, so an unchanged demand never costs an
    *  IPC round trip. Not reactive: nothing in the UI renders from it. */
   private reportedFrameWidth = 0
+  /** Last preview visibility reported to main, deduped like the frame demand. */
+  private reportedVisible: boolean | null = null
 
   init(): void {
     const unsubFrame = subscribe('computerUse:pipFrame', (frame: ComputerUsePipFrame) => {
@@ -115,6 +117,20 @@ class PipState {
     } catch {
       // Main may no longer own the PiP service; the local hide already closed it.
     }
+  }
+
+  /**
+   * Tell main whether a preview would be painted at all, so it stops capturing
+   * frames while the overlay is off screen. Deduped: the overlay reports from an
+   * effect that re-runs on every state change it reads.
+   */
+  setPreviewWanted(wanted: boolean): void {
+    if (this.reportedVisible === wanted) return
+    this.reportedVisible = wanted
+    void invoke('computerUse:pipSetVisible', wanted).catch(() => {
+      // Main may no longer own the PiP service; report again on the next change.
+      this.reportedVisible = null
+    })
   }
 
   private applyActivity(activity: ComputerUseActivity): void {

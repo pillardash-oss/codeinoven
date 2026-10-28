@@ -1,4 +1,4 @@
-import { formatDateTime } from '$shared/date-time-format'
+import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
 import {
   describeRelativeTime,
   isAssistantSetupThread,
@@ -20,6 +20,11 @@ import {
   type UtilityDefinition
 } from '$shared/types'
 import { normalizePlanDelivery, normalizePlanPriority } from '$shared/assistant-reporting'
+import {
+  ASSISTANT_PERSONALITY_HEADING,
+  ASSISTANT_PERSONALITY_SECTION_TITLE,
+  assistantPersonalityDocument
+} from '$shared/assistant-personality'
 import type { ComposerAssistantTag } from '../chats/composer-mentions'
 import { assistantAccentColor } from '../../assistant-icons'
 import { assistantTagIconHtml } from './assistant-tag-badge'
@@ -219,14 +224,24 @@ export function taskHasMissed(runs: readonly MissedRun[]): boolean {
  * Line 2 of a task row: the next intended run for a scheduled task, else the
  * last run, else "Not scheduled". `onDemand` marks a function the user drives
  * by hand, which reads "On demand" rather than the ambiguous "Not scheduled".
+ *
+ * An on-demand function has no next fire to state, so it states how long ago the
+ * thread last worked instead, in the same compact age ("8m") a project and
+ * thread row wear. Without that the row gave the user no time at all   only the
+ * word "On demand". It is last activity, not the scheduler's last-run stamp: a
+ * hand-driven function is worked in its own conversation, and that is what the
+ * user is asking the row about.
  */
 export function taskRunLine(
-  task: Pick<Thread, 'lastRunAt'>,
+  task: Pick<Thread, 'lastRunAt'> & Partial<Pick<Thread, 'lastActivity'>>,
   nextRunAt: number | null,
   now: number,
   onDemand = false
 ): string {
-  if (onDemand) return 'On demand'
+  if (onDemand) {
+    const age = formatCompactAge(task.lastActivity, now)
+    return age ? `On demand · ${age}` : 'On demand'
+  }
   if (nextRunAt !== null) return `Next run ${describeRelativeTime(nextRunAt, now)}`
   if (task.lastRunAt !== undefined) return `Last run ${describeRelativeTime(task.lastRunAt, now)}`
   return 'Not scheduled'
@@ -795,6 +810,64 @@ export function serializeKnowledgeSections(sections: readonly KnowledgeSection[]
     .join('\n\n')
 }
 
+// ─── Personality ──────────────────────────────────────────────────────────
+
+/**
+ * Whether a section is the assistant's personality.
+ *
+ * How an assistant behaves used to be a field of its own. It is now the first
+ * section of its knowledge, so every surface that treats it specially (the panel
+ * that edits it above the rest, the recap card that shows it first) recognises it
+ * by its title rather than by a second copy of the value.
+ */
+export function isPersonalitySection(section: Pick<KnowledgeSection, 'title'>): boolean {
+  return section.title.trim().toLowerCase() === ASSISTANT_PERSONALITY_SECTION_TITLE.toLowerCase()
+}
+
+/** The assistant's personality as its knowledge carries it, or an empty string. */
+export function readKnowledgePersonality(knowledge: string): string {
+  const section = parseKnowledgeSections(knowledge).find(isPersonalitySection)
+  return section?.body.trim() ?? ''
+}
+
+/**
+ * The knowledge with its personality section set to `personality`.
+ *
+ * A document that already carries the section has it rewritten in place, so the
+ * order the agent wrote stays as it is. One that does not gets it at the top, where
+ * the panel shows it and where the authoring contract asks the agent to write it. A
+ * document with no headings of its own takes an `Instructions` boundary first, so
+ * the personality stays one section instead of owning everything under it.
+ *
+ * An empty personality leaves just the heading, so the section survives as an empty
+ * one the user can fill in later instead of disappearing from the panel.
+ */
+export function withKnowledgePersonality(knowledge: string, personality: string): string {
+  const sections = parseKnowledgeSections(knowledge)
+  const body = personality.trim()
+  const index = sections.findIndex(isPersonalitySection)
+  if (index >= 0) {
+    return serializeKnowledgeSections(
+      sections.map((section, position) => (position === index ? { ...section, body } : section))
+    )
+  }
+  if (!body) return knowledge
+  // A heading-less document is one unheaded section, so it needs the boundary the
+  // shared helper adds; anything else already opens with a heading of its own.
+  if (sections.length === 1 && !sections[0]?.heading) {
+    return assistantPersonalityDocument(body, knowledge)
+  }
+  return serializeKnowledgeSections([
+    {
+      id: 'personality',
+      heading: ASSISTANT_PERSONALITY_HEADING,
+      title: ASSISTANT_PERSONALITY_SECTION_TITLE,
+      body
+    },
+    ...sections
+  ])
+}
+
 /**
  * One line saying what a folded section holds.
  *
@@ -1030,11 +1103,9 @@ export function parseAssistantPlan(body: string): AssistantPlanDraft | null {
 
   if (!sawAnything) return null
   return {
-    // The prose fallback reads the schedule and the connections only: a name, a
-    // personality or a clock the user named travel in the plan's JSON, where they
-    // are unambiguous.
+    // The prose fallback reads the schedule and the connections only: a name or a
+    // clock the user named travel in the plan's JSON, where they are unambiguous.
     name: null,
-    personality: null,
     scheduled: null,
     scheduleName: null,
     schedule: buildPlanSchedule(cadence, times, weekdays),

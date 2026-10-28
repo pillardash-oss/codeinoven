@@ -1,7 +1,6 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import Switch from '$lib/components/ui/Switch.svelte'
   import type { NewAssistantDraft } from './assistant-create'
 
   interface Props {
@@ -14,8 +13,8 @@
     /**
      * Build the assistant by talking to it instead of from this form. The host
      * creates an assistant with nothing known about it and opens its first
-     * conversation, where the assistant itself asks for the name, the personality
-     * and the rest, one question at a time.
+     * conversation, where the assistant itself asks for the name and the rest,
+     * one question at a time.
      */
     onCreateViaChat?: () => void | Promise<void>
     title?: string
@@ -28,10 +27,7 @@
 
   let open = $state(false)
   let name = $state('')
-  let personality = $state('')
-  /** On by default: a new assistant runs on a schedule unless the user opts out. */
-  let scheduled = $state(true)
-  let scheduleName = $state('')
+  let description = $state('')
   let busy = $state(false)
 
   /** Highest trigger value already handled. The control unmounts when the view
@@ -55,9 +51,7 @@
     try {
       await onCreate({
         name: name.trim(),
-        personality: personality.trim(),
-        scheduled,
-        scheduleName: scheduleName.trim()
+        description: description.trim()
       })
       open = false
       resetForm()
@@ -89,9 +83,7 @@
 
   function resetForm(): void {
     name = ''
-    personality = ''
-    scheduled = true
-    scheduleName = ''
+    description = ''
   }
 </script>
 
@@ -129,57 +121,22 @@
     <div>
       <label
         class="mb-1 block text-[0.6875rem] font-medium text-muted"
-        for="new-assistant-personality"
+        for="new-assistant-description"
       >
-        Personality <span class="font-normal text-dimmed">(optional)</span>
+        Description <span class="font-normal text-dimmed">(optional)</span>
       </label>
       <textarea
-        id="new-assistant-personality"
-        rows="4"
+        id="new-assistant-description"
+        rows="3"
         class="w-full resize-none border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
-        placeholder="You are Jenny. You keep my X and LinkedIn accounts moving, and you write the way I do."
-        aria-label="Assistant personality"
-        bind:value={personality}></textarea>
+        placeholder="Keeps my X and LinkedIn accounts moving, and flags anything that needs me."
+        aria-label="Assistant description"
+        bind:value={description}></textarea>
       <p class="mt-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-        How it should behave and sound. It works the rest out with you.
+        What it is for, in your own words. It is your note about the assistant, shown when you hover
+        its row; how it behaves is agreed with it in its first conversation.
       </p>
     </div>
-
-    <div
-      class="flex items-center justify-between gap-3 border border-border bg-surface px-2.5 py-2"
-    >
-      <div class="min-w-0">
-        <p class="text-[0.75rem] text-foreground">Run on a schedule</p>
-        <p class="text-[0.625rem] leading-relaxed text-dimmed">
-          {scheduled
-            ? 'It agrees the times with you, then keeps to them.'
-            : 'No schedule. It runs when you ask.'}
-        </p>
-      </div>
-      <Switch
-        bind:checked={scheduled}
-        aria-label="Run this assistant on a schedule"
-        title="Run on a schedule"
-      />
-    </div>
-
-    {#if scheduled}
-      <div>
-        <label
-          class="mb-1 block text-[0.6875rem] font-medium text-muted"
-          for="new-assistant-schedule-name"
-        >
-          Schedule name <span class="font-normal text-dimmed">(optional)</span>
-        </label>
-        <input
-          id="new-assistant-schedule-name"
-          class="w-full border border-border bg-surface px-2.5 py-2 text-[0.8125rem] text-foreground placeholder:text-dimmed focus:border-border-strong focus:outline-none"
-          placeholder="e.g. Daily account check"
-          aria-label="Schedule name"
-          bind:value={scheduleName}
-        />
-      </div>
-    {/if}
   </form>
 
   {#snippet footer()}

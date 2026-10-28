@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>V6 · Priority ladder · App header study</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-theme="light" data-variant="v6">
+    <main class="page">
+      <header class="topline">
+        <div class="brand-mini">
+          <svg viewBox="0 0 96 96" aria-hidden="true">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <span>CodeInOven / header study</span>
+        </div>
+        <div class="top-links">
+          <a class="top-meta" href="./index.html">Overview</a>
+          <a class="top-meta" href="./recommendation.html">Recommendation</a>
+          <div class="theme-switch" role="group" aria-label="Preview theme">
+            <button type="button" data-theme-choice="light" aria-pressed="true">Light</button>
+            <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="intro">
+        <div>
+          <div class="eyebrow">Variant 6</div>
+          <h1>V6 · Priority ladder</h1>
+          <p>Three slots filled in priority order: the view's actions, then the thread's, then the global pair. Everything else goes to one overflow menu that opens away from the OS zone. Labels ride along while there is room and drop before the icons do.</p>
+        </div>
+        <aside class="intro-aside">
+          <strong>Trade</strong>
+          Holds its shape at any width, and the count of visible controls never changes, so nothing jumps when a thread gains or loses a chip. The cost is a menu for the things users touch most, and the git chip loses its at-a-glance status.
+        </aside>
+      </section>
+
+      <nav class="toolbar" aria-label="Screens">
+        <a class="pill-link" href="./index.html">Overview</a>
+        <a class="pill-link" href="./v1-reserved-edge.html">V1 edge</a>
+        <a class="pill-link" href="./v2-split-center.html">V2 split</a>
+        <a class="pill-link" href="./v3-rail-actions.html">V3 rail</a>
+        <a class="pill-link" href="./v4-command-field.html">V4 command</a>
+        <a class="pill-link" href="./v5-two-tiers.html">V5 tiers</a>
+        <a class="pill-link" href="./v6-priority-ladder.html">V6 ladder</a>
+        <a class="pill-link" href="./v7-fixed-spine.html">V7 spine</a>
+        <a class="pill-link" href="./v8-icon-as-menu.html">V8 icon menu</a>
+        <a class="pill-link" href="./recommendation.html">Recommendation</a>
+      </nav>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Four window geometries</h2>
+          <span class="meta">macOS · Windows · Linux left · Linux right</span>
+        </div>
+        <p class="lede">
+          The same variant drawn against the real window-control geometry. macOS reserves 80px at
+          the left, Windows 138px at the right, and a Linux desktop reserves 138px on whichever
+          edge <span class="inline-code">gtk-decoration-layout</span> names.
+        </p>
+        <div id="widths"></div>
+        <div id="rulers"></div>
+      </section>
+
+      <div id="states"></div>
+
+      <p class="footnote">
+        Variant 6 of six. The same frames are re-rendered by
+        <span class="inline-code">header.js</span>, so a change to the frame anatomy reaches every
+        screen and every variant at once.
+      </p>
+    </main>
+
+    <script src="./header.js"></script>
+    <script src="./variant-page.js"></script>
+      <script src="./checks.js"></script>
+  </body>
+</html>

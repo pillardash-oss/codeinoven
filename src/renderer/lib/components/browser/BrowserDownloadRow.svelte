@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
@@ -8,12 +9,11 @@
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
+  import { copyText } from '$lib/copy-text'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserDownloadProgress from './BrowserDownloadProgress.svelte'
   import {
-    browserDownloadAge,
-    browserDownloadBytes,
-    browserDownloadHost,
+    browserDownloadDetail,
     browserDownloadStateLabel,
     browserDownloadTone
   } from './browser-download-format'
@@ -47,6 +47,9 @@
   const canRetry = $derived(download.state === 'interrupted' || download.state === 'cancelled')
   /** Only a finished download is opened; a stopped one has no complete file yet. */
   const canOpen = $derived(download.state === 'completed' && download.savePath !== '')
+  /** A stopped or slow download can be handed to a real download manager, which
+   *  needs nothing more than the address it is downloading from. */
+  const canCopyUrl = $derived(download.url.length > 0)
   /** Revealing works for anything that left a file or kept bytes behind. */
   const canReveal = $derived(download.state !== 'cancelled' && download.savePath !== '')
   const canRemove = $derived(!progressing)
@@ -62,24 +65,12 @@
     }`
   )
   const actionIcon = $derived(compact ? 12 : 13)
-  const detail = $derived.by(() => {
-    const parts = [browserDownloadHost(download.url)]
-    if (download.receivedBytes > 0) {
-      parts.push(
-        showsProgress && download.totalBytes > 0
-          ? `${browserDownloadBytes(download.receivedBytes)} of ${browserDownloadBytes(download.totalBytes)}`
-          : browserDownloadBytes(download.receivedBytes)
-      )
-    }
-    if (progressing && download.speedBytes > 0) {
-      parts.push(`${browserDownloadBytes(download.speedBytes)}/s`)
-    }
-    // Downloads outlive the run that started them, so a stopped one says how old
-    // it is instead of looking like something from a moment ago.
-    const age = progressing ? '' : browserDownloadAge(download.startedAt)
-    if (age.length > 0) parts.push(age)
-    return parts.join(' · ')
-  })
+  const detail = $derived(browserDownloadDetail(download))
+  /** Hand the address to whoever wants it: a user pasting it into a download
+   *  manager gets the same file without the app's speed or reach. */
+  function copyUrl(): void {
+    void copyText(download.url, 'Download link copied')
+  }
 </script>
 
 <div class={compact ? 'flex flex-col gap-1.5 px-3 py-2' : 'border border-border bg-elevated p-3'}>
@@ -140,6 +131,17 @@
             <CioPause size={actionIcon} />
           </button>
         {/if}
+        {#if canCopyUrl}
+          <button
+            type="button"
+            class={actionButton}
+            aria-label={`Copy the link for ${download.fileName}`}
+            title={`Copy ${download.fileName} link`}
+            onclick={copyUrl}
+          >
+            <CioCopy size={actionIcon} />
+          </button>
+        {/if}
         <button
           type="button"
           class={cancelButton}
@@ -170,6 +172,17 @@
             onclick={() => browserDownloads.retry(download)}
           >
             <CioRefresh size={actionIcon} />
+          </button>
+        {/if}
+        {#if canCopyUrl}
+          <button
+            type="button"
+            class={actionButton}
+            aria-label={`Copy the link for ${download.fileName}`}
+            title={`Copy ${download.fileName} link`}
+            onclick={copyUrl}
+          >
+            <CioCopy size={actionIcon} />
           </button>
         {/if}
         {#if canOpen}

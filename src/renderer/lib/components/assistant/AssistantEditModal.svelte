@@ -1,12 +1,11 @@
 <script lang="ts">
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import Switch from '$lib/components/ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
-  import { assistantIsScheduled, type CustomIcon, type Assistant } from '$shared/types'
+  import type { CustomIcon, Assistant } from '$shared/types'
 
   interface Props {
     /** Assistant being edited; null closes the modal. */
@@ -30,9 +29,7 @@
   }
 
   let name = $state('')
-  let personality = $state('')
-  let scheduled = $state(true)
-  let scheduleName = $state('')
+  let description = $state('')
   let color = $state<string | undefined>(undefined)
   let iconType = $state<string | undefined>(undefined)
   let customSvg = $state<string | undefined>(undefined)
@@ -46,9 +43,7 @@
   $effect(() => {
     if (!assistant) return
     name = assistant.name
-    personality = assistant.personality ?? ''
-    scheduled = assistantIsScheduled(assistant)
-    scheduleName = assistant.scheduleName ?? ''
+    description = assistant.description ?? ''
     color = assistant.color
     iconType = assistant.iconType
     customSvg = assistant.customSvg
@@ -92,9 +87,7 @@
     try {
       const appearance = {
         name: name.trim(),
-        personality: personality.trim() || null,
-        scheduled,
-        scheduleName: scheduleName.trim() || null,
+        description: description.trim() || null,
         color: color ?? null,
         iconType: iconType ?? null,
         customSvg: customSvg ?? null
@@ -178,50 +171,21 @@
     </div>
 
     <div>
-      <label class="mb-1 block text-xs font-medium text-muted" for="edit-assistant-personality">
-        Personality <span class="font-normal text-dimmed">(optional)</span>
+      <label class="mb-1 block text-xs font-medium text-muted" for="edit-assistant-description">
+        Description <span class="font-normal text-dimmed">(optional)</span>
       </label>
       <textarea
-        id="edit-assistant-personality"
-        rows="4"
+        id="edit-assistant-description"
+        rows="3"
         class="w-full resize-none border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        placeholder="You are Jenny. You keep my X and LinkedIn accounts moving, and you write the way I do."
-        bind:value={personality}></textarea>
+        placeholder="Keeps my X and LinkedIn accounts moving, and flags anything that needs me."
+        bind:value={description}></textarea>
       <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
-        How it should behave and sound. It works the rest out with you.
+        What it is for, in your own words. It is your note about the assistant, shown when you hover
+        its row. How it behaves lives in the Personality section of its behavior, and its schedule
+        sits beside it there.
       </p>
     </div>
-
-    <div class="flex items-center justify-between gap-3 border bg-elevated px-3 py-2">
-      <div class="min-w-0">
-        <p class="text-sm text-foreground">Run on a schedule</p>
-        <p class="text-[0.625rem] leading-relaxed text-dimmed">
-          {scheduled
-            ? 'It agrees the times with you, then keeps to them.'
-            : 'No schedule. It runs when you ask. Turning this on starts the schedule fresh, so it agrees the times with you again.'}
-        </p>
-      </div>
-      <Switch
-        bind:checked={scheduled}
-        aria-label="Run this assistant on a schedule"
-        title="Run on a schedule"
-      />
-    </div>
-
-    {#if scheduled}
-      <div>
-        <label class="mb-1 block text-xs font-medium text-muted" for="edit-assistant-schedule-name">
-          Schedule name <span class="font-normal text-dimmed">(optional)</span>
-        </label>
-        <input
-          id="edit-assistant-schedule-name"
-          type="text"
-          class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-          placeholder="e.g. Daily account check"
-          bind:value={scheduleName}
-        />
-      </div>
-    {/if}
 
     {#if error}
       <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>

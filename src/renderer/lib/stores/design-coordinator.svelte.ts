@@ -115,6 +115,7 @@ class DesignCoordinatorState {
   async refresh(projectId: string, threadId: string): Promise<void> {
     const key = threadKey(projectId, threadId)
     const isSwitch = key !== this.activeKey
+    const previousKey = this.activeKey
     this.activeKey = key
     this.refs.set(key, { projectId, threadId })
     this.dirty.add(key)
@@ -125,6 +126,11 @@ class DesignCoordinatorState {
     // coordinator has to be right the first time the user lands on a thread.
     if (isSwitch) {
       this.clearTrailing(key)
+      // A trailing read armed by the thread the user just left would land while
+      // another thread is on screen, and its answer would dock that thread's
+      // panel. Moving on is the cancel: nothing waits on a thread nobody is
+      // looking at.
+      if (previousKey !== null && previousKey !== key) this.clearTrailing(previousKey)
       await this.read(key)
       return
     }
@@ -135,6 +141,19 @@ class DesignCoordinatorState {
       return
     }
     this.scheduleTrailing(key, REFRESH_SETTLE_MS - elapsed)
+  }
+
+  /**
+   * Forget which thread is on screen, because none is.
+   *
+   * A closed thread must not dock its panel either: the last read for it may
+   * still be in flight or waiting out the settle window, and `activeKey` would
+   * otherwise keep matching the thread the user just closed.
+   */
+  release(): void {
+    if (this.activeKey === null) return
+    this.clearTrailing(this.activeKey)
+    this.activeKey = null
   }
 
   /** One trailing read per key, so a stream of activity cannot stack reads: the
@@ -193,7 +212,15 @@ class DesignCoordinatorState {
       })
       // Docks itself the first time a session appears, unless the user closed it
       // before; later refreshes are no-ops because the tab exists.
+      //
+      // Only while this thread is the one on screen: the read is an IPC round
+      // trip, and a thread switch during it leaves the answer describing a
+      // thread the user has already left. Docking then opened the sidebar on a
+      // panel that belongs to that thread's own context, so the region surfaced
+      // with nothing active in it, out of nowhere. The state is still published,
+      // so returning to the thread renders its coordinator immediately.
       if (
+        this.activeKey === key &&
         coordinatorDockState.autoOpen &&
         !contextSidebarState.hasCoordinator(projectId, threadId)
       ) {

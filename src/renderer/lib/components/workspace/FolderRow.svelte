@@ -1,4 +1,6 @@
 <script lang="ts">
+  import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
+  import type { MediaActivity } from '$shared/media-activity'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import type { Snippet } from 'svelte'
@@ -17,6 +19,7 @@
     project: Project
     /** Data URL of the project's custom icon. */
     iconUrl?: string | null
+    media?: readonly MediaActivity[]
     expanded: boolean
     /** How this folder's threads break down: working, attention, and errors. */
     stateCounts?: ThreadStateCountsValue
@@ -52,6 +55,7 @@
     project,
     iconUrl = null,
     expanded,
+    media = [],
     stateCounts = emptyThreadStateCounts(),
     onToggle,
     actions,
@@ -208,6 +212,7 @@
        row instead of reserving width in the flex flow, so the project name always
        keeps the full width of the row until the actions are actually visible. The
        left-to-right fade keeps the overlaid controls legible over a long name. -->
+  <MediaActivityTrail activities={media} label={project.name} />
   {#if hasThreadStateCounts(stateCounts)}
     <span
       class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
