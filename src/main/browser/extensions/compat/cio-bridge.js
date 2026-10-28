@@ -65,6 +65,23 @@
    * the page's memory.
    */
   const downloadRequests = []
+  /**
+   * The cookie reads the worker could not do itself.
+   *
+   * The jar is the session's and only main can read it, so the worker numbers each
+   * read and leaves it here; main drains them on the same poll as the rest and
+   * answers into the worker as `cookies-result` with that number. Bounded so a
+   * worker that loops cannot grow the page's memory.
+   */
+  const cookieRequests = []
+  /**
+   * The extension pages the worker asked the app to open.
+   *
+   * `runtime.openOptionsPage` is a page in a window the worker does not have, so
+   * the request is the worker's and the window is main's, which is why it travels
+   * the same way the rest does. Bounded for the same reason as the others.
+   */
+  const pageRequests = []
   const ensurePort = () => {
     if (port) return port
     try {
@@ -90,6 +107,14 @@
         }
         if (request && request.kind === 'download-request' && downloadRequests.length < 64) {
           downloadRequests.push(request)
+          return
+        }
+        if (request && request.kind === 'cookies-request' && cookieRequests.length < 64) {
+          cookieRequests.push(request)
+          return
+        }
+        if (request && request.kind === 'extension-page-request' && pageRequests.length < 64) {
+          pageRequests.push(request)
         }
       })
       if (port && port.onDisconnect && typeof port.onDisconnect.addListener === 'function') {
@@ -144,6 +169,12 @@
 
   /** Main applies the worker's `chrome.downloads` calls through this. */
   globalThis.__cioBridgeDrainDownloadRequests = () => JSON.stringify(downloadRequests.splice(0, 16))
+
+  /** Main reads the session's cookie jar for these through this. */
+  globalThis.__cioBridgeDrainCookieRequests = () => JSON.stringify(cookieRequests.splice(0, 16))
+
+  /** Main opens the extension pages the worker asked for through this. */
+  globalThis.__cioBridgeDrainPageRequests = () => JSON.stringify(pageRequests.splice(0, 8))
 
   /** Main reads the worker's mailbox through this. */
   globalThis.__cioBridgeDrain = () =>

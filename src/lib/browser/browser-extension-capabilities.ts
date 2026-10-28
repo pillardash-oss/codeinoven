@@ -32,6 +32,22 @@
  * `download`, `open`, `show` and `removeFile`, which answer empty rather than
  * failing loudly.
  *
+ * `cookies` is deliberately not in the list either, with one limit: it is
+ * read-only. `get` and `getAll` are answered from the jar's own session, which is
+ * exactly what a download manager asks for   it collects the `Cookie` header a
+ * native download needs, and without this namespace every download it takes over
+ * arrives unauthenticated and asks the user to sign in. `set`, `remove` and
+ * `removeAll` are refused rather than silently ignored, because this app has no
+ * business writing a site's cookies from an extension.
+ *
+ * `webRequest` is not in the list, and it carries a limit of its own. The five
+ * notification events (`onSendHeaders`, `onResponseStarted`, `onHeadersReceived`,
+ * `onCompleted`, `onErrorOccurred`) are delivered from the jar's own session, which
+ * is what lets a capture extension recognise a download before Chromium starts
+ * one. The blocking halves are not implemented: a listener's return value is
+ * ignored, so an extension cannot cancel or rewrite a response here   the download
+ * path (`downloads.cancel`) is the supported way to take a transfer over.
+ *
  * `contextMenus` is deliberately not in the list. The runtime still has no
  * namespace of its own, but the app's install-time bridge records the tree each
  * extension creates and renders it in the native context menu, so an extension
@@ -58,7 +74,6 @@ export const BROWSER_EXTENSION_ABSENT_CAPABILITIES: readonly string[] = [
   'bookmarks',
   'browsingData',
   'commands',
-  'cookies',
   'debugger',
   'declarativeContent',
   'devtools',

@@ -23,6 +23,7 @@ import {
   clipboard,
   ipcMain as electronIpcMain,
   Menu,
+  nativeImage,
   screen,
   session,
   shell,
@@ -435,6 +436,32 @@ interface BrowserExtensionTabInfo {
   url: string
   title: string
   status: 'loading' | 'complete'
+}
+
+/** What a menu row is high, in points. An extension publishes its icon at store
+ *  size, so the menu reduces it to the one line it is drawn on. */
+const MENU_ICON_POINTS = 16
+
+/**
+ * An extension's published icon as a menu image.
+ *
+ * Two pixel representations are built from the one data URL, a single-scale and a
+ * double-scale copy of the same picture, so the icon is sharp on a retina menu and
+ * still drawn one row high everywhere. A data URL that does not decode answers
+ * undefined, which leaves a row with its label and no image rather than no item.
+ */
+function extensionMenuIcon(dataUrl: string): MenuItemConstructorOptions['icon'] | undefined {
+  const source = nativeImage.createFromDataURL(dataUrl)
+  if (source.isEmpty()) return undefined
+  const image = nativeImage.createEmpty()
+  for (const scaleFactor of [1, 2]) {
+    const pixels = MENU_ICON_POINTS * scaleFactor
+    const resized = source.resize({ width: pixels, height: pixels, quality: 'best' })
+    const buffer = resized.toPNG()
+    if (buffer.byteLength === 0) continue
+    image.addRepresentation({ scaleFactor, width: pixels, height: pixels, buffer })
+  }
+  return image.isEmpty() ? undefined : image
 }
 
 function menuPageFor(tabId: string, tab: BrowserTab): BrowserMenuPage {
@@ -1047,7 +1074,11 @@ export class BrowserService {
       // A capture extension stops the browser's own transfer to fetch the file
       // with its own manager, and the app's download manager is the only thing
       // that can stop it.
-      downloadCommand: (command) => this.downloads.applyExtensionCommand(command)
+      downloadCommand: (command) => this.downloads.applyExtensionCommand(command),
+      // `chrome.runtime.openOptionsPage()` from a worker has no window of its own,
+      // so the page it asks for opens as a tab in the jar the extension runs in.
+      openExtensionPage: (projectId, boxId, extensionId, page) =>
+        this.openExtensionPageFromWorker({ projectId, boxId, extensionId, page })
     })
     // Every download this browser starts is also reported to the extensions that
     // declared the `downloads` permission, which is what a download manager
@@ -4528,6 +4559,61 @@ export class BrowserService {
   }
 
   /** Resolve a worker window request and route it to the surface it belongs on. */
+  /**
+   * Open one extension's own page because the extension asked for it, which today
+   * means `chrome.runtime.openOptionsPage()` from its worker.
+   *
+   * The app hosts extension pages as browser tabs, so this reaches the same surface
+   * the extensions panel offers, from a click in the extension's own popup instead
+   * of from the panel. The tab lands in the jar the extension asked from, beside
+   * whatever page is already open there, because that page is what its settings
+   * usually act on.
+   */
+  private openExtensionPageFromWorker(request: {
+    projectId: string
+    boxId: string | null
+    extensionId: string
+    page: 'options'
+  }): void {
+    const url = this.extensions.optionsUrlFor(request.extensionId, request.projectId, request.boxId)
+    if (!url) {
+      Logger.dev('An extension asked for a settings page it does not have:', {
+        extensionId: request.extensionId
+      })
+      return
+    }
+    const owner = this.extensionPageOwner(request.projectId, request.boxId)
+    if (!owner) return
+    try {
+      this.openNewTabFor(
+        owner,
+        this.validateTabNavigationUrl(request.projectId, request.boxId, url)
+      )
+    } catch (error: unknown) {
+      Logger.dev('An extension settings page could not be opened:', {
+        extensionId: request.extensionId,
+        error
+      })
+    }
+  }
+
+  /**
+   * The tab an extension page should open beside: the jar's active tab when the
+   * user is looking at one, otherwise the first tab of that jar.
+   *
+   * Null when the jar has no page open at all, which is the one case where there is
+   * no window the tab could belong to; the extensions panel is then the way in.
+   */
+  private extensionPageOwner(projectId: string, boxId: string | null): BrowserPageOwner | null {
+    const entries = [...this.tabs.entries()].filter(
+      ([, candidate]) => candidate.projectId === projectId && candidate.boxId === boxId
+    )
+    const entry = entries.find(([tabId]) => tabId === this.activeTabId) ?? entries[0]
+    if (!entry) return null
+    const [tabId, tab] = entry
+    return { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId }
+  }
+
   private openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
     const owner = this.tabForContents(request.extensionTabId)
     if (!owner) return
@@ -5806,9 +5892,14 @@ export class BrowserService {
   ): MenuItemConstructorOptions[] {
     const sections = this.extensions.menuRecordsFor(page.owner.projectId, page.owner.boxId)
     if (sections.length === 0) return []
-    return buildExtensionMenuItems(sections, extensionClickContexts(params), (section, item) => {
-      this.dispatchExtensionMenuClick(page, params, section.extensionId, item)
-    })
+    return buildExtensionMenuItems(
+      sections,
+      extensionClickContexts(params),
+      (section, item) => {
+        this.dispatchExtensionMenuClick(page, params, section.extensionId, item)
+      },
+      extensionMenuIcon
+    )
   }
 
   /** Hand one chosen extension item back to the worker that recorded it. */
