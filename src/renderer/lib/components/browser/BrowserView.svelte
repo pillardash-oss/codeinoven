@@ -397,6 +397,10 @@
       unsubscribePanelShortcut()
       window.removeEventListener('resize', trackViewport)
       clearTimeout(railDragTimer)
+      // The palette is this view's own surface, so it goes with the view: leaving
+      // the browser on a tab where the field was open must not keep a palette
+      // waiting to reappear over whatever is opened next.
+      globalBrowser.closeAddressSpotlight()
     }
   })
 </script>

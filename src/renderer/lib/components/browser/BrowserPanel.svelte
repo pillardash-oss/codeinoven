@@ -290,6 +290,11 @@
     if (!bar) return
     if (!panelVisible) return
     if (!browserAddressFocus.take(tabId)) return
+    // A request belongs to the moment a blank tab opens. By the time this panel
+    // is the one on screen the user may already have given the tab an address,
+    // and selecting the address of a page they already navigated would take the
+    // keyboard for a field they are done with: the request is spent either way.
+    if (!isBlank) return
     bar.focusAndSelect()
   }
   $effect(claimRequestedAddressFocus)
@@ -473,10 +478,26 @@
 
   /** Open a resolved address in this tab. */
   function navigate(url: string): void {
+    const previous = pageState
     address = url
     browserBlankDraft.clear(tabId)
     contextSidebarState.updateBrowserTab(tabId, url)
-    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {})
+    // The tab is on the address from the moment it is submitted, not from the
+    // first report main sends back. Without this the panel keeps the empty state
+    // (or the previous page's state) for the whole handover, and returning to a
+    // tab that is only just loading looks like a tab that was never given an
+    // address. The snapshot is replaced as soon as a real report lands.
+    const optimistic = { ...previous, url, loading: true, loadError: null }
+    pageState = optimistic
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {
+      // The tab can be destroyed between the submit and the call. Put the page
+      // the tab is really on back rather than leaving an address that never
+      // loaded on screen.
+      if (pageState !== optimistic) return
+      pageState = previous
+      address = previous.url
+      contextSidebarState.updateBrowserTab(tabId, previous.url)
+    })
   }
 
   function applyPageState(next: BrowserPageState): void {

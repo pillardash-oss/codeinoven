@@ -72,6 +72,7 @@ import {
   MAX_GLOBAL_BROWSER_TABS,
   MAX_REOPENED_BROWSER_TABS,
   browserTabLabel,
+  browserTabLoadingTitle,
   browserTabTitleForUrl,
   canHibernateTab,
   isBlankBrowserAddress,
@@ -994,6 +995,10 @@ export class GlobalBrowserState {
       this.openAddressSpotlight()
       return
     }
+    // Landing on a page takes the palette down. It belongs to the tab it was
+    // opened for, and a tab switch is the moment the user chose the page over
+    // the field: leaving it up would hold the new page off screen behind it.
+    this.closeAddressSpotlight()
     // Silent on failure: the tab can be destroyed between the switch and the
     // call, and a keyboard handover that did not land must not surface an error.
     void invoke('browser:focusPage', tab.id).catch(() => {})
@@ -1340,6 +1345,11 @@ export class GlobalBrowserState {
    * is idempotent, so re-activating a tab costs nothing.
    */
   private setActiveTab(tabId: string | null): void {
+    // The address palette belongs to the tab it was opened for. Every way the
+    // tab on screen can change   a row in the strip, a close that falls back, a
+    // switcher, a popup revealing itself   lands here, so taking the palette
+    // down here is what keeps it from hanging over a page it was not opened on.
+    if (this.activeTabId !== tabId) this.closeAddressSpotlight()
     // Every activation, from any surface (strip, sidebar, switcher, a popup that
     // reveals itself), counts as a visit so the Ctrl+Tab switcher lists this tab
     // by the moment it was last used, exactly as it does a thread.
@@ -1565,6 +1575,15 @@ export class GlobalBrowserState {
     if (!tab) {
       this.createTab(url)
       return
+    }
+    // A tab with no address yet takes the address it was just told to load, at
+    // once: the row stops reading "New Tab", the empty state ends, and coming
+    // back to this tab while the page is still loading no longer looks like a
+    // tab that was never given an address.
+    if (isBlankBrowserAddress(tab.url)) {
+      tab.url = url
+      tab.title = browserTabTitleForUrl(url)
+      this.persist()
     }
     // Silent on failure: the tab can be destroyed between the click and the call.
     // The tab's own box rides along, so an existing tab is ensured in the jar it
@@ -2261,7 +2280,9 @@ export class GlobalBrowserState {
     // A document with no committed address yet (a fresh tab, an about:blank
     // popup) reports an empty URL and must not erase the address on screen.
     if (state.url && tab.url !== state.url) {
+      const loadingTitle = browserTabLoadingTitle(tab, state.url)
       tab.url = state.url
+      if (loadingTitle !== null) tab.title = loadingTitle
       // The icon is the icon of an address, so a tab that moved is not the tab
       // the stored icon was read from: it goes with the address it came from, and
       // the row picks up the new one from the page or from the address itself

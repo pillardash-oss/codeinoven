@@ -268,6 +268,27 @@ export function browserTabTitleForUrl(url: string): string {
 }
 
 /**
+ * The title a tab wears while the address it was told to load is still loading,
+ * or null when the tab already owns a title a load must not overwrite.
+ *
+ * A tab that is told to load an address is on that address from the moment the
+ * user submits it, not from the moment the page reports a committed document:
+ * keeping "New Tab" there is what made a tab being typed into still read as a
+ * new tab while its page loaded. A tab that already shows a page's own title
+ * keeps it until the new page commits its own, which is what a browser's strip
+ * does, so a reload never flashes a hostname over a real title.
+ */
+export function browserTabLoadingTitle(
+  tab: Pick<GlobalBrowserTab, 'title' | 'url'>,
+  nextUrl: string
+): string | null {
+  const current = tab.title.trim()
+  const placeholder =
+    current === '' || current === 'New Tab' || current === browserTabTitleForUrl(tab.url)
+  return placeholder ? browserTabTitleForUrl(nextUrl) : null
+}
+
+/**
  * Whether a tab's page may be released while its row stays in the strip.
  *
  * The same three refusals the strip has always made, in one place: a tab already
