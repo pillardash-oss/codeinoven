@@ -21,6 +21,11 @@
     checkpoint: TurnCheckpointSummary
     projectId: string
     threadId: string
+    /**
+     * This card reports the turn up to the steer that split it, not the whole
+     * turn, so its head says `steered` where a partial summary would say so.
+     */
+    steered?: boolean
     /** Reveals the file's diff on the Changes tab (not opening the file directly). */
     onRevealFile: (path: string) => void
     /** Opens the original file in the file viewer. */
@@ -34,6 +39,7 @@
     checkpoint,
     projectId,
     threadId,
+    steered = false,
     onRevealFile,
     onOpenFile,
     onReview,
@@ -123,7 +129,9 @@
           ? 'Review changes to restore files'
           : 'Calculating file change summary'
         : canUndo
-          ? 'Undo this turn’s file changes'
+          ? steered
+            ? 'Undo every change from this turn, including the files changed after you steered it'
+            : 'Undo this turn’s file changes'
           : 'This turn did not change any files'
   )
 
@@ -168,7 +176,9 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
         <span class="flex shrink-0 gap-1.5 text-xs font-medium tabular-nums" title={summaryTitle}>
           <span class="text-success">+{additionsTotal ?? '…'}</span>
           <span class="text-danger">−{deletionsTotal ?? '…'}</span>
-          {#if aggregation.summary?.partial}
+          {#if steered}
+            <span class="font-normal text-dimmed">steered</span>
+          {:else if aggregation.summary?.partial}
             <span class="font-normal text-dimmed">partial count</span>
           {/if}
         </span>
@@ -264,16 +274,22 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
                       onclick={() => onRevealFile(change.path)}
                     >
                       <span
-                        class="w-3 shrink-0 text-center font-semibold text-warning"
-                        class:text-success={change.kind === 'created'}
-                        class:text-danger={change.kind === 'deleted'}
+                        class={[
+                          'w-3 shrink-0 text-center font-semibold text-warning',
+                          {
+                            'text-success': change.kind === 'created',
+                            'text-danger': change.kind === 'deleted'
+                          }
+                        ]}
                       >
                         {statusLabel(change.kind)}
                       </span>
                       <FileTypeIcon path={change.path} size={14} />
                       <span
-                        class="min-w-0 flex-1 truncate text-muted"
-                        class:line-through={changeRolledBack}
+                        class={[
+                          'min-w-0 flex-1 truncate text-muted',
+                          { 'line-through': changeRolledBack }
+                        ]}
                       >
                         {change.path}
                       </span>

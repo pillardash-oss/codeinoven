@@ -436,6 +436,7 @@
   import {
     auditReportForTurn,
     buildTranscriptIndex,
+    changesBeforeSteer,
     getTurnFinalText,
     getTurnWorkingParts,
     hasRenderableWorkingParts,
@@ -14589,6 +14590,34 @@
                             onRedo={() => redoCheckpoint(turnCheckpoint)}
                           />
                         </div>
+                      {/if}
+
+                      <!-- A steered turn reports what it had already changed before
+                           the steer, above the steered message; the turn's own card at
+                           its end repeats those files with everything after them. -->
+                      {@const steeredPromptIndex = transcriptIndex.steerCard[absIndex] ?? null}
+                      {#if !chatMode && turnCheckpoint && steeredPromptIndex !== null}
+                        {@const steeredChanges = changesBeforeSteer(
+                          turnCheckpoint,
+                          transcriptIndex.messageIndexById,
+                          steeredPromptIndex
+                        )}
+                        {#if steeredChanges.length > 0 && steeredChanges.length < turnCheckpoint.changes.length}
+                          {@const steeredCheckpoint = { ...turnCheckpoint, changes: steeredChanges }}
+                          <div class="mt-3">
+                            <RunChangesCard
+                              checkpoint={steeredCheckpoint}
+                              projectId={thread.projectId}
+                              threadId={thread.id}
+                              steered
+                              onRevealFile={(path) => revealCheckpointFile(turnCheckpoint.id, path)}
+                              onOpenFile={(path) => void openCheckpointFile(turnCheckpoint.id, path)}
+                              onReview={() => reviewCheckpoint(turnCheckpoint.id)}
+                              onUndo={() => undoCheckpoint(turnCheckpoint)}
+                              onRedo={() => redoCheckpoint(turnCheckpoint)}
+                            />
+                          </div>
+                        {/if}
                       {/if}
 
                       {#if !busy || !isLatest}
