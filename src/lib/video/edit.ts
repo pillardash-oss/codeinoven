@@ -741,8 +741,46 @@ export function applyVideoEditOperations(
           ? undefined
           : number(operation.duration, 'Duration', 0.001, 3600)
       )
+      // A cut timeline places each clip at its own in-point, so an addClip that
+      // could only start at the head of the media forced callers into the file.
+      if (operation.sourceStart !== undefined)
+        clip.sourceStart = number(operation.sourceStart, 'Source in', 0, 86400, 0)
+      if (operation.speed !== undefined) clip.speed = number(operation.speed, 'Speed', 0.25, 4, 1)
       edit.duration = Math.max(edit.duration, start + clip.duration)
       edit.clips.push(clip)
+    } else if (kind === 'replaceClips') {
+      // A cut map is hundreds of segments on one track. Rebuilding them through
+      // addClip alone is thousands of calls, which is how a hand-written script
+      // ends up editing the document (and its asset metadata) instead.
+      const track = edit.tracks.find((item) => item.id === operation.trackId)
+      const asset = edit.assets.find((item) => item.id === operation.assetId)
+      if (!track || !asset || track.locked) throw new Error('Choose an asset and an unlocked track')
+      const segments = entries(operation.clips, 800).map((value) => {
+        const segment = record(value)
+        return {
+          start: snapEditTime(number(segment.start, 'Start', 0, 3599, 0), fps),
+          duration:
+            segment.duration === undefined
+              ? undefined
+              : number(segment.duration, 'Duration', 0.001, 3600),
+          sourceStart: number(segment.sourceStart, 'Source in', 0, 86400, 0),
+          speed:
+            segment.speed === undefined ? undefined : number(segment.speed, 'Speed', 0.25, 4, 1)
+        }
+      })
+      edit.clips = edit.clips.filter((clip) => clip.trackId !== track.id)
+      let end = 0
+      for (const segment of segments) {
+        const clip = newVideoEditClip(asset, track.id, segment.start, segment.duration)
+        clip.sourceStart = segment.sourceStart
+        if (segment.speed !== undefined) clip.speed = segment.speed
+        edit.clips.push(clip)
+        end = Math.max(end, clip.start + clip.duration)
+      }
+      edit.duration =
+        operation.duration === undefined
+          ? Math.max(edit.duration, end)
+          : Math.max(number(operation.duration, 'Duration', 0.001, 3600), end)
     } else if (kind === 'addTrack') {
       edit.tracks.push({
         id: crypto.randomUUID(),

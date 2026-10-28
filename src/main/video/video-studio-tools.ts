@@ -36,7 +36,7 @@ export function videoStudioTools(): McpTool[] {
   const tools: McpTool[] = [
     tool(
       'editor',
-      'Open/read a source-preserving editable timeline, import local media into assets/, or apply up to 64 incremental commands at the saved revision. Read first. action:read enables legacy cut-map conversion with Undo history. action:apply requires revision and operations. Commands: addTrack{name,trackKind:video|audio|caption|overlay}, addClip{assetId,trackId,start,duration?}, split{id,at}, trim{id,edge:start|end,at}, move{id,start,trackId?}, remove{id,ripple?}, patchClip{id,patch}, addRegion{region:{start,duration,x,y,width,height,kind:blur|pixelate|cover,amount,color}}, removeRegion{id}, review{id?}. Clips carry sourceStart, speed, volume, opacity, normalized rect/crop, grade{exposure,contrast,saturation,temperature,hue}, audio{highpass,lowpass,deess,compression,pan}, fadeIn/fadeOut, transition{kind:none|dissolve|fade|slide|zoom,duration}. Original assets are never deleted. Unreviewed agent saves are marked by changed time range. action:import accepts composition-relative sources and returns assets; use addClip to place them.',
+      'Open/read a source-preserving editable timeline, import local media into assets/, or apply up to 64 incremental commands at the saved revision. Read first. action:read enables legacy cut-map conversion with Undo history. action:apply requires revision and operations. Commands: addTrack{name,trackKind:video|audio|caption|overlay}, addClip{assetId,trackId,start,duration?,sourceStart?,speed?}, replaceClips{trackId,assetId,clips:[{start,duration,sourceStart,speed?}],duration?} to rebuild one track from up to 800 segments in a single call, split{id,at}, trim{id,edge:start|end,at}, move{id,start,trackId?}, remove{id,ripple?}, patchClip{id,patch} where patch carries clip fields (start, duration, sourceStart, speed, volume, opacity, rect, crop, grade, audio, fadeIn/fadeOut, transition), addRegion{region:{start,duration,x,y,width,height,kind:blur|pixelate|cover,amount,color}}, removeRegion{id}, review{id?}. Clips carry sourceStart, speed, volume, opacity, normalized rect/crop, grade{exposure,contrast,saturation,temperature,hue}, audio{highpass,lowpass,deess,compression,pan}, fadeIn/fadeOut, transition{kind:none|dissolve|fade|slide|zoom,duration}. Original assets are never deleted. Unreviewed agent saves are marked by changed time range. action:import accepts composition-relative sources and returns assets; use addClip or replaceClips to place them. studio.json, composition.json and the composition page are app-owned: never write them with a script. An asset records the media identity and length the app measured from the file, so never retype them; a timeline built from a cut map goes through replaceClips, and the returned document is the truth to re-read afterwards.',
       {
         directory,
         action: { type: 'string', enum: ['read', 'apply', 'import'] },
@@ -53,6 +53,7 @@ export function videoStudioTools(): McpTool[] {
                 enum: [
                   'addTrack',
                   'addClip',
+                  'replaceClips',
                   'split',
                   'trim',
                   'move',
