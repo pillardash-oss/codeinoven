@@ -22,6 +22,16 @@
  * extension's declared manifest, which is what an extension needs to enable an
  * optional capability such as `nativeMessaging` at runtime.
  *
+ * `downloads` is deliberately not in the list. The runtime compiles the namespace
+ * out, but the app owns every download the browser starts, so the compatibility
+ * preamble feeds the extension the four events in the shapes the API documents and
+ * forwards `cancel`, `pause`, `resume` and `erase` back to the download manager. A
+ * capture extension (AB Download Manager and its kind) therefore sees a download
+ * arrive and can stop the browser's copy to fetch the file itself, which is the
+ * whole of what that permission is used for. What stays approximated is `search`,
+ * `download`, `open`, `show` and `removeFile`, which answer empty rather than
+ * failing loudly.
+ *
  * `contextMenus` is deliberately not in the list. The runtime still has no
  * namespace of its own, but the app's install-time bridge records the tree each
  * extension creates and renders it in the native context menu, so an extension
@@ -52,7 +62,6 @@ export const BROWSER_EXTENSION_ABSENT_CAPABILITIES: readonly string[] = [
   'debugger',
   'declarativeContent',
   'devtools',
-  'downloads',
   'fontSettings',
   'gcm',
   'history',

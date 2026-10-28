@@ -1043,8 +1043,25 @@ export class BrowserService {
       },
       closeSidePanel: (extensionId, extensionTabId) =>
         this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it'),
-      openPopup: (request) => this.openExtensionWindowFromWorker(request)
+      openPopup: (request) => this.openExtensionWindowFromWorker(request),
+      // A capture extension stops the browser's own transfer to fetch the file
+      // with its own manager, and the app's download manager is the only thing
+      // that can stop it.
+      downloadCommand: (command) => this.downloads.applyExtensionCommand(command)
     })
+    // Every download this browser starts is also reported to the extensions that
+    // declared the `downloads` permission, which is what a download manager
+    // extension captures. Nothing crosses into a worker when no extension asked.
+    this.downloads.setExtensionObserver((event) => {
+      const args: unknown[] = event.item ? [event.item] : [event.id]
+      this.extensions.onDownloadEvent(event.projectId, event.boxId, event.name, args)
+    })
+    // An extension that watches downloads captures them by cancelling, so a new
+    // download in that jar starts without a save dialog: it would be a dialog for
+    // a file the extension is about to discard.
+    this.downloads.setDownloadWatcher((projectId, boxId) =>
+      this.extensions.watchesDownloadsInJar(projectId, boxId)
+    )
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
       // published on the same state event the tab strip already listens to.
@@ -2063,6 +2080,8 @@ export class BrowserService {
     // tab lookup from being consulted. The manager survives and keeps the
     // records, the live items and the bytes.
     this.downloads.setTabResolver(null)
+    this.downloads.setExtensionObserver(null)
+    this.downloads.setDownloadWatcher(null)
     this.configuredSessions.clear()
     // Extensions are unloaded from every jar before the sessions go: a loaded
     // extension holds a renderer and an open file inside a partition this service

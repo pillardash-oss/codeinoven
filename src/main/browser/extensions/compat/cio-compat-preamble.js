@@ -447,11 +447,9 @@
     },
     ['onCreated', 'onRemoved', 'onChanged', 'onMoved', 'onImportBegan', 'onImportEnded']
   )
-  ensureNamespace(
-    'downloads',
-    { download: noop, search: answering([]), pause: noop, resume: noop, cancel: noop },
-    ['onCreated', 'onChanged', 'onErased', 'onDeterminingFilename']
-  )
+  // `downloads` is not ensured here: the app's download manager owns every
+  // download this browser starts and feeds the real namespace below, rather than
+  // leaving a stub whose events never fire (see the downloads section).
   ensureNamespace(
     'identity',
     {
@@ -648,6 +646,81 @@
       } catch (error) {
         state.errors.push(name + ': ' + String(error))
       }
+    }
+  }
+
+  // ── downloads ───────────────────────────────────────────────────────────────
+  // The runtime compiles `chrome.downloads` out of the extension runtime, so a
+  // download manager extension (AB Download Manager, and every other tool that
+  // captures downloads) cannot see a download this browser starts, let alone take
+  // it over. The app's download manager owns them all instead and hands every fact
+  // here through the bridge, in the shapes the API documents, with a numeric id the
+  // extension passes back to stop the browser's copy.
+  //
+  // Real here: the four events, and `cancel`, `pause`, `resume` and `erase`. Not
+  // real: `search`, `download`, `open`, `show` and `removeFile`, which the app has
+  // no answer for   they keep the quiet shapes they had before, so an extension that
+  // calls one for a download it started itself does not throw.
+  const downloadEvents = {}
+  for (const name of ['onCreated', 'onChanged', 'onErased', 'onDeterminingFilename']) {
+    downloadEvents[name] = makeRealEvent()
+  }
+  const sendDownloadCommand = (method, id) => {
+    if (!Number.isSafeInteger(id) || !bridgePort) return
+    try {
+      bridgePort.postMessage({ kind: 'download-request', method, id })
+    } catch (error) {
+      state.errors.push('download-bridge: ' + String(error))
+      bridgePort = null
+    }
+  }
+  const downloadsMembers = {
+    cancel: (id) => sendDownloadCommand('cancel', id),
+    pause: (id) => sendDownloadCommand('pause', id),
+    resume: (id) => sendDownloadCommand('resume', id),
+    erase: (id) => sendDownloadCommand('erase', id),
+    search: answering([]),
+    download: answering(-1),
+    open: noop,
+    show: noop,
+    removeFile: noop,
+    acceptDanger: noop,
+    drag: noop,
+    setShelfEnabled: noop
+  }
+  for (const root of roots) {
+    if (!root) continue
+    try {
+      const existing = root.downloads
+      const api = existing && typeof existing === 'object' ? existing : {}
+      for (const key of Object.keys(downloadsMembers)) {
+        try {
+          Object.defineProperty(api, key, {
+            value: downloadsMembers[key],
+            configurable: true,
+            writable: true
+          })
+        } catch (error) {
+          state.errors.push('downloads.' + key + ': ' + String(error))
+        }
+      }
+      for (const key of Object.keys(downloadEvents)) {
+        try {
+          Object.defineProperty(api, key, {
+            value: downloadEvents[key],
+            configurable: true,
+            writable: true
+          })
+        } catch (error) {
+          state.errors.push('downloads.' + key + ': ' + String(error))
+        }
+      }
+      if (!existing) {
+        Object.defineProperty(root, 'downloads', { value: api, configurable: true, writable: true })
+      }
+      state.downloadsBridge = 'installed'
+    } catch (error) {
+      state.errors.push('downloads: ' + String(error))
     }
   }
 
@@ -2012,6 +2085,20 @@
       }
     } else if (command.kind === 'notification-close') {
       notificationClosed.__cioEmit([String(command.id || ''), command.byUser === true])
+    } else if (command.kind === 'downloads') {
+      const dispatcher = downloadEvents[command.name]
+      if (dispatcher) {
+        const args = Array.isArray(command.args) ? command.args : []
+        // `onDeterminingFilename` hands its listener a `suggest` callback, and a
+        // listener that exists but never calls it leaves the filename to the app.
+        // The app already decided it, so this one only keeps the listener's own
+        // signature intact.
+        emitRecorded(
+          'downloads.' + command.name,
+          dispatcher,
+          command.name === 'onDeterminingFilename' ? [args[0], noop] : args
+        )
+      }
     } else if (command.kind === 'startup') {
       state.startupAt = Date.now()
       runtimeEvents.onStartup.__cioEmit([])

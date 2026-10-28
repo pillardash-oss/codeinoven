@@ -56,6 +56,15 @@
    * queries. Bounded so a worker that loops cannot grow the page's memory.
    */
   const nativeRequests = []
+  /**
+   * The `chrome.downloads` calls the worker made.
+   *
+   * Same shape as the native requests above and for the same reason: a cancel or
+   * a pause is the worker's decision, main is the only side that can carry it out,
+   * and the poll is where the two meet. Bounded so a worker that loops cannot grow
+   * the page's memory.
+   */
+  const downloadRequests = []
   const ensurePort = () => {
     if (port) return port
     try {
@@ -77,6 +86,10 @@
         }
         if (request && request.kind === 'native-request' && nativeRequests.length < 64) {
           nativeRequests.push(request)
+          return
+        }
+        if (request && request.kind === 'download-request' && downloadRequests.length < 64) {
+          downloadRequests.push(request)
         }
       })
       if (port && port.onDisconnect && typeof port.onDisconnect.addListener === 'function') {
@@ -128,6 +141,9 @@
 
   /** Main opens, writes to, and closes native messaging ports through this. */
   globalThis.__cioBridgeDrainNativeRequests = () => JSON.stringify(nativeRequests.splice(0, 16))
+
+  /** Main applies the worker's `chrome.downloads` calls through this. */
+  globalThis.__cioBridgeDrainDownloadRequests = () => JSON.stringify(downloadRequests.splice(0, 16))
 
   /** Main reads the worker's mailbox through this. */
   globalThis.__cioBridgeDrain = () =>

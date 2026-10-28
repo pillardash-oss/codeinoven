@@ -58,6 +58,7 @@ import { BrowserExtensionNativeMessaging } from './browser-native-messaging'
 import { BrowserExtensionOffscreenDocuments } from './browser-extension-offscreen-documents'
 import type { NativeHostLookupOptions } from './browser-native-host-manifest'
 import { nativeMessagingCommand } from './browser-extension-bridge'
+import type { BrowserDownloadExtensionEventName } from '../browser-service/browser-downloads'
 import {
   BrowserExtensionBridge,
   type BrowserExtensionActionPopupRequest,
@@ -234,6 +235,13 @@ export interface BrowserExtensionHost {
   closeSidePanel(extensionId: string, extensionTabId: number | null): void
   /** Apply a popup surface request for the tab named by the extension runtime. */
   openPopup(request: BrowserExtensionActionPopupOpenRequest): void
+  /**
+   * Apply one `chrome.downloads` call an extension made.
+   *
+   * The extension service only carries the call: the downloads belong to the
+   * app's download manager, which is the one place that can stop a transfer.
+   */
+  downloadCommand(command: { method: 'cancel' | 'pause' | 'resume' | 'erase'; id: number }): void
 }
 
 /** One extension popup request carried from the worker to the browser host. */
@@ -1694,6 +1702,54 @@ export class BrowserExtensionService {
     }
   }
 
+  /**
+   * One download fact, delivered into every extension in that jar that asked to
+   * watch downloads.
+   *
+   * The runtime compiles `chrome.downloads` out, so a listener written against it
+   * waits forever unless the app feeds it. Each download arrives in the shapes the
+   * API documents, but only at extensions that declared the `downloads` permission:
+   * a download is the user's traffic, and an extension that never asked to see one
+   * has no business being told about it.
+   */
+  onDownloadEvent(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserDownloadExtensionEventName,
+    args: unknown[]
+  ): void {
+    const state = this.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state || state.bridges.size === 0) return
+    for (const [extensionId, bridge] of state.bridges) {
+      if (!this.watchesDownloads(extensionId)) continue
+      void bridge.push({ kind: 'downloads', name, args })
+    }
+  }
+
+  /** Whether one installed extension declared the permission the download events
+   *  belong to. The installed copy has the permission stripped to keep the
+   *  runtime from refusing it, so the record's own reading of its manifest is the
+   *  one that answers. */
+  private watchesDownloads(extensionId: string): boolean {
+    return this.registry.get(extensionId)?.declaredPermissions.includes('downloads') ?? false
+  }
+
+  /**
+   * Whether any extension loaded in one jar watches downloads.
+   *
+   * A watcher captures by cancelling, so the download manager asks this before it
+   * opens a save dialog: a dialog for a file the extension is about to take over
+   * is a dialog that closes by itself.
+   */
+  watchesDownloadsInJar(projectId: string, boxId: string | null): boolean {
+    const state = this.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state) return false
+    for (const extensionId of state.bridges.keys()) {
+      if (this.watchesDownloads(extensionId)) return true
+    }
+    return false
+  }
+
   /** Open the channel into one extension's worker, beside its load. */
   private startBridge(state: LoadedJar, record: BrowserExtensionRecord): void {
     if (state.bridges.has(record.id)) return
@@ -1740,7 +1796,11 @@ export class BrowserExtensionService {
       // `chrome.userScripts.register` takes code and this runtime only registers
       // files, so the preamble asks for the write and waits for the answer.
       materializeUserScripts: (request) =>
-        materializeUserScriptFiles(extensionSourceDirectory(this.configRoot, record.id), request)
+        materializeUserScriptFiles(extensionSourceDirectory(this.configRoot, record.id), request),
+      // A capture extension stops the browser's own transfer to fetch the file
+      // itself, so this is the one media type of extension call that reaches the
+      // download manager rather than staying inside the extension's own jar.
+      downloadCommand: (command) => this.host.downloadCommand(command)
     })
     state.bridges.set(record.id, bridge)
     bridge.start()

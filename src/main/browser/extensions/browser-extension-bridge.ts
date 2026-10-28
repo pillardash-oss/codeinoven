@@ -185,6 +185,14 @@ export interface BrowserExtensionBridgeDeps {
    * closes every port.
    */
   nativeMessaging?: BrowserExtensionNativeMessaging
+  /**
+   * One `chrome.downloads` call an extension made about a download it saw.
+   *
+   * The `downloads` permission asks its owner to stop or keep the browser's own
+   * transfer, so the answer is the download manager's to give; this is only the
+   * way the call crosses from the worker to it.
+   */
+  downloadCommand?: (command: BrowserExtensionDownloadCommand) => void
 }
 
 /** Chromium's details for the install/update event the app synthesizes. */
@@ -367,6 +375,21 @@ const MAX_NATIVE_HOST_NAME_LENGTH = 256
 /** A port id is the app's own UUID, so anything longer is not one of ours. */
 const MAX_NATIVE_PORT_ID_LENGTH = 64
 
+/** Whether an unknown value from the wire is a usable download command. Every
+ *  field is worker-supplied, so the method is checked against what the app can
+ *  actually do and the id against what a download id can be before either is
+ *  handed to the download manager. */
+export function toDownloadCommand(value: unknown): BrowserExtensionDownloadCommand | null {
+  const record = asRecord(value)
+  const method = record['method']
+  if (method !== 'cancel' && method !== 'pause' && method !== 'resume' && method !== 'erase') {
+    return null
+  }
+  const id = record['id']
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return null
+  return { method, id }
+}
+
 /** Whether an unknown value from the wire is a usable native messaging request. */
 export function toNativeRequest(value: unknown): BrowserExtensionNativeRequest | null {
   const record = asRecord(value)
@@ -401,6 +424,14 @@ export function toNativeRequest(value: unknown): BrowserExtensionNativeRequest |
   return null
 }
 
+/** One `chrome.downloads` call an extension made, carried from its worker to
+ *  main through the bridge page. `id` is the numeric id the app handed that
+ *  extension in a download item. */
+export interface BrowserExtensionDownloadCommand {
+  method: 'cancel' | 'pause' | 'resume' | 'erase'
+  id: number
+}
+
 /** One delivery from the app's native port manager, as the worker reads it. */
 export function nativeMessagingCommand(delivery: NativeMessagingDelivery): Record<string, unknown> {
   switch (delivery.kind) {
@@ -424,6 +455,7 @@ export class BrowserExtensionBridge {
   private draining = false
   private readingFrames = false
   private answeringNative = false
+  private answeringDownloads = false
   private disposed = false
   /** The worker life the last snapshot came from. */
   private generation = ''
@@ -477,6 +509,7 @@ export class BrowserExtensionBridge {
           void this.drain()
           void this.answerFrameRequests()
           void this.answerNativeRequests()
+          void this.answerDownloadRequests()
           void this.writeUserScriptFiles()
           void this.reassertUserScripts()
         }, MAILBOX_POLL_INTERVAL_MS)
@@ -650,6 +683,44 @@ export class BrowserExtensionBridge {
       })
     } finally {
       this.answeringNative = false
+    }
+  }
+
+  /**
+   * Apply the `chrome.downloads` calls the worker made.
+   *
+   * The worker cannot reach the download manager, so the preamble leaves each
+   * cancel, pause, resume and erase here and this drains them on the same poll as
+   * the frame and native-messaging requests. Dropping one is not harmless: a
+   * capture is a cancel, and a cancel that never arrives leaves the browser's own
+   * copy downloading beside the extension's.
+   */
+  private async answerDownloadRequests(): Promise<void> {
+    const view = this.view
+    if (!view || this.disposed || this.answeringDownloads) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    this.answeringDownloads = true
+    try {
+      const raw = await contents.executeJavaScript(
+        'globalThis.__cioBridgeDrainDownloadRequests ? globalThis.__cioBridgeDrainDownloadRequests() : "[]"',
+        true
+      )
+      if (typeof raw !== 'string') return
+      const requests: unknown = JSON.parse(raw)
+      if (!Array.isArray(requests)) return
+      for (const value of requests.slice(0, 16)) {
+        const command = toDownloadCommand(value)
+        if (!command) continue
+        this.deps.downloadCommand?.(command)
+      }
+    } catch (error: unknown) {
+      Logger.dev('Extension download requests could not be handled:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
+    } finally {
+      this.answeringDownloads = false
     }
   }
 
