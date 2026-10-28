@@ -1,4 +1,5 @@
 import { pathIsAccessible } from '../../lib/utils'
+import { PI_HARNESS_PI_AI_REGISTRY_FILE } from '../../lib/pi-harness-vendor'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { bundledPiVendorDir } from '../drivers/harness-runtime'
@@ -13,8 +14,17 @@ import { Logger } from '../system/logger'
  *     real `exports` map, so it works in any checkout that has node_modules,
  *     including ones without the gitignored bundled-Pi build
  *     (`resources/harnesses/pi`, produced by `scripts/build-pi-harness.ts`).
- *  2. The vendored copy shipped next to the bundled Pi harness   required in
- *     the packaged app, where pi-ai is not part of CodeInOven's node_modules.
+ *  2. The self-contained copy the bundle script builds next to the bundled Pi
+ *     harness (`vendor/pi-ai-registry.mjs`), required in the packaged app where
+ *     pi-ai is not part of CodeInOven's node_modules.
+ *
+ * The vendored copy is a single esbuild output rather than pi-ai's own `dist`
+ * tree on purpose: that tree imports `@earendil-works/pi-telemetry`, `typebox`,
+ * `openai`, `@google/genai`, `@anthropic-ai/sdk` and `partial-json` by package
+ * name, none of which resolves without a node_modules walk the packaged app does
+ * not have. Loading it threw on the first of them and the catalog silently fell
+ * back to a stale inventory. See `bundlePiAiRegistry` in
+ * `scripts/pi-harness-bundle.ts`.
  *
  * Note: `require.resolve('@earendil-works/pi-ai/dist/providers/all.js')` can
  * NOT be used   the exports map only exposes `./providers/*`, so deep `dist/`
@@ -42,7 +52,7 @@ export async function importPiAiProvidersRegistry(scope: string): Promise<unknow
   }
   const vendor = bundledPiVendorDir()
   if (vendor) {
-    const vendored = join(vendor, 'pi-ai/dist/providers/all.js')
+    const vendored = join(vendor, PI_HARNESS_PI_AI_REGISTRY_FILE)
     if (await pathIsAccessible(vendored)) candidates.push(vendored)
   }
   const resolved = candidates[0]
