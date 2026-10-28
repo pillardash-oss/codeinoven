@@ -724,6 +724,15 @@ export class BrowserService {
     string,
     { directory: string; time: number; playing: boolean }
   >()
+  /**
+   * Compositions the user muted, by folder.
+   *
+   * A mute is a decision about the film, not about the view showing it, so it is
+   * held by folder and re-applied whenever that composition is armed or restored.
+   * Keying it by tab made it vanish with the tab: every reload or re-open brought
+   * the sound back, and the user had to mute the same video again.
+   */
+  private readonly mutedCompositions = new Set<string>()
   private activeTabId: string | null = null
   /**
    * The link target the pointer on the active page rests on, and the tab's page
@@ -1716,6 +1725,11 @@ export class BrowserService {
       }
       tab.transportMuted = false
       tab.view.webContents.setAudioMuted(rawMuted)
+      const directory = tab.composition?.directory
+      if (directory) {
+        if (rawMuted) this.mutedCompositions.add(directory)
+        else this.mutedCompositions.delete(directory)
+      }
       // Publish rather than trust the caller: `isAudioMuted` is the state the
       // renderer's indicator must show, including for a muted tab that the page
       // silently unmuted through its own audio controls.
@@ -3481,6 +3495,12 @@ export class BrowserService {
     // A re-arm of the document that is on screen right now keeps where the user is
     // rather than the position saved for a document that has been replaced.
     const live = armed?.generation === generation ? await this.readPlayhead(tabId) : null
+    // A page load arms playing unless told otherwise. Nothing here may start a film
+    // the user did not ask to play: a composition opens paused, and only a viewing
+    // that was already playing resumes. The saved position is only read here, so an
+    // arming that gives up early still leaves it for the next attempt.
+    const saved = this.playheads.get(tabId)
+    const resumesPlaying = saved?.directory === composition.directory && saved.playing
     this.applyTransportAudio(tabId, tab, false)
     // Load events do not wait for an async film's images, fonts or runtime bind.
     // Wait in the page, with one bounded startup timer and no main-process poll.
@@ -3501,7 +3521,7 @@ export class BrowserService {
       compositionTransportScript({
         duration: composition.duration,
         fps: composition.fps,
-        autoplay: !frozen
+        autoplay: !frozen && resumesPlaying
       })
     )
     const record =
@@ -3616,6 +3636,16 @@ export class BrowserService {
   private applyTransportAudio(tabId: string, tab: BrowserTab, playing: boolean): void {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) return
+    // A mute the user chose belongs to the composition, not to the tab, so it
+    // outlives every reload, re-open and thread switch until they unmute it.
+    if (this.mutedCompositions.has(tab.composition?.directory ?? '')) {
+      if (!contents.isAudioMuted()) {
+        contents.setAudioMuted(true)
+        this.publishState(tabId)
+      }
+      tab.transportMuted = false
+      return
+    }
     if (playing) {
       if (tab.transportMuted && contents.isAudioMuted()) {
         contents.setAudioMuted(false)
@@ -3634,6 +3664,9 @@ export class BrowserService {
   private releaseTransportAudio(tabId: string, tab: BrowserTab): void {
     if (!tab.transportMuted) return
     tab.transportMuted = false
+    // A mute the user chose outlives the player's own mute, so releasing the one
+    // must never lift the other.
+    if (this.mutedCompositions.has(tab.composition?.directory ?? '')) return
     const contents = tab.view.webContents
     if (contents.isDestroyed() || !contents.isAudioMuted()) return
     contents.setAudioMuted(false)

@@ -791,6 +791,35 @@
     if (previous !== '') void invoke('browser:destroy', previous, 'closed').catch(() => {})
   }
 
+  /**
+   * A teardown waiting out a flap.
+   *
+   * The board's `active` flag follows the sidebar, and an update elsewhere in the
+   * window can take it away for a frame and give it straight back. Ending the view
+   * on that frame destroyed the composition page and opened another one, twice, on
+   * an update that had nothing to do with the video: the picture flashed, the page
+   * re-ran its startup and a muted user heard the film again. The release therefore
+   * waits, and is cancelled by the ownership effect coming back.
+   */
+  let pendingRelease: ReturnType<typeof setTimeout> | null = null
+  function cancelPendingRelease(): void {
+    if (pendingRelease === null) return
+    clearTimeout(pendingRelease)
+    pendingRelease = null
+  }
+  function scheduleRelease(): void {
+    cancelPendingRelease()
+    const tab = boardTabId
+    if (tab === '') return
+    pendingRelease = setTimeout(() => {
+      pendingRelease = null
+      // A newer view took over while the teardown waited, so this one is not ours.
+      if (boardTabId !== tab) return
+      if (active && video && playable && !selectedMissing && selected.directory !== '') return
+      releaseComposition()
+    }, 400)
+  }
+
   async function ensureComposition(directory: string, force = false): Promise<void> {
     if (
       !active ||
@@ -1226,6 +1255,13 @@
     void refreshSettledWork()
   })
 
+  onMount(() => () => {
+    // Leaving the board for good still ends the view straight away; only a flap
+    // inside the board's own life waits out `scheduleRelease`.
+    cancelPendingRelease()
+    releaseComposition()
+  })
+
   onMount(() => {
     projectWorkState.invalidate(projectId, threadId)
     void projectWorkState.refresh(projectId, threadId).then(async () => {
@@ -1258,6 +1294,10 @@
   $effect(() => {
     const directory = selected.directory
     if (!active || !video || !playable || selectedMissing || directory === '') return
+    // A board that comes back within the grace window keeps the page it already
+    // owns: an unrelated update that flips the board inactive for a frame must
+    // not destroy the composition view and open a second one.
+    cancelPendingRelease()
     let cancelled = false
     // Read the lifecycle inputs above, without subscribing to the state written
     // while the asynchronous open completes.
@@ -1266,7 +1306,7 @@
     })
     return () => {
       cancelled = true
-      releaseComposition()
+      scheduleRelease()
     }
   })
 
