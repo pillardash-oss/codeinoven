@@ -52,7 +52,8 @@ export const invokeDesignContract = {
       threadId: string,
       directory: string,
       times: number[],
-      document?: VideoStudioDocument
+      document?: VideoStudioDocument,
+      clipIds?: string[]
     ],
     VideoFrameThumbnail[]
   >,

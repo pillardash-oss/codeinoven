@@ -21,58 +21,38 @@ import {
 } from '$shared/video/edit'
 import type { VideoProjectManifest } from '$shared/video/project'
 import type { BrowserCompositionPlayback } from '$shared/ipc-contract'
-import { visibleVideoFrames, type VideoFrameThumbnail } from '$shared/video/frame-grid'
+import {
+  visibleClipFrames,
+  videoThumbnailClips,
+  type VideoClipFrameCell,
+  type VideoFrameThumbnail
+} from '$shared/video/frame-grid'
 
 // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Ownership registry, not rendered state.
 const controllers = new Map<string, VideoEditorController>()
 type DocumentEdit = (document: VideoStudioDocument, edit: VideoEditDocument) => void
 
-/** Only picture data that can affect this sample invalidates its thumbnail. */
-function frameSignature(document: VideoStudioDocument | null, time: number): string {
-  const edit = document?.edit
-  if (!edit) return ''
-  const assets = new Map(edit.assets.map((asset) => [asset.id, asset]))
-  const tracks = new Map(edit.tracks.map((track) => [track.id, track]))
-  const visual = edit.clips.filter(
-    (clip) => assets.get(clip.assetId)?.kind !== 'audio' && !tracks.get(clip.trackId)?.hidden
+/** Thumbnail validity excludes placement, audio and other clips' layers. */
+function frameSignature(
+  document: VideoStudioDocument | null,
+  _time: number,
+  clipId: string
+): string {
+  const edit = document?.edit,
+    clip = edit?.clips.find((clip) => clip.id === clipId)
+  return JSON.stringify(
+    clip
+      ? {
+          source: edit?.assets.find((asset) => asset.id === clip.assetId)?.source,
+          start: clip.start,
+          duration: clip.duration,
+          sourceStart: clip.sourceStart,
+          speed: clip.speed,
+          crop: clip.crop,
+          grade: clip.grade
+        }
+      : null
   )
-  const clips = visual.filter((clip) => time >= clip.start && time < clip.start + clip.duration)
-  for (const clip of [...clips]) {
-    if (clip.transition.kind !== 'dissolve' || time >= clip.start + clip.transition.duration)
-      continue
-    const previous = visual
-      .filter(
-        (candidate) =>
-          candidate.trackId === clip.trackId &&
-          candidate.id !== clip.id &&
-          Math.abs(candidate.start + candidate.duration - clip.start) < 0.05
-      )
-      .at(-1)
-    if (previous && !clips.includes(previous)) clips.push(previous)
-  }
-  const captions =
-    document?.captionStyle === 'none'
-      ? []
-      : (document?.captions.filter((caption) => time >= caption.start && time < caption.end) ?? [])
-  return JSON.stringify({
-    background: edit.background,
-    controls: edit.background === 'composition' ? document?.controls : undefined,
-    tracks: edit.tracks
-      .filter((track) => clips.some((clip) => clip.trackId === track.id))
-      .map((track) => track.id),
-    clips: clips.map(
-      ({ audio: _audio, volume: _volume, fadeIn: _fadeIn, fadeOut: _fadeOut, ...clip }) => ({
-        ...clip,
-        asset: assets.get(clip.assetId)
-      })
-    ),
-    regions: edit.regions.filter(
-      (region) => time >= region.start && time < region.start + region.duration
-    ),
-    style: captions.length ? document?.captionStyle : undefined,
-    captions,
-    appearance: captions.length ? document?.captionAppearance : undefined
-  })
 }
 
 /** One document and undo chain, shared by the board and its fullscreen editor. */
@@ -80,6 +60,8 @@ export class VideoEditorController {
   document = $state.raw<VideoStudioDocument | null>(null)
   manifest = $state.raw<VideoProjectManifest | null>(null)
   selection = $state.raw<VideoEditorSelection>(null)
+  snapEnabled = $state(true)
+  rippleMode = $state<'off' | 'track' | 'all'>('off')
   contextRequest = $state.raw<{ x: number; y: number } | null>(null)
   private copiedClip = $state.raw<VideoEditClip | null>(null)
   time = $state(0)
@@ -116,20 +98,28 @@ export class VideoEditorController {
   private gestureWasDirty = false
   waveforms = $state.raw<Record<string, string | null>>({})
   private waveformBusy = false
-  readonly frames = new SvelteMap<number, VideoFrameThumbnail>()
+  readonly frames = new SvelteMap<string, VideoFrameThumbnail>()
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Cache validity does not drive rendered output.
-  private frameSignatures = new Map<number, string>()
+  private frameSignatures = new Map<string, string>()
   private frameTimer: ReturnType<typeof setTimeout> | undefined
   private frameBusy = false
-  private frameRequest: number[] | null = null
+  private frameRequest: VideoClipFrameCell[] | null = null
   private frameDocument: VideoStudioDocument | null = null
   private frameRange: [number, number, number] | null = null
   requestFrames(start: number, end: number, contentWidth: number): void {
     if (!this.tabId || !this.document?.edit) return
     this.frameRange = [start, end, contentWidth]
-    this.frameRequest = visibleVideoFrames(this.duration, this.fps, start, end, contentWidth)
-      .map((cell) => cell.time)
-      .filter((time) => this.frameSignatures.get(time) !== frameSignature(this.document, time))
+    const videos = videoThumbnailClips(this.document)
+    this.frameRequest = visibleClipFrames(
+      videos,
+      this.fps,
+      start,
+      end,
+      contentWidth / this.duration
+    ).filter(
+      (cell) =>
+        this.frameSignatures.get(cell.key) !== frameSignature(this.document, cell.time, cell.clipId)
+    )
     clearTimeout(this.frameTimer)
     this.frameTimer = setTimeout(() => {
       void this.flushFrames()
@@ -137,9 +127,9 @@ export class VideoEditorController {
   }
   private async flushFrames(): Promise<void> {
     if (this.frameBusy || !this.tabId || !this.frameRequest?.length) return
-    const times = this.frameRequest
+    const samples = this.frameRequest.slice(0, 24)
     const document = this.document
-    this.frameRequest = null
+    this.frameRequest = this.frameRequest.slice(24)
     this.frameBusy = true
     try {
       const frames = await invoke(
@@ -147,16 +137,22 @@ export class VideoEditorController {
         this.projectId,
         this.threadId,
         this.directory,
-        times,
-        document ?? undefined
+        samples.map((cell) => cell.time),
+        document ?? undefined,
+        samples.map((cell) => cell.clipId)
       )
       // Decode offscreen before changing src, so the existing image stays painted.
       // Small batches avoid decoding the entire strip at once on low-end machines.
       for (let index = 0; index < frames.length; index += 2) {
         await Promise.all(
           frames.slice(index, index + 2).map(async (frame) => {
-            const signature = frameSignature(document, frame.time)
-            if (this.disposed || signature !== frameSignature(this.document, frame.time)) return
+            const clipId =
+              frame.clipId ?? samples.find((sample) => sample.time === frame.time)?.clipId
+            if (!clipId) return
+            const key = `${clipId}:${frame.time}`
+            const signature = frameSignature(document, frame.time, clipId)
+            if (this.disposed || signature !== frameSignature(this.document, frame.time, clipId))
+              return
             try {
               const image = new Image()
               image.src = frame.image
@@ -164,25 +160,27 @@ export class VideoEditorController {
             } catch {
               return
             }
-            if (this.disposed || signature !== frameSignature(this.document, frame.time)) return
-            this.frameSignatures.set(frame.time, signature)
-            if (this.frames.get(frame.time)?.image !== frame.image)
-              this.frames.set(frame.time, frame)
+            if (this.disposed || signature !== frameSignature(this.document, frame.time, clipId))
+              return
+            this.frameSignatures.set(key, signature)
+            if (this.frames.get(key)?.image !== frame.image)
+              this.frames.set(key, { ...frame, clipId })
           })
         )
       }
-      // Keep visible samples when pruning the bounded cache.
-      // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Temporary eviction membership, not rendered state.
+      const [start, end, contentWidth] = this.frameRange ?? [0, 0, 0]
+      const videos = videoThumbnailClips(this.document)
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Temporary cache eviction lookup.
       const visible = new Set(
-        this.frameRange
-          ? visibleVideoFrames(this.duration, this.fps, ...this.frameRange).map((cell) => cell.time)
-          : []
+        visibleClipFrames(videos, this.fps, start, end, contentWidth / this.duration).map(
+          (cell) => cell.key
+        )
       )
-      for (const time of this.frames.keys()) {
+      for (const key of this.frames.keys()) {
         if (this.frames.size <= 96) break
-        if (!visible.has(time)) {
-          this.frames.delete(time)
-          this.frameSignatures.delete(time)
+        if (!visible.has(key)) {
+          this.frames.delete(key)
+          this.frameSignatures.delete(key)
         }
       }
     } catch {
@@ -402,6 +400,17 @@ export class VideoEditorController {
     this.time = Math.min(this.duration, snapEditTime(seconds, this.fps))
     if (this.tabId) this.seeker.seek(this.tabId, this.time)
   }
+  async paintBlur(): Promise<void> {
+    try {
+      if (this.playing && this.tabId) {
+        const state = await invoke('browser:transport', this.tabId, 'pause', 0)
+        if (state) this.adoptPlayback(state)
+      }
+      this.select(this.selection?.kind === 'brush' ? null : { kind: 'brush', size: 0.04 })
+    } catch (cause) {
+      this.error = cause instanceof Error ? cause.message : String(cause)
+    }
+  }
   async togglePlayback(): Promise<void> {
     if (!this.tabId) return
     try {
@@ -574,18 +583,54 @@ export class VideoEditorController {
       this.selection = { kind: 'clip', id: clone.id }
     })
   }
-  remove(ripple = false): void {
+  remove(
+    ripple: boolean | 'all' = this.rippleMode === 'all' ? 'all' : this.rippleMode === 'track'
+  ): void {
     const selection = this.selection
     if (!selection) return
     this.mutate((doc, edit) => {
-      if (selection.kind === 'clip') removeVideoEditClip(edit, selection.id, ripple)
+      if (selection.kind === 'clip') {
+        const clip = edit.clips.find((clip) => clip.id === selection.id)
+        if (!clip || edit.tracks.find((track) => track.id === clip.trackId)?.locked) return
+        if (ripple === 'all') {
+          const shift = (time: number): number =>
+            time <= clip.start ? time : Math.max(clip.start, time - clip.duration)
+          doc.captions = doc.captions
+            .map((caption) => ({
+              ...caption,
+              start: shift(caption.start),
+              end: shift(caption.end),
+              words: caption.words
+                ?.map((word) => ({
+                  ...word,
+                  start: shift(word.start),
+                  end: shift(word.end)
+                }))
+                .filter((word) => word.end > word.start)
+            }))
+            .filter((caption) => caption.end > caption.start)
+          edit.changes = edit.changes.map((change) => ({
+            ...change,
+            start: shift(change.start),
+            end: shift(change.end)
+          }))
+          edit.regions = edit.regions
+            .map((region) => ({
+              ...region,
+              start: shift(region.start),
+              duration: shift(region.start + region.duration) - shift(region.start)
+            }))
+            .filter((region) => region.duration > 0.001)
+        }
+        removeVideoEditClip(edit, selection.id, ripple)
+      }
       if (selection.kind === 'region')
         edit.regions = edit.regions.filter((region) => region.id !== selection.id)
       if (selection.kind === 'caption') doc.captions.splice(selection.index, 1)
       this.selection = null
     })
   }
-  moveClip(id: string, start: number, trackId: string): void {
+  moveClip(id: string, start: number, trackId: string, tolerance = 0.1): void {
     this.updateGesture((_doc, edit) => {
       const clip = edit.clips.find((clip) => clip.id === id),
         track = edit.tracks.find((track) => track.id === trackId)
@@ -597,12 +642,45 @@ export class VideoEditorController {
         edit.tracks.find((track) => track.id === clip.trackId)?.locked
       )
         return
-      clip.start = Math.min(3600 - clip.duration, snapEditTime(start, this.fps))
+      if (this.snapEnabled) {
+        let distance = Math.min(0.5, tolerance),
+          best = start
+        for (const edge of [
+          0,
+          this.time,
+          ...edit.clips
+            .filter((item) => item.id !== id)
+            .flatMap((item) => [item.start, item.start + item.duration])
+        ])
+          for (const candidate of [edge, edge - clip.duration])
+            if (Math.abs(candidate - start) < distance) {
+              distance = Math.abs(candidate - start)
+              best = candidate
+            }
+        start = best
+      }
+      clip.start = Math.max(0, Math.min(3600 - clip.duration, snapEditTime(start, this.fps)))
       clip.trackId = trackId
       edit.duration = Math.max(edit.duration, clip.start + clip.duration)
     })
   }
-  trimClip(id: string, edge: 'start' | 'end', at: number): void {
+  trimClip(id: string, edge: 'start' | 'end', at: number, tolerance = 0.1): void {
+    if (this.snapEnabled) {
+      let distance = Math.min(0.5, tolerance),
+        nearest = at
+      for (const boundary of [
+        0,
+        this.time,
+        ...(this.edit?.clips ?? [])
+          .filter((item) => item.id !== id)
+          .flatMap((item) => [item.start, item.start + item.duration])
+      ])
+        if (Math.abs(boundary - at) < distance) {
+          distance = Math.abs(boundary - at)
+          nearest = boundary
+        }
+      at = nearest
+    }
     this.updateGesture((_doc, edit) => trimVideoEditClip(edit, id, edge, at, this.fps))
   }
   editClip(id: string, change: (clip: VideoEditClip) => void): void {
@@ -614,16 +692,18 @@ export class VideoEditorController {
     })
   }
   addTrack(kind: 'video' | 'audio' | 'overlay'): void {
-    this.mutate((_doc, edit) =>
-      edit.tracks.push({
+    this.mutate((_doc, edit) => {
+      const track = {
         id: crypto.randomUUID(),
         kind,
         name: kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : 'Overlays',
         locked: false,
         muted: false,
         hidden: false
-      })
-    )
+      }
+      if (kind === 'audio') edit.tracks.push(track)
+      else edit.tracks.unshift(track)
+    })
   }
   addAsset(assetId: string, at = this.time, targetTrack?: string): void {
     this.mutate((_doc, edit) => {
@@ -661,6 +741,27 @@ export class VideoEditorController {
     })
   }
   private applyGesture(gesture: VideoEditorGesture): void {
+    if (gesture.kind === 'paint' && gesture.selection.kind === 'region' && gesture.stroke?.length) {
+      this.mutate((_doc, edit) => {
+        const id = gesture.selection.kind === 'region' ? gesture.selection.id : crypto.randomUUID()
+        edit.regions.push({
+          id,
+          kind: 'blur',
+          start: Math.min(this.time, edit.duration - 0.01),
+          duration: Math.min(5, Math.max(0.01, edit.duration - this.time)),
+          ...gesture.rect,
+          amount: 30,
+          color: '#000000',
+          stroke: gesture.stroke,
+          brushSize: gesture.brushSize
+        })
+        this.selection = {
+          kind: 'brush',
+          size: Math.max(0.005, Math.min(0.3, (gesture.brushSize ?? 0.1) * gesture.rect.width))
+        }
+      })
+      return
+    }
     if (gesture.kind) {
       // The native stage already painted its selection. Do not replace its document mid-drag.
       this.selection = gesture.selection
@@ -676,7 +777,7 @@ export class VideoEditorController {
       } else if (target.kind === 'region') {
         const region = edit.regions.find((region) => region.id === target.id)
         if (region) Object.assign(region, gesture.rect)
-      } else {
+      } else if (target.kind === 'caption') {
         const caption = doc.captions[target.index]
         if (caption)
           caption.appearance = gesture.captionAppearance ?? {

@@ -527,7 +527,15 @@ export class VideoStudioService {
   registerIpc(): void {
     ipcMain.handle(
       'video:frameStrip',
-      async (_event, projectId, threadId, directory, times: unknown, rawDocument: unknown) => {
+      async (
+        _event,
+        projectId,
+        threadId,
+        directory,
+        times: unknown,
+        rawDocument: unknown,
+        rawClipIds: unknown
+      ) => {
         if (
           !Array.isArray(times) ||
           times.length > 24 ||
@@ -550,16 +558,28 @@ export class VideoStudioService {
         if (!entry) return []
         const registration = await this.options.previews.open(folder)
         const document = rawDocument === undefined ? undefined : validateVideoStudio(rawDocument)
+        const clipIds = rawClipIds === undefined ? undefined : rawClipIds
+        if (
+          clipIds !== undefined &&
+          (!Array.isArray(clipIds) ||
+            clipIds.length !== times.length ||
+            clipIds.some(
+              (id) =>
+                typeof id !== 'string' ||
+                id.length > 128 ||
+                !document?.edit?.clips.some((clip) => clip.id === id)
+            ))
+        )
+          throw new Error('Invalid clip thumbnail samples')
         const duration = document?.edit?.duration ?? manifest.duration
         return this.framePreviews.render(
           servedFileUrl(registration.url, entry),
           { ...manifest, duration },
-          [
-            ...new Set(
-              (times as number[]).map((time) => snapVideoFrame(time, duration, manifest.fps))
-            )
-          ],
-          document
+          (times as number[]).map((time) =>
+            clipIds ? time : snapVideoFrame(time, duration, manifest.fps)
+          ),
+          document,
+          clipIds as string[] | undefined
         )
       }
     )

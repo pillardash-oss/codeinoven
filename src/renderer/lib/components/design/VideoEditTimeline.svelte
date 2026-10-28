@@ -11,7 +11,7 @@
   import type { VideoEditorController } from '$lib/stores/video-editor.svelte'
   import { snapEditTime } from '$shared/video/edit'
   import { videoTimecode } from '$shared/video/timeline'
-  import { visibleVideoFrames } from '$shared/video/frame-grid'
+  import { visibleClipFrames, videoThumbnailClips } from '$shared/video/frame-grid'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   let {
@@ -96,10 +96,10 @@
   const start = $derived(scrollLeft / scale)
   const end = $derived((scrollLeft + width) / scale)
   const frameCells = $derived(
-    visibleVideoFrames(editor.duration, editor.fps, start, end, contentWidth)
+    visibleClipFrames(videoThumbnailClips(editor.document), editor.fps, start, end, scale)
   )
   const pendingChanges = $derived(
-    editor.edit?.changes.filter((change) => change.author === 'agent' && !change.reviewed) ?? []
+    editor.edit?.changes.filter((change) => change.author === 'agent').slice(-200) ?? []
   )
   const visibleClips = $derived.by(() => {
     const items =
@@ -153,7 +153,10 @@
     const offset =
       clientX === undefined
         ? width / 2
-        : Math.max(0, Math.min(width, clientX - viewport.getBoundingClientRect().left))
+        : Math.max(
+            0,
+            Math.min(width, clientX - viewport.getBoundingClientRect().left - labelWidth - 6)
+          )
     const anchor = (viewport.scrollLeft + offset) / scale
     zoom = Math.max(1, Math.min(1000, next))
     await tick()
@@ -173,7 +176,12 @@
   function at(event: { clientX: number }): number {
     if (!viewport) return 0
     return snapEditTime(
-      (event.clientX - viewport.getBoundingClientRect().left + viewport.scrollLeft) / scale,
+      (event.clientX -
+        viewport.getBoundingClientRect().left -
+        labelWidth -
+        6 +
+        viewport.scrollLeft) /
+        scale,
       editor.fps
     )
   }
@@ -230,14 +238,15 @@
         editor.trimClip(
           active.id,
           active.edge,
-          (active.edge === 'start' ? active.start : active.end) + delta
+          (active.edge === 'start' ? active.start : active.end) + delta,
+          8 / scale
         )
       else {
         const track =
           document
             .elementFromPoint(event.clientX, event.clientY)
             ?.closest<HTMLElement>('[data-video-track]')?.dataset.videoTrack ?? active.trackId
-        editor.moveClip(active.id, active.start + delta, track)
+        editor.moveClip(active.id, active.start + delta, track, 8 / scale)
       }
     } else
       editor.updateGesture((doc, edit) => {
@@ -378,10 +387,48 @@
         >
       </div>
     </div>
-    <div class="flex min-h-0 flex-1 overflow-y-auto">
-      <div class="shrink-0 border-r border-border bg-surface" style:width={`${labelWidth}px`}>
-        <div class="h-6 border-b border-border"></div>
-        <div class="h-14 border-b border-border px-2 py-4 text-[0.625rem] text-muted">Frames</div>
+    <div
+      {@attach (element) => {
+        viewport = element
+        width = Math.max(1, element.clientWidth - labelWidth - 6)
+        const observer = new ResizeObserver(() => {
+          width = Math.max(1, element.clientWidth - labelWidth - 6)
+          queueMicrotask(() => editor.requestFrames(start, end, contentWidth))
+        })
+        observer.observe(element)
+        const offWheel = on(element, 'wheel', wheel, { passive: false })
+        const gestureStart = (event: Event): void => {
+          event.preventDefault()
+          gestureZoom = zoom
+        }
+        const gestureChange = (event: Event): void => {
+          event.preventDefault()
+          const gesture = event as Event & { scale: number; clientX: number }
+          if (Number.isFinite(gesture.scale))
+            void zoomAt(gestureZoom * gesture.scale, gesture.clientX)
+        }
+        element.addEventListener('gesturestart', gestureStart, { passive: false })
+        element.addEventListener('gesturechange', gestureChange, { passive: false })
+        return () => {
+          observer.disconnect()
+          offWheel()
+          element.removeEventListener('gesturestart', gestureStart)
+          element.removeEventListener('gesturechange', gestureChange)
+          if (viewport === element) viewport = undefined
+        }
+      }}
+      class="flex min-h-0 flex-1 overflow-auto"
+      aria-label="Timeline tracks"
+      onscroll={(event) => {
+        scrollLeft = event.currentTarget.scrollLeft
+        editor.requestFrames(start, end, contentWidth)
+      }}
+    >
+      <div
+        class="sticky left-0 z-20 shrink-0 self-start border-r border-border bg-surface"
+        style:width={`${labelWidth}px`}
+      >
+        <div class="sticky top-0 z-30 h-6 border-b border-border bg-surface"></div>
         {#each editor.edit?.tracks ?? [] as track (track.id)}
           <div
             class="relative flex items-center gap-1 border-b border-border px-1"
@@ -457,60 +504,24 @@
           Blur / privacy
           {@render bandSizer('regions', 'privacy track height')}
         </div>
-        {#if pendingChanges.length}<div
-            class="flex h-6 items-center px-2 text-[0.625rem] text-muted"
-          >
-            Assistant changes
-          </div>{/if}
+        <div class="flex h-6 items-center px-2 text-[0.625rem] text-muted">Agent review</div>
       </div>
       <StudioSidebarResizeHandle
         sidebarLabel="track labels"
         value={labelWidth}
         min={112}
         max={320}
-        onResize={(value) => (labelWidth = value)}
+        onResize={(value) => {
+          labelWidth = value
+          if (viewport) width = Math.max(1, viewport.clientWidth - value - 6)
+        }}
         onCommit={rememberRows}
         class="h-full w-1.5 shrink-0 cursor-col-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
       />
-      <div
-        {@attach (element) => {
-          viewport = element
-          width = element.clientWidth
-          const observer = new ResizeObserver(() => {
-            width = element.clientWidth
-            queueMicrotask(() => editor.requestFrames(start, end, contentWidth))
-          })
-          observer.observe(element)
-          const offWheel = on(element, 'wheel', wheel, { passive: false })
-          const gestureStart = (event: Event): void => {
-            event.preventDefault()
-            gestureZoom = zoom
-          }
-          const gestureChange = (event: Event): void => {
-            event.preventDefault()
-            const gesture = event as Event & { scale: number; clientX: number }
-            if (Number.isFinite(gesture.scale))
-              void zoomAt(gestureZoom * gesture.scale, gesture.clientX)
-          }
-          element.addEventListener('gesturestart', gestureStart, { passive: false })
-          element.addEventListener('gesturechange', gestureChange, { passive: false })
-          return () => {
-            observer.disconnect()
-            offWheel()
-            element.removeEventListener('gesturestart', gestureStart)
-            element.removeEventListener('gesturechange', gestureChange)
-            if (viewport === element) viewport = undefined
-          }
-        }}
-        class="min-w-0 flex-1 overflow-x-auto"
-        onscroll={(event) => {
-          scrollLeft = event.currentTarget.scrollLeft
-          editor.requestFrames(start, end, contentWidth)
-        }}
-      >
+      <div class="shrink-0" style:width={`${contentWidth}px`}>
         <div class="relative min-h-full" style:width={`${contentWidth}px`}>
           <div
-            class="relative h-6 cursor-ew-resize touch-none border-b border-border bg-surface"
+            class="sticky top-0 z-10 h-6 cursor-ew-resize touch-none border-b border-border bg-surface"
             role="slider"
             tabindex="0"
             aria-label="Timeline playhead"
@@ -547,22 +558,6 @@
                 style:left={`${hoverTime * scale}px`}
                 >{videoTimecode(hoverTime)} · f{Math.round(hoverTime * editor.fps)}</span
               >{/if}
-          </div>
-          <div
-            class="relative h-14 overflow-hidden border-b border-border bg-app"
-            aria-label="Video frame thumbnails"
-          >
-            {#each frameCells as cell (cell.frame)}
-              {@const frame = editor.frames.get(cell.time)}
-              {#if frame}<img
-                  src={frame.image}
-                  alt={`Video at ${videoTimecode(frame.time)}`}
-                  class="pointer-events-none absolute top-0 h-14 object-cover"
-                  style:left={`${cell.time * scale}px`}
-                  style:width={`${Math.max(1, (cell.end - cell.time) * scale)}px`}
-                  draggable="false"
-                />{/if}
-            {/each}
           </div>
           {#each editor.edit?.tracks ?? [] as track (track.id)}
             <div
@@ -614,6 +609,17 @@
                     class="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-border/50"
                     data-trim="start"
                   ></span>
+                  {#each frameCells.filter((cell) => cell.clipId === clip.id) as cell (cell.key)}
+                    {@const thumbnail = editor.frames.get(cell.key)}
+                    {#if thumbnail}<img
+                        class="pointer-events-none absolute inset-y-0 h-full object-cover opacity-70"
+                        src={thumbnail.image}
+                        alt=""
+                        style:left={`${(cell.time - clip.start) * scale}px`}
+                        style:width={`${Math.max(1, (cell.end - cell.time) * scale)}px`}
+                        draggable="false"
+                      />{/if}
+                  {/each}
                   {#if editor.waveforms[editor.waveformKey(clip)]}
                     <img
                       class="pointer-events-none absolute inset-0 h-full w-full opacity-35"
@@ -622,7 +628,9 @@
                       draggable="false"
                     />
                   {/if}
-                  <span class="pointer-events-none relative truncate">{asset?.name ?? 'Clip'}</span>
+                  <span class="pointer-events-none relative truncate bg-app/75 px-1"
+                    >{asset?.name ?? 'Clip'}</span
+                  >
                   <span
                     class="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-border/50"
                     data-trim="end"
@@ -735,23 +743,23 @@
             {/each}
             {@render bandSizer('regions', 'privacy track height')}
           </div>
-          {#if pendingChanges.length}<div
-              class="relative h-6"
-              role="group"
-              aria-label="Unreviewed assistant changes"
-            >
-              {#each pendingChanges as change (change.id)}
-                <button
-                  type="button"
-                  class="absolute top-1 h-4 overflow-hidden bg-primary/30 px-1 text-[0.5625rem] text-primary"
-                  style:left={`${change.start * scale}px`}
-                  style:width={`${Math.max(10, (change.end - change.start) * scale)}px`}
-                  title={`${change.label} · click to review from here`}
-                  aria-label={change.label}
-                  onclick={() => editor.seek(change.start)}>Agent</button
-                >
-              {/each}
-            </div>{/if}
+          <div class="relative h-6" role="group" aria-label="Agent edit review markers">
+            {#each pendingChanges as change (change.id)}
+              <button
+                type="button"
+                class={[
+                  'absolute top-1 h-4 overflow-hidden px-1 text-[0.5625rem]',
+                  change.reviewed ? 'bg-elevated text-dimmed' : 'bg-primary/30 text-primary'
+                ]}
+                style:left={`${change.start * scale}px`}
+                style:width={`${Math.max(10, (change.end - change.start) * scale)}px`}
+                title={`${change.reviewed ? 'Reviewed' : 'Needs review'}: ${change.label}`}
+                aria-label={change.label}
+                onclick={() => editor.seek(change.start)}
+                >{change.reviewed ? 'Reviewed' : 'Review'}</button
+              >
+            {/each}
+          </div>
           <div
             class="pointer-events-none absolute inset-y-0 z-10 w-px bg-primary"
             style:left={`${editor.time * scale}px`}

@@ -2,6 +2,8 @@
   import { onMount, type Component, type Snippet } from 'svelte'
   import { on } from 'svelte/events'
   import { ContextMenu } from 'bits-ui'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
@@ -56,7 +58,7 @@
   // svelte-ignore state_referenced_locally
   const editor = videoEditorController(projectId, threadId, directory)
   let root: HTMLElement | undefined
-  let section = $state<'inspector' | 'assets' | 'captions'>('inspector')
+  let section = $state<'inspector' | 'assets' | 'captions' | 'review'>('inspector')
   let leftWidth = $state(320)
   let upperHeight = $state(420)
   let assetsHeight = $state(180)
@@ -88,19 +90,13 @@
   const sections = [
     { id: 'inspector', label: 'Inspector' },
     { id: 'assets', label: 'Assets' },
-    { id: 'captions', label: 'Captions' }
+    { id: 'captions', label: 'Captions' },
+    { id: 'review', label: 'Agent review' }
   ] as const
   const additions = [
     { id: 'video', label: 'Video track' },
     { id: 'audio', label: 'Audio track' },
-    { id: 'overlay', label: 'Overlay track' },
-    { id: 'blur', label: 'Blur region' },
-    { id: 'pixelate', label: 'Pixelate region' },
-    { id: 'cover', label: 'Privacy cover' },
-    { id: 'split-all', label: 'Split all unlocked tracks' },
-    { id: 'ripple', label: 'Ripple delete this clip' },
-    { id: 'review', label: 'Mark agent edits reviewed' },
-    { id: 'fit-end', label: 'End at the last clip' }
+    { id: 'overlay', label: 'Overlay track' }
   ] as const
 
   async function save(): Promise<void> {
@@ -109,15 +105,24 @@
   async function exportMovie(): Promise<void> {
     if (!editor.dirty || (await editor.save())) onExport()
   }
-  async function remove(ripple = false): Promise<void> {
+  async function remove(
+    ripple: boolean | 'all' = editor.rippleMode === 'all' ? 'all' : editor.rippleMode === 'track'
+  ): Promise<void> {
     if (!editor.selection) return
     if (
       await appConfirm.request({
-        title: ripple ? 'Ripple delete this clip?' : 'Remove the selected item?',
+        title:
+          ripple === 'all' && editor.selectedClip
+            ? 'Ripple delete across all tracks?'
+            : ripple && editor.selectedClip
+              ? 'Ripple delete this clip?'
+              : 'Remove the selected item?',
         body: [
-          ripple
-            ? 'The clip is removed and later clips on the same track move left. Original media stays in assets.'
-            : 'The selected timeline item is removed. Original media stays available, and Undo restores the item.'
+          ripple === 'all' && editor.selectedClip
+            ? 'This time range is removed across all unlocked tracks. Spanning clips split, and captions move with the edit. Locked tracks stay in place. Original media stays in assets.'
+            : ripple && editor.selectedClip
+              ? 'The clip is removed and later clips on the same track move left. Original media stays in assets.'
+              : 'The selected timeline item is removed. Original media stays available, and Undo restores the item.'
         ],
         confirmLabel: 'Remove',
         cancelLabel: 'Cancel',
@@ -128,32 +133,6 @@
   }
   function add(value: (typeof additions)[number]['id']): void {
     if (value === 'video' || value === 'audio' || value === 'overlay') editor.addTrack(value)
-    else if (value === 'blur' || value === 'pixelate' || value === 'cover') {
-      section = 'inspector'
-      editor.addRegion(value)
-    } else if (value === 'split-all') editor.split(true)
-    else if (value === 'ripple') void remove(true)
-    else if (value === 'review')
-      editor.mutate((_doc, edit) => {
-        for (const change of edit.changes) change.reviewed = true
-      })
-    else
-      editor.mutate((doc, edit) => {
-        edit.duration = Math.max(0.1, ...edit.clips.map((clip) => clip.start + clip.duration))
-        doc.captions = doc.captions
-          .filter((caption) => caption.start < edit.duration)
-          .map((caption) => ({
-            ...caption,
-            end: Math.min(caption.end, edit.duration),
-            words: caption.words?.filter((word) => word.end <= edit.duration)
-          }))
-        edit.regions = edit.regions
-          .filter((region) => region.start < edit.duration)
-          .map((region) => ({
-            ...region,
-            duration: Math.min(region.duration, edit.duration - region.start)
-          }))
-      })
   }
   function keydown(event: KeyboardEvent): void {
     if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
@@ -192,6 +171,8 @@
     )
       return
     const actions: [string, () => void][] = [
+      ['video-edit-snap', () => (editor.snapEnabled = !editor.snapEnabled)],
+      ['video-edit-paint-blur', () => void editor.paintBlur()],
       ['video-edit-undo', () => editor.undo()],
       ['video-edit-redo', () => editor.redo()],
       ['video-edit-split', () => editor.split()],
@@ -241,7 +222,8 @@
   Icon: Component<{ size?: number }>,
   title: string,
   run: () => void,
-  disabled = false
+  disabled = false,
+  pressed?: boolean
 )}
   <button
     type="button"
@@ -249,6 +231,7 @@
     {title}
     aria-label={title}
     {disabled}
+    aria-pressed={pressed}
     onclick={run}><Icon size={13} /></button
   >
 {/snippet}
@@ -258,14 +241,59 @@
     <EnumSelect
       options={additions}
       value={null}
-      placeholder="Add to timeline"
-      ariaLabel="Add or edit timeline elements"
-      title="Add tracks, blur, privacy covers or review agent edits"
+      placeholder="Add track"
+      ariaLabel="Add track"
+      title="Add a video, audio or overlay track"
       menuMinWidth="22rem"
       compact
       onChange={add}
     />
   </div>
+  <label class="flex shrink-0 items-center gap-1 px-2 text-xs text-muted"
+    ><Switch
+      title="Snap clip edges"
+      aria-label="Snap clip edges"
+      checked={editor.snapEnabled}
+      onchange={(value) => (editor.snapEnabled = value)}
+    />Snap</label
+  >
+  <div class="w-40 shrink-0">
+    <EnumSelect
+      options={[
+        { id: 'off', label: 'Ripple off' },
+        { id: 'track', label: 'Ripple track' },
+        { id: 'all', label: 'Ripple all tracks' }
+      ]}
+      value={editor.rippleMode}
+      placeholder="Delete gaps"
+      ariaLabel="Ripple delete mode"
+      title="Choose whether deleting closes gaps on this track or all unlocked tracks"
+      menuMinWidth="18rem"
+      compact
+      onChange={(value) => (editor.rippleMode = value)}
+    />
+  </div>
+  {@render action(
+    CioPencil,
+    editor.selection?.kind === 'brush' ? 'Stop painting blur' : 'Paint blur on the preview',
+    () => void editor.paintBlur(),
+    false,
+    editor.selection?.kind === 'brush'
+  )}
+  {#if editor.selection?.kind === 'brush'}<label class="flex items-center gap-1 text-xs text-muted"
+      >Brush<input
+        type="range"
+        min="0.01"
+        max="0.2"
+        step="0.005"
+        class="w-24"
+        value={editor.selection.size}
+        aria-label="Blur brush size"
+        title="Blur brush size"
+        oninput={(event) =>
+          editor.select({ kind: 'brush', size: Number(event.currentTarget.value) })}
+      /></label
+    >{/if}
   {@render editActions()}
 {/snippet}
 
@@ -483,7 +511,36 @@
             class="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
           />
           <div class="min-h-0 flex-1">
-            <VideoEditInspector {editor} expanded captions={section === 'captions'} />
+            {#if section === 'review'}
+              <div class="h-full overflow-y-auto p-2 text-xs" aria-label="Agent edit review">
+                {#each editor.edit.changes
+                  .filter((change) => change.author === 'agent')
+                  .slice(-200)
+                  .reverse() as change (change.id)}
+                  <div class="flex items-center justify-between gap-2 border-b border-border py-2">
+                    <button
+                      type="button"
+                      class="min-w-0 flex-1 text-left text-muted hover:text-foreground"
+                      title="Seek to this agent edit"
+                      onclick={() => editor.seek(change.start)}>{change.label}</button
+                    >
+                    <button
+                      type="button"
+                      class="shrink-0 text-primary disabled:text-dimmed"
+                      title={change.reviewed
+                        ? 'Agent edit reviewed'
+                        : 'Mark this agent edit reviewed'}
+                      disabled={change.reviewed}
+                      onclick={() =>
+                        editor.mutate((_doc, edit) => {
+                          const target = edit.changes.find((item) => item.id === change.id)
+                          if (target) target.reviewed = true
+                        })}>{change.reviewed ? 'Reviewed' : 'Mark reviewed'}</button
+                    >
+                  </div>
+                {:else}<p class="text-muted">No agent edits recorded yet.</p>{/each}
+              </div>
+            {:else}<VideoEditInspector {editor} expanded captions={section === 'captions'} />{/if}
           </div>
         </aside>
         <StudioSidebarResizeHandle

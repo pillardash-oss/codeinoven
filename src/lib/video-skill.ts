@@ -167,6 +167,8 @@ Declare the intent in the manifest with \`audioPolicy\`: \`"required"\` for a fi
 
 Timing inside sound is measurable, so measure it. \`waveform\` and \`listen\` read the audio you are actually placing, which lets a cut land on a real beat instead of a guessed one. Do not present a pulse you invented as analysis of the music, and keep any beat-dependent drawing in the render function, where the playhead can reach it.
 
+The editor's upper tracks composite above lower tracks. A clip's rectangle remains editable by dragging its corners in the preview. Timeline thumbnails show each clip's own source, not the final composition. Privacy brush strokes are stored as normalized points in a region's optional \`stroke\` array, with \`brushSize\` relative to that region's width; they remain adjustable and undoable. Keep agent changes recorded for the Agent review section.
+
 ## Footage, captions and delivery
 
 Use \`probe\` before editing source media. \`filmstrip\` extracts up to 24 small frames at reported timestamps; open those pictures. \`waveform\` returns a waveform PNG, and \`listen\` returns a mono WAV excerpt. \`cut\` saves a trimmed clip with its audio into a new folder. Sources are project-relative files and originals are kept.

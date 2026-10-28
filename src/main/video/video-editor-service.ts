@@ -7,6 +7,7 @@ import { validateVideoStudio, type VideoStudioDocument } from '../../lib/video/s
 import {
   applyVideoEditOperations,
   validateVideoEditRect,
+  validateVideoBrushStroke,
   validateCaptionAppearance,
   type VideoEditAsset,
   type VideoEditorGesture,
@@ -256,10 +257,23 @@ export class VideoEditorService {
         const gesture: VideoEditorGesture = {
           selection: target,
           rect: validateVideoEditRect(value.rect),
-          ...(value.kind === 'select' || value.kind === 'context' ? { kind: value.kind } : {}),
+          ...(value.kind === 'select' || value.kind === 'context' || value.kind === 'paint'
+            ? { kind: value.kind }
+            : {}),
           ...(target.kind === 'caption' && value.captionAppearance !== undefined
             ? { captionAppearance: validateCaptionAppearance(value.captionAppearance) }
             : {})
+        }
+        if (gesture.kind === 'paint') {
+          gesture.stroke = validateVideoBrushStroke(value.stroke)
+          if (
+            typeof value.brushSize !== 'number' ||
+            !Number.isFinite(value.brushSize) ||
+            value.brushSize <= 0 ||
+            value.brushSize > 2
+          )
+            return
+          gesture.brushSize = value.brushSize
         }
         if (gesture.kind === 'context' && value.point && typeof value.point === 'object') {
           const point = value.point as Record<string, unknown>

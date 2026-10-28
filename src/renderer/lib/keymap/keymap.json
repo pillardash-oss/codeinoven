@@ -970,6 +970,20 @@
           "scenario": "Focus is inside the video editor, outside a text field."
         },
         {
+          "id": "video-edit-snap",
+          "keys": [],
+          "label": "Toggle video clip snapping",
+          "description": "Toggle snapping clip edges to nearby timeline boundaries.",
+          "scenario": "Video editor is focused."
+        },
+        {
+          "id": "video-edit-paint-blur",
+          "keys": [],
+          "label": "Paint blur on video",
+          "description": "Paint an undoable privacy mask on the video preview.",
+          "scenario": "Video editor is focused."
+        },
+        {
           "id": "video-edit-undo",
           "keys": ["mod", "z"],
           "label": "Undo an edit",

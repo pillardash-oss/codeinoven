@@ -176,5 +176,6 @@ export async function migrateVideoEdit(
     clip.volume = track.gain
     edit.clips.push(clip)
   }
+  edit.tracks.sort((a, b) => (a.kind === 'overlay' ? -1 : b.kind === 'overlay' ? 1 : 0))
   return validateVideoEdit(edit)
 }

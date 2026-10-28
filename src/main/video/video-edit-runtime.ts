@@ -1,6 +1,7 @@
 import type { VideoStudioDocument } from '../../lib/video/studio'
 import type {
   VideoEditClip,
+  VideoEditRegion,
   VideoEditRect,
   VideoEditorGesture,
   VideoEditorSelection,
@@ -36,6 +37,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     gain: GainNode
     pan: StereoPannerNode
   }
+  const regionMasks = new WeakMap<VideoEditRegion, { key: string; path: Path2D }>()
   const media = new Map<string, Media>()
   let wanted = new Set<string>()
   const graphs = new Map<HTMLMediaElement, AudioGraph>()
@@ -58,6 +60,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     appearance?: VideoCaptionAppearance
     selection: Exclude<VideoEditorSelection, null>
   } | null = null
+  let brushStroke: { x: number; y: number }[] | null = null
   let dragRect: VideoEditRect | null = null
   const pendingGestures: VideoEditorGesture[] = []
   let painting = false
@@ -288,7 +291,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
 
   function selectedRect(): VideoEditRect | null {
     if (dragRect) return dragRect
-    if (!studio || !selection) return null
+    if (!studio || !selection || selection.kind === 'brush') return null
     const target = selection
     if (target.kind === 'clip')
       return studio.edit?.clips.find((clip) => clip.id === target.id)?.rect ?? null
@@ -321,6 +324,25 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       rect = selectedRect()
     if (!ctx) return
     ctx.clearRect(0, 0, overlay.width, overlay.height)
+    if (selection?.kind === 'brush') {
+      overlay.style.pointerEvents = 'auto'
+      overlay.style.cursor = 'crosshair'
+      if (brushStroke?.length) {
+        ctx.strokeStyle =
+          getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim() ||
+          '#e7bb42'
+        ctx.lineWidth = selection.size * overlay.width
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.beginPath()
+        brushStroke.forEach((point, index) => {
+          if (index === 0) ctx.moveTo(point.x * overlay!.width, point.y * overlay!.height)
+          else ctx.lineTo(point.x * overlay!.width, point.y * overlay!.height)
+        })
+        ctx.stroke()
+      }
+      return
+    }
     if (!rect) {
       overlay.style.pointerEvents = editing ? 'auto' : 'none'
       overlay.style.cursor = 'default'
@@ -403,8 +425,8 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
         ) ?? []
       clips.sort(
         (a, b) =>
-          (studio?.edit?.tracks.findIndex((track) => track.id === a.trackId) ?? 0) -
-          (studio?.edit?.tracks.findIndex((track) => track.id === b.trackId) ?? 0)
+          (studio?.edit?.tracks.findIndex((track) => track.id === b.trackId) ?? 0) -
+          (studio?.edit?.tracks.findIndex((track) => track.id === a.trackId) ?? 0)
       )
       const clip = clips.findLast((clip) => contains(clip.rect))
       return clip ? { kind: 'clip', id: clip.id } : null
@@ -426,6 +448,19 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
     })
     overlay.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return
+      if (selection?.kind === 'brush' && overlay && !host.__cioTransport?.playing) {
+        const bounds = overlay.getBoundingClientRect()
+        brushStroke = [
+          {
+            x: clamp((event.clientX - bounds.left) / bounds.width),
+            y: clamp((event.clientY - bounds.top) / bounds.height)
+          }
+        ]
+        overlay.setPointerCapture(event.pointerId)
+        event.preventDefault()
+        paintOverlay()
+        return
+      }
       const target = hit(event)
       if (target) {
         selection = target
@@ -474,6 +509,26 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       }
     })
     overlay.addEventListener('pointermove', (event) => {
+      if (brushStroke && selection?.kind === 'brush' && overlay) {
+        const bounds = overlay.getBoundingClientRect(),
+          last = brushStroke.at(-1)!,
+          point = {
+            x: clamp((event.clientX - bounds.left) / bounds.width),
+            y: clamp((event.clientY - bounds.top) / bounds.height)
+          }
+        const distance = Math.hypot(
+          point.x - last.x,
+          ((point.y - last.y) * bounds.height) / bounds.width
+        )
+        const steps = Math.min(256 - brushStroke.length, Math.ceil(distance / (selection.size / 4)))
+        for (let i = 1; i <= steps; i++)
+          brushStroke.push({
+            x: last.x + ((point.x - last.x) * i) / steps,
+            y: last.y + ((point.y - last.y) * i) / steps
+          })
+        paintOverlay()
+        return
+      }
       if (!overlay) return
       if (!drag) {
         const rect = selectedRect()
@@ -562,6 +617,36 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       paintOverlay()
     })
     overlay.addEventListener('pointerup', (event) => {
+      if (brushStroke?.length && selection?.kind === 'brush' && overlay && canvas) {
+        const radius = selection.size / 2,
+          radiusY = (radius * canvas.width) / canvas.height
+        const left = clamp(Math.min(...brushStroke.map((p) => p.x)) - radius),
+          top = clamp(Math.min(...brushStroke.map((p) => p.y)) - radiusY)
+        const right = clamp(Math.max(...brushStroke.map((p) => p.x)) + radius),
+          bottom = clamp(Math.max(...brushStroke.map((p) => p.y)) + radiusY)
+        const rect = {
+          x: left,
+          y: top,
+          width: Math.max(0.01, right - left),
+          height: Math.max(0.01, bottom - top)
+        }
+        const target = { kind: 'region' as const, id: crypto.randomUUID() }
+        emitGesture({
+          kind: 'paint',
+          selection: target,
+          rect,
+          stroke: brushStroke.map((p) => ({
+            x: clamp((p.x - left) / rect.width),
+            y: clamp((p.y - top) / rect.height)
+          })),
+          brushSize: Math.min(2, selection.size / rect.width)
+        })
+        brushStroke = null
+        if (overlay.hasPointerCapture(event.pointerId))
+          overlay.releasePointerCapture(event.pointerId)
+        paintOverlay()
+        return
+      }
       if (!overlay || !drag) return
       const result = dragRect ?? drag.rect,
         target = drag.selection,
@@ -621,7 +706,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       .filter((clip) => time >= clip.start && time < clip.start + clip.duration)
       .sort(
         (a, b) =>
-          (tracks.get(a.trackId)?.index ?? 0) - (tracks.get(b.trackId)?.index ?? 0) ||
+          (tracks.get(b.trackId)?.index ?? 0) - (tracks.get(a.trackId)?.index ?? 0) ||
           a.start - b.start
       )
     const visual = clips.filter((clip) => {
@@ -644,7 +729,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       }
     visual.sort(
       (a, b) =>
-        (tracks.get(a.trackId)?.index ?? 0) - (tracks.get(b.trackId)?.index ?? 0) ||
+        (tracks.get(b.trackId)?.index ?? 0) - (tracks.get(a.trackId)?.index ?? 0) ||
         a.start - b.start
     )
     if (visual.length > 8) throw new Error('At most eight picture layers can play at the same time')
@@ -777,6 +862,22 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
           width = Math.min(region.width * canvas.width, canvas.width - x),
           height = Math.min(region.height * canvas.height, canvas.height - y)
         if (width < 1 || height < 1) continue
+        ctx.save()
+        if (region.stroke?.length) {
+          const key = [x, y, width, height, region.brushSize].join(':')
+          let cached = regionMasks.get(region)
+          if (!cached || cached.key !== key) {
+            const path = new Path2D(),
+              radius = ((region.brushSize ?? 0.1) * width) / 2
+            for (const point of region.stroke) {
+              path.moveTo(x + point.x * width + radius, y + point.y * height)
+              path.arc(x + point.x * width, y + point.y * height, radius, 0, Math.PI * 2)
+            }
+            cached = { key, path }
+            regionMasks.set(region, cached)
+          }
+          ctx.clip(cached.path)
+        }
         if (region.kind === 'cover') {
           ctx.fillStyle = region.color
           ctx.fillRect(x, y, width, height)
@@ -796,6 +897,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
           ctx.drawImage(scratch, x, y, width, height)
           ctx.restore()
         }
+        ctx.restore()
       }
     hooks.drawCaptions(ctx, time, canvas.width, canvas.height)
     ctx.restore()
@@ -841,6 +943,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
 
   function stopEditing(): void {
     editing = false
+    brushStroke = null
     pendingGestures.length = 0
     selection = null
     drag = null

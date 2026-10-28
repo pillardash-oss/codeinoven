@@ -70,6 +70,8 @@ export interface VideoEditRegion extends VideoEditRect {
   kind: 'blur' | 'pixelate' | 'cover'
   amount: number
   color: string
+  stroke?: { x: number; y: number }[]
+  brushSize?: number
 }
 export interface VideoCaptionAppearance {
   x: number
@@ -105,17 +107,28 @@ export type VideoEditorSelection =
   | { kind: 'clip'; id: string }
   | { kind: 'region'; id: string }
   | { kind: 'caption'; index: number }
+  | { kind: 'brush'; size: number }
   | null
 export interface VideoEditorGesture {
-  kind?: 'select' | 'context'
+  kind?: 'select' | 'context' | 'paint'
   point?: { x: number; y: number }
   selection: Exclude<VideoEditorSelection, null>
   rect: VideoEditRect
   captionAppearance?: VideoCaptionAppearance
+  stroke?: { x: number; y: number }[]
+  brushSize?: number
+}
+export function validateVideoBrushStroke(raw: unknown): { x: number; y: number }[] {
+  return entries(raw, 256).map((entry) => {
+    const point = record(entry)
+    return { x: number(point.x, 'Brush X', 0, 1), y: number(point.y, 'Brush Y', 0, 1) }
+  })
 }
 export function validateVideoEditorSelection(raw: unknown): VideoEditorSelection {
   if (raw === null || raw === undefined) return null
   const value = record(raw)
+  if (value.kind === 'brush')
+    return { kind: 'brush', size: number(value.size, 'Brush size', 0.005, 0.3, 0.04) }
   if (value.kind === 'caption')
     return { kind: 'caption', index: number(value.index, 'Caption index', 0, 9999) }
   return { kind: choice(value.kind, ['clip', 'region']), id: text(value.id, 'Selection ID', 96) }
@@ -331,7 +344,13 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
       duration: number(b.duration, 'Region duration', 0.001, duration),
       kind: choice(b.kind, ['blur', 'pixelate', 'cover'], 'blur'),
       amount: number(b.amount, 'Blur strength', 1, 100, 24),
-      color: color(b.color, '#000000')
+      color: color(b.color, '#000000'),
+      ...(b.stroke !== undefined
+        ? {
+            stroke: validateVideoBrushStroke(b.stroke),
+            brushSize: number(b.brushSize, 'Brush size', 0.001, 2, 0.1)
+          }
+        : {})
     }
   })
   const changes = entries(r.changes, 100).map((raw): VideoEditChange => {
@@ -414,14 +433,68 @@ export function splitVideoEditClip(
   edit.clips.push(next)
   return next.id
 }
-export function removeVideoEditClip(edit: VideoEditDocument, id: string, ripple: boolean): void {
+export function removeVideoEditClip(
+  edit: VideoEditDocument,
+  id: string,
+  ripple: boolean | 'all'
+): void {
   const clip = edit.clips.find((clip) => clip.id === id)
   if (!clip || edit.tracks.find((track) => track.id === clip.trackId)?.locked) return
+  if (ripple === 'all') {
+    const start = clip.start,
+      end = start + clip.duration,
+      next: VideoEditClip[] = []
+    for (const item of edit.clips) {
+      if (item.id === id) continue
+      if (
+        edit.tracks.find((track) => track.id === item.trackId)?.locked ||
+        item.start + item.duration <= start
+      ) {
+        next.push(item)
+        continue
+      }
+      if (item.start >= end) {
+        next.push({ ...item, start: item.start - clip.duration })
+        continue
+      }
+      const itemEnd = item.start + item.duration
+      if (item.start < start)
+        next.push({
+          ...item,
+          duration: start - item.start,
+          fadeIn: Math.min(item.fadeIn, start - item.start),
+          fadeOut: Math.min(item.fadeOut, start - item.start),
+          transition: {
+            ...item.transition,
+            duration: Math.min(item.transition.duration, start - item.start)
+          }
+        })
+      if (itemEnd > end)
+        next.push({
+          ...item,
+          id: item.start < start ? crypto.randomUUID() : item.id,
+          start,
+          sourceStart: item.sourceStart + (end - item.start) * item.speed,
+          duration: itemEnd - end,
+          fadeIn: Math.min(item.fadeIn, itemEnd - end),
+          fadeOut: Math.min(item.fadeOut, itemEnd - end),
+          transition: { kind: 'none', duration: 0 }
+        })
+    }
+    edit.clips = next
+    edit.duration = Math.max(
+      0.001,
+      edit.duration - clip.duration,
+      ...next.map((item) => item.start + item.duration)
+    )
+    return
+  }
   edit.clips = edit.clips.filter((candidate) => candidate.id !== id)
   if (ripple)
     for (const candidate of edit.clips)
       if (
         candidate.trackId === clip.trackId &&
+        !edit.tracks.find((track) => track.id === candidate.trackId)?.locked &&
         candidate.start >= clip.start + clip.duration - 0.001
       )
         candidate.start = Math.max(0, candidate.start - clip.duration)

@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron'
 import type { VideoProjectManifest } from '../../lib/video/project'
-import type { VideoFrameThumbnail } from '../../lib/video/frame-grid'
+import { videoClipThumbnailDocument, type VideoFrameThumbnail } from '../../lib/video/frame-grid'
 import type { VideoStudioDocument } from '../../lib/video/studio'
 import { videoCaptureUrl } from '../../lib/video/project'
 import {
@@ -19,7 +19,8 @@ export class VideoFramePreview {
     url: string,
     manifest: VideoProjectManifest,
     times: number[],
-    document?: VideoStudioDocument
+    document?: VideoStudioDocument,
+    clipIds?: string[]
   ): Promise<VideoFrameThumbnail[]> {
     if (this.disposed || this.queued >= 2) return []
     this.queued += 1
@@ -31,7 +32,7 @@ export class VideoFramePreview {
     await previous
     try {
       if (this.disposed) return []
-      return await this.capture(url, manifest, times, document)
+      return await this.capture(url, manifest, times, document, clipIds)
     } finally {
       this.queued -= 1
       release()
@@ -47,7 +48,8 @@ export class VideoFramePreview {
     url: string,
     manifest: VideoProjectManifest,
     times: number[],
-    document?: VideoStudioDocument
+    document?: VideoStudioDocument,
+    clipIds?: string[]
   ): Promise<VideoFrameThumbnail[]> {
     const window = new BrowserWindow({
       show: false,
@@ -88,11 +90,20 @@ export class VideoFramePreview {
               if (globalThis.CIOVideo?.setStudio) await globalThis.CIOVideo.setStudio(${JSON.stringify(document)}, null);
             })()`)
           const frames: VideoFrameThumbnail[] = []
-          for (const time of times) {
+          let previousClip = ''
+          for (const [index, time] of times.entries()) {
+            const clipId = clipIds?.[index]
+            if (document?.edit && clipId && previousClip !== clipId) {
+              const isolated = videoClipThumbnailDocument(document, clipId)
+              await window.webContents.executeJavaScript(
+                `globalThis.CIOVideo.setStudio(${JSON.stringify(isolated)}, null)`
+              )
+              previousClip = clipId
+            }
             if (this.disposed || window.isDestroyed()) break
             const image: unknown = await window.webContents.executeJavaScript(`(async () => {
               const transport = globalThis.__cioTransport;
-              const state = await transport.freezeAt(${JSON.stringify(time)});
+              const state = ${JSON.stringify(clipId !== undefined)} ? (await globalThis.cioRenderFrame(${JSON.stringify(time)}), {}) : await transport.freezeAt(${JSON.stringify(time)});
               if (state.error) throw new Error(state.error);
               const canvases = document.querySelectorAll('canvas');
               const source = globalThis.cioVideoCanvas || (canvases.length === 1 ? canvases[0] : null);
@@ -106,7 +117,8 @@ export class VideoFramePreview {
                 return canvas.toDataURL('image/jpeg', 0.65);
               } catch { await transport.settle(); return null; }
             })()`)
-            if (typeof image === 'string' && image.length < 128000) frames.push({ time, image })
+            if (typeof image === 'string' && image.length < 128000)
+              frames.push({ time, image, ...(clipId ? { clipId } : {}) })
             else if (image === null) {
               const scale = Math.min(160 / manifest.width, 90 / manifest.height)
               // Chromium scales DOM previews before IPC. Full-frame native
@@ -127,7 +139,11 @@ export class VideoFramePreview {
                   ? (captured as Record<string, unknown>)['data']
                   : null
               if (typeof data === 'string' && data.length < 128000)
-                frames.push({ time, image: `data:image/jpeg;base64,${data}` })
+                frames.push({
+                  time,
+                  image: `data:image/jpeg;base64,${data}`,
+                  ...(clipId ? { clipId } : {})
+                })
             }
           }
           return frames
