@@ -30,6 +30,7 @@ import {
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
+import { designGroupBriefing } from '../design/design-group-service'
 import { designSessionBriefing, type DesignSessionMode } from './cio-design-prompt'
 import { videoSessionBriefing, type VideoSessionMode } from './cio-video-prompt'
 import { CUA_PLAYBOOK } from './cio-cua-prompt'
@@ -2257,7 +2258,7 @@ export class UtilityOrchestrationService {
     const capability = await this.capabilityFor(
       state,
       resolved,
-      this.sessionOpeningFor(state, utilityId)
+      await this.sessionOpeningFor(state, utilityId)
     )
     await this.audit(state, 'utility.activated', {
       utilityId,
@@ -2382,11 +2383,17 @@ export class UtilityOrchestrationService {
    * the prompt is then the copy in hand and a second one would say the same thing
    * twice.
    */
-  private sessionOpeningFor(state: TurnState, utilityId: string): string {
+  private async sessionOpeningFor(state: TurnState, utilityId: string): Promise<string> {
     if (utilityId === APP_DESIGN_UTILITY_ID) {
       const session = state.request.designSession
       return session === undefined || session === 'off'
-        ? designSessionBriefing('activation', currentWorkRoot('design', state.request.projectId))
+        ? designSessionBriefing(
+            'activation',
+            currentWorkRoot('design', state.request.projectId),
+            this.database === undefined
+              ? ''
+              : designGroupBriefing(this.database, state.request.projectId)
+          )
         : ''
     }
     if (utilityId === APP_VIDEO_UTILITY_ID) {
@@ -2784,6 +2791,8 @@ export class UtilityOrchestrationService {
       const executors = new Map<string, DesignCapabilityExecutor | null>([
         ['preview', this.designPreviewExecutor],
         ['checkpoint', this.designPreviewExecutor],
+        ['groups', this.designPreviewExecutor],
+        ['organize-designs', this.designPreviewExecutor],
         ['read-contract', this.designPreviewExecutor],
         ['write-contract', this.designPreviewExecutor],
         ['lint', this.designPreviewExecutor],

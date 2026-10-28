@@ -74,6 +74,18 @@ export const IPC_EVENT_CONTRACT = {
     projectId: string,
     moves: Array<{ from: string; to: string }>
   ],
+  /**
+   * A project's design or video grouping changed, from this window or another.
+   *
+   * The record is shared, so every surface drawing it has to be told rather than
+   * trusting what it read when it painted, and the stamp is what a reader compares
+   * against the answer it already holds.
+   */
+  'design:workGroupsChanged': [] as unknown as [
+    projectId: string,
+    kind: import('./design').AuthoredWorkKind,
+    updatedAt: number
+  ],
   /** One app call for the renderer to perform on the agent's behalf. The
    *  renderer answers on the `appControl:respond` invoke with the request id. */
   'appControl:request': [] as unknown as [request: AppControlRequest],

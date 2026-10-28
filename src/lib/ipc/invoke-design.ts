@@ -11,7 +11,10 @@ import type {
   DesignThumbnail,
   ProjectWorkState,
   ScreenCanvasState,
-  ThreadDesignState
+  ThreadDesignState,
+  WorkGroupMove,
+  WorkGroupState,
+  WorkGroupView
 } from './design'
 import type { WorkRoots } from '../design/work-roots'
 import type { Contract } from './contract-helpers'
@@ -275,5 +278,47 @@ export const invokeDesignContract = {
    * directory, and the container id alone cannot say which one. A project answers
    * without it.
    */
-  'design:projectWork': {} as Contract<[projectId: string, threadId?: string], ProjectWorkState>
+  'design:projectWork': {} as Contract<[projectId: string, threadId?: string], ProjectWorkState>,
+  /**
+   * How a project's board is organised: its groups, which design sits in which,
+   * and how the board draws them.
+   *
+   * Grouping is a record about the designs, never a move: the folders stay where
+   * the agent wrote them, so the board can be rearranged freely and the work is
+   * untouched. Every mutation below answers with the whole state, so one drop is
+   * one round trip rather than a write and a re-read.
+   */
+  'design:workGroups': {} as Contract<[projectId: string, kind: AuthoredWorkKind], WorkGroupState>,
+  'design:workGroupsCreate': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, name: string],
+    WorkGroupState
+  >,
+  'design:workGroupsRename': {} as Contract<
+    [projectId: string, groupId: string, name: string],
+    WorkGroupState
+  >,
+  /** Deleting a group returns its designs to the ungrouped list; no folder moves. */
+  'design:workGroupsRemove': {} as Contract<[projectId: string, groupId: string], WorkGroupState>,
+  /** Folding a group is persisted with it, so the board reopens as it was left. */
+  'design:workGroupsCollapse': {} as Contract<
+    [projectId: string, groupId: string, collapsed: boolean],
+    WorkGroupState
+  >,
+  'design:workGroupsReorder': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, groupIds: string[]],
+    WorkGroupState
+  >,
+  /**
+   * Drop one or more designs into a group, out of a group, or to a new place in
+   * the group they are already in. One call per drop, so the board and the agent
+   * agree about what a single user gesture did.
+   */
+  'design:workGroupsMove': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, moves: WorkGroupMove[]],
+    WorkGroupState
+  >,
+  'design:workGroupsView': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, view: WorkGroupView],
+    WorkGroupState
+  >
 }

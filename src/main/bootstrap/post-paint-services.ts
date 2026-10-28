@@ -673,6 +673,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     for (const window of BrowserWindow.getAllWindows())
       sendToRenderer(window.webContents, 'design:historyChanged', projectId, directory)
   }
+  const announceWorkGroups = (
+    projectId: string,
+    kind: 'design' | 'video',
+    updatedAt: number
+  ): void => {
+    for (const window of BrowserWindow.getAllWindows())
+      sendToRenderer(window.webContents, 'design:workGroupsChanged', projectId, kind, updatedAt)
+  }
   const designService = new DesignService({
     database,
     onHistoryChanged: announceHistoryChanged,
@@ -680,6 +688,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       for (const window of BrowserWindow.getAllWindows())
         sendToRenderer(window.webContents, 'design:relocated', projectId, moves)
     },
+    // The grouping is a shared record rather than one window's preference, so the
+    // board in every window hears about a drop, a rename or a fold as it happens.
+    onWorkGroupsChanged: announceWorkGroups,
     // The agent can open a design or video session by previewing into a work
     // root with no tag, so the row's authored-work markers have to reach the
     // renderer the same way the tag path's write does, in real time.
@@ -723,7 +734,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       checkpoint: (projectId, threadId, input) =>
         designService.checkpoint(projectId, threadId, input, 'design'),
       browser: () => state.browserService,
-      record: (input) => designService.recordPreview(input)
+      record: (input) => designService.recordPreview(input),
+      announceWorkGroups
     })
   )
   // Generation services answer with a link and those links expire, so the design

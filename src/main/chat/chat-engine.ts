@@ -198,6 +198,7 @@ import {
   isCioDesignRequest,
   type DesignSessionMode
 } from '../utilities/cio-design-prompt'
+import { designGroupBriefing } from '../design/design-group-service'
 import {
   videoSessionBriefing,
   videoSessionContinuation,
@@ -4453,9 +4454,16 @@ export class ChatEngine {
       // the playbook's default would name.
       const designContract =
         designSession === 'start'
-          ? designSessionBriefing('tag', currentWorkRoot('design', projectId))
+          ? designSessionBriefing(
+              'tag',
+              currentWorkRoot('design', projectId),
+              designGroupBriefing(this.database, projectId)
+            )
           : designSession === 'continue'
-            ? designSessionContinuation(currentWorkRoot('design', projectId))
+            ? designSessionContinuation(
+                currentWorkRoot('design', projectId),
+                designGroupBriefing(this.database, projectId)
+              )
             : ''
       // The video contract is the same shape as the design one, for the same
       // reason: the capability it activates arrives with the turn request.

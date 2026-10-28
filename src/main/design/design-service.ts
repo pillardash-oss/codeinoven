@@ -12,8 +12,8 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { DEFAULT_WORK_ROOTS, workRootForKind } from '../../lib/design/work-roots'
 import type {
   AuthoredWorkKind,
-  DesignEntry,
   DesignCheckpointResult,
+  DesignEntry,
   DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
@@ -26,7 +26,10 @@ import type {
   ScreenCanvasState,
   ThreadDesignCurrent,
   ThreadDesignState,
-  UpdateWorkDetails
+  UpdateWorkDetails,
+  WorkGroupMove,
+  WorkGroupState,
+  WorkGroupView
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
 import { authoredWorkRoot, type AuthoredWorkRoot } from './authored-work-root'
@@ -34,6 +37,7 @@ import type { BrowserService } from '../browser/browser-service'
 import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/browser-tab-mark'
 import type { Database } from '../database/database'
 import { DesignRepo } from '../database/repositories/design-repo'
+import { WorkGroupRepo } from '../database/repositories/work-group-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { resolveServedFolder } from '../preview/served-folder'
@@ -52,7 +56,6 @@ import {
   projectWorkRootPaths,
   forgetProjectWorkRoots
 } from './work-roots-state'
-
 /**
  * What the app knows about a thread's authored work, and how the user gets back to it.
  *
@@ -130,6 +133,45 @@ function optionalKind(value: unknown): AuthoredWorkKind | undefined {
 }
 
 /**
+ * The kind a board-organisation call is about, which one of the two must name.
+ *
+ * Unlike a board's forced kind, this has no sensible default: groups of a design
+ * and groups of a composition are two arrangements, and guessing one would write
+ * the user's drop into the other.
+ */
+function requireWorkKind(value: unknown): AuthoredWorkKind {
+  const kind = optionalKind(value)
+  if (kind === undefined) throw new TypeError('A design or video kind is required')
+  return kind
+}
+
+/** How a board draws the work, when a caller is changing it. */
+function requireWorkGroupView(value: unknown): WorkGroupView {
+  if (value !== 'cards' && value !== 'list') throw new TypeError('Board view is invalid')
+  return value
+}
+
+/**
+ * One design the board is moving, out of a drag or out of an agent's request.
+ *
+ * Null `groupId` is a real destination: it is the ungrouped part of the board,
+ * which is where a design goes when the user drags it out of every group.
+ */
+function requireWorkGroupMove(value: unknown): WorkGroupMove {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new TypeError('A design to move is invalid')
+  const record = value as Record<string, unknown>
+  return {
+    directory: requirePath(record['directory']),
+    groupId: record['groupId'] === null ? null : requirePath(record['groupId']),
+    position:
+      typeof record['position'] === 'number' && Number.isFinite(record['position'])
+        ? record['position']
+        : undefined
+  }
+}
+
+/**
  * Validation for a file path inside an authored-work folder.
  *
  * Longer than an id because a nested page is a real path, and NUL-free because the
@@ -185,6 +227,19 @@ export interface DesignServiceOptions {
   onHistoryChanged?: (projectId: string, directory: string) => void
   onWorkRelocated?: (projectId: string, moves: Array<{ from: string; to: string }>) => void
   /**
+   * Mirror a change to a project's design or video grouping into live UI.
+   *
+   * The organisation is a record every window draws, so the window that made the
+   * change and the ones that did not both have to hear about it. The stamp is
+   * carried because a reader's own answer is only stale when this is newer than
+   * what it read.
+   */
+  onWorkGroupsChanged?: (
+    projectId: string,
+    kind: AuthoredWorkKind,
+    updatedAt: number
+  ) => void
+  /**
    * Mirror a thread's authored-work kinds to live UI the moment they are recorded.
    *
    * The row is what the sidebar draws its markers from, and the agent can open a
@@ -216,6 +271,15 @@ interface ServedWork {
 
 export class DesignService {
   private readonly designs: DesignRepo
+  /**
+   * The board's organisation of a project's work.
+   *
+   * A group is a record about designs, never a place to put them, so this service
+   * owns it beside the listing: the board asks for both, and neither may move a
+   * folder. Renames and deletions reach it here for the same reason, so a design
+   * keeps its group when its folder is renamed.
+   */
+  private readonly workGroups: WorkGroupRepo
   private readonly threads: ThreadRepo
   /** The change history behind the board's Undo and Redo, one line per folder. */
   private readonly history: DesignHistoryService
@@ -228,6 +292,7 @@ export class DesignService {
 
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
+    this.workGroups = new WorkGroupRepo(options.database)
     this.threads = new ThreadRepo(options.database)
     this.history = new DesignHistoryService(options.database)
   }
@@ -305,6 +370,75 @@ export class DesignService {
           optionalKind(rawKind)
         )
     )
+    // The board's own organisation of the work: named groups, which design sits
+    // in which, and how the board draws them. Every mutation answers with the
+    // whole state, so one gesture is one round trip, and every mutation
+    // announces the new stamp so every window reading this board agrees about
+    // what the user arranged.
+    ipcMain.handle('design:workGroups', async (_event, rawProjectId, rawKind) =>
+      this.workGroups.state(requireId(rawProjectId, 'project id'), requireWorkKind(rawKind))
+    )
+    ipcMain.handle('design:workGroupsCreate', async (_event, rawProjectId, rawKind, name) => {
+      const projectId = requireId(rawProjectId, 'project id')
+      const kind = requireWorkKind(rawKind)
+      return this.announceWorkGroups(this.workGroups.create(projectId, kind, name))
+    })
+    ipcMain.handle('design:workGroupsRename', async (_event, rawProjectId, groupId, name) =>
+      this.announceWorkGroups(
+        this.workGroups.rename(
+          requireId(rawProjectId, 'project id'),
+          requireId(groupId, 'group id'),
+          name
+        )
+      )
+    )
+    ipcMain.handle('design:workGroupsRemove', async (_event, rawProjectId, groupId) =>
+      this.announceWorkGroups(
+        this.workGroups.remove(requireId(rawProjectId, 'project id'), requireId(groupId, 'group id'))
+      )
+    )
+    ipcMain.handle(
+      'design:workGroupsCollapse',
+      async (_event, rawProjectId, groupId, collapsed) =>
+        this.announceWorkGroups(
+          this.workGroups.setCollapsed(
+            requireId(rawProjectId, 'project id'),
+            requireId(groupId, 'group id'),
+            collapsed === true
+          )
+        )
+    )
+    ipcMain.handle('design:workGroupsReorder', async (_event, rawProjectId, rawKind, groupIds) => {
+      if (!Array.isArray(groupIds)) throw new TypeError('A group order is required')
+      const projectId = requireId(rawProjectId, 'project id')
+      const kind = requireWorkKind(rawKind)
+      return this.announceWorkGroups(
+        this.workGroups.reorder(
+          projectId,
+          kind,
+          groupIds.map((id) => requireId(id, 'group id'))
+        )
+      )
+    })
+    ipcMain.handle('design:workGroupsMove', async (_event, rawProjectId, rawKind, moves) => {
+      if (!Array.isArray(moves)) throw new TypeError('A list of designs to move is required')
+      const projectId = requireId(rawProjectId, 'project id')
+      const kind = requireWorkKind(rawKind)
+      return this.announceWorkGroups(
+        this.workGroups.move(
+          projectId,
+          kind,
+          moves.map((move) => requireWorkGroupMove(move))
+        )
+      )
+    })
+    ipcMain.handle('design:workGroupsView', async (_event, rawProjectId, rawKind, view) => {
+      const projectId = requireId(rawProjectId, 'project id')
+      const kind = requireWorkKind(rawKind)
+      return this.announceWorkGroups(
+        this.workGroups.setView(projectId, kind, requireWorkGroupView(view))
+      )
+    })
     ipcMain.handle(
       'design:thumbnail',
       async (_event, rawProjectId, rawThreadId, rawDirectory, rawEntry, rawWidth, rawKind) =>
@@ -377,7 +511,10 @@ export class DesignService {
           // it runs in, and every assistant task shares one project id, so writing
           // it would repoint every other assistant's designs at once.
           projectScope: !scope.appOwned,
-          onRelocated: (moves) => this.options.onWorkRelocated?.(projectId, moves),
+          onRelocated: (moves) => {
+            this.followRelocatedFolders(projectId, details.kind, moves)
+            this.options.onWorkRelocated?.(projectId, moves)
+          },
           list: async () => (await this.projectWork(projectId, threadId))[details.kind],
           relocate: async (from, to) => {
             await this.history.relocateFolder(
@@ -749,9 +886,39 @@ export class DesignService {
     this.options.onThreadKindChanged?.(projectId, threadId, kind, kinds)
   }
 
-  forgetProject(projectId: string): void {
-    forgetProjectWorkRoots(this.options.database, projectId)
+  /**
+   * Publish an arrangement change and hand the answer back.
+   *
+   * Every group mutation goes through here so the stamp and the announcement
+   * cannot drift apart: a window that missed the write is told, and the window
+   * that made it gets the state it should draw rather than asking again.
+   */
+  private announceWorkGroups(state: WorkGroupState): WorkGroupState {
+    this.options.onWorkGroupsChanged?.(state.projectId, state.kind, state.updatedAt)
+    return state
+  }
+
+  /**
+   * Keep a design's group when its folder is renamed or moved.
+   *
+   * Membership is keyed by the folder, and a rename is a real move on disk, so
+   * without this the user would lose the arrangement at the exact moment they
+   * tidied the name. It runs for every move the change made, then the renderer is
+   * told once, which is what the board's own relocation handler expects.
+   */
+  private followRelocatedFolders(
+    projectId: string,
+    kind: AuthoredWorkKind,
+    moves: ReadonlyArray<{ from: string; to: string }>
+  ): void {
+    if (moves.length === 0) return
+    for (const move of moves) this.workGroups.relocate({ projectId, kind, ...move })
+    this.options.onWorkGroupsChanged?.(projectId, kind, this.workGroups.state(projectId, kind).updatedAt)
+  }
+
+  forgetProject(projectId: string): void {    forgetProjectWorkRoots(this.options.database, projectId)
     this.designs.deleteProject(projectId)
+    this.workGroups.deleteProject(projectId)
     this.history.forgetProject(projectId)
     for (const key of [...this.screenShots.keys()]) {
       if (key.startsWith(`${projectId}|`)) this.screenShots.delete(key)

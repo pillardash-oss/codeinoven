@@ -1273,6 +1273,59 @@ export const DATABASE_SCHEMA_SQL = [
     PRIMARY KEY(project_id, directory)
   );
   CREATE INDEX IF NOT EXISTS idx_authored_work_folders_kind ON authored_work_folders(project_id, kind);`,
+  /**
+   * A project's named groups of authored work: the board's organisation, never a
+   * place on disk. The folders stay where they are, so a group can be renamed or
+   * deleted without touching a file, and moving a design into one is a record
+   * rather than a move.
+   *
+   * `collapsed` is stored with the group because folding a group is the user's
+   * arrangement too: a board that reopened with every group expanded would undo
+   * the tidying the user did on a long project.
+   */
+  `CREATE TABLE IF NOT EXISTS work_groups (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    collapsed INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_groups_scope ON work_groups(project_id, kind, position);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_work_groups_name ON work_groups(project_id, kind, name COLLATE NOCASE);`,
+  /**
+   * Which group one design belongs to.
+   *
+   * The key is the folder, exactly as the board spells it, so the membership
+   * follows the design rather than a copy of it. A folder with no row here is
+   * ungrouped, which is why a project that never used groups has nothing written
+   * for any of its designs.
+   */
+  `CREATE TABLE IF NOT EXISTS work_group_members (
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    directory TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, kind, directory)
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_group_members_group ON work_group_members(group_id, position);`,
+  /**
+   * How one project's board draws its work: pictures of the designs, or the list.
+   *
+   * Read with the groups so a reopened board comes back the way the user left it,
+   * rather than resetting to whichever view the app happens to prefer.
+   */
+  `CREATE TABLE IF NOT EXISTS work_group_boards (
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    view TEXT NOT NULL DEFAULT 'cards' CHECK(view IN ('cards','list')),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, kind)
+  );`,
   `CREATE TABLE IF NOT EXISTS design_reviews (
     id TEXT PRIMARY KEY NOT NULL,
     project_id TEXT NOT NULL,

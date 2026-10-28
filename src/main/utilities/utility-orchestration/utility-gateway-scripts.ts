@@ -638,6 +638,70 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
       }
     },
     {
+      name: 'groups',
+      description:
+        "Read how the user organises this project's designs on the coordinator board: the named groups, the designs each one holds, how the board draws them, and when the user last rearranged them. Read this before you talk about the arrangement, and again after the user says they moved something. A group is a record about folders, not a place to put them, so reading it never changes where a design lives.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['design', 'video'],
+            description: 'Which board to read. Defaults to design.'
+          }
+        },
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'organize-designs',
+      description:
+        "Change how the user's designs are grouped on the coordinator board. This is the only way you may group designs: it writes names and memberships, never a folder, so no design moves on disk and no rename ever happens here. Every call answers with the whole board afterwards. Actions: create (a new empty group), rename, delete (its designs return to ungrouped), assign (move designs into a group, or out of every group when group is omitted), reorder (the order the groups appear in), view (cards, which is a picture per design, or list, which is a folded list).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['create', 'rename', 'delete', 'assign', 'reorder', 'view'],
+            description: 'What to change about the arrangement.'
+          },
+          kind: {
+            type: 'string',
+            enum: ['design', 'video'],
+            description: 'Which board to change. Defaults to design.'
+          },
+          name: {
+            type: 'string',
+            maxLength: 80,
+            description: 'The group name for create, or the new name for rename.'
+          },
+          group: {
+            type: 'string',
+            description:
+              'The group to act on for rename, delete and assign, by its name or the id the last read returned. Omit it for assign to ungroup the designs.'
+          },
+          designs: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Project-relative design folders for assign, such as .cio/designs/hero. These are the folders the board lists; grouping them does not move them.'
+          },
+          order: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Group names or ids in the order they should appear, for reorder.'
+          },
+          view: {
+            type: 'string',
+            enum: ['cards', 'list'],
+            description: 'How the board should draw the designs, for view.'
+          }
+        },
+        required: ['action'],
+        additionalProperties: false
+      }
+    },
+    {
       name: 'save-media',
       description: `Save a generated image, video or sound file into the project, so the design references a file of its own instead of a link that expires. Give it the https link the generation service answered with; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
       inputSchema: {

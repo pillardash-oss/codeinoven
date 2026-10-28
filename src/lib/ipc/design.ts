@@ -395,3 +395,90 @@ export interface UpdateWorkDetailsResult {
   directory: string
   moved: number
 }
+
+/**
+ * How the board draws a project's designs: pictures of them, or a folded list.
+ *
+ * A grid of thumbnails answers "which one is this"; a list of groups answers
+ * "where is it" once a project holds more designs than fit on one screen. The
+ * same folders are behind both, so this is a reading of the work rather than a
+ * different set of it.
+ */
+export type WorkGroupView = 'cards' | 'list'
+
+/**
+ * One named group of a project's authored work.
+ *
+ * A group is the user's own organisation of the board, not a place on disk: the
+ * folders stay exactly where they are and the group is a record about them. That
+ * is what makes grouping safe to do freely, and it is why deleting a group
+ * returns its designs to the board ungrouped instead of touching a single file.
+ */
+export interface WorkGroup {
+  /** Stable id, mentioned by the agent and used to move designs between groups. */
+  id: string
+  /** Which session's work the group holds. */
+  kind: AuthoredWorkKind
+  /** Name the user gave it, e.g. `Marketing site`. */
+  name: string
+  /** Position among the project's groups of this kind, lowest first. */
+  position: number
+  /** Whether the board shows the group's designs folded away. Persisted so a
+   *  folded group is still folded after a restart. */
+  collapsed: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * One design's place in a group, and its order inside it.
+ *
+ * A design with no membership row is ungrouped: the absence of a record is the
+ * whole of "not in a group", so no design has to be written to when a project
+ * starts using groups.
+ */
+export interface WorkGroupMember {
+  /** Project-relative folder with forward slashes. */
+  directory: string
+  /** The group holding it. */
+  groupId: string
+  /** Position inside that group, lowest first. */
+  position: number
+}
+
+/**
+ * Everything the board knows about how a project's designs are organised.
+ *
+ * Groups and memberships travel together with the view and one change stamp,
+ * because the board draws all of it at once and an agent asking what the user
+ * arranged needs the same answer in one read.
+ */
+export interface WorkGroupState {
+  projectId: string
+  kind: AuthoredWorkKind
+  /** Groups in board order. */
+  groups: WorkGroup[]
+  /** Membership of every grouped design; a folder absent from this list is
+   *  ungrouped. */
+  members: WorkGroupMember[]
+  /** How the board draws the work: pictures, or the folded list. */
+  view: WorkGroupView
+  /**
+   * When the user last changed the organisation (ms), or 0 when they never have.
+   *
+   * It is the stamp that tells a reader its answer is stale: an agent that read
+   * the groups earlier compares this against what it read, and the board uses it
+   * to know a change came from another window.
+   */
+  updatedAt: number
+}
+
+/** One design the board should put in a group, for a single drop. */
+export interface WorkGroupMove {
+  /** Project-relative folder with forward slashes. */
+  directory: string
+  /** Destination group, or null to return the design to the ungrouped list. */
+  groupId: string | null
+  /** Position inside the destination group; omitted appends to the end. */
+  position?: number
+}
