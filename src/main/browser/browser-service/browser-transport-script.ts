@@ -353,6 +353,13 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   function renderAt(seconds) {
     if (pendingFrame) { queuedFrame = seconds; return true; }
     try {
+      // A poster page reads cio-time instead of its render argument. Keep that
+      // capture time aligned while scrubbing before the first Play click.
+      const url = new URL(location.href);
+      if (url.searchParams.has('cio-capture')) {
+        url.searchParams.set('cio-time', String(seconds));
+        history.replaceState(history.state, '', url.href);
+      }
       const drawn = render(seconds);
       transport.error = null;
       if (drawn && typeof drawn.then === 'function') {

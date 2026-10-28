@@ -765,7 +765,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     previews: state.directoryPreviewService,
     speech: () => state.speechService,
     config: () => storage.getConfig(),
-    onChanged: announceHistoryChanged
+    onChanged: announceHistoryChanged,
+    captureHistory: async (projectId, threadId, directory, cause) => {
+      await designService.historyState(projectId, threadId, directory, cause)
+    }
   })
   videoStudio.registerIpc()
   state.chatEngine.setVideoPreviewExecutor(

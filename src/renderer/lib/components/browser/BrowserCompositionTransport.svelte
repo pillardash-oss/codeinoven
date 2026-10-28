@@ -37,6 +37,7 @@
 
   interface Props {
     tabId: string
+    titlebar?: boolean
     /** The composition the tab is showing, from `browser:state`. */
     composition: BrowserCompositionTab
     /**
@@ -58,7 +59,15 @@
     threadId?: string
   }
 
-  let { tabId, composition, active, pauseWhenHidden = false, projectId, threadId }: Props = $props()
+  let {
+    tabId,
+    composition,
+    active,
+    pauseWhenHidden = false,
+    projectId,
+    threadId,
+    titlebar = false
+  }: Props = $props()
 
   /** How often the scrubber catches up with the page it is driving. */
   const POLL_MS = 250
@@ -238,10 +247,9 @@
       await send('pause')
       const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
       if (snapshot) frameNote = { snapshot, armed: true }
-      else captureError = 'That frame could not be captured. Try again.'
-    } catch {
-      // The tab can be closed between the click and the capture.
-      captureError = 'That frame could not be captured. Try again.'
+      else captureError = 'This composition is no longer open. Reopen it before annotating.'
+    } catch (cause: unknown) {
+      captureError = cause instanceof Error ? cause.message : 'The frame could not be captured.'
     } finally {
       capturing = false
     }
@@ -474,7 +482,10 @@
 </script>
 
 <div
-  class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-2"
+  class={[
+    'titlebar-no-drag flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2',
+    titlebar ? 'h-10' : 'h-9'
+  ]}
   role="group"
   aria-label={`Playback of ${composition.directory}`}
 >

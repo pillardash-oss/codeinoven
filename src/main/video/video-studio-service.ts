@@ -76,6 +76,12 @@ export interface VideoStudioOptions {
    * directory, the same form `design:historyChanged` carries.
    */
   onChanged?: (projectId: string, directory: string) => void
+  captureHistory?: (
+    projectId: string,
+    threadId: string,
+    directory: string,
+    cause: 'user' | 'agent'
+  ) => Promise<void>
 }
 function revision(document: VideoStudioDocument): string {
   return createHash('sha256').update(JSON.stringify(document)).digest('hex')
@@ -154,7 +160,8 @@ export class VideoStudioService {
     threadId: string,
     directory: unknown,
     raw: unknown,
-    expected: unknown
+    expected: unknown,
+    cause: 'user' | 'agent' = 'user'
   ): Promise<{
     document: VideoStudioDocument
     revision: string
@@ -170,7 +177,11 @@ export class VideoStudioService {
           throw new Error('The agent changed these controls. Reload them before saving.')
         const document = validateVideoStudio(raw)
         for (const track of document.audioTracks) await videoFile(folder, track.source)
+        const savedDirectory = relative(root, folder).replaceAll('\\', '/')
+        // Save both sides even when no history panel is mounted.
+        await this.options.captureHistory?.(projectId, threadId, savedDirectory, cause)
         await writeVideoStudio(folder, document)
+        await this.options.captureHistory?.(projectId, threadId, savedDirectory, cause)
         // A saved control edit is a step in the folder's history, so the pane that
         // shows that history is told, exactly as a design restore tells it.
         this.options.onChanged?.(projectId, relative(root, folder).replaceAll('\\', '/'))
@@ -225,7 +236,8 @@ export class VideoStudioService {
         context.threadId,
         input.directory,
         input.document,
-        input.revision
+        input.revision,
+        'agent'
       )
     }
     if (operation === 'scaffold') {
@@ -281,7 +293,8 @@ export class VideoStudioService {
         context.threadId,
         input.directory,
         { ...state.document, captions, captionStyle: input.style ?? state.document.captionStyle },
-        state.revision
+        state.revision,
+        'agent'
       )
       return { ...saved, directory: relative(root, folder) }
     }

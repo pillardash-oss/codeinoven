@@ -5,6 +5,7 @@
   import CioSkipBack from '@pdslng/cio-icon/CioSkipBack.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { projectFilePreviewUrl } from '$lib/file-preview'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
@@ -142,7 +143,11 @@
       label: 'Highlight',
       hint: 'The word being spoken is painted in the accent colour.'
     },
-    { id: 'karaoke', label: 'Karaoke', hint: 'Words fill in as they are spoken; the rest stay dim.' },
+    {
+      id: 'karaoke',
+      label: 'Karaoke',
+      hint: 'Words fill in as they are spoken; the rest stay dim.'
+    },
     { id: 'none', label: 'Off', hint: 'Draw no captions over the picture at all.' }
   ] as const
   const labels: Record<string, string> = {
@@ -253,12 +258,7 @@
    * player is invented: the browser plays the same bytes the export will mix.
    */
   function trackUrl(source: string): string {
-    const relative = `${directory}/${source}`
-      .split('/')
-      .filter(Boolean)
-      .map((segment) => encodeURIComponent(segment))
-      .join('/')
-    return `appfile://project/${projectId}/${relative}`
+    return projectFilePreviewUrl(projectId, `${directory}/${source}`, threadId)
   }
 
   /** The end of a track's used window, which is where auditioning stops. */
@@ -283,8 +283,9 @@
       element.currentTime = track.trim
     }
     element.volume = Math.min(1, Math.max(0, track.gain))
-    void element.play().catch(() => {
+    void element.play().catch((cause: unknown) => {
       auditionPlaying = false
+      error = cause instanceof Error ? cause.message : 'The audio track could not be played.'
     })
   }
 

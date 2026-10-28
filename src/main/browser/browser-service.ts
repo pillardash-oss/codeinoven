@@ -36,6 +36,7 @@ import {
   type WebFrameMain
 } from 'electron'
 import type { Database } from '../database/database'
+import { authoredWorkRoot } from '../design/authored-work-root'
 import { createHash } from 'node:crypto'
 import { videoTimecode } from '../../lib/video/timeline'
 import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
@@ -934,7 +935,7 @@ export class BrowserService {
 
   constructor(
     private readonly window: BrowserWindow,
-    db: Database,
+    private readonly db: Database,
     permissionPersistence: PermissionMemoryPersistence,
     private readonly downloads: BrowserDownloadManager
   ) {
@@ -2938,6 +2939,17 @@ export class BrowserService {
     )
     const tabId =
       movedTab?.[0] ?? compositionBoardTabId({ projectId, threadId, directory: input.directory })
+    // A board owns one selected video. Dispose earlier compositions, including
+    // views left behind before the renderer acquired lifecycle cleanup.
+    for (const [previousId, previous] of this.tabs) {
+      if (
+        previousId !== tabId &&
+        previousId.startsWith('browser:board:') &&
+        previous.projectId === projectId &&
+        previous.threadId === threadId
+      )
+        this.destroy(previousId, 'closed')
+    }
     const existing = this.tabs.get(tabId)
     if (existing) {
       // A view already on this page is the one being asked for again, so it is
@@ -3203,16 +3215,20 @@ export class BrowserService {
     if (!tab.transport) await this.armCompositionTransport(tabId, tab)
     await this.sendTransport(tabId, 'pause', 0).catch(() => null)
     let rendered = false
+    let reason = 'The composition did not render the requested frame.'
     for (let attempt = 0; attempt < FRAME_CAPTURE_ATTEMPTS && !rendered; attempt += 1) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FRAME_CAPTURE_RETRY_MS))
-      rendered = (await this.renderTabFrame(tabId, at).catch(() => ({ rendered: false }))).rendered
+      const result = await this.renderTabFrame(tabId, at).catch((cause: unknown) => ({
+        rendered: false,
+        reason: cause instanceof Error ? cause.message : String(cause)
+      }))
+      rendered = result.rendered
+      if (result.reason) reason = result.reason
     }
-    if (!rendered) return null
+    if (!rendered) throw new Error(`Cannot capture the frame: ${reason}`)
     const frame = await this.readCompositionFrame(tabId, tab, at)
-    if (!frame) return null
-    const project = this.projects.get(tab.projectId)
-    const root = project?.source === 'local' ? project.path : null
-    if (!root) return null
+    if (!frame) throw new Error('The composition rendered but supplied no readable frame image.')
+    const { path: root } = await authoredWorkRoot(this.db, tab.projectId, tab.threadId)
     const folder = `video-frames/${frameFolderName(composition.directory)}`
     const relative = `.cio/work/${folder}/frame-${Math.round(at * 1000)}.png`
     const absolute = join(root, relative)
@@ -3229,7 +3245,7 @@ export class BrowserService {
       .join('/')
     return {
       path: relative,
-      url: `appfile://project/${tab.projectId}/${served}`,
+      url: `appfile://thread/${tab.projectId}/${tab.threadId}/${served}`,
       seconds: at,
       timecode: videoTimecode(at),
       frame: Math.round(at * (composition.fps > 0 ? composition.fps : 30)),

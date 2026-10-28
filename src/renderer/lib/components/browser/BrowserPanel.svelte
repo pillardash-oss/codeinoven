@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
@@ -790,11 +791,18 @@
     </div>
   {/if}
   {#if pageState.composition}
-    <div class="flex shrink-0 items-stretch">
+    <div
+      class={[
+        'titlebar-no-drag flex shrink-0 items-stretch bg-surface',
+        compositionPlayer && 'h-10'
+      ]}
+      style={compositionPlayer ? trafficLightInsetStyle() : undefined}
+    >
       <div class="min-w-0 flex-1">
         <BrowserCompositionTransport
           {tabId}
           composition={pageState.composition}
+          titlebar={compositionPlayer}
           projectId={pageState.projectId}
           threadId={pageState.threadId}
           active={panelVisible}

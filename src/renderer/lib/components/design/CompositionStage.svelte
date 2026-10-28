@@ -39,9 +39,11 @@
      * surface: there is nothing finer to hide than the whole page.
      */
     covered?: boolean
+    /** Re-measure when history changes the board layout. */
+    layoutRevision?: number
   }
 
-  let { tab, active = true, covered = false }: Props = $props()
+  let { tab, active = true, covered = false, layoutRevision = 0 }: Props = $props()
 
   const surface = 'panel' as const
   // The tab identity is snapshotted at construction: the key is this stage's entry
@@ -125,10 +127,10 @@
   /** The frame the page occupies, derived from the pane it is fitted into. */
   let pageRect = $derived(fittedBounds(paneRect))
 
-  let placed = $derived(browserVisibility.isVisible(placedTab.tabId, pageRect))
+  let placed = $derived(active && browserVisibility.isVisible(placedTab.tabId, pageRect))
 
   function measurePane(): BrowserViewBounds | null {
-    if (!host) return null
+    if (!host || !active) return null
     // A mounted panel is not automatically a painted one: the rail keeps its
     // panels alive across view switches, so an element that is laid out but
     // hidden must place nothing, or the page would sit over a surface nobody
@@ -143,12 +145,25 @@
     )
       return null
     const rect = host.getBoundingClientRect()
-    if (rect.width < 1 || rect.height < 1) return null
+    let left = Math.max(0, rect.left)
+    let top = Math.max(0, rect.top)
+    let right = Math.min(window.innerWidth, rect.right)
+    let bottom = Math.min(window.innerHeight, rect.bottom)
+    // Native views do not obey CSS clipping. Fit into the visible area of
+    // every containing panel, including the space history leaves for playback.
+    for (let parent = host.parentElement; parent; parent = parent.parentElement) {
+      const bounds = parent.getBoundingClientRect()
+      left = Math.max(left, bounds.left)
+      top = Math.max(top, bounds.top)
+      right = Math.min(right, bounds.right)
+      bottom = Math.min(bottom, bounds.bottom)
+    }
+    if (right - left < 1 || bottom - top < 1) return null
     return {
-      x: Math.max(0, Math.round(rect.x)),
-      y: Math.max(0, Math.round(rect.y)),
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height))
+      x: Math.round(left),
+      y: Math.round(top),
+      width: Math.max(1, Math.floor(right - left)),
+      height: Math.max(1, Math.floor(bottom - top))
     }
   }
 
@@ -160,7 +175,10 @@
     // an overlay stops covering it.
     paneRect = pane
     paneCoverRect = pane
-    if (!pane) return
+    if (!pane) {
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(placedTab.tabId, surface)
+      return
+    }
     const frame = fittedBounds(pane)
     if (!frame) return
     // Ask the store directly instead of reading `placed`: this also runs from
@@ -192,7 +210,7 @@
 
   /** The single native rectangle this stage owns while it is really on screen. */
   $effect(() => {
-    const frame = pageRect
+    const frame = active ? pageRect : null
     if (frame) browserVisibility.publishPageFrame(nativeFrameKey, placedTab.tabId, frame)
     else browserVisibility.clearPageFrame(nativeFrameKey)
     return () => browserVisibility.clearPageFrame(nativeFrameKey)
@@ -329,7 +347,13 @@
     active={active && placed}
   />
   <div
-    {@attach attachHost}
+    {@attach (element) => {
+      // Re-measure after the board changes its layout, even if this pane's
+      // dimensions stayed the same and only its position changed.
+      void layoutRevision
+      void active
+      return attachHost(element)
+    }}
     data-native-composition-stage
     class="relative min-h-0 flex-1 bg-app"
     aria-label={`Live composition ${placedTab.directory}`}

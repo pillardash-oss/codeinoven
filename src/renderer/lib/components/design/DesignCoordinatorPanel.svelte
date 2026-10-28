@@ -27,7 +27,7 @@
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import { onDestroy, onMount, tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { LastKnown } from '$lib/last-known'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
@@ -478,11 +478,8 @@
    * and an editor at once, and while it is not the stage falls back to the last
    * export or the captured frame.
    *
-   * The folder is part of the test, not just the view's existence. Switching to
-   * another composition leaves the folder just left with a live view of its own,
-   * so a board that only asked "is a view open?" kept playing the composition the
-   * user had navigated away from. A null here is what asks main to open the one in
-   * front instead.
+   * Only the selected folder may supply the stage. Its native page is destroyed
+   * when selection changes or this board becomes inactive.
    */
   let liveTab = $derived.by(() => {
     if (boardTabId === '') return null
@@ -844,38 +841,64 @@
    * The browser is left exactly where it was, because the browser is not where this
    * board plays.
    */
+  let compositionRevision = 0
+  let compositionOpen: Promise<void> = Promise.resolve()
+
+  function releaseComposition(): void {
+    compositionRevision += 1
+    const previous = boardTabId
+    boardTabId = ''
+    compositionAsked = ''
+    composing = ''
+    if (previous !== '') void invoke('browser:destroy', previous, 'closed').catch(() => {})
+  }
+
   async function ensureComposition(directory: string, force = false): Promise<void> {
-    if (!video || directory === '' || selectedMissing) return
+    if (
+      !active ||
+      !video ||
+      directory === '' ||
+      selectedMissing ||
+      selected.directory !== directory
+    )
+      return
     if (!force && compositionAsked === directory) return
     compositionAsked = directory
     composing = directory
-    try {
-      // The stage is fed by `browser:state`, and that listener only exists once
-      // the browser runtime is wired. Wiring it before the open is what makes the
-      // board's own composition arrive: without it the open succeeds in main, the
-      // Store never hears about the view, and the stage has nothing to mount.
-      await loadBrowser()
-      const opened = await invoke(
-        'design:open',
-        projectId,
-        threadId,
-        directory,
-        null,
-        false,
-        requestedKind
-      )
-      boardTabId = opened.tabId
-      // A view main already holds on this composition is answered with `reused`
-      // and not reloaded, so no state follows the open. Reading the view's own
-      // state closes that gap rather than waiting for a report that never comes.
-      await videoTimelineState.seed(opened.tabId)
-      compositionError = ''
-    } catch (failure) {
-      compositionError =
-        failure instanceof Error ? failure.message : `The ${noun} could not be opened.`
-    } finally {
-      if (composing === directory) composing = ''
-    }
+    const revision = ++compositionRevision
+    // Serialize opens so a late result can be destroyed before a newer request
+    // reuses the same deterministic tab id, including an A -> B -> A switch.
+    const opening = compositionOpen.then(async () => {
+      if (revision !== compositionRevision) return
+      try {
+        await loadBrowser()
+        if (revision !== compositionRevision) return
+        const opened = await invoke(
+          'design:open',
+          projectId,
+          threadId,
+          directory,
+          null,
+          false,
+          requestedKind
+        )
+        if (revision !== compositionRevision) {
+          await invoke('browser:destroy', opened.tabId, 'closed')
+          return
+        }
+        boardTabId = opened.tabId
+        await videoTimelineState.seed(opened.tabId)
+        if (revision === compositionRevision) compositionError = ''
+      } catch (failure) {
+        if (revision === compositionRevision)
+          compositionError =
+            failure instanceof Error ? failure.message : `The ${noun} could not be opened.`
+      } finally {
+        if (revision === compositionRevision) composing = ''
+      }
+    })
+    compositionOpen = opening.catch(() => {})
+    await opening
   }
 
   /**
@@ -1348,66 +1371,22 @@
     })
   )
 
-  // Play the composition in the board rather than in the browser.
-  //
-  // The folder in front changes, a rail panel comes back on screen, or a tab was
-  // closed under the board: every one of those leaves the stage with nothing to
-  // mount, and this is what asks for the tab again. Only the folder, the live tab
-  // and whether the folder is playable are read here, so a report from
-  // `browser:state` is what settles it rather than a poll.
+  // Own the native page for exactly as long as this video is selected on an
+  // active board. Fullscreen and menus reuse that ownership, never end it.
   $effect(() => {
     const directory = selected.directory
-    const live = liveTab
-    const canPlay = playable
-    const busyFolder = composing
-    const enhanced = liveEditing
-    if (
-      !video ||
-      !enhanced ||
-      !canPlay ||
-      live !== null ||
-      directory === '' ||
-      busyFolder === directory
-    )
+    if (!active || !video || !liveEditing || !playable || selectedMissing || directory === '')
       return
-    void ensureComposition(directory)
-  })
-
-  /**
-   * The composition tab the board has most recently been driving.
-   *
-   * Deliberately outside the reactive graph: a pause has to be sent even after the
-   * view is gone, and the store that holds the tab has already forgotten it by
-   * then.
-   */
-  let drivenTabId = ''
-
-  // The board owns the film: it is the surface the user is on, so leaving the board
-  // stops playback. Going full screen must not, because that is this same board
-  // showing this same tab bigger, and a pause there would freeze the film the user
-  // just asked to watch. It is also why the stage itself must never pause: it
-  // unmounts on the way into full screen (so exactly one surface ever places the
-  // native view), and a teardown pause would freeze the film every time.
-  $effect(() => {
-    const live = liveTab
-    const previous = drivenTabId
-    if (live !== null && live.tabId !== previous) {
-      drivenTabId = live.tabId
-      // Moving to another composition leaves the one that was playing behind in a
-      // parked page that keeps running offscreen, where nothing the user can see
-      // ever stops it: the sound of the film they left would follow them into the
-      // next one. Switching is a departure, so the film they left is stopped
-      // before the new one is ever shown.
-      if (previous !== '') void invoke('browser:transport', previous, 'pause', 0).catch(() => {})
+    let cancelled = false
+    // Read the lifecycle inputs above, without subscribing to the state written
+    // while the asynchronous open completes.
+    void Promise.resolve().then(() => {
+      if (!cancelled) return ensureComposition(directory)
+    })
+    return () => {
+      cancelled = true
+      releaseComposition()
     }
-    if (active || drivenTabId === '') return
-    void invoke('browser:transport', drivenTabId, 'pause', 0).catch(() => {})
-  })
-
-  // The board going away takes the film with it, exactly as leaving it does.
-  onDestroy(() => {
-    if (drivenTabId === '') return
-    void invoke('browser:transport', drivenTabId, 'pause', 0).catch(() => {})
   })
 
   // A board that is no longer the surface on screen cannot keep a full screen
@@ -1499,7 +1478,12 @@
         <!-- The tab's identity is the stage's identity: a re-keyed tab builds a
              new stage, so the frame this pane claims, the view it places and the
              transport it draws all belong to the same tab. -->
-        <CompositionStage tab={liveTab} {active} covered={menuOpen} />
+        <CompositionStage
+          tab={liveTab}
+          {active}
+          covered={menuOpen}
+          layoutRevision={Number(historyOpen)}
+        />
       {/key}
     {:else if !playable}
       <div
