@@ -21,20 +21,18 @@
     onFilterChange: () => void
   }
 
-  let { entries, activeIndex, query, onSelect, onFilterChange }: Props = $props()
-  let listboxElement: HTMLDivElement
-
-  $effect(() => {
+  let { entries, activeIndex, onSelect, onFilterChange }: Props = $props()
+  function scrollSelection(element: HTMLDivElement) {
     const selectedIndex = activeIndex
     const entryCount = entries.length
     const frame = requestAnimationFrame(() => {
       if (selectedIndex < 0 || selectedIndex >= entryCount) return
-      listboxElement
-        ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      element
+        .querySelector<HTMLElement>('[aria-selected="true"]')
         ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     })
     return () => cancelAnimationFrame(frame)
-  })
+  }
 
   function parentPath(entry: ProjectFileEntry): string {
     const separator = entry.path.lastIndexOf('/')
@@ -44,25 +42,31 @@
   function taskWorker(task: AssignmentTask): string {
     return task.workerName ?? (task.owner === 'senior' ? 'Sr. Engineer' : 'Unassigned')
   }
-
-  /** Assistant View offers its own assistants and threads, so the header names
-   *  them only where they can actually appear. */
-  const hasAssistantEntries = $derived(entries.some((mention) => mention.type === 'assistant'))
 </script>
 
 <div
-  bind:this={listboxElement}
+  {@attach scrollSelection}
   class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col border border-border-strong bg-surface p-1 shadow-lg"
   role="listbox"
   aria-label="Composer references"
 >
   <div class="flex shrink-0 items-center justify-between gap-2 px-2 py-1">
     <p class="min-w-0 truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-      {query ? `References matching “${query}”` : hasAssistantEntries
-        ? 'Built-in actions, assistants, threads and Assignment tasks'
-        : 'Built-in actions, files, and Assignment tasks'}
+      Tag Actions
     </p>
     <div class="flex shrink-0 items-center gap-2">
+      <Switch
+        checked={cioSearchVisibility.includeThreads}
+        label="Threads"
+        class="text-[0.625rem] font-semibold text-dimmed"
+        title="Include threads across projects in tag search"
+        aria-label="Include threads across projects in tag search"
+        onmousedown={(event: MouseEvent) => event.preventDefault()}
+        onchange={(checked: boolean) => {
+          cioSearchVisibility.includeThreads = checked
+          onFilterChange()
+        }}
+      />
       <Switch
         checked={cioSearchVisibility.includeIgnored}
         label="ignored"
