@@ -382,6 +382,7 @@ import {
   type TabMarkRecogniser
 } from './browser-service/browser-tab-mark'
 import {
+  EXTENSION_PAGE_COMMAND_CHANNEL,
   EXTENSION_PAGE_TABS_CHANNEL,
   EXTENSION_PAGE_TABS_PRELOAD_FILE,
   extensionPageTabsPreloadSource,
@@ -1333,6 +1334,17 @@ export class BrowserService {
         protocol === 'chrome-extension:' && frame && frame.url.startsWith('chrome-extension://')
           ? this.extensionPageTabForContents(event.sender.id)
           : null
+    })
+    // An extension page cannot reach main on its own, so the preload forwards the
+    // one command a page asks for: `chrome.runtime.openOptionsPage` from a popup's
+    // "More settings". Only a document the app hosts for an extension can make this
+    // request, and only for itself.
+    electronIpcMain.removeAllListeners(EXTENSION_PAGE_COMMAND_CHANNEL)
+    electronIpcMain.on(EXTENSION_PAGE_COMMAND_CHANNEL, (event, command) => {
+      const frame = event.senderFrame
+      if (!frame || !frame.url.startsWith('chrome-extension://')) return
+      if (command !== 'open-options') return
+      this.openOptionsPageFromPage(event.sender.id)
     })
     // Started here so the file exists long before the first extension popup or
     // panel is created; every path that can wait for it does.
@@ -4575,25 +4587,60 @@ export class BrowserService {
     extensionId: string
     page: 'options'
   }): void {
-    const url = this.extensions.optionsUrlFor(request.extensionId, request.projectId, request.boxId)
+    this.openExtensionOptionsTab(request.projectId, request.boxId, request.extensionId, null)
+  }
+
+  /**
+   * Open an extension's settings page because the extension's own popup asked for
+   * it, and close that popup the way a browser does.
+   *
+   * A popup's "More settings" row is a page this app hosts rather than a worker
+   * call, so the settings page takes the popup's place: the popup closes, and the
+   * tab opens beside the page it was acting on. Leaving it up would stack two
+   * surfaces asking the same question.
+   */
+  private openOptionsPageFromPage(contentsId: number): void {
+    const record = this.popupWindows.recordForContents(contentsId)
+    if (!record || !record.extensionId) return
+    const tab = this.tabs.get(record.tabId)
+    const owner: BrowserPageOwner | null =
+      tab && tab.projectId === record.projectId && tab.boxId === record.boxId
+        ? {
+            tabId: record.tabId,
+            projectId: tab.projectId,
+            threadId: tab.threadId,
+            boxId: tab.boxId
+          }
+        : null
+    this.openExtensionOptionsTab(record.projectId, record.boxId, record.extensionId, owner)
+    this.popupWindows.dismiss(record.id)
+  }
+
+  /**
+   * Put one extension's options page in a tab of the jar it runs in.
+   *
+   * `owner` is the tab to open beside when the caller knows it, which a popup does
+   * because it is acting on that page. Otherwise the jar's active tab is used, and a
+   * jar with no page open has nowhere to put the tab: the extensions panel is then
+   * the way in.
+   */
+  private openExtensionOptionsTab(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    owner: BrowserPageOwner | null
+  ): void {
+    const url = this.extensions.optionsUrlFor(extensionId, projectId, boxId)
     if (!url) {
-      Logger.dev('An extension asked for a settings page it does not have:', {
-        extensionId: request.extensionId
-      })
+      Logger.dev('An extension asked for a settings page it does not have:', { extensionId })
       return
     }
-    const owner = this.extensionPageOwner(request.projectId, request.boxId)
-    if (!owner) return
+    const target = owner ?? this.extensionPageOwner(projectId, boxId)
+    if (!target) return
     try {
-      this.openNewTabFor(
-        owner,
-        this.validateTabNavigationUrl(request.projectId, request.boxId, url)
-      )
+      this.openNewTabFor(target, this.validateTabNavigationUrl(projectId, boxId, url))
     } catch (error: unknown) {
-      Logger.dev('An extension settings page could not be opened:', {
-        extensionId: request.extensionId,
-        error
-      })
+      Logger.dev('An extension settings page could not be opened:', { extensionId, error })
     }
   }
 
