@@ -28,8 +28,11 @@ afterEach(async () => {
 
 describe('antigravity self-update hold', () => {
   it('resolves the stamp under the home the CLI runs with', async () => {
+    // The expectation is built with join so it holds on both path flavours: the
+    // resolver follows the host's separators, so a literal POSIX string only
+    // matches on macOS and Linux.
     expect(antigravityAutoUpdateStampPath({ HOME: '/tmp/account-home' })).toBe(
-      '/tmp/account-home/.gemini/antigravity-cli/last_check.timestamp'
+      join('/tmp/account-home', '.gemini', 'antigravity-cli', 'last_check.timestamp')
     )
     expect(antigravityAutoUpdateStampPath({ USERPROFILE: 'C:\\Users\\me' })).toContain(
       join('.gemini', 'antigravity-cli', 'last_check.timestamp')
