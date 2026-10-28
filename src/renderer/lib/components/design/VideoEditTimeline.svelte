@@ -784,23 +784,29 @@
     <ContextMenu.Content
       data-layer-above-modal
       {...occlusion}
-      class="z-80 flex min-w-56 flex-col border border-border bg-surface py-1 shadow-lg"
+      class="z-80 flex min-w-64 flex-col border border-border bg-surface py-1 shadow-lg"
     >
       {@render contextActions?.()}
       {#if contextTrack}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         <ContextMenu.Item
-          class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
-          onSelect={() => editor.duplicateTrack(contextTrack)}>Duplicate track</ContextMenu.Item
+          class="flex cursor-pointer items-center px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
+          onSelect={() => editor.duplicateTrack(contextTrack)}
         >
+          <span class="flex-1">Duplicate track</span>
+        </ContextMenu.Item>
         <ContextMenu.Item
-          class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
-          onSelect={() => shiftTrack(-1)}>Move track up</ContextMenu.Item
+          class="flex cursor-pointer items-center px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
+          onSelect={() => shiftTrack(-1)}
         >
+          <span class="flex-1">Move track up</span>
+        </ContextMenu.Item>
         <ContextMenu.Item
-          class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
-          onSelect={() => shiftTrack(1)}>Move track down</ContextMenu.Item
+          class="flex cursor-pointer items-center px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
+          onSelect={() => shiftTrack(1)}
         >
+          <span class="flex-1">Move track down</span>
+        </ContextMenu.Item>
       {/if}
     </ContextMenu.Content>
   </ContextMenu.Portal>

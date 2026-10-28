@@ -21,6 +21,7 @@
   import CioSave from '@pdslng/cio-icon/CioSave.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { appConfirm } from '$lib/stores/app-confirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { videoEditorController } from '$lib/stores/video-editor.svelte'
@@ -138,6 +139,110 @@
     if (value === 'video' || value === 'audio' || value === 'caption' || value === 'overlay')
       editor.addTrack(value)
   }
+  /** One row of the timeline context menu. */
+  interface TimelineMenuRow {
+    label: string
+    /** The keymap id this row teaches, so its binding is whatever the registry
+     *  and the user's overrides resolve to. */
+    id: string
+    run: () => void
+    disabled: boolean
+  }
+  /**
+   * Timeline context menu, grouped the way the editor's actions relate. Every
+   * row shows its own binding from the live keymap, so the menu teaches the
+   * shortcuts as the user works and follows any rebinding. An unbound id shows
+   * no hint rather than a guess, and binding it later needs no code change.
+   */
+  function timelineMenuRows(): (TimelineMenuRow & { keys: readonly string[] })[][] {
+    const groups: TimelineMenuRow[][] = [
+      [
+        {
+          label: 'Extract audio',
+          id: 'video-edit-extract-audio',
+          run: () => editor.extractAudio(),
+          disabled: !editor.canExtractAudio
+        }
+      ],
+      [
+        {
+          label: 'Undo',
+          id: 'video-edit-undo',
+          run: () => editor.undo(),
+          disabled: !editor.canUndo
+        },
+        {
+          label: 'Redo',
+          id: 'video-edit-redo',
+          run: () => editor.redo(),
+          disabled: !editor.canRedo
+        },
+        {
+          label: 'Split at playhead',
+          id: 'video-edit-split',
+          run: () => editor.split(),
+          disabled: !editor.selectedClip
+        },
+        {
+          label: 'Split all unlocked tracks',
+          id: 'video-edit-split-all',
+          run: () => editor.split(true),
+          disabled: !editor.edit
+        },
+        {
+          label: 'Duplicate selected item',
+          id: 'video-edit-duplicate',
+          run: () => editor.duplicate(),
+          disabled: !editor.selection
+        }
+      ],
+      [
+        {
+          label: 'Copy clip',
+          id: 'video-edit-copy',
+          run: () => editor.copy(),
+          disabled: !editor.selectedClip
+        },
+        {
+          label: 'Paste clip at playhead',
+          id: 'video-edit-paste',
+          run: () => editor.paste(),
+          disabled: !editor.canPaste
+        },
+        {
+          label: 'Cut clip',
+          id: 'video-edit-cut',
+          run: () => {
+            editor.copy()
+            void remove()
+          },
+          disabled: !editor.selectedClip
+        },
+        {
+          label: 'Remove selected item',
+          id: 'video-edit-delete',
+          run: () => {
+            void remove()
+          },
+          disabled: !editor.selection
+        }
+      ],
+      [
+        {
+          label: 'Import media',
+          id: 'video-edit-import',
+          run: () => {
+            void editor.importFiles()
+          },
+          disabled: editor.importing
+        }
+      ]
+    ]
+    return groups.map((group) =>
+      group.map((item) => ({ ...item, keys: keymapState.keysFor(item.id) }))
+    )
+  }
+  const timelineMenu = $derived(timelineMenuRows())
   function keydown(event: KeyboardEvent): void {
     if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
     const fromPage = event.target === document
@@ -303,34 +408,18 @@
 {/snippet}
 
 {#snippet timelineContextActions()}
-  <ContextMenu.Item
-    class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated data-disabled:opacity-30"
-    disabled={!editor.selectedClip}
-    onSelect={() => editor.copy()}>Copy clip</ContextMenu.Item
-  >
-  <ContextMenu.Item
-    class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated data-disabled:opacity-30"
-    disabled={!editor.canPaste}
-    onSelect={() => editor.paste()}>Paste clip at playhead</ContextMenu.Item
-  >
-  <ContextMenu.Item
-    class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated data-disabled:opacity-30"
-    disabled={!editor.selectedClip}
-    onSelect={() => {
-      editor.copy()
-      void remove()
-    }}>Cut clip</ContextMenu.Item
-  >
-  {#each [{ label: 'Extract audio', run: () => editor.extractAudio(), disabled: !editor.canExtractAudio }, { label: 'Undo', run: () => editor.undo(), disabled: !editor.canUndo }, { label: 'Redo', run: () => editor.redo(), disabled: !editor.canRedo }, { label: 'Split at playhead', run: () => editor.split(), disabled: !editor.selectedClip }, { label: 'Split all unlocked tracks', run: () => editor.split(true), disabled: !editor.edit }, { label: 'Duplicate selected item', run: () => editor.duplicate(), disabled: !editor.selection }, { label: 'Remove selected item', run: () => {
-        void remove()
-      }, disabled: !editor.selection }, { label: 'Import media', run: () => {
-        void editor.importFiles()
-      }, disabled: editor.importing }] as item (item.label)}
-    <ContextMenu.Item
-      class="cursor-pointer px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated data-disabled:opacity-30"
-      disabled={item.disabled}
-      onSelect={item.run}>{item.label}</ContextMenu.Item
-    >
+  {#each timelineMenu as group, groupIndex (groupIndex)}
+    {#if groupIndex > 0}<ContextMenu.Separator class="my-1 h-px bg-border" />{/if}
+    {#each group as item (item.label)}
+      <ContextMenu.Item
+        class="flex cursor-pointer items-center justify-between gap-6 px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated data-disabled:opacity-30"
+        disabled={item.disabled}
+        onSelect={() => item.run()}
+      >
+        <span class="flex-1">{item.label}</span>
+        {#if item.keys.length > 0}<ShortcutHint keys={item.keys} />{/if}
+      </ContextMenu.Item>
+    {/each}
   {/each}
 {/snippet}
 
