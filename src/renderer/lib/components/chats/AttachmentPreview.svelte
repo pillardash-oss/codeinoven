@@ -8,6 +8,7 @@
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
   import AudioPlayer from '../ui/AudioPlayer.svelte'
+  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
@@ -379,18 +380,9 @@
             />
           </div>
         {:else if kind === 'video' && src}
-          <!-- The player's own fullscreen control is hidden: this surface is the
-               fullscreen view, so it would only cover it with an element fullscreen
-               that carries no viewer chrome. -->
-          <video
-            {src}
-            controls
-            controlslist="nofullscreen"
-            preload="metadata"
-            class="min-h-0 w-full flex-1 object-contain"
-          >
-            <track kind="captions" />
-          </video>
+          <!-- The app's own player: this surface is the fullscreen view, so it
+               offers no fullscreen action of its own. -->
+          <VideoPlayer {src} label={filename} fit="fill" />
         {:else if kind === 'audio' && src}
           <AudioPlayer {src} label={filename} class="w-full max-w-xl" />
         {:else if kind === 'pdf' && src}

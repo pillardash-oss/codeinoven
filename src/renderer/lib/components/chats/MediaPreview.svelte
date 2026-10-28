@@ -8,6 +8,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
   import AudioPlayer from '../ui/AudioPlayer.svelte'
+  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
@@ -91,10 +92,6 @@
     // manager), so the lightbox closes itself: staying open hides the result
     // and reads as a button that did nothing.
     onClose()
-  }
-
-  function mediaError(event: Event): void {
-    onLoadError?.(event.currentTarget as HTMLMediaElement)
   }
 
   const panZoom = new PanZoom()
@@ -207,23 +204,15 @@
       {#if annotate}
         {@render annotate()}
       {:else if kind === 'video'}
-        <!-- The player's own fullscreen control is hidden: this surface already is
-             the fullscreen view, so the button would only cover it with an element
-             fullscreen that carries no viewer chrome. -->
-        <video
+        <!-- The app's own player, filling this surface. It offers no fullscreen
+             action here: this surface already is the fullscreen view. -->
+        <VideoPlayer
           {src}
-          controls
-          controlslist="nofullscreen"
-          preload="metadata"
-          class="min-h-0 w-full flex-1 object-contain"
-          onloadedmetadata={(event) => {
-            const at = startAt
-            if (at && at > 0) event.currentTarget.currentTime = at
-          }}
-          onerror={mediaError}
-        >
-          <track kind="captions" />
-        </video>
+          label={filename}
+          {startAt}
+          fit="fill"
+          onError={(element) => onLoadError?.(element)}
+        />
       {:else if kind === 'audio'}
         <AudioPlayer
           {src}
