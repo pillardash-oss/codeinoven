@@ -147,8 +147,12 @@
   {/if}
 {/snippet}
 
-<div class="md-table-block">
-  <div class="md-table-controls" role="group" aria-label="Table controls">
+<div class="md-table-block group/md-table relative">
+  <div
+    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5 opacity-0 shadow-sm transition-opacity duration-150 group-hover/md-table:pointer-events-auto group-hover/md-table:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+    role="group"
+    aria-label="Table controls"
+  >
     {@render tableControls(true, true)}
   </div>
   <div

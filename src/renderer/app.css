@@ -634,11 +634,11 @@ body {
   /* Native table column sizing: every column keeps at least one word of
      width; content wider than the container scrolls inside .md-table-wrap
      instead of squeezing sibling columns. min-width keeps narrow tables
-     filling the container like a normal block. */
+     filling the container like a normal block. The table carries no frame of
+     its own: it is content of the message, so only the row rules draw. */
   width: 100%;
   min-width: max-content;
   border-collapse: collapse;
-  border: 1px solid var(--color-border);
   font-size: 0.9em;
 }
 
@@ -686,7 +686,6 @@ body {
   display: flex;
   max-width: 100%;
   flex-direction: column;
-  gap: 0.25rem;
 }
 
 .markdown-body .md-table-controls {

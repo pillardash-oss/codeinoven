@@ -124,7 +124,7 @@
   <div
     {@attach fullscreen ? bindFullscreenViewport : () => {}}
     class={[
-      'relative flex min-h-32 items-center justify-center bg-surface p-4',
+      'relative flex min-h-32 items-center justify-center p-4',
       fullscreen ? 'h-full min-h-0 touch-none overflow-hidden' : 'overflow-auto',
       fullscreen && panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
     ]}
@@ -166,58 +166,68 @@
   </div>
 {/snippet}
 
-<div class="overflow-hidden border bg-elevated" {@attach renderDiagram(code.trim(), retryKey)}>
-  <div class="flex h-8 items-center justify-between border-b px-2">
-    <span class="px-1 font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">Mermaid</span>
-    <div class="flex items-center gap-0.5">
-      {#if onAnnotate}
-        <button
-          class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-          aria-label="Annotate Mermaid diagram"
-          title="Annotate Mermaid diagram"
-          onclick={(event: MouseEvent) => {
-            event.stopPropagation()
-            onAnnotate(code, event)
-          }}
-        >
-          <CioMessagePlus size={13} />
-        </button>
-      {/if}
-      <button
-        class={[
-          'p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground',
-          sourceVisible && 'bg-overlay text-foreground'
-        ]}
-        aria-label={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
-        title={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
-        aria-pressed={sourceVisible}
-        onclick={() => (sourceVisible = !sourceVisible)}
-      >
-        <CioCode size={13} />
-      </button>
-      <button
-        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-        aria-label="Copy Mermaid source"
-        title="Copy Mermaid source"
-        onclick={() => void copySource()}
-      >
-        {#if copied}
-          <CioCheck size={13} class="text-success" />
-        {:else}
-          <CioCopy size={13} />
-        {/if}
-      </button>
-      {#if svg}
-        <button
-          class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-          aria-label="Expand Mermaid diagram"
-          title="Expand Mermaid diagram"
-          onclick={() => (expanded = true)}
-        >
-          <CioMaximize size={13} />
-        </button>
-      {/if}
-    </div>
+{#snippet diagramControls(withExpand: boolean, withSource = true)}
+  {#if onAnnotate}
+    <button
+      class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      aria-label="Annotate Mermaid diagram"
+      title="Annotate Mermaid diagram"
+      onclick={(event: MouseEvent) => {
+        event.stopPropagation()
+        onAnnotate(code, event)
+      }}
+    >
+      <CioMessagePlus size={13} />
+    </button>
+  {/if}
+  {#if withSource}
+    <button
+      class={[
+        'p-1 transition-colors hover:bg-overlay hover:text-foreground',
+        sourceVisible ? 'bg-overlay text-foreground' : 'text-dimmed'
+      ]}
+      aria-label={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
+      title={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
+      aria-pressed={sourceVisible}
+      onclick={() => (sourceVisible = !sourceVisible)}
+    >
+      <CioCode size={13} />
+    </button>
+  {/if}
+  <button
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+    aria-label="Copy Mermaid source"
+    title="Copy Mermaid source"
+    onclick={() => void copySource()}
+  >
+    {#if copied}
+      <CioCheck size={13} class="text-success" />
+    {:else}
+      <CioCopy size={13} />
+    {/if}
+  </button>
+  {#if withExpand && svg}
+    <button
+      class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      aria-label="Expand Mermaid diagram"
+      title="Expand Mermaid diagram"
+      onclick={() => (expanded = true)}
+    >
+      <CioMaximize size={13} />
+    </button>
+  {/if}
+{/snippet}
+
+<!-- The diagram is content of the message rather than a boxed widget beside it:
+     no frame around it, no fixed height, and a control strip that appears while
+     the diagram is under the pointer or holding focus. -->
+<div class="group/mermaid relative" {@attach renderDiagram(code.trim(), retryKey)}>
+  <div
+    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5 opacity-0 shadow-sm transition-opacity duration-150 group-hover/mermaid:pointer-events-auto group-hover/mermaid:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+    role="group"
+    aria-label="Mermaid diagram controls"
+  >
+    {@render diagramControls(true)}
   </div>
 
   {#if error}
@@ -269,14 +279,21 @@
   panelClass="bg-surface"
   contentClass="flex flex-col overflow-hidden p-0"
 >
-  <div class="min-h-0 flex-1">
+  <div class="relative min-h-0 flex-1">
     {@render diagramContent(true)}
+    <div
+      class="absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5"
+      role="group"
+      aria-label="Mermaid diagram controls"
+    >
+      {@render diagramControls(false, false)}
+    </div>
   </div>
 </Modal>
 
 <style>
   .mermaid-svg {
-    --pele-bg: var(--color-surface);
+    --pele-bg: var(--color-app);
     --pele-fg: var(--color-foreground);
     --pele-muted: var(--color-muted);
     --pele-line: var(--color-muted);
@@ -293,7 +310,6 @@
     display: block;
     max-width: 100%;
     height: auto;
-    max-height: 70vh;
     margin-inline: auto;
   }
 

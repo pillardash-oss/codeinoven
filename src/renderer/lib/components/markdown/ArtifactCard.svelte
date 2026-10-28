@@ -7,7 +7,6 @@
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { onDestroy } from 'svelte'
-  import { artifactThemeStyles } from './artifact-theme'
   import { artifactKeyFor, artifactReferenceKind } from '$lib/artifact-element-reference'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
@@ -18,12 +17,7 @@
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import Modal from '../ui/Modal.svelte'
   import CodeBlock from './CodeBlock.svelte'
-  import {
-    buildArtifactSrcdoc,
-    artifactPictureFrameStyle,
-    svgArtifactIntrinsicRatio,
-    type ArtifactKind
-  } from './artifact'
+  import type { ArtifactKind } from './artifact'
 
   interface Props {
     code: string
@@ -48,22 +42,24 @@
   let manualInspecting = $state(false)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
-  const label = $derived(kind === 'html' ? 'HTML artifact' : 'SVG artifact')
-  const srcdoc = $derived(buildArtifactSrcdoc(kind, code, artifactThemeStyles()))
   /**
-   * The shape the inline preview is drawn in, or `undefined` for a plain viewport.
+   * The artifact's one surface, and the two homes it can be drawn in.
    *
-   * An SVG artifact states its own shape, and the card takes it: a picture poured
-   * into a fixed viewport is a picture cropped or shrunk by its host. An HTML
-   * artifact is a document with a flowing height rather than a picture, and an
-   * SVG that states no shape keeps the plain viewport too.
+   * The conversation card and the full-size viewer are the same artifact, so a
+   * second mount is a second artifact: a tab the reader checked, a disclosure
+   * they opened, a scroll position, a playing video would all live in the copy
+   * that was just replaced, and the viewer would open on a reset artifact. The
+   * surface is therefore rendered once and moved between the two homes, exactly
+   * as the app's panels move between rails, so the viewer opens on the state the
+   * reader left behind and every control in the artifact keeps working there.
    */
-  const pictureFrameRatio = $derived(kind === 'svg' ? svgArtifactIntrinsicRatio(code) : null)
-  const pictureFrame = $derived(
-    pictureFrameRatio === null ? undefined : artifactPictureFrameStyle(pictureFrameRatio)
-  )
-  const wrapped = $derived(wrapTextState.wrapped)
+  let inlineHome = $state<HTMLDivElement | null>(null)
+  let viewerHome = $state<HTMLDivElement | null>(null)
+  let surface = $state<HTMLDivElement | null>(null)
+
+  const label = $derived(kind === 'html' ? 'HTML artifact' : 'SVG artifact')
   const artifactKey = $derived(artifactKeyFor(kind, code))
+  const wrapped = $derived(wrapTextState.wrapped)
   /** Inspection is offered on both kinds: an element of a picture or of a
    *  document is the same decision, and both send a CSS path to that element. */
   const canInspect = $derived(annotationScope !== undefined)
@@ -98,9 +94,9 @@
    * The expanded viewer, which is the only surface that offers the inspector.
    *
    * A pick is a decision about the artifact, and the artifact at full size is
-   * where a user makes it, so the inline card stays a plain preview. A composer
-   * jump opens the viewer as well: the pick it names has nowhere else to be
-   * commented on.
+   * where a user makes it, so the inline card stays an ordinary preview. A
+   * composer jump opens the viewer as well: the pick it names has nowhere else
+   * to be commented on.
    */
   const viewerOpen = $derived(expanded || focusRequest !== null)
   /**
@@ -108,28 +104,16 @@
    *
    * The inline card behind it would otherwise render a second pick surface, a
    * second pin on the same element and a second comment editor for the same
-   * pick. The artifact at full size is where a pick is made, so the inline card
-   * stays a plain preview whenever the viewer is open.
+   * pick. The artifact at full size is where a pick is made.
    */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
-  /**
-   * Whether the viewer draws the artifact inline, in its own shadow document.
-   *
-   * It does whenever a pick can be made on it, which is every artifact in a
-   * conversation. That inline document is also what makes a document artifact
-   * behave like one: it is the scroll container, so the wheel scrolls it, and it
-   * reaches this viewer's own handlers, so a deliberate gesture can still zoom.
-   * A sandboxed iframe preview keeps the gesture overlay instead, because a wheel
-   * inside it never reaches this surface.
-   */
-  const inlineSurface = $derived(canInspect)
 
   /**
    * The expanded viewer's zoom.
    *
-   * One instance for the whole viewer, so the preview the user zoomed into is
-   * the surface they pick in. The threshold is what lets both work: a press that
+   * One instance for the whole viewer, so the view the user zoomed into is the
+   * surface they pick in. The threshold is what lets both work: a press that
    * does not move is a pick on the artifact, and a press that moves is a pan.
    *
    * A document artifact keeps the wheel for scrolling and zooms only on a
@@ -152,6 +136,16 @@
   // A viewer reopened on another artifact must not inherit the last zoom.
   $effect(() => {
     if (!viewerOpen) panZoom.reset()
+  })
+
+  // The surface follows its home: the conversation while the artifact is read
+  // there, the viewer while it is open. Nothing is re-created on the way, so the
+  // state the reader left in it is the state they find on the other side.
+  $effect(() => {
+    const element = surface
+    const home = viewerOpen ? viewerHome : inlineHome
+    if (!element || !home || element.parentElement === home) return
+    home.appendChild(element)
   })
 
   onDestroy(() => clearTimeout(copyResetTimer))
@@ -190,121 +184,79 @@
   }
 </script>
 
-{#snippet artifactBody(fullscreen = false)}
-  {#if showSource && !fullscreen}
-    <div class="[&>div]:border-0 [&>div]:border-t">
+<!-- The artifact's home in the conversation. It carries no box of its own: the
+     artifact is part of the message column, so it draws in the same surface the
+     message does rather than inside a framed preview. -->
+<div bind:this={inlineHome} class="relative"></div>
+
+<!-- The one surface. Rendered here first and moved to the viewer when it opens;
+     never rebuilt, so nothing inside it is lost on the way. -->
+<div
+  bind:this={surface}
+  class={['group/md-artifact relative w-full', viewerOpen && 'h-full']}
+  data-artifact-key={artifactKey}
+>
+  {#if showSource}
+    <div class={['[&>div]:border-0', viewerOpen && 'h-full']}>
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
-  {:else if annotationScope && fullscreen && inlineSurface}
-    <div class="h-full min-h-0">
-      <ArtifactInspector
-        {code}
-        {kind}
-        enabled={inspecting}
-        {artifactKey}
-        projectId={annotationScope.projectId}
-        threadId={annotationScope.threadId}
-        {picks}
-        editingId={inspectorEditingId}
-        onEditClosed={releaseFocusRequest}
-        {panZoom}
-        onExit={() => {
-          releaseFocusRequest()
-          manualInspecting = false
-        }}
-      />
-    </div>
   {:else}
-    {@const picture = fullscreen ? undefined : pictureFrame}
-    <!-- The inline frame is the artifact's own shape whenever the artifact states
-         one, and the plain viewport otherwise. The viewer fills its stage and lets
-         the zoom carry the picture past the frame's edges. -->
-    {#if fullscreen}
-      <div {@attach panZoom.bindTarget} class="absolute inset-0" style={panZoom.transform}>
-        <iframe
-          title="{label} preview"
-          sandbox=""
-          {srcdoc}
-          class="block h-full w-full border-0 bg-app"
-        ></iframe>
-      </div>
-    {:else}
-      <iframe
-        title="{label} preview"
-        sandbox=""
-        {srcdoc}
-        class={['block w-full border-0 bg-app', picture === undefined ? 'h-80' : 'mx-auto']}
-        style={picture}
-      ></iframe>
-    {/if}
+    <ArtifactInspector
+      {code}
+      {kind}
+      enabled={inspecting}
+      {artifactKey}
+      projectId={annotationScope?.projectId ?? ''}
+      threadId={annotationScope?.threadId ?? ''}
+      {picks}
+      editingId={inspectorEditingId}
+      onEditClosed={releaseFocusRequest}
+      {panZoom}
+      fill={viewerOpen}
+      onExit={() => {
+        releaseFocusRequest()
+        manualInspecting = false
+      }}
+    />
   {/if}
-{/snippet}
 
-{#snippet viewerStage()}
-  <!-- The viewer's own zoom surface. The artifact inside it is the only element
-       that carries the transform, so the controls drawn on top of it keep their
-       size and their place. -->
+  <!-- The artifact's controls ride on top of it and appear while it is under the
+       pointer or holding focus, so the artifact reads as the content it is
+       instead of a widget with a toolbar. -->
   <div
-    {@attach viewerViewportAttachment}
+    class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-0.5 border border-border bg-elevated/95 p-0.5 opacity-0 shadow-sm transition-opacity duration-150 group-hover/md-artifact:pointer-events-auto group-hover/md-artifact:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
     role="group"
-    aria-label="Zoomable {label.toLowerCase()}"
-    class={[
-      'relative h-full w-full touch-none overflow-hidden',
-      panZoom.zoom !== 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
-    ]}
-    onwheel={panZoom.onWheel}
-    onpointerdown={panZoom.onPointerDown}
-    onpointermove={panZoom.onPointerMove}
-    onpointerup={panZoom.onPointerUp}
-    onpointercancel={panZoom.onPointerUp}
-    ondblclick={() => panZoom.reset()}
+    aria-label="{label} controls"
   >
-    {@render artifactBody(true)}
-    {#if !inlineSurface && panZoom.zoom !== 1}
-      <!-- The preview frame is a document of its own: a gesture inside it never
-           reaches this surface, so a pan over it is taken here instead. Only
-           while zoomed, though: at its own size the frame is left alone, so a
-           document in it keeps its own scrolling. -->
-      <div class="absolute inset-0" role="presentation"></div>
-    {/if}
-  </div>
-  <PanZoomToolbar {panZoom} viewport={viewerViewport} class="absolute right-3 bottom-9 z-20" />
-{/snippet}
-
-<div class="overflow-hidden border bg-elevated" data-artifact-key={artifactKey}>
-  <div class="flex h-8 items-center justify-between border-b px-2">
-    <span class="px-1 font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">{label}</span>
-    <div class="flex items-center gap-0.5">
-      <div
-        class="mr-1 flex items-center border border-border"
-        role="group"
-        aria-label="{label} view"
+    <div class="flex items-center" role="group" aria-label="{label} view">
+      <button
+        type="button"
+        class={[
+          'flex items-center p-1 transition-colors',
+          showSource ? 'text-dimmed hover:text-foreground' : 'bg-overlay text-foreground'
+        ]}
+        aria-pressed={!showSource}
+        title="Show rendered {label} preview"
+        aria-label="Show rendered {label} preview"
+        onclick={() => (showSource = false)}
       >
-        <button
-          type="button"
-          class={[
-            'px-2 py-1 text-[0.625rem] font-medium transition-colors',
-            !showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:text-foreground'
-          ]}
-          aria-pressed={!showSource}
-          title="Show rendered {label} preview"
-          onclick={() => (showSource = false)}
-        >
-          <span class="flex items-center gap-1"><CioEye size={12} />Preview</span>
-        </button>
-        <button
-          type="button"
-          class={[
-            'px-2 py-1 text-[0.625rem] font-medium transition-colors',
-            showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:text-foreground'
-          ]}
-          aria-pressed={showSource}
-          title="Show {label} source"
-          onclick={() => (showSource = true)}
-        >
-          <span class="flex items-center gap-1"><CioCode size={12} />Code</span>
-        </button>
-      </div>
+        <CioEye size={13} />
+      </button>
+      <button
+        type="button"
+        class={[
+          'flex items-center p-1 transition-colors',
+          showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:text-foreground'
+        ]}
+        aria-pressed={showSource}
+        title="Show {label} source"
+        aria-label="Show {label} source"
+        onclick={() => (showSource = true)}
+      >
+        <CioCode size={13} />
+      </button>
+    </div>
+    {#if showSource}
       <button
         class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label={wrapToggleLabel(wrapped)}
@@ -314,18 +266,20 @@
       >
         <CioWrapText size={13} class={wrapped ? 'text-primary' : ''} />
       </button>
-      <button
-        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-        aria-label="Copy {label} source"
-        title="Copy {label} source"
-        onclick={() => void copySource()}
-      >
-        {#if copied}
-          <CioCheck size={13} class="text-success" />
-        {:else}
-          <CioCopy size={13} />
-        {/if}
-      </button>
+    {/if}
+    <button
+      class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      aria-label="Copy {label} source"
+      title="Copy {label} source"
+      onclick={() => void copySource()}
+    >
+      {#if copied}
+        <CioCheck size={13} class="text-success" />
+      {:else}
+        <CioCopy size={13} />
+      {/if}
+    </button>
+    {#if !viewerOpen}
       <button
         class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label="Expand {label}"
@@ -334,10 +288,8 @@
       >
         <CioMaximize size={13} />
       </button>
-    </div>
+    {/if}
   </div>
-
-  {@render artifactBody()}
 </div>
 
 {#snippet inspectAction()}
@@ -376,7 +328,26 @@
   contentClass="flex flex-col overflow-hidden p-0"
   headerActions={canInspect ? inspectAction : undefined}
 >
+  <!-- The viewer's own zoom surface, and the artifact's second home. The
+       artifact inside it is the only element that carries the transform, so a
+       toolbar or a control drawn next to it keeps its size and its place. -->
   <div class="relative min-h-0 flex-1">
-    {@render viewerStage()}
+    <div
+      bind:this={viewerHome}
+      {@attach viewerViewportAttachment}
+      role="group"
+      aria-label="Zoomable {label.toLowerCase()}"
+      class={[
+        'relative h-full w-full touch-none overflow-hidden',
+        panZoom.zoom !== 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+      ]}
+      onwheel={panZoom.onWheel}
+      onpointerdown={panZoom.onPointerDown}
+      onpointermove={panZoom.onPointerMove}
+      onpointerup={panZoom.onPointerUp}
+      onpointercancel={panZoom.onPointerUp}
+      ondblclick={() => panZoom.reset()}
+    ></div>
+    <PanZoomToolbar {panZoom} viewport={viewerViewport} class="absolute right-3 bottom-3 z-20" />
   </div>
 </Modal>

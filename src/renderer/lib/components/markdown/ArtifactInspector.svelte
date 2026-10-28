@@ -62,6 +62,16 @@
     /** The expanded viewer's zoom, shared with its preview so the view the user
      *  zoomed into is the view they pick in. */
     panZoom: PanZoom
+    /**
+     * Whether the surface fills a fixed box instead of flowing in the message.
+     *
+     * It fills the viewer, which is a window of its own: a document artifact
+     * there is the scroll container and a picture is centred in it. In the
+     * conversation the same surface is part of the column, so it takes the
+     * height its content has and the page scrolls, exactly as the message
+     * around it does.
+     */
+    fill: boolean
   }
 
   let {
@@ -75,7 +85,8 @@
     editingId,
     onEditClosed,
     onExit,
-    panZoom
+    panZoom,
+    fill
   }: Props = $props()
 
   /** How this surface names its artifact to the user. */
@@ -516,49 +527,63 @@
    * document a page would otherwise own: the app's surface, the app's type, and
    * the pointer cursor that says an element can be picked. An artifact's own
    * rules are placed after this sheet, so a page that styles its own canvas still
-   * wins, exactly as it does in the sandboxed preview.
+   * wins, exactly as it does in the preview.
+   *
+   * `contain: paint` is what keeps an artifact inside the box it is given. The
+   * surface is drawn in the app's own document rather than in a sandboxed frame,
+   * so without it a page could paint over the conversation around it (a fixed
+   * element in an artifact would otherwise be laid out against the window).
+   *
+   * Where the surface is drawn is a host attribute rather than a value baked into
+   * this sheet. The sheet is what rebuilds the artifact's own DOM, and a rebuild
+   * is a reset: opening the viewer on a filled surface would have re-created the
+   * tab the reader had just checked.
    */
-  const stageSheet = `:host { display: block; height: 100%; }
-.${ARTIFACT_STAGE_CLASS} { position: relative; box-sizing: border-box; height: 100%; background: var(--color-app); font-family: var(--font-app); color: var(--color-foreground); }
+  const stageSheet = `:host { display: block; contain: paint; }
+:host([data-fill]) { height: 100%; }
+.${ARTIFACT_STAGE_CLASS} { position: relative; box-sizing: border-box; background: var(--color-app); font-family: var(--font-app); color: var(--color-foreground); }
+:host([data-fill]) .${ARTIFACT_STAGE_CLASS} { height: 100%; }
 .${ARTIFACT_STAGE_CLASS} img, .${ARTIFACT_STAGE_CLASS} video { max-width: 100%; height: auto; }
 :host([data-inspecting]) .${ARTIFACT_STAGE_CLASS}, :host([data-inspecting]) .${ARTIFACT_STAGE_CLASS} * { cursor: pointer !important; }`
 
-  /** A picture is centred and contained; a document is laid out and scrolls. */
+  /**
+   * A picture is centred and contained; a document is laid out.
+   *
+   * In the viewer the document is also the scroll container, because the viewer
+   * is a fixed window on it. In the conversation the document flows instead: it
+   * has no height of its own to scroll inside, so the message column scrolls.
+   */
   const kindSheet = $derived(
     kind === 'svg'
       ? `.${ARTIFACT_STAGE_CLASS} { display: flex; align-items: center; justify-content: center; padding: 1.25rem; }
-.${ARTIFACT_STAGE_CLASS} > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; fill: currentColor; }`
-      : `.${ARTIFACT_STAGE_CLASS} { overflow: auto; }`
+.${ARTIFACT_STAGE_CLASS} > svg { max-width: 100%; width: 100%; height: auto; fill: currentColor; }
+:host([data-fill]) .${ARTIFACT_STAGE_CLASS} > svg { width: auto; max-height: 100%; }`
+      : `:host([data-fill]) .${ARTIFACT_STAGE_CLASS} { overflow: auto; }`
   )
 
-  function svgStageMarkup(): string {
-    const template = document.createElement('template')
-    template.innerHTML = sanitizedSvgArtifact(code)
-    // An SVG image has its own :root. Inside a shadow tree those declarations
-    // must belong to the host, or authored aliases such as --ink disappear.
-    for (const style of template.content.querySelectorAll('style')) {
-      style.textContent = (style.textContent ?? '').replace(/:root\b/gu, ':host')
-    }
-    return `<div class="${ARTIFACT_STAGE_CLASS}" id="${ARTIFACT_STAGE_ID}">${template.innerHTML}</div>`
-  }
-
   /**
-   * The isolated document, rebuilt from the source and the theme.
+   * The stage box and the two sheets that style it.
    *
-   * A document keeps its own `<style>` rules, which are emitted after the stage
-   * sheet so the artifact's canvas overrides it, and are already rewritten for
-   * the stage box because a shadow tree is what they now style.
+   * The isolated document has three parts, and only one of them is the
+   * artifact: the token sheet (theme, stage rules, kind rules), the artifact's
+   * own rules, and the artifact markup itself. Keeping them apart is what lets
+   * the theme change without touching the artifact. A theme nudge (a theme
+   * switch, a body attribute a modal sets while it opens) used to rewrite the
+   * whole shadow document, which re-created the tabs and disclosures the reader
+   * had already used, so the surface reset itself under their pointer.
    */
-  function shadowDocument(theme: string): string {
-    if (kind === 'svg') return `<style>${theme}${stageSheet}${kindSheet}</style>${svgStageMarkup()}`
-    const artifact = sanitizedHtmlArtifactDocument(code)
-    const stage = `<div class="${ARTIFACT_STAGE_CLASS}" id="${ARTIFACT_STAGE_ID}">${artifact.markup}</div>`
-    return `<style>${theme}${stageSheet}${kindSheet}${artifact.styles}</style>${stage}`
-  }
+  let sheetEl = $state<HTMLStyleElement | null>(null)
+  let sourceSheetEl = $state<HTMLStyleElement | null>(null)
+  let stageEl = $state<HTMLElement | null>(null)
 
   function mountInspector(node: HTMLDivElement): void {
     host = node
-    shadowRoot = node.attachShadow({ mode: 'open' })
+    const root = node.attachShadow({ mode: 'open' })
+    root.innerHTML = `<style data-cio-sheet></style><style data-cio-source></style><div class="${ARTIFACT_STAGE_CLASS}" id="${ARTIFACT_STAGE_ID}"></div>`
+    sheetEl = root.querySelector('style[data-cio-sheet]')
+    sourceSheetEl = root.querySelector('style[data-cio-source]')
+    stageEl = root.querySelector(`.${ARTIFACT_STAGE_CLASS}`)
+    shadowRoot = root
   }
 
   /** The untransformed box every control on the artifact is placed in. */
@@ -569,14 +594,46 @@
     }
   }
 
-  // The artifact's source and the app's theme can both change while the card is
-  // mounted, so the isolated document is rebuilt from them rather than written
-  // once at mount.
+  /** An SVG picture, drawn inline so its own elements can be pointed at. */
+  function svgMarkup(source: string): string {
+    const template = document.createElement('template')
+    template.innerHTML = sanitizedSvgArtifact(source)
+    // An SVG image has its own :root. Inside a shadow tree those declarations
+    // must belong to the host, or authored aliases such as --ink disappear.
+    for (const style of template.content.querySelectorAll('style')) {
+      style.textContent = (style.textContent ?? '').replace(/:root\b/gu, ':host')
+    }
+    return template.innerHTML
+  }
+
+  // The app's theme, restated for the artifact's own document. Only a sheet is
+  // written, never the artifact, so the artifact keeps its state.
   $effect(() => {
-    const root = shadowRoot
+    const sheet = sheetEl
+    if (!sheet) return
     const theme = artifactThemeStyles().replace(/:root\b/gu, ':host')
-    if (!root) return
-    root.innerHTML = shadowDocument(theme)
+    sheet.textContent = `${theme}${stageSheet}${kindSheet}`
+  })
+
+  // The artifact itself, rewritten only when its source does. A document keeps
+  // its own `<style>` rules, which are emitted after the stage sheet so the
+  // artifact's canvas overrides it, and are already rewritten for the stage box
+  // because a shadow tree is what they now style.
+  let appliedSource: string | null = null
+  $effect(() => {
+    const stage = stageEl
+    const sourceSheet = sourceSheetEl
+    const key = `${kind}\u0000${code}`
+    if (!stage || !sourceSheet || appliedSource === key) return
+    appliedSource = key
+    if (kind === 'svg') {
+      sourceSheet.textContent = ''
+      stage.innerHTML = svgMarkup(code)
+      return
+    }
+    const artifact = sanitizedHtmlArtifactDocument(code)
+    sourceSheet.textContent = artifact.styles
+    stage.innerHTML = artifact.markup
   })
 
   // A zoom or a pan moves every element the pins, the hover box and the open
@@ -603,20 +660,25 @@
 
 <svelte:window onkeydown={handleKeydown} onscrollcapture={remeasure} onresize={remeasure} />
 
-<div class="relative h-full w-full" {@attach frameAttachment}>
+<div class={['relative w-full', fill && 'h-full']} {@attach frameAttachment}>
   <!-- Only the artifact itself carries the viewer's zoom. The hover box, the pins
        and the comment box are the app's own DOM placed in this box's pixels, so
        the controls keep their size and stay on their elements at any zoom. -->
-  <div class="h-full w-full" style={panZoom.transform} {@attach panZoom.bindTarget}>
+  <div
+    class={['w-full', fill && 'h-full']}
+    style={panZoom.transform}
+    {@attach panZoom.bindTarget}
+  >
     <!-- The picking surface is pointer-driven by nature, exactly like the element
          picker the browser panel uses: an element is chosen by pointing at it. The
          role says so, and the keyboard path is Enter or Space on the element the
          pointer is on, so the interaction is not pointer-only. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
-      class="h-full w-full overflow-hidden"
+      class={['w-full', fill ? 'h-full overflow-hidden' : 'overflow-visible']}
       data-artifact-inspector
       data-inspecting={enabled ? '' : undefined}
+      data-fill={fill ? '' : undefined}
       role={enabled ? 'application' : kind === 'svg' ? 'img' : 'document'}
       aria-label={enabled
         ? 'Artifact element inspector: hover an element and click, or press Enter, to comment on it'
