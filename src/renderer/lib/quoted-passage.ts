@@ -17,13 +17,13 @@ import { workspaceState } from '$lib/stores/workspace.svelte'
 /**
  * The draft a quoted passage becomes in a fresh thread.
  *
- * The passage is fenced so it reads as one block of quoted material with room to
- * write context above and below it. The fence widens when the passage itself
- * carries triple backticks, so the block stays intact.
+ * The passage is the user's own words carried over, so it lands as plain text:
+ * fencing it turned a sentence they wanted to write on top of into a code block
+ * the agent read as a quotation of code. A blank line above keeps the passage
+ * apart from whatever they type before it.
  */
 export function quotedPassageDraft(passage: string): string {
-  const fence = passage.includes('```') ? '````' : '```'
-  return `\n${fence}txt\n${passage}\n${fence}\n`
+  return `\n${passage.trim()}\n`
 }
 
 /**
@@ -53,6 +53,16 @@ export function openPassageInNewThread(projectId: string, threadId: string, pass
         scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
       })
       rendererRecovery.setDraft(created.projectId, created.id, quotedPassageDraft(passage))
+      // The passage came out of that conversation, so the new thread starts with
+      // it attached as context: a badge the user can detach, and a lookup the
+      // agent may make when the passage alone does not say enough.
+      rendererRecovery.setThreadReferences(created.projectId, created.id, [
+        {
+          projectId,
+          threadId,
+          title: thread.title
+        }
+      ])
       // The thread the passage becomes has to be on screen and ready to type
       // into: a draft nobody can see, in a view that cannot show it, is the
       // whole point of the action lost.

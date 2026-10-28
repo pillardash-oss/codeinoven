@@ -69,6 +69,7 @@
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
+  import { THREAD_DRAG_TYPE } from '$lib/components/chats/chat-composer-drop-source'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
   import type { Thread } from '$shared/types'
@@ -201,7 +202,20 @@
 
   function handleDragStart(e: DragEvent): void {
     e.dataTransfer!.setData('text/plain', thread.id)
-    e.dataTransfer!.effectAllowed = 'move'
+    // The row is also a conversation the composer can be handed as context: the
+    // payload is the thread's identity and the title its badge reads, so a drop
+    // on the conversation attaches it without a second lookup.
+    e.dataTransfer!.setData(
+      THREAD_DRAG_TYPE,
+      JSON.stringify({
+        projectId: thread.projectId,
+        threadId: thread.id,
+        title: thread.title
+      })
+    )
+    // Both a reorder inside the list and a context attachment on the
+    // conversation accept this drag.
+    e.dataTransfer!.effectAllowed = 'copyMove'
     setDragImage(e, thread.title)
   }
 

@@ -317,6 +317,7 @@
     revealAnnotatedDocument
   } from '$lib/reveal-file'
   import { openPassageInNewThread } from '$lib/quoted-passage'
+  import { threadContextPrompt, type ThreadContextReference } from '$lib/thread-context'
   import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
@@ -3645,7 +3646,8 @@
     direct?: boolean,
     projectReferences: PromptProjectReference[] = [],
     taskReferences: PromptAssignmentTaskReference[] = [],
-    startAfterThreads: StartAfterThreadReference[] = []
+    startAfterThreads: StartAfterThreadReference[] = [],
+    threadReferences: ThreadContextReference[] = []
   ): void {
     // The user answered the agent's "shall I save it?" with a plain yes. The app
     // owns the commit: save the pending draft, then have the agent post its
@@ -3685,7 +3687,16 @@
     // engine attaches it to every user turn in an assistant that still has no
     // knowledge, so a resend from the message editor or a queued delivery can
     // never drop it.
-    const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
+    const promptContext = [
+      responseReferenceContext(),
+      // An attached conversation is a lookup the agent may make, never a request
+      // of its own: the sentence leaves with the badge, so detaching it before
+      // sending is what removes it from the turn.
+      threadContextPrompt(threadReferences),
+      taskContext
+    ]
+      .filter(Boolean)
+      .join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
     // The centered head start must never return for this thread once a real
@@ -15684,6 +15695,10 @@
                         thread.projectId,
                         thread.id
                       )}
+                      initialThreadReferences={rendererRecovery.threadReferencesFor(
+                        thread.projectId,
+                        thread.id
+                      )}
                       onValueChange={(value) => {
                         rendererRecovery.setDraft(thread.projectId, thread.id, value)
                         publishDraftActivity(
@@ -15747,6 +15762,13 @@
                         )
                       }}
                       onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
+                      onThreadReferencesChange={(threadReferences) => {
+                        rendererRecovery.setThreadReferences(
+                          thread.projectId,
+                          thread.id,
+                          threadReferences
+                        )
+                      }}
                       onRelocateItem={relocationAvailable ? requestComposerRelocation : undefined}
                       references={composerReferences}
                       onRemoveReference={removeComposerReference}

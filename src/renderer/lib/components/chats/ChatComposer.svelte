@@ -42,7 +42,7 @@
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
   import type { ComposerRelocationRequest } from './composer-relocation'
   import { installComposerDropListeners, type ComposerDropRegion } from './chat-composer-drop'
-  import { readComposerDrop } from './chat-composer-drop-source'
+  import { droppedThread, readComposerDrop } from './chat-composer-drop-source'
   import { handleComposerKeydown, type ComposerKeydownContext } from './chat-composer-keydown'
   import { handleComposerPaste, type ComposerPasteContext } from './chat-composer-paste'
   import {
@@ -97,6 +97,10 @@
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import ComposerShoe, { type ComposerShoeData, type ComposerUsage } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import {
+    uniqueThreadContextReferences,
+    type ThreadContextReference
+  } from '$lib/thread-context'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -144,7 +148,8 @@
       direct?: boolean,
       projectReferences?: PromptProjectReference[],
       taskReferences?: PromptAssignmentTaskReference[],
-      startAfterThreads?: StartAfterSelection[]
+      startAfterThreads?: StartAfterSelection[],
+      threadReferences?: ThreadContextReference[]
     ) => void
     disabled?: boolean
     /** True while the agent is running   turns the send button into a stop button. */
@@ -216,6 +221,10 @@
     onStartAfterThreadsChange?: (threads: StartAfterSelection[]) => void
     /** Opens a selected source thread from the composer badge popover. */
     onOpenStartAfterThread?: (threadId: string) => void | Promise<void>
+    /** Restart-safe conversations attached to this composer as context. */
+    initialThreadReferences?: ThreadContextReference[]
+    /** Persists or clears the conversations attached to this composer. */
+    onThreadReferencesChange?: (references: ThreadContextReference[]) => void
     /** Assistant-response excerpts referenced by the next message. */
     references?: readonly PromptReference[]
     onRemoveReference?: (id: string) => void
@@ -358,6 +367,8 @@
     initialStartAfterThreads = [],
     onStartAfterThreadsChange,
     onOpenStartAfterThread,
+    initialThreadReferences = [],
+    onThreadReferencesChange,
     references = [],
     onRemoveReference,
     onRemoveAllReferences,
@@ -773,6 +784,12 @@
   )
   // svelte-ignore state_referenced_locally
   let startAfterEnabled = $state(initialStartAfterThreads.length > 0)
+  // Attached conversations travel with the draft, so they are captured the same
+  // way the restored draft and its dependencies are.
+  // svelte-ignore state_referenced_locally
+  let threadReferences = $state<ThreadContextReference[]>(
+    uniqueThreadContextReferences(initialThreadReferences)
+  )
 
   // Selection slot hover popover   a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
@@ -897,6 +914,34 @@
     startAfterThreads = []
     closeStartAfterPopover()
     onStartAfterThreadsChange?.([])
+  }
+
+  /**
+   * Attach a conversation as context for the next message.
+   *
+   * A thread is attached by identity only: the badge names it, and the turn tells
+   * the agent it may look it up. Attaching the thread this composer speaks for is
+   * refused, because the agent already holds that conversation.
+   */
+  function attachThreadContext(reference: ThreadContextReference): void {
+    if (reference.threadId === threadId) return
+    const next = uniqueThreadContextReferences([...threadReferences, reference])
+    if (next.length === threadReferences.length) return
+    threadReferences = next
+    onThreadReferencesChange?.(threadReferences)
+  }
+
+  function removeThreadContext(attachedThreadId: string): void {
+    threadReferences = threadReferences.filter(
+      (reference) => reference.threadId !== attachedThreadId
+    )
+    onThreadReferencesChange?.(threadReferences)
+  }
+
+  function clearThreadContexts(): void {
+    if (threadReferences.length === 0) return
+    threadReferences = []
+    onThreadReferencesChange?.([])
   }
 
   /** Toggle the independent (spec-less) audit. Turning it on hands the thread
@@ -1607,7 +1652,17 @@
     onTaskReferencesChange?.([])
     const selectedStartAfterThreads = startAfterEnabled ? startAfterThreads : []
     clearStartAfterThreads()
-    onSend(msg, files, direct, taggedPaths, taggedTasks, selectedStartAfterThreads)
+    const attachedThreads = [...threadReferences]
+    clearThreadContexts()
+    onSend(
+      msg,
+      files,
+      direct,
+      taggedPaths,
+      taggedTasks,
+      selectedStartAfterThreads,
+      attachedThreads
+    )
     // The draft just left the composer, so the long-form writing surface has
     // nothing left to hold: settle back to the compact composer.
     expansion.collapse()
@@ -1981,11 +2036,24 @@
    */
   async function handleDropData(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    if (!dt) return
+    // A thread row carried in is context, not a file: it attaches by identity,
+    // never touches attachment storage, and a model that takes no files can still
+    // be given one.
+    const carriedThread = droppedThread(dt)
+    if (carriedThread) {
+      attachThreadContext({
+        projectId: carriedThread.projectId,
+        threadId: carriedThread.threadId,
+        title: carriedThread.title
+      })
+      focusComposerAtSavedCaret()
+      return
+    }
     if (selectedHarnessLacksAttachments) {
       attachmentBlockedNotice = true
       return
     }
-    if (!dt) return
     const { files, urls } = readComposerDrop(dt)
     if (files.length > 0) {
       for (const file of files) {
@@ -2218,6 +2286,7 @@
     {attachments}
     {references}
     {startAfterThreads}
+    {threadReferences}
     {showChatModes}
     fileSystemMode={resolved.fileSystemMode}
     previewUrls={preview.urls}
@@ -2231,6 +2300,7 @@
     onClearStartAfterThreads={clearStartAfterThreads}
     {onOpenStartAfterThread}
     onRemoveStartAfterThread={removeStartAfterThread}
+    onRemoveThreadContext={removeThreadContext}
     {selectionPopoverOpen}
     onOpenSelectionPopover={openSelectionPopover}
     onScheduleSelectionPopoverClose={scheduleSelectionPopoverClose}

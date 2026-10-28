@@ -29,6 +29,23 @@ export interface ComposerDropPayload {
   urls: string[]
 }
 
+/**
+ * The MIME type a dragged thread row writes.
+ *
+ * A thread dropped on the conversation is attached as context, not as a file, so
+ * the drop has to be able to tell it apart from a drag that carried files or a
+ * link before it reads anything else. The type is private to the app, which is
+ * what keeps a foreign drag from claiming to be one of our threads.
+ */
+export const THREAD_DRAG_TYPE = 'application/x-cio-thread'
+
+/** A thread a drag carried: its identity, and the name its badge reads. */
+export interface DroppedThread {
+  projectId: string
+  threadId: string
+  title: string
+}
+
 /** True when `types` carries an entry, whichever list shape it arrives in. */
 function typesCarry(dataTransfer: DataTransfer, type: string): boolean {
   return Array.from(dataTransfer.types ?? []).includes(type)
@@ -47,8 +64,46 @@ export function dropCarriesAttachable(dataTransfer: DataTransfer | null): boolea
   return (
     typesCarry(dataTransfer, 'Files') ||
     (dataTransfer.files?.length ?? 0) > 0 ||
-    typesCarry(dataTransfer, 'text/uri-list')
+    typesCarry(dataTransfer, 'text/uri-list') ||
+    typesCarry(dataTransfer, THREAD_DRAG_TYPE)
   )
+}
+
+/** Whether this drag is a thread row being carried into the composer. */
+export function dropCarriesThread(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false
+  return typesCarry(dataTransfer, THREAD_DRAG_TYPE)
+}
+
+/**
+ * The thread a drag carried, or null when it carried none.
+ *
+ * Read at drop time only: during `dragover` a drag from another document answers
+ * empty for every `getData`, so the overlay is raised from the type alone.
+ */
+export function droppedThread(dataTransfer: DataTransfer | null): DroppedThread | null {
+  if (!dataTransfer) return null
+  let raw: string
+  try {
+    raw = dataTransfer.getData(THREAD_DRAG_TYPE) ?? ''
+  } catch {
+    return null
+  }
+  if (raw.length === 0) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const record = parsed as Record<string, unknown>
+  const projectId = record.projectId
+  const threadId = record.threadId
+  if (typeof projectId !== 'string' || typeof threadId !== 'string') return null
+  if (projectId.length === 0 || threadId.length === 0) return null
+  const title = typeof record.title === 'string' ? record.title.trim() : ''
+  return { projectId, threadId, title: title.length > 0 ? title : 'Thread' }
 }
 
 /** One `text/uri-list` body split into its URIs. The format is one URI per line,

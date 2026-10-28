@@ -8,7 +8,7 @@
  * project, and only the conversation attaches to the message.
  */
 
-import { dropCarriesAttachable } from './chat-composer-drop-source'
+import { dropCarriesAttachable, dropCarriesThread } from './chat-composer-drop-source'
 
 export interface ComposerDropRegion {
   left: number
@@ -127,7 +127,9 @@ export function installComposerDropListeners(ctx: ComposerDropContext): () => vo
       clearDropState()
       return
     }
-    if (ctx.getSelectedHarnessLacksAttachments()) {
+    // A thread row is attached as context rather than as a file, so a model that
+    // cannot take attachments can still be given one.
+    if (ctx.getSelectedHarnessLacksAttachments() && !dropCarriesThread(e.dataTransfer)) {
       clearDropState()
       return
     }
@@ -184,7 +186,7 @@ export function installComposerDropListeners(ctx: ComposerDropContext): () => vo
     // and warned about nothing.
     if (!dropCarriesAttachable(e.dataTransfer)) return
     if (ctx.getReadOnlyMode() && !ctx.getAllowAttachments()) return
-    if (ctx.getSelectedHarnessLacksAttachments()) {
+    if (ctx.getSelectedHarnessLacksAttachments() && !dropCarriesThread(e.dataTransfer)) {
       if (dropCarriesAttachable(e.dataTransfer)) {
         e.preventDefault()
         ctx.setAttachmentBlockedNotice(true)
