@@ -135,7 +135,14 @@
        not a screen: refusing it keeps a misread from trimming the title while the
        page beside it obviously has room. */
     if (width < 240) return 0
-    const available = Math.round(width - titleInset)
+    /* The room left between where the block actually starts and the screen's right
+       edge. Deriving it from the block's own position rather than subtracting the
+       inset again matters: the block starts at the column's left edge, so the
+       inset is already spent on getting there. */
+    const chromeEnd = leftInset + Math.max(panelColumnWidth, clusterWidth)
+    const blockStart = chromeEnd + Math.max(8, titleInset)
+    const screenRight = layoutPanelState.conversationLeft + width
+    const available = Math.round(screenRight - blockStart)
     return available < 240 ? 0 : available
   })
 
