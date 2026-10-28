@@ -1910,25 +1910,22 @@
       ? harnessDisplayName(visibleProviderStatus.issue.harnessId)
       : providerName
   )
-  /** Settings frozen at the moment the visible provider status card appeared.
-   *  The composer must not mutate anything already on the conversation screen:
-   *  an error card keeps showing   and retrying from "Change" affects   the
-   *  configuration of the failed attempt until a new message is actually sent.
-   *  The snapshot is refreshed only when the card's identity changes, when the
-   *  user explicitly picks a model from the card itself, or when it clears. */
-  let statusCardSettings = $state<ThreadSettings | null>(null)
-  let seenProviderStatusKey: typeof visibleProviderStatus = null
-  $effect(() => {
-    if (visibleProviderStatus !== seenProviderStatusKey) {
-      seenProviderStatusKey = visibleProviderStatus
-      statusCardSettings = chatMode
+  /** Settings the visible provider status card renders.
+   *
+   *  The card outlives the failure it reports. Switching the thread to another
+   *  model or harness from the card's own picker (or from the composer) must
+   *  leave Retry on screen, because Retry re-sends the unanswered request
+   *  through the thread's current settings on the current session. A frozen
+   *  snapshot would leave the card showing the model that failed while the
+   *  button actually ran on the newly selected one, so the card mirrors the
+   *  live selection instead. */
+  const statusCardSettings = $derived<ThreadSettings | null>(
+    visibleProviderStatus === null
+      ? null
+      : chatMode
         ? { ...settings, assignmentMode: false, loopMode: false }
-        : { ...settings }
-    } else if (visibleProviderStatus === null && statusCardSettings !== null) {
-      statusCardSettings = null
-      seenProviderStatusKey = null
-    }
-  })
+        : settings
+  )
   const applicationActionSource = {
     id: 'application',
     label: APP_NAME,
@@ -11409,8 +11406,8 @@
   }
 
   /** Switch the thread's text model from the provider-error card's picker.
-   *  This is an explicit mutation point on the card itself, so refresh the
-   *  card's frozen settings snapshot to reflect the user's own pick. */
+   *  The card renders the thread's live settings, so this only has to apply the
+   *  pick to the thread (which also updates the card's picker in place). */
   function changeThreadModel(selected: ThreadSettings): void {
     const normalized = normalizeFastInference(
       selected,
@@ -11423,17 +11420,6 @@
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
     )
-    statusCardSettings =
-      statusCardSettings !== null
-        ? chatMode
-          ? {
-              ...statusCardSettings,
-              ...normalized,
-              assignmentMode: false,
-              loopMode: false
-            }
-          : { ...statusCardSettings, ...normalized }
-        : null
     updateSettings({ ...settings, ...normalized })
   }
 
@@ -12272,22 +12258,14 @@
       // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
       accountUsageCache.markStale()
-      // A provider card produced by the previous harness no longer applies once
-      // the user switches to another harness   otherwise the stale issue's
-      // message and links (e.g. a Codex usage-limit URL) linger under the badge
-      // of the newly selected one. Dismiss it so the next send surfaces fresh
-      // status for the current configuration.
-      if (
-        providerStatus &&
-        (providerStatus.state === 'waiting' || providerStatus.state === 'error') &&
-        providerStatus.issue.harnessId &&
-        providerStatus.issue.harnessId !== normalized.harnessId
-      ) {
-        providerStatus = null
-      }
-      if (proactiveAuthIssue && proactiveAuthIssue.harnessId !== normalized.harnessId) {
-        proactiveAuthIssue = null
-      }
+      // The provider card survives the switch. Picking another model or harness
+      // is the user's fix for the failure, and Retry is the action that carries
+      // it out: it re-sends the unanswered request through the current settings
+      // on a fresh session, exactly as a "continue" message would. Dropping the
+      // card here used to hide that button the instant the pick landed, forcing
+      // the user to type the continuation by hand. The card keeps attributing
+      // the issue to the harness that reported it (`statusCardProviderName`),
+      // while its picker mirrors the newly selected configuration.
     }
     if (seniorModelChanged && engineeringOn) {
       syncAgentRole('seniorEngineer', {
