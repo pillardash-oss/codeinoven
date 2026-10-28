@@ -26,8 +26,9 @@
     /**
      * Opens the file in the fullscreen surface, when the caller has one.
      *
-     * The control is revealed on hover, like every other tool on inline content,
-     * so the player itself stays a plain strip at rest.
+     * The control sits in the player's own row of controls: the player is the
+     * app's own surface, so the action belongs beside play and mute rather than
+     * appearing over the content on hover.
      */
     onExpand?: () => void
     /** Reports a source that cannot be decoded, with the element that failed. */
@@ -102,7 +103,7 @@
 
 <div
   class={[
-    'group/audio flex min-w-0 items-center gap-2 border border-border bg-surface px-2 py-1.5',
+    'flex min-w-0 items-center gap-2 border border-border bg-surface px-2 py-1.5',
     layout
   ]}
 >
@@ -213,7 +214,7 @@
     {#if onExpand}
       <button
         type="button"
-        class="flex size-7 shrink-0 items-center justify-center text-dimmed opacity-0 transition-opacity duration-150 hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover/audio:opacity-100"
+        class="flex size-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Open {label} full screen"
         title="Open {label} full screen"
         onclick={onExpand}
