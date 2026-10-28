@@ -33,11 +33,26 @@
     onExpand?: () => void
     /** Reports a source that cannot be decoded, with the element that failed. */
     onError?: (element: HTMLAudioElement) => void
+    /**
+     * The media element, as soon as it exists.
+     *
+     * The player owns the controls, so a caller that has to coordinate playback
+     * (the recording history holds the app's single-playback rule) listens to the
+     * element rather than drawing a player of its own beside this one.
+     */
+    onElement?: (element: HTMLAudioElement) => void
     /** Layout classes from the caller: a column width, or a centered card. */
     class?: string
   }
 
-  let { src, label, onExpand, onError, class: layout = '' }: Props = $props()
+  let {
+    src,
+    label,
+    onExpand,
+    onError,
+    onElement,
+    class: layout = ''
+  }: Props = $props()
 
   let audio = $state<HTMLAudioElement | null>(null)
   let playing = $state(false)
@@ -108,7 +123,15 @@
   ]}
 >
   <audio
-    bind:this={audio}
+    {@attach (element) => {
+      // The element is handed over the moment it mounts, before any metadata
+      // arrives, so a caller that means to start this player reaches it at once.
+      audio = element
+      onElement?.(element)
+      return () => {
+        audio = null
+      }
+    }}
     class="hidden"
     {src}
     preload="metadata"
