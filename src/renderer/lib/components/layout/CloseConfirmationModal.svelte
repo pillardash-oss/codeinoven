@@ -5,12 +5,11 @@
   import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
   import BrowserDownloadProgress from '$lib/components/browser/BrowserDownloadProgress.svelte'
   import {
-    browserDownloadBytes,
-    browserDownloadHost,
+    browserDownloadDetail,
     browserDownloadStateLabel,
     browserDownloadTone
   } from '$lib/components/browser/browser-download-format'
-  import type { BrowserDownload, CloseConfirmationPayload } from '$shared/ipc-contract'
+  import type { CloseConfirmationPayload } from '$shared/ipc-contract'
   import type { Project } from '$shared/types'
 
   type CloseConfirmationFileProject = Pick<Project, 'id' | 'name' | 'path' | 'source' | 'host'>
@@ -96,21 +95,6 @@
       : `Are you sure you want to close? ${closeCosts}.`
   )
 
-  /** Where a download came from and how far it got. The host says which source a
-   *  row belongs to when two files share a name, which is the only thing that
-   *  tells them apart. */
-  function downloadDetail(download: BrowserDownload): string {
-    const parts = [browserDownloadHost(download.url)]
-    if (download.receivedBytes > 0) {
-      parts.push(
-        download.totalBytes > 0
-          ? `${browserDownloadBytes(download.receivedBytes)} of ${browserDownloadBytes(download.totalBytes)}`
-          : browserDownloadBytes(download.receivedBytes)
-      )
-    }
-    return parts.join(' · ')
-  }
-
   /**
    * What closing does to the downloads above. It is the one consequence that is
    * not a loss, so it says where they continue rather than what the user loses,
@@ -172,7 +156,7 @@
                   <span class="min-w-0 flex-1 truncate text-foreground" title={download.fileName}>
                     {download.fileName}
                   </span>
-                  <span class="shrink-0 text-dimmed">{downloadDetail(download)}</span>
+                  <span class="shrink-0 text-dimmed">{browserDownloadDetail(download)}</span>
                   <StatusPill tone={browserDownloadTone(download)} dot>
                     {browserDownloadStateLabel(download)}
                   </StatusPill>

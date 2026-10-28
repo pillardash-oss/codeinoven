@@ -25,6 +25,36 @@ export function browserDownloadAge(startedAt: number, now: number = Date.now()):
   return formatCompactAge(startedAt, now)
 }
 
+/**
+ * The one-line summary under a download's filename.
+ *
+ * Movement comes first because that is what the user watches: the bytes against
+ * the total, then the speed they are arriving at, then how long the download has
+ * been going. The source host is last on purpose. It never changes while a
+ * download runs, and a narrow row truncates its tail, so putting it first spent
+ * the visible room on the one part that never moves.
+ */
+export function browserDownloadDetail(download: BrowserDownload, now: number = Date.now()): string {
+  const parts: string[] = []
+  if (download.receivedBytes > 0) {
+    parts.push(
+      browserDownloadShowsProgress(download) && download.totalBytes > 0
+        ? `${browserDownloadBytes(download.receivedBytes)} of ${browserDownloadBytes(download.totalBytes)}`
+        : browserDownloadBytes(download.receivedBytes)
+    )
+  }
+  if (download.state === 'progressing' && !download.paused && download.speedBytes > 0) {
+    parts.push(`${browserDownloadBytes(download.speedBytes)}/s`)
+  }
+  // "Now" says nothing in a row that is already counting bytes upward, so the
+  // duration only appears once it is long enough to read as one.
+  const duration = browserDownloadAge(download.startedAt, now)
+  if (duration.length > 0 && duration !== 'Now') parts.push(duration)
+  const host = browserDownloadHost(download.url)
+  if (host.length > 0) parts.push(host)
+  return parts.join(' · ')
+}
+
 /** Whether this download has bytes on disk to continue from, which is what makes
  *  its progress worth showing even though it is not running right now. */
 export function browserDownloadShowsProgress(download: BrowserDownload): boolean {

@@ -11,9 +11,7 @@
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserDownloadProgress from './BrowserDownloadProgress.svelte'
   import {
-    browserDownloadAge,
-    browserDownloadBytes,
-    browserDownloadHost,
+    browserDownloadDetail,
     browserDownloadStateLabel,
     browserDownloadTone
   } from './browser-download-format'
@@ -62,24 +60,7 @@
     }`
   )
   const actionIcon = $derived(compact ? 12 : 13)
-  const detail = $derived.by(() => {
-    const parts = [browserDownloadHost(download.url)]
-    if (download.receivedBytes > 0) {
-      parts.push(
-        showsProgress && download.totalBytes > 0
-          ? `${browserDownloadBytes(download.receivedBytes)} of ${browserDownloadBytes(download.totalBytes)}`
-          : browserDownloadBytes(download.receivedBytes)
-      )
-    }
-    if (progressing && download.speedBytes > 0) {
-      parts.push(`${browserDownloadBytes(download.speedBytes)}/s`)
-    }
-    // Downloads outlive the run that started them, so a stopped one says how old
-    // it is instead of looking like something from a moment ago.
-    const age = progressing ? '' : browserDownloadAge(download.startedAt)
-    if (age.length > 0) parts.push(age)
-    return parts.join(' · ')
-  })
+  const detail = $derived(browserDownloadDetail(download))
 </script>
 
 <div class={compact ? 'flex flex-col gap-1.5 px-3 py-2' : 'border border-border bg-elevated p-3'}>
