@@ -4,6 +4,7 @@ import type { BrowserLoadError } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
 import { isAbortedNavigation, rejectedLoadIsNotAFailure } from './browser-navigation-outcome'
 import { validateBrowserUrl } from './browser-validation'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -47,7 +48,7 @@ export class BrowserServiceNavigation {
     // Where a composition was is read before the document is replaced, so a capture
     // round trip does not send the user back to the first frame, and the ordering
     // cannot depend on which IPC the renderer happens to handle first.
-    if (tab.composition && !tab.view.webContents.isDestroyed()) {
+    if (tab.composition && liveContents(tab.view)) {
       const navigationStart = this.host.rememberPlayhead(tabId, tab).then(
         () => this.navigateTo(tabId, url),
         () => this.navigateTo(tabId, url)
@@ -73,8 +74,9 @@ export class BrowserServiceNavigation {
   /** Start one navigation, reporting a failure rather than rejecting. */
   navigateTo(tabId: string, url: string): Promise<void> {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return Promise.resolve()
-    const contents = tab.view.webContents
+    if (!tab) return Promise.resolve()
+    const contents = liveContents(tab.view)
+    if (!contents) return Promise.resolve()
     const navigationStart = this.host.extensions
       .ensureJarLoaded(tab.projectId, tab.boxId)
       .catch((error: unknown) => {

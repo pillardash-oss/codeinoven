@@ -8,6 +8,7 @@ import { Logger } from '../../system/logger'
 import { type BrowserTab } from './browser-types'
 import { FRAME_RENDER_TIMEOUT_MS } from './browser-validation'
 import { COMPOSITION_TRANSPORT_GLOBAL, frameSettleScript } from './browser-transport-script'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -79,7 +80,7 @@ export class BrowserServiceCompositionFrames {
     seconds: number
   ): Promise<{ rendered: boolean; reason?: string }> {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) {
+    if (!tab || !liveContents(tab.view)) {
       return { rendered: false, reason: 'the tab is gone' }
     }
     const drawn: unknown = tab.view.webContents.executeJavaScript(`(async () => {
@@ -152,7 +153,7 @@ export class BrowserServiceCompositionFrames {
     seconds: number
   ): Promise<CompositionFrameSnapshot | null> {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || !tab.composition || tab.view.webContents.isDestroyed()) return null
+    if (!tab || !tab.composition || !liveContents(tab.view)) return null
     const composition = tab.composition
     const at = Math.min(
       Math.max(Number.isFinite(seconds) ? seconds : 0, 0),

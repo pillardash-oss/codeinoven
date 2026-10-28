@@ -8,6 +8,7 @@ import {
   removeBrowserProfiles
 } from './browser-profile-store'
 import { boxIdFromPartition, browserJarFor, browserPartitionFor } from './browser-validation'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -177,7 +178,7 @@ export class BrowserServiceJars {
     // as the account whose cookies were just erased.
     for (const tab of this.host.tabs.values()) {
       if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
-      if (!tab.initialNavigationStarted || tab.view.webContents.isDestroyed()) continue
+      if (!tab.initialNavigationStarted || !liveContents(tab.view)) continue
       tab.view.webContents.reload()
     }
   }
@@ -196,7 +197,7 @@ export class BrowserServiceJars {
     const jars: { projectId: string; boxId: string | null }[] = []
     const partitions = new Set<string>()
     for (const tab of this.host.tabs.values()) {
-      if (tab.view.webContents.isDestroyed()) continue
+      if (!liveContents(tab.view)) continue
       const jar = browserJarFor(tab.projectId, tab.boxId)
       const partition = browserPartitionFor(jar.projectId, jar.boxId)
       if (partitions.has(partition)) continue

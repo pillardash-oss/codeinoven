@@ -7,6 +7,7 @@ import type {
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { type BrowserTab } from './browser-types'
 import { MAX_CONSOLE_ENTRIES } from './browser-validation'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -86,7 +87,7 @@ export class BrowserServicePageState {
   }
 
   devToolsStateFor(tabId: string, tab: BrowserTab): BrowserDevToolsState {
-    return { tabId, open: tab.view.webContents.isDevToolsOpened() }
+    return { tabId, open: liveContents(tab.view)?.isDevToolsOpened() ?? false }
   }
 
   appendConsoleEntry(

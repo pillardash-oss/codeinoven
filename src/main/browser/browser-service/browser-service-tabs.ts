@@ -18,6 +18,7 @@ import { browserFindResultFor } from './browser-find'
 import type { BrowserService } from '../browser-service'
 import { consoleFrameUrl } from './browser-service-common'
 import { pageKeyFromInput } from './browser-service-keyboard'
+import { liveContents } from './browser-view-contents'
 
 /**
  * A browser tab: creating it, finding it, and destroying it.
@@ -107,6 +108,10 @@ export interface TabsHost {
 }
 
 export class BrowserServiceTabs {
+  /** Tabs whose close is already running, so a page that reports its own
+   *  destruction mid-close cannot re-enter the same close. */
+  private readonly closing = new Set<string>()
+
   constructor(private readonly host: TabsHost) {}
 
   /**
@@ -141,7 +146,21 @@ export class BrowserServiceTabs {
         // one would leave the page reading a store its session does not have.
         throw new Error('Browser tab belongs to a different box')
       }
-      return existing
+      if (liveContents(existing.view)) return existing
+      // A tab whose page destroyed itself keeps its record but has nothing left
+      // to draw, so nothing would ever hand it a page again and it came back
+      // blank for the rest of the session. Retiring the dead record here is what
+      // lets the show that asked for it build a real view instead.
+      this.host.tabs.delete(tabId)
+      this.host.stage.release(existing.view)
+      this.host.forgetParked(tabId)
+      if (this.host.displayedTab?.tabId === tabId) this.host.displayedTab = null
+      if (this.host.activeTabId === tabId) {
+        this.host.activeTabId = null
+        this.host.activeTabBounds = null
+      }
+      if (this.host.keyboardOwnerTabId === tabId) this.host.keyboardOwnerTabId = null
+      if (this.host.focusedChromeTabId === tabId) this.host.focusedChromeTabId = null
     }
 
     const browserSession = this.host.sessionForProject(projectId, boxId)
@@ -659,7 +678,7 @@ export class BrowserServiceTabs {
    */
   tabForContents(contentsId: number): { id: string; tab: BrowserTab } | null {
     for (const [id, tab] of this.host.tabs) {
-      if (tab.view.webContents.id === contentsId) return { id, tab }
+      if (liveContents(tab.view)?.id === contentsId) return { id, tab }
     }
     const ownerTabId = this.host.popupWindows.tabIdForContents(contentsId)
     if (!ownerTabId) return null
@@ -723,6 +742,21 @@ export class BrowserServiceTabs {
   }
 
   destroy(tabId: string, reason: BrowserTabDestroyReason): void {
+    // A page that destroys itself reports it while this call is already inside
+    // `webContents.close()`, so the same tab can ask to be closed twice. The call
+    // that is already running owns the cleanup, and the re-entrant one used to
+    // read a view whose page was already gone and throw there, which aborted the
+    // close halfway and left the tab named with nothing behind it.
+    if (this.closing.has(tabId)) return
+    this.closing.add(tabId)
+    try {
+      this.closeTab(tabId, reason)
+    } finally {
+      this.closing.delete(tabId)
+    }
+  }
+
+  private closeTab(tabId: string, reason: BrowserTabDestroyReason): void {
     this.host.childTabOpeners.delete(tabId)
     for (const [childId, openerId] of this.host.childTabOpeners) {
       if (openerId !== tabId) continue
@@ -756,7 +790,7 @@ export class BrowserServiceTabs {
     if (!tab) return
     // The extension-visible removal goes out before the page closes, because the
     // id it carries is the page's own.
-    const removedContents: WebContents | undefined = tab.view.webContents
+    const removedContents = liveContents(tab.view)
     if (removedContents && !removedContents.isDestroyed()) {
       this.host.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onRemoved', [
         removedContents.id,
@@ -796,7 +830,8 @@ export class BrowserServiceTabs {
     this.host.inspector.forget(tabId)
     this.host.findSessions.take(tabId)
     this.host.stage.release(tab.view)
-    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
+    const closingContents = liveContents(tab.view)
+    if (closingContents) closingContents.close()
     this.host.tabs.delete(tabId)
     // A cached popup is still a live extension document. Unloading its extension
     // would invalidate that document even though it remains available for reuse.

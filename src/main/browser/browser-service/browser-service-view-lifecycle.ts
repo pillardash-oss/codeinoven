@@ -2,6 +2,7 @@ import { screen } from 'electron'
 import type { BrowserViewBounds } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
 import { type BrowserTab, type BrowserViewport, type ParkBrowserTabOptions } from './browser-types'
+import { liveContents } from './browser-view-contents'
 import {
   AGENT_REVEAL_GRACE_MS,
   DEFAULT_PARKED_VIEWPORT,
@@ -193,10 +194,24 @@ export class BrowserServiceViewLifecycle {
     // The park this timer was going to do is happening now, so it is spent.
     this.dropPendingPark(tabId)
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
+    if (!tab) return
     // A deferred hide can land after the app window is gone (the app is quitting),
     // and there is no child list left to take the view out of.
     if (this.host.window.isDestroyed()) return
+    // A tab whose page destroyed itself has nothing left to park, and leaving the
+    // records that name it in place poisoned every attach after it: a show parks
+    // the outgoing tab before it attaches the next one, so one dead record made
+    // every page in the app blank until it restarted. Retire them and return.
+    if (!liveContents(tab.view)) {
+      this.host.stage.release(tab.view)
+      this.forgetParked(tabId)
+      if (this.host.displayedTab?.tabId === tabId) this.host.displayedTab = null
+      if (this.host.activeTabId === tabId) {
+        this.host.activeTabId = null
+        this.host.activeTabBounds = null
+      }
+      return
+    }
     // Leaving a tab is one of the two moments its stack has to be written down:
     // the view keeps running offscreen, but the app must not depend on that. The
     // write is coalesced, so a run of parks as the user moves around is one write.
@@ -257,7 +272,8 @@ export class BrowserServiceViewLifecycle {
    */
   primePagePointer(tab: BrowserTab, bounds: BrowserViewBounds | null): void {
     if (bounds === null || this.host.window.isDestroyed()) return
-    if (tab.view.webContents.isDestroyed()) return
+    const contents = liveContents(tab.view)
+    if (!contents) return
     const cursor = screen.getCursorScreenPoint()
     const content = this.host.window.getContentBounds()
     const x = Math.round(cursor.x - content.x - bounds.x)
@@ -265,7 +281,7 @@ export class BrowserServiceViewLifecycle {
     // A pointer that is not over the page must not be reported as if it were: the
     // page would gain a hover the user is not pointing at.
     if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) return
-    tab.view.webContents.sendInputEvent({ type: 'mouseMove', x, y })
+    contents.sendInputEvent({ type: 'mouseMove', x, y })
   }
 
   /** Mount the current active tab in the app window at its display bounds. */
@@ -273,7 +289,9 @@ export class BrowserServiceViewLifecycle {
     if (!this.host.activeTabId || this.host.toastVisible) return
     const tabId = this.host.activeTabId
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
+    if (!tab) return
+    const contents = liveContents(tab.view)
+    if (!contents) return
     const bounds = this.host.activeTabBounds
     const displayed = this.host.displayedTab
     // Both records must agree before a repeat can be skipped. The stage's parked
@@ -323,7 +341,7 @@ export class BrowserServiceViewLifecycle {
     // paints again, which is why closing another tab or reloading brought such a
     // page back. Asking for a repaint is what makes the returning page draw its
     // own frame at once.
-    tab.view.webContents.invalidate()
+    contents.invalidate()
     // A page that has just landed needs the pointer delivered again. Chromium
     // rebuilds hover and the cursor shape only from an input event, and the page
     // may have been told the pointer left while it was off screen: that is true
@@ -347,7 +365,7 @@ export class BrowserServiceViewLifecycle {
    */
   focusPage(tabId: string): void {
     const tab = this.host.tabs.get(tabId)
-    if (tab && !tab.view.webContents.isDestroyed() && this.isPageOnScreen(tabId)) {
+    if (tab && liveContents(tab.view) && this.isPageOnScreen(tabId)) {
       this.host.pendingPageFocusTabId = null
       this.focusPageView(tabId, tab)
       return
@@ -365,8 +383,10 @@ export class BrowserServiceViewLifecycle {
    * the moment a switch lands on the tab rather than at the next mouse move.
    */
   focusPageView(tabId: string, tab: BrowserTab): void {
+    const contents = liveContents(tab.view)
+    if (!contents) return
     this.host.keyboardOwnerTabId = tabId
-    tab.view.webContents.focus()
+    contents.focus()
     this.primePagePointer(tab, this.host.activeTabId === tabId ? this.host.activeTabBounds : null)
   }
 
@@ -391,7 +411,7 @@ export class BrowserServiceViewLifecycle {
     setImmediate(() => {
       if (this.host.window.isDestroyed()) return
       const tab = this.host.tabs.get(tabId)
-      if (!tab || tab.view.webContents.isDestroyed()) return
+      if (!tab || !liveContents(tab.view)) return
       if (!this.isPageOnScreen(tabId)) return
       this.focusPageView(tabId, tab)
     })
@@ -401,7 +421,7 @@ export class BrowserServiceViewLifecycle {
   isPageOnScreen(tabId: string): boolean {
     if (this.host.toastVisible || this.host.activeTabId !== tabId) return false
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return false
+    if (!tab || !liveContents(tab.view)) return false
     return this.host.displayedTab?.tabId === tabId && !this.host.stage.isParked(tab.view)
   }
 
@@ -411,7 +431,7 @@ export class BrowserServiceViewLifecycle {
     if (this.host.pendingPageFocusTabId !== tabId) return
     this.host.pendingPageFocusTabId = null
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
+    if (!tab || !liveContents(tab.view)) return
     this.focusPageView(tabId, tab)
   }
 

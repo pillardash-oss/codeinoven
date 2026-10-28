@@ -4,6 +4,7 @@ import { isVideoCaptureUrl } from '../../../lib/video/project'
 import { Logger } from '../../system/logger'
 import { type BrowserTab } from './browser-types'
 import { MAX_TRANSPORT_ERROR_LENGTH } from './browser-validation'
+import { liveContents } from './browser-view-contents'
 import {
   compositionRenderReadyScript,
   compositionTransportCommandScript,
@@ -238,10 +239,10 @@ export class BrowserServiceTransport {
    */
   async transportState(tabId: string): Promise<BrowserCompositionPlayback | null> {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || !tab.composition || tab.view.webContents.isDestroyed()) return null
-    const result: unknown = await tab.view.webContents.executeJavaScript(
-      compositionTransportStateScript()
-    )
+    if (!tab || !tab.composition) return null
+    const contents = liveContents(tab.view)
+    if (!contents) return null
+    const result: unknown = await contents.executeJavaScript(compositionTransportStateScript())
     return toCompositionPlayback(result)
   }
 
@@ -251,8 +252,10 @@ export class BrowserServiceTransport {
     value: number | boolean
   ): Promise<BrowserCompositionPlayback | null> {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return null
-    const result: unknown = await tab.view.webContents.executeJavaScript(
+    if (!tab) return null
+    const contents = liveContents(tab.view)
+    if (!contents) return null
+    const result: unknown = await contents.executeJavaScript(
       compositionTransportCommandScript(command, value)
     )
     const playback = toCompositionPlayback(result)

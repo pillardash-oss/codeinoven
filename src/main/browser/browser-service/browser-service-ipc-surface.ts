@@ -73,6 +73,7 @@ import {
   EXTENSION_PAGE_TABS_CHANNEL
 } from '../extensions/browser-extension-page-tabs'
 import { validateBrowserFindRequest, validateBrowserFindStopAction } from './browser-find'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 import { popupPageOwner } from './browser-service-popups'
 
@@ -348,14 +349,11 @@ export class BrowserServiceIpcSurface {
     })
     replaceHandler('browser:openPopupAsTab', (_event, rawId, duplicate, rawBoxId) => {
       const record = this.host.popupWindows.find(validatePopupWindowId(rawId))
-      if (!record || record.view.webContents.isDestroyed()) return
+      const contents = record ? liveContents(record.view) : undefined
+      if (!record || !contents) return
       if (typeof duplicate !== 'boolean') throw new Error('Invalid popup action')
       const boxId = rawBoxId === undefined ? record.boxId : validateOptionalBoxId(rawBoxId)
-      const url = this.host.validateTabNavigationUrl(
-        record.projectId,
-        boxId,
-        record.view.webContents.getURL()
-      )
+      const url = this.host.validateTabNavigationUrl(record.projectId, boxId, contents.getURL())
       this.host.openNewTabFor({ ...popupPageOwner(record), boxId }, url)
       if (!duplicate) this.host.popupWindows.close(record.id, 'opened as a browser tab')
     })
@@ -585,8 +583,10 @@ export class BrowserServiceIpcSurface {
       if (typeof rawMuted !== 'boolean') {
         throw new TypeError('Browser mute state must be a boolean')
       }
+      const muted = liveContents(tab.view)
+      if (!muted) return
       tab.transportMuted = false
-      tab.view.webContents.setAudioMuted(rawMuted)
+      muted.setAudioMuted(rawMuted)
       const directory = tab.composition?.directory
       if (directory) {
         if (rawMuted) this.host.mutedCompositions.add(directory)

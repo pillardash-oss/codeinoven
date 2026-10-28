@@ -4,6 +4,7 @@ import { type BrowserExtensionActionPopupOpenRequest } from '../extensions/brows
 import { ownedExtensionPageUrl } from '../extensions/browser-extension-page-url'
 import { type BrowserPageOwner } from './browser-types'
 import { MAX_POPUP_WINDOWS_PER_TAB } from './browser-validation'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -160,7 +161,7 @@ export class BrowserServiceExtensionPages {
     if (request.kind === 'focus-browser') {
       if (!this.host.window.isDestroyed()) {
         this.host.window.focus()
-        if (this.host.activeTabId === owner.id && !tab.view.webContents.isDestroyed()) {
+        if (this.host.activeTabId === owner.id && liveContents(tab.view)) {
           tab.view.webContents.focus()
         }
       }

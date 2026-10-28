@@ -2,6 +2,7 @@ import { Logger } from '../../system/logger'
 import type { BrowserInspectorEvent } from '../../../lib/ipc/browser'
 import type { ReportedInspectorEvent } from './browser-inspector'
 import { permissionResolutions } from './browser-permissions'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -85,7 +86,7 @@ export class BrowserServiceLifecycle {
     // A tab that is already gone has no frame left to place a bubble against, so
     // the page's own rectangle is the best answer available; the surface that
     // asked for the bubble is going away with the tab.
-    if (!tab || tab.view.webContents.isDestroyed()) return { ...event, anchor: rect }
+    if (!tab || !liveContents(tab.view)) return { ...event, anchor: rect }
     const frame =
       this.host.displayedTab?.tabId === tabId ? this.host.displayedTab.bounds : tab.view.getBounds()
     const zoom = tab.view.webContents.getZoomFactor()
@@ -145,7 +146,8 @@ export class BrowserServiceLifecycle {
       this.host.resolvePermission(requestId, permissionResolutions.dismiss)
     }
     for (const tab of this.host.tabs.values()) {
-      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
+      const contents = liveContents(tab.view)
+      if (contents) contents.close()
     }
     this.host.tabs.clear()
     this.host.agentTabIds.clear()

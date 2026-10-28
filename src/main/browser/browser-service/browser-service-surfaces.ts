@@ -14,6 +14,7 @@ import {
 } from './browser-validation'
 import { compositionBoardTabId } from './composition-board-tab'
 import { designScreenTabId } from './design-screen-tab'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -265,8 +266,10 @@ export class BrowserServiceSurfaces {
    */
   tabUrl(tabId: string): string | null {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return null
-    return tab.view.webContents.getURL()
+    if (!tab) return null
+    const contents = liveContents(tab.view)
+    if (!contents) return null
+    return contents.getURL()
   }
 
   /**
@@ -338,8 +341,10 @@ export class BrowserServiceSurfaces {
     maxWidth: number
   ): Promise<{ dataUrl: string; width: number; height: number } | null> {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return null
-    const captured = await tab.view.webContents.capturePage()
+    if (!tab) return null
+    const contents = liveContents(tab.view)
+    if (!contents) return null
+    const captured = await contents.capturePage()
     const source = captured.getSize()
     if (source.width < 1 || source.height < 1) return null
     const target = fitWithin(source.width, source.height, maxWidth)
@@ -373,12 +378,7 @@ export class BrowserServiceSurfaces {
   designMotionTab(projectId: string, threadId: string, expectedUrl: string): string | null {
     const id = this.agentTabFor(projectId, threadId)
     const tab = id ? this.host.tabs.get(id) : null
-    return id &&
-      tab &&
-      !tab.view.webContents.isDestroyed() &&
-      tab.view.webContents.getURL() === expectedUrl
-      ? id
-      : null
+    return id && tab && liveContents(tab.view)?.getURL() === expectedUrl ? id : null
   }
 
   async inspectDesignMotion(
@@ -387,9 +387,8 @@ export class BrowserServiceSurfaces {
     input: { targetId?: string; motion?: AuthoredMotion; sampleMs?: number }
   ): Promise<unknown> {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed())
-      throw new Error('The design preview is unavailable')
-    const contents = tab.view.webContents
+    const contents = tab ? liveContents(tab.view) : undefined
+    if (!contents) throw new Error('The design preview is unavailable')
     if (contents.getURL() !== expectedUrl)
       throw new Error('The preview navigated. Reopen the screen before inspecting motion.')
     let timer: ReturnType<typeof setTimeout> | undefined

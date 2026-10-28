@@ -32,6 +32,7 @@
 import { BaseWindow, screen, type WebContents, type WebContentsView } from 'electron'
 import { Logger } from '../../system/logger'
 import type { BrowserViewport } from './browser-types'
+import { liveContents } from './browser-view-contents'
 
 /** How much of each parked view stays inside the stage window. Liveness only
  *  needs a non-empty intersection, so the views sit mostly outside the window
@@ -188,7 +189,7 @@ export class BrowserTabStage {
     setImmediate(() => {
       if (this.disposed) return
       for (const entry of restored) {
-        if (!entry.view.webContents.isDestroyed()) this.park(entry.view, entry.viewport)
+        if (liveContents(entry.view)) this.park(entry.view, entry.viewport)
       }
     })
   }

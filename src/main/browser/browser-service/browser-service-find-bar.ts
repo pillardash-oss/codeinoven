@@ -1,6 +1,7 @@
 import type { BrowserFindRequest, BrowserFindStopAction } from '../../../lib/ipc-contract'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { browserFindResultFor } from './browser-find'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -42,8 +43,8 @@ export class BrowserServiceFindBar {
    */
   findInPage(tabId: string, request: BrowserFindRequest): void {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
-    const contents = tab.view.webContents
+    const contents = tab ? liveContents(tab.view) : undefined
+    if (!contents) return
     if (request.text.length === 0) {
       this.stopFindInPage(tabId, 'clearSelection')
       return
@@ -60,8 +61,9 @@ export class BrowserServiceFindBar {
   stopFindInPage(tabId: string, action: BrowserFindStopAction): void {
     const tab = this.host.tabs.get(tabId)
     this.host.findSessions.take(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
-    tab.view.webContents.stopFindInPage(action)
+    const contents = tab ? liveContents(tab.view) : undefined
+    if (!contents) return
+    contents.stopFindInPage(action)
   }
 
   /**

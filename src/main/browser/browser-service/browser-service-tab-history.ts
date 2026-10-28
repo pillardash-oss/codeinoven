@@ -6,6 +6,7 @@ import {
 import { Logger } from '../../system/logger'
 import { type BrowserTab } from './browser-types'
 import { RESTORE_SETTLE_TIMEOUT_MS, restoreNeedsFallbackLoad } from './browser-navigation-outcome'
+import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -56,8 +57,8 @@ export class BrowserServiceTabHistory {
    * gone or has nothing loadable to restore.
    */
   readTabHistory(tabId: string, tab: BrowserTab): BrowserTabHistoryRecord | null {
-    const contents = tab.view.webContents
-    if (contents.isDestroyed()) return null
+    const contents = liveContents(tab.view)
+    if (!contents) return null
     const history = contents.navigationHistory
     const bounded = boundedBrowserTabHistory(
       history.getAllEntries().map((entry) => {
@@ -110,7 +111,7 @@ export class BrowserServiceTabHistory {
    */
   stashClosedTabHistory(tabId: string, tab: BrowserTab | undefined): void {
     const record =
-      tab && !tab.view.webContents.isDestroyed()
+      tab && liveContents(tab.view)
         ? this.readTabHistory(tabId, tab)
         : this.host.tabHistory.recordFor(tabId)
     if (record) this.host.closedTabHistory.stash(tabId, record)
@@ -133,8 +134,8 @@ export class BrowserServiceTabHistory {
     const record = this.host.tabHistory.recordFor(tabId) ?? this.host.closedTabHistory.peek(tabId)
     if (!record) return false
     if (record.projectId !== tab.projectId || record.threadId !== tab.threadId) return false
-    const contents = tab.view.webContents
-    if (contents.isDestroyed()) return false
+    const contents = liveContents(tab.view)
+    if (!contents) return false
     void contents.navigationHistory
       .restore({ entries: record.entries.map((entry) => ({ ...entry })), index: record.index })
       .catch(

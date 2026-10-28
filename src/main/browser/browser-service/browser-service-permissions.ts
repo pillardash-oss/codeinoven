@@ -3,6 +3,7 @@ import type { Project, Thread } from '../../../lib/types'
 import type { BrowserPermissionRequest } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
 import { dialogContextScript } from './browser-dialog-context'
+import { liveContents } from './browser-view-contents'
 import {
   permissionGrantKeys,
   permissionLedgerForPartition,
@@ -156,7 +157,8 @@ export class BrowserServicePermissions {
     // can ask at all: a page with no origin of its own (a blank document, a
     // dead renderer) has no site to name.
     const origin =
-      permissionOrigin(requestingFrameUrl ?? '') ?? permissionOrigin(tab.view.webContents.getURL())
+      permissionOrigin(requestingFrameUrl ?? '') ??
+      permissionOrigin(liveContents(tab.view)?.getURL() ?? '')
     if (!origin) return false
     const id = crypto.randomUUID()
     const request: BrowserPermissionRequest = {

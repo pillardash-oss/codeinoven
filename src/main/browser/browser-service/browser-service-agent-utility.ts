@@ -36,6 +36,7 @@ import {
 } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import { asObject, safeOrigin } from './browser-service-common'
+import { liveContents } from './browser-view-contents'
 import {
   ATTACHED_PAGE_MUTATION_OPERATIONS,
   ATTACHED_PAGE_READ_OPERATIONS
@@ -262,7 +263,7 @@ export class BrowserServiceAgentUtility {
       return { ...utilityContext, url }
     }
     if (operation === 'reload') {
-      tab.view.webContents.reload()
+      liveContents(tab.view)?.reload()
       return { ...utilityContext, reloading: true }
     }
     if (operation === 'snapshot') {

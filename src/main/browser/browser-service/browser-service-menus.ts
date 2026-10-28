@@ -22,6 +22,7 @@ import {
 import { safeBasename, validateBrowserUrl, validateOptionalBoxId } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import type { BrowserMenuPage } from './browser-service-common'
+import { liveContents } from './browser-view-contents'
 
 /**
  * The native menus a page raises, and the actions behind their rows.
@@ -125,7 +126,7 @@ export class BrowserServiceMenus {
    */
   showTabContextMenu(tabId: string, params: Electron.ContextMenuParams): void {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || this.host.window.isDestroyed() || tab.view.webContents.isDestroyed()) return
+    if (!tab || this.host.window.isDestroyed() || !liveContents(tab.view)) return
     const frame = this.frameForTab(tabId)
     this.showPageContextMenu(menuPageFor(tabId, tab), params, frame)
   }

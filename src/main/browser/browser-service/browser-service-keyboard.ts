@@ -11,6 +11,7 @@ import {
   type ShortcutKeyInput
 } from './browser-shortcuts'
 import { MAX_ZOOM_LEVEL, ZOOM_STEP } from './browser-validation'
+import { liveContents } from './browser-view-contents'
 import { designScreenEntryFromUrl } from '../../../lib/design/screens'
 import type { BrowserService } from '../browser-service'
 
@@ -129,8 +130,8 @@ export class BrowserServiceKeyboard {
       return
     }
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
-    const contents = tab.view.webContents
+    const contents = tab ? liveContents(tab.view) : undefined
+    if (!contents) return
     switch (action) {
       case 'reload':
         contents.reload()
@@ -169,7 +170,7 @@ export class BrowserServiceKeyboard {
     return Boolean(
       tab &&
       work &&
-      !tab.view.webContents.isDestroyed() &&
+      liveContents(tab.view) &&
       designScreenEntryFromUrl(tab.view.webContents.getURL(), work.origin)
     )
   }
@@ -317,7 +318,7 @@ export class BrowserServiceKeyboard {
     const tabId = this.host.activeTabId
     if (!tabId) return false
     const tab = this.host.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return false
+    if (!tab || !liveContents(tab.view)) return false
 
     const isFocusedToolbar = tabId === this.host.focusedChromeTabId
     const isFocusedPage = tab.view.webContents.isFocused()
