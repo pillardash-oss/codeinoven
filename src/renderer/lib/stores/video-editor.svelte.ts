@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { VideoFrameSeeker } from '$lib/video-frame-seeker'
 import {
@@ -690,6 +690,13 @@ export class VideoEditorController {
       )
         return
       const anchor = clip.start
+      const previousEnd = Math.max(
+        0,
+        ...edit.clips
+          .filter((item) => item.id !== id && item.trackId === trackId && item.start < anchor)
+          .map((item) => item.start + item.duration)
+      )
+      start = Math.max(previousEnd, start)
       if (this.snapEnabled) {
         const followers = this.magneticFollowers(edit, id, clip.trackId, anchor)
         const last = Math.max(
@@ -704,14 +711,55 @@ export class VideoEditorController {
                 .map((item) => item.start + item.duration)
             : [])
         )
+        // Fixed neighbours, including locked clips, bound the entire moving group.
+        const moving = [clip, ...followers]
+        const movingIds = new SvelteSet(moving.map((item) => item.id))
+        let minimumDelta = -anchor
+        let maximumDelta = 3600 - last
+        const fixedByTrack = new SvelteMap<string, VideoEditClip[]>()
+        for (const fixed of edit.clips) {
+          if (movingIds.has(fixed.id)) continue
+          const entries = fixedByTrack.get(fixed.trackId)
+          if (entries) entries.push(fixed)
+          else fixedByTrack.set(fixed.trackId, [fixed])
+        }
+        for (const entries of fixedByTrack.values()) entries.sort((a, b) => a.start - b.start)
+        for (const item of moving) {
+          const destination = item.id === id ? trackId : item.trackId
+          const fixed = fixedByTrack.get(destination) ?? []
+          let low = 0,
+            high = fixed.length
+          while (low < high) {
+            const middle = (low + high) >>> 1
+            if (fixed[middle].start < item.start) low = middle + 1
+            else high = middle
+          }
+          const previous = fixed[low - 1],
+            next = fixed[low]
+          if (previous)
+            minimumDelta = Math.max(minimumDelta, previous.start + previous.duration - item.start)
+          if (next) maximumDelta = Math.min(maximumDelta, next.start - item.start - item.duration)
+        }
+        if (minimumDelta > maximumDelta) return
         const delta = Math.max(
-          -anchor,
-          Math.min(3600 - last, snapEditTime(start, this.fps) - anchor)
+          minimumDelta,
+          Math.min(maximumDelta, snapEditTime(start, this.fps) - anchor)
         )
         clip.start += delta
         for (const follower of followers) follower.start = Math.max(0, follower.start + delta)
         this.shiftMagneticMetadata(doc, edit, anchor, delta)
-      } else clip.start = Math.max(0, Math.min(3600 - clip.duration, snapEditTime(start, this.fps)))
+      } else {
+        const nextStart = Math.min(
+          3600,
+          ...edit.clips
+            .filter((item) => item.id !== id && item.trackId === trackId && item.start >= anchor)
+            .map((item) => item.start)
+        )
+        clip.start = Math.max(
+          previousEnd,
+          Math.min(nextStart - clip.duration, snapEditTime(start, this.fps))
+        )
+      }
       clip.trackId = trackId
       if (this.snapEnabled) this.fitMagneticDuration(doc, edit)
       else edit.duration = Math.max(edit.duration, clip.start + clip.duration)
@@ -738,8 +786,22 @@ export class VideoEditorController {
               .map((item) => item.start + item.duration)
           : [])
       )
-      if (this.snapEnabled && edge === 'end') at = Math.min(at, anchor + 3600 - last)
-      trimVideoEditClip(edit, id, edge, at, this.fps)
+      if (this.snapEnabled && edge === 'end') {
+        const fixedNext = Math.min(
+          3600,
+          ...edit.clips
+            .filter(
+              (item) =>
+                item.id !== id &&
+                item.trackId === clip.trackId &&
+                item.start >= anchor - 0.000001 &&
+                !followers.some((follower) => follower.id === item.id)
+            )
+            .map((item) => item.start)
+        )
+        at = Math.min(at, fixedNext, anchor + 3600 - last)
+      }
+      trimVideoEditClip(edit, id, edge, at, this.fps, this.snapEnabled && edge === 'end')
       if (this.snapEnabled && edge === 'end') {
         const delta = clip.start + clip.duration - anchor
         for (const follower of followers) follower.start = Math.max(0, follower.start + delta)

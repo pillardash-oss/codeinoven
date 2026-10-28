@@ -145,6 +145,7 @@
     id: string
     index: number
     x: number
+    scale: number
     start: number
     end: number
     edge: 'start' | 'end' | null
@@ -231,6 +232,7 @@
       id,
       index: -1,
       x: event.clientX,
+      scale,
       start: clip.start,
       end: clip.start + clip.duration,
       edge,
@@ -255,7 +257,7 @@
       event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-trim]') : null
     const edge =
       target?.dataset.trim === 'start' ? 'start' : target?.dataset.trim === 'end' ? 'end' : null
-    drag = { kind, id, index, x: event.clientX, start: from, end: to, edge, trackId: '' }
+    drag = { kind, id, index, x: event.clientX, scale, start: from, end: to, edge, trackId: '' }
     editor.select(kind === 'caption' ? { kind, index } : { kind, id })
     editor.beginGesture()
     captureDrag(event)
@@ -263,7 +265,7 @@
   function move(event: PointerEvent): void {
     if (!drag) return
     const active = drag,
-      delta = (event.clientX - active.x) / scale
+      delta = (event.clientX - active.x) / active.scale
     if (active.kind === 'clip') {
       if (active.edge)
         editor.trimClip(

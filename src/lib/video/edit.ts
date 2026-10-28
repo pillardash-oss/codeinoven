@@ -505,7 +505,8 @@ export function trimVideoEditClip(
   id: string,
   edge: 'start' | 'end',
   seconds: number,
-  fps: number
+  fps: number,
+  rippleEnd = false
 ): void {
   const clip = edit.clips.find((clip) => clip.id === id)
   if (!clip || edit.tracks.find((track) => track.id === clip.trackId)?.locked) return
@@ -514,14 +515,35 @@ export function trimVideoEditClip(
   const frame = 1 / Math.max(1, fps),
     end = clip.start + clip.duration
   if (edge === 'start') {
-    const minimum = Math.max(0, clip.start - clip.sourceStart / clip.speed)
+    const previousEnd = Math.max(
+      0,
+      ...edit.clips
+        .filter(
+          (item) => item.id !== id && item.trackId === clip.trackId && item.start < clip.start
+        )
+        .map((item) => item.start + item.duration)
+    )
+    const minimum = Math.max(previousEnd, clip.start - clip.sourceStart / clip.speed)
     const at = Math.min(end - frame, Math.max(minimum, snapEditTime(seconds, fps)))
     clip.sourceStart += (at - clip.start) * clip.speed
     clip.start = at
     clip.duration = end - at
   } else {
-    const maximum =
+    const nextStart = rippleEnd
+      ? 3600
+      : Math.min(
+          3600,
+          ...edit.clips
+            .filter(
+              (item) =>
+                item.id !== id && item.trackId === clip.trackId && item.start >= end - 0.000001
+            )
+            .map((item) => item.start)
+        )
+    const maximum = Math.min(
+      nextStart,
       asset.kind === 'image' ? 3600 : clip.start + (asset.duration - clip.sourceStart) / clip.speed
+    )
     clip.duration =
       Math.min(maximum, Math.max(clip.start + frame, snapEditTime(seconds, fps))) - clip.start
   }
