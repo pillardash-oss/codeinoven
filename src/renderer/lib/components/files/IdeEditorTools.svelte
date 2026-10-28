@@ -12,7 +12,7 @@
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { navigateTo } from '$lib/app-control/app-control-actions'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import type { AppPanelPortal } from '$lib/app-panel-portal'
@@ -498,7 +498,7 @@
     </p>{/if}
   {#if mode === 'documentation' || hover}
     <div class="min-h-0 overflow-auto px-2 py-1 text-xs text-foreground">
-      <MarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
+      <DeferredMarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
     </div>
   {:else}
     <div

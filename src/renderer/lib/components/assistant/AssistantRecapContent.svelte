@@ -4,7 +4,7 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import type { Component } from 'svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
   import { describeSchedule } from '$shared/types'
   import { parseKnowledgeSections, type AssistantPlanDraft } from './assistant-view'
@@ -195,7 +195,7 @@
           </div>
           {#if section.body}
             <div class="mt-1 pl-6 text-[0.75rem] leading-relaxed text-muted">
-              <MarkdownView text={section.body} />
+              <DeferredMarkdownView text={section.body} />
             </div>
           {/if}
         </li>

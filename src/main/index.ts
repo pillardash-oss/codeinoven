@@ -43,7 +43,7 @@ import {
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
 import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
-import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
+import { createSplashWindow, closeSplash, withSplashDeadline } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
 import {
   armQuitFailsafe,
@@ -952,12 +952,17 @@ void app
         isProduction
       )
       startupTelemetry.mark('splash:created')
-      // The barrier is waited on so the splash has a frame before synchronous
-      // database work can starve it. Waiting is therefore real elapsed time that
-      // the phase deltas would otherwise attribute to storage, so it is timed as
-      // its own step: on a machine where the splash never paints it costs the
-      // whole 5 s budget, and that has to be visible as what it is.
-      splashOutcome = await trackStartupStep('splash:barrier', splashVisualReady)
+      // The barrier is bounded: the splash shows its background the instant the
+      // window exists, so the boot waits only briefly for the logo before it
+      // starts storage. The wait is still its own step, because a barrier that
+      // publishes minutes of dead time into the phase deltas would hide the very
+      // cost this instrumentation exists to expose.
+      void splashVisualReady.then((outcome) => {
+        // The frame can arrive after the deadline. Record it when it does: the
+        // phase reports what painted, not what the boot was willing to wait for.
+        if (outcome === 'ready') startupTelemetry.mark('splash:visualReady')
+      })
+      splashOutcome = await trackStartupStep('splash:barrier', withSplashDeadline(splashVisualReady))
       if (splashOutcome === 'ready') {
         startupTelemetry.mark('splash:visualReady')
       }
@@ -977,7 +982,7 @@ void app
     mkdirSync(storage.resolve(LOGS_DIRECTORY), { recursive: true })
     Logger.initialize(storage.resolve(LOGS_DIRECTORY))
     logConfiguredDataRoot()
-    if (!startHidden && splashOutcome !== 'ready') {
+    if (!startHidden && splashOutcome !== 'ready' && splashOutcome !== 'deadline') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
         outcome: splashOutcome,
         ...paintPathFeatures()

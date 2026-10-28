@@ -41,6 +41,18 @@ import {
 const PERIODIC_SWEEP_MS = 5 * 60 * 1000
 
 /**
+ * Minimum spacing between whole-corpus sweeps triggered by a new thread.
+ *
+ * A sweep already walks every thread it knows about, so a second one started
+ * seconds later re-reads the same corpus. On a 350-thread corpus that turned into
+ * hundreds of passes a day, each one competing with whatever else the main
+ * process was doing (a launch, a turn). A thread that appears inside this window
+ * is not lost: the settle queue indexes the conversation that produced it, and the
+ * next periodic pass covers the rest.
+ */
+const CORPUS_SWEEP_MIN_GAP_MS = 60 * 1000
+
+/**
  * How long the summary stage stands down after no account could produce one.
  *
  * A summary is an optional refinement: without it a thread is still found through
@@ -120,6 +132,8 @@ export class SearchService {
   /** A warm-up boot is in flight; a second one would only duplicate it. */
   private warming = false
   private sweep: Promise<void> | null = null
+  /** When the last sweep finished, so a corpus sweep cannot immediately repeat. */
+  private lastSweepFinishedAt = 0
   private sweepTotals: { total: number | null; pending: number } = { total: null, pending: 0 }
   private indexing = false
   private periodicTimer: ReturnType<typeof setInterval> | null = null
@@ -260,6 +274,7 @@ export class SearchService {
     this.corpusTimer = setTimeout(() => {
       this.corpusTimer = null
       if (!this.settings.enabled || !this.activeModel() || !this.canEmbed()) return
+      if (Date.now() - this.lastSweepFinishedAt < CORPUS_SWEEP_MIN_GAP_MS) return
       if (this.sweep) this.requestCorpusSweep()
       else void this.runSweep('thread-created')
     }, 3000)
@@ -880,6 +895,7 @@ export class SearchService {
       Logger.error('Thread embedding index sweep failed:', error)
     } finally {
       this.sweepController = null
+      this.lastSweepFinishedAt = Date.now()
       this.indexing = false
       this.indexingDetail = null
       this.emitStatus()

@@ -17,6 +17,46 @@ export type SplashVisualOutcome = 'ready' | 'closed' | 'load-failed' | 'timeout'
 const SPLASH_VISUAL_TIMEOUT_MS = 5_000
 
 /**
+ * How long the boot may stop for the splash's first frame.
+ *
+ * The splash window is created with `show: true` and a matching
+ * `backgroundColor`, so the user is looking at the app's surface the instant the
+ * window exists; the frame that arrives at `ready-to-show` only adds the logo on
+ * top of it. Waiting the full visual ceiling for that logo is what cost a slow
+ * launch up to 4,999 ms of dead time before SQLite had even opened (measured in
+ * the durable startup log), so the barrier now gives the frame a short grace
+ * period and the boot continues without it.
+ */
+export const SPLASH_BARRIER_DEADLINE_MS = 250
+
+/** What the barrier settled on: the frame, the window, or the deadline. */
+export type SplashBarrierOutcome = SplashVisualOutcome | 'deadline'
+
+/**
+ * Bound the splash barrier so cosmetic work can never hold the storage chain.
+ *
+ * Resolves with the visual outcome when the frame wins, or `'deadline'` when the
+ * boot has waited long enough. The underlying promise is not cancelled: the
+ * caller can still observe the real outcome through `visualReady` itself (the
+ * boot marks `splash:visualReady` when it eventually lands).
+ */
+export function withSplashDeadline(
+  visualReady: Promise<SplashVisualOutcome>
+): Promise<SplashBarrierOutcome> {
+  return new Promise((resolveBarrier) => {
+    let settled = false
+    const finish = (outcome: SplashBarrierOutcome): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolveBarrier(outcome)
+    }
+    const timer = setTimeout(() => finish('deadline'), SPLASH_BARRIER_DEADLINE_MS)
+    void visualReady.then(finish)
+  })
+}
+
+/**
  * The splash is owned entirely by this module: it is the only consumer of the
  * handle, so the closure over `splashWindow` never has to leave the file.
  */

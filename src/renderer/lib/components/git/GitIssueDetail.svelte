@@ -18,7 +18,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { GitState, gitState } from '$lib/stores/git.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import PrAvatar from './PrAvatar.svelte'
   import BotBadge from './BotBadge.svelte'
   import {
@@ -536,7 +536,7 @@
         </div>
         <div class="px-2.5 py-2">
           {#if detail?.body}
-            <MarkdownView text={detail.body} allowHtml {repository} />
+            <DeferredMarkdownView text={detail.body} allowHtml {repository} />
           {:else}
             <p class="text-[0.625rem] italic text-dimmed">This issue has no description.</p>
           {/if}
@@ -650,7 +650,7 @@
                 </div>
               {:else}
                 <div class="px-2.5 py-2">
-                  <MarkdownView text={comment.body} allowHtml {repository} />
+                  <DeferredMarkdownView text={comment.body} allowHtml {repository} />
                 </div>
               {/if}
               {#if comment.nodeId && commentReactions.length > 0}

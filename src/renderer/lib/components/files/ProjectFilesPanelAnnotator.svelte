@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteMap } from 'svelte/reactivity'
   import { onDestroy, tick } from 'svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
@@ -459,7 +459,7 @@
     onscroll={scheduleBubbleUpdate}
   >
     <div bind:this={documentRoot} data-annotation-surface>
-      <MarkdownView text={content} class="text-sm text-foreground" />
+      <DeferredMarkdownView text={content} class="text-sm text-foreground" />
     </div>
   </div>
 </div>

@@ -26,7 +26,7 @@
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import PrAvatar from './PrAvatar.svelte'
   import BotBadge from './BotBadge.svelte'
@@ -484,7 +484,7 @@
         conversation reading size for prose, and it is the step a reader gets in
         every other prose surface, so a comment body must not fight it.
       -->
-      <MarkdownView text={entry.body} allowHtml {repository} />
+      <DeferredMarkdownView text={entry.body} allowHtml {repository} />
     </div>
   {/if}
 

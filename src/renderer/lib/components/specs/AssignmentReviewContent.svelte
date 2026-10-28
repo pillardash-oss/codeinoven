@@ -2,7 +2,7 @@
   import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import WorkerScopePicker from '../shared/WorkerScopePicker.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
@@ -579,7 +579,7 @@
       </div>
     {/if}
     <div class="border border-border bg-elevated/50 p-2">
-      <MarkdownView text={graphMarkdown()} />
+      <DeferredMarkdownView text={graphMarkdown()} />
     </div>
     {@render AnnotationBubbles('graph')}
   </section>

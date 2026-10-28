@@ -3,7 +3,7 @@
   import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import SmoothMarkdown from '../markdown/SmoothMarkdown.svelte'
   import type { AgentPart } from '$shared/types'
   import { reasoningBlockTitle, reasoningSummaryRepeatsBody } from '$shared/agent-part-merge'
@@ -120,7 +120,7 @@
               <p class="mb-1 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
                 Reasoning summary
               </p>
-              <MarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
+              <DeferredMarkdownView text={summary} class="text-xs text-muted" {onCiteFile} />
             </div>
           {/if}
         </div>

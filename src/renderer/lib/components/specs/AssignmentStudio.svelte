@@ -5,7 +5,7 @@
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioShell from './StudioShell.svelte'
@@ -807,7 +807,7 @@
   >
     {#snippet bodyView(annotation)}
       <div class="mt-3 text-xs leading-relaxed text-foreground">
-        <MarkdownView text={annotation.body} />
+        <DeferredMarkdownView text={annotation.body} />
       </div>
     {/snippet}
   </StudioAnnotationDetailPopover>

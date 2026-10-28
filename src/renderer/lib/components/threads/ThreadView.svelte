@@ -114,7 +114,7 @@
   import AuditOfferCard from './AuditOfferCard.svelte'
   import AuditReadyCard from './AuditReadyCard.svelte'
   import AuditGeneratedCard from './AuditGeneratedCard.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import {
@@ -14027,7 +14027,7 @@
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
                   {#if part.type === 'text'}
-                    <MarkdownView
+                    <DeferredMarkdownView
                       text={part.text}
                       citationThread={citationThreadContext}
                       annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
@@ -14201,7 +14201,7 @@
                           label="message"
                           onToggle={(next) => toggleMessageBody(msg.id, next)}
                         >
-                          <MarkdownView
+                          <DeferredMarkdownView
                             text={explicitPresentation
                               ? (explicitPresentation.body ?? '')
                               : messageText(msg)}
@@ -14575,7 +14575,7 @@
                                  answer may carry the drafted knowledge, which is a
                                  document rather than a code block, so it is shown as
                                  the finished markdown it is. -->
-                            <MarkdownView
+                            <DeferredMarkdownView
                               text={deliveredClosingText}
                               citationThread={citationThreadContext}
                               annotationScope={{ projectId: thread.projectId, threadId: thread.id }}

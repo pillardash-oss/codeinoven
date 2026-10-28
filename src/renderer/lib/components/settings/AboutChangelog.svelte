@@ -4,7 +4,7 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import { formatDate } from '$shared/date-time-format'
   import type { UpdaterChangelog } from '$shared/ipc-contract'
 
@@ -64,7 +64,7 @@
     </div>
   {:else if changelog}
     <div class="max-h-96 overflow-y-auto pr-1">
-      <MarkdownView text={changelog.notes} browserDestination="global" />
+      <DeferredMarkdownView text={changelog.notes} browserDestination="global" />
     </div>
   {:else if error}
     <div class="flex items-center gap-3 text-xs text-dimmed">

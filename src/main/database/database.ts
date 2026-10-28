@@ -22,6 +22,8 @@ import {
 import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
+  DATABASE_SCHEMA_SNAPSHOT_INDEXES_SQL,
+  DATABASE_SCHEMA_VERSION,
   LEGACY_RUBRIC_VERSION,
   MAX_PLAUSIBLE_SHOT_COST_USD,
   MODEL_RANKINGS_COLUMNS_SQL,
@@ -113,10 +115,15 @@ export class Database {
     this.db = new DatabaseConstructor(this.path)
 
     this.configureConnection()
-    this.applySchema()
+    const schemaUpgraded = this.applySchema()
     this.startMaintenanceWorker()
-    await this.migrateIndependentUsageLedger()
-    await this.migrateUsageEventFeatures()
+    // The ledger rebuilds below are legacy upgrade steps, not steady-state work.
+    // A database that already carries the current schema version skips them, so
+    // a boot never pays a compatibility pass it cannot need.
+    if (schemaUpgraded) {
+      await this.migrateIndependentUsageLedger()
+      await this.migrateUsageEventFeatures()
+    }
     this.db.pragma('optimize = 0x10002')
     // Non-blocking: the mirror is brought up to date on the worker in small
     // serialized batches, so init never waits on it and the main thread stays
@@ -307,6 +314,17 @@ export class Database {
     const worker = this.maintenanceWorker
     this.maintenanceWorker = null
     if (worker?.isRunning()) {
+      // Hand the write-ahead log back before this process exits. The WAL is
+      // carried on the maintenance worker's own connection, so a truncating
+      // checkpoint here is the last thing that writes to the database: it costs
+      // nothing when the log is already small and saves the next launch from
+      // replaying an inherited log against a database it has not opened yet.
+      // Best effort by design: a checkpoint that cannot finish must never hold
+      // teardown open.
+      const checkpoint = await worker.truncateCheckpoint()
+      if (!checkpoint.ok) {
+        Logger.dev('WAL checkpoint at shutdown did not complete', checkpoint.error ?? '')
+      }
       await worker.shutdown()
     }
     this.closeConnection()
@@ -918,56 +936,128 @@ export class Database {
     connection.pragma('journal_size_limit = 67108864')
   }
 
-  private applySchema(): void {
+  /**
+   * Create or upgrade the schema, and report whether the legacy chain ran.
+   *
+   * The version in `db_meta.schema_version` decides the work:
+   *
+   * - **No schema at all** (a fresh install): `DATABASE_SCHEMA_SQL` is a complete
+   *   snapshot of the current version, so it is executed once and every legacy
+   *   migration step is skipped. A first launch never walks ~40 `ALTER TABLE`
+   *   compatibility steps for a database it just created.
+   * - **Version below the current one**: the legacy chain below runs in order,
+   *   then the new version is stamped.
+   * - **Version at or above the current one**: nothing runs. Not the DDL, not a
+   *   single `PRAGMA table_info`. This is the steady state for every launch after
+   *   the first, and it is what keeps schema work off the boot path entirely.
+   */
+  private applySchema(): boolean {
     const connection = this.requireDb()
+    const storedVersion = this.readSchemaVersion(connection)
+    if (storedVersion !== null && storedVersion >= DATABASE_SCHEMA_VERSION) return false
+
     connection.transaction(() => {
-      this.migrateAssistantVocabulary(connection)
-      this.migrateModelRankingTables(connection)
-      connection.exec(DATABASE_SCHEMA_SQL)
-      this.migrateModelRankingCostPlausibility(connection)
-      this.migrateModelRankingSnapshotClaimToken(connection)
-      this.migrateModelRankingSnapshotAnchorMessageId(connection)
-      this.migrateModelRankingSnapshotUndoneAt(connection)
-      this.migrateEngineeringLifecycleColumns(connection)
-      this.migrateUsageEventColumns(connection)
-      this.migrateThreadIndependentAuditColumns(connection)
-      this.migrateThreadEngineeringColumn(connection)
-      this.migrateThreadAccountColumn(connection)
-      this.migrateThreadDraftColumns(connection)
-      this.migrateThreadBookmarkColumn(connection)
-      this.migrateThreadAssistantColumns(connection)
-      this.migrateThreadFailureColumns(connection)
-      this.migrateAgentMessageGenerationColumn(connection)
-      this.migrateAgentMessageAccountColumns(connection)
-      this.migrateAgentMessageOvenColumn(connection)
-      this.migrateAgentMessageOvenLabelColumn(connection)
-      this.migrateAgentMessageOvenAppearanceColumn(connection)
-      this.migrateAgentMessageContextEstimatedColumn(connection)
-      this.migrateAgentMessageNormalizedUsageColumn(connection)
-      this.migrateActiveTurnOwnerColumn(connection)
-      this.migrateThreadSettingsLegacyEngineeringFlag(connection)
-      this.migrateAssignmentSpecNullable(connection)
-      this.migrateThreadPinnedAt(connection)
-      this.migrateAssistantPinned(connection)
-      this.migrateAssistantAgentsAndPause(connection)
-      this.migrateAssistantIdentityColumns(connection)
-      this.repairCollapsedAssistantPersonality(connection)
-      this.migrateAssistantDescription(connection)
-      this.migrateAssistantReporting(connection)
-      this.migrateCustomSvgIcons(connection)
-      this.migrateProjectOvenColumn(connection)
-      this.migrateStickyNoteImagePath(connection)
-      this.migrateStickyNoteSortOrder(connection)
-      this.migrateCustomIconLibrary(connection)
-      this.migrateAssistantScheduleAnchor(connection)
-      this.migrateAssistantExecution(connection)
-      this.migrateAssistantScheduled(connection)
-      this.migrateThreadDesignKind(connection)
-      this.migrateThreadAuthoredWorkKind(connection)
-      this.migrateThreadAuthoredWorkKinds(connection)
-      this.migrateDesignRevisionMetadata(connection)
-      this.migrateSettledAuditThreadStatus(connection)
+      if (storedVersion === null) {
+        connection.exec(DATABASE_SCHEMA_SQL)
+        connection.exec(DATABASE_SCHEMA_SNAPSHOT_INDEXES_SQL)
+        this.writeSchemaVersion(connection, DATABASE_SCHEMA_VERSION)
+        return
+      }
+      this.runLegacySchemaChain(connection)
+      this.writeSchemaVersion(connection, DATABASE_SCHEMA_VERSION)
     })()
+    Logger.info('Database schema upgraded', {
+      fromVersion: storedVersion ?? 'fresh',
+      toVersion: DATABASE_SCHEMA_VERSION
+    })
+    return true
+  }
+
+  /**
+   * The schema version stored in `db_meta`, or `null` when the file has no
+   * schema at all.
+   *
+   * `null` is the fresh-install signal, so it is distinct from `0`: a database
+   * that has `db_meta` but lost its version row is treated as an old database
+   * and upgraded, while a file with no tables is created from the snapshot.
+   */
+  private readSchemaVersion(connection: DatabaseType): number | null {
+    const hasMetaTable = connection
+      .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'db_meta'")
+      .get() as { present?: number } | undefined
+    if (!hasMetaTable) return null
+    const row = connection
+      .prepare("SELECT value FROM db_meta WHERE key = 'schema_version'")
+      .get() as { value?: string } | undefined
+    const parsed = Number.parseInt(row?.value ?? '', 10)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  /** Stamp the schema version this build just guaranteed. */
+  private writeSchemaVersion(connection: DatabaseType, version: number): void {
+    connection
+      .prepare("INSERT OR REPLACE INTO db_meta(key, value) VALUES('schema_version', ?)")
+      .run(String(version))
+  }
+
+  /**
+   * Every schema step a database written by an older build still needs.
+   *
+   * The order matters and is not alphabetical: the vocabulary rename has to run
+   * before the snapshot DDL (otherwise `CREATE TABLE IF NOT EXISTS assistants`
+   * creates an empty table the rename can no longer replace), and the vocabulary
+   * and model-ranking steps have to run before it too so the later column steps
+   * find rows to backfill. A step re-entering after a completed upgrade is
+   * impossible: `applySchema` only reaches here when the stored version is
+   * behind, and then stamps the current version.
+   */
+  private runLegacySchemaChain(connection: DatabaseType): void {
+    this.migrateAssistantVocabulary(connection)
+    this.migrateModelRankingTables(connection)
+    connection.exec(DATABASE_SCHEMA_SQL)
+    this.migrateModelRankingCostPlausibility(connection)
+    this.migrateModelRankingSnapshotClaimToken(connection)
+    this.migrateModelRankingSnapshotAnchorMessageId(connection)
+    this.migrateModelRankingSnapshotUndoneAt(connection)
+    this.migrateEngineeringLifecycleColumns(connection)
+    this.migrateUsageEventColumns(connection)
+    this.migrateThreadIndependentAuditColumns(connection)
+    this.migrateThreadEngineeringColumn(connection)
+    this.migrateThreadAccountColumn(connection)
+    this.migrateThreadDraftColumns(connection)
+    this.migrateThreadBookmarkColumn(connection)
+    this.migrateThreadAssistantColumns(connection)
+    this.migrateThreadFailureColumns(connection)
+    this.migrateAgentMessageGenerationColumn(connection)
+    this.migrateAgentMessageAccountColumns(connection)
+    this.migrateAgentMessageOvenColumn(connection)
+    this.migrateAgentMessageOvenLabelColumn(connection)
+    this.migrateAgentMessageOvenAppearanceColumn(connection)
+    this.migrateAgentMessageContextEstimatedColumn(connection)
+    this.migrateAgentMessageNormalizedUsageColumn(connection)
+    this.migrateActiveTurnOwnerColumn(connection)
+    this.migrateThreadSettingsLegacyEngineeringFlag(connection)
+    this.migrateAssignmentSpecNullable(connection)
+    this.migrateThreadPinnedAt(connection)
+    this.migrateAssistantPinned(connection)
+    this.migrateAssistantAgentsAndPause(connection)
+    this.migrateAssistantIdentityColumns(connection)
+    this.repairCollapsedAssistantPersonality(connection)
+    this.migrateAssistantDescription(connection)
+    this.migrateAssistantReporting(connection)
+    this.migrateCustomSvgIcons(connection)
+    this.migrateProjectOvenColumn(connection)
+    this.migrateStickyNoteImagePath(connection)
+    this.migrateStickyNoteSortOrder(connection)
+    this.migrateCustomIconLibrary(connection)
+    this.migrateAssistantScheduleAnchor(connection)
+    this.migrateAssistantExecution(connection)
+    this.migrateAssistantScheduled(connection)
+    this.migrateThreadDesignKind(connection)
+    this.migrateThreadAuthoredWorkKind(connection)
+    this.migrateThreadAuthoredWorkKinds(connection)
+    this.migrateDesignRevisionMetadata(connection)
+    this.migrateSettledAuditThreadStatus(connection)
   }
 
   /**

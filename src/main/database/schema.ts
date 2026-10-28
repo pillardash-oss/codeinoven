@@ -20,6 +20,22 @@ import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
 /** Quoted feature list for the usage ledger's CHECK constraint. */
 const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${feature}'`).join(',')
 
+/**
+ * The version of the schema this build writes.
+ *
+ * `SCHEMA_SQL` below is a complete snapshot of the schema at this version, and a
+ * database that stores an equal or higher value in `db_meta.schema_version` has
+ * nothing to create and nothing to migrate: boot opens it and goes straight to
+ * work. That is the whole point of the version: the ~40 legacy migration steps
+ * in `Database.applySchema` exist for databases written by older builds, and a
+ * fresh install must never walk them.
+ *
+ * Bump this in the same change that adds a table, column, index or trigger, and
+ * add the snapshot DDL to `SCHEMA_SQL`. A schema change without a bump reaches
+ * fresh installs only and silently skips every database already on disk.
+ */
+export const DATABASE_SCHEMA_VERSION = 2
+
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS db_meta (
@@ -27,7 +43,7 @@ CREATE TABLE IF NOT EXISTS db_meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO db_meta(key, value) VALUES('schema_version', '1');
+INSERT OR REPLACE INTO db_meta(key, value) VALUES('schema_version', '${DATABASE_SCHEMA_VERSION}');
 
 -- ─── Settings (app config) ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS settings (
@@ -1023,6 +1039,22 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sticky_notes_updated ON sticky_notes(updated_at DESC);`
+
+/**
+ * Indexes that no legacy migration may assume, because the column they cover was
+ * itself added by a migration.
+ *
+ * `DATABASE_SCHEMA_SQL` is executed by the *upgrade* path too, before the column
+ * migrations have run, so an index on a migrated column would abort an old
+ * database's upgrade. The legacy chain creates each of these itself after adding
+ * its column; a fresh install has every column from the snapshot, so it applies
+ * this block once, right after the snapshot.
+ */
+export const DATABASE_SCHEMA_SNAPSHOT_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_sticky_notes_sort ON sticky_notes(sort_order);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_project
+  ON usage_events(project_id, created_at, id);`
 
 /**
  * Assistants: the top-level grouping for assistant tasks. An assistant owns the

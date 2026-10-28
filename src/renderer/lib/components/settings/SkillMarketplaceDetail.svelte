@@ -39,7 +39,7 @@
     SkillMarketInstallRequest
   } from '$shared/types'
   import { onMount } from 'svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
@@ -415,7 +415,7 @@
           {#if loading}<CioSpinner size={12} class="animate-spin text-dimmed" />{/if}
         </div>
         {#if detail?.skillMarkdown}
-          <MarkdownView text={skillPreview} class="mt-4" />
+          <DeferredMarkdownView text={skillPreview} class="mt-4" />
         {:else if loading}
           <div class="mt-5 space-y-3" aria-label="Loading skill instructions">
             <div class="h-4 w-3/5 animate-pulse bg-raised"></div>

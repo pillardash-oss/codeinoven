@@ -306,10 +306,35 @@ async function runOpenCodeV2ProviderCatalogs(options: {
 const discoveryQueue = createWorkQueue(1)
 const discoveryRequests = new Map<string, Promise<unknown>>()
 
+/**
+ * How long a completed discovery may be reused before it runs again.
+ *
+ * A discovery is not a query: it spawns a private `opencode serve` and tears it
+ * down, so the cost is the process boot and its plugin activation, not the read.
+ * The provider/model catalog only changes when a provider is installed or a
+ * catalog updates, while callers ask for it on every turn and every poll. Without
+ * a cache that turned into hundreds of server spawns a day (238-409 in the
+ * durable log) competing with the app's own startup work.
+ */
+const PROVIDER_CATALOG_TTL_MS = 5 * 60_000
+const discoveryResults = new Map<string, { at: number; value: unknown }>()
+
+function cachedDiscovery<T>(key: string, ttlMs: number): T | null {
+  if (ttlMs <= 0) return null
+  const cached = discoveryResults.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.at >= ttlMs) {
+    discoveryResults.delete(key)
+    return null
+  }
+  return cached.value as T
+}
+
 function queuedDiscovery<T>(
   kind: string,
   options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv },
-  run: (signal: AbortSignal) => Promise<T>
+  run: (signal: AbortSignal) => Promise<T>,
+  ttlMs = 0
 ): Promise<T> {
   const fingerprint = createHash('sha256')
     .update(
@@ -324,6 +349,8 @@ function queuedDiscovery<T>(
     options.cwd ?? homedir(),
     fingerprint
   ])
+  const cached = cachedDiscovery<T>(key, ttlMs)
+  if (cached !== null) return Promise.resolve(cached)
   const pending = discoveryRequests.get(key)
   if (pending) return pending as Promise<T>
   const request = discoveryQueue(async () => {
@@ -334,7 +361,14 @@ function queuedDiscovery<T>(
     } finally {
       clearTimeout(timer)
     }
-  }).finally(() => discoveryRequests.delete(key))
+  })
+    .then((value) => {
+      // Only completed reads are remembered: a failed spawn is a real signal and
+      // must be retried by the next caller rather than served from a cache.
+      if (ttlMs > 0) discoveryResults.set(key, { at: Date.now(), value })
+      return value
+    })
+    .finally(() => discoveryRequests.delete(key))
   discoveryRequests.set(key, request)
   return request
 }
@@ -342,8 +376,10 @@ function queuedDiscovery<T>(
 export function discoverOpenCodeV2Catalog(
   options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}
 ): Promise<OpenCodeV2DiscoveryResult> {
-  return queuedDiscovery('catalog', options, (signal) =>
-    runOpenCodeV2Catalog({ ...options, signal })
+  return queuedDiscovery(
+    'catalog',
+    options,
+    (signal) => runOpenCodeV2Catalog({ ...options, signal })
   )
 }
 
@@ -352,7 +388,18 @@ export function discoverOpenCodeV2ProviderCatalogs(options: {
   cwd: string
   env?: NodeJS.ProcessEnv
 }): Promise<ProviderCatalog[]> {
-  return queuedDiscovery('providers', options, (signal) =>
-    runOpenCodeV2ProviderCatalogs({ ...options, signal })
+  return queuedDiscovery(
+    'providers',
+    options,
+    (signal) => runOpenCodeV2ProviderCatalogs({ ...options, signal }),
+    PROVIDER_CATALOG_TTL_MS
   )
+}
+
+/**
+ * Drop every cached discovery so the next read reflects a change this process
+ * just made (an install, a provider edit, a version switch).
+ */
+export function invalidateOpenCodeV2DiscoveryCache(): void {
+  discoveryResults.clear()
 }
