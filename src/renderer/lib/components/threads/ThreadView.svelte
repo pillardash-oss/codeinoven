@@ -33,8 +33,7 @@
       /* A conversation the reader cannot see has a position but not a meaning:
          reporting it would align the header to a page nobody is looking at. */
       const onScreen =
-        element.getClientRects().length > 0 &&
-        getComputedStyle(element).visibility !== 'hidden'
+        element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden'
       const box = element.getBoundingClientRect()
       const textLeft = box.left + padding
       /* The room is measured to the edge of the conversation screen, not to the
@@ -4318,7 +4317,7 @@
     // Docks itself the first time a thread starts coordinating, unless the user
     // closed it before; later runs are no-ops because the tab already exists.
     if (
-      coordinatorDockState.autoOpen &&
+      coordinatorDockState.canAutoOpen(thread.projectId, coordinatorDockThreadId) &&
       !contextSidebarState.hasCoordinator(thread.projectId, coordinatorDockThreadId)
     ) {
       contextSidebarState.openCoordinator(thread.projectId, coordinatorDockThreadId, label)
@@ -11029,7 +11028,7 @@
       workspaceState.openThread(durableAuditThread, project)
       return
     }
-    coordinatorDockState.setAutoOpen(true)
+    coordinatorDockState.restore(thread.projectId, coordinatorDockThreadId)
     contextSidebarState.openCoordinator(
       thread.projectId,
       coordinatorDockThreadId,
@@ -11094,7 +11093,7 @@
         selected
       )
       if (thread.id === coordinatorThreadId) {
-        coordinatorDockState.setAutoOpen(true)
+        coordinatorDockState.restore(thread.projectId, thread.id)
         contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
       }
       auditReport = await invoke('agent:generateAudit', thread.projectId, coordinatorThreadId, {
@@ -11141,7 +11140,7 @@
         thread.id,
         selected
       )
-      coordinatorDockState.setAutoOpen(true)
+      coordinatorDockState.restore(thread.projectId, thread.id)
       contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
       const result = await invoke('agent:generateIndependentAudit', thread.projectId, thread.id, {
         settings: selected

@@ -999,7 +999,7 @@
 
   function openCoordinatorTab(): void {
     if (!coordinator) return
-    coordinatorDockState.setAutoOpen(true)
+    coordinatorDockState.restore(coordinator.projectId, coordinator.threadId)
     contextSidebarState.openCoordinator(
       coordinator.projectId,
       coordinator.threadId,
@@ -1870,9 +1870,9 @@
     if (tab.kind === 'files' && tab.fileTabId) {
       projectFilesWorkspace.closeTab(tab.projectId, tab.fileTabId)
     }
-    // Closing the coordinator is a dismissal: it stays undocked until the user
-    // brings it back from the rail, otherwise it would reappear immediately.
-    if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
+    // Closing the coordinator is a dismissal for this thread, remembered across
+    // restarts: it stays undocked until the user brings it back from the rail.
+    if (tab.kind === 'coordinator') coordinatorDockState.dismiss(tab.projectId, tab.threadId)
     if (tab.kind === 'browser') {
       // A thread browser tab that is closed takes its Back/Forward stack out of
       // the strip with it, but main keeps it in the session's reopen set so
