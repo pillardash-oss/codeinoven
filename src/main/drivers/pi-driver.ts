@@ -117,8 +117,17 @@ const PI_CHILD_STREAM_MAX = 16
  * (see `resumeNativePiSession`), the same path an app restart and a crash use.
  * Nothing is evicted while a turn, a worker, or a pending card still owns the
  * session.
+ *
+ * The window is deliberately longer than a user's think time. Five minutes
+ * evicted the process of the thread the user was reading, so the follow-up they
+ * sent after any pause paid a full spawn, an extension reload and a transcript
+ * resume before the prompt could even reach pi: measured at roughly a second of
+ * pure loss per pause, and invisible to the user as anything but "it is slow
+ * again". A resident process is not wasted work; it is the thing that makes a
+ * follow-up instant, and it is still released once the thread has genuinely
+ * been left alone.
  */
-const PI_SESSION_IDLE_DISPOSE_MS = 5 * 60_000
+const PI_SESSION_IDLE_DISPOSE_MS = 30 * 60_000
 
 /** Cadence of the idle sweep. One timer serves every session of the driver. */
 const PI_SESSION_IDLE_SWEEP_MS = 60_000
@@ -878,7 +887,21 @@ export class PiDriver extends PersistentCliDriver {
 
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
+    // Dev-only phase clock for the harness half of the dispatch: the spawn (or
+    // warm reuse) of the session process, the settings round-trips, and the
+    // handoff files that have to be on disk before pi can run the prompt. This
+    // separates "our process was cold" from "the provider is thinking" when a
+    // follow-up turn feels slow (see `turn-dispatch-timer` on the engine side).
+    const dispatchStartedAt = performance.now()
+    let dispatchPhaseAt = dispatchStartedAt
+    const dispatchPhases: { phase: string; ms: number }[] = []
+    const markDispatch = (phase: string): void => {
+      const now = performance.now()
+      dispatchPhases.push({ phase, ms: Math.round(now - dispatchPhaseAt) })
+      dispatchPhaseAt = now
+    }
     const client = await this.ensureRpcClient(projectPath, session.id) // A real user turn is not a continuation of a stop: clear the stop request
+    markDispatch('client')
     // the extension applies to worker sessions, and re-arm pi's automatic retry
     // that the stop disarmed.
     await this.clearStopRequest(session.id)
@@ -953,12 +976,14 @@ export class PiDriver extends PersistentCliDriver {
       options.settings.modelId,
       options.settings.thinkingLevel
     )
+    markDispatch('settings')
     this.appendUserMessage(session, options)
     this.silentContinues.delete(session.id)
     this.reconcileAnswers.delete(session.id)
     this.activeTurns.add(session.id)
 
     const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+    markDispatch('attachments')
     if (options.systemPrompt) {
       await this.publishCioSystemPrompt(session.id, options.systemPrompt)
     }
@@ -966,6 +991,7 @@ export class PiDriver extends PersistentCliDriver {
     // Publish every turn: an empty list clears a previous restriction, so a
     // mid-session File-System toggle takes effect without a session restart.
     await this.publishCioAllowedTools(session.id, options.allowedTools)
+    markDispatch('handoffFiles')
     const prompt = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
 
     // The user's input is the thing that must survive: a session that turns out
@@ -979,6 +1005,12 @@ export class PiDriver extends PersistentCliDriver {
       await this.finishTurn(session)
       throw error
     }
+    markDispatch('promptAccepted')
+    Logger.dev('Pi dispatch phases', {
+      sessionId: session.id,
+      totalMs: Math.round(performance.now() - dispatchStartedAt),
+      phases: dispatchPhases
+    })
   }
 
   private resolveModel(

@@ -43,6 +43,17 @@ const CUA_PERMISSIONS_URL = 'https://cua.ai/docs/reference/cua-driver/macos-perm
 const CUA_REPOSITORY_URL = 'https://github.com/trycua/cua'
 const CUA_UTILITY_ID = 'cio:cua-driver'
 const PERMISSION_CACHE_TTL_MS = 20_000
+/**
+ * How long a probed bridge status is served from memory.
+ *
+ * Every turn resolves this bridge through `resolveUtility()`, and a probe is not
+ * free: it scans the install locations and spawns the driver twice (`list-tools`
+ * and `status`, measured at ~0.3 s here), all of it on the critical path of the
+ * prompt before the harness is even reached. The TTL only bounds staleness for
+ * changes made outside the app; every mutation this service performs drops the
+ * cache itself, so the value is never older than the last thing the user did.
+ */
+const STATUS_CACHE_TTL_MS = 60_000
 const DAEMON_START_TIMEOUT_MS = 8_000
 const DAEMON_WAIT_STEP_MS = 300
 /** How long a stop is given to take effect before the daemon's pid is signalled. */
@@ -187,7 +198,38 @@ export class CuaBridgeService {
    */
   private updateState: CuaUpdateProgress | null = null
 
+  /** Last probed status, and the probe in flight, so a turn never pays twice. */
+  private statusCache: { at: number; status: CuaBridgeStatus } | null = null
+  private statusInFlight: Promise<CuaBridgeStatus> | null = null
+
+  /**
+   * The bridge's current state, from memory when it was probed a moment ago.
+   *
+   * See `STATUS_CACHE_TTL_MS`: this is read once per turn by the utility
+   * resolution, and a repeated probe there is latency the user feels before the
+   * agent has received anything at all.
+   */
   async getStatus(): Promise<CuaBridgeStatus> {
+    const cached = this.statusCache
+    if (cached && Date.now() - cached.at < STATUS_CACHE_TTL_MS) return { ...cached.status }
+    if (this.statusInFlight) return { ...(await this.statusInFlight) }
+    const probe = this.probeStatus()
+    this.statusInFlight = probe
+    try {
+      const status = await probe
+      this.statusCache = { at: Date.now(), status }
+      return { ...status }
+    } finally {
+      this.statusInFlight = null
+    }
+  }
+
+  /** Drop the cached probe after anything that can change what it reports. */
+  private invalidateStatus(): void {
+    this.statusCache = null
+  }
+
+  private async probeStatus(): Promise<CuaBridgeStatus> {
     const config = await this.loadConfig()
     const platform = platformName()
     const { installations, selected } = await this.selectedInstallation()
@@ -282,6 +324,7 @@ export class CuaBridgeService {
       if (!status.ready) throw new Error(status.detail ?? 'Cua Driver is not ready')
     }
     await this.storage.write(CONFIG_PATH, { enabled } satisfies CuaBridgeConfig)
+    this.invalidateStatus()
     return this.getStatus()
   }
 
@@ -339,6 +382,9 @@ export class CuaBridgeService {
       return await run
     } finally {
       this.updateInFlight = null
+      // The installed copy just changed (or failed to change): a cached probe of
+      // the old one must never be served to the next turn.
+      this.invalidateStatus()
     }
   }
 

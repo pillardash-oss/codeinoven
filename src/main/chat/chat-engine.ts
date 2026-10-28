@@ -481,6 +481,7 @@ import {
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from '../../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
+import { createTurnDispatchTimer } from './turn-dispatch-timer'
 import { auxiliarySelectionFor } from '../../lib/auxiliary-agents'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import { createAutoTitleLauncher } from './title-generation-policy'
@@ -9923,9 +9924,13 @@ export class ChatEngine {
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    // Dev-only phase clock for this dispatch (see `turn-dispatch-timer`). Every
+    // mark below is a clock read; the breakdown only reaches the dev log.
+    const dispatchTimer = createTurnDispatchTimer(projectId, threadId)
     // Queue behind an in-flight optimistic create so a just-created thread can
     // accept its first prompt as soon as its row is persisted.
     await this.threadCreation?.awaitReady(threadId)
+    dispatchTimer.mark('threadReady')
     const visible = await this.database.queryViaWorker(
       `SELECT id FROM threads WHERE id = ? AND project_id = ? AND ${unarchivedThreadSql()}`,
       [threadId, projectId],
@@ -10238,6 +10243,7 @@ export class ChatEngine {
       visiblePrompt
     )
     const publicUserMessage = withoutTransportParts(userMessage)
+    dispatchTimer.mark('userPersisted')
     const workerRouting = await this.routeTaggedAssignmentWorkers(
       targetThread,
       origin,
@@ -10279,11 +10285,17 @@ export class ChatEngine {
     )
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
+    // It is a label on the thread row, not an input to the turn, so the git read
+    // and its write never gate the prompt the user is waiting on.
     if (targetThread?.workingDirectory) {
-      const branch = await this.repositoryService.getCurrentBranch(projectPath)
-      if (branch && targetThread.branch !== branch) {
-        await this.threadManager.setBranch(projectId, threadId, branch)
-      }
+      void this.repositoryService
+        .getCurrentBranch(projectPath)
+        .then((branch) =>
+          branch && targetThread.branch !== branch
+            ? this.threadManager.setBranch(projectId, threadId, branch)
+            : undefined
+        )
+        .catch((error: unknown) => Logger.dev('Thread branch label refresh failed:', error))
     }
     assertHarnessRequestCapabilities(driver, attachments, settings.permissionLevel)
     const project = await this.projectManager.getProject(projectId)
@@ -10475,6 +10487,7 @@ export class ChatEngine {
       throw error
     }
     const modelNeedsImageDescriptor = await this.modelLacksVision(projectId, settings)
+    dispatchTimer.mark('sessionReady')
     if (modelNeedsImageDescriptor) {
       const imageDescriptionContext = await this.describePromptAttachments(
         attachments,
@@ -10802,6 +10815,7 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
+    dispatchTimer.mark('turnContext')
     // The standalone workspace of this conversation, resolved by scope. An
     // assistant task owns `assistant-cwd/<assistantId>`, a chat owns
     // `chats-cwd/<threadId>`; resolving a chat path for an assistant thread put
@@ -11197,6 +11211,7 @@ export class ChatEngine {
       this.markSessionWorking(sessionId)
       // Chat owns a writable cwd even with File System off. External paths
       // remain subject to the thread's file-access permission policy.
+      dispatchTimer.mark('dispatchStart')
       await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
         await driver.sendPrompt(projectPath, {
           sessionId,
@@ -11236,6 +11251,8 @@ export class ChatEngine {
           ...(historyRecap ? { historyRecap } : {}),
           userMessageId: messageId
         })
+        dispatchTimer.mark('harnessAccepted')
+        dispatchTimer.finish()
       })
       if (utilitySetupRequested || isChatThread || isAssistantTask) {
         traceLeanAgent(
@@ -11271,6 +11288,8 @@ export class ChatEngine {
       this.preparedImplementationSessions.delete(sessionId)
     } catch (error) {
       this.pendingMemoryDecisions.delete(sessionId)
+      dispatchTimer.mark('dispatchFailed')
+      dispatchTimer.finish()
       await this.cleanupTurnUtilities(sessionId)
       this.preparedImplementationSessions.delete(sessionId)
       const failure = error instanceof Error ? error.message : String(error)
