@@ -44,6 +44,16 @@ const CUA_REPOSITORY_URL = 'https://github.com/trycua/cua'
 const CUA_UTILITY_ID = 'cio:cua-driver'
 const PERMISSION_CACHE_TTL_MS = 20_000
 /**
+ * How long a recorded permission verdict is trusted before a settings read may
+ * verify it again.
+ *
+ * A verdict is only recorded while a daemon happens to be running, or after a
+ * read the user asked for started one. Re-checking needs that same start, which is
+ * the side effect this app must keep rare, so the window is generous: the verdict
+ * changes only when the user changes it in System Settings.
+ */
+const PERMISSION_VERDICT_TTL_MS = 60 * 60_000
+/**
  * How long a probed bridge status is served from memory.
  *
  * Every turn resolves this bridge through `resolveUtility()`, and a probe is not
@@ -127,6 +137,69 @@ let configCache: CuaBridgeConfig | null = null
 const daemonClaims = new Map<string, CuaDaemonClaim>()
 
 /**
+ * The last permission verdict the driver gave, written through to the config.
+ *
+ * Verifying macOS permissions needs a running daemon, and starting one to answer
+ * a read is the one driver side effect this app must not perform on its own: it
+ * wakes a signed app, takes seconds, and every instance it launches that fails to
+ * become the shared daemon lives on in the process table. The verdict itself only
+ * changes when the user changes it in System Settings, so the last one is
+ * recorded here and reused until a read that already has a daemon re-verifies it.
+ */
+let rememberedPermission: CuaPermissionStatus | null = null
+
+/**
+ * One queue for the work that starts or terminates driver processes.
+ *
+ * A permission probe briefly starts a daemon, and the stray sweep terminates
+ * driver processes: run those beside each other and the sweep kills the daemon
+ * the probe is reading from, or the probe's daemon outlives a sweep that already
+ * listed it. Every operation that touches a driver process body is appended
+ * here instead, so the two can never overlap.
+ */
+let daemonWorkTail: Promise<unknown> = Promise.resolve()
+
+function runDaemonWork<T>(work: () => Promise<T>): Promise<T> {
+  const run = daemonWorkTail.then(work, work)
+  daemonWorkTail = run.catch(() => undefined)
+  return run
+}
+
+/** Whether a process id still exists, without signalling it. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Terminate one process, escalating only when the polite signal did not take.
+ *
+ * The pid comes from a process-table read taken moments earlier, so the process
+ * is re-checked before every signal: a pid the system has since handed to
+ * another program must never receive this signal.
+ */
+async function terminateProcess(pid: number): Promise<void> {
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    if (!processAlive(pid)) return
+    try {
+      process.kill(pid, signal)
+    } catch {
+      return
+    }
+    const deadline = Date.now() + DAEMON_STOP_SIGNAL_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (!processAlive(pid)) return
+      await sleep(DAEMON_WAIT_STEP_MS)
+    }
+  }
+  Logger.info('A Cua Driver process would not stop', { pid })
+}
+
+/**
  * The driver's daemon-wide authorization modes. `bounded` needs an immutable
  * per-session manifest that CodeInOven never writes, so it is never requested;
  * it is still parsed so a daemon someone else started is recognised as a
@@ -166,6 +239,13 @@ interface CuaDaemonClaim {
 
 interface CuaBridgeConfig {
   enabled: boolean
+  /**
+   * The last verdict the driver gave for the macOS permissions computer use
+   * needs. Recorded so a read never has to start a daemon to answer.
+   */
+  permission?: CuaPermissionStatus
+  /** When that verdict was observed, in epoch milliseconds. */
+  permissionCheckedAt?: number
 }
 
 interface CuaCandidate {
@@ -230,7 +310,22 @@ export class CuaBridgeService {
   async getStatus(): Promise<CuaBridgeStatus> {
     const cached = statusCache
     if (cached && Date.now() - cached.at < STATUS_CACHE_TTL_MS) return { ...cached.status }
-    return this.probeStatusShared(true)
+    return this.probeStatusShared(this.shouldVerifyPermissions(await this.loadConfig()))
+  }
+
+  /**
+   * Whether a read may start the driver to verify the macOS permissions.
+   *
+   * Starting a daemon to answer a read is the one driver side effect this app must
+   * keep rare, so only a verdict that is missing, or old enough that the user may
+   * have changed it since, earns one. Even then the caller has to be a surface the
+   * user opened: see `statusForTurn`.
+   */
+  private shouldVerifyPermissions(config: CuaBridgeConfig): boolean {
+    if (platformName() !== 'macos') return false
+    if (config.permission === undefined) return true
+    const checkedAt = config.permissionCheckedAt ?? 0
+    return Date.now() - checkedAt > PERMISSION_VERDICT_TTL_MS
   }
 
   /**
@@ -257,8 +352,10 @@ export class CuaBridgeService {
       if (Date.now() - cached.at >= STATUS_CACHE_TTL_MS) this.refreshStatusInBackground()
       return { ...cached.status }
     }
+    // A turn never starts a daemon, not even the first one after launch: the boot
+    // warm-up owns establishing the verdict, and it is already on its way.
     try {
-      return await this.probeStatusShared(true)
+      return await this.probeStatusShared(false)
     } catch (error) {
       Logger.dev('Cua bridge status could not be read for this turn:', error)
       return null
@@ -276,7 +373,11 @@ export class CuaBridgeService {
   async warmStatus(): Promise<void> {
     const config = await this.loadConfig()
     if (!config.enabled || statusCache !== null) return
-    await this.probeStatusShared(true).catch((error: unknown) => {
+    // A fresh verdict is trusted: permissions change only by the user's own hand,
+    // and verifying them needs a daemon. Only a launch with nothing on record (the
+    // first one after this change) verifies, once.
+    const allowDaemonStart = this.shouldVerifyPermissions(config)
+    await this.probeStatusShared(allowDaemonStart).catch((error: unknown) => {
       Logger.dev('Cua bridge warm-up probe failed:', error)
     })
   }
@@ -292,6 +393,12 @@ export class CuaBridgeService {
   private async probeStatusShared(allowDaemonStart: boolean): Promise<CuaBridgeStatus> {
     const inFlight = statusInFlight.get(allowDaemonStart)
     if (inFlight) return { ...(await inFlight) }
+    // A read that may not start a daemon can always join the one that may, instead
+    // of racing it to write the snapshot.
+    if (!allowDaemonStart) {
+      const stronger = statusInFlight.get(true)
+      if (stronger) return { ...(await stronger) }
+    }
     const probe = this.probeStatus(allowDaemonStart)
     statusInFlight.set(allowDaemonStart, probe)
     try {
@@ -329,11 +436,7 @@ export class CuaBridgeService {
     try {
       const version = selected.version
       const compatible = selected.compatible
-      const permissionStatus = await this.permissionStatus(
-        binaryPath,
-        platform,
-        allowDaemonStart
-      )
+      const permissionStatus = await this.permissionStatus(binaryPath, platform, allowDaemonStart)
       const [mcpAvailable, daemonRunning] = await Promise.all([
         this.hasMcpSurface(binaryPath),
         this.daemonRunning(binaryPath)
@@ -406,8 +509,12 @@ export class CuaBridgeService {
       if (!status.mcpAvailable) throw new Error('Cua Driver MCP is unavailable')
       if (!status.ready) throw new Error(status.detail ?? 'Cua Driver is not ready')
     }
-    await this.storage.write(CONFIG_PATH, { enabled } satisfies CuaBridgeConfig)
-    configCache = { enabled }
+    // The recorded permission verdict outlives the toggle: it describes the
+    // driver, not the preference, and losing it would make the next launch start
+    // a daemon just to read it back.
+    const config: CuaBridgeConfig = { ...(await this.loadConfig()), enabled }
+    await this.storage.write(CONFIG_PATH, config)
+    configCache = config
     this.invalidateStatus()
     return this.getStatus()
   }
@@ -456,7 +563,8 @@ export class CuaBridgeService {
       if (this.updateState?.state === 'updating') {
         this.updateState = {
           state: 'failed',
-          error: updateError instanceof Error ? updateError.message : 'Cua Driver could not be updated.'
+          error:
+            updateError instanceof Error ? updateError.message : 'Cua Driver could not be updated.'
         }
       }
       throw updateError
@@ -662,10 +770,20 @@ export class CuaBridgeService {
     const cached = configCache
     if (cached) return cached
     const value = await this.storage.read<unknown>(CONFIG_PATH)
-    configCache =
-      isRecord(value) && typeof value['enabled'] === 'boolean'
-        ? { enabled: value['enabled'] }
-        : { enabled: false }
+    const record = isRecord(value) ? value : null
+    const permission = record?.['permission']
+    const checkedAt = record?.['permissionCheckedAt']
+    rememberedPermission =
+      permission === 'granted' || permission === 'missing' || permission === 'not_required'
+        ? permission
+        : null
+    configCache = {
+      enabled: record?.['enabled'] === true,
+      ...(rememberedPermission ? { permission: rememberedPermission } : {}),
+      ...(typeof checkedAt === 'number' && Number.isFinite(checkedAt)
+        ? { permissionCheckedAt: checkedAt }
+        : {})
+    }
     return configCache
   }
 
@@ -699,22 +817,62 @@ export class CuaBridgeService {
   ): Promise<CuaPermissionStatus> {
     if (platform !== 'macos') return 'not_required'
     const running = await this.daemonRunning(binaryPath)
-    if (running) return this.readPermissionStatus(binaryPath)
+    if (running) {
+      const status = await this.readPermissionStatus(binaryPath)
+      this.rememberPermissionVerdict(status)
+      return status
+    }
     const cached = permissionCache
     if (cached && Date.now() - cached.at < PERMISSION_CACHE_TTL_MS) return cached.status
-    // A background refresh must never spawn a daemon of its own: the last verdict
-    // this process observed is the best answer it is allowed to give, and macOS
-    // permissions only change when the user changes them.
-    if (!allowDaemonStart) return statusCache?.status.permissionStatus ?? 'unknown'
+    // A read that may not start a daemon answers with the last verdict the driver
+    // gave. macOS permissions only change when the user changes them in System
+    // Settings, and the settings surface re-verifies them the moment it opens.
+    if (!allowDaemonStart) return rememberedPermission ?? 'unknown'
+    return runDaemonWork(() => this.probePermissionStatus(binaryPath))
+  }
+
+  /**
+   * Verify permissions against a daemon started for this read only, and leave no
+   * driver process behind.
+   *
+   * Call only through `runDaemonWork`: it starts and terminates processes.
+   */
+  private async probePermissionStatus(binaryPath: string): Promise<CuaPermissionStatus> {
     const probe = await this.startDaemonTransiently(binaryPath)
-    if (!probe) return 'unknown'
+    if (!probe) {
+      // A start that never reported still may have launched an instance that is
+      // not serving: nothing else is going to reap it.
+      await this.reapStrayDriverProcesses(binaryPath)
+      return 'unknown'
+    }
     try {
       const status = await this.readPermissionStatus(binaryPath)
       permissionCache = { status, at: Date.now() }
+      this.rememberPermissionVerdict(status)
       return status
     } finally {
       await this.stopUnownedDaemon(binaryPath, probe)
+      await this.reapStrayDriverProcesses(binaryPath)
     }
+  }
+
+  /**
+   * Record the verdict the driver gave, so no later read needs a daemon.
+   *
+   * Written through to the config because the interesting case is the process
+   * that has not started yet: the next launch answers readiness from disk.
+   */
+  private rememberPermissionVerdict(status: CuaPermissionStatus): void {
+    if (status !== 'granted' && status !== 'missing') return
+    if (rememberedPermission === status && configCache?.permission === status) return
+    rememberedPermission = status
+    const config = configCache
+    if (!config) return
+    if (config.permission === status) return
+    configCache = { ...config, permission: status, permissionCheckedAt: Date.now() }
+    void this.storage.write(CONFIG_PATH, configCache).catch((error: unknown) => {
+      Logger.dev('Cua Driver permission verdict could not be recorded:', error)
+    })
   }
 
   /**
@@ -760,12 +918,17 @@ export class CuaBridgeService {
   /**
    * Start a daemon for a read that must not outlive it, and answer which process
    * it started so the caller can stop exactly that one.
+   *
+   * `open` is deliberately asked for an existing instance rather than a new one:
+   * `-n` starts a *second* instance beside the one already serving, `stop` can
+   * only address the process the daemon reports, and those duplicates then sat in
+   * the process table for days with nothing owning them.
    */
   private async startDaemonTransiently(binaryPath: string): Promise<CuaDaemonReport | null> {
     const appRoot = appBundleRoot(binaryPath)
     const args = appRoot
-      ? ['-n', '-g', appRoot, '--args', 'serve']
-      : ['-n', '-g', '-a', 'CuaDriver', '--args', 'serve']
+      ? ['-g', appRoot, '--args', 'serve']
+      : ['-g', '-a', 'CuaDriver', '--args', 'serve']
     try {
       await execFileAsync('open', args, { timeout: 8_000, maxBuffer: 128_000 })
     } catch {
@@ -891,6 +1054,10 @@ export class CuaBridgeService {
     const { selected } = await this.selectedInstallation()
     if (!selected) throw new Error('Cua Driver was not found in a supported install location')
     const binaryPath = selected.realPath
+    // A stray instance of the same bundle answers `open` before the launch this
+    // run asks for ever starts, so the daemon would come up in whatever mode the
+    // leftover had. Sweep before claiming: this run has no claim yet.
+    await runDaemonWork(() => this.reapStrayDriverProcesses(binaryPath))
     daemonClaims.set(ownerKey, { mode: required, binaryPath })
     Logger.dev('Cua Driver daemon claim taken', {
       owner: ownerKey,
@@ -974,24 +1141,102 @@ export class CuaBridgeService {
     const { selected } = await this.selectedInstallation()
     if (!selected) return
     const binaryPath = selected.realPath
-    const live = await this.readDaemonReport(binaryPath)
-    // Only a daemon whose mode was actually read as unrestricted is reaped: a
-    // standard, bounded or unreadable one may belong to someone else.
-    if (!live || live.pid === null || live.mode?.mode !== 'unrestricted') return
-    // Another CodeInOven instance may be mid-run against this daemon, and its
-    // sessions are the only evidence either process has. This read's own session
-    // is discounted, or the reap could never fire.
-    const sessions = await this.readDaemonSessions(binaryPath)
-    if (sessions === null || sessions.attributed > 0) return
-    // A run that claimed the daemon while this was reading owns it now, and that
-    // claim has to win over anything decided above.
-    if (daemonClaims.size > 0) return
-    Logger.info('Stopping a Cua Driver daemon left over from an earlier run', {
-      pid: live.pid,
-      mode: live.mode.mode,
-      source: live.mode.source
+    await runDaemonWork(async () => {
+      const live = await this.readDaemonReport(binaryPath)
+      // Only a daemon whose mode was actually read as unrestricted is reaped: a
+      // standard, bounded or unreadable one may belong to someone else.
+      if (live && live.pid !== null && live.mode?.mode === 'unrestricted') {
+        // Another CodeInOven instance may be mid-run against this daemon, and its
+        // sessions are the only evidence either process has. This read's own
+        // session is discounted, or the reap could never fire.
+        const sessions = await this.readDaemonSessions(binaryPath)
+        if (sessions !== null && sessions.attributed === 0 && daemonClaims.size === 0) {
+          Logger.info('Stopping a Cua Driver daemon left over from an earlier run', {
+            pid: live.pid,
+            mode: live.mode.mode,
+            source: live.mode.source
+          })
+          await this.stopDaemon(binaryPath)
+        }
+      }
+      // Whatever the report says, duplicates from an earlier launch are still in
+      // the process table and only a sweep can see them.
+      await this.reapStrayDriverProcesses(binaryPath)
     })
-    await this.stopDaemon(binaryPath)
+  }
+
+  /**
+   * Terminate driver processes nothing owns.
+   *
+   * `cua-driver stop` can only address the process the daemon reports, so an
+   * instance that never became the shared daemon survives every later stop and
+   * sits in the process table for days: three of them were found on this machine
+   * while chasing dispatch latency, all parented to launchd. The process table is
+   * the only place they are visible, so the sweep compares it against the paths
+   * the driver is installed at.
+   *
+   * Call only through `runDaemonWork`: it terminates processes.
+   */
+  private async reapStrayDriverProcesses(binaryPath: string): Promise<void> {
+    // A run owns the daemon and its lifetime; nothing else may end one.
+    if (daemonClaims.size > 0) return
+    const live = await this.readDaemonReport(binaryPath)
+    if (live && live.pid !== null) {
+      // Something is serving. Anyone attached to it is a run this app cannot
+      // account for, and ending it would end their control session.
+      const sessions = await this.readDaemonSessions(binaryPath)
+      if (sessions === null || sessions.total > 0) return
+    }
+    const strays = (await this.driverProcessIds(binaryPath)).filter(
+      (pid) => pid !== live?.pid && pid !== process.pid
+    )
+    if (strays.length === 0) return
+    Logger.info('Stopping Cua Driver processes nothing is using', { pids: strays, binaryPath })
+    for (const pid of strays) await terminateProcess(pid)
+  }
+
+  /**
+   * Every live daemon process for this driver, read from the process table.
+   *
+   * Identity is the executable path, not the program name: the driver is reachable
+   * through the app bundle, a symlink in `~/.local/bin` and possibly a PATH
+   * directory, and all of those are the same binary. The MCP proxy
+   * (`cua-driver mcp`) shares that path but is a client of the daemon, so only a
+   * `serve` invocation counts.
+   */
+  private async driverProcessIds(binaryPath: string): Promise<number[]> {
+    const { installations } = await this.selectedInstallation()
+    const executablePaths = new Set<string>([binaryPath])
+    for (const installation of installations) {
+      executablePaths.add(installation.path)
+      executablePaths.add(installation.realPath)
+      for (const alias of installation.aliases) executablePaths.add(alias)
+    }
+    let listing: string
+    try {
+      const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,command='], {
+        timeout: 8_000,
+        maxBuffer: 8_000_000
+      })
+      listing = stdout
+    } catch (error) {
+      Logger.dev('The process table could not be read:', error)
+      return []
+    }
+    const pids: number[] = []
+    for (const line of listing.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      const separator = trimmed.indexOf(' ')
+      if (separator <= 0) continue
+      const pid = Number.parseInt(trimmed.slice(0, separator), 10)
+      if (!Number.isFinite(pid) || pid === process.pid) continue
+      const [executable, ...args] = trimmed.slice(separator + 1).split(/\s+/)
+      if (!executable || !args.includes('serve')) continue
+      if (!executablePaths.has(executable)) continue
+      pids.push(pid)
+    }
+    return pids
   }
 
   /**
@@ -1036,8 +1281,8 @@ export class CuaBridgeService {
     const serveArgs = ['serve', '--permission-mode', mode, ...modeArgs(mode)]
     const appRoot = appBundleRoot(binaryPath)
     const args = appRoot
-      ? ['-n', '-g', appRoot, '--args', ...serveArgs]
-      : ['-n', '-g', '-a', 'CuaDriver', '--args', ...serveArgs]
+      ? ['-g', appRoot, '--args', ...serveArgs]
+      : ['-g', '-a', 'CuaDriver', '--args', ...serveArgs]
     try {
       await execFileAsync('open', args, { timeout: 8_000, maxBuffer: 128_000 })
     } catch (error) {
