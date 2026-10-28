@@ -40,16 +40,13 @@
     threadActionsMenu: ReturnType<typeof createThreadActionsMenu>
     /** Distance from the chrome's end to the conversation column's left edge. */
     titleInset?: number
-    /** The conversation page's width: the thread's name truncates at its edge. */
-    titleMaxWidth?: number
   }
 
   let {
     activeView,
     chatMode,
     threadActionsMenu,
-    titleInset = 0,
-    titleMaxWidth = 0
+    titleInset = 0
   }: Props = $props()
 
   const viewLabels: Record<string, string> = {
@@ -137,13 +134,10 @@
     {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
     <!-- The block is as wide as the room the bar leaves it, so a long thread name
          uses the whole column before it gives up any of itself. -->
-    <!-- `max-w-none` because the only width this block may have is the one the
-         conversation gives it: any inherited cap from the bar trimmed the name
-         while the page beside it still had room. -->
-    <div
-      class="titlebar-no-drag relative flex min-w-0 max-w-none items-center gap-2"
-      style:max-width={titleMaxWidth > 0 ? `${titleMaxWidth}px` : undefined}
-    >
+    <!-- No width cap of its own: the block takes every pixel the bar leaves between
+         the chrome and the trailing controls, and the name truncates there. A second,
+         measured bound is what trimmed it while the conversation was still wide. -->
+    <div class="titlebar-no-drag relative flex min-w-0 items-center gap-2">
       {#if thread.projectId === ASSISTANT_SPACE_ID}
         <!-- An assistant thread wears its assistant's icon, exactly as its sidebar
              row does, so the header names the assistant at a glance. A

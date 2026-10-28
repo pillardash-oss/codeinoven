@@ -126,26 +126,6 @@
     return Math.max(0, Math.round(contentLeft - chromeEnd))
   })
 
-  /** The page's own width, less the distance the block had to move to reach it:
-   *  the thread's name never runs wider than the text the reader is reading. */
-  let titleMaxWidth = $derived.by(() => {
-    if (!layoutPanelState.contentVisible) return 0
-    const width = layoutPanelState.conversationWidth
-    /* A conversation screen narrower than this is a measurement of the wrong box,
-       not a screen: refusing it keeps a misread from trimming the title while the
-       page beside it obviously has room. */
-    if (width < 240) return 0
-    /* The room left between where the block actually starts and the screen's right
-       edge. Deriving it from the block's own position rather than subtracting the
-       inset again matters: the block starts at the column's left edge, so the
-       inset is already spent on getting there. */
-    const chromeEnd = leftInset + Math.max(panelColumnWidth, clusterWidth)
-    const blockStart = chromeEnd + Math.max(8, titleInset)
-    const screenRight = layoutPanelState.conversationLeft + width
-    const available = Math.round(screenRight - blockStart)
-    return available < 240 ? 0 : available
-  })
-
   /** A checkout and a probe run the same source, so the one thing that tells
    *  them apart is where their data lives. The header says which this is, and a
    *  shipped build says nothing at all. */
@@ -424,7 +404,7 @@
       <AppHeaderBrowserCenter />
     {/await}
   {:else}
-    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} {titleMaxWidth} />
+    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} />
   {/if}
 
   <AppHeaderThreadModals menu={threadActionsMenu} />
