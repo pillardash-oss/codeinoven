@@ -553,7 +553,7 @@
             aria-label="Video frame thumbnails"
           >
             {#each frameCells as cell (cell.frame)}
-              {@const frame = editor.frames.find((frame) => frame.time === cell.time)}
+              {@const frame = editor.frames.get(cell.time)}
               {#if frame}<img
                   src={frame.image}
                   alt={`Video at ${videoTimecode(frame.time)}`}

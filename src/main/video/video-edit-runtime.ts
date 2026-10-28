@@ -680,13 +680,7 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
         release(entry)
         media.delete(key)
       }
-    ctx.save()
-    ctx.globalAlpha = 1
-    ctx.filter = 'none'
-    if (edit.background !== 'composition') {
-      ctx.fillStyle = '#000000'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-    }
+    const prepared = new Map<string, HTMLVideoElement | HTMLAudioElement | HTMLImageElement>()
     for (const clip of visual) {
       const asset = assets.get(clip.assetId)
       if (!asset) continue
@@ -706,6 +700,20 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
         if (playing && time < clip.start + clip.duration) void element.play().catch(() => undefined)
         else element.pause()
       }
+      prepared.set(clip.id, element)
+    }
+    // All asynchronous decoding is finished. Paint every layer synchronously so
+    // scrubbing never presents a cleared canvas or a partly drawn composition.
+    ctx.save()
+    ctx.globalAlpha = 1
+    ctx.filter = 'none'
+    if (edit.background !== 'composition') {
+      ctx.fillStyle = '#000000'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+    }
+    for (const clip of visual) {
+      const element = prepared.get(clip.id)
+      if (!element) continue
       const progress = clip.transition.duration
         ? clamp((time - clip.start) / clip.transition.duration)
         : 1

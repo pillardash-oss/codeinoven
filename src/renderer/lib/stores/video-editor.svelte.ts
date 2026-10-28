@@ -1,3 +1,4 @@
+import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { VideoFrameSeeker } from '$lib/video-frame-seeker'
 import {
@@ -25,6 +26,54 @@ import { visibleVideoFrames, type VideoFrameThumbnail } from '$shared/video/fram
 // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Ownership registry, not rendered state.
 const controllers = new Map<string, VideoEditorController>()
 type DocumentEdit = (document: VideoStudioDocument, edit: VideoEditDocument) => void
+
+/** Only picture data that can affect this sample invalidates its thumbnail. */
+function frameSignature(document: VideoStudioDocument | null, time: number): string {
+  const edit = document?.edit
+  if (!edit) return ''
+  const assets = new Map(edit.assets.map((asset) => [asset.id, asset]))
+  const tracks = new Map(edit.tracks.map((track) => [track.id, track]))
+  const visual = edit.clips.filter(
+    (clip) => assets.get(clip.assetId)?.kind !== 'audio' && !tracks.get(clip.trackId)?.hidden
+  )
+  const clips = visual.filter((clip) => time >= clip.start && time < clip.start + clip.duration)
+  for (const clip of [...clips]) {
+    if (clip.transition.kind !== 'dissolve' || time >= clip.start + clip.transition.duration)
+      continue
+    const previous = visual
+      .filter(
+        (candidate) =>
+          candidate.trackId === clip.trackId &&
+          candidate.id !== clip.id &&
+          Math.abs(candidate.start + candidate.duration - clip.start) < 0.05
+      )
+      .at(-1)
+    if (previous && !clips.includes(previous)) clips.push(previous)
+  }
+  const captions =
+    document?.captionStyle === 'none'
+      ? []
+      : (document?.captions.filter((caption) => time >= caption.start && time < caption.end) ?? [])
+  return JSON.stringify({
+    background: edit.background,
+    controls: edit.background === 'composition' ? document?.controls : undefined,
+    tracks: edit.tracks
+      .filter((track) => clips.some((clip) => clip.trackId === track.id))
+      .map((track) => track.id),
+    clips: clips.map(
+      ({ audio: _audio, volume: _volume, fadeIn: _fadeIn, fadeOut: _fadeOut, ...clip }) => ({
+        ...clip,
+        asset: assets.get(clip.assetId)
+      })
+    ),
+    regions: edit.regions.filter(
+      (region) => time >= region.start && time < region.start + region.duration
+    ),
+    style: captions.length ? document?.captionStyle : undefined,
+    captions,
+    appearance: captions.length ? document?.captionAppearance : undefined
+  })
+}
 
 /** One document and undo chain, shared by the board and its fullscreen editor. */
 export class VideoEditorController {
@@ -67,7 +116,9 @@ export class VideoEditorController {
   private gestureWasDirty = false
   waveforms = $state.raw<Record<string, string | null>>({})
   private waveformBusy = false
-  frames = $state.raw<VideoFrameThumbnail[]>([])
+  readonly frames = new SvelteMap<number, VideoFrameThumbnail>()
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Cache validity does not drive rendered output.
+  private frameSignatures = new Map<number, string>()
   private frameTimer: ReturnType<typeof setTimeout> | undefined
   private frameBusy = false
   private frameRequest: number[] | null = null
@@ -78,7 +129,7 @@ export class VideoEditorController {
     this.frameRange = [start, end, contentWidth]
     this.frameRequest = visibleVideoFrames(this.duration, this.fps, start, end, contentWidth)
       .map((cell) => cell.time)
-      .filter((time) => !this.frames.some((frame) => frame.time === time))
+      .filter((time) => this.frameSignatures.get(time) !== frameSignature(this.document, time))
     clearTimeout(this.frameTimer)
     this.frameTimer = setTimeout(() => {
       void this.flushFrames()
@@ -99,12 +150,41 @@ export class VideoEditorController {
         times,
         document ?? undefined
       )
-      if (!this.disposed && this.document === document)
-        this.frames = Object.values(
-          Object.fromEntries([...this.frames, ...frames].map((frame) => [frame.time, frame]))
+      // Decode offscreen before changing src, so the existing image stays painted.
+      // Small batches avoid decoding the entire strip at once on low-end machines.
+      for (let index = 0; index < frames.length; index += 2) {
+        await Promise.all(
+          frames.slice(index, index + 2).map(async (frame) => {
+            const signature = frameSignature(document, frame.time)
+            if (this.disposed || signature !== frameSignature(this.document, frame.time)) return
+            try {
+              const image = new Image()
+              image.src = frame.image
+              await image.decode()
+            } catch {
+              return
+            }
+            if (this.disposed || signature !== frameSignature(this.document, frame.time)) return
+            this.frameSignatures.set(frame.time, signature)
+            if (this.frames.get(frame.time)?.image !== frame.image)
+              this.frames.set(frame.time, frame)
+          })
         )
-          .slice(-96)
-          .sort((a, b) => a.time - b.time)
+      }
+      // Keep visible samples when pruning the bounded cache.
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Temporary eviction membership, not rendered state.
+      const visible = new Set(
+        this.frameRange
+          ? visibleVideoFrames(this.duration, this.fps, ...this.frameRange).map((cell) => cell.time)
+          : []
+      )
+      for (const time of this.frames.keys()) {
+        if (this.frames.size <= 96) break
+        if (!visible.has(time)) {
+          this.frames.delete(time)
+          this.frameSignatures.delete(time)
+        }
+      }
     } catch {
       /* A composition still loading can retry when the viewport moves. */
     } finally {
@@ -694,7 +774,6 @@ export class VideoEditorController {
   queuePreview(): void {
     if (this.frameDocument !== this.document) {
       this.frameDocument = this.document
-      this.frames = []
       if (this.frameRange) this.requestFrames(...this.frameRange)
     }
     if (this.disposed || !this.document || !this.tabId) return
