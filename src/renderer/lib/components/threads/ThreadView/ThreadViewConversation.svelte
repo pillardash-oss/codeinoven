@@ -14,6 +14,7 @@
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import CioZap from '@pdslng/cio-icon/CioZap.svelte'
+  import ConversationSkeleton from './ConversationSkeleton.svelte'
   import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
   import { fly } from 'svelte/transition'
@@ -105,10 +106,11 @@
           </button>
         </div>
       {:else}
-        <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
-          <CioSpinner size={16} class="animate-spin" />
-          Loading conversation...
-        </div>
+        <!-- A skeleton of the transcript, in the transcript's own container, is
+             the loading state: a spinner on one line reads as a container that
+             failed to fill, and it also collapsed the column's height before the
+             messages arrived. -->
+        <ConversationSkeleton />
       {/if}
     {:else}
       {#if board.unmirroredTraceStartTime.hasOlderMessages}
