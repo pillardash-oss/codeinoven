@@ -45,6 +45,13 @@
     filename: string
     /** Where playback resumes, so a viewer opened from the inline player keeps its frame. */
     startAt?: number
+    /**
+     * Whether the recording was running when it was handed over.
+     *
+     * The inline player is stopped on the way here, because both stay mounted; the
+     * viewer picks the recording up instead of leaving the user on a still frame.
+     */
+    autoPlay?: boolean
     /** The message the video arrived in, so a mark can be jumped back to. */
     messageId?: string
     /** Marks already drawn on this video, in composer order. */
@@ -64,6 +71,7 @@
     src,
     filename,
     startAt,
+    autoPlay = false,
     messageId,
     marks,
     editingId,
@@ -236,6 +244,7 @@
     {src}
     label={filename}
     {startAt}
+    {autoPlay}
     fit="fill"
     interactive={false}
     showCenterControl={!armed}

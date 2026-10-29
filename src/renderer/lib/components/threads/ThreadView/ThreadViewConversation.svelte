@@ -172,6 +172,7 @@
           parts={traceParts}
           open
           busy={traceBusy}
+          done={!traceBusy}
           note={traceBusy ? board.unmirroredTraceStartTime.workingStatusNote : null}
           active={board.props.active}
           olderPartsAvailable={board.pollStreamParts.streamTrace.hasOlder}
@@ -311,7 +312,8 @@
                   src={part.url}
                   kind="video"
                   filename={part.filename ?? 'Video'}
-                  onExpand={(startAt) => board.editVideoNote.openMessageViewer(msg, part, startAt)}
+                  onExpand={(startAt, playing) =>
+                    board.editVideoNote.openMessageViewer(msg, part, startAt, playing)}
                 />
               {:else if part.type === 'file' && isAudioMime(part.mime)}
                 <InlineMediaFigure

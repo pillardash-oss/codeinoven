@@ -400,7 +400,8 @@ export class ThreadViewEditVideoNote extends BoardUnit<ThreadView> {
   openMessageViewer(
     msg: AgentMessage,
     part: Extract<AgentPart, { type: 'file' }>,
-    startAt?: number
+    startAt?: number,
+    playing?: boolean
   ): void {
     const items = this.root.studioTemporaryChatContext.previewableFileParts(msg)
     const index = items.findIndex((item) => item.url === part.url)
@@ -410,7 +411,8 @@ export class ThreadViewEditVideoNote extends BoardUnit<ThreadView> {
       index,
       messageId: msg.id,
       annotatable: msg.inlineArtifact === true,
-      startAt
+      ...(startAt !== undefined ? { startAt } : {}),
+      ...(playing !== undefined ? { playing } : {})
     }
     this.root.studioTemporaryChatContext.loadViewerItem(items[index])
   }

@@ -31,6 +31,13 @@
      */
     startAt?: number
     /**
+     * Whether the media was running when the lightbox took it over.
+     *
+     * A recording the user was watching continues in the viewer instead of
+     * stopping on the frame they clicked from.
+     */
+    autoPlay?: boolean
+    /**
      * Original `file://` url of the media being shown, when the caller has one.
      * `src` is usually a blob url, which has no path on disk, so the reveal
      * action needs the untouched source url instead.
@@ -69,7 +76,8 @@
     pager,
     onReveal,
     annotate,
-    startAt
+    startAt,
+    autoPlay = false
   }: Props = $props()
 
   let annotationToolbar = $state<HTMLDivElement>()
@@ -210,6 +218,7 @@
           {src}
           label={filename}
           {startAt}
+          {autoPlay}
           fit="fill"
           onError={(element) => onLoadError?.(element)}
         />

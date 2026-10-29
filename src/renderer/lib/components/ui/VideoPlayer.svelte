@@ -50,10 +50,24 @@
      */
     startAt?: number
     /**
-     * Opens the file in the fullscreen surface, when the caller has one, at the
-     * second the inline player had reached.
+     * Opens the file in the fullscreen surface, when the caller has one.
+     *
+     * It hands over the second the inline player had reached and whether it was
+     * running at that moment. The picture in the conversation stays mounted behind
+     * the fullscreen surface   the conversation is not unmounted while a viewer is
+     * open   so a player that kept running here would play on, and its sound would
+     * keep coming from a player nobody can see while the one on screen sat paused.
+     * Reporting the state is what lets the surface that takes over continue the
+     * recording instead of starting it again.
      */
-    onExpand?: (startAt: number) => void
+    onExpand?: (startAt: number, playing: boolean) => void
+    /**
+     * Whether the picture starts running as soon as it has metadata.
+     *
+     * The fullscreen viewer adopts a recording that was already playing, so it
+     * picks up both the frame and the fact that the user was watching it move.
+     */
+    autoPlay?: boolean
     /** Reports a source that cannot be played, with the element that failed. */
     onError?: (element: HTMLVideoElement) => void
     /** `fill` takes the whole viewer; `inline` is capped so a message stays readable. */
@@ -102,6 +116,7 @@
     onTime,
     onMetadata,
     showCenterControl = true,
+    autoPlay = false,
     class: layout = ''
   }: Props = $props()
 
@@ -173,6 +188,25 @@
     currentTime = 0
     video?.load()
   }
+
+  /**
+   * Hand this picture over to the surface that is taking it.
+   *
+   * The element is stopped first, because the two players are mounted at once for
+   * as long as the fullscreen surface is open: leaving this one running would play
+   * the recording twice, once silently behind the viewer. Its frame and whether it
+   * was running travel with the hand-off, so the viewer continues the recording
+   * rather than restarting it at a still.
+   */
+  function handOver(): void {
+    if (!onExpand) return
+    const element = video
+    const seconds = element ? element.currentTime : currentTime
+    const wasPlaying = element !== null && !element.paused && !element.ended && !failed
+    element?.pause()
+    playing = false
+    onExpand(seconds, wasPlaying)
+  }
 </script>
 
 {#snippet picture()}
@@ -206,6 +240,7 @@
           element.currentTime = startAt
           currentTime = startAt
         }
+        if (autoPlay) void element.play().catch(() => {})
       }}
       ondurationchange={(event) => {
         const value = event.currentTarget.duration
@@ -308,7 +343,7 @@
       aria-label={playing ? `Pause ${label}` : `Play ${label}`}
       title={playing ? `Pause ${label}` : `Play ${label}`}
       onclick={() => void togglePlay()}
-      ondblclick={() => onExpand?.(currentTime)}
+      ondblclick={handOver}
     >
       {@render picture()}
     </button>
@@ -411,7 +446,7 @@
           class="flex size-7 shrink-0 items-center justify-center text-white/85 transition-colors hover:bg-white/10 hover:text-white"
           aria-label="Open {label} full screen"
           title="Open {label} full screen"
-          onclick={() => onExpand?.(currentTime)}
+          onclick={handOver}
         >
           <CioMaximize size={13} aria-hidden="true" />
         </button>

@@ -110,6 +110,18 @@
     scrubbing = false
     scrubValue = 0
   }
+
+  /**
+   * Hand this track over to the fullscreen surface.
+   *
+   * The inline player stays mounted behind that surface, so a track left running
+   * here would be heard from a player nobody can see while the one on screen sat at
+   * its start.
+   */
+  function handOver(): void {
+    audio?.pause()
+    onExpand?.()
+  }
 </script>
 
 <div
@@ -234,7 +246,7 @@
         class="flex size-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Open {label} full screen"
         title="Open {label} full screen"
-        onclick={onExpand}
+        onclick={handOver}
       >
         <CioMaximize size={13} aria-hidden="true" />
       </button>

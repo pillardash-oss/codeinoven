@@ -8,9 +8,10 @@
     filename: string
     /**
      * Opens the file in the app's fullscreen media surface, at the position the
-     * inline player had reached, so the reader keeps their place.
+     * inline player had reached and in the state it was in, so the reader keeps
+     * their place and the recording carries on rather than restarting.
      */
-    onExpand: (startAt?: number) => void
+    onExpand: (startAt?: number, playing?: boolean) => void
   }
 
   let { src, kind, filename, onExpand }: Props = $props()
@@ -21,7 +22,7 @@
      the application rather than as a platform widget dropped into a message, and
      a source that fails says so instead of leaving a dead control bar. -->
 {#if kind === 'video'}
-  <VideoPlayer {src} label={filename} onExpand={(at) => onExpand(at)} />
+  <VideoPlayer {src} label={filename} onExpand={(at, playing) => onExpand(at, playing)} />
 {:else}
   <AudioPlayer {src} label={filename} onExpand={() => onExpand()} />
 {/if}

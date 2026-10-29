@@ -718,6 +718,7 @@
           src={board.state.imageUrls.getUrl(item.url)}
           filename={item.filename}
           startAt={board.studioTemporaryChatContext.messageViewer?.startAt}
+          autoPlay={board.studioTemporaryChatContext.messageViewer?.playing ?? false}
           messageId={board.studioTemporaryChatContext.messageViewer?.messageId}
           marks={board.composerScope.marksFor(item.url)}
           editingId={board.unmirroredTraceStartTime.imageMarkEditorId}
@@ -757,6 +758,7 @@
       src={board.state.imageUrls.getUrl(viewerItem.url)}
       revealUrl={viewerItem.url}
       startAt={board.studioTemporaryChatContext.messageViewer.startAt}
+      autoPlay={board.studioTemporaryChatContext.messageViewer.playing ?? false}
       filename={viewerItem.filename}
       mime={viewerItem.mime}
       pager={board.studioTemporaryChatContext.messageViewerPager}

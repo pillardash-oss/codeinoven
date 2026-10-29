@@ -200,6 +200,15 @@ export class ThreadViewStudioTemporaryChatContext extends BoardUnit<ThreadView> 
      * instead of at the beginning.
      */
     startAt?: number
+    /**
+     * Whether that media was running when it was handed over.
+     *
+     * The inline player stays mounted behind this surface, so it is stopped before
+     * the hand-off; without carrying the state over, clicking fullscreen on a
+     * playing recording paused it. Only the item that was opened keeps it: paging
+     * to a sibling is a fresh look at another file.
+     */
+    playing?: boolean
   } | null>(null)
 
   /**
