@@ -4,8 +4,6 @@
   import CioFolderPlus from '@pdslng/cio-icon/CioFolderPlus.svelte'
   import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioImageOff from '@pdslng/cio-icon/CioImageOff.svelte'
-  import CioLayoutGrid from '@pdslng/cio-icon/CioLayoutGrid.svelte'
-  import CioListTree from '@pdslng/cio-icon/CioListTree.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -65,7 +63,15 @@
 
   let board = $derived(workGroupState.stateFor(projectId, kind))
   let groups = $derived(board?.groups ?? [])
-  let view = $derived<WorkGroupView>(board?.view ?? 'cards')
+  /**
+   * How this list draws its designs.
+   *
+   * The board in front is the cards reading (its Screen Canvas, live preview and
+   * screens), so this surface is the folded list, and its default is that list
+   * rather than a second grid of pictures. The persisted reading still wins when
+   * one exists, so a window that was left in the other reading reopens as it was.
+   */
+  let view = $derived<WorkGroupView>(board?.view ?? 'list')
 
   /** Where each design sits, by folder, so a row knows its group without a scan. */
   let placement = $derived(
@@ -275,11 +281,6 @@
     await run(() => workGroupState.remove(projectId, kind, group.id), 'Could not delete the group')
   }
 
-  async function switchView(next: WorkGroupView): Promise<void> {
-    if (next === view) return
-    await run(() => workGroupState.setView(projectId, kind, next), 'Could not change the view')
-  }
-
   async function moveTo(directory: string, groupId: string | null): Promise<void> {
     await run(
       () => workGroupState.move(projectId, kind, [{ directory, groupId }]),
@@ -290,39 +291,12 @@
   $effect(() => {
     void workGroupState.ensure(projectId, kind)
   })
-
-  /** The view toggle's two readings, in the order a list grows: pictures, then the
-   *  folded list that is easier to scan once there are many. */
-  const views: Array<{ id: WorkGroupView; label: string; title: string }> = [
-    { id: 'cards', label: 'Cards', title: 'Show the designs as pictures' },
-    { id: 'list', label: 'List', title: 'Show the designs as a folded list' }
-  ]
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
   <div class="flex shrink-0 items-center gap-1 border-b border-border py-1.5 pl-2.5">
-    <div class="flex shrink-0 items-center border border-border" aria-label="How designs are shown">
-      {#each views as option (option.id)}
-        <button
-          type="button"
-          class="flex h-6 items-center gap-1 px-1.5 text-[0.6875rem] transition-colors {view ===
-          option.id
-            ? 'bg-primary text-on-primary'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          title={option.title}
-          aria-label={option.title}
-          aria-pressed={view === option.id}
-          onclick={() => void switchView(option.id)}
-        >
-          {#if option.id === 'cards'}
-            <CioLayoutGrid size={12} />
-          {:else}
-            <CioListTree size={12} />
-          {/if}
-          {option.label}
-        </button>
-      {/each}
-    </div>
+    <!-- The reading itself is the board's own header control; this row only holds
+         what the list needs to arrange itself. -->
     <span class="min-w-0 flex-1"></span>
     <button
       type="button"

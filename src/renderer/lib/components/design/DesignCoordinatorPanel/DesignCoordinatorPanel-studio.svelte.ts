@@ -11,6 +11,7 @@ import type { VideoJob } from '$shared/video/studio'
 import { type DesignExportFormat } from '$shared/design/design-export'
 import { isScreenCanvasEntry } from '$shared/design/screen-canvas'
 import type { DesignEntry, DesignScreenShot } from '$shared/ipc-contract'
+import { workGroupState } from '$lib/stores/work-groups.svelte'
 import { SCREEN_ORDERS } from './DesignCoordinatorPanel-types'
 import type { ScreenOrder } from './DesignCoordinatorPanel-types'
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
@@ -43,6 +44,25 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
   /** Whether the menu's own string is one of the board's orders. */
   isScreenOrder(value: string): value is ScreenOrder {
     return SCREEN_ORDERS.some((order) => order === value)
+  }
+
+  /**
+   * Switch the panel between the design in front and the project's designs list.
+   *
+   * One control, two readings: closed the panel is the design as cards (the Screen
+   * Canvas, the live preview, then its screens), open it is the list the user
+   * arranges, where designs are grouped and a group folds away. The reading is
+   * persisted per board, so a long project reopens the way the user left it rather
+   * than flat.
+   */
+  toggleDesignsListing(): void {
+    const listing = !this.root.state.navigatorOpen
+    this.root.state.navigatorOpen = listing
+    void workGroupState.setView(
+      this.root.props.projectId,
+      this.root.gallery.requestedKind,
+      listing ? 'list' : 'cards'
+    )
   }
 
   /**

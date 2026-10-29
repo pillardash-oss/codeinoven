@@ -11,6 +11,7 @@
   import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
   import CioImageOff from '@pdslng/cio-icon/CioImageOff.svelte'
   import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
+  import CioLayoutGrid from '@pdslng/cio-icon/CioLayoutGrid.svelte'
   import CioListTree from '@pdslng/cio-icon/CioListTree.svelte'
   import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
   import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
@@ -315,6 +316,25 @@
     </button>
   {/snippet}
 
+  {#snippet designsListing()}
+    <!--
+      The project's designs, grouped and folded. One reading only: the header's own
+      List control is what opens this, and its Cards control is what comes back, so
+      the list never becomes a second, unrelated view of the same work.
+    -->
+    <DesignNavigator
+      projectId={board.props.projectId}
+      threadId={board.props.threadId}
+      kind={board.gallery.requestedKind}
+      items={board.gallery.items}
+      selectedDirectory={board.gallery.selected.directory}
+      onSelect={(directory) => {
+        board.gallery.selectDesign(directory)
+        board.state.navigatorOpen = false
+      }}
+    />
+  {/snippet}
+
   <header class="shrink-0 border-b border-border">
     <div class="flex board.gallery.items-center gap-1.5 py-1.5 pl-2.5">
       <!--
@@ -328,7 +348,7 @@
       -->
       <button
         type="button"
-        class="group flex max-w-56 min-w-0 cursor-pointer board.gallery.items-center gap-1 px-1.5 py-0.5 transition-colors hover:bg-elevated {board
+        class="group flex h-6 max-w-56 min-w-0 cursor-pointer board.gallery.items-center gap-1 px-1.5 transition-colors hover:bg-elevated {board
           .state.navigatorOpen
           ? 'bg-elevated'
           : ''}"
@@ -339,7 +359,7 @@
           ? `Back to the ${board.gallery.noun} in front`
           : `${board.gallery.switchLabel}, currently ${board.gallery.selectedName === '' ? board.studio.nounTitle : board.gallery.selectedName}`}
         aria-expanded={board.state.navigatorOpen}
-        onclick={() => (board.state.navigatorOpen = !board.state.navigatorOpen)}
+        onclick={() => void board.studio.toggleDesignsListing()}
       >
         <board.studio.WorkIcon size={13} class="shrink-0 text-accent" />
         <span
@@ -375,12 +395,14 @@
       <span class="min-w-0 flex-1"></span>
       <span class="flex shrink-0 board.gallery.items-center gap-0.5">
         <!--
-          The way to the designs themselves.
+          The two readings of this panel, one control.
 
-          The design in front is only half of what this panel holds: the rest are
-          grouped behind a click, and a name that happens to be clickable is not an
-          affordance anyone finds. This is the control that says so, and it is
-          there whether the project holds one design or fifty.
+          Closed, the panel shows the design in front as cards: the Screen Canvas,
+          the live preview, then every screen of the design. That is the default
+          view, and it is what "Cards" returns to. Open, it shows the project's
+          designs as the list the user arranges: groups, folded, so a project of
+          fifty designs is still readable. The label always names what the click
+          will show, so the control is never a mystery.
         -->
         <button
           type="button"
@@ -390,18 +412,24 @@
             : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
           aria-pressed={board.state.navigatorOpen}
           title={board.state.navigatorOpen
-            ? `Back to the ${board.gallery.noun} in front`
-            : `Designs: group, fold and switch between the ${board.gallery.noun}s of this project`}
+            ? `Back to the ${board.gallery.noun} in front, as cards`
+            : `Show the ${board.gallery.noun}s of this project as a list`}
           aria-label={board.state.navigatorOpen
-            ? `Back to the ${board.gallery.noun} in front`
-            : `Designs: group, fold and switch between the ${board.gallery.noun}s of this project`}
-          onclick={() => (board.state.navigatorOpen = !board.state.navigatorOpen)}
+            ? `Back to the ${board.gallery.noun} in front, as cards`
+            : `Show the ${board.gallery.noun}s of this project as a list`}
+          onclick={() => void board.studio.toggleDesignsListing()}
         >
-          <CioListTree size={12} />
-          Designs
+          {#if board.state.navigatorOpen}
+            <CioLayoutGrid size={12} />
+            Cards
+          {:else}
+            <CioListTree size={12} />
+            List
+          {/if}
         </button>
         {#if board.historyActions.historyActions && board.gallery.selected.directory !== '' && !board.gallery.selectedMissing}
           <DesignHistoryActions
+            compact
             canUndo={board.historyActions.historyActions.canUndo}
             canRedo={board.historyActions.historyActions.canRedo}
             undoTitle={`Undo the last change to this ${board.gallery.noun}`}
@@ -483,7 +511,7 @@
             title={`${board.studio.nounTitle} options`}
             aria-label={`${board.studio.nounTitle} options`}
           >
-            <CioEllipsis size={13} />
+            <CioEllipsis size={12} />
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -732,43 +760,37 @@
       </p>
     {/if}
 
-    {#if board.state.navigatorOpen}
+    {#if !board.gallery.video || !board.state.navigatorOpen}
       <!--
-        The navigator replaces the design in front rather than sitting beside it:
-        the panel is narrow, and a listing squeezed next to a preview is neither
-        readable nor draggable. Picking a design returns the board to it, which is
-        the whole gesture.
+        The design in front and the project's designs list are one surface, so the
+        board stays mounted under the list and comes back exactly as it was: its
+        cards, their pictures and its history are not rebuilt because the user
+        looked at the other designs for a moment.
+
+        A composition is the exception, and deliberately: its stage is a native view
+        that no `display: none` can take off screen, so watching it and reading the
+        list at the same time is not a thing this panel can do.
       -->
-      <DesignNavigator
-        projectId={board.props.projectId}
-        threadId={board.props.threadId}
-        kind={board.gallery.requestedKind}
-        items={board.gallery.items}
-        selectedDirectory={board.gallery.selected.directory}
-        onSelect={(directory) => {
-          board.gallery.selectDesign(directory)
-          board.state.navigatorOpen = false
-        }}
-      />
-    {:else if board.gallery.selectedMissing}
-      <div
-        class="flex min-h-0 flex-1 flex-col board.gallery.items-center justify-center gap-3 p-4 text-center"
-      >
-        <CioImageOff size={20} class="text-warning" />
-        <p class="text-sm font-medium">{board.studio.nounTitle} not found</p>
-        <p class="break-all font-mono text-xs text-muted">{board.gallery.selected.directory}</p>
-        <p class="text-xs text-muted">
-          Restore the folder and refresh, or remove this entry from the panel.
-        </p>
-        <button
-          type="button"
-          class="flex board.gallery.items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
-          onclick={() => (board.studio.removeRequested = board.gallery.selectedItem)}
-          ><CioTrash size={13} />Remove from panel</button
-        >
-      </div>
-    {:else if board.gallery.video && board.gallery.selected.directory !== ''}
-      <!--
+      <div class="flex min-h-0 flex-1 flex-col" class:hidden={board.state.navigatorOpen}>
+        {#if board.gallery.selectedMissing}
+          <div
+            class="flex min-h-0 flex-1 flex-col board.gallery.items-center justify-center gap-3 p-4 text-center"
+          >
+            <CioImageOff size={20} class="text-warning" />
+            <p class="text-sm font-medium">{board.studio.nounTitle} not found</p>
+            <p class="break-all font-mono text-xs text-muted">{board.gallery.selected.directory}</p>
+            <p class="text-xs text-muted">
+              Restore the folder and refresh, or remove this entry from the panel.
+            </p>
+            <button
+              type="button"
+              class="flex board.gallery.items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
+              onclick={() => (board.studio.removeRequested = board.gallery.selectedItem)}
+              ><CioTrash size={13} />Remove from panel</button
+            >
+          </div>
+        {:else if board.gallery.video && board.gallery.selected.directory !== ''}
+          <!--
         The composition above, the tools below.
 
         The picture takes the space the panel has, and the timeline and controls
@@ -777,97 +799,102 @@
         scrolling column with the controls would be drawn past the panel at the
         sizes where the column is taller than the panel.
       -->
-      <div class="flex min-h-0 flex-1 flex-col">
-        <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
-          {@render videoStage()}
-        </div>
-        <div class="flex shrink-0 flex-col border-t border-border pb-2 pl-2.5">
-          {#key `${board.props.projectId}:${board.props.threadId}:${board.gallery.selected.directory}:${board.studio.boardRevision}`}
-            <VideoEditWorkspace
-              projectId={board.props.projectId}
-              threadId={board.props.threadId}
-              directory={board.gallery.selected.directory}
-              tabId={board.gallery.boardTabId}
-              active={board.props.active && !board.studio.compositionFullscreen}
-              onDirtyChange={board.studio.setStudioDirty}
-              onSaved={board.studio.setStudioSaved}
-              onExport={board.gallery.exportVideo}
-              onExpand={() => void board.gallery.openPreview(null)}
-            />
-          {/key}
-        </div>
-      </div>
-    {:else}
-      <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
-        {#if board.gallery.video}
-          <div
-            class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
-          >
-            <CioImageOff size={16} />
-            <span class="px-4 text-center text-[0.6875rem]">
-              {`The agent has not written a ${board.gallery.noun} yet. It will appear here when it does.`}
-            </span>
-          </div>
-        {:else if board.gallery.gallery.length === 0}
-          <div
-            class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
-          >
-            {#if board.studio.galleryBusy}
-              <CioSpinner size={16} class="animate-spin" />
-              <span class="text-[0.6875rem]">Capturing the {board.gallery.noun}…</span>
-            {:else}
-              <CioImageOff size={16} />
-              <span class="px-4 text-center text-[0.6875rem]">
-                {board.gallery.items.length === 0
-                  ? `The agent has not written a ${board.gallery.noun} yet. It will appear here when it does.`
-                  : 'No preview captured yet.'}
-              </span>
-            {/if}
+          <div class="flex min-h-0 flex-1 flex-col">
+            <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
+              {@render videoStage()}
+            </div>
+            <div class="flex shrink-0 flex-col border-t border-border pb-2 pl-2.5">
+              {#key `${board.props.projectId}:${board.props.threadId}:${board.gallery.selected.directory}:${board.studio.boardRevision}`}
+                <VideoEditWorkspace
+                  projectId={board.props.projectId}
+                  threadId={board.props.threadId}
+                  directory={board.gallery.selected.directory}
+                  tabId={board.gallery.boardTabId}
+                  active={board.props.active && !board.studio.compositionFullscreen}
+                  onDirtyChange={board.studio.setStudioDirty}
+                  onSaved={board.studio.setStudioSaved}
+                  onExport={board.gallery.exportVideo}
+                  onExpand={() => void board.gallery.openPreview(null)}
+                />
+              {/key}
+            </div>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-1.5" aria-label={board.studio.screensLabel}>
-            {#if !board.gallery.video}
-              {@render entryCard({
-                icon: CioDisplay,
-                name: 'Screen Canvas',
-                shot: board.studio.canvasShot,
-                label: 'Open the Screen Canvas in the in-app browser',
-                empty: board.studio.canvasEntryNote,
-                busy: !board.gallery.canvasRead || board.gallery.openingCanvas,
-                ready: board.gallery.canvasState !== null,
-                onOpen: () => void board.gallery.openCanvas()
-              })}
-              {@render entryCard({
-                icon: CioLayers,
-                name: 'Live preview',
-                shot: board.studio.liveShot,
-                label: `Open the live preview of this ${board.gallery.noun} in the in-app browser`,
-                empty: board.studio.liveEntryNote,
-                busy: board.gallery.opening,
-                ready: board.gallery.liveReady,
-                onOpen: () => void board.gallery.openPreview(board.studio.LIVE_PREVIEW_ENTRY)
-              })}
-            {/if}
-            {#each board.studio.screenCards as screen (screen.entry)}
-              {@render screenCard(screen, board.gallery.video)}
-            {/each}
-          </div>
-          {#if !board.gallery.video && board.studio.designScreens.length === 0}
-            {#if board.studio.galleryBusy}
-              <p
-                class="mt-2 flex board.gallery.items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed"
+          <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
+            {#if board.gallery.video}
+              <div
+                class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
               >
-                <CioSpinner size={12} class="animate-spin" />
-                Capturing the {board.gallery.noun}…
-              </p>
+                <CioImageOff size={16} />
+                <span class="px-4 text-center text-[0.6875rem]">
+                  {`The agent has not written a ${board.gallery.noun} yet. It will appear here when it does.`}
+                </span>
+              </div>
+            {:else if board.gallery.gallery.length === 0}
+              <div
+                class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+              >
+                {#if board.studio.galleryBusy}
+                  <CioSpinner size={16} class="animate-spin" />
+                  <span class="text-[0.6875rem]">Capturing the {board.gallery.noun}…</span>
+                {:else}
+                  <CioImageOff size={16} />
+                  <span class="px-4 text-center text-[0.6875rem]">
+                    {board.gallery.items.length === 0
+                      ? `The agent has not written a ${board.gallery.noun} yet. It will appear here when it does.`
+                      : 'No preview captured yet.'}
+                  </span>
+                {/if}
+              </div>
             {:else}
-              <p class="mt-2 text-center text-[0.6875rem] text-muted">
-                {`The agent has not written a ${board.gallery.noun} yet. It will appear here when it does.`}
-              </p>
+              <div class="grid grid-cols-2 gap-1.5" aria-label={board.studio.screensLabel}>
+                {#if !board.gallery.video}
+                  {@render entryCard({
+                    icon: CioDisplay,
+                    name: 'Screen Canvas',
+                    shot: board.studio.canvasShot,
+                    label: 'Open the Screen Canvas in the in-app browser',
+                    empty: board.studio.canvasEntryNote,
+                    busy: !board.gallery.canvasRead || board.gallery.openingCanvas,
+                    ready: board.gallery.canvasState !== null,
+                    onOpen: () => void board.gallery.openCanvas()
+                  })}
+                  {@render entryCard({
+                    icon: CioLayers,
+                    name: 'Live preview',
+                    shot: board.studio.liveShot,
+                    label: `Open the live preview of this ${board.gallery.noun} in the in-app browser`,
+                    empty: board.studio.liveEntryNote,
+                    busy: board.gallery.opening,
+                    ready: board.gallery.liveReady,
+                    onOpen: () => void board.gallery.openPreview(board.studio.LIVE_PREVIEW_ENTRY)
+                  })}
+                {/if}
+                {#each board.studio.screenCards as screen (screen.entry)}
+                  {@render screenCard(screen, board.gallery.video)}
+                {/each}
+              </div>
+              {#if !board.gallery.video && board.studio.designScreens.length === 0}
+                {#if board.studio.galleryBusy}
+                  <p
+                    class="mt-2 flex board.gallery.items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed"
+                  >
+                    <CioSpinner size={12} class="animate-spin" />
+                    Capturing the {board.gallery.noun}…
+                  </p>
+                {:else}
+                  <p class="mt-2 text-center text-[0.6875rem] text-muted">
+                    {`The agent has not written a ${board.gallery.noun} yet. It will appear here when it does.`}
+                  </p>
+                {/if}
+              {/if}
             {/if}
-          {/if}
+          </div>
         {/if}
       </div>
+    {/if}
+    {#if board.state.navigatorOpen}
+      {@render designsListing()}
     {/if}
     {#if board.gallery.selected.directory !== '' && !board.gallery.selectedMissing && !board.state.navigatorOpen}
       {#key `${board.props.projectId}:${board.props.threadId}:${board.gallery.selected.directory}`}
