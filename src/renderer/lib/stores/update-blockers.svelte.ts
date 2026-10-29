@@ -38,7 +38,7 @@ class UpdateBlockersState {
   init(): void {
     // Only refresh once the modal has asked for something, so a closed modal
     // never turns the gate's poll into a per-tick payload fetch.
-    const unsubWaiting = subscribe('updater:waiting-for-threads', () => {
+    const unsubWaiting = subscribe('updater:waiting-for-work', () => {
       if (this.payload) void this.refresh()
     })
     this.cleanups.push(unsubWaiting)

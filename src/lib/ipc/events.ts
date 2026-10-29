@@ -276,7 +276,17 @@ export const IPC_EVENT_CONTRACT = {
   /** Emitted when the user presses the mouse's forward side button. */
   'window:historyForward': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
-  'updater:waiting-for-threads': [] as unknown as [activeCount: number],
+  /**
+   * What a pending update install is still waiting on: working sessions and live
+   * terminal processes first, then browser downloads whose bytes are still
+   * arriving. Pushed on every deferred decision, so a rail button, an open
+   * Settings card and the blockers modal all read the same answer.
+   *
+   * Two numbers rather than one payload object on purpose: the event contract is
+   * one large union, and an object payload here pushes TypeScript's
+   * representation of it past its complexity limit in the preload bridge.
+   */
+  'updater:waiting-for-work': [] as unknown as [threads: number, downloads: number],
   /**
    * State of the app-owned TypeSafe (Jev) capability, pushed after any change
    * to the key or after a connection check, so an open Settings card never

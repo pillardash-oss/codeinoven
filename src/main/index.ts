@@ -199,6 +199,10 @@ ipcMain.handle('app:parkWindow', async () => {
 // must be cancelled here, or it force-exits an app the user just kept open.
 ipcMain.handle('app:abandonClose', () => {
   disarmQuitFailsafe(state)
+  // A declined close is also a declined install when the quit it interrupted was
+  // the updater's: the dispatch is undone so the update goes back to "downloaded"
+  // instead of being lost with the app still running.
+  state.updaterService?.handleInstallDeclined()
 })
 
 // Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+D) is the menu bar's
@@ -962,7 +966,10 @@ void app
         // phase reports what painted, not what the boot was willing to wait for.
         if (outcome === 'ready') startupTelemetry.mark('splash:visualReady')
       })
-      splashOutcome = await trackStartupStep('splash:barrier', withSplashDeadline(splashVisualReady))
+      splashOutcome = await trackStartupStep(
+        'splash:barrier',
+        withSplashDeadline(splashVisualReady)
+      )
       if (splashOutcome === 'ready') {
         startupTelemetry.mark('splash:visualReady')
       }
@@ -1215,7 +1222,15 @@ app.on('before-quit', (event) => {
   // If the user hasn't explicitly approved a force close, gate the quit on the
   // close-confirmation flow (which proceeds immediately when nothing is working).
   if (!state.quitConfirmed) {
-    requestCloseConfirmation({ state, database, window: state.mainWindow })
+    // The install this quit belongs to must stop counting down while the user is
+    // being asked: the prompt is progress, not a wedged installer.
+    state.updaterService?.pauseInstallQuitWatchdog()
+    requestCloseConfirmation({
+      state,
+      database,
+      window: state.mainWindow,
+      install: quitForUpdate
+    })
     return
   }
   state.quitCleanupStarted = true
