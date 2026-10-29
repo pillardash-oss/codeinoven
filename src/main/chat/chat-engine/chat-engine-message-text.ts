@@ -1,5 +1,6 @@
 import { MEMORY_EXTRACTION_LIMITS } from '../memory-service'
 import { isTodoToolPart } from '../../../lib/agent-todos'
+import { patternActionPhrase } from '../../../lib/tool-action-label'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../../drivers/persistent-cli-driver'
 import type {
@@ -68,19 +69,6 @@ export function textForMessage(message: AgentMessage): string {
  * patterns match on intent, not on any one harness's naming, and are checked
  * in order from most to least specific.
  */
-export const TOOL_ACTION_PATTERNS: Array<{ match: RegExp; label: string }> = [
-  { match: /todo/i, label: 'updated the task list' },
-  { match: /task|spawn.?agent|subagent|agent.?status/i, label: 'delegated to a sub-agent' },
-  { match: /websearch|web.?search/i, label: 'searched the web' },
-  { match: /webfetch|fetch|browse|curl/i, label: 'fetched a URL' },
-  { match: /bash|shell|exec|terminal|command/i, label: 'ran a shell command' },
-  { match: /multiedit|notebook.?edit|apply.?patch|patch/i, label: 'edited a file' },
-  { match: /^edit$|^edit[-_]/i, label: 'edited a file' },
-  { match: /^write$|write[-_]?file/i, label: 'wrote a file' },
-  { match: /^read$|read.?file|^cat$/i, label: 'read a file' },
-  { match: /grep|glob|^find$|search/i, label: 'searched files' }
-]
-
 export const TOOL_CALL_INPUT_PARAM_CAP = 150
 
 export const TOOL_CALL_RESULT_CAP = 500
@@ -127,9 +115,7 @@ export function truncateToolResult(text: string): string {
  * reason to trust (see formatConversationTranscript).
  */
 export function describeToolPart(part: Extract<AgentPart, { type: 'tool' }>): string {
-  const action =
-    TOOL_ACTION_PATTERNS.find(({ match }) => match.test(part.tool))?.label ??
-    `used a tool (${part.tool})`
+  const action = patternActionPhrase(part.tool) ?? `used a tool (${part.tool})`
   const subject = summarizeToolInput(part.state.input ?? {})
   const line = subject ? `${action}: ${subject}` : action
   if (part.state.status === 'error' || part.state.error) {

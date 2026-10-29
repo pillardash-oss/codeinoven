@@ -41,7 +41,8 @@ import {
   changedPathsFromTool,
   normalizedToolName
 } from './chat-engine-changes'
-import { turnStreamPath, validatePromptReferences } from './chat-engine-pure'
+import { turnStreamPath } from './chat-engine-pure'
+import { toolActionLabelForPart } from '../../../lib/tool-action-label'
 import { ChatEngine, isTurnBoundaryPrompt } from '../chat-engine'
 
 /** ChatEngine turns: one concern, moved verbatim from the composition root. */
@@ -519,6 +520,14 @@ export class ChatEngineTurns {
         (event.type === 'session.status' && event.status.state === 'idle'))
     ) {
       this.host.refreshOpenCodeHarness()
+    }
+    // A tool call carries the friendly action it performed, snapshotted here, at
+    // ingest, so every reader downstream (the live trace, the durable stream
+    // log, the transcript mirror) shows one label instead of re-deriving it from
+    // a harness's own tool name. A thread recorded before the field existed has
+    // no label and keeps rendering its title or tool name, which costs nothing.
+    if (event.type === 'message.part.updated' && event.part.type === 'tool') {
+      event.part = toolActionLabelForPart(event.part)
     }
     // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.

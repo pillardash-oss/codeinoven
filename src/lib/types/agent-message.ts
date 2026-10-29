@@ -184,6 +184,14 @@ export type AgentPart =
       /** True when this call ran model-written code (a code-mode script) or
        *  was made from inside one. The trace renders it with the code glyph. */
       codeMode?: boolean
+      /**
+       * Friendly one-line action this call performed ("Searched the web"),
+       * snapshotted when the app first saw the part so a trace never re-derives
+       * it at render time. Absent on threads recorded before it existed, and on
+       * calls whose action cannot be named without repeating a raw tool name;
+       * those rows fall back to `state.title` or the tool name.
+       */
+      actionLabel?: string
       state: AgentToolState
     }
   | {

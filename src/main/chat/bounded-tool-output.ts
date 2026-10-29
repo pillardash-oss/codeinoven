@@ -1,5 +1,6 @@
 import type { AgentPart, AgentToolState } from '../../lib/types'
 import { base64Kilobytes } from '../../lib/image-payload'
+import { toolActionLabelForPart } from '../../lib/tool-action-label'
 
 /**
  * Bounded persisted size for one tool part's `state.output`.
@@ -75,11 +76,11 @@ function boundPersistedText(text: string): string {
 }
 
 /**
- * Cap oversized tool-part outputs in an event part before it reaches any
- * durable store (mirror rows, stream log lines). Sub-cap parts pass through
- * by reference   the common case stays allocation-free.
+ * Cap oversized tool-part outputs in a part that is about to reach a durable
+ * store (mirror rows, stream log lines). Sub-cap parts pass through by
+ * reference, so the common case stays allocation-free.
  */
-export function capPersistedPart(part: AgentPart): AgentPart {
+function capPartPayload(part: AgentPart): AgentPart {
   if (part.type !== 'tool') return part
   const state = part.state
   let nextState: AgentToolState | null = null
@@ -106,7 +107,32 @@ export function capPersistedPart(part: AgentPart): AgentPart {
   return nextState ? { ...part, state: nextState } : part
 }
 
+/**
+ * Prepare one part for a durable store: cap its payload and stamp the friendly
+ * action label it performs.
+ *
+ * The label is a snapshot, written once when the app first persists the part,
+ * and from then on it is just another short string in the JSON the part already
+ * costs. Readers never derive it again, and a thread recorded before the field
+ * existed simply keeps its title or raw tool name.
+ */
+export function capPersistedPart(part: AgentPart): AgentPart {
+  const capped = capPartPayload(part)
+  return capped.type === 'tool' ? toolActionLabelForPart(capped) : capped
+}
+
 /** Cap every part of a message that is about to be persisted. */
 export function capPersistedParts(parts: AgentPart[]): AgentPart[] {
   return parts.map(capPersistedPart)
+}
+
+/**
+ * The read-side counterpart, for rows decoded out of the mirror.
+ *
+ * It only bounds the payload of legacy rows; it never derives an action label,
+ * because a thread recorded before the snapshot existed must not pay to have
+ * one computed every time its transcript is loaded.
+ */
+export function capDecodedParts(parts: AgentPart[]): AgentPart[] {
+  return parts.map(capPartPayload)
 }

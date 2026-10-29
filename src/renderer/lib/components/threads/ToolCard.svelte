@@ -160,8 +160,12 @@
   /** A code-mode call orchestrates other tools by script, so it reads as a
    *  distinct kind of step in the trace instead of an unnamed tool. */
   const codeModeLabel = $derived(
-    part.state.title ?? (toolKind === 'code' ? 'Code mode' : part.tool)
+    part.state.title ?? part.actionLabel ?? (toolKind === 'code' ? 'Code mode' : part.tool)
   )
+
+  /** True when the row's label describes the action rather than repeating the
+   *  tool's own name, which is what the expanded card spells out. */
+  const labeled = $derived(codeModeLabel !== part.tool)
 
   /** Bound on the collapsed row's input preview. The row truncates to the
    *  width it actually has in CSS, so this only stops a pathological first
@@ -239,7 +243,7 @@
     {:else}
       <CioWrench size={12} class={kindIconClass} />
     {/if}
-    <span class="shrink-0 font-mono font-medium">
+    <span class="shrink-0 font-medium">
       {codeModeLabel}
     </span>
     {#if start}
@@ -266,6 +270,11 @@
 
   {#if open}
     <div transition:slide={foldSlide()} class="space-y-2 border-l border-border/60 py-1 pr-3 pl-3">
+      {#if labeled}
+        <p class="text-[0.625rem] text-dimmed">
+          Tool · <span class="font-mono text-muted">{part.tool}</span>
+        </p>
+      {/if}
       {#if displayDiffs.length > 0}
         <InlineToolDiff diffs={displayDiffs} />
       {:else if giantInput !== null}

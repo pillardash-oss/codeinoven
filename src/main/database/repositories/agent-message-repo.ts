@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { capPersistedParts } from '../../chat/bounded-tool-output'
+import { capDecodedParts, capPersistedParts } from '../../chat/bounded-tool-output'
 import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import type { Database } from '../database'
 import type {
@@ -270,7 +270,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
   // forks, exports) bounded even for legacy rows.
   const decodedParts = stripStoredThinkingArtifacts(
     row.role,
-    capPersistedParts(JSON.parse(row.parts) as AgentPart[])
+    capDecodedParts(JSON.parse(row.parts) as AgentPart[])
   )
   return {
     id: row.id,
