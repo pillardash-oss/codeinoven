@@ -719,8 +719,8 @@
                 {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                   <WorkingTrace
                     parts={turnParts}
-                    open={isCurrentAssistantTurn || traceIsLive || traceIsRestored}
-                    busy={traceIsLive || traceIsRestored}
+                    open={isCurrentAssistantTurn || traceIsLive}
+                    busy={traceIsLive}
                     done={turnDone}
                     rehydrated={traceIsRestored}
                     foreignRun={traceRunIsForeign}

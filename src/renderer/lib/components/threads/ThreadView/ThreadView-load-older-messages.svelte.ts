@@ -4,9 +4,10 @@ import { invoke } from '$lib/ipc.svelte'
 
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { playHistoryArrive } from '$lib/motion'
+import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
-import type { ThreadMessageCursor, ThreadSettings } from '$shared/types'
+import type { ThreadMessageCursor, ThreadSettings, TurnStreamPartsPage } from '$shared/types'
 import {
   hasRenderableWorkingParts,
   isActivityOnlyUserMessage,
@@ -904,6 +905,41 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     }
   }
 
+  /**
+   * Adopt the durable fold read for the restored turn.
+   *
+   * Split out of the restore chain so a completed thread can apply it after the
+   * mount frame has painted instead of holding the restore on the durable read,
+   * while a live turn still applies it in the same pass.
+   */
+  applyRestoredTrace(page: TurnStreamPartsPage | null): void {
+    if (!this.alive || !page) return
+    if (
+      this.root.handleAgentEvent.providerStatus !== null ||
+      this.root.handleAgentEvent.thread.status === 'working-paused' ||
+      this.root.buildSpecActionPrompt.restoredBusy ||
+      !hasRenderableWorkingParts(page.parts)
+    ) {
+      return
+    }
+    // Only a saved run that is still the newest work may claim the
+    // restored-trace state. Once the user has sent a newer message (locally
+    // submitted turn, or a pending user message after the last assistant turn),
+    // that stale trace is history: it must stay folded with frozen durations
+    // while the new run gets its own live trace.
+    const latestStart = this.root.buildSpecActionPrompt.latestTurnInfo.startIndex
+    let turnEnd = latestStart
+    while (turnEnd + 1 < this.messages.length && this.messages[turnEnd + 1]?.role !== 'user') {
+      turnEnd += 1
+    }
+    const hasNewerUserWork =
+      latestStart === -1 ||
+      this.root.buildSpecActionPrompt.locallySubmittedTurnId !== null ||
+      this.messages.slice(turnEnd + 1).some((message) => message.role === 'user')
+    this.root.buildSpecActionPrompt.restoredBusy =
+      !hasNewerUserWork && !this.root.unmirroredTraceStartTime.isLatestTurnCompleted()
+  }
+
   /** Restore app-owned session state without contacting native harness transport. */
   async connectSession(): Promise<void> {
     // Controller-driven conversations own their own session handshake.
@@ -913,13 +949,14 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // Independent extras   each lands as it resolves, none block the paint.
     void this.root.abortRun.refreshCheckpoints()
     void this.root.switchProject.loadProjectContext()
-    // The durable fold is the one read the open path cannot answer from the
-    // message mirror, and the session handshake below is a chain of round
-    // trips of its own. Its request leaves first, so it is already in flight
-    // while the status, permission, and question reads run. A hover preload has
-    // usually warmed the fold and the main process's log reader, which makes
-    // this a refresh rather than the first read.
-    const latestTraceWindow = this.root.pollStreamParts.loadLatestTraceWindow()
+    // The durable fold is not what makes a thread readable. The mirror already
+    // carries the user's message and the answer, and a completed thread's trace
+    // is additional detail, so it is read once the mount frame has painted and
+    // nothing below waits for it (see the restore section at the end). A live
+    // turn keeps the old behaviour: its trace is the work itself.
+    let traceWindowRead: Promise<TurnStreamPartsPage | null> | null = null
+    const readTraceWindow = (): Promise<TurnStreamPartsPage | null> =>
+      (traceWindowRead ??= this.root.pollStreamParts.loadLatestTraceWindow())
 
     if (this.root.composerScope.shouldHydrateEngineeringState()) {
       try {
@@ -973,12 +1010,24 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       ) {
         this.root.buildSpecActionPrompt.setIdleFromRestore()
       }
-      await this.root.editVideoNote.refreshPendingPermissions()
-      if (!this.alive) return
-      await this.root.sources.refreshPendingImageDescriptorError()
-      if (!this.alive) return
-      await this.root.composerScope.refreshPendingQuestions()
-      if (!this.alive) return
+      const liveSessionWorking = this.root.handleAgentEvent.providerStatus?.state === 'working'
+      if (liveSessionWorking) {
+        await this.root.editVideoNote.refreshPendingPermissions()
+        if (!this.alive) return
+        await this.root.sources.refreshPendingImageDescriptorError()
+        if (!this.alive) return
+        await this.root.composerScope.refreshPendingQuestions()
+        if (!this.alive) return
+      } else {
+        // A completed thread has nothing waiting on these: a permission card or
+        // a question only exists while work is in flight. They enrich the opened
+        // thread, so they load after the frame instead of holding the restore.
+        scheduleDeferredWork('thread:restored-session-extras', () => {
+          void this.root.editVideoNote.refreshPendingPermissions()
+          void this.root.sources.refreshPendingImageDescriptorError()
+          void this.root.composerScope.refreshPendingQuestions()
+        })
+      }
       this.root.abortRun.syncOpenSubagentTabs()
       // A queued message restored from the recovery snapshot should be
       // dispatched as soon as the agent is known idle. Wait for the local
@@ -998,47 +1047,24 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       // The thread itself stays interactive (not busy) so a poke message can
       // still be sent normally. Paused retry waits are represented by the
       // provider status card, not by a misleading reconnecting trace.
-      const liveSessionWorking = this.root.handleAgentEvent.providerStatus?.state === 'working'
       this.root.buildSpecActionPrompt.restoredBusy =
         this.root.handleAgentEvent.providerStatus === null &&
         this.root.handleAgentEvent.thread.status !== 'working-paused' &&
         this.root.pollStreamParts.hasPersistedInFlightWork()
-      // Always rebuild the latest logical turn from the durable SSE log. The
-      // bounded mirror can contain only the newest snapshot of a long turn,
-      // and a finished thread still needs the same complete trace after a
-      // refresh or thread switch. Only the newest page is read here; older
-      // entries page in on the trace's own inner scroll.
-      void this.root.pollStreamParts.loadCompletedTurns()
-      const page = await latestTraceWindow
-      if (!this.alive) return
-      if (page) {
-        if (
-          this.root.handleAgentEvent.providerStatus === null &&
-          this.root.handleAgentEvent.thread.status !== 'working-paused' &&
-          !this.root.buildSpecActionPrompt.restoredBusy &&
-          hasRenderableWorkingParts(page.parts)
-        ) {
-          // Only a saved run that is still the newest work may claim the
-          // restored-trace state. Once the user has sent a newer message
-          // (locally submitted turn, or a pending user message after the
-          // last assistant turn), that stale trace is history: it must stay
-          // folded with frozen durations while the new run gets its own
-          // live trace.
-          const latestStart = this.root.buildSpecActionPrompt.latestTurnInfo.startIndex
-          let turnEnd = latestStart
-          while (
-            turnEnd + 1 < this.messages.length &&
-            this.messages[turnEnd + 1]?.role !== 'user'
-          ) {
-            turnEnd += 1
-          }
-          const hasNewerUserWork =
-            latestStart === -1 ||
-            this.root.buildSpecActionPrompt.locallySubmittedTurnId !== null ||
-            this.messages.slice(turnEnd + 1).some((message) => message.role === 'user')
-          this.root.buildSpecActionPrompt.restoredBusy =
-            !hasNewerUserWork && !this.root.unmirroredTraceStartTime.isLatestTurnCompleted()
-        }
+      // Rebuilding the latest logical turn from the durable SSE log is detail on
+      // top of a transcript that has already painted. A live turn needs it
+      // before anything else, because that trace is the work in progress. A
+      // completed thread takes it after the frame, through the same deferred
+      // path, so no part of the restore chain waits on the durable read.
+      if (liveSessionWorking) {
+        void this.root.pollStreamParts.loadCompletedTurns()
+        this.applyRestoredTrace(await readTraceWindow())
+        if (!this.alive) return
+      } else {
+        scheduleDeferredWork('thread:restored-trace', () => {
+          void this.root.pollStreamParts.loadCompletedTurns()
+          void readTraceWindow().then((page) => this.applyRestoredTrace(page))
+        })
       }
       if (!liveSessionWorking && this.root.handleAgentEvent.providerStatus === null)
         this.root.buildSpecActionPrompt.setIdleFromRestore()
