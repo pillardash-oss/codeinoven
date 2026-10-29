@@ -7,7 +7,24 @@
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type { Snippet } from 'svelte'
   import SeekBar from './SeekBar.svelte'
+  import { SvelteMap } from 'svelte/reactivity'
   import { preloadNearViewport } from './preload-near-viewport'
+
+  /**
+   * The shape of a picture this session has already measured, keyed by source.
+   *
+   * A video's own dimensions only arrive with its metadata, and until then the
+   * element falls back to the browser's 300x150 box. Measured in the running app
+   * while scrolling a long conversation, that fallback is what makes reaching a
+   * recording feel like a stumble: the box grew from 150px to 360px at the
+   * moment metadata landed, and the document shifted under the reader (three
+   * layout shifts, 0.07 and 0.06 of the viewport, in the same frame). Reserving
+   * the box at the ratio we already know keeps that frame still, and remembering
+   * the ratio means the second visit to a video never has to guess.
+   */
+  const measuredRatios = new SvelteMap<string, number>()
+  /** What an unmeasured video reserves: the shape nearly every recording has. */
+  const FALLBACK_RATIO = 16 / 9
 
   /**
    * The app's video player.
@@ -89,6 +106,8 @@
   }: Props = $props()
 
   let video = $state<HTMLVideoElement | null>(null)
+  /** Intrinsic width/height, as soon as this element's metadata reports it. */
+  let measuredRatio = $state<number | null>(null)
   let playing = $state(false)
   let started = $state(false)
   let muted = $state(false)
@@ -97,6 +116,9 @@
   let failed = $state(false)
   let scrubbing = $state(false)
   let scrubValue = $state(0)
+
+  /** The box the picture reserves, so metadata can land without moving it. */
+  const ratio = $derived(measuredRatio ?? measuredRatios.get(src) ?? FALLBACK_RATIO)
 
   /** `m:ss`, or `h:mm:ss` once a recording runs past an hour. */
   function clock(seconds: number): string {
@@ -155,53 +177,64 @@
 
 {#snippet picture()}
   <!-- The picture fetches its metadata when it comes into view rather than when
-       the message mounts: see `preload-near-viewport`. -->
-  <video
-    bind:this={video}
-    class={['block w-full object-contain', fit === 'fill' ? 'h-full' : 'max-h-96']}
-    {src}
-    playsinline
-    preload="none"
-    use:preloadNearViewport
-    onloadedmetadata={(event) => {
-      const element = event.currentTarget
-      onElement?.(element)
-      onMetadata?.(element)
-      duration = element.duration
-      // A caller that opened this from an inline player hands over the frame it
-      // had reached; playback resumes there rather than at the beginning.
-      if (startAt && startAt > 0 && startAt < element.duration) {
-        element.currentTime = startAt
-        currentTime = startAt
-      }
-    }}
-    ondurationchange={(event) => {
-      const value = event.currentTarget.duration
-      if (Number.isFinite(value)) duration = value
-    }}
-    ontimeupdate={(event) => {
-      if (scrubbing) return
-      currentTime = event.currentTarget.currentTime
-      onTime?.(currentTime)
-    }}
-    onplay={() => {
-      playing = true
-      started = true
-    }}
-    onpause={() => (playing = false)}
-    onended={() => {
-      playing = false
-      currentTime = duration
-    }}
-    onerror={(event) => {
-      failed = true
-      playing = false
-      const element = event.currentTarget
-      if (element instanceof HTMLVideoElement) onError?.(element)
-    }}
+       the message mounts (see `preload-near-viewport`), and it is drawn inside a
+       box reserved at its own shape, so the frame that measures it does not also
+       move the document under the reader. -->
+  <div
+    class={['relative w-full overflow-hidden bg-black', fit === 'fill' ? 'h-full' : 'max-h-96']}
+    style={fit === 'fill' ? undefined : `aspect-ratio: ${ratio}`}
   >
-    <track kind="captions" />
-  </video>
+    <video
+      bind:this={video}
+      class="block size-full object-contain"
+      {src}
+      playsinline
+      preload="none"
+      use:preloadNearViewport
+      onloadedmetadata={(event) => {
+        const element = event.currentTarget
+        onElement?.(element)
+        onMetadata?.(element)
+        if (element.videoWidth > 0 && element.videoHeight > 0) {
+          measuredRatio = element.videoWidth / element.videoHeight
+          measuredRatios.set(src, measuredRatio)
+        }
+        duration = element.duration
+        // A caller that opened this from an inline player hands over the frame it
+        // had reached; playback resumes there rather than at the beginning.
+        if (startAt && startAt > 0 && startAt < element.duration) {
+          element.currentTime = startAt
+          currentTime = startAt
+        }
+      }}
+      ondurationchange={(event) => {
+        const value = event.currentTarget.duration
+        if (Number.isFinite(value)) duration = value
+      }}
+      ontimeupdate={(event) => {
+        if (scrubbing) return
+        currentTime = event.currentTarget.currentTime
+        onTime?.(currentTime)
+      }}
+      onplay={() => {
+        playing = true
+        started = true
+      }}
+      onpause={() => (playing = false)}
+      onended={() => {
+        playing = false
+        currentTime = duration
+      }}
+      onerror={(event) => {
+        failed = true
+        playing = false
+        const element = event.currentTarget
+        if (element instanceof HTMLVideoElement) onError?.(element)
+      }}
+    >
+      <track kind="captions" />
+    </video>
+  </div>
 
   {#if overlay}
     {@render overlay()}
