@@ -7,9 +7,12 @@
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioFolderPlus from '@pdslng/cio-icon/CioFolderPlus.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
   import CioImageOff from '@pdslng/cio-icon/CioImageOff.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import CioLayoutGrid from '@pdslng/cio-icon/CioLayoutGrid.svelte'
   import CioListTree from '@pdslng/cio-icon/CioListTree.svelte'
@@ -21,7 +24,6 @@
   import CioStore from '@pdslng/cio-icon/CioStore.svelte'
   import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
-  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
@@ -31,6 +33,8 @@
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import CompositionStage from '$lib/components/design/CompositionStage.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
+  import { screenBoardState } from '$lib/stores/screen-board.svelte'
   import VideoEditWorkspace from '$lib/components/design/VideoEditWorkspace.svelte'
   import { usesThreadWorkspaceMount } from '$shared/types'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -40,6 +44,7 @@
   import { SCREEN_ORDERS } from './DesignCoordinatorPanel/DesignCoordinatorPanel-types'
   import { createDesignBoard } from './DesignCoordinatorPanel/DesignCoordinatorPanel-board.svelte'
   import type { Props } from './DesignCoordinatorPanel/DesignCoordinatorPanel-types'
+  import type { ScreenGroup } from '$shared/ipc-contract'
 
   let { projectId, threadId, viewingThreadId, kind: forcedKind, active = true }: Props = $props()
   const board = createDesignBoard(() => ({
@@ -55,6 +60,13 @@
    * Svelte compiles that branch into.
    */
   const shownFullscreenTab = $derived(board.studio.shownFullscreenTab)
+
+  // The arrangement of the design in front is read when it changes, so a board a
+  // window reopens on shows the user's own groups without waiting for a drag.
+  $effect(() => {
+    const directory = board.gallery.selected.directory
+    if (directory !== '') void screenBoardState.ensure(board.props.projectId, directory)
+  })
 </script>
 
 <div class="flex h-full min-h-0 flex-col" {@attach board.studio.watchViewingThread}>
@@ -297,6 +309,189 @@
     </button>
   {/snippet}
 
+  {#snippet screenSelection(entry: string)}
+    <Switch
+      checked={board.studio.selectedScreens.has(entry)}
+      title="Select this screen to group or move it"
+      aria-label="Select this screen to group or move it"
+      onchange={() => board.studio.toggleScreenSelection(entry)}
+    />
+  {/snippet}
+
+  {#snippet screenGrip(entry: string)}
+    <button
+      type="button"
+      class="flex h-5 w-4 cursor-grab items-center justify-center text-dimmed hover:text-foreground"
+      draggable="true"
+      title="Drag to reorder this screen"
+      aria-label="Drag to reorder this screen"
+      ondragstart={(event) => {
+        event.dataTransfer?.setData('text/plain', entry)
+        board.studio.beginScreenDrag(entry)
+      }}
+      ondragend={() => board.studio.endScreenDrag()}
+    >
+      <CioGrip size={11} />
+    </button>
+  {/snippet}
+
+  {#snippet screenListRow(screen: DesignScreenShot, groupId: string | null)}
+    <div
+      role="listitem"
+      class="flex items-center gap-1 border border-border bg-elevated transition-colors hover:border-primary/60 {board
+        .studio.dropTarget?.before === screen.entry
+        ? 'border-primary'
+        : ''}"
+      ondragover={(event) => {
+        event.preventDefault()
+        board.studio.hoverScreenDrop(groupId, screen.entry)
+      }}
+      ondrop={(event) => {
+        event.preventDefault()
+        void board.studio.dropScreens(groupId, screen.entry)
+      }}
+    >
+      {@render screenGrip(screen.entry)}
+      {@render screenSelection(screen.entry)}
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-2 py-1 pr-2 text-left"
+        title={`Open the ${board.gallery.noun} screen ${screen.name} in the in-app browser`}
+        aria-label={`Open the ${board.gallery.noun} screen ${screen.name} in the in-app browser`}
+        onclick={() => void board.gallery.openPreview(screen.entry)}
+      >
+        <span
+          class="flex h-8 w-12 shrink-0 items-center justify-center overflow-hidden border border-border bg-app text-dimmed"
+        >
+          {#if screen.dataUrl}
+            <img src={screen.dataUrl} alt="" class="h-full w-full object-cover object-top" />
+          {:else}
+            <CioImageOff size={12} />
+          {/if}
+        </span>
+        <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
+          >{screen.name}</span
+        >
+        <span class="max-w-24 shrink-0 truncate text-[0.625rem] text-dimmed">{screen.entry}</span>
+      </button>
+    </div>
+  {/snippet}
+
+  {#snippet screenCardItem(screen: DesignScreenShot, groupId: string | null)}
+    <div
+      role="listitem"
+      class="relative {board.studio.dropTarget?.before === screen.entry
+        ? 'ring-1 ring-primary'
+        : ''}"
+      ondragover={(event) => {
+        event.preventDefault()
+        board.studio.hoverScreenDrop(groupId, screen.entry)
+      }}
+      ondrop={(event) => {
+        event.preventDefault()
+        void board.studio.dropScreens(groupId, screen.entry)
+      }}
+    >
+      {@render screenCard(screen, board.gallery.video)}
+      <span class="absolute top-1 left-1 flex items-center gap-1 bg-app/85 px-1 py-0.5">
+        {@render screenGrip(screen.entry)}
+        {@render screenSelection(screen.entry)}
+      </span>
+    </div>
+  {/snippet}
+
+  {#snippet screenGroupHeader(group: ScreenGroup | null, count: number)}
+    <div
+      role="group"
+      class="flex w-full items-center gap-1 {group ? 'bg-elevated' : ''} px-1 py-0.5"
+      ondragover={(event) => {
+        if (!group) return
+        event.preventDefault()
+        board.studio.hoverScreenDrop(group.id, null)
+      }}
+      ondrop={(event) => {
+        if (!group) return
+        event.preventDefault()
+        void board.studio.dropScreens(group.id, null)
+      }}
+    >
+      {#if group}
+        <button
+          type="button"
+          class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed hover:text-foreground"
+          title={group.collapsed ? `Open the group ${group.name}` : `Fold the group ${group.name}`}
+          aria-label={group.collapsed
+            ? `Open the group ${group.name}`
+            : `Fold the group ${group.name}`}
+          aria-expanded={!group.collapsed}
+          onclick={() => void board.studio.foldScreenGroup(group.id, !group.collapsed)}
+        >
+          <CioChevronDown
+            size={11}
+            class="transition-transform {group.collapsed ? '-rotate-90' : ''}"
+          />
+        </button>
+        {#if board.studio.renamingGroup === group.id}
+          <input
+            class="min-w-0 flex-1 border border-border bg-app px-1 text-[0.6875rem] font-semibold text-foreground outline-none focus:border-primary"
+            aria-label={`Rename the group ${group.name}`}
+            bind:value={board.studio.renameDraft}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void board.studio.commitGroupRename()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                board.studio.cancelGroupRename()
+              }
+            }}
+            onblur={() => void board.studio.commitGroupRename()}
+          />
+        {:else}
+          <button
+            type="button"
+            class="min-w-0 flex-1 truncate text-left text-[0.6875rem] font-semibold text-foreground"
+            title={`${group.collapsed ? 'Open' : 'Fold'} the group ${group.name}`}
+            aria-label={`${group.collapsed ? 'Open' : 'Fold'} the group ${group.name}`}
+            onclick={() => void board.studio.foldScreenGroup(group.id, !group.collapsed)}
+          >
+            {group.name}
+          </button>
+        {/if}
+        <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">{count}</span>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-surface hover:text-foreground"
+            title={`Group actions for ${group.name}`}
+            aria-label={`Group actions for ${group.name}`}
+          >
+            <CioEllipsis size={11} />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              class="z-50 min-w-40 border border-border bg-surface p-1 shadow-lg"
+            >
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => board.studio.beginGroupRename(group)}>Rename</DropdownMenu.Item
+              >
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
+                onSelect={() => void board.studio.removeScreenGroup(group.id)}
+                >Delete group</DropdownMenu.Item
+              >
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {:else}
+        <span class="shrink-0 px-1 text-[0.625rem] font-semibold text-dimmed uppercase"
+          >Ungrouped</span
+        >
+        <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">{count}</span>
+      {/if}
+    </div>
+  {/snippet}
+
   {#snippet entryCard(input: {
     icon: typeof CioDisplay
     name: string
@@ -469,16 +664,16 @@
         <button
           type="button"
           class="flex h-6 items-center gap-1 px-1.5 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-pressed={board.state.screensView === 'list'}
-          title={board.state.screensView === 'cards'
+          aria-pressed={board.studio.screensView === 'list'}
+          title={board.studio.screensView === 'cards'
             ? 'Show the screens of this design as a list'
             : 'Show the screens of this design as cards'}
-          aria-label={board.state.screensView === 'cards'
+          aria-label={board.studio.screensView === 'cards'
             ? 'Show the screens of this design as a list'
             : 'Show the screens of this design as cards'}
           onclick={() => board.studio.toggleScreensView()}
         >
-          {#if board.state.screensView === 'cards'}
+          {#if board.studio.screensView === 'cards'}
             <CioListTree size={12} />
             List
           {:else}
@@ -524,7 +719,9 @@
               >
                 <DropdownMenu.RadioGroup
                   value={board.studio.screenOrder}
-                  onValueChange={board.studio.handleScreenOrderChange}
+                  onValueChange={(value) => {
+                    if (board.studio.isScreenOrder(value)) board.studio.setScreenOrder(value)
+                  }}
                   aria-label="Order the screens"
                 >
                   {#each SCREEN_ORDERS as order (order)}
@@ -580,13 +777,6 @@
               collisionPadding={8}
               class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
             >
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={board.gallery.refreshBoard}
-              >
-                <CioRefresh size={13} class="shrink-0 text-muted" />
-                {board.studio.refreshLabel}
-              </DropdownMenu.Item>
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={board.gallery.selected.directory === '' || board.gallery.selectedMissing}
@@ -780,23 +970,6 @@
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
-        <button
-          type="button"
-          class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={board.gallery.opening ||
-            !board.gallery.playable ||
-            board.gallery.selected.directory === '' ||
-            board.gallery.selectedMissing}
-          title={`Expand this ${board.gallery.noun} to full screen`}
-          aria-label={`Expand this ${board.gallery.noun} to full screen`}
-          onclick={() => void board.gallery.openPreview(board.gallery.selected.entry)}
-        >
-          {#if board.gallery.opening}
-            <CioSpinner size={12} class="animate-spin" />
-          {:else}
-            <CioMaximize size={ICON_SIZE.inline} />
-          {/if}
-        </button>
       </span>
     </div>
 
@@ -895,40 +1068,50 @@
                   </span>
                 {/if}
               </div>
-            {:else if board.state.screensView === 'list'}
-              <div class="flex flex-col gap-1" aria-label={board.studio.screensLabel}>
+            {:else if board.studio.screensView === 'list'}
+              <div class="flex flex-col gap-2" aria-label={board.studio.screensLabel}>
                 {#if !board.gallery.video}
-                  {@render screenRow({
-                    icon: CioDisplay,
-                    shot: board.studio.canvasShot,
-                    name: 'Screen Canvas',
-                    detail: 'canvas',
-                    label: 'Open the Screen Canvas in the in-app browser',
-                    busy: !board.gallery.canvasRead || board.gallery.openingCanvas,
-                    onOpen: () => void board.gallery.openCanvas()
-                  })}
-                  {@render screenRow({
-                    icon: CioLayers,
-                    shot: board.studio.liveShot,
-                    name: 'Live preview',
-                    detail: board.studio.LIVE_PREVIEW_ENTRY,
-                    label: `Open the live preview of this ${board.gallery.noun} in the in-app browser`,
-                    busy: board.gallery.opening,
-                    onOpen: () => void board.gallery.openPreview(board.studio.LIVE_PREVIEW_ENTRY)
-                  })}
+                  <div class="flex flex-col gap-1">
+                    {@render screenRow({
+                      icon: CioDisplay,
+                      shot: board.studio.canvasShot,
+                      name: 'Screen Canvas',
+                      detail: 'canvas',
+                      label: 'Open the Screen Canvas in the in-app browser',
+                      busy: !board.gallery.canvasRead || board.gallery.openingCanvas,
+                      onOpen: () => void board.gallery.openCanvas()
+                    })}
+                    {@render screenRow({
+                      icon: CioLayers,
+                      shot: board.studio.liveShot,
+                      name: 'Live preview',
+                      detail: board.studio.LIVE_PREVIEW_ENTRY,
+                      label: `Open the live preview of this ${board.gallery.noun} in the in-app browser`,
+                      busy: board.gallery.opening,
+                      onOpen: () => void board.gallery.openPreview(board.studio.LIVE_PREVIEW_ENTRY)
+                    })}
+                  </div>
                 {/if}
-                {#each board.studio.screenCards as screen (screen.entry)}
-                  {@render screenRow({
-                    shot: screen,
-                    name: screen.name,
-                    detail: screen.entry,
-                    label: `Open the ${board.gallery.noun} screen ${screen.name} in the in-app browser`,
-                    onOpen: () => void board.gallery.openPreview(screen.entry)
-                  })}
+                {#each board.studio.screenSections as section (section.group?.id ?? 'ungrouped')}
+                  <div class="flex flex-col gap-1">
+                    {#if section.group || board.studio.screenGroups.length > 0}
+                      {@render screenGroupHeader(section.group, section.screens.length)}
+                    {/if}
+                    {#if !section.group?.collapsed}
+                      <div class="flex flex-col gap-1 {section.group ? 'pl-3' : ''}">
+                        {#each section.screens as screen (screen.entry)}
+                          {@render screenListRow(screen, section.group?.id ?? null)}
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
                 {/each}
               </div>
             {:else}
-              <div class="grid grid-cols-2 gap-1.5" aria-label={board.studio.screensLabel}>
+              <div
+                class="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-1.5"
+                aria-label={board.studio.screensLabel}
+              >
                 {#if !board.gallery.video}
                   {@render entryCard({
                     icon: CioDisplay,
@@ -951,8 +1134,19 @@
                     onOpen: () => void board.gallery.openPreview(board.studio.LIVE_PREVIEW_ENTRY)
                   })}
                 {/if}
-                {#each board.studio.screenCards as screen (screen.entry)}
-                  {@render screenCard(screen, board.gallery.video)}
+                {#each board.studio.screenSections as section (section.group?.id ?? 'ungrouped')}
+                  {#if section.group || section.screens.length > 0}
+                    <div class="col-span-full">
+                      {#if section.group || board.studio.screenGroups.length > 0}
+                        {@render screenGroupHeader(section.group, section.screens.length)}
+                      {/if}
+                    </div>
+                    {#if !section.group?.collapsed}
+                      {#each section.screens as screen (screen.entry)}
+                        {@render screenCardItem(screen, section.group?.id ?? null)}
+                      {/each}
+                    {/if}
+                  {/if}
                 {/each}
               </div>
               {#if !board.gallery.video && board.studio.designScreens.length === 0}
@@ -988,6 +1182,94 @@
           onActions={board.historyActions.handleHistoryActions}
         />
       {/key}
+    {/if}
+    {#if board.studio.namingGroup}
+      <form
+        class="flex shrink-0 items-center gap-1 border-t border-border bg-surface px-2.5 py-1.5"
+        onsubmit={(event) => {
+          event.preventDefault()
+          void board.studio.groupSelection()
+        }}
+      >
+        <input
+          class="min-w-0 flex-1 border border-border bg-app px-1.5 py-0.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
+          placeholder="Group name"
+          aria-label="New group name"
+          bind:value={board.studio.groupDraft}
+        />
+        <button
+          type="submit"
+          class="flex h-6 shrink-0 items-center gap-1 bg-primary px-1.5 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+          title="Group the selected screens">Create</button
+        >
+        <button
+          type="button"
+          class="flex h-6 shrink-0 items-center px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Cancel grouping"
+          onclick={() => board.studio.clearScreenSelection()}>Cancel</button
+        >
+      </form>
+    {/if}
+    {#if board.studio.selectedScreens.size > 0}
+      <div
+        class="flex shrink-0 items-center gap-1.5 border-t border-border bg-surface px-2.5 py-1.5"
+      >
+        <span class="shrink-0 text-[0.625rem] tabular-nums text-muted"
+          >{board.studio.selectedScreens.size} selected</span
+        >
+        <span class="min-w-0 flex-1"></span>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-6 items-center gap-1 px-1.5 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated"
+            title="Move the selected screens to a group"
+            aria-label="Move the selected screens to a group"
+          >
+            <CioLayers size={12} />
+            Move to group
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="top"
+              align="end"
+              sideOffset={4}
+              class="z-50 max-h-72 w-56 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
+            >
+              {#each board.studio.screenGroups as group (group.id)}
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  onSelect={() => void board.studio.moveSelectionTo(group.id)}
+                >
+                  <CioFolder size={12} class="shrink-0 text-muted" />
+                  <span class="min-w-0 flex-1 truncate">{group.name}</span>
+                </DropdownMenu.Item>
+              {/each}
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => void board.studio.moveSelectionTo(null)}
+              >
+                <CioFiles size={12} class="shrink-0 text-muted" />
+                Ungrouped
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+        <button
+          type="button"
+          class="flex h-6 items-center gap-1 px-1.5 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Put the selected screens in a new group"
+          aria-label="Put the selected screens in a new group"
+          onclick={() => (board.studio.namingGroup = true)}
+        >
+          <CioFolderPlus size={12} />
+          New group
+        </button>
+        <button
+          type="button"
+          class="flex h-6 items-center px-1.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Clear the selection"
+          onclick={() => board.studio.clearScreenSelection()}>Clear</button
+        >
+      </div>
     {/if}
   </div>
 </div>

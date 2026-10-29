@@ -40,7 +40,8 @@ export class DesignBoardState extends BoardUnit<DesignBoard> {
     latest: 'Latest',
     name: 'Name A-Z',
     'name-desc': 'Name Z-A',
-    oldest: 'Oldest'
+    oldest: 'Oldest',
+    custom: 'Custom'
   }
 
   /**
@@ -59,17 +60,6 @@ export class DesignBoardState extends BoardUnit<DesignBoard> {
    * than a detour: the design stays in the top half and its history opens under it.
    */
   historyOpen = $state(false)
-
-  /**
-   * How the screens of the design in front are drawn.
-   *
-   * Both readings are the same screens of the same design: `cards` is the board's
-   * grid, its Screen Canvas and live preview first and then every screen pictured,
-   * and `list` is the same set as rows, which is what a design of thirty screens
-   * is read in. Nothing about which design is in front changes here, which is why
-   * switching readings never reloads the design.
-   */
-  screensView = $state<'cards' | 'list'>('cards')
 
   detailsMode = $state<'this' | 'all' | 'rename' | null>(null)
 

@@ -7,12 +7,21 @@ import { invoke } from '$lib/ipc.svelte'
 import type { BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
 import { openThreadById } from '$lib/threads/open-thread-by-id'
 import { logRendererError } from '$lib/system/renderer-logger'
+import { toast } from 'svelte-sonner'
 import type { VideoJob } from '$shared/video/studio'
 import { type DesignExportFormat } from '$shared/design/design-export'
 import { isScreenCanvasEntry } from '$shared/design/screen-canvas'
-import type { DesignEntry, DesignScreenShot } from '$shared/ipc-contract'
+import type {
+  DesignEntry,
+  DesignScreenShot,
+  ScreenBoardOrder,
+  ScreenGroup,
+  WorkGroupView
+} from '$shared/ipc-contract'
 import { SCREEN_ORDERS } from './DesignCoordinatorPanel-types'
-import type { ScreenOrder } from './DesignCoordinatorPanel-types'
+import type { ScreenOrder, ScreenSection } from './DesignCoordinatorPanel-types'
+import { screenBoardState } from '$lib/stores/screen-board.svelte'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
 import { isSiteUrl } from './design-board-reference'
 import { BoardUnit } from '$lib/components/board-unit'
@@ -45,15 +54,258 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
     return SCREEN_ORDERS.some((order) => order === value)
   }
 
+  /** Remember the order the user picked, which the design keeps with itself. */
+  setScreenOrder(order: ScreenOrder): void {
+    if (order === this.screenOrder) return
+    void screenBoardState.setOrder(
+      this.root.props.projectId,
+      this.root.gallery.selected.directory,
+      order
+    )
+  }
+
+  /** The screens of one section, in the order the board draws them. */
+  sectionScreens(groupId: string | null): DesignScreenShot[] {
+    const screens = this.root.gallery.gallery.filter(
+      (screen) => !isScreenCanvasEntry(screen.entry) && screen.entry !== this.LIVE_PREVIEW_ENTRY
+    )
+    const inSection = screens.filter(
+      (screen) => (this.screenPlacement.get(screen.entry)?.groupId ?? null) === groupId
+    )
+    if (this.screenOrder !== 'custom') return this.orderScreens(inSection, this.screenOrder)
+    const placed = inSection
+      .filter((screen) => this.screenPlacement.has(screen.entry))
+      .toSorted(
+        (left, right) =>
+          (this.screenPlacement.get(left.entry)?.position ?? 0) -
+          (this.screenPlacement.get(right.entry)?.position ?? 0)
+      )
+    // Screens the user has not placed yet are new: newest first, ahead of the
+    // arrangement, so a screen the agent just wrote is the first thing on the board.
+    const fresh = inSection
+      .filter((screen) => !this.screenPlacement.has(screen.entry))
+      .toSorted((left, right) => right.updatedAt - left.updatedAt)
+    return [...fresh, ...placed]
+  }
+
+  /** The groups and the ungrouped screens, in the order the board draws them. */
+  screenSections = $derived.by((): ScreenSection[] => {
+    const groups = this.screenGroups
+      .toSorted((left, right) => left.position - right.position)
+      .map((group) => ({ group, screens: this.sectionScreens(group.id) }))
+    const ungrouped = this.sectionScreens(null)
+    if (ungrouped.length === 0) return groups
+    // A custom arrangement puts the screens the user has not placed yet at the top
+    // of the board, because those are the new ones and the reason to look at it: a
+    // fresh screen hidden under three groups is a screen the user has to hunt for.
+    const hasFresh =
+      this.screenOrder === 'custom' &&
+      ungrouped.some((screen) => !this.screenPlacement.has(screen.entry))
+    return hasFresh
+      ? [{ group: null, screens: ungrouped }, ...groups]
+      : [...groups, { group: null, screens: ungrouped }]
+  })
+
+  // ─── Selecting, dragging and grouping screens ─────────────────────────────
+
+  /** The screens the user selected, by entry, for a multiple drag or a group move. */
+  selectedScreens = new SvelteSet<string>()
+
+  /** The screens a drag is carrying, in the order they will land. */
+  dragScreens = $state<string[]>([])
+
+  /** Where a drag would land, for the highlighted drop target. */
+  dropTarget = $state<{ groupId: string | null; before: string | null } | null>(null)
+
+  /** Whether the new-group field is open. */
+  namingGroup = $state(false)
+
+  /** The group whose name is being edited inline, or an empty string. */
+  renamingGroup = $state('')
+
+  /** What the rename field holds. */
+  renameDraft = $state('')
+
+  beginGroupRename(group: ScreenGroup): void {
+    this.renamingGroup = group.id
+    this.renameDraft = group.name
+  }
+
+  async commitGroupRename(): Promise<void> {
+    const groupId = this.renamingGroup
+    const name = this.renameDraft.trim()
+    this.renamingGroup = ''
+    if (groupId === '' || name === '') return
+    await this.renameScreenGroup(groupId, name)
+  }
+
+  cancelGroupRename(): void {
+    this.renamingGroup = ''
+    this.renameDraft = ''
+  }
+
+  /** What the new-group field holds. */
+  groupDraft = $state('')
+
+  toggleScreenSelection(entry: string): void {
+    if (this.selectedScreens.has(entry)) this.selectedScreens.delete(entry)
+    else this.selectedScreens.add(entry)
+  }
+
+  clearScreenSelection(): void {
+    this.selectedScreens.clear()
+    this.namingGroup = false
+    this.groupDraft = ''
+  }
+
+  /** Start dragging a screen, carrying the whole selection when it is part of one. */
+  beginScreenDrag(entry: string): void {
+    this.dragScreens = this.selectedScreens.has(entry) ? [...this.selectedScreens] : [entry]
+  }
+
+  endScreenDrag(): void {
+    this.dragScreens = []
+    this.dropTarget = null
+  }
+
+  /** Highlight the place a drop would land, while the drag is over it. */
+  hoverScreenDrop(groupId: string | null, before: string | null): void {
+    if (this.dragScreens.length === 0) return
+    this.dropTarget = { groupId, before }
+  }
+
   /**
-   * Switch the screens of the design in front between cards and the list.
+   * Drop the dragged screens into a group, ahead of one screen or at its end.
+   *
+   * The group is sent whole, in the order it will show: what the caller dropped,
+   * then the screens that were already there. That is the same call a reorder
+   * makes, so there is one rule about where a screen lands.
+   */
+  async dropScreens(groupId: string | null, before: string | null): Promise<void> {
+    const dragging = this.dragScreens
+    this.endScreenDrag()
+    if (dragging.length === 0) return
+    const existing = this.sectionScreens(groupId).filter(
+      (screen) => !dragging.includes(screen.entry)
+    )
+    const index =
+      before === null ? existing.length : existing.findIndex((screen) => screen.entry === before)
+    const ordered = existing.map((screen) => screen.entry)
+    ordered.splice(index < 0 ? ordered.length : index, 0, ...dragging)
+    try {
+      await screenBoardState.place(
+        this.root.props.projectId,
+        this.root.gallery.selected.directory,
+        groupId,
+        ordered
+      )
+      this.selectedScreens.clear()
+    } catch (error) {
+      logRendererError('The screens could not be rearranged.', error)
+      toast.error('The screens could not be rearranged.')
+    }
+  }
+
+  /** Put the selection in a new group named here, created with the move. */
+  async groupSelection(): Promise<void> {
+    const name = this.groupDraft.trim()
+    if (name === '') return
+    this.namingGroup = false
+    this.groupDraft = ''
+    try {
+      await screenBoardState.createGroup(
+        this.root.props.projectId,
+        this.root.gallery.selected.directory,
+        name
+      )
+      const created = this.screenGroups.find((group) => group.name === name)
+      if (created) await this.moveSelectionTo(created.id)
+    } catch (error) {
+      logRendererError('The group could not be created.', error)
+      toast.error('The group could not be created.')
+    } finally {
+      this.clearScreenSelection()
+    }
+  }
+
+  /** Move the selected screens into an existing group, or out to the ungrouped list. */
+  async moveSelectionTo(groupId: string | null): Promise<void> {
+    const entries = [...this.selectedScreens]
+    if (entries.length === 0) return
+    const existing = this.sectionScreens(groupId).filter(
+      (screen) => !entries.includes(screen.entry)
+    )
+    try {
+      await screenBoardState.place(
+        this.root.props.projectId,
+        this.root.gallery.selected.directory,
+        groupId,
+        [...entries, ...existing.map((screen) => screen.entry)]
+      )
+      this.clearScreenSelection()
+    } catch (error) {
+      logRendererError('The screens could not be moved.', error)
+      toast.error('The screens could not be moved.')
+    }
+  }
+
+  async foldScreenGroup(groupId: string, collapsed: boolean): Promise<void> {
+    try {
+      await screenBoardState.setCollapsed(
+        this.root.props.projectId,
+        this.root.gallery.selected.directory,
+        groupId,
+        collapsed
+      )
+    } catch (error) {
+      logRendererError('The group could not be folded.', error)
+    }
+  }
+
+  async renameScreenGroup(groupId: string, name: string): Promise<void> {
+    const next = name.trim()
+    if (next === '') return
+    try {
+      await screenBoardState.renameGroup(
+        this.root.props.projectId,
+        this.root.gallery.selected.directory,
+        groupId,
+        next
+      )
+    } catch (error) {
+      logRendererError('The group could not be renamed.', error)
+      toast.error('The group could not be renamed.')
+    }
+  }
+
+  async removeScreenGroup(groupId: string): Promise<void> {
+    try {
+      await screenBoardState.removeGroup(
+        this.root.props.projectId,
+        this.root.gallery.selected.directory,
+        groupId
+      )
+    } catch (error) {
+      logRendererError('The group could not be deleted.', error)
+      toast.error('The group could not be deleted.')
+    }
+  }
+
+  /**
+   * The screens of the design in front between cards and the list.
    *
    * The two readings hold the same screens of the same design: the grid pictures
-   * them, the list rows them. The design in front never changes, so this is a
-   * reading of the board and not a way of leaving it.
+   * them, the list rows them. The reading is app-wide and stored with the design's
+   * own arrangement, so it survives leaving the panel, opening a screen and coming
+   * back, and reopening the app.
    */
+  screensView = $derived<WorkGroupView>(
+    screenBoardState.stateFor(this.root.props.projectId, this.root.gallery.selected.directory)
+      ?.view ?? screenBoardState.view()
+  )
+
   toggleScreensView(): void {
-    this.root.state.screensView = this.root.state.screensView === 'cards' ? 'list' : 'cards'
+    void screenBoardState.setView(this.screensView === 'cards' ? 'list' : 'cards')
   }
 
   /**
@@ -79,13 +331,34 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
 
   galleryBusy = $state(false)
 
+  /** The design's own arrangement: its groups, placements and order. */
+  screenBoard = $derived(
+    screenBoardState.stateFor(this.root.props.projectId, this.root.gallery.selected.directory)
+  )
+
+  /** The design's screen groups, in the order the user arranged them. */
+  screenGroups = $derived(this.screenBoard?.groups ?? [])
+
+  /** Where each screen sits, by entry. */
+  screenPlacement = $derived(
+    new SvelteMap(
+      (this.screenBoard?.placements ?? []).map((placement) => [placement.entry, placement])
+    )
+  )
+
   /**
-   * The order the screens grid is shown in.
+   * The order the screens are drawn in.
    *
-   * A view setting of the board rather than of the design: switching designs keeps
-   * it, and a board opened again starts at the default, newest first.
+   * `custom` is the arrangement the user dragged: a screen written after that
+   * arrangement is drawn before the placed ones, because a new screen is the one
+   * the user is looking for, not one to hide at the bottom.
    */
-  screenOrder = $state<ScreenOrder>('latest')
+  screenOrder = $derived<ScreenBoardOrder>(this.screenBoard?.order ?? 'latest')
+
+  /** Ask for this design's arrangement, which the board paints from. */
+  async ensureScreenBoard(): Promise<void> {
+    await screenBoardState.ensure(this.root.props.projectId, this.root.gallery.selected.directory)
+  }
 
   /**
    * The composition's jobs, read by the board.
@@ -240,18 +513,6 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
     this.designScreens.find((screen) => screen.entry === this.LIVE_PREVIEW_ENTRY) ?? null
   )
 
-  /**
-   * The screens the grid itself lists.
-   *
-   * The canvas and the live preview are the design's two doors and are drawn as the
-   * grid's first two cells, so the grid must not repeat the entry page underneath
-   * them: the design's `index.html` is the Live preview card, and listing it again
-   * as a screen made every board open on the same picture twice.
-   */
-  screenCards = $derived(
-    this.designScreens.filter((screen) => screen.entry !== this.LIVE_PREVIEW_ENTRY)
-  )
-
   /** What the canvas entry says while it has no picture to show. */
   canvasEntryNote = $derived(
     !this.root.gallery.canvasRead
@@ -300,11 +561,6 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
     if (this.previousViewingThread !== undefined && this.previousViewingThread !== next)
       void this.root.gallery.refreshViewingThread()
     this.previousViewingThread = next
-  }
-
-  /** The Sort menu reports a string too, so it is checked before it becomes the order. */
-  handleScreenOrderChange(value: string): void {
-    if (this.isScreenOrder(value)) this.screenOrder = value
   }
 
   /**

@@ -87,6 +87,12 @@ export const IPC_EVENT_CONTRACT = {
     kind: import('./design').AuthoredWorkKind,
     updatedAt: number
   ],
+  /** One design's screens were arranged, folded or regrouped somewhere. */
+  'design:screenBoardChanged': [] as unknown as [
+    projectId: string,
+    directory: string,
+    updatedAt: number
+  ],
   /** One app call for the renderer to perform on the agent's behalf. The
    *  renderer answers on the `appControl:respond` invoke with the request id. */
   'appControl:request': [] as unknown as [request: AppControlRequest],

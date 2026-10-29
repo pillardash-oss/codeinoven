@@ -725,6 +725,42 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.designService = designService
   designService.registerIpc()
   void designService.reconcileHistory()
+  // How one design's screens are grouped and ordered, plus the cards/list reading
+  // every design board shares. Kept beside the design service because it is about
+  // the same folders, and announced so two windows never disagree about the
+  // arrangement the user made.
+  const { ScreenBoardService } = await import('../design/screen-board-service')
+  const screenBoards = new ScreenBoardService({
+    storage,
+    onChanged: (projectId, directory, updatedAt) => {
+      for (const window of BrowserWindow.getAllWindows())
+        sendToRenderer(window.webContents, 'design:screenBoardChanged', projectId, directory, updatedAt)
+    }
+  })
+  ipcMain.handle('design:screenBoard', (_event, projectId, directory) =>
+    screenBoards.state(projectId, directory)
+  )
+  ipcMain.handle('design:screenBoardView', (_event, view) => screenBoards.setView(view))
+  ipcMain.handle('design:screenBoardSort', (_event, projectId, directory, order) =>
+    screenBoards.setOrder(projectId, directory, order)
+  )
+  ipcMain.handle('design:screenBoardCreateGroup', (_event, projectId, directory, name) =>
+    screenBoards.createGroup(projectId, directory, name)
+  )
+  ipcMain.handle('design:screenBoardRenameGroup', (_event, projectId, directory, groupId, name) =>
+    screenBoards.renameGroup(projectId, directory, groupId, name)
+  )
+  ipcMain.handle('design:screenBoardRemoveGroup', (_event, projectId, directory, groupId) =>
+    screenBoards.removeGroup(projectId, directory, groupId)
+  )
+  ipcMain.handle(
+    'design:screenBoardCollapseGroup',
+    (_event, projectId, directory, groupId, collapsed) =>
+      screenBoards.setCollapsed(projectId, directory, groupId, collapsed)
+  )
+  ipcMain.handle('design:screenBoardPlace', (_event, projectId, directory, groupId, entries) =>
+    screenBoards.place(projectId, directory, groupId, entries)
+  )
   // What each thread decided about the experts its design or video session may
   // delegate to. One service answers it, because the playbook that names the
   // experts and the `delegate` operation that would run one have to agree: a

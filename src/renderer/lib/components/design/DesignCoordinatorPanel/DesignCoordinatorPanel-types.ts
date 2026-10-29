@@ -1,4 +1,4 @@
-import type { AuthoredWorkKind } from '$shared/ipc-contract'
+import type { AuthoredWorkKind, DesignScreenShot, ScreenGroup } from '$shared/ipc-contract'
 
 /**
  * The coordinator board for a thread's authored work.
@@ -49,6 +49,12 @@ export interface Props {
  * that moved last is usually the one the user came to look at. The other three
  * are what a person reaches for when they know a screen's name instead.
  */
-export const SCREEN_ORDERS = ['latest', 'name', 'name-desc', 'oldest'] as const
+export const SCREEN_ORDERS = ['latest', 'name', 'name-desc', 'oldest', 'custom'] as const
 
 export type ScreenOrder = (typeof SCREEN_ORDERS)[number]
+
+/** One section of the screens board: a group, and the screens it holds. */
+export interface ScreenSection {
+  group: ScreenGroup | null
+  screens: DesignScreenShot[]
+}

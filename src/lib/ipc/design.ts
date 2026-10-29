@@ -482,3 +482,52 @@ export interface WorkGroupMove {
   /** Position inside the destination group; omitted appends to the end. */
   position?: number
 }
+
+/**
+ * How the screens of one design are ordered.
+ *
+ * The four automatic orders are read off the files themselves; `custom` is the
+ * arrangement the user dragged, and a screen written after that arrangement is
+ * drawn before the placed ones rather than appended to them.
+ */
+export type ScreenBoardOrder = 'latest' | 'name' | 'name-desc' | 'oldest' | 'custom'
+
+/** One named group of one design's screens. */
+export interface ScreenGroup {
+  id: string
+  name: string
+  /** Position among the design's groups, lowest first. */
+  position: number
+  /** Whether the board draws the group folded. Persisted, so it reopens folded. */
+  collapsed: boolean
+}
+
+/** One screen's group and its place in the order the user arranged. */
+export interface ScreenBoardPlacement {
+  /** Project-relative screen path inside the design folder, e.g. `checkout.html`. */
+  entry: string
+  /** The group holding it, or null when it sits in the ungrouped list. */
+  groupId: string | null
+  /** Position among its group's screens, lowest first. */
+  position: number
+}
+
+/**
+ * Everything the board knows about how one design's screens are organised.
+ *
+ * The reading itself (`view`) is app-wide and travels with every answer, so one
+ * window's click is the reading every design board shows, including one opened
+ * afterwards.
+ */
+export interface ScreenBoardState {
+  projectId: string
+  /** Project-relative design folder with forward slashes. */
+  directory: string
+  groups: ScreenGroup[]
+  placements: ScreenBoardPlacement[]
+  order: ScreenBoardOrder
+  view: WorkGroupView
+  /** When the user last changed the arrangement (ms), or 0 when they never have. */
+  updatedAt: number
+}
+

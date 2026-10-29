@@ -10,6 +10,8 @@ import type {
   DesignScreenShot,
   DesignThumbnail,
   ProjectWorkState,
+  ScreenBoardOrder,
+  ScreenBoardState,
   ScreenCanvasState,
   ThreadDesignState,
   WorkGroupMove,
@@ -320,5 +322,43 @@ export const invokeDesignContract = {
   'design:workGroupsView': {} as Contract<
     [projectId: string, kind: AuthoredWorkKind, view: WorkGroupView],
     WorkGroupState
+  >,
+  /**
+   * How one design's screens are organised: its groups, the order the user
+   * arranged, and the cards/list reading the whole app shares.
+   *
+   * A design is a folder of screens, and the board's own grouping is about those
+   * screens rather than about the designs of a project. Nothing here moves a file,
+   * so grouping is free to change and deleting a group returns its screens to the
+   * plain list.
+   */
+  'design:screenBoard': {} as Contract<[projectId: string, directory: string], ScreenBoardState>,
+  /** The app-wide reading of a design's screens: pictures, or rows. */
+  'design:screenBoardView': {} as Contract<[view: WorkGroupView], WorkGroupView>,
+  'design:screenBoardSort': {} as Contract<
+    [projectId: string, directory: string, order: ScreenBoardOrder],
+    ScreenBoardState
+  >,
+  'design:screenBoardCreateGroup': {} as Contract<
+    [projectId: string, directory: string, name: string],
+    ScreenBoardState
+  >,
+  'design:screenBoardRenameGroup': {} as Contract<
+    [projectId: string, directory: string, groupId: string, name: string],
+    ScreenBoardState
+  >,
+  /** Deleting a group returns its screens to the ungrouped list; no file moves. */
+  'design:screenBoardRemoveGroup': {} as Contract<
+    [projectId: string, directory: string, groupId: string],
+    ScreenBoardState
+  >,
+  'design:screenBoardCollapseGroup': {} as Contract<
+    [projectId: string, directory: string, groupId: string, collapsed: boolean],
+    ScreenBoardState
+  >,
+  /** Place screens, in the order given, in one group: a drop or a reorder. */
+  'design:screenBoardPlace': {} as Contract<
+    [projectId: string, directory: string, groupId: string | null, entries: string[]],
+    ScreenBoardState
   >
 }
