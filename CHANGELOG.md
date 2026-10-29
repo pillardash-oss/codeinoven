@@ -7,11 +7,26 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **Hover documentation works again in IDE Mode, from the first hover.** A
+  language server loads its project lazily, on the first request that needs it,
+  and that first hover measured 11.8 s for svelte-language-server on this
+  repository (20-70 ms for every hover after it). The worker cancelled any
+  language-server request after a flat 12 s, so the first hover was killed
+  mid-load; because it was never cached as failed, each later hover paid the
+  same load while the IDE service's own 20 s watchdog (main/editor/
+  ide-service.ts) expired first and reported `Editor intelligence timed out`
+  with nothing to act on. Requests that load a project (hover, definition,
+  references) now get 30 s while a plain request keeps its 12 s bound, the
+  service watchdog outlives the worker's own bound instead of undercutting it,
+  and every failure names the server that could not answer. Each document also
+  pays that cold start in the background as soon as it syncs, and a file's
+  matching servers now start in parallel instead of one after another.
+
 - **A design's comment pins come back on their own, without an edit from the
   composer.** The pins a design page draws are published by the renderer's
   inspection session, and it only publishes for a tab whose design it has
   mirrored. It learned that by reading each open tab once, at the seam that
-  starts the browser, which runs *before* the sidebar restores its persisted
+  starts the browser, which runs _before_ the sidebar restores its persisted
   tabs (`stores/browser-runtime.ts`): the read found no tabs, and main announces
   a tab's design only when it changes, so nothing ever taught the session about
   the tabs already on screen. Refreshing the design page did not help either,

@@ -16,6 +16,21 @@ import type { IdeRequest, IdeResponse, IdeLocation } from '../../lib/editor-ide'
 
 const port = parentPort!
 const MAX_BYTES = 2 * 1024 * 1024
+/**
+ * How long one language-server request may take.
+ *
+ * A warm server answers in milliseconds, so this bound exists only to stop a
+ * hung child from occupying a slot forever. Hover, definition and references are
+ * the exception and use `INTELLIGENCE_TIMEOUT_MS`: the first of them after a
+ * document opens pays that server's own project load, which measured 11.8 s for
+ * svelte-language-server on this repository (the rest of the hovers on the same
+ * document answered in 20-70 ms). The old flat 12 s bound sat inside that load,
+ * so the first hover was cancelled, every hover queued behind it blew the IDE
+ * service's own watchdog, and the editor reported "Editor intelligence timed
+ * out" with nothing else to act on.
+ */
+const REQUEST_TIMEOUT_MS = 12_000
+const INTELLIGENCE_TIMEOUT_MS = 30_000
 const sessions = new Map<string, Promise<Session>>()
 const liveSessions = new Set<Session>()
 let configuredServers: IdeLanguageServer[] | undefined
@@ -34,6 +49,8 @@ const record = (value: unknown): Record<string, unknown> =>
 
 class Session {
   readonly documents = new Map<string, { text: string; version: number }>()
+  /** Documents this session already paid its cold-start request for. */
+  readonly warmed = new Set<string>()
   capabilities: Record<string, unknown> = {}
   private stopped = false
   private failure = ''
@@ -125,14 +142,14 @@ class Session {
       )
     }
   }
-  request(method: string, params: unknown): Promise<unknown> {
+  request(method: string, params: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = ++this.sequence
       const timer = setTimeout(() => {
         this.pending.delete(id)
         this.notify('$/cancelRequest', { id })
-        reject(new Error('Language server request timed out'))
-      }, 12_000)
+        reject(new Error(`The language server did not answer ${method} in time`))
+      }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
       try {
         this.send({ id, method, params })
@@ -480,6 +497,28 @@ async function grep(
 
 const chains = new Map<string, Promise<unknown>>()
 
+/**
+ * Pay a server's cold start before the user asks for an answer.
+ *
+ * A language server loads its project lazily, on the first request that needs
+ * it: svelte-language-server took 11.8 s on this repository to answer the first
+ * hover and 20-70 ms for every hover after that. Sending one throwaway hover as
+ * soon as the document is synced moves that cost off the request the user is
+ * waiting on, and the answer is discarded. Failures are ignored on purpose: the
+ * real request reports them with the server's name attached.
+ */
+function warm(session: Session, uri: string): void {
+  if (!session.capabilities.hoverProvider || session.warmed.has(uri)) return
+  session.warmed.add(uri)
+  void session
+    .request(
+      'textDocument/hover',
+      { textDocument: { uri }, position: { line: 0, character: 0 } },
+      INTELLIGENCE_TIMEOUT_MS
+    )
+    .catch(() => undefined)
+}
+
 /** The actions a file offers when any of its servers advertises them. */
 function capabilitiesOf(sessions: Session[]) {
   return {
@@ -573,13 +612,19 @@ async function handle(
   if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('File is too large for IDE Mode')
   const entries: { session: Session; selection: Selection }[] = []
   let failure: unknown
-  for (const selection of selections) {
-    try {
-      entries.push({ session: await sessionFor(root, path, env, selection.server), selection })
-    } catch (error) {
-      // One server that is missing or broken must not disable the rest.
-      failure ??= error
-    }
+  // Servers start in parallel: their loads are independent, and starting them
+  // one after another made the slowest one's wait add up for every later
+  // server instead of overlapping with it.
+  const started = await Promise.allSettled(
+    selections.map(async (selection) => ({
+      session: await sessionFor(root, path, env, selection.server),
+      selection
+    }))
+  )
+  for (const result of started) {
+    if (result.status === 'fulfilled') entries.push(result.value)
+    // One server that is missing or broken must not disable the rest.
+    else failure ??= result.reason
   }
   if (!entries.length)
     throw failure instanceof Error
@@ -594,8 +639,10 @@ async function handle(
   if (currentOwner.length && !settled)
     closeOwner(request.owner, new Set(entries.map((entry) => entry.session)), uri)
   if (!settled) void ideInstallations(env, [selections[0].server], true).catch(() => undefined)
-  for (const entry of entries)
+  for (const entry of entries) {
     syncDocument(entry.session, uri, entry.selection.mapping.languageId, text)
+    warm(entry.session, uri)
+  }
   owners.set(
     request.owner,
     entries.map((entry) => ({ session: entry.session, uri }))
@@ -632,7 +679,24 @@ async function handle(
     Boolean(entry.session.capabilities[`${request.action}Provider`])
   )
   const results = await Promise.allSettled(
-    providers.map((entry) => entry.session.request(`textDocument/${request.action}`, params))
+    providers.map((entry) =>
+      entry.session
+        .request(
+          `textDocument/${request.action}`,
+          params,
+          request.action === 'references' ||
+            request.action === 'hover' ||
+            request.action === 'definition'
+            ? INTELLIGENCE_TIMEOUT_MS
+            : REQUEST_TIMEOUT_MS
+        )
+        .catch((error: unknown) => {
+          throw new Error(
+            `${entry.selection.server.name} could not answer ${request.action}. ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error }
+          )
+        })
+    )
   )
   const answers: unknown[] = []
   let rejection: unknown

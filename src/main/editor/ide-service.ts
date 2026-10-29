@@ -187,9 +187,17 @@ export class IdeService {
       const timer = setTimeout(
         () => {
           this.pending.delete(id)
-          reject(new Error('Editor intelligence timed out'))
+          reject(new Error(`${request.action} timed out. The language server is still starting.`))
         },
-        request.action === 'inventory' ? 150_000 : 20_000
+        // The worker answers or rejects every request itself, so this watchdog
+        // only catches a worker that stopped replying. It has to outlive the
+        // worker's own bound, or a request that is legitimately still loading a
+        // project would be reported as an editor failure instead of an answer.
+        request.action === 'inventory'
+          ? 150_000
+          : ['hover', 'definition', 'references', 'sync', 'capabilities'].includes(request.action)
+            ? 45_000
+            : 20_000
       )
       this.pending.set(id, { resolve, reject, timer })
       worker.postMessage({ id, root, request, env, servers })
