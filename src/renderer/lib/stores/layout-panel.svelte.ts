@@ -32,20 +32,19 @@ class LayoutPanelState {
    */
   minimumWidth = $state(0)
   /**
-   * Where the surface the reader is reading begins, in window pixels.
+   * Where the column the reader is reading starts, in window pixels.
    *
-   * The header's thread block aligns to that surface's own text edge rather than
-   * to the panel: the page is the thing the reader is looking at, and the panel is
-   * only how much room it has. The surface on screen owns it, and a surface that
-   * is hidden rather than gone (a studio taking the pane) keeps the last edge it
-   * measured, so the thread's name stays put through the toggle instead of jumping
-   * back to the end of the header's chrome. Zero until a reading surface has
-   * reported.
+   * The header's thread block aligns to that column rather than to the panel: the
+   * page is the thing the reader is looking at, and the panel is only how much
+   * room it has. The surface on screen owns it, and a surface that is hidden rather
+   * than gone (a studio taking the pane) keeps the last edge it measured, so the
+   * thread's name stays put through the toggle instead of jumping back to the end
+   * of the header's chrome. Zero until a reading surface has reported.
    *
-   * It is the surface's gutter, never the centred page column's position: that
-   * column re-centres whenever a panel narrows the surface from the right, and a
-   * temporary chat opening beside the conversation must not move the name of the
-   * thread it is not part of.
+   * It is the column's laid-out edge, measured against the workspace grid, never
+   * its position inside a pane a panel has narrowed: a temporary chat opening
+   * beside the conversation re-centres the column and must not move the name of
+   * the thread it is not part of.
    */
   private readingColumn = $state<{ owner: object; left: number } | null>(null)
   /**

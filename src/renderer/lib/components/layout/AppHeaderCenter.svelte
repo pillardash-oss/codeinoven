@@ -39,7 +39,7 @@
     chatMode: boolean
     /** Shared thread action menu owned by the header shell. */
     threadActionsMenu: ReturnType<typeof createThreadActionsMenu>
-    /** Distance from the chrome's end to the conversation surface's text edge. */
+    /** Distance from the chrome's end to the conversation column's left edge. */
     titleInset?: number
   }
 
