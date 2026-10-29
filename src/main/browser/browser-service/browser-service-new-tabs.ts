@@ -128,9 +128,10 @@ export class BrowserServiceNewTabs {
     url: string,
     frame: BrowserViewBounds | null,
     point: BrowserPeekPoint | null,
-    media: BrowserPeekMediaTarget | null = null
+    media: BrowserPeekMediaTarget | null = null,
+    probeLink = true
   ): void {
-    void this.peekOriginFor(contents, frame, point, media).then((origin) => {
+    void this.peekOriginFor(contents, frame, point, media, probeLink).then((origin) => {
       try {
         this.openNewTabFor(owner, url, true, origin)
       } catch (error: unknown) {
@@ -155,23 +156,33 @@ export class BrowserServiceNewTabs {
     const tab = this.host.tabs.get(tabId)
     if (!tab) return
     const displayed = this.host.displayedTab
-    if (displayed?.tabId !== tabId) return
+    if (displayed?.tabId !== tabId || contents.isDestroyed()) return
     let url: string
     try {
       url = validateBrowserUrl(request.url)
     } catch {
       return
     }
-    // The page reports its own CSS pixels; the frame the peek flies inside is the
-    // window's, and the zoom factor is what converts one into the other.
-    const zoom = contents.isDestroyed() ? 1 : contents.getZoomFactor()
-    const point = { x: Math.round(request.x * zoom), y: Math.round(request.y * zoom) }
+    // A frame reports its own frame's pixels, and Electron does not say where
+    // that frame sits in the page, so the pointer is the only anchor that lands
+    // where the user clicked. The top document reports the click itself, in the
+    // page's CSS pixels, which the zoom factor turns into the view's.
+    const point = request.frameRelative
+      ? this.pointerViewPoint(displayed.bounds)
+      : {
+          x: Math.round(request.x * contents.getZoomFactor()),
+          y: Math.round(request.y * contents.getZoomFactor())
+        }
     this.openPeekFrom(
       { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
       contents,
       url,
       displayed.bounds,
-      point
+      point,
+      null,
+      // The page-side probe walks the top document, which cannot see inside the
+      // frame the click came from, so it would only ever name the wrong element.
+      !request.frameRelative
     )
   }
 
@@ -207,10 +218,11 @@ export class BrowserServiceNewTabs {
     contents: WebContents,
     frame: BrowserViewBounds | null,
     point: BrowserPeekPoint | null,
-    media: BrowserPeekMediaTarget | null = null
+    media: BrowserPeekMediaTarget | null = null,
+    probeLink = true
   ): Promise<BrowserViewBounds | null> {
     if (frame === null || point === null) return null
-    const link = await this.probePeekRect(contents, point, media)
+    const link = probeLink ? await this.probePeekRect(contents, point, media) : null
     return resolvePeekOrigin({
       link,
       point: { x: frame.x + point.x, y: frame.y + point.y },

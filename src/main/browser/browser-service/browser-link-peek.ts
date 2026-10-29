@@ -20,9 +20,16 @@
  * Only a plain Option/Alt+click on an http(s) link is claimed. Every other
  * modifier combination keeps Chromium's meaning, so Command+click still opens a
  * background tab and a plain click still navigates.
+ *
+ * A page's own document is not the whole page. Every subframe a site embeds (a
+ * checkout, a dashboard widget, an embedded editor) handles its own clicks, and
+ * an event inside one never reaches the top document's listener: the link in it
+ * kept Chromium's Option-click meaning, which is a download of the page. So the
+ * observer is installed in every frame a page holds, and each frame's document
+ * re-arms itself when it loads, the same way the top one does.
  */
 
-import type { WebContents } from 'electron'
+import type { WebContents, WebFrameMain } from 'electron'
 import { Logger } from '../../system/logger'
 
 /** The isolated world the observer lives in, distinct from the swipe's and the keys'. */
@@ -42,6 +49,12 @@ export interface BrowserLinkPeekRequest {
   /** The click in the page's own CSS pixels. */
   x: number
   y: number
+  /**
+   * Whether the click landed inside a subframe, whose pixels are that frame's
+   * own rather than the page's. Electron does not report where a frame sits in
+   * the page, so the pointer is the only honest anchor for those.
+   */
+  frameRelative: boolean
 }
 
 /** The observer, installed once per document and idempotent thereafter. */
@@ -111,8 +124,14 @@ export function linkPeekWaitScript(): string {
 /**
  * Read a page's report, which comes from a page and is therefore untrusted:
  * anything without an http(s) address and finite coordinates is no report.
+ *
+ * `frameRelative` only describes which coordinate space the numbers are in; it
+ * is decided by main, never by the frame that reported them.
  */
-export function parseLinkPeekReport(value: unknown): BrowserLinkPeekRequest | null {
+export function parseLinkPeekReport(
+  value: unknown,
+  frameRelative = false
+): BrowserLinkPeekRequest | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const url = record['url']
@@ -126,7 +145,7 @@ export function parseLinkPeekReport(value: unknown): BrowserLinkPeekRequest | nu
   } catch {
     return null
   }
-  return { url, x, y }
+  return { url, x, y, frameRelative }
 }
 
 export interface BrowserLinkPeekDeps {
@@ -137,58 +156,100 @@ export interface BrowserLinkPeekDeps {
 interface RelayState {
   pending: boolean
   failures: number
-  abandoned: boolean
 }
 
 /**
- * Owns one Option-click relay per page: installing it, waiting for its reports,
- * and re-arming after each. Identity of the state object is what tells an answer
- * that belongs to the current document from one a navigation has replaced.
+ * One page's relays: the top document's state machine, and the frames it holds.
+ *
+ * The state object's identity is what tells an answer that belongs to the
+ * current document from one a navigation has replaced.
+ */
+interface PageRelay {
+  main: RelayState
+  /** Set when the page goes away, so no later answer is acted on. */
+  abandoned: boolean
+  /** Whether the frame watcher for this page is already installed. */
+  watching: boolean
+  /** Every frame that already carries the observer, installed once each. */
+  frames: WeakSet<WebFrameMain>
+  /** Frames whose outstanding wait is already running. */
+  waiting: WeakSet<WebFrameMain>
+}
+
+/**
+ * Owns one Option-click relay per page: installing it in the top document and in
+ * every frame that document holds, waiting for reports, and re-arming after each.
  */
 export class BrowserLinkPeek {
-  private readonly documents = new WeakMap<WebContents, RelayState>()
+  private readonly pages = new WeakMap<WebContents, PageRelay>()
 
   constructor(private readonly deps: BrowserLinkPeekDeps) {}
 
-  /** Install the observer for the document that just arrived. */
+  /**
+   * Install the observers for the document that just arrived.
+   *
+   * The page's record outlives the document, because the frames it holds keep
+   * their own observers across a top-level navigation: only the top document's
+   * state machine is new, and the frame watcher is installed once per page.
+   */
   install(contents: WebContents): void {
     if (contents.isDestroyed()) return
-    const state: RelayState = { pending: false, failures: 0, abandoned: false }
-    this.documents.set(contents, state)
-    this.arm(contents, state)
+    let page = this.pages.get(contents)
+    if (!page || page.abandoned) {
+      page = {
+        main: { pending: false, failures: 0 },
+        abandoned: false,
+        watching: false,
+        frames: new WeakSet(),
+        waiting: new WeakSet()
+      }
+      this.pages.set(contents, page)
+    } else {
+      page.main = { pending: false, failures: 0 }
+    }
+    this.arm(contents, page)
+    this.watchFrames(contents, page)
   }
 
   /** Stop reporting for a page that is going away. */
   release(contents: WebContents): void {
-    const state = this.documents.get(contents)
-    if (state) state.abandoned = true
-    this.documents.delete(contents)
+    const page = this.pages.get(contents)
+    if (page) page.abandoned = true
+    this.pages.delete(contents)
   }
 
-  private arm(contents: WebContents, state: RelayState): void {
-    if (state.pending || state.abandoned || contents.isDestroyed()) return
-    if (this.documents.get(contents) !== state) return
+  /**
+   * The top document's relay, in its own isolated world.
+   *
+   * Its answer is the click in the page's own pixels and in the page's own
+   * coordinate space, which is what lets a peek grow out of the link itself.
+   */
+  private arm(contents: WebContents, page: PageRelay): void {
+    const state = page.main
+    if (state.pending || page.abandoned || contents.isDestroyed()) return
+    if (this.pages.get(contents) !== page) return
     state.pending = true
-    contents
-      .executeJavaScriptInIsolatedWorld(LINK_PEEK_WORLD_ID, [{ code: linkPeekInstallScript() }])
+    const inWorld = (code: string): Promise<unknown> =>
+      contents.executeJavaScriptInIsolatedWorld(LINK_PEEK_WORLD_ID, [{ code }])
+    inWorld(linkPeekInstallScript())
       .then((installed: unknown) => {
         if (installed !== true) throw new Error('link peek relay refused to install')
-        return contents.executeJavaScriptInIsolatedWorld(LINK_PEEK_WORLD_ID, [
-          { code: linkPeekWaitScript() }
-        ])
+        return inWorld(linkPeekWaitScript())
       })
       .then((answer: unknown) => {
-        if (this.documents.get(contents) !== state) return
+        // A navigation replaces the document this wait belonged to, and its
+        // answer describes a page that is no longer there.
+        if (this.pages.get(contents) !== page || page.main !== state) return
         state.pending = false
         state.failures = 0
         const request = parseLinkPeekReport(answer)
         if (request) this.deps.onPeek(contents, request)
-        this.arm(contents, state)
+        this.arm(contents, page)
       })
       .catch((error: unknown) => {
-        if (this.documents.get(contents) !== state) return
+        if (this.pages.get(contents) !== page || page.main !== state) return
         state.pending = false
-        if (contents.isDestroyed() || state.abandoned) return
+        if (contents.isDestroyed() || page.abandoned) return
         // A document swap rejects the outstanding promise routinely, so a failure
         // is retried rather than treated as abandon; only a page that keeps
         // refusing is dropped.
@@ -197,7 +258,76 @@ export class BrowserLinkPeek {
           Logger.dev('Browser link peek relay abandoned a document:', error)
           return
         }
-        setTimeout(() => this.arm(contents, state), REARM_DELAY_MS)
+        setTimeout(() => this.arm(contents, page), REARM_DELAY_MS)
+      })
+  }
+
+  /**
+   * Every frame the page holds, now and as it grows.
+   *
+   * A frame a document embeds is created and loaded on its own schedule, so the
+   * watcher is installed once per page and then arms each frame's document as it
+   * arrives, which is what keeps a link inside one from keeping Chromium's
+   * Option-click meaning of "download this".
+   */
+  private watchFrames(contents: WebContents, page: PageRelay): void {
+    let root: WebFrameMain
+    try {
+      root = contents.mainFrame
+    } catch {
+      // A page whose main frame was disposed holds no frame to arm, and nothing
+      // here is worth reporting.
+      return
+    }
+    for (const frame of root.framesInSubtree) {
+      if (frame !== root) this.armFrame(contents, page, frame)
+    }
+    if (page.watching) return
+    page.watching = true
+    contents.on('frame-created', (_event, details) => {
+      const current = this.pages.get(contents)
+      const frame = details.frame
+      if (frame && current) this.armFrame(contents, current, frame)
+    })
+  }
+
+  /** Watch one frame, then arm the document it already holds. */
+  private armFrame(contents: WebContents, page: PageRelay, frame: WebFrameMain): void {
+    if (page.abandoned || frame.detached || page.frames.has(frame)) return
+    page.frames.add(frame)
+    frame.on('dom-ready', () => this.armInFrame(contents, page, frame))
+    this.armInFrame(contents, page, frame)
+  }
+
+  /**
+   * A subframe's relay, in that frame's own document.
+   *
+   * A frame has no isolated world of its own through this API, so the observer
+   * runs beside the frame's script. That costs nothing an attacker did not
+   * already have: the report is untrusted either way and is validated before it
+   * opens anything, and a peek only ever previews a page.
+   */
+  private armInFrame(contents: WebContents, page: PageRelay, frame: WebFrameMain): void {
+    if (page.abandoned || frame.detached || contents.isDestroyed()) return
+    if (page.waiting.has(frame)) return
+    page.waiting.add(frame)
+    frame
+      .executeJavaScript(linkPeekInstallScript())
+      .then((installed: unknown) => {
+        if (installed !== true) throw new Error('link peek relay refused to install')
+        return frame.executeJavaScript(linkPeekWaitScript())
+      })
+      .then((answer: unknown) => {
+        page.waiting.delete(frame)
+        if (page.abandoned || frame.detached || contents.isDestroyed()) return
+        const request = parseLinkPeekReport(answer, true)
+        if (request) this.deps.onPeek(contents, request)
+        this.armInFrame(contents, page, frame)
+      })
+      .catch(() => {
+        // A frame mid-navigation rejects the outstanding wait routinely, and the
+        // document that replaces it is armed by that frame's own `dom-ready`.
+        page.waiting.delete(frame)
       })
   }
 }

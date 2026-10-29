@@ -3,7 +3,6 @@ import { app, clipboard, Menu, type MenuItemConstructorOptions, type WebContents
 import { join } from 'node:path'
 import { buildBrowserSearchUrl } from '../../../lib/browser-search-engines'
 import type { BrowserViewBounds } from '../../../lib/ipc-contract'
-import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc-contract'
 import { getGlobalBrowserContextMenuBoxes } from '../../ipc/global-browser-ipc'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { Logger } from '../../system/logger'
@@ -235,22 +234,20 @@ export class BrowserServiceMenus {
           Logger.error('Browser context menu refused a link in a box:', error)
         }
       },
-      ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
-        ? {
-            openPeekWindow: (url: string, media?: BrowserPeekMediaTarget | null): void => {
-              const current = live()
-              if (!current) return
-              let target: string
-              try {
-                target = validateBrowserUrl(url)
-              } catch (error: unknown) {
-                Logger.error('Browser Peek refused a link:', error)
-                return
-              }
-              this.host.openPeekFrom(owner, current, target, frame, point, media ?? null)
-            }
-          }
-        : {}),
+      // Every browser surface offers a peek, not only the global one: the Peek
+      // Window is app-wide, and a link in a thread's page is the same link.
+      openPeekWindow: (url: string, media?: BrowserPeekMediaTarget | null): void => {
+        const current = live()
+        if (!current) return
+        let target: string
+        try {
+          target = validateBrowserUrl(url)
+        } catch (error: unknown) {
+          Logger.error('Browser Peek refused a link:', error)
+          return
+        }
+        this.host.openPeekFrom(owner, current, target, frame, point, media ?? null)
+      },
       saveLinkAs: saveAs,
       openMediaInNewTab: openInNewTab,
       saveMediaAs: saveAs,
