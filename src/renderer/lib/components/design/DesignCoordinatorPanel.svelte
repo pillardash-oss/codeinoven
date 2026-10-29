@@ -206,11 +206,11 @@
                 alt={board.gallery.video
                   ? `Preview of the ${board.gallery.noun} ${board.gallery.selectedName}`
                   : `Preview of the ${board.gallery.noun} screen ${screen.name}`}
-                class="block max-h-44 w-full object-cover object-top"
+                class="block max-h-64 w-full object-cover object-top"
               />
             {:else}
               <span
-                class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+                class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1 text-dimmed"
               >
                 {#if board.studio.galleryBusy}
                   <CioSpinner size={14} class="animate-spin" />
@@ -543,11 +543,11 @@
         <img
           src={input.shot.dataUrl}
           alt={input.label}
-          class="block max-h-44 w-full object-cover object-top"
+          class="block max-h-64 w-full object-cover object-top"
         />
       {:else}
         <span
-          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+          class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1 text-dimmed"
         >
           {#if input.busy}
             <CioSpinner size={14} class="animate-spin" />
