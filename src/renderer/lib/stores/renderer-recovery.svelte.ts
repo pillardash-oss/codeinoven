@@ -4,6 +4,7 @@ import type {
   PromptProjectReference
 } from '$shared/types'
 import { uuidv7 } from '$shared/id'
+import { invoke } from '$lib/ipc.svelte'
 import { parseModelKey } from '$lib/model-keys'
 import type { ModelScope } from './thread-settings.svelte'
 import { clearDraftLabelCookie, setDraftLabelCookie } from './draft-label'
@@ -222,11 +223,16 @@ export class RendererRecoveryStore {
     this.selectedProjectId = projectId
     this.selectedThread = { projectId, threadId }
     this.persist()
+    // Main keeps its own copy so the next launch can warm this thread's row and
+    // newest transcript page while the splash is still up, before the renderer
+    // exists to ask for them. Best effort: the restore never depends on it.
+    void invoke('app:rememberThread', projectId, threadId).catch(() => undefined)
   }
 
   clearSelectedThread(): void {
     this.selectedThread = null
     this.persist()
+    void invoke('app:forgetThread').catch(() => undefined)
   }
 
   draftFor(projectId: string, threadId: string): string {

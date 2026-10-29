@@ -1,3 +1,4 @@
+import { tick } from 'svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 
 import { invoke, waitForFeatures } from '$lib/ipc.svelte'
@@ -116,6 +117,40 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     })
   }
 
+  /**
+   * Tell main the first screen is actually on the glass, releasing the splash.
+   *
+   * This is not a delay: it is the restore's own completion. When a thread is
+   * being restored this waits for its transcript read and the frame that paints
+   * it, so the window is revealed with the conversation already there rather
+   * than with an empty shell whose messages arrive afterwards. With nothing to
+   * restore it reports the empty state as soon as it is decided.
+   */
+  private async signalConversationReady(thread: Thread | null): Promise<void> {
+    let readyMessages = 0
+    if (thread) {
+      await threadMessages.waitForLoad(thread.projectId, thread.id)
+      // A large first load lands in tail-first batches; revealing the window
+      // against the first batch would put the newest rows on screen and then
+      // push them down as older ones arrive. Wait for the window to be whole,
+      // bounded so a stuck reveal can never hold the splash.
+      const deadline = Date.now() + 1_200
+      while (threadMessages.revealing(thread.projectId, thread.id) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 16))
+      }
+      await tick()
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 120)
+        requestAnimationFrame(() => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+      readyMessages = threadMessages.messages(thread.projectId, thread.id).length
+    }
+    await invoke('app:conversationReady', readyMessages).catch(() => undefined)
+  }
+
   async loadData(): Promise<void> {
     try {
       // Assistant View is a secondary surface and never hydrates in this pass:
@@ -151,11 +186,19 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         this.upsertThreadInList(restoredThread)
         workspaceState.openThread(
           restoredThread,
-          projectList.find((candidate) => candidate.id === restoredThread.projectId) ?? null
+          projectList.find((candidate) => candidate.id === restoredThread.projectId) ?? null,
+          undefined,
+          { deferContextPanel: true }
         )
         // Read-settling for programmatic selections is centralized in the
         // selected-thread effect above; startup restore needs no extra call.
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
+        void this.signalConversationReady(restoredThread)
+      } else if (!saved) {
+        // No thread to restore: the empty state is the first screen, so stop
+        // holding the neutral restore surface now instead of after the sidebar.
+        workspaceState.restoringLastThread = false
+        void this.signalConversationReady(null)
       }
 
       // Sidebar hydration follows the conversation the restore just started.
@@ -192,11 +235,15 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
           this.upsertThreadInList(fromList)
           workspaceState.openThread(
             fromList,
-            projectList.find((candidate) => candidate.id === fromList.projectId) ?? null
+            projectList.find((candidate) => candidate.id === fromList.projectId) ?? null,
+            undefined,
+            { deferContextPanel: true }
           )
           void scopeState.ensureBoardLoaded(fromList.projectId)
+          void this.signalConversationReady(fromList)
         } else {
           rendererRecovery.clearSelectedThread()
+          void this.signalConversationReady(null)
         }
       }
       workspaceState.restoringLastThread = false

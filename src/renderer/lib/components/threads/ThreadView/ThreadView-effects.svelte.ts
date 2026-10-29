@@ -563,10 +563,23 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     // runs once per thread (the view is remounted per thread switch); later
     // arrivals are followed by the resize observer below.
     $effect(() => {
+      // Reading the mounted window here is the dependency that re-runs this
+      // effect as the reveal publishes batches; the restore must wait for the
+      // whole window, otherwise it anchors on a partial tail and the prompt
+      // arrives above the viewport a few frames later.
+      void this.root.composerScope.visibleMessages.length
       if (
         !this.root.sources.loaded ||
         !this.root.loadOlderMessages.scrollEl ||
         this.root.unmirroredTraceStartTime.scrollRestored
+      )
+        return
+      if (
+        !this.root.loadOlderMessages.hasController &&
+        threadMessages.revealing(
+          this.root.handleAgentEvent.thread.projectId,
+          this.root.handleAgentEvent.thread.id
+        )
       )
         return
       const scrollToTurnPrompt = (attempt: number): void => {

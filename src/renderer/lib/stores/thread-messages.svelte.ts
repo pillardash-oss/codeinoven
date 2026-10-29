@@ -156,6 +156,11 @@ class ThreadMessagesStore {
     return this.cache.hasOlder(projectId, threadId)
   }
 
+  /** True while a large initial load is still being revealed in batches. */
+  revealing(projectId: string, threadId: string): boolean {
+    return this.cache.revealing(projectId, threadId)
+  }
+
   async waitForLoad(projectId: string, threadId: string): Promise<void> {
     await this.#loadPromises.get(threadKey(projectId, threadId))
   }

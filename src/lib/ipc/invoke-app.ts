@@ -198,6 +198,19 @@ export const invokeAppContract = {
    */
   'app:rendererReady': {} as Contract<[], void>,
   /**
+   * Signalled once the first screen is on the glass: the restored conversation
+   * has painted, or the empty state has been decided. The splash is held for
+   * exactly this, so it carries no payload and is a no-op after the first call.
+   */
+  'app:conversationReady': {} as Contract<[readyMessages: number], void>,
+  /**
+   * The thread the renderer is showing, persisted so the next launch can warm
+   * its row and newest transcript page while the splash is still up.
+   */
+  'app:rememberThread': {} as Contract<[projectId: string, threadId: string], void>,
+  /** Drop the persisted selection (deliberate close, deletion, or no thread). */
+  'app:forgetThread': {} as Contract<[], void>,
+  /**
    * Renderer forwards its own captured errors (uncaught exceptions, unhandled
    * rejections, console errors) to the main-process durable Logger. Fire and
    * forget; returns `void`.

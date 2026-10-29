@@ -254,7 +254,12 @@ class WorkspaceState {
     return this.contentViewThreadRefs[family] === null
   }
 
-  openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
+  openThread(
+    thread: Thread,
+    project: Project | null,
+    iconUrl?: string | null,
+    options: { deferContextPanel?: boolean } = {}
+  ): void {
     // The chat composer owns keyboard focus after any thread switch. Open the
     // guard window so sidebar tools re-attaching around the switch (terminal
     // panels, action terminals) never steal focus back from the composer.
@@ -284,12 +289,16 @@ class WorkspaceState {
     this.sourceProcessCount = this.freshProcessCount(thread.projectId, thread.id) ?? 0
     // A worker/auditor child opens the coordinator's sidebar context: its own
     // row is the Sr. Engineer, and that is where the coordinator panel is docked.
-    contextSidebarState.activateThread(
-      thread.projectId,
-      thread.id,
-      thread.title,
-      activeThreadRowId(thread) ?? thread.id
-    )
+    // A boot restore defers this: the context panel is a secondary surface, and
+    // its reads must never share the moment the restored conversation paints.
+    const rowThreadId = activeThreadRowId(thread) ?? thread.id
+    if (options.deferContextPanel) {
+      scheduleDeferredWork('workspace:contextPanel', () => {
+        contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
+      })
+    } else {
+      contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
+    }
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Opening a thread re-anchors the project's active scope (file manager,
     // terminal, and action roots follow the thread's scope bucket).

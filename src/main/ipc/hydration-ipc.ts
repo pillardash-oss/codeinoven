@@ -56,6 +56,37 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   }
 
   ipcMain.handle('config:get', () => storage.getConfig())
+
+  // ── The conversation the last session was on ────────────────────────────
+  //
+  // The selection itself lives in the renderer's recovery storage, which main
+  // cannot read. Persisting a copy here lets the boot start the two reads the
+  // restored conversation needs (its row and its newest transcript page) while
+  // the splash is still up: the renderer's own request then lands on a warm
+  // page cache instead of being the database's first sight of that thread.
+  // Best effort in both directions - a missing or unreadable file only costs
+  // the warmth, never the restore.
+  const LAST_THREAD_FILE = 'state/last-thread.json'
+  ipcMain.handle('app:rememberThread', (_, rawProjectId: unknown, rawThreadId: unknown) => {
+    const reference = {
+      projectId: validateEntityId(rawProjectId, 'Project ID'),
+      threadId: validateEntityId(rawThreadId, 'Thread ID')
+    }
+    void storage.write(LAST_THREAD_FILE, reference).catch(() => undefined)
+  })
+  ipcMain.handle('app:forgetThread', () =>
+    storage.removeRaw(LAST_THREAD_FILE).catch(() => undefined)
+  )
+  void (async (): Promise<void> => {
+    const last = await storage
+      .read<{ projectId: string; threadId: string }>(LAST_THREAD_FILE)
+      .catch(() => null)
+    const projectId = validateEntityId(last?.projectId, 'Project ID')
+    const threadId = validateEntityId(last?.threadId, 'Thread ID')
+    const thread = await threadManager.getThreadViaWorker(projectId, threadId)
+    if (!thread || thread.archived) return
+    await threadManager.loadMessagePage(projectId, threadId, undefined, 40)
+  })().catch(() => undefined)
   ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
   ipcMain.handle('project:list', async () => {
     await projectsReady

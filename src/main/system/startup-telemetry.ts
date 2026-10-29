@@ -26,6 +26,7 @@ export type StartupPhase =
   | 'renderer:documentLoaded'
   | 'window:visualReady'
   | 'renderer:hydrated'
+  | 'conversation:ready'
   | 'features:ready'
   | 'workspace:ready'
   | 'provider:warmup'

@@ -407,6 +407,28 @@ ipcMain.handle('app:setWindowControls', (event, symbolColor: unknown, headerHeig
  * interactive workspace. Idempotent: repeated signals (e.g. renderer reload)
  * never re-record phases or re-emit the report.
  */
+/**
+ * The renderer reports that the conversation it restored has painted.
+ *
+ * This is a real milestone, not a timer: the splash is held for exactly as long
+ * as the work takes, and it drops the moment this lands. A launch with no
+ * conversation to restore reports it as soon as the empty state is decided.
+ */
+let resolveConversationReady: (() => void) | null = null
+let conversationReadyReported = false
+
+ipcMain.handle('app:conversationReady', (_event, readyMessages: unknown) => {
+  if (conversationReadyReported) return
+  conversationReadyReported = true
+  startupTelemetry.mark('conversation:ready')
+  Logger.dev('Conversation ready for reveal', {
+    mountedMessages: typeof readyMessages === 'number' ? readyMessages : null
+  })
+  const resolve = resolveConversationReady
+  resolveConversationReady = null
+  resolve?.()
+})
+
 ipcMain.handle('app:rendererReady', async () => {
   if (state.rendererReadyReported) return
   state.rendererReadyReported = true
@@ -1090,6 +1112,9 @@ void app
       return
     }
 
+    // Each window waits on its own conversation paint.
+    conversationReadyReported = false
+    resolveConversationReady = null
     const window = createWindow()
     startupTelemetry.mark('window:created')
 
@@ -1139,23 +1164,51 @@ void app
     window.webContents.once('did-finish-load', () => {
       documentLoaded = true
       startupTelemetry.mark('renderer:documentLoaded')
-      startPostVisualServices()
       // A hand-off that landed while the renderer was still loading could not
       // be pushed (its listeners did not exist yet) and was not drained either
       // (its mount-time drain had already run). Deliver it now.
       flushOpenedPathsToRenderer(state)
       void completeStartupIfReady()
     })
+    // The splash covers the renderer's restore, not an artificial pause: it is
+    // dismissed the instant the restored conversation has painted, and every
+    // optional surface (the feature graph, the context panel, provider
+    // discovery) starts only after that reveal. A renderer that never reports
+    // would otherwise strand the user on the splash, so the wait is bounded.
+    const CONVERSATION_SPLASH_BUDGET_MS = 4_000
+    let conversationFailsafe: ReturnType<typeof setTimeout> | undefined
+    let splashRevealed = false
+    const revealWorkspace = (): void => {
+      if (splashRevealed) return
+      splashRevealed = true
+      if (conversationFailsafe !== undefined) {
+        clearTimeout(conversationFailsafe)
+        conversationFailsafe = undefined
+      }
+      closeSplash()
+      startPostVisualServices()
+    }
     window.once('ready-to-show', () => {
       visualReady = true
       startupTelemetry.mark('window:visualReady')
       clearTimeout(splashFailsafe)
-      closeSplash()
-      startPostVisualServices()
+      if (conversationReadyReported) {
+        revealWorkspace()
+      } else {
+        conversationFailsafe = setTimeout(() => {
+          Logger.dev('Conversation restore did not report within the splash budget; revealing')
+          revealWorkspace()
+        }, CONVERSATION_SPLASH_BUDGET_MS)
+        void new Promise<void>((resolve) => {
+          resolveConversationReady = resolve
+        }).then(() => revealWorkspace())
+      }
       void completeStartupIfReady()
     })
     window.once('closed', () => {
       clearTimeout(splashFailsafe)
+      if (conversationFailsafe !== undefined) clearTimeout(conversationFailsafe)
+      resolveConversationReady = null
       closeSplash()
     })
 

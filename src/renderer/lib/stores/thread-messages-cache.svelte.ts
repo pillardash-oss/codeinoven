@@ -315,6 +315,15 @@ export class ThreadMessagesCache {
     this.#revealTimers.set(key, setTimeout(publishBatch, LOAD_REVEAL_INTERVAL_MS))
   }
 
+  /**
+   * Whether this thread's large initial load is still being revealed in
+   * batches. A window that reads its messages mid-reveal holds a partial set,
+   * so anything that measures or anchors the transcript has to wait for it.
+   */
+  revealing(projectId: string, threadId: string): boolean {
+    return this.#revealPending.has(threadKey(projectId, threadId))
+  }
+
   /** Stop any in-flight batched reveal for a thread. */
   #cancelReveal(key: string): void {
     const timer = this.#revealTimers.get(key)
