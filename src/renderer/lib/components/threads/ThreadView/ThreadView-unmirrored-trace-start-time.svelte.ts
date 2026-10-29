@@ -581,7 +581,7 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
   }
 
   /** Debounces the dependency warmup so a fast mouse pass never fires an IPC call. */
-  dependencyPreloadTimer = $state<ReturnType<typeof setTimeout> | undefined>()
+  dependencyPreloadTimer: ReturnType<typeof setTimeout> | undefined = undefined
 
   DEPENDENCY_PRELOAD_DEBOUNCE_MS = 200
 

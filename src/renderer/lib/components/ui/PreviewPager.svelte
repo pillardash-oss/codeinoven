@@ -3,11 +3,11 @@
 </script>
 
 <script lang="ts">
-  import type { PreviewPagerState } from './preview-pager-state'
+  import type { PreviewPagerState as PreviewPagerStateData } from './preview-pager-state'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   interface Props {
-    pager: PreviewPagerState
+    pager: PreviewPagerStateData
     class?: string
   }
 

@@ -712,7 +712,7 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
 
   copiedMessageId = $state<string | null>(null)
 
-  copyResetTimer = $state<ReturnType<typeof setTimeout> | undefined>()
+  copyResetTimer: ReturnType<typeof setTimeout> | undefined = undefined
 
   async copyMessage(msg: AgentMessage, text = messageText(msg)): Promise<void> {
     try {

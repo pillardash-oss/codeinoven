@@ -162,7 +162,7 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
 
   lastCaretText: string | null = $state(null)
 
-  richEditor = $state<RichMarkdownEditor>()
+  richEditor!: RichMarkdownEditor
 
   composerSpeechTarget(): SpeechEditorTarget | null {
     const editorTarget = this.richEditor?.speechEditorTarget(this.composerEditorId) ?? null
@@ -253,7 +253,7 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
 
   pendingStop = $state(false)
 
-  pendingStopTimer = $state<ReturnType<typeof setTimeout> | undefined>()
+  pendingStopTimer: ReturnType<typeof setTimeout> | undefined = undefined
 
   historyIndex = $state(-1)
 

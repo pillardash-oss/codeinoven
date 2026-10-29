@@ -37,7 +37,7 @@ export class WorkspaceState extends BoardUnit<Workspace> {
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   /** Set by `bind()`: the mode the surface was on when the board was built. */
-  previousMode = $state<Workspace['props']['mode']>('chats')
+  previousMode: Workspace['props']['mode'] = 'chats'
 
   projectCreateTrigger = $state(0)
 

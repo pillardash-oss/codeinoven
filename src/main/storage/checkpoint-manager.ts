@@ -268,9 +268,7 @@ export class CheckpointManager {
     assertId(threadId)
     const checkpoint = await this.getActive(projectId, threadId)
     if (!checkpoint) return new Map()
-    const rows = await this.queryRows<
-      TranscriptEvidenceRow
-    >(
+    const rows = await this.queryRows<TranscriptEvidenceRow>(
       `SELECT parts FROM agent_messages
        WHERE thread_id = ? AND role = 'assistant' AND created_at >= ?
        ORDER BY created_at DESC, id DESC`,

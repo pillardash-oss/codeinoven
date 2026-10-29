@@ -113,7 +113,7 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
   // pointer travels from the chip across any gap to the popover itself.
   selectionPopoverOpen = $state(false)
 
-  selectionPopoverTimer = $state<ReturnType<typeof setTimeout> | undefined>()
+  selectionPopoverTimer: ReturnType<typeof setTimeout> | undefined = undefined
 
   /**
    * Whether a reference row's relocation menu is up.
@@ -126,7 +126,7 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
 
   startAfterPopoverOpen = $state(false)
 
-  startAfterPopoverTimer = $state<ReturnType<typeof setTimeout> | undefined>()
+  startAfterPopoverTimer: ReturnType<typeof setTimeout> | undefined = undefined
 
   openSelectionPopover(): void {
     clearTimeout(this.selectionPopoverTimer)

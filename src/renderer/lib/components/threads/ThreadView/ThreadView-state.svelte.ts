@@ -87,7 +87,7 @@ export class ThreadViewState extends BoardUnit<ThreadView> {
   /** Minimum quiet time before the rendered battery settles mid-turn. */
   CONTEXT_USAGE_SETTLE_MS = 6000
 
-  contextUsageSettleTimer = $state<ReturnType<typeof setTimeout> | undefined>()
+  contextUsageSettleTimer: ReturnType<typeof setTimeout> | undefined = undefined
 
   /**
    * Where the conversation's page column starts, reported to the header so the

@@ -73,7 +73,7 @@ export class WorkspacePanelExitMs extends BoardUnit<Workspace> {
    */
   railDragging = $state(false)
 
-  railDragTimer = $state<ReturnType<typeof setTimeout> | undefined>()
+  railDragTimer: ReturnType<typeof setTimeout> | undefined = undefined
 
   railTrackDuration = $derived(
     this.railDragging

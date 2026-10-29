@@ -55,7 +55,7 @@
 </script>
 
 <script lang="ts">
-  import type { ComposerUsage } from './composer-usage'
+  import type { ComposerUsage as ComposerUsageData } from './composer-usage'
   import CioActions from '@pdslng/cio-icon/CioActions.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioClipboardCheck from '@pdslng/cio-icon/CioClipboardCheck.svelte'
@@ -78,7 +78,6 @@
   import { vendorMatches } from '$lib/components/shared/model-picker-helpers'
   import type { GenerationFact } from '$lib/generation-details'
   import type { ScopeBucket, ScopeChoice, ScopeEnvironmentMode } from '$shared/types'
-  import type { AgentContextUsage, AgentHarnessUsage, UsageEfficiencyKpis } from '$shared/types'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import ScopePickerMenu from '$lib/components/shared/ScopePickerMenu.svelte'
   import ScopeCreateModal from '$lib/components/scope/ScopeCreateModal.svelte'
@@ -98,7 +97,7 @@
      * battery is always on screen   it is how the user checks a model choice
      * before sending, and hovering it is what fetches live quota.
      */
-    usage: ComposerUsage
+    usage: ComposerUsageData
     /** Runs whenever the scope picker menu closes, so the composer that renders
      *  the shoe can win its focus back and resume typing at the saved caret. */
     onScopeMenuClosed?: () => void
