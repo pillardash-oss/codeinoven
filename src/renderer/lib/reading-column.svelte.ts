@@ -7,18 +7,13 @@ import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
  *
  * The app header puts the thread's name on that column's left edge instead of on
  * the sidebar's, because the page is the thing the reader is looking at: the name
- * and the messages read as one surface, so they move as one surface. The
- * conversation's page column is that surface, and measuring it is the whole job:
- * the box's left edge plus its own left padding, because the text starts after
- * that padding and aligning to the box leaves the name a few pixels off the line
- * the messages start on.
+ * and the messages read as one surface, so they move as one surface.
  *
- * It is measured live, not against the layout the workspace was built for. A
- * panel sliding in on the right narrows the pane, the centred column re-centres,
- * and the name travels with it frame by frame   the same slide the conversation
- * itself is making, never a snap at the end of it. That is why the pane around
- * the column is observed as well as the column: the column keeps its width while
- * the pane narrows, so only the pane reports the movement.
+ * The conversation's page column hugs that surface's own gutter rather than
+ * centring itself in whatever room is left, so it starts in the same place every
+ * time it is on screen: a panel docking on the right narrows the page from its
+ * right edge and never shifts where the reader's text begins. That is what keeps
+ * the name in the header still, since it is placed on the text's edge.
  *
  * A surface the reader cannot see keeps the last coordinate it reported instead
  * of resetting it. Hiding the conversation (a studio taking the pane) is not the

@@ -96,7 +96,7 @@
          actions target the owning durable worker rather than this thread. -->
     {#each board.submitBrainstormDecision.assignmentWorkerAttentionItems as item, index (item.task.id)}
       <div class="conversation-gutter shrink-0 px-6">
-        <div class="mx-auto max-w-3xl">
+        <div class="max-w-3xl">
           <AgentProviderStatusCard
             status={board.state.assignmentWorkerAttentionStatus(item.task, item.worker)}
             providerName={harnessDisplayName(item.worker.settings?.harnessId ?? 'unknown')}
@@ -133,7 +133,7 @@
          matching bubbled worker error is replaced by the attributed card above. -->
     {#if board.submitBrainstormDecision.visibleProviderStatus && !board.submitBrainstormDecision.coordinatorErrorMatchesAssignmentWorker}
       <div class="conversation-gutter shrink-0 px-6">
-        <div class="mx-auto max-w-3xl">
+        <div class="max-w-3xl">
           <AgentProviderStatusCard
             status={board.submitBrainstormDecision.visibleProviderStatus}
             stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('provider')}
@@ -197,7 +197,7 @@
        never blocks the composer. -->
     {#if board.unmirroredTraceStartTime.compactionInterruptedNotice}
       <div class="conversation-gutter shrink-0 px-6">
-        <div class="mx-auto max-w-3xl">
+        <div class="max-w-3xl">
           <div out:slide={dismissSlide()} role="status" aria-live="polite">
             <CardFrame
               placement="top"
@@ -250,7 +250,7 @@
        The head names what waits, and Send now (the steer key) is a head control. -->
     {#if board.steerQueuedMessage.queuedCardVisible}
       <div class="conversation-gutter shrink-0 px-6" in:slide={cardArrive()}>
-        <div class="mx-auto max-w-3xl">
+        <div class="max-w-3xl">
           <ComposerQueuedCard
             text={board.steerQueuedMessage.queuedMessage}
             hasContent={board.steerQueuedMessage.queuedHasContent}
@@ -289,9 +289,7 @@
         ? 'pt-0'
         : 'pt-2'}"
     >
-      <div
-        class="mx-auto w-full {board.composerScope.centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}"
-      >
+      <div class="w-full {board.composerScope.centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
         {#if board.composerScope.centeredComposer}
           {#if board.props.assistantMode}
             <div class="mb-5 text-center">

@@ -119,9 +119,9 @@
    *  bounding box the title aligns to, whether that page is the conversation or the
    *  document a studio is showing; the panel only decides how much room it has.
    *
-   *  The gap is live, not reserved: when a panel beside the conversation re-centres
-   *  the page column, the title travels with that column frame by frame, so the bar
-   *  and the page below it read as one surface instead of two that disagree. */
+   *  The page column hugs its gutter, so this gap holds still: a panel docking on
+   *  the right narrows the page instead of shifting it, and the name never travels
+   *  away from the messages it belongs to. */
   let titleInset = $derived.by(() => {
     if (!layoutPanelState.contentVisible) return 0
     const contentLeft = layoutPanelState.readingColumnLeft

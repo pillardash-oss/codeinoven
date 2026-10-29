@@ -36,9 +36,9 @@ class LayoutPanelState {
    *
    * The header's thread block aligns to that column rather than to the panel: the
    * page is the thing the reader is looking at, and the panel is only how much
-   * room it has. It is a live coordinate, so a column that moves (a panel opening
-   * beside it, a window resize, a sidebar drag) carries the thread's name with it,
-   * frame by frame and with no snap at the end of the motion.
+   * room it has. The page column hugs its own gutter, so this coordinate only
+   * moves with the sidebar and the window, never with a panel that docks beside
+   * the conversation: the panel takes room from the page's right edge.
    *
    * A surface that is hidden rather than gone (a studio taking the pane) keeps the
    * last edge it measured, so the thread's name stays put through the toggle
