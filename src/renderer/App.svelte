@@ -5,6 +5,9 @@
   import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
+  import ConversationFirstPaint from '$lib/components/workspace/ConversationFirstPaint.svelte'
+  import { hasConversationPainted, whenConversationPainted } from '$lib/conversation-painted'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { fly } from 'svelte/transition'
   import { pageReveal } from '$lib/components/layout/page-reveal'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -36,8 +39,46 @@
   import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { guideState } from '$lib/guide/guide-state.svelte'
+  import { onMount } from 'svelte'
   import { createApp } from './App/App-board.svelte'
   const board = createApp()
+
+  /**
+   * The conversation the user was reading, painted before anything owns it.
+   *
+   * The workspace is a second module graph on top of the shell, so on a launch
+   * that restores a thread its own pane cannot paint until that graph and the
+   * thread read behind it have both landed. The one thing a launch already has
+   * before either is the transcript it read on the renderer's first statement
+   * (`preloadRestoredThreadConversation`), so the last prompt and its answer are
+   * shown from here in the meantime instead of leaving the app's main area empty
+   * while the rail, the header and the thread list fill in around it.
+   *
+   * It is a real handoff, not a delay: the layer is removed the moment the
+   * renderer reports that the restored conversation painted, which is the same
+   * signal the splash is released on. The failsafe only exists so a restore that
+   * never reports cannot trap the user behind this layer.
+   */
+  let conversationPainted = $state(hasConversationPainted())
+  let firstScreenDismissed = $state(false)
+  let restoredThread = $derived(rendererRecovery.selectedThread)
+  let firstScreenActive = $derived(
+    restoredThread !== null &&
+      !conversationPainted &&
+      !firstScreenDismissed &&
+      board.openAssistantFromSearch.showsContentView
+  )
+
+  onMount(() => {
+    whenConversationPainted(() => {
+      conversationPainted = true
+    })
+    // A restore that never reports must not trap the user behind this layer.
+    const failsafe = setTimeout(() => {
+      firstScreenDismissed = true
+    }, 15_000)
+    return () => clearTimeout(failsafe)
+  })
 </script>
 
 <div class="flex h-screen flex-col bg-app">
@@ -99,6 +140,20 @@
           updateConfig={board.updateConfig.updateConfig}
         />
       </div>
+      {#if firstScreenActive && restoredThread}
+        <!-- The restored conversation, before its own renderer owns the area.
+             Sits above the workspace shell so the first thing on screen is what
+             the user was reading, not an empty column beside a loading list. -->
+        <div
+          class="pointer-events-none absolute inset-0 z-10 bg-app"
+          data-conversation-first-screen
+        >
+          <ConversationFirstPaint
+            projectId={restoredThread.projectId}
+            threadId={restoredThread.threadId}
+          />
+        </div>
+      {/if}
       {#if board.onKeydown.activeView === 'scope'}
         {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
           <div class="absolute inset-0" transition:fly={pageReveal()}>

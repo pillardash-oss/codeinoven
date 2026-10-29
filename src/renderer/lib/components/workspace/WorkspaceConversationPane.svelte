@@ -1,12 +1,14 @@
 <script lang="ts">
   import { SvelteMap } from 'svelte/reactivity'
+  import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
-  import { loadCachedPanelModule, SURFACE_KEYS } from '$lib/lazy-panel'
+  import ConversationFirstPaint from './ConversationFirstPaint.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { threadReveal } from '$lib/components/layout/page-reveal'
   import { fly } from 'svelte/transition'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
   import { assistantKnowledgeComplete, type Project, type Thread } from '$shared/types'
@@ -90,6 +92,20 @@
       threadId: thread.id
     })
   }
+
+  /**
+   * The thread this launch is restoring, while the workspace is still resolving
+   * its row.
+   *
+   * The persisted selection is known before any list is: the conversation's own
+   * transcript is already being read against it (see
+   * `preloadRestoredThreadConversation`), so the first screen can show what the
+   * user was reading instead of holding an empty surface until the thread list,
+   * the projects and the conversation renderer have all arrived.
+   */
+  let restoringSelection = $derived(
+    workspaceState.restoringLastThread ? rendererRecovery.selectedThread : null
+  )
 </script>
 
 <div
@@ -110,30 +126,28 @@
         in:fly={threadReveal()}
       >
         <svelte:boundary onerror={handleConversationRenderError}>
-          {#await loadCachedPanelModule(SURFACE_KEYS.threadView, () => import('$lib/components/threads/ThreadView.svelte')) then { default: ThreadView }}
-            <ThreadView
-              thread={selectedThread}
-              {active}
-              chatMode={mode === 'chats' || mode === 'assistant'}
-              assistantMode={mode === 'assistant'}
-              {assistantId}
-              assistantName={assistant?.name ?? null}
-              assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
-              {assistantForeignRunThreadId}
-              {assistantSpaceThreads}
-              {onOpenAssistantThread}
-              allowCenteredComposer={mode === 'chats' ||
-                (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
-                  ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
-                    workspaceState.freshEmptyStateThreadIds.has(selectedThread.id)))}
-              {onForked}
-              projects={visibleProjects}
-              {projectIcons}
-              {onContinueInProject}
-              {onProjectCreated}
-              onOpenScopeView={(thread) => void onOpenScopeView(thread)}
-            />
-          {/await}
+          <ThreadView
+            thread={selectedThread}
+            {active}
+            chatMode={mode === 'chats' || mode === 'assistant'}
+            assistantMode={mode === 'assistant'}
+            {assistantId}
+            assistantName={assistant?.name ?? null}
+            assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
+            {assistantForeignRunThreadId}
+            {assistantSpaceThreads}
+            {onOpenAssistantThread}
+            allowCenteredComposer={mode === 'chats' ||
+              (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
+                ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
+                  workspaceState.freshEmptyStateThreadIds.has(selectedThread.id)))}
+            {onForked}
+            projects={visibleProjects}
+            {projectIcons}
+            {onContinueInProject}
+            {onProjectCreated}
+            onOpenScopeView={(thread) => void onOpenScopeView(thread)}
+          />
           {#snippet failed(_error: unknown, reset: () => void)}
             <div class="flex h-full min-h-0 items-center justify-center px-6">
               <div
@@ -159,10 +173,14 @@
         </svelte:boundary>
       </div>
     {/key}
-  {:else if workspaceState.restoringLastThread}
-    <!-- The saved thread is being restored: hold an empty surface instead of
-         flashing the Welcome screen and then replacing it. -->
-    <div class="h-full min-h-0" aria-busy="true"></div>
+  {:else if restoringSelection}
+    <!-- The saved thread is being restored: paint the part that is already in
+         hand instead of flashing the Welcome screen through a blank surface.
+         `ThreadView` replaces this the moment the workspace resolves the row. -->
+    <ConversationFirstPaint
+      projectId={restoringSelection.projectId}
+      threadId={restoringSelection.threadId}
+    />
   {:else if mode === 'chats'}
     <WelcomeStart
       variant="chats"
