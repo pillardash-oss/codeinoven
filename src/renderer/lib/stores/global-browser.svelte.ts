@@ -14,56 +14,32 @@
  */
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import type { GlobalBrowserPeek } from './global-browser/global-browser-peek-entry.svelte'
 import {
-  peekLandingFor,
   peekPageOnScreen as peekPageOnScreenState,
   type BrowserPeekPhase
 } from '$lib/components/browser/browser-peek-transition'
 import {
   GLOBAL_BROWSER_PROJECT_ID,
   GLOBAL_BROWSER_THREAD_ID,
-  type BrowserExtensionSidePanel,
   type BrowserOpenRequestContext,
   type BrowserPageState,
-  type BrowserPopupWindow,
   type BrowserScreenSharePrompt,
   type BrowserSitePermissionState,
   type BrowserSitePermissionsPrompt,
   type BrowserViewBounds
 } from '$shared/ipc-contract'
-import {
-  isStorableBrowserFavicon,
-  type GlobalBrowserTabsSnapshot
-} from '$shared/browser/global-browser-tabs'
+import { type GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
 import { appConfigState } from './app-config.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
-import {
-  BROWSER_ASSISTANT_DEFAULT_TITLE,
-  browserAssistant,
-  type BrowserAssistantChat
-} from './browser-assistant.svelte'
+import { BROWSER_ASSISTANT_DEFAULT_TITLE, type BrowserAssistantChat } from './browser-assistant.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { browserVisibility } from './browser-visibility.svelte'
 import {
   DEFAULT_BOX_ID,
-  IDLE_GLOBAL_BROWSER_RUNTIME,
-  MAX_BROWSER_BOX_NAME_LENGTH,
-  MAX_BROWSER_GROUP_NAME_LENGTH,
-  MAX_BROWSER_TAB_TITLE_LENGTH,
-  MAX_GLOBAL_BROWSER_BOXES,
-  MAX_GLOBAL_BROWSER_GROUPS,
-  MAX_GLOBAL_BROWSER_TABS,
-  MAX_REOPENED_BROWSER_TABS,
   boxIdForJar,
   browserTabLabel,
-  browserTabLoadingTitle,
-  browserTabTitleForUrl,
-  canHibernateTab,
   defaultBrowserBox,
-  isBlankBrowserAddress,
-  isSameBrowserLoadError,
-  isTabIdlePastWindow,
-  jarIdForBox,
   type BrowserBoxAppearance,
   type BrowserGroupAppearance,
   type ClosedGlobalBrowserTab,
@@ -109,19 +85,7 @@ export class GlobalBrowserState {
   /** The in-app screen-share picker's payload, for a page that asked to share and
    *  found no native picker on this platform. Null while no picker is up. */
   screenSharePrompt = $state<BrowserScreenSharePrompt | null>(null)
-  public peeks = new SvelteMap<
-    string,
-    {
-      tab: GlobalBrowserTab
-      projectId: string
-      threadId: string
-      ownerThreadId: string
-      phase: BrowserPeekPhase
-      origin: BrowserViewBounds | null
-      documentSeen: boolean
-      landed: boolean
-    }
-  >()
+  public peeks = new SvelteMap<string, GlobalBrowserPeek>()
 
   private get currentPeek() {
     const sourceId = browserVisibility.sourceTabId

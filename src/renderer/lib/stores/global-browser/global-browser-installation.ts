@@ -1,5 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
-import { type BrowserPeekPhase } from '$lib/components/browser/browser-peek-transition'
+import { createPeek } from './global-browser-peek-entry.svelte'
 import type { BrowserOpenRequestContext } from '$shared/ipc-contract'
 import { type GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
@@ -105,7 +105,9 @@ export class GlobalBrowserStateInstallation {
         this.host.runtime.delete(previous.tab.id)
         browserAudio.forget(previous.tab.id)
       }
-      const peek = $state({
+      // The record is `$state`, so it is created where the compiler runs: see
+      // `global-browser-peek-entry.svelte.ts`.
+      const peek = createPeek({
         tab: newTab,
         projectId: context.projectId,
         threadId: context.threadId,
@@ -114,10 +116,7 @@ export class GlobalBrowserStateInstallation {
           (context.projectId === GLOBAL_BROWSER_PROJECT_ID
             ? context.threadId
             : (contextSidebarState.threadIdForProject(context.projectId) ?? context.threadId)),
-        phase: 'opening' as BrowserPeekPhase,
-        origin: context.origin ?? null,
-        documentSeen: false,
-        landed: false
+        origin: context.origin ?? null
       })
       this.host.peeks.set(sourceTabId, peek)
       // Native loading begins before a lazy renderer can subscribe. Read once
