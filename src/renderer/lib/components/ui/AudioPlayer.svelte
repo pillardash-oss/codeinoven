@@ -6,6 +6,7 @@
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import SeekBar from './SeekBar.svelte'
+  import { preloadNearViewport } from './preload-near-viewport'
 
   /**
    * The app's audio player.
@@ -121,6 +122,7 @@
     'flex min-w-0 items-center gap-2 border border-border bg-surface px-2 py-1.5',
     layout
   ]}
+  use:preloadNearViewport={{ media: () => audio }}
 >
   <audio
     {@attach (element) => {
@@ -134,7 +136,7 @@
     }}
     class="hidden"
     {src}
-    preload="metadata"
+    preload="none"
     onloadedmetadata={(event) => {
       duration = event.currentTarget.duration
     }}

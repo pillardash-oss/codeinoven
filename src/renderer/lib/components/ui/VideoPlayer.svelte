@@ -7,6 +7,7 @@
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type { Snippet } from 'svelte'
   import SeekBar from './SeekBar.svelte'
+  import { preloadNearViewport } from './preload-near-viewport'
 
   /**
    * The app's video player.
@@ -151,12 +152,15 @@
 </script>
 
 {#snippet picture()}
+  <!-- The picture fetches its metadata when it comes into view rather than when
+       the message mounts: see `preload-near-viewport`. -->
   <video
     bind:this={video}
     class={['block w-full object-contain', fit === 'fill' ? 'h-full' : 'max-h-96']}
     {src}
     playsinline
-    preload="metadata"
+    preload="none"
+    use:preloadNearViewport
     onloadedmetadata={(event) => {
       const element = event.currentTarget
       onElement?.(element)

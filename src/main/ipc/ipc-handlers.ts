@@ -1,5 +1,5 @@
 import { registerArchiveHandlers } from './handlers/archive-handlers'
-import { resolveOvenThreadRoot } from '../ovens/oven-thread-root'
+import { createOvenMediaRoute } from '../ovens/oven-media-route'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { isShippedBuild } from '../bootstrap/app-resources'
@@ -247,31 +247,15 @@ export function registerIpcHandlers(
    *
    * The `appfile://` protocol serves remote previews through the same file
    * service as local ones; this hook is what turns a remote path into bytes,
-   * bound to the thread whose checkout the URL names.
+   * bound to the thread whose checkout the URL names. The route is resolved
+   * once per thread rather than once per range request, because a single video
+   * arrives as several of them.
    */
-  projectFilesService.remoteFileReader = async (projectId, threadId, path) => {
-    const thread = await threadManager.getThread(projectId, threadId)
-    if (!thread?.settings?.ovenId || thread.settings.ovenId === 'local') return null
-    const target = await resolveOvenThreadRoot(ovenService, thread, projectManager)
-    const metadata = await ovenService.workspace(target.ovenId, {
-      operation: 'stat',
-      root: target.root,
-      path
-    })
-    if (metadata.file?.kind !== 'file') throw new Error('The remote preview is not a file.')
-    return {
-      size: metadata.file.size,
-      read: async (offset) => {
-        const chunk = await ovenService.workspace(target.ovenId, {
-          operation: 'read',
-          root: target.root,
-          path,
-          offset
-        })
-        return new Uint8Array(Buffer.from(chunk.data ?? '', 'base64'))
-      }
-    }
-  }
+  projectFilesService.remoteFileReader = createOvenMediaRoute({
+    oven: ovenService,
+    threads: threadManager,
+    projects: projectManager
+  }).reader
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)
