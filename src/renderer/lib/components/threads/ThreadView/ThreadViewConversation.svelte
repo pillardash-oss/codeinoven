@@ -115,6 +115,7 @@
         <div
           class="flex justify-center pb-2"
           {@attach board.studioTemporaryChatContext.trackHistoryHead}
+          {@attach board.loadOlderMessages.watchHistoryHead}
         >
           <button
             type="button"

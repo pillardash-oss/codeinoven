@@ -303,12 +303,85 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       awayFromBottom: this.userScrolledAway
     })
     this.root.steerQueuedMessage.scheduleResponseBubbleUpdate()
-    // History is button-driven by design: scrolling to the top of the
-    // conversation never auto-loads older pages. The "Load earlier messages"
-    // button is the only trigger for the conversation-level history fetch.
+    // Nothing loads from here: the history row's own visibility observer (see
+    // `watchHistoryHead`) is what triggers the conversation-level fetch, and
+    // only once that row is genuinely on screen.
   }
 
   loadingOlderMessages = $state(false)
+
+  /** True while the history row entering the viewport may fire one load.
+   *  Released by a load and re-armed only after the row leaves the viewport
+   *  again, so a row parked on screen loads exactly one page instead of a page
+   *  per observer callback. Plain, not reactive: nothing renders from it. */
+  private historyAutoLoadArmed = true
+
+  /**
+   * Load the next page of history the moment the "Load earlier messages" row
+   * comes into view.
+   *
+   * The reader no longer has to reach for the button: scrolling far enough up
+   * that the history row enters the viewport is the request itself. The row is
+   * the sentinel, so nothing loads while it is still off screen above or still
+   * below the fold   only its arrival in view does.
+   *
+   * This is the conversation-level fetch only. A working trace paging its own
+   * older entries up is a separate observer on its own body (see
+   * `WorkingTrace.svelte`), and both stop as soon as the row or the trace body
+   * leaves the zone they watch.
+   */
+  watchHistoryHead(node: HTMLElement): () => void {
+    let cancelled = false
+    let observer: IntersectionObserver | undefined
+    void tick().then(() => {
+      if (cancelled) return
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) {
+              // The row left the viewport, so the next arrival is a new page
+              // request. Re-arming here is what keeps a short page from
+              // loading again on its own while it is still standing in view.
+              this.historyAutoLoadArmed = true
+              continue
+            }
+            if (!this.historyAutoLoadArmed || this.loadingOlderMessages) continue
+            this.historyAutoLoadArmed = false
+            void this.autoLoadOlderMessages()
+          }
+        },
+        // The transcript scroller is the frame: the row counts as arrived when
+        // it is inside what the reader can actually see, not merely when it is
+        // inside the document.
+        { root: this.scrollEl ?? null, threshold: 0 }
+      )
+      observer.observe(node)
+    })
+    return () => {
+      cancelled = true
+      observer?.disconnect()
+    }
+  }
+
+  /** The scroll-triggered load.
+   *
+   *  A click on the button is a deliberate leave from the live tail, so that
+   *  path pins the viewport for good. A reader whose transcript is shorter
+   *  than the viewport sees the history row without ever scrolling, and
+   *  dropping their tail follow because a page happened to arrive would stop
+   *  a streaming turn from following along. So the follow state is put back
+   *  exactly as it was found once the page has landed. */
+  private async autoLoadOlderMessages(): Promise<void> {
+    if (!this.alive) return
+    const atBottom = this.scrollEl
+      ? this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
+      : false
+    try {
+      await this.loadOlderMessages()
+    } finally {
+      if (atBottom && this.alive) this.userScrolledAway = false
+    }
+  }
 
   async loadOlderMessages(): Promise<void> {
     if (
