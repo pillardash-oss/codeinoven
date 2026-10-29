@@ -552,11 +552,16 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       }
     })
 
-    // A thread always opens at the live bottom: the latest output, the working
-    // trace, the file-changes cards. A saved pixel offset is stale the moment
-    // the conversation grows, so restoring it lands the user mid-list   never
-    // restore it. This runs once per thread (the view is remounted per thread
-    // switch); later arrivals are followed by the resize observer below.
+    // A thread opens where the reader needs to start reading.
+    //
+    // A live turn opens at the live bottom, which is where its output is
+    // arriving. A settled one opens at its newest prompt: the message the user
+    // sent and the answer it produced are what the screen is for, and dropping
+    // them above the fold so the first thing on screen is the turn's
+    // file-changes card inverts the whole conversation. A saved pixel offset is
+    // stale the moment the conversation grows, so it is never restored. This
+    // runs once per thread (the view is remounted per thread switch); later
+    // arrivals are followed by the resize observer below.
     $effect(() => {
       if (
         !this.root.sources.loaded ||
@@ -564,21 +569,55 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.unmirroredTraceStartTime.scrollRestored
       )
         return
-      void tick().then(() => {
-        if (
-          !this.root.loadOlderMessages.scrollEl ||
-          this.root.unmirroredTraceStartTime.scrollRestored
-        )
+      const live =
+        this.root.unmirroredTraceStartTime.threadWorking ||
+        this.root.pollStreamParts.conversationBusy
+      const scrollToTurnPrompt = (attempt: number): void => {
+        const el = this.root.loadOlderMessages.scrollEl
+        if (!el || this.root.unmirroredTraceStartTime.scrollRestored) return
+        // The first mounted message is the prompt that opens the newest turn
+        // (see `mountedStartIndex`), so anchoring the first one in the DOM is
+        // the same element even if the window was still settling when the
+        // effect first ran.
+        const prompt = el.querySelector<HTMLElement>('[id^="msg-"]')
+        if (prompt) {
+          const top =
+            prompt.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+          el.scrollTo({ top: Math.max(0, top), behavior: 'auto' })
+          // The reader is deliberately not at the tail when the turn is taller
+          // than the viewport: the reveal batches that mount more above must
+          // preserve this viewport instead of dragging it back down to the
+          // newest pixel. A turn that fits entirely is already at the bottom,
+          // so nothing is pinned and the jump-to-latest affordance stays away.
+          this.root.loadOlderMessages.userScrolledAway =
+            !this.root.unmirroredTraceStartTime.isAtBottom(el)
+          this.root.unmirroredTraceStartTime.scrollRestored = true
           return
-        this.root.loadOlderMessages.scrollEl.scrollTo({
-          top: this.root.loadOlderMessages.scrollEl.scrollHeight,
-          behavior: 'auto'
-        })
+        }
+        // The transcript mounts its window on the frame after the load flag
+        // flips; a short bounded retry anchors it instead of falling back to
+        // the tail and hiding the prompt.
+        if (attempt < 4) {
+          requestAnimationFrame(() => scrollToTurnPrompt(attempt + 1))
+          return
+        }
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
         this.root.loadOlderMessages.userScrolledAway = false
         // Flag the restore *after* the scroll actually ran: setting it in the
         // effect body would poison this callback's own `scrollRestored` guard
         // (the body runs synchronously, before `tick()` resolves) and the
         // snap-to-bottom would never fire.
+        this.root.unmirroredTraceStartTime.scrollRestored = true
+      }
+      void tick().then(() => {
+        const el = this.root.loadOlderMessages.scrollEl
+        if (!el || this.root.unmirroredTraceStartTime.scrollRestored) return
+        if (!live) {
+          scrollToTurnPrompt(0)
+          return
+        }
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+        this.root.loadOlderMessages.userScrolledAway = false
         this.root.unmirroredTraceStartTime.scrollRestored = true
       })
     })

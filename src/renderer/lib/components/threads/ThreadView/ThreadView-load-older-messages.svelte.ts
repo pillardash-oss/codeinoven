@@ -74,9 +74,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   /** Absolute index of the first mounted message. If the anchored message
    *  left the store (truncated/deleted), fall back without touching state
-   *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
-   *  current working page ([prompt][trace][output]) and the previous page,
-   *  even when it sits out of the viewport. */
+   *  deriveds must stay pure.
+   *
+   *  The window always begins on the prompt that opened the newest turn, never
+   *  on an assistant row. The tail-relative fallback used to start a few
+   *  messages back, which for a normal turn lands inside the *previous* turn's
+   *  assistant rows: the reader opened a conversation and the first thing on
+   *  screen was that turn's final text, its file-changes card, and its footer,
+   *  with the prompt and answer they came to read further down. The prompt is
+   *  the anchor, so the current turn reads in the order it was lived
+   *  (prompt, trace, answer) and its cards follow the answer. */
   mountedStartIndex = $derived.by(() => {
     if (this.hasController) return 0
     if (this.windowStartId) {
@@ -92,12 +99,17 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       for (let index = this.messages.length - 1; index >= 0; index -= 1) {
         const message = this.messages[index]
         if (message?.role !== 'user' || isActivityOnlyUserMessage(message)) continue
-        return Math.min(countStart, index)
+        return index
       }
       return countStart
     }
-    const covered = promptPagesBefore(this.messages, turnStart, 2)
-    return Math.min(countStart, covered === -1 ? 0 : covered)
+    // One prompt back is this turn's own opening message. If the loaded window
+    // does not reach it (a turn longer than the alignment budget), the turn
+    // start is still a better anchor than the raw page boundary, which can sit
+    // inside the previous turn and paint that turn's cards first.
+    const turnPrompt = promptPagesBefore(this.messages, turnStart, 1)
+    if (turnPrompt !== -1) return turnPrompt
+    return Math.min(turnStart, Math.max(0, this.messages.length - 1))
   })
 
   scheduleInitialReveal(): void {
