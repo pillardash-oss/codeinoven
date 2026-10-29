@@ -199,6 +199,30 @@ export interface ProviderSyncCursor {
   syncedAt: number
 }
 
+/**
+ * A prompt's text, normalized, so a provider transcript's copy of a prompt can be
+ * matched to the row the app itself persisted when the user sent it.
+ *
+ * A harness that keeps its own transcript (pi's native `.jsonl`, a resumed or a
+ * seeded session) re-imports every user message under an id of its own making,
+ * and a positional id scheme renumbers on every re-parse. The app already stored
+ * that prompt under the id it minted at send time, so persisting the imported
+ * copy put the same prompt on screen twice: once as the row the app wrote and
+ * once as the harvested one, which also split the transcript into a spurious
+ * extra turn at the second copy.
+ */
+function userPromptTextKey(role: string, text: string): string | null {
+  if (role !== 'user') return null
+  const normalized = text.replace(/\s+/gu, ' ').trim().toLowerCase()
+  return normalized.length > 0 ? normalized : null
+}
+
+/** How close a harvested prompt has to sit to the row the app wrote for the
+ *  same prompt when their text cannot be compared (attachments, injected
+ *  context). A harness records the user message as it receives it, so the gap
+ *  is milliseconds; the window only has to survive clock and batching jitter. */
+const DUPLICATE_PROMPT_WINDOW_MS = 2_000
+
 /** Explicit outcome of a delta-only transcript sync. */
 export interface ProviderDeltaSyncResult {
   /** Messages appended or updated by this sync. */
@@ -207,6 +231,8 @@ export interface ProviderDeltaSyncResult {
   skipped: number
   /** Messages skipped because the id already belongs to another thread/session. */
   collisions: number
+  /** Provider copies of a prompt the app already persisted under its own id. */
+  duplicatedPrompts: number
   /** Total mirrored conversation messages after this sync. */
   total: number
   /** Cursor advanced by this sync; null on a true noop (nothing was written). */
@@ -616,36 +642,124 @@ export function runProviderDeltaSync(
 
   // Bulk-load existing identities so unchanged rows are never rewritten and a
   // foreign id (belonging to another thread/session) is never clobbered.
+  const existingRows = executor.all<{
+    id: string
+    content_hash: string | null
+    thread_id: string
+    session_id: string | null
+    role: string
+    origin: string
+    visibility: string
+    search_text: string | null
+    created_at: number
+  }>(
+    `SELECT id, content_hash, thread_id, session_id, role, origin, visibility, search_text,
+            created_at
+     FROM agent_messages WHERE thread_id = ?`,
+    threadId
+  )
   const existing = new Map<
     string,
-    { contentHash: string | null; threadId: string; sessionId: string | null }
+    {
+      contentHash: string | null
+      threadId: string
+      sessionId: string | null
+      role: string
+      origin: string
+      visibility: string
+      searchText: string | null
+      createdAt: number
+    }
   >(
-    executor
-      .all<{
-        id: string
-        content_hash: string | null
-        thread_id: string
-        session_id: string | null
-      }>(
-        'SELECT id, content_hash, thread_id, session_id FROM agent_messages WHERE thread_id = ?',
-        threadId
-      )
-      .map(
-        (row) =>
-          [
-            row.id,
-            { contentHash: row.content_hash, threadId: row.thread_id, sessionId: row.session_id }
-          ] as const
-      )
+    existingRows.map(
+      (row) =>
+        [
+          row.id,
+          {
+            contentHash: row.content_hash,
+            threadId: row.thread_id,
+            sessionId: row.session_id,
+            role: row.role,
+            origin: row.origin,
+            visibility: row.visibility,
+            searchText: row.search_text,
+            createdAt: row.created_at
+          }
+        ] as const
+    )
   )
+
+  // What the app itself already stored as prompts, and the visible provider
+  // copies of those same prompts. A provider transcript copy is never new
+  // information: the app persists every prompt it sends, so the copy can only
+  // render the same words a second time under a second id.
+  const appPromptKeys = new Set<string>()
+  const appPromptTimes: number[] = []
+  for (const row of existing.values()) {
+    if (row.role !== 'user' || row.origin !== 'user') continue
+    appPromptTimes.push(row.createdAt)
+    const key = userPromptTextKey(row.role, row.searchText ?? '')
+    if (key !== null) appPromptKeys.add(key)
+  }
+  for (const message of sorted) {
+    if (message.role !== 'user' || message.origin !== 'user') continue
+    appPromptTimes.push(message.createdAt)
+    const key = userPromptTextKey(message.role, partsToSearchText(message.parts))
+    if (key !== null) appPromptKeys.add(key)
+  }
+  /**
+   * Whether this user row is a provider transcript's copy of a prompt the app
+   * already persisted.
+   *
+   * The text settles it whenever the harvested copy carries the same words. A
+   * prompt with attachments or injected context is harvested as its transport
+   * text, which never equals the words on screen, so a prompt the app wrote
+   * within seconds of the harvested entry is the same prompt as well: a harness
+   * records the user message at the instant it received it.
+   */
+  const isDuplicatePrompt = (
+    role: string,
+    origin: string,
+    text: string,
+    createdAt: number
+  ): boolean => {
+    // Only a harvested provider row can be the copy: an activity notice, a
+    // sub-agent envelope and an app prompt all have their own origin, and every
+    // one of them is real content rather than a second copy of a prompt.
+    if (role !== 'user') return false
+    if (origin !== 'provider' && origin !== '') return false
+    const key = userPromptTextKey(role, text)
+    if (key !== null && appPromptKeys.has(key)) return true
+    return appPromptTimes.some((at) => Math.abs(createdAt - at) <= DUPLICATE_PROMPT_WINDOW_MS)
+  }
+  const duplicatedPromptIds: string[] = []
+  if (appPromptTimes.length > 0) {
+    for (const row of existingRows) {
+      if (row.visibility === 'hidden') continue
+      if (isDuplicatePrompt(row.role, row.origin, row.search_text ?? '', row.created_at))
+        duplicatedPromptIds.push(row.id)
+    }
+  }
 
   let skipped = 0
   let collisions = 0
+  let duplicatedPrompts = 0
   const writes: EncodedAgentMessage[] = []
   for (const message of sorted) {
     const existingRow = existing.get(message.id)
     if (existingRow && (existingRow.threadId !== threadId || existingRow.sessionId !== null)) {
       collisions++
+      continue
+    }
+    if (
+      isDuplicatePrompt(
+        message.role,
+        message.origin ?? '',
+        partsToSearchText(message.parts),
+        message.createdAt
+      )
+    ) {
+      duplicatedPrompts++
       continue
     }
     const encoded = encodeAgentMessage(message, threadId)
@@ -657,11 +771,12 @@ export function runProviderDeltaSync(
   }
 
   // True noop: nothing changed, so write nothing   not even the cursor row.
-  if (writes.length === 0 && collisions === 0) {
+  if (writes.length === 0 && collisions === 0 && duplicatedPromptIds.length === 0) {
     return {
       applied: 0,
       skipped,
       collisions,
+      duplicatedPrompts,
       total: existing.size,
       cursor: null,
       noop: true
@@ -669,6 +784,17 @@ export function runProviderDeltaSync(
   }
 
   executor.transaction(() => {
+    // Heal rows an earlier sync already wrote as visible duplicates: hide the
+    // harvested copy so the prompt stops rendering twice, transcript and
+    // history panel alike. Nothing is deleted; the content stays recoverable.
+    for (const id of duplicatedPromptIds) {
+      executor.run(
+        `UPDATE agent_messages SET visibility = 'hidden', parts = '[]', content_hash = NULL
+         WHERE thread_id = ? AND id = ?`,
+        threadId,
+        id
+      )
+    }
     for (const encoded of writes) {
       writeEncodedMessage(executor, encoded)
     }
@@ -689,9 +815,10 @@ export function runProviderDeltaSync(
   )
 
   return {
-    applied: writes.length,
+    applied: writes.length + duplicatedPromptIds.length,
     skipped,
     collisions,
+    duplicatedPrompts,
     total: sorted.length,
     cursor: { sessionId, messageCount: sorted.length, lastMessageId: lastId, syncedAt: Date.now() },
     noop: false
