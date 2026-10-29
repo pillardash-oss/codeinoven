@@ -1,6 +1,6 @@
 import { session } from 'electron'
 import type { BrowserWindow } from 'electron'
-import { installFilePreviewProtocol } from '../editor/file-preview-protocol'
+import { bootDependency, installFilePreviewProtocol } from '../editor/file-preview-protocol'
 import type { ProjectFilesService } from '../editor/project-files-service'
 import type { PrivilegedIpcValidator } from '../ipc/ipc-validation'
 import { localDownloadName } from '../system/local-download-names'
@@ -87,9 +87,12 @@ export interface AppFilePreviewProtocolDeps {
  * The file service is resolved lazily from the post-paint boot.
  */
 export function installAppFilePreviewProtocol(deps: AppFilePreviewProtocolDeps): void {
-  installFilePreviewProtocol(deps.getProjectFiles, (value) => {
-    const resolveScopedPath = deps.getScopedPathResolver()
-    if (!resolveScopedPath) throw new Error('Scoped path resolution is not ready')
-    return resolveScopedPath(value)
-  })
+  // The scoped path resolver is published by the same post-paint boot as the
+  // file service, so a preview of a file the user opened can arrive before it
+  // exists. Waiting for it answers that request instead of failing it, which is
+  // what left such an image broken until the next reload.
+  const scopedPath = bootDependency(deps.getScopedPathResolver, 'Scoped path resolution')
+  installFilePreviewProtocol(deps.getProjectFiles, (value) =>
+    scopedPath.read().then((resolve) => resolve(value))
+  )
 }

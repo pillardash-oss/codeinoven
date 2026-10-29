@@ -19,6 +19,48 @@ const ATTACHMENT_ID_PATTERN = /^[a-f0-9]{24}$/u
 /** Thread IDs follow the same safe-entity charset as project IDs. */
 const THREAD_ID_PATTERN = /^[a-zA-Z0-9._-]+$/u
 
+/** How long a preview request waits for the boot to publish what it needs. */
+const READY_TIMEOUT_MS = 5000
+/** How often that wait looks again while the boot is still running. */
+const READY_POLL_MS = 25
+
+/**
+ * One boot-published dependency, asked for until it exists.
+ *
+ * The protocol is installed before the window loads, deliberately, so a preview
+ * request can arrive while the post-paint boot is still building the service it
+ * needs. Answering `not found` then is what leaves an image permanently broken:
+ * a browser does not retry a failed preview, and nothing tells it to. A short
+ * bounded wait turns that race into the same successful answer a later request
+ * gets, and a service that never arrives still ends the wait with an error the
+ * handler already reports.
+ *
+ * The pending promise is shared per dependency, so a burst of requests during
+ * boot costs one poll loop instead of one loop each.
+ */
+export function bootDependency<T>(get: () => T | null, label: string): { read: () => Promise<T> } {
+  let pending: Promise<T> | null = null
+  const waitOnce = async (): Promise<T> => {
+    const deadline = Date.now() + READY_TIMEOUT_MS
+    for (;;) {
+      const value = get()
+      if (value) return value
+      if (Date.now() >= deadline) throw new Error(`${label} is not ready`)
+      await new Promise<void>((resolve) => setTimeout(resolve, READY_POLL_MS))
+    }
+  }
+  return {
+    read: () => {
+      const value = get()
+      if (value) return Promise.resolve(value)
+      pending ??= waitOnce().finally(() => {
+        pending = null
+      })
+      return pending
+    }
+  }
+}
+
 // Which extensions may be served, and how large each may be, is one shared
 // declaration (`src/lib/preview-types.ts`): the inline artifact pipeline reads
 // the same table, so a type the app can publish is always a type it can stream.
@@ -202,10 +244,13 @@ function decodeSegments(pathname: string): string[] {
  */
 export function installFilePreviewProtocol(
   getProjectFiles: () => ProjectFilesService | null,
-  resolveScopedPath?: (value: unknown) => Promise<string>
+  resolveScopedPath?: (value: unknown) => Promise<string | null>
 ): void {
   /** Long-lived, so a scrub through a video reuses one grant; idle-stopped. */
   const mediaServer = new MediaServer()
+  // The service graph is built by the post-paint boot, so a preview requested in
+  // the first frames after hydration waits for it instead of being refused.
+  const projectFiles = bootDependency(getProjectFiles, 'Project file service')
   protocol.handle(SCHEME, async (request) => {
     try {
       const url = new URL(request.url)
@@ -218,9 +263,8 @@ export function installFilePreviewProtocol(
         if (!relativePath) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
-        const projectFiles = getProjectFiles()
-        if (!projectFiles) return notFound()
-        const absolutePath = await projectFiles.resolveForExternalEditor(projectId, relativePath)
+        const files = await projectFiles.read()
+        const absolutePath = await files.resolveForExternalEditor(projectId, relativePath)
         return serveLocalFile(mediaServer, absolutePath, type, request)
       }
 
@@ -234,11 +278,10 @@ export function installFilePreviewProtocol(
         if (!relativePath) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
-        const projectFiles = getProjectFiles()
-        if (!projectFiles) return notFound()
-        const remote = await projectFiles.remoteFileReader?.(projectId, threadId, relativePath)
+        const files = await projectFiles.read()
+        const remote = await files.remoteFileReader?.(projectId, threadId, relativePath)
         if (remote) return serveRemoteFile(remote, type, request)
-        const absolutePath = await projectFiles.resolveForExternalEditor(
+        const absolutePath = await files.resolveForExternalEditor(
           projectId,
           relativePath,
           undefined,
@@ -257,6 +300,7 @@ export function installFilePreviewProtocol(
         // opened (or picked in a dialog) resolve to a canonical path here.
         if (!resolveScopedPath) return notFound()
         const safePath = await resolveScopedPath(absolutePath)
+        if (!safePath) return notFound()
         return serveLocalFile(mediaServer, safePath, type, request)
       }
 
