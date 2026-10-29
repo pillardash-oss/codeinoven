@@ -1,12 +1,35 @@
 import { readdir, stat } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
-import type { DesignEntry } from '../../lib/ipc/design'
+import type { AuthoredWorkKind, DesignEntry } from '../../lib/ipc/design'
+import { VIDEO_PROJECT_MANIFEST } from '../../lib/video/project'
 import { SERVED_FOLDER_ENTRY_FILE } from '../preview/served-folder'
 
 /** Folder metadata shared by canonical-root discovery and exact registry checks. */
 
 /** Most files scanned for a folder's latest modification time. */
 const MAX_SCANNED_FILES = 50
+
+/**
+ * Whether a folder holds authored work of this kind at all.
+ *
+ * A design folder is authored work as soon as it exists: a screen may not have been
+ * written yet, and the board says so. A composition is different, because the video
+ * board's panel is an editor: it opens `composition.json` and has nothing to show
+ * without one. A video folder with only media in it is a delivery the agent made for
+ * the conversation (clips or a render an inline artifact points at), not a composition
+ * to edit, so it must not reach the board, the panel, or the thread's video marker.
+ */
+export async function holdsWorkOfKind(
+  projectPath: string,
+  directory: string,
+  kind: AuthoredWorkKind
+): Promise<boolean> {
+  if (kind !== 'video') return true
+  const manifest = await stat(resolve(projectPath, directory, VIDEO_PROJECT_MANIFEST)).catch(
+    () => null
+  )
+  return manifest?.isFile() === true
+}
 
 /**
  * When a folder was made and when it was last touched, so the board can show a
@@ -30,25 +53,29 @@ async function folderStamps(directory: string): Promise<{ createdAt: number; upd
 }
 
 /**
- * Every folder under `root` in a project, newest first.
+ * Every folder of `kind` under `root` in a project, newest first.
  *
  * `root` is project-relative and forward-slashed (`.cio/designs`, `.cio/videos`),
- * and is also how each folder's `directory` is spelled back to the caller.
+ * and is also how each folder's `directory` is spelled back to the caller. Folders
+ * that hold no work of this kind are left out entirely: see {@link holdsWorkOfKind}.
  */
 export async function listProjectWorkFolders(
   projectPath: string,
-  root: string
+  root: string,
+  kind: AuthoredWorkKind
 ): Promise<DesignEntry[]> {
   const absoluteRoot = resolve(projectPath, root)
   const entries = await readdir(absoluteRoot, { withFileTypes: true }).catch(() => [])
   const folders: DesignEntry[] = []
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+    const directory = `${root}/${entry.name}`
+    if (!(await holdsWorkOfKind(projectPath, directory, kind))) continue
     const absolute = resolve(absoluteRoot, entry.name)
     const indexFile = await stat(resolve(absolute, SERVED_FOLDER_ENTRY_FILE)).catch(() => null)
     const stamps = await folderStamps(absolute)
     folders.push({
-      directory: `${root}/${entry.name}`,
+      directory,
       name: entry.name,
       hasEntry: indexFile?.isFile() === true,
       createdAt: stamps.createdAt,

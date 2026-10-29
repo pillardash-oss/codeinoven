@@ -234,11 +234,7 @@ export interface DesignServiceOptions {
    * carried because a reader's own answer is only stale when this is newer than
    * what it read.
    */
-  onWorkGroupsChanged?: (
-    projectId: string,
-    kind: AuthoredWorkKind,
-    updatedAt: number
-  ) => void
+  onWorkGroupsChanged?: (projectId: string, kind: AuthoredWorkKind, updatedAt: number) => void
   /**
    * Mirror a thread's authored-work kinds to live UI the moment they are recorded.
    *
@@ -394,19 +390,20 @@ export class DesignService {
     )
     ipcMain.handle('design:workGroupsRemove', async (_event, rawProjectId, groupId) =>
       this.announceWorkGroups(
-        this.workGroups.remove(requireId(rawProjectId, 'project id'), requireId(groupId, 'group id'))
+        this.workGroups.remove(
+          requireId(rawProjectId, 'project id'),
+          requireId(groupId, 'group id')
+        )
       )
     )
-    ipcMain.handle(
-      'design:workGroupsCollapse',
-      async (_event, rawProjectId, groupId, collapsed) =>
-        this.announceWorkGroups(
-          this.workGroups.setCollapsed(
-            requireId(rawProjectId, 'project id'),
-            requireId(groupId, 'group id'),
-            collapsed === true
-          )
+    ipcMain.handle('design:workGroupsCollapse', async (_event, rawProjectId, groupId, collapsed) =>
+      this.announceWorkGroups(
+        this.workGroups.setCollapsed(
+          requireId(rawProjectId, 'project id'),
+          requireId(groupId, 'group id'),
+          collapsed === true
         )
+      )
     )
     ipcMain.handle('design:workGroupsReorder', async (_event, rawProjectId, rawKind, groupIds) => {
       if (!Array.isArray(groupIds)) throw new TypeError('A group order is required')
@@ -913,10 +910,15 @@ export class DesignService {
   ): void {
     if (moves.length === 0) return
     for (const move of moves) this.workGroups.relocate({ projectId, kind, ...move })
-    this.options.onWorkGroupsChanged?.(projectId, kind, this.workGroups.state(projectId, kind).updatedAt)
+    this.options.onWorkGroupsChanged?.(
+      projectId,
+      kind,
+      this.workGroups.state(projectId, kind).updatedAt
+    )
   }
 
-  forgetProject(projectId: string): void {    forgetProjectWorkRoots(this.options.database, projectId)
+  forgetProject(projectId: string): void {
+    forgetProjectWorkRoots(this.options.database, projectId)
     this.designs.deleteProject(projectId)
     this.workGroups.deleteProject(projectId)
     this.history.forgetProject(projectId)
@@ -1332,8 +1334,12 @@ export class DesignService {
     return new WorkFolderRegistry(this.options.database).list(projectId, scope.path, kind)
   }
 
-  async listWorkFolders(projectPath: string, root: string): Promise<DesignEntry[]> {
-    return listProjectWorkFolders(projectPath, root)
+  async listWorkFolders(
+    projectPath: string,
+    root: string,
+    kind: AuthoredWorkKind
+  ): Promise<DesignEntry[]> {
+    return listProjectWorkFolders(projectPath, root, kind)
   }
 
   /**

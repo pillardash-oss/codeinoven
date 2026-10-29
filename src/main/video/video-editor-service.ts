@@ -57,7 +57,10 @@ export class VideoEditorService {
 
   async enable(projectId: string, threadId: string, directory: string): Promise<VideoEditorRead> {
     const state = await this.options.read(projectId, threadId, directory)
-    if (!state.manifest) throw new Error('The composition needs a manifest before it can be edited')
+    if (!state.manifest)
+      throw new Error(
+        'This folder has no composition.json, so there is no frame size, rate or length to edit. A video delivered for the conversation plays where it is and is not an editable composition.'
+      )
     const folder = await this.folder(projectId, threadId, directory)
     await installVideoRuntime(folder, folder)
     if (state.document.edit) return state

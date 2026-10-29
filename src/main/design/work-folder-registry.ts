@@ -5,7 +5,7 @@ import type { AuthoredWorkKind, DesignEntry } from '../../lib/ipc/design'
 import { ASSISTANT_SPACE_ID } from '../../lib/types'
 import type { Database } from '../database/database'
 import { isInsideProject } from '../preview/served-folder'
-import { listProjectWorkFolders, readWorkFolder } from './design-listing'
+import { holdsWorkOfKind, listProjectWorkFolders, readWorkFolder } from './design-listing'
 import { projectWorkRootPaths } from './work-roots-state'
 
 interface FolderRow {
@@ -60,18 +60,21 @@ export async function listConversationWorkFolders(input: {
   kind: AuthoredWorkKind
 }): Promise<DesignEntry[]> {
   const root = DEFAULT_WORK_ROOTS[input.kind]
-  const discovered = await listProjectWorkFolders(input.workspacePath, root)
+  const discovered = await listProjectWorkFolders(input.workspacePath, root, input.kind)
   const seen = new Set(discovered.map((entry) => entry.directory))
   const recorded = await recordedWorkspaceFolders(input)
   for (let index = 0; index < recorded.length; index += 8) {
     const batch = await Promise.all(
       recorded.slice(index, index + 8).map(async (directory) => ({
         directory,
-        entry: await readWorkFolder(input.workspacePath, directory).catch(() => null)
+        entry: await readWorkFolder(input.workspacePath, directory).catch(() => null),
+        // A recorded folder still has to hold work of this kind, so a folder that
+        // only ever held delivered media never reaches the board through a row.
+        holds: await holdsWorkOfKind(input.workspacePath, directory, input.kind).catch(() => false)
       }))
     )
-    for (const { directory, entry } of batch) {
-      if (!entry || seen.has(directory)) continue
+    for (const { directory, entry, holds } of batch) {
+      if (!entry || !holds || seen.has(directory)) continue
       seen.add(directory)
       discovered.push({ ...entry, creatorThreadId: null })
     }
@@ -199,7 +202,7 @@ export class WorkFolderRegistry {
       0
     )
     if (!legacy.ok) throw new Error('Could not read recorded work folders')
-    const discovered = await listProjectWorkFolders(projectPath, DEFAULT_WORK_ROOTS[kind])
+    const discovered = await listProjectWorkFolders(projectPath, DEFAULT_WORK_ROOTS[kind], kind)
     const discoveredByPath = new Map(discovered.map((entry) => [entry.directory, entry]))
     const inserts: Array<{ sql: string; params: unknown[] }> = []
     const register = (directory: string, created: number, updated: number): void => {
@@ -244,10 +247,15 @@ export class WorkFolderRegistry {
     const updates: Array<{ sql: string; params: unknown[] }> = []
     for (let index = 0; index < rows.length; index += 8) {
       const batch = await Promise.all(
-        rows.slice(index, index + 8).map(async (row) => {
+        rows.slice(index, index + 8).map(async (row): Promise<DesignEntry | null> => {
           const present =
             discoveredByPath.get(row.directory) ??
             (await readWorkFolder(projectPath, row.directory))
+          // A folder that exists but holds no work of this kind is not a missing
+          // composition, it is not one at all: an earlier version registered any
+          // folder under the video root, and a delivery of media would otherwise
+          // stay on the board as something the editor cannot open.
+          if (present && !(await holdsWorkOfKind(projectPath, row.directory, kind))) return null
           const entry: DesignEntry = present ?? {
             directory: row.directory,
             name: basename(row.directory),
@@ -269,7 +277,7 @@ export class WorkFolderRegistry {
           return entry
         })
       )
-      entries.push(...batch)
+      entries.push(...batch.filter((entry): entry is DesignEntry => entry !== null))
       await new Promise<void>((resume) => setImmediate(resume))
     }
     await this.save(updates)
