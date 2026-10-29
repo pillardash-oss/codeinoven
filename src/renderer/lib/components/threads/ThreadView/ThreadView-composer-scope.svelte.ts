@@ -327,6 +327,7 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
    *  tail-relative until the reader happened to reload history. */
   onWheel(event: WheelEvent): void {
     if (event.deltaY >= 0) return
+    this.root.loadOlderMessages.markReaderReachedUp()
     this.root.loadOlderMessages.userScrolledAway = true
     this.root.loadOlderMessages.windowStartId ??= this.mountedWindowStartId()
   }

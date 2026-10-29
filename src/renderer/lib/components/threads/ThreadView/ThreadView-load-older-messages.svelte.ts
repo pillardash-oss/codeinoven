@@ -493,11 +493,11 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     }
   }
 
-  /** Whether the transcript is currently shorter than the pane it sits in. */
-  private transcriptCannotScroll(): boolean {
-    const el = this.scrollEl
-    if (!el) return false
-    return el.scrollHeight - el.clientHeight <= 1
+  /** A wheel turn upwards is the reader asking for the past, and it is the only
+   *  way to ask when the transcript is too short to scroll at all. Called from
+   *  the transcript's own wheel handler, which runs on the gesture itself. */
+  markReaderReachedUp(): void {
+    this.readerReachedUp = true
   }
 
   /** Whether the history row is inside the visible part of the transcript right
@@ -516,17 +516,18 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
    *
    *  A click on the button is a deliberate leave from the live tail, so that
    *  path pins the viewport for good and mounts three turns of history at once.
-   *  A reader whose transcript is shorter than the viewport sees the history
-   *  row without ever scrolling, so the scroll path keeps filling while the row
-   *  is still on screen: one turn per pass, and it stops the moment the page
-   *  that landed pushed the row out of view or the thread has nothing older. */
+   *  The scroll path follows the reader: one turn per pass while the row is
+   *  still on screen, stopping the moment the page that landed pushed it out of
+   *  view or the thread has nothing older. */
   private async autoLoadOlderMessages(): Promise<void> {
     if (!this.alive || this.historyFilling) return
-    // Loading is the reader's request, and one of two things makes it: they
-    // scrolled up towards the row, or the transcript has nothing to scroll yet
-    // because the turn it opened on fits the pane. The second case is a
-    // dead end otherwise   an empty scrollbar is not a way to ask for history.
-    if (!this.readerReachedUp && !this.transcriptCannotScroll()) return
+    // Only the reader's own request loads, and only once this view has finished
+    // putting them where they belong. A page mounted above the newest turn
+    // before that restore runs becomes the first message in the document, and
+    // the restore anchors on the first message   which is exactly how a thread
+    // could open in the middle of its history instead of at its tail.
+    if (!this.readerReachedUp) return
+    if (!this.root.unmirroredTraceStartTime.scrollRestored) return
     this.historyFilling = true
     try {
       for (let page = 0; page < ThreadViewLoadOlderMessages.HISTORY_FILL_LIMIT; page += 1) {

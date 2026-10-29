@@ -585,11 +585,19 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       const scrollToTurnPrompt = (attempt: number): void => {
         const el = this.root.loadOlderMessages.scrollEl
         if (!el || this.root.unmirroredTraceStartTime.scrollRestored) return
-        // The first mounted message is the prompt that opens the newest turn
-        // (see `mountedStartIndex`), so anchoring the first one in the DOM is
-        // the same element even if the window was still settling when the
-        // effect first ran.
-        const prompt = el.querySelector<HTMLElement>('[id^="msg-"]')
+        // Anchor on the message that opens the newest turn, by id. The first
+        // mounted message is normally the same element, but only while the
+        // window still starts there: a history page that mounted above it puts
+        // an OLD message first in the document, and anchoring on that one is
+        // how a thread opened in the middle of its history instead of at the
+        // prompt the reader came to read.
+        const startIndex = this.root.buildSpecActionPrompt.latestTurnInfo.startIndex
+        const newestPromptId =
+          startIndex >= 0 ? this.root.loadOlderMessages.messages[startIndex]?.id : undefined
+        const newestPrompt = newestPromptId
+          ? document.getElementById(`msg-${newestPromptId}`)
+          : null
+        const prompt = newestPrompt ?? el.querySelector<HTMLElement>('[id^="msg-"]')
         if (prompt) {
           const top =
             prompt.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
