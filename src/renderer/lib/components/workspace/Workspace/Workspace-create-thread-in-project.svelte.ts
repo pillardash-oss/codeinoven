@@ -125,49 +125,30 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       // process before navigation, so its project record is already in
       // `project:list`.
       const saved = rendererRecovery.selectedThread
-      // The saved thread is restored onto, so its own row is worth reading in
-      // the same pass as the lists instead of one serial step afterwards: a
-      // saved thread that fell outside the bounded recent slice used to cost a
-      // second round trip before it could open, which read as the conversation
-      // simply not loading at launch.
-      const [projectList, threadList, savedThread] = await Promise.all([
+      workspaceState.restoringLastThread = saved !== null
+      // The conversation only needs the projects and the thread it restores
+      // onto; its messages are already preloading (see main.ts). Read those two
+      // and open the thread BEFORE the sidebar list is requested. The list is
+      // the bigger read of the boot pass, and serializing the restore behind it
+      // is what left a launch sitting on the Welcome screen for seconds before
+      // the conversation it was supposed to restore appeared.
+      const [projectList, savedThread] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listRecentPerProject'),
         saved
           ? invoke('thread:get', saved.projectId, saved.threadId).catch(() => null)
           : Promise.resolve(null)
       ])
       this.projects = projectList
-      const uniqueThreads = this.uniqueThreadList(threadList)
-      this.allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
-      this.historyOffset = this.uniqueThreadList(threadList).length
-      this.root.mergeThreadsInList.hasMoreHistory = false
-      // Restore what the last session left in the durable inbox, alongside the
-      // thread-state hydration below. Deliberately not awaited: hydration
-      // already refills the statuses it can see on its own, and the restored
-      // entries merge in whenever the read lands (both paths dedupe on id).
-      void notificationPanelState.restoreFromStore()
-      notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       this.projectIcons.clear()
       // Publish the workspace with deterministic fallback icons immediately.
       // Custom icon IPC is cosmetic and must never delay the first usable frame.
       scopeState.setScopesFromProjects(projectList, this.projectIcons)
-      scopeState.setThreads(uniqueThreads)
-      void this.rescueDraftThreads()
-      this.root.switcherPanelTabs.sidebar.initExpandedFolders(projectList.filter((p) => !p.hidden))
-      void loadProjectIcons(projectList).then((icons) => {
-        for (const [projectId, iconUrl] of icons) this.projectIcons.set(projectId, iconUrl)
-        scopeState.setScopesFromProjects(projectList, this.projectIcons)
-      })
-      const restoredThread = saved
-        ? uniqueThreads.find(
-            (candidate) =>
-              candidate.id === saved.threadId &&
-              candidate.projectId === saved.projectId &&
-              !candidate.archived
-          )
-        : undefined
+      const restoredThread =
+        savedThread && !savedThread.archived && savedThread.projectId === saved?.projectId
+          ? savedThread
+          : null
       if (restoredThread) {
+        this.upsertThreadInList(restoredThread)
         workspaceState.openThread(
           restoredThread,
           projectList.find((candidate) => candidate.id === restoredThread.projectId) ?? null
@@ -175,19 +156,50 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         // Read-settling for programmatic selections is centralized in the
         // selected-thread effect above; startup restore needs no extra call.
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
-      } else if (saved) {
-        // The saved thread may sit beyond the bounded recent hydration list
-        // (e.g. it was manually reordered below the cut), so its own read
-        // decides whether the selection is still valid.
-        const project = projectList.find((candidate) => candidate.id === saved.projectId) ?? null
-        if (savedThread && !savedThread.archived) {
-          this.upsertThreadInList(savedThread)
-          workspaceState.openThread(savedThread, project)
-          void scopeState.ensureBoardLoaded(saved.projectId)
+      }
+
+      // Sidebar hydration follows the conversation the restore just started.
+      const threadList = await invoke('thread:listRecentPerProject')
+      const uniqueThreads = this.uniqueThreadList(threadList)
+      this.allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
+      // A restored thread beyond the bounded recent slice keeps its row.
+      if (restoredThread) this.upsertThreadInList(restoredThread)
+      this.historyOffset = uniqueThreads.length
+      this.root.mergeThreadsInList.hasMoreHistory = false
+      // Restore what the last session left in the durable inbox, alongside the
+      // thread-state hydration below. Deliberately not awaited: hydration
+      // already refills the statuses it can see on its own, and the restored
+      // entries merge in whenever the read lands (both paths dedupe on id).
+      void notificationPanelState.restoreFromStore()
+      notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
+      scopeState.setThreads(uniqueThreads)
+      void this.rescueDraftThreads()
+      this.root.switcherPanelTabs.sidebar.initExpandedFolders(projectList.filter((p) => !p.hidden))
+      void loadProjectIcons(projectList).then((icons) => {
+        for (const [projectId, iconUrl] of icons) this.projectIcons.set(projectId, iconUrl)
+        scopeState.setScopesFromProjects(projectList, this.projectIcons)
+      })
+      // The saved thread's own read failed or fell outside the slice: resolve it
+      // from the list before giving up on the selection.
+      if (!workspaceState.selectedThread && saved) {
+        const fromList = uniqueThreads.find(
+          (candidate) =>
+            candidate.id === saved.threadId &&
+            candidate.projectId === saved.projectId &&
+            !candidate.archived
+        )
+        if (fromList) {
+          this.upsertThreadInList(fromList)
+          workspaceState.openThread(
+            fromList,
+            projectList.find((candidate) => candidate.id === fromList.projectId) ?? null
+          )
+          void scopeState.ensureBoardLoaded(fromList.projectId)
         } else {
           rendererRecovery.clearSelectedThread()
         }
       }
+      workspaceState.restoringLastThread = false
 
       // Restore the last active project even without a thread
       if (rendererRecovery.selectedProjectId && !workspaceState.activeProject) {
@@ -255,6 +267,7 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       this.projects = []
       this.allThreads = []
     } finally {
+      workspaceState.restoringLastThread = false
       this.root.switcherPanelTabs.loading = false
       void invoke('app:rendererReady').catch(() => undefined)
       // Assistant View hydrates only after the main project view has landed.

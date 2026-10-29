@@ -723,13 +723,13 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         presentation,
         taskReferences
       )
-      // Wait for the DOM to reflect the optimistic message, then scroll to it
-      //   but only when the reader stayed at the tail. A detached reader is
-      // never yanked; their on-screen messages must stay mounted.
+      // Wait for the DOM to reflect the optimistic message, then follow it.
+      // A send is the reader acting on the conversation, so it always returns
+      // them to the tail: the view may have opened anchored on the previous
+      // prompt (a restore), and leaving the message they just sent below the
+      // fold would read as the send doing nothing.
       await tick()
-      if (this.root.loadOlderMessages.scrollEl && !this.root.loadOlderMessages.userScrolledAway)
-        this.root.loadOlderMessages.scrollEl.scrollTop =
-          this.root.loadOlderMessages.scrollEl.scrollHeight
+      this.root.loadOlderMessages.scrollToLatest()
       await sendPromise
       dispatched = true
       if (this.root.submitBrainstormDecision.engineeringOn) {

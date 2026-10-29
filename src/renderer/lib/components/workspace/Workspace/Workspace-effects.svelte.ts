@@ -61,6 +61,10 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
    * so every effect here is owned by the component.
    */
   init(): void {
+    // Decide the launch's first frame before it paints: a saved thread means a
+    // restore is coming, so the conversation pane must not flash the Welcome
+    // screen at a user whose thread is already on its way.
+    workspaceState.restoringLastThread = rendererRecovery.selectedThread !== null
     // Runs before the DOM swaps: capture the outgoing mode's scrollTop while its
     // list is still mounted, render the incoming mode's row, then settle the
     // incoming list once it has rendered.

@@ -157,6 +157,10 @@
         </svelte:boundary>
       </div>
     {/key}
+  {:else if workspaceState.restoringLastThread}
+    <!-- The saved thread is being restored: hold an empty surface instead of
+         flashing the Welcome screen and then replacing it. -->
+    <div class="h-full min-h-0" aria-busy="true"></div>
   {:else if mode === 'chats'}
     <WelcomeStart
       variant="chats"

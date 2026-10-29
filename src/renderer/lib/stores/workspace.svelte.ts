@@ -88,6 +88,15 @@ const SOURCE_PROCESS_COUNT_TTL_MS = 30_000
 class WorkspaceState {
   /** Currently open thread, if any. */
   selectedThread: Thread | null = $state(null)
+  /**
+   * True while the launch's saved thread is still being restored.
+   *
+   * The conversation pane uses it to hold a neutral surface instead of the
+   * Welcome screen: before the restore lands there is no selected thread yet,
+   * and flashing "What would you like to work on?" at a user whose conversation
+   * is already on its way reads as the app having lost their work.
+   */
+  restoringLastThread = $state(false)
   /** Project that owns the selected thread (null for standalone chats). */
   activeProject: Project | null = $state(null)
   /** Resolved icon URL for the active project (custom image, SVG icon, or initials). */
