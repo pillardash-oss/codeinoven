@@ -5,8 +5,10 @@
   import { Portal } from 'bits-ui'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
+  import type { BrowserViewBounds } from '$shared/ipc-contract'
 
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { logRendererDev } from '$lib/system/renderer-logger'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -113,17 +115,50 @@
       : ''
   )
 
-  onMount(() =>
-    subscribe('browser:panelShortcut', (tabId, action) => {
+  onMount(() => {
+    // A peek nobody can see is the one failure with no visible symptom: the panel
+    // is laid out from the source page's rectangle, so a missing rectangle is
+    // worth recording once, with the state that decided it.
+    const opened = globalBrowser.peekTab
+    if (opened) {
+      const source = browserVisibility.sourceTabId
+      const rect = source ? browserVisibility.pageBoundsFor(source) : null
+      logRendererDev(
+        `peek ${opened.id} opened from ${source ?? 'no surface'} at ${rect ? `${rect.x},${rect.y} ${rect.width}x${rect.height}` : 'no frame'}`
+      )
+    }
+    return subscribe('browser:panelShortcut', (tabId, action) => {
       if (tabId === globalBrowser.peekTab?.id && action === 'close-tab') globalBrowser.closePeek()
     })
-  )
+  })
   // Follow the source page layout even while its native page is parked.
   const bounds = $derived(
     browserVisibility.sourceTabId
       ? browserVisibility.pageBoundsFor(browserVisibility.sourceTabId)
       : null
   )
+
+  /**
+   * The rectangle the panel is laid out at.
+   *
+   * The source page's own frame while its surface still publishes one, else the
+   * rectangle the peek was asked for (the link it grew out of), else a centred
+   * panel. The last step exists because a peek that is not laid out anywhere is
+   * drawn nowhere: the user asks to take a peek and sees nothing at all, which is
+   * how a peek can be completely broken with no symptom to report.
+   */
+  const panelBounds = $derived(bounds ?? globalBrowser.peekOrigin ?? centeredPanelBounds())
+
+  function centeredPanelBounds(): BrowserViewBounds {
+    const width = Math.max(320, Math.round(window.innerWidth * 0.72))
+    const height = Math.max(240, Math.round(window.innerHeight * 0.72))
+    return {
+      x: Math.round((window.innerWidth - width) / 2),
+      y: Math.round((window.innerHeight - height) / 2),
+      width,
+      height
+    }
+  }
 
   async function copyAddress(): Promise<void> {
     const url = tab?.url
@@ -356,12 +391,12 @@
   </div>
 {/snippet}
 
-{#if tab && bounds}
+{#if tab}
   {#key tab.id}
     <Modal
       open
       modal={false}
-      {bounds}
+      bounds={panelBounds}
       scrim={false}
       closeOnBackdrop={false}
       onCloseAutoFocus={(event) => event.preventDefault()}

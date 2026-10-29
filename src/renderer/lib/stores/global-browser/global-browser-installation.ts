@@ -1,9 +1,10 @@
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke } from '$lib/ipc.svelte'
 import { type BrowserPeekPhase } from '$lib/components/browser/browser-peek-transition'
 import type { BrowserOpenRequestContext } from '$shared/ipc-contract'
 import { type GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import { contextSidebarState } from '../context-sidebar.svelte'
+import { logRendererDev } from '$lib/system/renderer-logger'
 import { browserVisibility } from '../browser-visibility.svelte'
 import { browserAudio } from '../browser-audio.svelte'
 import {
@@ -94,6 +95,9 @@ export class GlobalBrowserStateInstallation {
     }
     if (context.peek) {
       const sourceTabId = context.sourceTabId ?? browserVisibility.sourceTabId
+      logRendererDev(
+        `peek request ${url} for source ${sourceTabId ?? 'none'} (surface ${browserVisibility.sourceTabId ?? 'none'})`
+      )
       if (!sourceTabId) return
       const previous = this.host.peeks.get(sourceTabId)
       if (previous?.tab.id === tabId) return
