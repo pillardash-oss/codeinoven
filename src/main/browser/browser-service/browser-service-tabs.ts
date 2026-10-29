@@ -1,5 +1,9 @@
 import { webFrameMain, WebContentsView, type WebContents } from 'electron'
-import type { BrowserLoadError, BrowserTabDestroyReason } from '../../../lib/ipc-contract'
+import {
+  GLOBAL_BROWSER_PROJECT_ID,
+  type BrowserLoadError,
+  type BrowserTabDestroyReason
+} from '../../../lib/ipc-contract'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { fetchIconAsDataUrl } from '../../editor/favicon-service'
 import { type BrowserDownloadOwner } from './browser-downloads'
@@ -327,9 +331,13 @@ export class BrowserServiceTabs {
       // The observer that reports a chord the page did not handle, so the app's
       // own shortcuts still reach the app from inside a page.
       this.host.pageKeys.install(view.webContents)
-      // The observer that reports an Option-click on a link, which is the one
-      // gesture the app cannot see from here: the click belongs to a native page.
-      this.host.linkPeek.install(view.webContents)
+      // Take a Peek is a global browser gesture and nothing else: a thread's page
+      // is the surface a conversation already talks to, so it has no peek. Only
+      // a global tab gets the observer that claims an Option-click on a link,
+      // which otherwise keeps Chromium's meaning for it and downloads the page.
+      if (tab.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+        this.host.linkPeek.install(view.webContents)
+      }
       this.host.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
       // The document that just arrived drops the last one's stylesheet, so the

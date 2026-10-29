@@ -1,5 +1,5 @@
 import { screen, type WebContents } from 'electron'
-import type { BrowserViewBounds } from '../../../lib/ipc-contract'
+import { GLOBAL_BROWSER_PROJECT_ID, type BrowserViewBounds } from '../../../lib/ipc-contract'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { Logger } from '../../system/logger'
 import { type BrowserPageOwner } from './browser-types'
@@ -131,6 +131,9 @@ export class BrowserServiceNewTabs {
     media: BrowserPeekMediaTarget | null = null,
     probeLink = true
   ): void {
+    // Taking a peek is the global browser's gesture: a thread's page is the
+    // surface its conversation already works in, and has no peek of its own.
+    if (owner.projectId !== GLOBAL_BROWSER_PROJECT_ID) return
     void this.peekOriginFor(contents, frame, point, media, probeLink).then((origin) => {
       try {
         this.openNewTabFor(owner, url, true, origin)
