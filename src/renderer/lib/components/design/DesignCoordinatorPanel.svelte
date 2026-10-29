@@ -1070,7 +1070,7 @@
             </div>
           </div>
         {:else}
-          <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
+          <div class="screen-board-scope min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
             {#if board.gallery.video}
               <div
                 class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
@@ -1139,10 +1139,7 @@
                 {/each}
               </div>
             {:else}
-              <div
-                class="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-1.5"
-                aria-label={board.studio.screensLabel}
-              >
+              <div class="screen-cards" aria-label={board.studio.screensLabel}>
                 {#if !board.gallery.video}
                   {@render entryCard({
                     icon: CioDisplay,
@@ -1173,10 +1170,7 @@
                       {/if}
                     </div>
                     {#if !section.group?.collapsed}
-                      <div
-                        class="col-span-full grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-1.5"
-                        transition:slide={{ duration: 140 }}
-                      >
+                      <div class="screen-cards col-span-full" transition:slide={{ duration: 140 }}>
                         {#each section.screens as screen (screen.entry)}
                           {@render screenCardItem(screen, section.group?.id ?? null)}
                         {/each}
@@ -1488,3 +1482,27 @@
     {/await}
   </FullscreenPanelDialog>
 {/if}
+
+<style>
+  /*
+   * Two screens across until the panel has room for a third.
+   *
+   * The board is a panel that the user widens and narrows, so its column count is
+   * a question about the room it has, not about the window: the scope below is the
+   * width a card may share, and three columns arrive once that width can hold them
+   * without shrinking a picture below its own capture.
+   */
+  .screen-board-scope {
+    container-type: inline-size;
+  }
+  .screen-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.375rem;
+  }
+  @container (min-width: 28rem) {
+    .screen-cards {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+</style>
