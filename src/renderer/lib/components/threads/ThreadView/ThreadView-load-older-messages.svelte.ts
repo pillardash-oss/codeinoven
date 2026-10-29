@@ -288,7 +288,18 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // entries arriving at the tail.
     if (away && !this.userScrolledAway) {
       this.windowStartId = this.root.composerScope.mountedWindowStartId()
-    } else if (!away && this.userScrolledAway) {
+    } else if (
+      !away &&
+      this.userScrolledAway &&
+      !this.loadingOlderMessages &&
+      !this.viewportSettling
+    ) {
+      // A transcript that fits the viewport is at its bottom AND at its top at
+      // the same time, so a page landing above the reader can leave them
+      // "at the bottom" by measurement while they are reading history. The
+      // release is skipped while a load is running or settling, otherwise it
+      // unmounted the page that had just arrived and left the reader at a top
+      // that refused to load again.
       this.windowStartId = null
     }
     this.userScrolledAway = away
@@ -303,11 +314,12 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       awayFromBottom: this.userScrolledAway
     })
     this.root.steerQueuedMessage.scheduleResponseBubbleUpdate()
-    // The settle guard pins the seam itself and has to yield to the reader the
-    // moment the scroll is theirs, not the load's.
-    if (this.viewportSettling && Math.abs(this.scrollEl.scrollTop - this.viewportWriteTop) > 1.5) {
-      this.stopViewportSettle()
-    }
+    // The reader owns the viewport, so the pin moves with them instead of
+    // being dropped: a load can insert a page in the middle of a scroll, and
+    // content above the seam keeps finding its height for a while after. Only
+    // the delta between where this unit left the scroll and where it now is
+    // belongs to the reader.
+    this.followViewportScroll()
     // Nothing loads from here: the history row's own visibility observer (see
     // `watchHistoryHead`) is what triggers the conversation-level fetch, and
     // only once that row is genuinely on screen.
@@ -331,12 +343,39 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   private viewportSettleFrame = 0
 
-  /** How long the seam is held after a page lands. The page is laid out by
-   *  then, but content inside it can still find its height a frame or two
-   *  later (a picture without an intrinsic size, a clamped block that measures
-   *  itself, a font that swaps in), and any of those would push the reader's
-   *  view down after the correction had already run. */
-  private static readonly VIEWPORT_SETTLE_MS = 480
+  /** How long the seam stays pinned after the last layout change it had to
+   *  correct. Content inside a landed page can find its height well after the
+   *  mount (a picture without an intrinsic size, a trace block the stream log
+   *  delivers later, a clamped block that measures itself), and every one of
+   *  those would push the reader's view down if nothing was watching. */
+  private static readonly VIEWPORT_SETTLE_MS = 700
+
+  /** A single load never holds the seam longer than this, however much keeps
+   *  arriving: the hold is a correction for a mount, not a scroll lock. */
+  private static readonly VIEWPORT_HOLD_MS = 4000
+
+  /** True once the reader has scrolled up in this view. Plain, not reactive. */
+  private readerReachedUp = false
+
+  /** Move the pin with the reader.
+   *
+   *  Native scroll anchoring is off on this scroller, so nothing else adjusts
+   *  the viewport when content above it grows. As long as a page is pinned,
+   *  the reader's own scroll has to be reflected in the pin instead of cutting
+   *  it loose   otherwise every load that lands while they are still scrolling
+   *  is left uncorrected, which is exactly the jump they see. */
+  private followViewportScroll(): void {
+    const el = this.scrollEl
+    if (!el) return
+    const travelled = el.scrollTop - this.viewportWriteTop
+    if (Math.abs(travelled) <= 0.5) return
+    if (this.viewportSeam) this.viewportSeam.offset -= travelled
+    this.viewportWriteTop = el.scrollTop
+    // Upward travel is the reader asking for the past. Until that happens
+    // once, nothing loads on its own: a thread that opens on a short turn
+    // would otherwise pull history the reader never reached for.
+    if (travelled < -0.5) this.readerReachedUp = true
+  }
 
   /** Pin the viewport to the seam. Called once before a load inserts anything. */
   private holdViewportSeam(): void {
@@ -346,6 +385,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       el && seam instanceof HTMLElement
         ? { node: seam, offset: seam.getBoundingClientRect().top - el.getBoundingClientRect().top }
         : null
+    if (el) this.viewportWriteTop = el.scrollTop
   }
 
   /** Put the seam back where it was. Idempotent, and cheap enough to run on
@@ -358,29 +398,42 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       seam.node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
     const next = Math.max(0, contentOffset - seam.offset)
     if (Math.abs(next - el.scrollTop) > 0.5) {
-      this.viewportWriteTop = next
       el.scrollTop = next
+      // Read back: the browser clamps, and the reader's next scroll is measured
+      // against what the scroller actually holds.
+      this.viewportWriteTop = el.scrollTop
     }
   }
 
-  /** Hold the seam across the frames after the insert, so the loaded page
-   *  settles above the reader instead of dragging their view. Bounded by time
-   *  and abandoned the instant they scroll: the viewport belongs to the reader,
-   *  and this only exists to keep the layout from moving it for them. */
+  /** Hold the seam for as long as content keeps arriving above the reader.
+   *
+   *  The mount itself is corrected once, in the same task, so it is never
+   *  painted. What this covers is everything that lands after it   a block the
+   *  stream log delivers a moment later, media without an intrinsic size, a
+   *  self-measuring clamp   and it keeps covering it for a short while after
+   *  the last correction, because one late block often follows another. It is
+   *  never a scroll lock: the pin moves with the reader (`followViewportScroll`)
+   *  and the whole hold expires on its own. */
   private settleViewportSeam(): void {
     this.stopViewportSettle()
     if (!this.viewportSeam) return
-    const deadline = performance.now() + ThreadViewLoadOlderMessages.VIEWPORT_SETTLE_MS
+    const started = performance.now()
     this.viewportSettling = true
+    let deadline = started + ThreadViewLoadOlderMessages.VIEWPORT_SETTLE_MS
     const step = (): void => {
       this.viewportSettleFrame = 0
       if (!this.alive || !this.viewportSettling) return
+      const before = this.scrollEl?.scrollTop ?? 0
       this.restoreViewportSeam()
-      if (performance.now() < deadline) this.viewportSettleFrame = requestAnimationFrame(step)
-      else {
-        this.viewportSettling = false
-        this.viewportSeam = null
+      const corrected = Math.abs((this.scrollEl?.scrollTop ?? 0) - before) > 0.5
+      if (corrected) deadline = performance.now() + ThreadViewLoadOlderMessages.VIEWPORT_SETTLE_MS
+      const now = performance.now()
+      if (now < deadline && now - started < ThreadViewLoadOlderMessages.VIEWPORT_HOLD_MS) {
+        this.viewportSettleFrame = requestAnimationFrame(step)
+        return
       }
+      this.viewportSettling = false
+      this.viewportSeam = null
     }
     this.viewportSettleFrame = requestAnimationFrame(step)
   }
@@ -391,20 +444,25 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     this.viewportSettling = false
   }
 
-  /** True while the history row entering the viewport may fire one load.
-   *  Released by a load and re-armed only after the row leaves the viewport
-   *  again, so a row parked on screen loads exactly one page instead of a page
-   *  per observer callback. Plain, not reactive: nothing renders from it. */
-  private historyAutoLoadArmed = true
+  /** How many pages one arrival at the history row may pull. A page that lands
+   *  above the reader moves the row up by exactly the height it inserted, so a
+   *  row that is STILL on screen means the transcript has room for another
+   *  page between it and the reader   that is what fills the pane instead of
+   *  leaving a short page parked at the top. Bounded so the fill can never run
+   *  away on a thread whose rows are tiny. */
+  private static readonly HISTORY_FILL_LIMIT = 8
+
+  /** True while the fill loop is running. Plain, not reactive. */
+  private historyFilling = false
 
   /**
    * Load the next page of history the moment the "Load earlier messages" row
    * comes into view.
    *
-   * The reader no longer has to reach for the button: scrolling far enough up
-   * that the history row enters the viewport is the request itself. The row is
-   * the sentinel, so nothing loads while it is still off screen above or still
-   * below the fold   only its arrival in view does.
+   * The reader no longer has to reach for the button: reaching the top of the
+   * transcript is the request itself. The row is the sentinel, so nothing loads
+   * while it is still off screen above or still below the fold   only its
+   * arrival in view does.
    *
    * This is the conversation-level fetch only. A working trace paging its own
    * older entries up is a separate observer on its own body (see
@@ -419,16 +477,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       observer = new IntersectionObserver(
         (entries) => {
           for (const entry of entries) {
-            if (!entry.isIntersecting) {
-              // The row left the viewport, so the next arrival is a new page
-              // request. Re-arming here is what keeps a short page from
-              // loading again on its own while it is still standing in view.
-              this.historyAutoLoadArmed = true
-              continue
-            }
-            if (!this.historyAutoLoadArmed || this.loadingOlderMessages) continue
-            this.historyAutoLoadArmed = false
-            void this.autoLoadOlderMessages()
+            if (entry.isIntersecting) void this.autoLoadOlderMessages()
           }
         },
         // The transcript scroller is the frame: the row counts as arrived when
@@ -444,26 +493,56 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     }
   }
 
+  /** Whether the transcript is currently shorter than the pane it sits in. */
+  private transcriptCannotScroll(): boolean {
+    const el = this.scrollEl
+    if (!el) return false
+    return el.scrollHeight - el.clientHeight <= 1
+  }
+
+  /** Whether the history row is inside the visible part of the transcript right
+   *  now. Measured fresh, never latched: the row is the trigger, so a row still
+   *  on screen after a page landed means the transcript wants another page. */
+  private historyRowVisible(): boolean {
+    const el = this.scrollEl
+    const row = this.root.studioTemporaryChatContext.historyHeadEl
+    if (!el || !row || !row.isConnected) return false
+    const rect = row.getBoundingClientRect()
+    const frame = el.getBoundingClientRect()
+    return rect.bottom > frame.top + 1 && rect.top < frame.bottom - 1
+  }
+
   /** The scroll-triggered load.
    *
    *  A click on the button is a deliberate leave from the live tail, so that
    *  path pins the viewport for good and mounts three turns of history at once.
    *  A reader whose transcript is shorter than the viewport sees the history
-   *  row without ever scrolling, and dropping their tail follow because a page
-   *  happened to arrive would stop a streaming turn from following along. So
-   *  the follow state is put back exactly as it was found once the page has
-   *  landed, and only one turn is fetched: the page arrives in a few frames and
-   *  the reader keeps scrolling into it, instead of one long freeze followed by
-   *  a wall of blocks mounting at once. */
+   *  row without ever scrolling, so the scroll path keeps filling while the row
+   *  is still on screen: one turn per pass, and it stops the moment the page
+   *  that landed pushed the row out of view or the thread has nothing older. */
   private async autoLoadOlderMessages(): Promise<void> {
-    if (!this.alive) return
-    const atBottom = this.scrollEl
-      ? this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
-      : false
+    if (!this.alive || this.historyFilling) return
+    // Loading is the reader's request, and one of two things makes it: they
+    // scrolled up towards the row, or the transcript has nothing to scroll yet
+    // because the turn it opened on fits the pane. The second case is a
+    // dead end otherwise   an empty scrollbar is not a way to ask for history.
+    if (!this.readerReachedUp && !this.transcriptCannotScroll()) return
+    this.historyFilling = true
     try {
-      await this.loadOlderMessages(true)
+      for (let page = 0; page < ThreadViewLoadOlderMessages.HISTORY_FILL_LIMIT; page += 1) {
+        if (!this.alive) return
+        if (!this.historyRowVisible()) return
+        if (!this.root.unmirroredTraceStartTime.hasOlderMessages) return
+        const messagesBefore = this.messages.length
+        const startBefore = this.mountedStartIndex
+        await this.loadOlderMessages(true)
+        if (!this.alive) return
+        // A pass that neither fetched nor mounted anything would spin here.
+        if (this.messages.length === messagesBefore && this.mountedStartIndex === startBefore)
+          return
+      }
     } finally {
-      if (atBottom && this.alive) this.userScrolledAway = false
+      this.historyFilling = false
     }
   }
 
