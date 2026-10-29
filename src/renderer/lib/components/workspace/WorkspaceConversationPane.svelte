@@ -9,6 +9,8 @@
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { conversationFirstScreen } from '$lib/stores/conversation-first-screen.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
   import { assistantKnowledgeComplete, type Project, type Thread } from '$shared/types'
@@ -106,6 +108,80 @@
   let restoringSelection = $derived(
     workspaceState.restoringLastThread ? rendererRecovery.selectedThread : null
   )
+
+  /**
+   * Whether the open thread's transcript is in hand with nothing left to reveal.
+   *
+   * Loaded alone is not enough: a large first load publishes its batches over a
+   * few frames, so a view that has finished reading can still be showing its
+   * first batch. `revealing` is the difference between "I have the data" and
+   * "the conversation is on screen".
+   */
+  let transcriptSettled = $derived(
+    selectedThread !== null &&
+      threadMessages.loaded(selectedThread.projectId, selectedThread.id) &&
+      !threadMessages.revealing(selectedThread.projectId, selectedThread.id)
+  )
+
+  /**
+   * The wrapper the conversation view paints into, for the handoff below.
+   */
+  let conversationHost: HTMLElement | null = $state(null)
+
+  // Tell the first-screen layer above the workspace when the real conversation is
+  // on screen. The signal cannot be a timer, a store flag or the launch's own
+  // "conversation reported" event: all three are true before the view has laid a
+  // single message out, and taking the layer down on one of them showed the user
+  // their conversation, blanked it, and painted it again. The only honest answer
+  // is the first message node actually existing in the conversation, which is
+  // what is observed here.
+  //
+  // An empty thread is the exception: there is no message to wait for, so a
+  // settled empty transcript marks immediately instead of holding the layer.
+  $effect(() => {
+    if (conversationFirstScreen.paneReady) return
+    if (!transcriptSettled) return
+    if (selectedThread === null) return
+    if (threadMessages.messages(selectedThread.projectId, selectedThread.id).length === 0) {
+      conversationFirstScreen.markPaneReady()
+      return
+    }
+    const host = conversationHost
+    if (host === null) return
+    let frame = 0
+    const painted = (): boolean => {
+      // A message row is not the conversation: the view mounts its rows before
+      // their text is ready, and holding the skeleton until the row exists would
+      // uncover an empty message container for a frame or three. What has to be
+      // on screen is the message, so the test is a row that carries text.
+      const rows = host.querySelectorAll('[data-message-id]')
+      let hasText = false
+      for (const row of rows) {
+        if ((row.textContent ?? '').trim().length > 0) {
+          hasText = true
+          break
+        }
+      }
+      if (!hasText) return false
+      // One more frame, so the layer comes down on a painted conversation
+      // rather than on the frame the node was inserted in.
+      frame = requestAnimationFrame(() => conversationFirstScreen.markPaneReady())
+      return true
+    }
+    if (painted()) return () => cancelAnimationFrame(frame)
+    const observer = new MutationObserver(() => {
+      if (painted()) observer.disconnect()
+    })
+    observer.observe(host, { childList: true, subtree: true })
+    // A view that renders its transcript some other way must not stay covered
+    // forever: the layer is a loading affordance, and a bounded one.
+    const ceiling = setTimeout(() => conversationFirstScreen.markPaneReady(), 8_000)
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+      clearTimeout(ceiling)
+    }
+  })
 </script>
 
 <div
@@ -123,6 +199,7 @@
            state the arriving thread just published. -->
       <div
         class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+        bind:this={conversationHost}
         in:fly={threadReveal()}
       >
         <svelte:boundary onerror={handleConversationRenderError}>
@@ -171,6 +248,17 @@
             </div>
           {/snippet}
         </svelte:boundary>
+        {#if !conversationFirstScreen.paneReady}
+          <!-- The view is mounted but has nothing laid out yet. Cover it with the
+               conversation's own silhouette instead of showing a chrome-only
+               shell, which reads as a broken app rather than a loading one. -->
+          <div class="absolute inset-0 bg-app">
+            <ConversationFirstPaint
+              projectId={selectedThread.projectId}
+              threadId={selectedThread.id}
+            />
+          </div>
+        {/if}
       </div>
     {/key}
   {:else if restoringSelection}

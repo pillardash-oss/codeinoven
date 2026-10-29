@@ -6,7 +6,7 @@
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import ConversationFirstPaint from '$lib/components/workspace/ConversationFirstPaint.svelte'
-  import { hasConversationPainted, whenConversationPainted } from '$lib/conversation-painted'
+  import { conversationFirstScreen } from '$lib/stores/conversation-first-screen.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { fly } from 'svelte/transition'
   import { pageReveal } from '$lib/components/layout/page-reveal'
@@ -54,29 +54,28 @@
    * shown from here in the meantime instead of leaving the app's main area empty
    * while the rail, the header and the thread list fill in around it.
    *
-   * It is a real handoff, not a delay: the layer is removed the moment the
-   * renderer reports that the restored conversation painted, which is the same
-   * signal the splash is released on. The failsafe only exists so a restore that
-   * never reports cannot trap the user behind this layer.
+   * It is a real handoff, not a delay: the layer is removed once the conversation
+   * pane itself reports that it painted real messages
+   * (`conversationFirstScreen.markPaneReady`), never on the launch's own
+   * "conversation reported" signal, which arrives before the pane has laid
+   * anything out and used to show the user their conversation, blank it, and
+   * paint it again. The failsafe only exists so a pane that never paints cannot
+   * trap the user behind this layer.
    */
-  let conversationPainted = $state(hasConversationPainted())
   let firstScreenDismissed = $state(false)
   let restoredThread = $derived(rendererRecovery.selectedThread)
   let firstScreenActive = $derived(
     restoredThread !== null &&
-      !conversationPainted &&
+      !conversationFirstScreen.paneReady &&
       !firstScreenDismissed &&
       board.openAssistantFromSearch.showsContentView
   )
 
   onMount(() => {
-    whenConversationPainted(() => {
-      conversationPainted = true
-    })
     // A restore that never reports must not trap the user behind this layer.
     const failsafe = setTimeout(() => {
       firstScreenDismissed = true
-    }, 15_000)
+    }, 25_000)
     return () => clearTimeout(failsafe)
   })
 </script>
