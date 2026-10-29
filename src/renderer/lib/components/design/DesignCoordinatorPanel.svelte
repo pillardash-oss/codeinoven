@@ -813,30 +813,6 @@
             >
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                disabled={board.gallery.selected.directory === '' || board.gallery.selectedMissing}
-                onSelect={() => (board.state.historyOpen = !board.state.historyOpen)}
-              >
-                <CioHistory size={13} class="shrink-0 text-muted" />
-                {`${board.studio.nounTitle} history`}
-                <CioCheck
-                  size={12}
-                  class={[
-                    'ml-auto shrink-0',
-                    board.state.historyOpen ? 'text-primary' : 'invisible'
-                  ]}
-                  aria-hidden="true"
-                />
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                disabled={!board.studio.canRevealCreator}
-                onSelect={() => void board.studio.revealCreator()}
-              >
-                <CioTarget size={13} class="shrink-0 text-muted" />
-                {board.studio.revealLabel}
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={board.gallery.selected.directory === ''}
                 onSelect={() => void board.state.copyDesignPath(board.gallery.selected.directory)}
               >
@@ -964,6 +940,14 @@
                 </DropdownMenu.Item>
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={!board.studio.canRevealCreator}
+                onSelect={() => void board.studio.revealCreator()}
+              >
+                <CioTarget size={13} class="shrink-0 text-muted" />
+                {board.studio.revealLabel}
+              </DropdownMenu.Item>
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={board.gallery.selected.directory === '' || board.gallery.selectedMissing}
