@@ -13,6 +13,7 @@
 
 import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
+import { appfileProjectFilesGate, scopedPathResolverGate, settleAppfileGates } from './boot-gate'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { appResourcesRoot, isShippedBuild } from './app-resources'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
@@ -292,6 +293,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createThreadWorkspaceRoots(storage, database)
   )
   state.appfileProjectFiles = projectFilesService
+  // The preview protocol was installed before the window loaded and awaits this
+  // publish, so a preview requested during the boot is served instead of lost.
+  appfileProjectFilesGate.publish(projectFilesService)
   // CIO Cleanup resolves the same roots the app boots a session in, and reports
   // into the app-root dock exactly like the other background jobs do.
   state.cioCleanup = new CioCleanupService({
@@ -937,10 +941,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     utilityFootprint,
     onScopedPathResolver: (resolve) => {
       // Published here so the `appfile://` preview protocol authorizes a path
-      // exactly the way privileged IPC does, against the same grants. A preview
-      // requested before this point waits for it rather than failing.
+      // exactly the way privileged IPC does, against the same grants, and the
+      // gate releases any preview that was waiting on it.
       state.appfileScopedPathResolver = resolve
-      Logger.dev('Scoped path resolver published')
+      scopedPathResolverGate.publish(resolve)
     }
   })
   state.chatEngine.register()
@@ -1141,6 +1145,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
     state.featuresReady = true
+    // Anything the boot did not publish will never be published, so a preview
+    // waiting for it is answered now instead of waiting for nothing.
+    settleAppfileGates()
     startupTelemetry.mark('features:ready')
     // The lean-agent merge is maintenance, not first interaction: it shells out
     // for the installed version and rewrites the machine-wide opencode config, so

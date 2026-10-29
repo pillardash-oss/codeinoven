@@ -1,7 +1,7 @@
 import { session } from 'electron'
 import type { BrowserWindow } from 'electron'
-import { bootDependency, installFilePreviewProtocol } from '../editor/file-preview-protocol'
-import type { ProjectFilesService } from '../editor/project-files-service'
+import { installFilePreviewProtocol } from '../editor/file-preview-protocol'
+import { appfileProjectFilesGate, scopedPathResolverGate } from './boot-gate'
 import type { PrivilegedIpcValidator } from '../ipc/ipc-validation'
 import { localDownloadName } from '../system/local-download-names'
 
@@ -74,33 +74,20 @@ export function installRendererSessionGuards(deps: RendererSessionGuardDeps): vo
   })
 }
 
-export interface AppFilePreviewProtocolDeps {
-  getProjectFiles: () => ProjectFilesService | null
-  getScopedPathResolver: () => ((value: unknown) => Promise<string>) | null
-  /** Whether the boot could still publish the resolver, so a request waits it out. */
-  isBootPending: () => boolean
-}
-
 /**
  * Install the `appfile://` preview protocol before the renderer loads: the
  * packaged renderer requests preview images as soon as it hydrates, and if the
  * handler is not yet registered Chromium rejects those early requests with
  * `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently broken.
- * The file service is resolved lazily from the post-paint boot.
+ *
+ * The services it needs are published later by the post-paint boot, so the
+ * request awaits the boot's gate rather than reading a maybe-empty slot: a
+ * preview requested in the first frames after hydration is then served when the
+ * service arrives, instead of being refused for the rest of the session.
  */
-export function installAppFilePreviewProtocol(deps: AppFilePreviewProtocolDeps): void {
-  // The scoped path resolver is published by the same post-paint boot as the
-  // file service, so a preview of a file the user opened can arrive before it
-  // exists. Waiting for it answers that request instead of failing it, which is
-  // what left such an image broken until the next reload.
-  const scopedPath = bootDependency(
-    deps.getScopedPathResolver,
-    'Scoped path resolution',
-    deps.isBootPending
-  )
-  installFilePreviewProtocol(
-    deps.getProjectFiles,
-    (value) => scopedPath.read().then((resolve) => resolve(value)),
-    deps.isBootPending
-  )
+export function installAppFilePreviewProtocol(): void {
+  installFilePreviewProtocol({
+    projectFiles: () => appfileProjectFilesGate.read(),
+    resolveScopedPath: (value) => scopedPathResolverGate.read().then((resolve) => resolve(value))
+  })
 }

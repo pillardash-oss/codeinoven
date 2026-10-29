@@ -74,6 +74,7 @@ import {
   installAppFilePreviewProtocol,
   installRendererSessionGuards
 } from './bootstrap/session-guards'
+import { closeAppfileGates } from './bootstrap/boot-gate'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_APP_VERSION__: string
@@ -254,6 +255,9 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
  * unfulfilled, so this can never pass a release check as a healthy launch.
  */
 function releaseFeaturesAfterBootFailure(): void {
+  // A boot that died publishes nothing more, so the preview protocol stops
+  // waiting for the services it was installed without.
+  closeAppfileGates('The boot that publishes it failed')
   if (state.featuresReady) return
   state.featuresReady = true
   state.resolveFeaturesReady?.()
@@ -1086,14 +1090,10 @@ void app
     // the handler is not yet registered Chromium rejects those early requests
     // with `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently
     // broken. The file service is resolved lazily from bootPostPaintServices.
-    installAppFilePreviewProtocol({
-      getProjectFiles: () => state.appfileProjectFiles,
-      getScopedPathResolver: () => state.appfileScopedPathResolver,
-      // The post-paint boot publishes both, and a preview requested before it
-      // finishes waits for it instead of failing, which is what kept an early
-      // image broken for the whole session. A boot that gave up is not pending.
-      isBootPending: () => !state.startupServicesFailed
-    })
+    // The services it serves from are published by the post-paint boot, which
+    // starts after the first paint, so the protocol awaits the boot's gate
+    // instead of reading a slot that may still be empty.
+    installAppFilePreviewProtocol()
 
     const bootContext = {
       state,

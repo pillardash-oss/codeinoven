@@ -7,9 +7,11 @@ import { Readable } from 'node:stream'
 import { join, sep } from 'path'
 import { realpath } from 'fs/promises'
 import { getConfigRoot } from '../../lib/utils'
+import { BootUnavailableError } from '../bootstrap/boot-gate'
 import { previewTypeForPath, type PreviewType } from '../../lib/preview-types'
 import { byteRange, previewHeaders } from '../../lib/preview-range'
 import { Logger } from '../system/logger'
+import { openWithService } from '../system/open-with-service'
 import { MediaServer } from './media-server/media-server'
 import type { ProjectFilesService } from './project-files-service'
 
@@ -18,64 +20,6 @@ const PROJECT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/u
 const ATTACHMENT_ID_PATTERN = /^[a-f0-9]{24}$/u
 /** Thread IDs follow the same safe-entity charset as project IDs. */
 const THREAD_ID_PATTERN = /^[a-zA-Z0-9._-]+$/u
-
-/** How long a preview request waits for the boot to publish what it needs. */
-const READY_TIMEOUT_MS = 20_000
-/** How often that wait looks again while the boot is still running. */
-const READY_POLL_MS = 25
-
-/** A preview asked for something the boot has not published yet. */
-export class BootDependencyError extends Error {
-  constructor(label: string) {
-    super(`${label} is not ready`)
-    this.name = 'BootDependencyError'
-  }
-}
-
-/**
- * One boot-published dependency, asked for until it exists.
- *
- * The protocol is installed before the window loads, deliberately, so a preview
- * request can arrive while the post-paint boot is still building the service it
- * needs. Answering `not found` then is what leaves an image permanently broken:
- * a browser does not retry a failed preview, and nothing tells it to. So the
- * request waits for the dependency instead, and the wait follows the boot
- * rather than a guess: it looks again for as long as the boot says it is still
- * running, and gives up only once the boot has settled without publishing it.
- *
- * The pending promise is shared per dependency, so a burst of requests during
- * boot costs one poll loop instead of one loop each.
- */
-export function bootDependency<T>(
-  get: () => T | null,
-  label: string,
-  isBootPending: () => boolean
-): { read: () => Promise<T> } {
-  let pending: Promise<T> | null = null
-  const waitOnce = async (): Promise<T> => {
-    const deadline = Date.now() + READY_TIMEOUT_MS
-    for (;;) {
-      const value = get()
-      if (value) return value
-      // A boot that has finished without publishing this will never publish it,
-      // so waiting on it any longer would only delay the same answer.
-      if (!isBootPending()) break
-      if (Date.now() >= deadline) break
-      await new Promise<void>((resolve) => setTimeout(resolve, READY_POLL_MS))
-    }
-    throw new BootDependencyError(label)
-  }
-  return {
-    read: () => {
-      const value = get()
-      if (value) return Promise.resolve(value)
-      pending ??= waitOnce().finally(() => {
-        pending = null
-      })
-      return pending
-    }
-  }
-}
 
 // Which extensions may be served, and how large each may be, is one shared
 // declaration (`src/lib/preview-types.ts`): the inline artifact pipeline reads
@@ -258,17 +202,40 @@ function decodeSegments(pathname: string): string[] {
  * requests `appfile://` previews as soon as it hydrates; installing the handler
  * any later makes those requests fail with `ERR_UNKNOWN_URL_SCHEME`).
  */
-export function installFilePreviewProtocol(
-  getProjectFiles: () => ProjectFilesService | null,
-  resolveScopedPath: ((value: unknown) => Promise<string | null>) | undefined,
-  isBootPending: () => boolean
-): void {
+/**
+ * The canonical form of a path the user opened, or null when it does not exist.
+ *
+ * The grants themselves are compared in canonical form, because that is what
+ * the OS hand-off records: `/var` and `/private/var` name the same file on
+ * macOS and only one of them is what the user actually opened.
+ */
+async function canonicalOpenedPath(path: string): Promise<string | null> {
+  try {
+    return await realpath(path)
+  } catch {
+    return null
+  }
+}
+
+function isOpenedPath(canonicalPath: string): boolean {
+  return openWithService.grantedPaths().some((opened) => opened.path === canonicalPath)
+}
+
+export interface FilePreviewProtocolDeps {
+  /**
+   * The file service, awaited when the request arrives before the boot has
+   * published it. The boot resolves it; a boot that failed rejects it.
+   */
+  projectFiles: () => Promise<ProjectFilesService>
+  /** Authorizes a standalone path, awaited for the same reason. */
+  resolveScopedPath?: (value: unknown) => Promise<string | null>
+}
+
+export function installFilePreviewProtocol(deps: FilePreviewProtocolDeps): void {
   /** Long-lived, so a scrub through a video reuses one grant; idle-stopped. */
   const mediaServer = new MediaServer()
-  // The service graph is built by the post-paint boot, so a preview requested in
-  // the first frames after hydration waits for it instead of being refused.
-  const projectFiles = bootDependency(getProjectFiles, 'Project file service', isBootPending)
-  protocol.handle(SCHEME, async (request) => {
+  const resolveScopedPath = deps.resolveScopedPath
+  const respond = async (request: Request): Promise<Response> => {
     try {
       const url = new URL(request.url)
 
@@ -280,7 +247,7 @@ export function installFilePreviewProtocol(
         if (!relativePath) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
-        const files = await projectFiles.read()
+        const files = await deps.projectFiles()
         const absolutePath = await files.resolveForExternalEditor(projectId, relativePath)
         return serveLocalFile(mediaServer, absolutePath, type, request)
       }
@@ -295,7 +262,7 @@ export function installFilePreviewProtocol(
         if (!relativePath) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
-        const files = await projectFiles.read()
+        const files = await deps.projectFiles()
         const remote = await files.remoteFileReader?.(projectId, threadId, relativePath)
         if (remote) return serveRemoteFile(remote, type, request)
         const absolutePath = await files.resolveForExternalEditor(
@@ -314,9 +281,15 @@ export function installFilePreviewProtocol(
         const type = previewTypeForPath(name, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         // Authorization is shared with privileged IPC: only paths the user
-        // opened (or picked in a dialog) resolve to a canonical path here.
+        // opened (or picked in a dialog) resolve to a canonical path here. The
+        // hand-off that opened the file is recorded the instant the operating
+        // system delivers it, which is before any service graph exists, so the
+        // viewer's own preview is answered without waiting on the boot at all.
+        const canonical = await canonicalOpenedPath(absolutePath)
+        if (!canonical) return notFound()
+        if (isOpenedPath(canonical)) return serveLocalFile(mediaServer, canonical, type, request)
         if (!resolveScopedPath) return notFound()
-        const safePath = await resolveScopedPath(absolutePath)
+        const safePath = await resolveScopedPath(canonical)
         if (!safePath) return notFound()
         return serveLocalFile(mediaServer, safePath, type, request)
       }
@@ -354,13 +327,23 @@ export function installFilePreviewProtocol(
 
       return notFound()
     } catch (error) {
-      // A preview asked for before the boot published what it needs is a request
-      // that arrived too early, not a fault: the boot settles and the next
-      // request is served normally, so it is not reported as an error.
-      if (error instanceof BootDependencyError)
+      // A preview whose service never arrived because the boot failed is a
+      // degraded feature, not a fault of the request, so it is reported as a
+      // skip instead of an error.
+      if (error instanceof BootUnavailableError) {
         Logger.dev('appfile preview skipped:', error.message)
-      else Logger.error('appfile protocol request failed:', error)
+      } else Logger.error('appfile protocol request failed:', error)
       return notFound()
     }
+  }
+  protocol.handle(SCHEME, async (request) => {
+    const startedAt = Date.now()
+    const response = await respond(request)
+    Logger.dev('appfile request', {
+      host: new URL(request.url).host,
+      status: response.status,
+      ms: Date.now() - startedAt
+    })
+    return response
   })
 }
