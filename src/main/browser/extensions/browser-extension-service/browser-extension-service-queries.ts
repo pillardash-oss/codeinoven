@@ -50,8 +50,7 @@ export class BrowserExtensionServiceQueries {
   /**
    * A box was deleted. Its id never comes back, so every extension that named it
    * forgets it, and anything loaded for it is released before its storage goes.
-   */
-  async forgetBox(projectId: string, boxId: string): Promise<void> {
+   */ async forgetBox(projectId: string, boxId: string): Promise<void> {
     const partition = browserPartitionFor(projectId, boxId)
     await this.host.units['runtime'].onJarEmptied(projectId, boxId, true)
     this.host.loaded.delete(partition)
@@ -72,6 +71,19 @@ export class BrowserExtensionServiceQueries {
     const forgotten = await this.host.registry.forgetProjectJars([projectId])
     if (forgotten) this.host.host.publish()
     return forgotten
+  }
+
+  /**
+   * Touch one extension's worker just before the app opens a surface of it.
+   *
+   * Called only on the user's own action (its action popup, its side panel, its
+   * own page), because that is the only moment a released worker's lost state
+   * matters: a password manager keeps "the desktop app is connected" in worker
+   * memory, asks the desktop whether biometric unlock is available, and answers no
+   * from a worker that has just started its life until its own reconnect lands.
+   */
+  wakeWorker(projectId: string, boxId: string | null, extensionId: string): void {
+    this.host.loaded.get(browserPartitionFor(projectId, boxId))?.bridges.get(extensionId)?.wake()
   }
 
   async setDarkReaderTabScope(

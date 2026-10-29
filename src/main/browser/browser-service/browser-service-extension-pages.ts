@@ -217,6 +217,11 @@ export class BrowserServiceExtensionPages {
     requestedUrl?: string
   ): Promise<string | null> {
     const tab = this.host.ensureTab(tabId, projectId, threadId, boxId)
+    // The popup is about to load, and its first act is to ask its own worker a
+    // question about the desktop bridge. A worker released since the last time is
+    // a fresh life that has not reconnected yet, so it is touched before its page
+    // is created and the reconnect runs while the page loads.
+    this.host.extensions.wakeWorker(projectId, boxId, extensionId)
     // An extension can ask for its panel to open when its action is clicked, and
     // Chromium opens the panel rather than the action popup when it does. The
     // panel is a surface of the rail, so there is no popup id to answer with.

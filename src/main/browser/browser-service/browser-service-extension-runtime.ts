@@ -623,6 +623,9 @@ export class BrowserServiceExtensionRuntime {
     }
     const tab = this.host.tabs.get(appTabId)
     if (!tab) return
+    // The panel's document asks its worker about the desktop bridge as it starts,
+    // so the worker is touched before the panel is created rather than after.
+    this.host.extensions.wakeWorker(request.projectId, request.boxId, request.extensionId)
     this.host.sidePanels.open({
       session: this.host.sessionForProject(request.projectId, request.boxId),
       extensionId: request.extensionId,

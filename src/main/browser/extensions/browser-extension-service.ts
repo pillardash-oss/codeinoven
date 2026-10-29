@@ -454,6 +454,16 @@ export class BrowserExtensionService {
    * process, so they are computed once.
    */
   nativeLookupOptionsCache: NativeHostLookupOptions | null = null
+  /**
+   * Touch one extension's worker just before the app opens a surface of it.
+   *
+   * The browser service calls this from its own popup, side panel and extension
+   * page paths, so the cost is one message per surface the user opens and nothing
+   * at all while they browse.
+   */
+  wakeWorker(projectId: string, boxId: string | null, extensionId: string): void {
+    this.units['queries'].wakeWorker(projectId, boxId, extensionId)
+  }
   sidePanelForActionClick(
     projectId: string,
     boxId: string | null,

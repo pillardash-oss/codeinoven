@@ -131,19 +131,6 @@ export class BrowserExtensionNativeMessaging {
     port.process.kill()
   }
 
-  /**
-   * How many hosts this extension currently holds open.
-   *
-   * The bridge reads it to keep a worker alive while it owns a port: Chromium
-   * extends a service worker's life for an open native messaging port, and a
-   * password manager's desktop status (`connected`) lives in the worker's memory,
-   * so a worker that idles out forgets the bridge is up and answers "desktop
-   * disconnected" until it reconnects.
-   */
-  portCount(): number {
-    return this.ports.size
-  }
-
   /** Close every port this extension holds and stop delivering. */
   dispose(): void {
     if (this.disposed) return

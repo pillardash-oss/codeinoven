@@ -1,5 +1,5 @@
-import { join, resolve } from 'node:path'
-import { app, type Session } from 'electron'
+import { join } from 'node:path'
+import type { Session } from 'electron'
 import { Logger } from '../../../system/logger'
 import { browserJarFor, browserPartitionFor } from '../../browser-service/browser-validation'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME } from '../browser-extension-inject'
@@ -343,6 +343,9 @@ export class BrowserExtensionServiceLifecycle {
       // `chrome.runtime.openOptionsPage` names a page the worker cannot raise; the
       // host opens it in the jar the extension is loaded in.
       extensionPageRequest: (request) => {
+        // Its own page asks the worker about the desktop bridge as it loads, so
+        // the worker is touched first, for the same reason the action popup is.
+        this.host.wakeWorker(state.projectId, state.boxId, record.id)
         this.host.host.openExtensionPage(state.projectId, state.boxId, record.id, request.page)
         return Promise.resolve({})
       }
