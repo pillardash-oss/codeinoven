@@ -20,6 +20,7 @@ import {
 } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import { consoleFrameUrl } from './browser-service-common'
+import { installBrowserHistorySwipe } from './browser-history-swipe'
 import { liveWindowContents } from './browser-view-contents'
 import {
   PANEL_SHORTCUT_TARGETS,
@@ -291,7 +292,15 @@ export class BrowserServicePopups {
     })
     // A popup's keys reach its own page and then the application menu, where
     // Cmd/Ctrl+W would close the app window rather than this popup.
-    contents.on('dom-ready', () => this.host.pageKeys.install(contents))
+    contents.on('dom-ready', () => {
+      this.host.pageKeys.install(contents)
+      // A popup is a page with its own history, and the user's trackpad gesture
+      // belongs to whichever page they are pointing at. Installing the same
+      // observer the tabs use is what makes a swipe inside this window walk this
+      // window's history: the gesture is delivered to the page under the pointer,
+      // so a swipe in the main page keeps moving the main page.
+      installBrowserHistorySwipe(contents)
+    })
     contents.on('destroyed', () => this.host.pageKeys.release(contents))
     contents.on('before-input-event', (event, input) => {
       if (this.host.consumeSwitcherKey(input)) {
