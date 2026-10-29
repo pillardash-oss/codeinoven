@@ -1,4 +1,5 @@
 import { tick } from 'svelte'
+import { markConversationPainted } from '$lib/conversation-painted'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 
 import { invoke, waitForFeatures } from '$lib/ipc.svelte'
@@ -149,6 +150,10 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       readyMessages = threadMessages.messages(thread.projectId, thread.id).length
     }
     await invoke('app:conversationReady', readyMessages).catch(() => undefined)
+    // The first screen is up. Everything that only enriches the app (the panel
+    // chunks and their data) was queued behind this moment, so it starts here
+    // instead of competing with the restore's own reads and renders.
+    markConversationPainted()
   }
 
   async loadData(): Promise<void> {

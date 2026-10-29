@@ -19,6 +19,7 @@ import { harnessAccountCache } from '$lib/stores/harness-accounts'
 import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
 import { warmSidebarPanels } from '$lib/sidebar-panel-preload'
 import { warmAppPanels } from '$lib/app-panel-preload'
+import { whenConversationPainted } from '$lib/conversation-painted'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { initVoiceShortcutListener } from '$lib/speech/voice-shortcut'
 import { handleOpenedPaths } from '../app-os-handoff'
@@ -208,17 +209,25 @@ export class AppEffects extends BoardUnit<App> {
       )
       // The context sidebar's panels are all dynamic imports, and the rail's tab
       // strip, the terminal chords and a restored session reach them without the
-      // hover that `page-preload` relies on. Warming every panel once here, after
-      // the first paint and while the renderer is idle, is what makes the first
-      // open of the Git, files, diff or terminal panel instant instead of a cold
-      // chunk fetch on the click.
-      scheduleDeferredWork('sidebar:panels', warmSidebarPanels)
-      // The global panels (notifications, sticky notes) are dynamic imports in
-      // `AppPanelHost`, reached only from the rail's tab strip with no hover in
-      // front of the click. Warming their chunks here is what keeps the first
-      // open of the notification panel from painting blank while its module is
-      // fetched.
-      scheduleDeferredWork('app:panels', warmAppPanels)
+      // hover that `page-preload` relies on. Warm every panel so the first open of
+      // the Git, files, diff or terminal panel is instant instead of a cold chunk
+      // fetch on the click.
+      //
+      // They are warmed only once the conversation has painted, never before: the
+      // panels are roughly 850 KiB of chunk that only enrich the app, and an idle
+      // callback is not a safe gate because the renderer goes idle between two
+      // batches of a tail-first transcript load. A panel the user left open still
+      // expands on its own as it always did; one they left closed simply has its
+      // module in hand and stays closed.
+      whenConversationPainted(() => {
+        scheduleDeferredWork('sidebar:panels', warmSidebarPanels)
+        // The global panels (notifications, sticky notes) are dynamic imports in
+        // `AppPanelHost`, reached only from the rail's tab strip with no hover in
+        // front of the click. Warming their chunks here is what keeps the first
+        // open of the notification panel from painting blank while its module is
+        // fetched.
+        scheduleDeferredWork('app:panels', warmAppPanels)
+      })
       // Workspace owns the initial project/thread hydration. Keeping this signal
       // there prevents App and Workspace from issuing the same startup queries.
 

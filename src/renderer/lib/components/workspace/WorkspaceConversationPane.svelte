@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteMap } from 'svelte/reactivity'
-  import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
+  import { loadCachedPanelModule, SURFACE_KEYS } from '$lib/lazy-panel'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { threadReveal } from '$lib/components/layout/page-reveal'
   import { fly } from 'svelte/transition'
@@ -110,28 +110,30 @@
         in:fly={threadReveal()}
       >
         <svelte:boundary onerror={handleConversationRenderError}>
-          <ThreadView
-            thread={selectedThread}
-            {active}
-            chatMode={mode === 'chats' || mode === 'assistant'}
-            assistantMode={mode === 'assistant'}
-            {assistantId}
-            assistantName={assistant?.name ?? null}
-            assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
-            {assistantForeignRunThreadId}
-            {assistantSpaceThreads}
-            {onOpenAssistantThread}
-            allowCenteredComposer={mode === 'chats' ||
-              (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
-                ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
-                  workspaceState.freshEmptyStateThreadIds.has(selectedThread.id)))}
-            {onForked}
-            projects={visibleProjects}
-            {projectIcons}
-            {onContinueInProject}
-            {onProjectCreated}
-            onOpenScopeView={(thread) => void onOpenScopeView(thread)}
-          />
+          {#await loadCachedPanelModule(SURFACE_KEYS.threadView, () => import('$lib/components/threads/ThreadView.svelte')) then { default: ThreadView }}
+            <ThreadView
+              thread={selectedThread}
+              {active}
+              chatMode={mode === 'chats' || mode === 'assistant'}
+              assistantMode={mode === 'assistant'}
+              {assistantId}
+              assistantName={assistant?.name ?? null}
+              assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
+              {assistantForeignRunThreadId}
+              {assistantSpaceThreads}
+              {onOpenAssistantThread}
+              allowCenteredComposer={mode === 'chats' ||
+                (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
+                  ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
+                    workspaceState.freshEmptyStateThreadIds.has(selectedThread.id)))}
+              {onForked}
+              projects={visibleProjects}
+              {projectIcons}
+              {onContinueInProject}
+              {onProjectCreated}
+              onOpenScopeView={(thread) => void onOpenScopeView(thread)}
+            />
+          {/await}
           {#snippet failed(_error: unknown, reset: () => void)}
             <div class="flex h-full min-h-0 items-center justify-center px-6">
               <div

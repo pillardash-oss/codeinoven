@@ -25,7 +25,6 @@
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve, sep } from 'node:path'
-import JSZip from 'jszip'
 import { missingExtensionCapabilities } from '../../../lib/browser/browser-extension-capabilities'
 import { extensionIdFromManifestKey } from './browser-extension-crx'
 
@@ -138,12 +137,18 @@ function isInside(root: string, candidate: string): boolean {
  * The directory is expected to be empty and app-owned; it is never merged into.
  * `onProgress` receives a count of entries written, which is the only progress a
  * ZIP offers without decompressing everything twice.
+ *
+ * The ZIP reader is imported here rather than at module scope: this file is part
+ * of the main process graph Electron evaluates before `whenReady`, and jszip
+ * costs ~25 ms to evaluate for code that only runs once an extension is actually
+ * installed or read.
  */
 export async function extractZipToDirectory(
   zipBytes: Buffer,
   destinationDir: string,
   onProgress: (entriesWritten: number) => void
 ): Promise<number> {
+  const JSZip = (await import('jszip')).default
   const archive = await JSZip.loadAsync(zipBytes)
   const entries = Object.values(archive.files)
   let written = 0

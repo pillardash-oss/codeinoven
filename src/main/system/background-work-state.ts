@@ -5,6 +5,15 @@
  * Both are derived from durable state (SQLite and the schedulers) rather than
  * from a renderer, because while the window is closed there is no renderer to
  * ask. The menu bar icon's states and its tooltip are the only consumers.
+ *
+ * Their thread reads stay on the primary connection on purpose. Residency and
+ * attention are synchronous by contract: the close decision, the parked drain
+ * tick and the tray tooltip all ask synchronously, and the answer decides whether
+ * a run may be interrupted, so it cannot lag behind by the round trip of a worker
+ * read. A cached value fed by an async read would be exactly that lag, and a
+ * cache that is a moment behind a run that just started is a process that exits
+ * mid-turn. Where a caller can await instead, `countWorkingThreads` below and
+ * `ThreadRepo.countActiveViaWorker` read the same rows off the main thread.
  */
 
 import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'

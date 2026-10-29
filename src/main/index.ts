@@ -27,6 +27,10 @@ import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry, type StartupStep } from './system/startup-telemetry'
+// `post-paint-services` is deliberately not imported here. Its graph is 87
+// modules and 0.92 MB of source (browser, search, model pricing, checkpointing,
+// assistant helpers), none of which the first paint touches, so it is imported
+// at the three places that actually start it.
 import { startupBudgetViolation } from './system/startup-budget'
 import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
@@ -52,7 +56,6 @@ import {
   requestCloseConfirmation
 } from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
-import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
 import { isShippedBuild } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
@@ -287,11 +290,16 @@ function paintPathFeatures(): Record<string, string> {
  * Storage, the database and the platform probe run together, so the phase delta
  * covering them is one number for three workloads. Naming each task is what
  * turns "startup took six seconds" into "the database open took six seconds".
+ *
+ * The task is taken as a thunk, never as an already-started promise: a step has
+ * to open before the work begins, and `trackStartupStep('database:init',
+ * database.init())` started the work while building the argument, so the step
+ * reported 0 ms for every boot that completed it synchronously.
  */
-async function trackStartupStep<T>(step: StartupStep, work: Promise<T>): Promise<T> {
+async function trackStartupStep<T>(step: StartupStep, work: () => Promise<T>): Promise<T> {
   const finish = startupTelemetry.beginStep(step)
   try {
-    return await work
+    return await work()
   } finally {
     finish()
   }
@@ -900,9 +908,9 @@ function createWindow(): BrowserWindow {
   // the current state. On a reopen after parking this also rebuilds the
   // window-bound services (browser, PTY) the previous window owned.
   state.backgroundLifecycle?.onWindowOpened(window)
-  void attachWindowServices(state, window).catch((error) =>
-    Logger.error('Window service attach failed', error)
-  )
+  void import('./bootstrap/post-paint-services')
+    .then(({ attachWindowServices }) => attachWindowServices(state, window))
+    .catch((error: unknown) => Logger.error('Window service attach failed', error))
 
   return window
 }
@@ -995,8 +1003,7 @@ void app
         // phase reports what painted, not what the boot was willing to wait for.
         if (outcome === 'ready') startupTelemetry.mark('splash:visualReady')
       })
-      splashOutcome = await trackStartupStep(
-        'splash:barrier',
+      splashOutcome = await trackStartupStep('splash:barrier', () =>
         withSplashDeadline(splashVisualReady)
       )
       if (splashOutcome === 'ready') {
@@ -1033,11 +1040,11 @@ void app
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([
       storage.initialize(),
-      trackStartupStep('database:init', database.init()),
+      trackStartupStep('database:init', () => database.init()),
       // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
       // here guarantees the flag is ready before `createWindow()` runs without
       // serializing behind the heavier startup work.
-      trackStartupStep('trafficLight:warm', warmTrafficLightDetection())
+      trackStartupStep('trafficLight:warm', () => warmTrafficLightDetection())
     ])
     if (state.startupRecovery) return
     // Analytics never delays window creation and never runs in a probe.
@@ -1100,11 +1107,13 @@ void app
       // graph boots directly so the scheduler, chat engine, and notifications
       // are live. Window-bound services (browser, PTY) attach the first time a
       // window is opened, from the menu bar or a notification click.
-      void bootPostPaintServices(bootContext).catch((error) => {
-        state.startupServicesFailed = true
-        releaseFeaturesAfterBootFailure()
-        Logger.error('Headless service boot failed; background work is degraded', error)
-      })
+      void import('./bootstrap/post-paint-services')
+        .then(({ bootPostPaintServices }) => bootPostPaintServices(bootContext))
+        .catch((error: unknown) => {
+          state.startupServicesFailed = true
+          releaseFeaturesAfterBootFailure()
+          Logger.error('Headless service boot failed; background work is degraded', error)
+        })
       app.on('activate', () => {
         if (state.quitCleanupStarted) return
         if (BrowserWindow.getAllWindows().length === 0) openMainWindow()
@@ -1137,11 +1146,16 @@ void app
       // already-registered services stay alive, and the failure is fully
       // logged for diagnosis. A background feature failing must never exit
       // the whole app on the user's behalf.
-      void bootPostPaintServices(bootContext).catch((error) => {
-        state.startupServicesFailed = true
-        releaseFeaturesAfterBootFailure()
-        Logger.error('Post-paint service boot failed; app continues with degraded features', error)
-      })
+      void import('./bootstrap/post-paint-services')
+        .then(({ bootPostPaintServices }) => bootPostPaintServices(bootContext))
+        .catch((error: unknown) => {
+          state.startupServicesFailed = true
+          releaseFeaturesAfterBootFailure()
+          Logger.error(
+            'Post-paint service boot failed; app continues with degraded features',
+            error
+          )
+        })
     }
 
     const splashFailsafe = setTimeout(() => {
@@ -1181,6 +1195,11 @@ void app
     const revealWorkspace = (): void => {
       if (splashRevealed) return
       splashRevealed = true
+      // The moment the user actually sees the app: the splash comes down on a
+      // restored conversation. `window:visualReady` is only the first frame of
+      // the window, which the splash still covers, so this is the phase the
+      // first-paint budget is measured on.
+      startupTelemetry.mark('window:revealed')
       if (conversationFailsafe !== undefined) {
         clearTimeout(conversationFailsafe)
         conversationFailsafe = undefined

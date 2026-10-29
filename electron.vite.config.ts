@@ -385,6 +385,14 @@ export default defineConfig(({ mode }) => {
         // rendered, hydrated workspace with it on. Never disable it to "make a
         // bug reproducible": run a dev build instead.
         minify: 'oxc',
+        // A per-chunk stylesheet means a render-blocking request per chunk, and
+        // the first screen reaches seven of them: index.html carried 153,558 B of
+        // CSS split across seven files, so the first paint waited on seven
+        // round trips for styles every one of which belongs to that same screen.
+        // The app has no route-level CSS boundary to preserve (a lazily loaded
+        // panel's sheet becomes part of the one sheet, not a reason to hold the
+        // first paint), so the renderer emits one stylesheet for the whole app.
+        cssCodeSplit: false,
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/renderer/index.html'),
@@ -405,6 +413,51 @@ export default defineConfig(({ mode }) => {
             // of its own because it draws the card with the app's stylesheet,
             // and runs nothing else of the app.
             'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html')
+          },
+          // Chunk names are otherwise whatever module rolldown happens to put
+          // first, so a chunk called `CioSparkles-*.js` held terminal-panel
+          // glue and the chunk holding the Svelte runtime was called `app-*.js`.
+          // These two groups pin the packages that make up most of the initial
+          // closure to stable names that say what they are. This is Vite 8's own
+          // splitter (`output.codeSplitting`, reached here through the
+          // `rollupOptions` alias that electron-vite keeps in step); `manualChunks`
+          // is the deprecated Rollup-compatibility form of the same thing, and it
+          // cannot express the `$initial` restriction below.
+          output: {
+            codeSplitting: {
+              groups: [
+                {
+                  name: 'vendor',
+                  // Anchored on the separator so `svelte` does not also capture
+                  // `svelte-sonner`. Package ids as they appear under
+                  // node_modules, a nested copy included.
+                  test: /node_modules[\\/](?:svelte|bits-ui|svelte-sonner|dompurify)[\\/]/u,
+                  // Capture only what the entries already load to show their
+                  // first screen. A package a panel reaches through its own
+                  // dynamic import (dompurify sits behind the markdown and
+                  // preview panels, and about half of the icon set behind
+                  // lazily opened surfaces) must not be dragged into a chunk
+                  // every entry preloads: measured, grouping the whole packages
+                  // made the initial closure 183 KB heavier raw, while the same
+                  // groups restricted to the initial closure made it 17 KB raw
+                  // and 39 KB gzip lighter than the closure they replaced.
+                  tags: ['$initial'],
+                  // And capture the matched packages only. Pulling their
+                  // dependencies in as well would do the same thing one level
+                  // down.
+                  includeDependenciesRecursively: false
+                },
+                {
+                  name: 'icons',
+                  // The rail icons stay eager, exactly as they were: they are in
+                  // the initial closure, so the group keeps every icon the first
+                  // screen draws in one named chunk instead of scattering them.
+                  test: /node_modules[\\/]@pdslng[\\/]cio-icon[\\/]/u,
+                  tags: ['$initial'],
+                  includeDependenciesRecursively: false
+                }
+              ]
+            }
           }
         }
       }

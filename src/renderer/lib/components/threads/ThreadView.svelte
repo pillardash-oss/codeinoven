@@ -2,22 +2,23 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
+  // The pickers and annotators below are reached by a gesture and are imported
+  // where they are rendered. The five dialogs that take an `open` prop instead
+  // stay static on purpose: each stays mounted so its own enter and exit
+  // transition plays, and mounting it only while open would drop the exit. They
+  // are small; the conversation's weight is the surface itself.
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
-  import RelocateThreadPicker from '../chats/RelocateThreadPicker.svelte'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
-  import FindInSurface from './FindInSurface.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import CodexBankedResetConfirm from '../ui/CodexBankedResetConfirm.svelte'
-  import { findNavState } from '$lib/stores/find-nav.svelte'
-  import ArtifactImageAnnotator from './ArtifactImageAnnotator.svelte'
-  import ArtifactVideoAnnotator from './ArtifactVideoAnnotator.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
+  import { findNavState } from '$lib/stores/find-nav.svelte'
   import { isVideoMime } from '$lib/mime'
   import type { ActionDefinition } from '$lib/actions'
   import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
@@ -709,32 +710,36 @@
   {@const item = board.studioTemporaryChatContext.viewerAnnotatableItem}
   {#if item}
     {#if isVideoMime(item.mime)}
-      <ArtifactVideoAnnotator
-        projectId={board.handleAgentEvent.thread.projectId}
-        threadId={board.handleAgentEvent.thread.id}
-        url={item.url}
-        src={board.state.imageUrls.getUrl(item.url)}
-        filename={item.filename}
-        startAt={board.studioTemporaryChatContext.messageViewer?.startAt}
-        messageId={board.studioTemporaryChatContext.messageViewer?.messageId}
-        marks={board.composerScope.marksFor(item.url)}
-        editingId={board.unmirroredTraceStartTime.imageMarkEditorId}
-        onEditClosed={board.unmirroredTraceStartTime.clearImageMarkEditor}
-        onLoadError={(element) =>
-          void board.state.imageUrls.bindMedia(item.url, item.mime, element)}
-      />
+      {#await import('./ArtifactVideoAnnotator.svelte') then { default: ArtifactVideoAnnotator }}
+        <ArtifactVideoAnnotator
+          projectId={board.handleAgentEvent.thread.projectId}
+          threadId={board.handleAgentEvent.thread.id}
+          url={item.url}
+          src={board.state.imageUrls.getUrl(item.url)}
+          filename={item.filename}
+          startAt={board.studioTemporaryChatContext.messageViewer?.startAt}
+          messageId={board.studioTemporaryChatContext.messageViewer?.messageId}
+          marks={board.composerScope.marksFor(item.url)}
+          editingId={board.unmirroredTraceStartTime.imageMarkEditorId}
+          onEditClosed={board.unmirroredTraceStartTime.clearImageMarkEditor}
+          onLoadError={(element) =>
+            void board.state.imageUrls.bindMedia(item.url, item.mime, element)}
+        />
+      {/await}
     {:else}
-      <ArtifactImageAnnotator
-        projectId={board.handleAgentEvent.thread.projectId}
-        threadId={board.handleAgentEvent.thread.id}
-        url={item.url}
-        src={board.state.imageUrls.getUrl(item.url)}
-        filename={item.filename}
-        messageId={board.studioTemporaryChatContext.messageViewer?.messageId}
-        marks={board.composerScope.marksFor(item.url)}
-        editingId={board.unmirroredTraceStartTime.imageMarkEditorId}
-        onEditClosed={board.unmirroredTraceStartTime.clearImageMarkEditor}
-      />
+      {#await import('./ArtifactImageAnnotator.svelte') then { default: ArtifactImageAnnotator }}
+        <ArtifactImageAnnotator
+          projectId={board.handleAgentEvent.thread.projectId}
+          threadId={board.handleAgentEvent.thread.id}
+          url={item.url}
+          src={board.state.imageUrls.getUrl(item.url)}
+          filename={item.filename}
+          messageId={board.studioTemporaryChatContext.messageViewer?.messageId}
+          marks={board.composerScope.marksFor(item.url)}
+          editingId={board.unmirroredTraceStartTime.imageMarkEditorId}
+          onEditClosed={board.unmirroredTraceStartTime.clearImageMarkEditor}
+        />
+      {/await}
     {/if}
   {/if}
 {/snippet}
@@ -882,13 +887,15 @@
 
   {#if board.submitSpecDecision.showSpecStudio}
     {#if findNavState.studioFindOpen}
-      <FindInSurface
-        container={board.state.threadViewElement}
-        focusTrigger={findNavState.studioFindFocusTrigger}
-        placeholder={`Find in ${board.harnessUsage.studioDocument}…`}
-        label="Find in Spec Studio"
-        onClose={() => findNavState.closeStudioFind()}
-      />
+      {#await import('./FindInSurface.svelte') then { default: FindInSurface }}
+        <FindInSurface
+          container={board.state.threadViewElement}
+          focusTrigger={findNavState.studioFindFocusTrigger}
+          placeholder={`Find in ${board.harnessUsage.studioDocument}…`}
+          label="Find in Spec Studio"
+          onClose={() => findNavState.closeStudioFind()}
+        />
+      {/await}
     {/if}
     {#if board.harnessUsage.studioDocument === 'brainstorm' && board.editVideoNote.studioBrainstorm}
       {#key `${board.editVideoNote.studioBrainstorm.id}:${board.editVideoNote.studioBrainstorm.version}:${board.studioReloadNonce.studioReloadNonce}`}
@@ -1224,14 +1231,16 @@
     data-conversation-pane
   >
     {#if board.unmirroredTraceStartTime.showFind}
-      <FindInSurface
-        container={board.state.threadViewElement}
-        focusTrigger={findNavState.conversationFindFocusTrigger}
-        searchSelector={board.state.CONVERSATION_FIND_SELECTOR}
-        placeholder="Find in conversation…"
-        label="Find in conversation"
-        onClose={board.state.closeFind}
-      />
+      {#await import('./FindInSurface.svelte') then { default: FindInSurface }}
+        <FindInSurface
+          container={board.state.threadViewElement}
+          focusTrigger={findNavState.conversationFindFocusTrigger}
+          searchSelector={board.state.CONVERSATION_FIND_SELECTOR}
+          placeholder="Find in conversation…"
+          label="Find in conversation"
+          onClose={board.state.closeFind}
+        />
+      {/await}
     {/if}
     <!-- Scrollable conversation area -->
     <ThreadViewConversation {board} />
@@ -1271,20 +1280,22 @@
   <!-- The request travels into the picker's own callback: the palette closes the
        picker before it reports the pick, and that close clears this state. -->
   {@const request = board.currentWorkingTraceAttribution.relocationRequest}
-  <RelocateThreadPicker
-    projectId={board.handleAgentEvent.thread.projectId}
-    projectName={board.composerScope.relocationAssistantId
-      ? (board.props.assistantName ?? 'this assistant')
-      : (board.contextUsage.project?.name ?? 'this project')}
-    assistantId={board.composerScope.relocationAssistantId ?? undefined}
-    sourceThreadId={board.handleAgentEvent.thread.id}
-    item={request.item}
-    mode={request.mode}
-    title={board.unmirroredTraceStartTime.relocationPickerTitle}
-    onSelect={(picked) =>
-      void board.currentWorkingTraceAttribution.commitComposerRelocation(request, picked)}
-    onClose={board.unmirroredTraceStartTime.closeRelocationPicker}
-  />
+  {#await import('../chats/RelocateThreadPicker.svelte') then { default: RelocateThreadPicker }}
+    <RelocateThreadPicker
+      projectId={board.handleAgentEvent.thread.projectId}
+      projectName={board.composerScope.relocationAssistantId
+        ? (board.props.assistantName ?? 'this assistant')
+        : (board.contextUsage.project?.name ?? 'this project')}
+      assistantId={board.composerScope.relocationAssistantId ?? undefined}
+      sourceThreadId={board.handleAgentEvent.thread.id}
+      item={request.item}
+      mode={request.mode}
+      title={board.unmirroredTraceStartTime.relocationPickerTitle}
+      onSelect={(picked) =>
+        void board.currentWorkingTraceAttribution.commitComposerRelocation(request, picked)}
+      onClose={board.unmirroredTraceStartTime.closeRelocationPicker}
+    />
+  {/await}
 {/if}
 
 <TranscriptExportModal

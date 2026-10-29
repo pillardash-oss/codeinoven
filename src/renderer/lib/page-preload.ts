@@ -9,12 +9,15 @@
  * no-ops.
  */
 
+import { SURFACE_KEYS, loadPanelModule } from './lazy-panel'
+
 let settingsChunkPromise: Promise<unknown> | null = null
 let scopeChunkPromise: Promise<unknown> | null = null
 let browserChunkPromise: Promise<unknown> | null = null
 let taskManagerChunkPromise: Promise<unknown> | null = null
 let updateBlockersChunkPromise: Promise<unknown> | null = null
 let spotlightChunkPromise: Promise<unknown> | null = null
+let conversationSurfacePromise: Promise<unknown> | null = null
 
 /**
  * Warm the command palette's module chunk so the spotlight opens instantly.
@@ -106,6 +109,30 @@ export function preloadBrowserChunk(): void {
   ]).catch((error: unknown) => {
     // Reset so a transient failure can be retried on the next reach.
     browserChunkPromise = null
+    throw error
+  })
+}
+
+/**
+ * Warm the conversation surface's module chunk before it is rendered.
+ *
+ * `ThreadView` is the app's first screen and the largest single chunk in the
+ * renderer, and it is a dynamic import at its render site so it no longer sits
+ * in the eager closure. Firing this from the renderer entry, beside the restored
+ * transcript read, is what makes that trade free for the user: the fetch and the
+ * module evaluation overlap the whole hydration pass instead of starting when the
+ * restored thread finally resolves. The load is memoised by
+ * `loadPanelModule`, so the rendering `{#await}` adopts this promise rather than
+ * fetching a second time.
+ */
+export function preloadConversationSurface(): void {
+  conversationSurfacePromise ??= loadPanelModule(
+    SURFACE_KEYS.threadView,
+    () => import('$lib/components/threads/ThreadView.svelte')
+  ).catch((error: unknown) => {
+    // Never a boot failure: the render site retries its own load, and a
+    // conversation that cannot load reports through the app's error surface.
+    conversationSurfacePromise = null
     throw error
   })
 }

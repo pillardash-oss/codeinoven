@@ -68,6 +68,22 @@ export const PANEL_KEYS = {
 export type PanelKey = (typeof PANEL_KEYS)[keyof typeof PANEL_KEYS]
 
 /**
+ * Lazily loaded page surfaces that share this memoizer but are not panels.
+ *
+ * The conversation is the app's first screen and the single largest chunk in
+ * the renderer, so it is a dynamic import at its render site. Rendering it
+ * through `loadCachedPanelModule` (below) is what keeps that safe: the boot warm
+ * started from the renderer entry and the rendering `{#await}` share one load,
+ * and a switch to another thread renders from the already-resolved module
+ * instead of showing an empty frame while a promise settles.
+ */
+export const SURFACE_KEYS = {
+  threadView: 'surface:thread-view'
+} as const
+
+export type SurfaceKey = (typeof SURFACE_KEYS)[keyof typeof SURFACE_KEYS]
+
+/**
  * Delay before each retry. The first attempt is immediate; a failure is usually
  * a dev server mid-restart, which a short wait outlasts.
  */

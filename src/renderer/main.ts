@@ -4,7 +4,7 @@ import './app.css'
 import { installRendererErrorCapture } from './lib/system/renderer-logger'
 import { installNotificationSound } from './lib/notification-sound'
 import { scheduleDeferredWork } from './lib/deferred-work'
-import { preloadSpotlightChunk } from './lib/page-preload'
+import { preloadSpotlightChunk, preloadConversationSurface } from './lib/page-preload'
 import { preloadRestoredThreadConversation } from './lib/stores/thread-preload'
 import { warmOverlayHostOnFirstGesture } from './lib/overlay-host-warm'
 
@@ -32,6 +32,16 @@ window.addEventListener('beforeunload', unsubscribeFromNotificationSound, { once
 // workspace has resolved the saved row and opened it, which is what left the
 // conversation blank for the first moments of a launch.
 preloadRestoredThreadConversation()
+
+// The conversation is the app's first screen: its composer, transcript, title and
+// rail. `ThreadView` is therefore a dynamic import at its render site, so that
+// ~230 KiB of gzip (and 628 modules) stays out of the eager closure the first
+// paint waits on. Warm it here, beside the restored transcript read, so the chunk
+// fetch and its module evaluation overlap the whole hydration pass: by the time
+// the restored thread resolves and the pane renders, the module is already in
+// hand. A session with nothing to restore still gets the warm, so the first thread
+// the user opens paints instead of waiting for a cold fetch.
+preloadConversationSurface()
 
 const app = mount(App, {
   target: document.getElementById('app')!

@@ -23,13 +23,14 @@ import type { StartupPhase, StartupTelemetrySnapshot } from './startup-telemetry
 /**
  * The first-paint startup budget, in milliseconds.
  *
- * The budget is enforced on `window:visualReady` - the moment Electron reports
- * the first rendered frame, which is also the moment the splash closes and the
- * user is looking at an interactive app. Later phases are deliberately not part
- * of the budget: `features:ready` and `workspace:ready` describe the post-paint
+ * The budget is enforced on `window:revealed` - the moment the splash comes down
+ * on a restored conversation, which is the moment the user is looking at an
+ * interactive app. Its fallback is `window:visualReady`, the first rendered
+ * frame, for a launch that never reveals. Later phases are deliberately not part
+ * of the budget: `features:ready` and `workspace:ready` describe the post-reveal
  * service boot, which is designed to happen *behind* a visible window, so a slow
- * service graph degrades optional features instead of holding the user off a
- * blank screen.
+ * service graph degrades optional features instead of holding the user off the
+ * conversation.
  *
  * The budget exists so a startup regression fails a release gate instead of
  * being absorbed by quietly raising a bundle budget. The renderer's eager
@@ -51,23 +52,40 @@ export interface StartupBudgetViolation {
 }
 
 /**
- * The first-paint violation in a telemetry snapshot, or `null` when the boot met
- * the budget or never recorded the phase at all.
+ * The phases the first-paint budget is measured on, best first.
  *
- * A snapshot without `window:visualReady` is not a violation: a headless launch
- * never paints, and a crashed renderer is diagnosed by its own signals rather
- * than by being reported as a startup that was too slow.
+ * `window:revealed` is the moment the splash comes down on a restored
+ * conversation, which is the moment the user can actually act. It replaced
+ * `window:visualReady` as the budgeted phase when the splash started waiting for
+ * the conversation: `visualReady` is only the first frame of a window the splash
+ * still covers, so a launch could sit inside the budget while the user watched a
+ * splash for seconds. `visualReady` stays as the fallback for a launch that never
+ * records a reveal (a headless boot, or a renderer that never painted).
+ */
+const BUDGET_PHASES: readonly StartupPhase[] = ['window:revealed', 'window:visualReady']
+
+/**
+ * The first-paint violation in a telemetry snapshot, or `null` when the boot met
+ * the budget or never recorded a budgeted phase at all.
+ *
+ * A snapshot with neither phase is not a violation: a headless launch never
+ * paints, and a crashed renderer is diagnosed by its own signals rather than by
+ * being reported as a startup that was too slow.
  */
 export function startupBudgetViolation(
   snapshot: StartupTelemetrySnapshot,
   budgetMs: number = STARTUP_BUDGET_MS
 ): StartupBudgetViolation | null {
-  const firstPaint = snapshot.phases.find((record) => record.phase === 'window:visualReady')
-  if (!firstPaint || firstPaint.atMs <= budgetMs) return null
-  return {
-    phase: 'window:visualReady',
-    atMs: firstPaint.atMs,
-    overByMs: firstPaint.atMs - budgetMs,
-    budgetMs
+  for (const phase of BUDGET_PHASES) {
+    const record = snapshot.phases.find((candidate) => candidate.phase === phase)
+    if (!record) continue
+    if (record.atMs <= budgetMs) return null
+    return {
+      phase: record.phase,
+      atMs: record.atMs,
+      overByMs: record.atMs - budgetMs,
+      budgetMs
+    }
   }
+  return null
 }

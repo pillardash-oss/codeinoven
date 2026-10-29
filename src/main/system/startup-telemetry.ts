@@ -25,6 +25,8 @@ export type StartupPhase =
   | 'window:created'
   | 'renderer:documentLoaded'
   | 'window:visualReady'
+  /** The splash came down: the user is looking at the app. */
+  | 'window:revealed'
   | 'renderer:hydrated'
   | 'conversation:ready'
   | 'features:ready'
@@ -104,7 +106,14 @@ export class StartupTelemetry {
 
   constructor(options: { now?: () => number } = {}) {
     this.now = options.now ?? (() => performance.now())
-    this.origin = this.now()
+    // Node's `performance.now()` already counts from this process's own clock
+    // origin, so the real clock needs no subtraction. Sampling one here hid
+    // everything that ran before this module was imported, and that included
+    // `better-sqlite3`, the browser-extension zip reader and megabytes of
+    // main-bundle evaluation: the most expensive part of process start was
+    // simply absent from the report. An injected clock is a test fixture whose
+    // zero is its own construction, so it keeps that convention.
+    this.origin = options.now ? this.now() : 0
     // Phase timestamps are relative to origin, so the first delta is simply the
     // first phase's elapsed time. Previous-relative deltas start at zero.
     this.previousAt = 0
