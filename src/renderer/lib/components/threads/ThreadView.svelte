@@ -29,6 +29,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
@@ -877,7 +878,13 @@
 
 <div
   bind:this={board.state.threadViewElement}
-  class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col"
+  class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col {board.composerScope
+    .centeredComposer
+    ? 'centered-composer'
+    : ''}"
+  style:--reading-column-left={layoutPanelState.readingColumnOffset > 0
+    ? `${layoutPanelState.readingColumnOffset}px`
+    : '1.5rem'}
   data-region={board.submitSpecDecision.showSpecStudio ? 'spec-studio' : undefined}
   data-drop-region={board.submitSpecDecision.showSpecStudio ? undefined : 'conversation'}
 >
@@ -1397,9 +1404,27 @@
     overflow-anchor: none;
   }
 
+  /*
+   * The left side of every gutter is the reader's column, so the messages, the
+   * composer and the name in the header all start on one line. The surface owns
+   * that offset because only it knows the room the page was laid out for, and it
+   * holds still when a panel narrows the pane beside it: the panel takes room
+   * from the right, never from the reader's left margin.
+   *
+   * A thread with no conversation yet has nothing to line up with, so its
+   * composer keeps plain centring instead.
+   */
+  .thread-view:not(.centered-composer) :global(.conversation-gutter) {
+    padding-left: var(--reading-column-left, 1.5rem);
+  }
+
   @container (max-width: 480px) {
-    :global(.conversation-gutter) {
-      padding-inline: 0.75rem;
+    .thread-view :global(.conversation-gutter) {
+      padding-right: 0.75rem;
+    }
+
+    .thread-view.centered-composer :global(.conversation-gutter) {
+      padding-left: 0.75rem;
     }
 
     :global(.composer-gutter) {

@@ -600,6 +600,7 @@
   <section class="flex min-w-0 flex-1 overflow-clip">
     <div
       class="grid h-full min-h-0 min-w-0 flex-1"
+      data-region="workspace-grid"
       style:grid-template-columns={board.contextPanelColumns.contextPanelColumns}
       style:grid-template-rows={board.contextPanelRows.contextPanelRows}
       style:--context-rail-width={board.panelExitMs.railTrackWidth}
