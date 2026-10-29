@@ -59,6 +59,21 @@ export class ChatComposerHandleDropData {
   constructor(root: ChatComposer) {
     this.#root = root
   }
+
+  /**
+   * Capture the start-after list the surface handed over.
+   *
+   * It comes from the props, which only exist once the board is bound, so the
+   * board asks for it right after construction.
+   */
+  bind(): void {
+    // The composer is remounted by the parent when a restore is required, so the
+    // persisted dependencies are captured exactly once, from the props at birth.
+    const props = this.root.props
+    this.startAfterThreads = props.initialStartAfterThreads.map((thread) => ({ ...thread }))
+    this.startAfterEnabled = props.initialStartAfterThreads.length > 0
+    this.threadReferences = uniqueThreadContextReferences(props.initialThreadReferences)
+  }
   /** Base composer settings   the prop when provided, else the global last-used. */
   baseSettings = $derived(this.root.props.settings ?? threadSettingsStore.lastUsed)
 
@@ -184,22 +199,14 @@ export class ChatComposerHandleDropData {
 
   startAfterPickerOpen = $state(false)
 
-  // The composer is remounted by the parent when a restore is required, so
-  // capture the persisted dependencies exactly once at construction.
-  // svelte-ignore state_referenced_locally
-  startAfterThreads = $state<StartAfterSelection[]>(
-    this.root.props.initialStartAfterThreads.map((t) => ({ ...t }))
-  )
+  /** Set by `bind()`: the threads the surface handed over at birth. */
+  startAfterThreads = $state<StartAfterSelection[]>([])
 
-  // svelte-ignore state_referenced_locally
-  startAfterEnabled = $state(this.root.props.initialStartAfterThreads.length > 0)
+  /** Set by `bind()`: whether the surface handed over start-after threads. */
+  startAfterEnabled = $state(false)
 
-  // Attached conversations travel with the draft, so they are captured the same
-  // way the restored draft and its dependencies are.
-  // svelte-ignore state_referenced_locally
-  threadReferences = $state<ThreadContextReference[]>(
-    uniqueThreadContextReferences(this.root.props.initialThreadReferences)
-  )
+  /** Set by `bind()`: the attached conversations handed over at birth. */
+  threadReferences = $state<ThreadContextReference[]>([])
 
   /** Commit a toolbar settings change through the host callback, or fall back to
    *  the global last-used store when this composer owns no thread. */

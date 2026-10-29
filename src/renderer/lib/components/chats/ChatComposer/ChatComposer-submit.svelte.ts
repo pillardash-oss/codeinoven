@@ -49,6 +49,11 @@ export class ChatComposerSubmit {
     this.#root = root
   }
 
+  /** Set from `bind()`: the editor's id names its project and thread. */
+  bindEditorId(): void {
+    this.composerEditorId = `chat-composer-${this.root.props.projectId ?? 'no-project'}-${this.root.props.threadId ?? 'none'}`
+  }
+
   /**
    * The mounted editor.
    *
@@ -61,36 +66,37 @@ export class ChatComposerSubmit {
     if (!editor) throw new Error('The composer editor is not mounted')
     return editor
   }
-  // svelte-ignore state_referenced_locally
-  value = $state(
-    restoredDraft(
-      this.root.props.initialValue,
-      this.root.props.initialProjectReferences,
-      this.root.props.initialTaskReferences
-    )
-  )
+  value = $state('')
 
   // The composer is remounted by the parent when a restore is required, so we
   // intentionally capture only the initial attachments passed at creation time.
   // Drafts restored from a session that ran before the duplicate guard can hold
   // the same file twice, which the keyed attachment chips cannot render, so the
   // restored list is collapsed here before it ever reaches the markup.
-  // svelte-ignore state_referenced_locally
-  attachments = $state<PromptAttachment[]>(
-    // A restored draft or a hand-off can carry more than a message takes, so the
-    // composer is bounded on the way in too.
-    uniqueAttachments(this.root.props.initialAttachments).slice(0, MAX_PROMPT_ATTACHMENTS)
-  )
+  attachments = $state<PromptAttachment[]>([])
 
-  // svelte-ignore state_referenced_locally
-  projectReferences = $state<PromptProjectReference[]>([
-    ...this.root.props.initialProjectReferences
-  ])
+  projectReferences = $state<PromptProjectReference[]>([])
 
-  // svelte-ignore state_referenced_locally
-  taskReferences = $state<PromptAssignmentTaskReference[]>([
-    ...this.root.props.initialTaskReferences
-  ])
+  taskReferences = $state<PromptAssignmentTaskReference[]>([])
+
+  /**
+   * Capture the draft the surface handed over.
+   *
+   * These fields are born from the props, and the props only exist once the
+   * board is bound, so the board calls this immediately after construction
+   * rather than reading `root` in a field initializer.
+   */
+  bind(): void {
+    const props = this.root.props
+    this.value = restoredDraft(
+      props.initialValue,
+      props.initialProjectReferences,
+      props.initialTaskReferences
+    )
+    this.attachments = uniqueAttachments(props.initialAttachments).slice(0, MAX_PROMPT_ATTACHMENTS)
+    this.projectReferences = [...props.initialProjectReferences]
+    this.taskReferences = [...props.initialTaskReferences]
+  }
 
   /**
    * Whether a mention query may span spaces.
@@ -100,8 +106,8 @@ export class ChatComposerSubmit {
    */
   mentionSpansSpaces = $derived(cioSearchVisibility.includeThreads)
 
-  // svelte-ignore state_referenced_locally
-  composerEditorId = `chat-composer-${this.root.props.projectId ?? 'no-project'}-${this.root.props.threadId ?? 'none'}`
+  /** Set by `bind()`: the id of the editor the surface renders. */
+  composerEditorId = ''
 
   mentions = createComposerMentionSearch({
     getAssignmentTasks: () => this.root.props.assignmentTasks,
@@ -743,7 +749,7 @@ export class ChatComposerSubmit {
     isSelectionPopoverOpen: () => this.root.captureComposerRoot.selectionPopoverOpen,
     closeSelectionPopover: () => (this.root.captureComposerRoot.selectionPopoverOpen = false),
     isStartAfterPopoverOpen: () => this.root.captureComposerRoot.startAfterPopoverOpen,
-    closeStartAfterPopover: this.root.captureComposerRoot.closeStartAfterPopover,
+    closeStartAfterPopover: () => this.root.captureComposerRoot.closeStartAfterPopover(),
     getComposerElement: () => document.getElementById(this.composerEditorId),
     getHistoryIndex: () => this.historyIndex,
     setHistoryIndex: (index) => (this.historyIndex = index),

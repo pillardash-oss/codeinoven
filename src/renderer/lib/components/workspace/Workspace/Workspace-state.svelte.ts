@@ -22,6 +22,16 @@ export class WorkspaceState {
   constructor(root: Workspace) {
     this.#root = root
   }
+
+  /**
+   * Capture the mode the surface opened on.
+   *
+   * It comes from the props, which only exist once the board is bound, so the
+   * board asks for it right after construction.
+   */
+  bind(): void {
+    this.previousMode = this.root.props.mode
+  }
   lastFocusedThreadId: string | null = $state(null)
 
   /** The slot the active row sat in on the last run of the follow effect, so a
@@ -31,7 +41,8 @@ export class WorkspaceState {
 
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
-  previousMode = $state(this.root.props.mode)
+  /** Set by `bind()`: the mode the surface was on when the board was built. */
+  previousMode = $state<Workspace['props']['mode']>('chats')
 
   projectCreateTrigger = $state(0)
 

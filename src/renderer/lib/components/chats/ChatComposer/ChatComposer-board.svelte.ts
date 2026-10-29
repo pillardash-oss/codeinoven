@@ -24,6 +24,11 @@ export class ChatComposer {
   readonly effects = new ChatComposerEffects(this)
   constructor(readProps: () => ChatComposerSurfaceProps) {
     this.readProps = readProps
+    this.submit.bindEditorId()
+    // The units are built first, so each one that captures props at birth is
+    // asked to after every unit exists and the board can answer.
+    this.submit.bind()
+    this.handleDropData.bind()
     this.effects.init()
   }
   get props(): ChatComposerSurfaceProps {

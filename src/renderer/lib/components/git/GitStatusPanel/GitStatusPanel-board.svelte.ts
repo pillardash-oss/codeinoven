@@ -32,6 +32,7 @@ export class GitStatusPanel {
   readonly effects = new GitStatusPanelEffects(this)
   constructor(readProps: () => GitStatusPanelSurfaceProps) {
     this.readProps = readProps
+    this.handlePrListAction.bindSavedView()
     this.effects.init()
   }
   get props(): GitStatusPanelSurfaceProps {

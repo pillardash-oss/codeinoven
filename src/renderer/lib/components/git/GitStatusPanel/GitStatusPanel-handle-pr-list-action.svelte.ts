@@ -39,6 +39,8 @@ import { threadSettings } from '$lib/stores/thread-settings.svelte'
 import { githubDisplayLogin } from '$lib/format/github-login'
 import type { PrMergeMethod, PullRequestSummary } from '$shared/types'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
+import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
+import type { GitStatusPanelConfirmAcceptAllConflicts } from './GitStatusPanel-confirm-accept-all-conflicts.svelte'
 /** One concern of the GitStatusPanel board. */
 export class GitStatusPanelHandlePrListAction {
   #root: GitStatusPanel | undefined
@@ -50,6 +52,11 @@ export class GitStatusPanelHandlePrListAction {
   }
   constructor(root: GitStatusPanel) {
     this.#root = root
+  }
+
+  /** Reads the view the panel was left on, once the board is bound. */
+  bindSavedView(): void {
+    this.savedView = this.root.confirmAcceptAllConflicts.initialViewState()
   }
   /**
    * The Find bar's own state and answers. The panel supplies where a result
@@ -113,7 +120,10 @@ export class GitStatusPanelHandlePrListAction {
     reloadHistory: () => this.reloadHistory()
   })
 
-  savedView = this.root.confirmAcceptAllConflicts.initialViewState()
+  /** Set by `bind()`: the view the panel was left on. */
+  savedView: ReturnType<
+    GitStatusPanelConfirmAcceptAllConflicts['initialViewState']
+  > = gitPanelView.get('', '')
 
   activeTab = $state<GitPanelTabId>(this.savedView.activeTab)
 
