@@ -5,7 +5,7 @@ import {
 } from '$shared/browser/browser-webstore'
 import { browserExtensions, type BrowserExtensionInstall } from './browser-extensions.svelte'
 import { globalBrowser } from './global-browser.svelte'
-import { DEFAULT_BOX_NAME, extensionJarForBox } from './global-browser-types'
+import { DEFAULT_BOX_ID, DEFAULT_BOX_NAME, extensionJarForBox } from './global-browser-types'
 
 /**
  * The extension the page on screen is, when that page is its Chrome Web Store
@@ -76,6 +76,62 @@ export function storeExtensionOffer(): StoreExtensionOffer | null {
   }
 }
 
+/** The page a surface is showing, reduced to what an offer is read from. */
+export interface StoreExtensionOfferPage {
+  url: string
+  title: string
+  /** The box the page runs in, or null for a scope's own jar. */
+  boxId: string | null
+}
+
+/**
+ * The same offer, for a page any browser surface is showing.
+ *
+ * The thread browser draws the same extension chrome the global one does, and its
+ * pages make the same offer, so the reading is shared: only the page it is read
+ * from differs. The box name comes from the profile's boxes either way, because a
+ * box is one jar shared by every context that picks it.
+ */
+export function storeExtensionOfferForPage(
+  page: StoreExtensionOfferPage | null
+): StoreExtensionOffer | null {
+  if (!page || page.url === '') return null
+  const id = webstoreExtensionIdFromUrl(page.url)
+  if (id === null) return null
+  const box = page.boxId === null ? null : globalBrowser.boxById(page.boxId)
+  return {
+    id,
+    name: webstoreExtensionNameFromTitle(page.title),
+    installed:
+      browserExtensions.extensions.find((extension) => extension.webstoreId === id) ?? null,
+    boxName: box?.name ?? DEFAULT_BOX_NAME,
+    install: browserExtensions.installForWebstoreId(id)
+  }
+}
+
+/**
+ * Install one offer into one box's jar.
+ *
+ * The caller names the box, because the surface that offers the install knows
+ * which page made the offer and this module does not. Nothing here waits for
+ * another install: it queues behind whatever is running, and every surface that
+ * shows the offer says so.
+ */
+export async function installStoreExtensionInBox(
+  offer: StoreExtensionOffer,
+  boxId: string | null
+): Promise<void> {
+  if (offer.installed || offer.install) return
+  await browserExtensions.install(
+    {
+      source: 'webstore',
+      value: offer.id,
+      boxes: [extensionJarForBox(boxId ?? DEFAULT_BOX_ID)]
+    },
+    offer.name
+  )
+}
+
 /**
  * Install the extension the page on screen offers, into the box that page runs
  * in. The box is the profile's one jar for that box rather than a per-context
@@ -91,12 +147,5 @@ export async function installStoreExtensionOffer(): Promise<void> {
   const offer = storeExtensionOffer()
   if (!offer || offer.installed || offer.install) return
   globalBrowser.showExtensionsSidebar()
-  await browserExtensions.install(
-    {
-      source: 'webstore',
-      value: offer.id,
-      boxes: [extensionJarForBox(globalBrowser.activeTabBoxId)]
-    },
-    offer.name
-  )
+  await installStoreExtensionInBox(offer, globalBrowser.activeTabBoxId)
 }

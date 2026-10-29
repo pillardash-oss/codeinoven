@@ -8,7 +8,8 @@
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
-  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -20,10 +21,15 @@
   import BrowserBlankTab from './BrowserBlankTab.svelte'
   import BrowserBoxButton from './BrowserBoxButton.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
+  import BrowserExtensionDropdown from './BrowserExtensionDropdown.svelte'
+  import { openThreadBrowserExtensionMenu } from './browser-extension-bar-menus'
   import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import { browserExtensionDropdown } from '$lib/stores/browser-extension-dropdown.svelte'
+  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
+  import { storeExtensionOfferForPage } from '$lib/stores/browser-extension-store-offer'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
@@ -41,7 +47,6 @@
   } from './browser-chrome-menus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import type {
-    BrowserDevToolsState,
     BrowserPageState,
     BrowserPanelShortcutAction,
     BrowserViewBounds
@@ -178,7 +183,31 @@
   $effect(synchronizePageFrame)
 
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
-  let devToolsOpen = $state(false)
+  /** The extension button tucked under the toolbar's own row, which the dropdown
+   *  card hangs from. */
+  let extensionButton = $state<HTMLButtonElement>()
+  /** The Web Store offer this tab's page makes, or null when it makes none. */
+  const storeOffer = $derived(
+    storeExtensionOfferForPage({ url: pageState.url, title: pageState.title, boxId: tabBoxId })
+  )
+  const installableOffer = $derived(storeOffer !== null && storeOffer.installed === null)
+  /** Whether an extension install is in flight, so the button says so instead of
+   *  quietly accepting a second click. */
+  const installingExtensions = $derived(browserExtensions.installs.length > 0)
+  /**
+   * The tab, in the shape the extension menu and its popups act on.
+   *
+   * Read from the live page state rather than the tab captured at construction, so
+   * the offer and the jar always describe what the toolbar is showing now.
+   */
+  const extensionTab = $derived({
+    tabId,
+    projectId: tabProjectId,
+    threadId: tabThreadId,
+    boxId: tabBoxId,
+    url: pageState.url,
+    title: pageState.title
+  })
   /** A blank tab has no address yet: show the empty state instead of a native page. */
   let isBlank = $derived(pageState.url === '' && !pageState.loading && !pageState.loadError)
   /**
@@ -511,17 +540,18 @@
     contextSidebarState.applyBrowserPageState(next)
   }
 
-  async function toggleDevTools(): Promise<void> {
-    try {
-      devToolsOpen = await invoke('browser:toggleDevTools', tabId)
-    } catch {
-      // Tab already destroyed.
-    }
-  }
-
-  function applyDevToolsState(state: BrowserDevToolsState): void {
-    if (state.tabId !== tabId) return
-    devToolsOpen = state.open
+  /**
+   * Open the extensions menu under the button.
+   *
+   * A left-click lists the box's extensions and heads the list with the Web Store
+   * offer the page is making; a right-click adds the two ways to install. Both go
+   * through one native menu, because the page on screen is a native view above the
+   * renderer and a document dropdown would be drawn behind it.
+   */
+  function openExtensionMenu(installDoors: boolean): void {
+    const anchor = extensionButton
+    if (!anchor) return
+    void openThreadBrowserExtensionMenu(extensionTab, anchor, installDoors)
   }
 
   /** Arm or disarm element inspection for this tab, through the shared session. */
@@ -597,7 +627,6 @@
     })
     let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
-    const unsubscribeDevTools = subscribe('browser:devToolsChanged', applyDevToolsState)
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     // Only the sidebar report is focus-driven: a single panel decides it for the
     // whole sidebar, so one listener is enough. The full screen overlay claims
@@ -644,7 +673,6 @@
       releaseBrowserClaim()
       unsubscribeSiteMenu()
       unsubscribeState()
-      unsubscribeDevTools()
       unsubscribePanelShortcut()
       // The bar is gone with this column, so its search ends with it: the page is
       // parked rather than destroyed, and a highlight left on it would still be
@@ -748,25 +776,53 @@
           </span>
         {/if}
       </button>
-      <button
-        type="button"
-        class={[
-          'relative flex h-7 shrink-0 items-center justify-center transition-colors',
-          fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-          devToolsOpen
-            ? 'bg-elevated text-foreground'
-            : 'text-dimmed hover:bg-elevated hover:text-foreground'
-        ]}
-        aria-label="Toggle browser DevTools"
-        aria-pressed={devToolsOpen}
-        title="Toggle browser DevTools"
-        onclick={() => void toggleDevTools()}
-      >
-        <CioTerminal size={13} />
-        {#if fullscreen}
-          <span>Console</span>
+      <!-- The extension button, where a browser puts it: the last chrome before the
+           page, and the anchor for the dropdown an extension's own popup drops
+           into. DevTools is not a toolbar button any more (right-clicking a page
+           offers Inspect Element, and the keymap still has its chord), so this is
+           the control that belongs here. -->
+      <div class="shrink-0">
+        <button
+          bind:this={extensionButton}
+          type="button"
+          class={[
+            'relative flex h-7 shrink-0 items-center justify-center transition-colors',
+            fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
+            browserExtensionDropdown.forTab(tabId)
+              ? 'bg-elevated text-foreground'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-label="Extensions"
+          aria-haspopup="menu"
+          aria-pressed={browserExtensionDropdown.forTab(tabId) !== null}
+          title={installableOffer
+            ? `Extensions: ${storeOffer?.name ?? 'one from this store page'} can be installed from here`
+            : 'Extensions'}
+          onclick={() => openExtensionMenu(false)}
+          oncontextmenu={(event) => {
+            event.preventDefault()
+            openExtensionMenu(true)
+          }}
+        >
+          {#if installingExtensions}
+            <CioSpinner size={13} />
+          {:else}
+            <CioTabExtensions size={14} />
+          {/if}
+          {#if fullscreen}
+            <span>Extensions</span>
+          {/if}
+          {#if installableOffer}
+            <!-- The indicator the store page earns: there is something to install
+                 here, and the top row of both menus installs it. -->
+            <span class="absolute right-0.5 top-0.5 h-1.5 w-1.5 bg-accent" aria-hidden="true"
+            ></span>
+          {/if}
+        </button>
+        {#if panelVisible}
+          <BrowserExtensionDropdown {tabId} anchor={extensionButton} />
         {/if}
-      </button>
+      </div>
       {#if authoredWork}
         <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
         {#if screenEntry}

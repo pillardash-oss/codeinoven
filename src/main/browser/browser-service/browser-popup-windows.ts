@@ -37,6 +37,7 @@ import { WebContentsView, type WebContents } from 'electron'
 import type { BrowserPopupWindow, BrowserViewBounds } from '../../../lib/ipc-contract'
 import { fetchIconAsDataUrl } from '../../editor/favicon-service'
 import { Logger } from '../../system/logger'
+import { measureExtensionPopupSize } from '../extensions/browser-extension-popup-size'
 import { applyBrowserPageBackground } from './browser-page-background'
 import type { BrowserPageOwner, BrowserViewport } from './browser-types'
 
@@ -77,6 +78,17 @@ export interface BrowserPopupWindowRecord {
   /** The size the page asked for when it opened, used while it has never been
    *  displayed and so has no frame of its own yet. */
   requestedViewport: BrowserViewport
+  /**
+   * The frame an extension's own popup wants, measured from its document once it
+   * has laid out, or null while it has not been measured.
+   *
+   * A page's `window.open` states its size and `requestedViewport` carries it; an
+   * extension's action popup states nothing, because in a browser the toolbar
+   * measures its content. This is that measurement, so a chrome with no rail to
+   * fill (the thread browser's dropdown) can draw the popup at the size its author
+   * designed for instead of guessing one.
+   */
+  preferredViewport: BrowserViewport | null
 }
 
 /** Everything the registry needs from the service that owns the window. */
@@ -187,7 +199,8 @@ export class BrowserPopupWindows {
       displayedBounds: null,
       requestedViewport: isUsableViewport(context.viewport)
         ? context.viewport
-        : { width: 480, height: 720 }
+        : { width: 480, height: 720 },
+      preferredViewport: null
     }
     this.popups.set(record.id, record)
     this.track(record)
@@ -236,13 +249,15 @@ export class BrowserPopupWindows {
       displayedBounds: null,
       requestedViewport: isUsableViewport(context.viewport)
         ? context.viewport
-        : { width: 480, height: 720 }
+        : { width: 480, height: 720 },
+      preferredViewport: null
     }
     // The extension's own document, so it gets its own surface the same way a
     // page does, and its title and favicon arrive through the usual tracking.
     applyBrowserPageBackground(record.view)
     this.popups.set(record.id, record)
     this.track(record)
+    this.measurePreferredViewport(record)
     this.viewHost.wire(record)
     this.viewHost.unmount(record.view, record.requestedViewport)
     Logger.dev('Browser extension popup opened', {
@@ -269,7 +284,8 @@ export class BrowserPopupWindows {
         favicon: record.favicon,
         loading: record.loading,
         activationSequence: record.activationSequence,
-        extensionId: record.extensionId
+        extensionId: record.extensionId,
+        preferredViewport: record.preferredViewport
       })
     }
     return popups
@@ -594,6 +610,46 @@ export class BrowserPopupWindows {
     if (this.displayedId === id) this.displayedId = null
     this.viewHost.discard(record.view)
     this.viewHost.changed()
+  }
+
+  /**
+   * Learn how large an extension's own popup wants to be, and publish it.
+   *
+   * The document is measured when it finishes loading and once more shortly after,
+   * because an extension that draws its layout from script (an unlocked vault, a
+   * list it filled in after start) settles a frame or two later than the load
+   * event. A measurement that matches the published one changes nothing, so a page
+   * that reports the same size twice costs one comparison and no re-render.
+   */
+  private measurePreferredViewport(record: BrowserPopupWindowRecord): void {
+    const measure = (): void => {
+      const page = pageOf(record)
+      if (!page || page.isDestroyed() || !this.popups.has(record.id)) return
+      void measureExtensionPopupSize(page)
+        .then((size) => {
+          if (!size) return
+          if (!this.popups.has(record.id) || pageOf(record) !== page) return
+          const current = record.preferredViewport
+          if (current && current.width === size.width && current.height === size.height) return
+          record.preferredViewport = size
+          this.viewHost.changed()
+        })
+        .catch((error: unknown) => {
+          Logger.dev('An extension popup size could not be measured:', error)
+        })
+    }
+    const contents = record.view.webContents
+    contents.on('did-finish-load', measure)
+    contents.on('did-stop-loading', () => {
+      measure()
+      // The late layout an extension does after its own start is what makes a
+      // second look worth taking; the timer is dropped with the page.
+      const timer = setTimeout(() => {
+        if (pageOf(record) !== contents || contents.isDestroyed()) return
+        measure()
+      }, 300)
+      timer.unref()
+    })
   }
 
   /**

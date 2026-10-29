@@ -57,6 +57,10 @@ import type {
   BrowserExtensionMenuInput
 } from '../browser/browser-extension-menu'
 import type {
+  BrowserExtensionBarMenuChoice,
+  BrowserExtensionBarMenuInput
+} from '../browser/browser-extension-bar-menu'
+import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
   BrowserStripOverlayInteraction,
@@ -618,6 +622,21 @@ export const invokeBrowserContract = {
   'browser:extensionMenu': {} as Contract<
     [input: BrowserExtensionMenuInput, x: number, y: number],
     BrowserExtensionMenuChoice | null
+  >,
+  /**
+   * Open the thread browser's native extension-bar menu.
+   *
+   * The extension button in the browser panel's toolbar opens it: the extensions
+   * that run in the tab's jar, the Web Store offer the page on screen makes, and
+   * (on a right-click) the two ways to install. A native menu because the page
+   * below is a `WebContentsView` composited above the renderer, so a document
+   * dropdown under the toolbar would be drawn behind it.
+   *
+   * The reply is null when the menu was dismissed without a choice.
+   */
+  'browser:extensionBarMenu': {} as Contract<
+    [input: BrowserExtensionBarMenuInput, x: number, y: number],
+    BrowserExtensionBarMenuChoice | null
   >,
   /** Open one extension's options/setup page in a new global browser tab. */
   'browser:openExtensionPage': {} as Contract<

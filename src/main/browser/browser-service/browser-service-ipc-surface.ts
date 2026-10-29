@@ -25,6 +25,10 @@ import {
   showBrowserExtensionMenu,
   validateBrowserExtensionMenuInput
 } from './browser-extension-menu'
+import {
+  showBrowserExtensionBarMenu,
+  validateBrowserExtensionBarMenuInput
+} from './browser-extension-bar-menu'
 import { permissionResolutions, sitePermissionDescriptor } from './browser-permissions'
 import { PEEK_SNAPSHOT_MAX_WIDTH } from './browser-peek'
 import {
@@ -838,6 +842,15 @@ export class BrowserServiceIpcSurface {
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       return showBrowserExtensionMenu(this.host.window, input, x, y)
+    })
+    replaceHandler('browser:extensionBarMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserExtensionBarMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      // A native popup runs a nested run loop, so the reply is detached from the
+      // invoke's own turn: the caller's promise resolves with the choice, not with
+      // "the menu was handed to the OS".
+      return showBrowserExtensionBarMenu(this.host.window, input, x, y)
     })
     replaceHandler('browser:openExtensionPage', async (_event, rawExtensionId, rawBoxId) => {
       const extensionId = validateExtensionId(rawExtensionId)
