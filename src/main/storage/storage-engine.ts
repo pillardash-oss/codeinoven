@@ -175,6 +175,15 @@ const MIGRATION_COMPLETE = 'complete'
  */
 const LEGACY_LAYOUT_MIGRATION_KEY = 'legacy_layout_v2'
 
+/**
+ * Marker key: `behavior.md` was folded into the agent behavior prompt.
+ *
+ * Separate from the layout key on purpose: a root can have finished one
+ * relocation and not the other, and rolling them into one key would let a
+ * completed walk hide an unfinished prompt migration.
+ */
+const LEGACY_BEHAVIOR_MIGRATION_KEY = 'legacy_behavior_prompt_v1'
+
 /** Result of an incremental, byte-offset tail read of an append-only log. */
 export interface RawFileTail {
   /** Complete lines after `fromByte`, decoded UTF-8. Empty when none yet. */
@@ -258,8 +267,7 @@ export class StorageEngine {
     })
 
     await this.timedStep('storage:migrations', async () => {
-      await this.migrateLegacyBehaviorPrompt()
-      await this.migrateLegacyLayoutOnce()
+      await this.runConfigRootMigrations()
     })
 
     await this.timedStep('storage:config', async () => {
@@ -521,18 +529,40 @@ export class StorageEngine {
   }
 
   /**
-   * Run the legacy layout relocation once per config root.
+   * Run the config-root relocations that only matter for a root last written by
+   * a build older than the v0.5.28 layout move.
    *
-   * The walk reads every project and thread directory with serial read pairs to
-   * move files that were relocated long ago, so repeating it on every launch is
-   * pure boot cost. It runs only while the marker is missing or lower than
-   * `complete`, and the marker is written only after the walk returns, so a walk
-   * that throws retries on the next boot instead of being skipped forever.
+   * Two relocations live behind this: `behavior.md` became the agent behavior
+   * prompt, and the flat-root `memory.md`, `window-state.json` and
+   * `retry-scheduler.json` files moved into their feature directories. Both are
+   * finished work, and running them on every boot cost 165 ms at the median and
+   * 824 ms at worst - a walk over every project and thread directory doing read
+   * pairs that can only come back empty.
+   *
+   * They are not deleted outright: a data root last written before v0.5.28 can
+   * still hold the old layout, and skipping it would leave that user's memory and
+   * window state on disk but invisible to the app. One marker file records that
+   * this root is done, so every boot after the first pays a single small read,
+   * and a boot that cannot read the marker runs the migrations again rather than
+   * risk skipping one. A migration is recorded only after it returns, so a walk
+   * that throws retries on the next boot.
    */
-  private async migrateLegacyLayoutOnce(): Promise<void> {
-    if (await this.isStorageMigrationComplete(LEGACY_LAYOUT_MIGRATION_KEY)) return
-    await this.migrateLegacyLayout()
-    await this.markStorageMigrationComplete(LEGACY_LAYOUT_MIGRATION_KEY)
+  private async runConfigRootMigrations(): Promise<void> {
+    const markers = await this.readStorageMigrations()
+    const pending: { key: string; run: () => Promise<void> }[] = []
+    if (markers[LEGACY_BEHAVIOR_MIGRATION_KEY] !== MIGRATION_COMPLETE) {
+      pending.push({
+        key: LEGACY_BEHAVIOR_MIGRATION_KEY,
+        run: () => this.migrateLegacyBehaviorPrompt()
+      })
+    }
+    if (markers[LEGACY_LAYOUT_MIGRATION_KEY] !== MIGRATION_COMPLETE) {
+      pending.push({ key: LEGACY_LAYOUT_MIGRATION_KEY, run: () => this.migrateLegacyLayout() })
+    }
+    for (const migration of pending) {
+      await migration.run()
+      await this.markStorageMigrationComplete(migration.key)
+    }
   }
 
   /**
@@ -560,11 +590,6 @@ export class StorageEngine {
     }
   }
 
-  /** Whether a one-time storage migration is recorded as finished. */
-  private async isStorageMigrationComplete(key: string): Promise<boolean> {
-    return (await this.readStorageMigrations())[key] === MIGRATION_COMPLETE
-  }
-
   /**
    * Record a one-time storage migration as finished. Best effort: a write that
    * fails only means the next boot runs the idempotent migration again.
@@ -588,7 +613,7 @@ export class StorageEngine {
    * directories so the config root stays clean and future files land in the
    * right place. Only moves a source when the destination is empty, and always
    * removes the source afterward to complete the cleanup. Runs once per config
-   * root through `migrateLegacyLayoutOnce`.
+   * root through `runConfigRootMigrations`.
    */
   private async migrateLegacyLayout(): Promise<void> {
     await this.migrateLegacyAssistantDirectory()
