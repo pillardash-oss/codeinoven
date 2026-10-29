@@ -303,12 +303,82 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       awayFromBottom: this.userScrolledAway
     })
     this.root.steerQueuedMessage.scheduleResponseBubbleUpdate()
+    // A load in flight keeps correcting for the pages it mounts above the
+    // reader. A scroll the reader caused themselves is not that: rebase the
+    // anchor on what they are looking at now, so the correction never pulls
+    // against their own scrolling.
+    if (
+      this.loadingOlderMessages &&
+      this.viewportAnchor &&
+      Math.abs(this.scrollEl.scrollTop - this.viewportWriteTop) > 1.5
+    ) {
+      this.captureViewportAnchor()
+    }
     // Nothing loads from here: the history row's own visibility observer (see
     // `watchHistoryHead`) is what triggers the conversation-level fetch, and
     // only once that row is genuinely on screen.
   }
 
   loadingOlderMessages = $state(false)
+
+  /** The block the reader's viewport is pinned to while history mounts above
+   *  it, plus the distance it kept from the scroller's top edge. Null when no
+   *  mounted block could be measured. Plain, not reactive. */
+  private viewportAnchor: { id: string; offset: number } | null = null
+
+  /** The scrollTop this unit last wrote itself. A scroll event landing
+   *  anywhere else came from the reader, who owns their viewport. Plain. */
+  private viewportWriteTop = -1
+
+  /** The scroller's scrollTop and content height when the load began, kept for
+   *  the height-delta fallback used when no block could be measured. Plain. */
+  private viewportStartTop = 0
+  private viewportStartHeight = 0
+
+  /** Remember where the reader is looking, before pages are prepended above.
+   *  A block is preferred once it has not already scrolled past the top of the
+   *  viewport, so the anchor is the thing they are actually reading rather
+   *  than a block far above it. */
+  private captureViewportAnchor(): void {
+    const el = this.scrollEl
+    this.viewportAnchor = null
+    if (!el) return
+    this.viewportStartTop = el.scrollTop
+    this.viewportStartHeight = el.scrollHeight
+    const top = el.getBoundingClientRect().top
+    const mounted = this.root.composerScope.visibleMessages
+    const limit = Math.min(mounted.length, 24)
+    let anchor: { id: string; offset: number } | null = null
+    for (let index = 0; index < limit; index += 1) {
+      const message = mounted[index]
+      if (!message) continue
+      const node = document.getElementById(`msg-${message.id}`)
+      if (!node) continue
+      const offset = node.getBoundingClientRect().top - top
+      anchor = { id: message.id, offset }
+      if (offset >= 0) break
+    }
+    this.viewportAnchor = anchor
+  }
+
+  /** Put the reader back exactly where they were after a page mounted above
+   *  them. Cheap and idempotent, so it runs after every tick a prepend causes
+   *  instead of once at the end: native scroll anchoring is off on this
+   *  scroller, so an uncorrected prepend is visible on the very next frame. */
+  private restoreViewportAnchor(): void {
+    const el = this.scrollEl
+    const anchor = this.viewportAnchor
+    if (!el || !anchor) return
+    const node = document.getElementById(`msg-${anchor.id}`)
+    if (!node) return
+    const contentOffset =
+      node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+    const next = Math.max(0, contentOffset - anchor.offset)
+    if (Math.abs(next - el.scrollTop) > 0.5) {
+      this.viewportWriteTop = next
+      el.scrollTop = next
+    }
+  }
 
   /** True while the history row entering the viewport may fire one load.
    *  Released by a load and re-armed only after the row leaves the viewport
@@ -390,6 +460,10 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       !this.root.unmirroredTraceStartTime.hasOlderMessages
     )
       return
+    // Where the reader is looking right now. Every page below is prepended
+    // above it, so this one measurement is what keeps the transcript from
+    // moving under them once the page lands.
+    this.captureViewportAnchor()
     if (this.root.props.controller) {
       // A controller's transcript mounts every message it holds, so the page that
       // lands above the seam is the page the reader watches arrive.
@@ -397,6 +471,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       await this.root.props.controller.loadOlder()
       if (!this.alive) return
       await tick()
+      this.restoreViewportAnchor()
       playHistoryArrive(
         this.root.studioTemporaryChatContext.historyArrivedBlocks(seam),
         this.scrollEl ?? null
@@ -455,9 +530,12 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         )
         this.mountedCount += page.messages.length
         await tick()
-        // A prompt-less run (a worker trace, or a thread whose opening prompt
-        // is still hidden) has no turn boundary to align to. Three pages is
-        // the whole chunk one click should mount; stop before over-fetching.
+        // The page landed above the reader and native scroll anchoring is off
+        // on this scroller, so the viewport is put back before the browser gets
+        // a frame to paint the shift. Correcting only after the whole fetch
+        // loop left every intermediate page visibly dragging the transcript
+        // down once per round trip.
+        this.restoreViewportAnchor()
         if (startsBefore.length === 0) {
           pagesWithoutTurnStart += 1
           if (pagesWithoutTurnStart >= 3) break
@@ -504,25 +582,11 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         )
         this.mountedCount += page.messages.length
         await tick()
+        this.restoreViewportAnchor()
       }
       // Move the anchor back three pages   or to the thread's very beginning
       // when fewer complete pages exist   then keep the reader's viewport
-      // stable across the mount. The restore is anchored to the first on-screen
-      // message element, not a height delta: a height-delta write drifts
-      // whenever the newly mounted pages' real laid-out height differs from
-      // the height measured at tick time, and the taller the loaded pages the
-      // further that drift throws the reader (all the way to the bottom).
-      const el = this.scrollEl
-      const firstVisibleId = this.root.composerScope.visibleMessages[0]?.id
-      const firstVisibleEl = firstVisibleId
-        ? document.getElementById(`msg-${firstVisibleId}`)
-        : undefined
-      const viewportOffset =
-        el && firstVisibleEl
-          ? firstVisibleEl.getBoundingClientRect().top - el.getBoundingClientRect().top
-          : undefined
-      const previousHeight = el?.scrollHeight ?? 0
-      const previousTop = el?.scrollTop ?? 0
+      // stable across the mount.
       // The anchor must be the start of a turn   a user prompt   never a
       // trace row. Landing on a trace presented the loaded page cut off at
       // its beginning, with the turn's prompt missing above it.
@@ -549,24 +613,15 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         // the bottom never shrinks the window below what is mounted.
         this.mountedCount = Math.max(this.mountedCount, this.messages.length - target)
         await tick()
+        this.restoreViewportAnchor()
         const after = this.scrollEl
         if (after) {
-          const afterEl = firstVisibleId
-            ? document.getElementById(`msg-${firstVisibleId}`)
-            : undefined
-          if (afterEl && viewportOffset !== undefined) {
-            // Position of the anchor message within the scroll content, then
-            // place it back at the exact viewport offset it had before the
-            // prepended pages mounted above it.
-            const contentOffset =
-              afterEl.getBoundingClientRect().top -
-              after.getBoundingClientRect().top +
-              after.scrollTop
-            after.scrollTop = Math.max(0, contentOffset - viewportOffset)
-          } else {
-            // Element anchor unavailable   fall back to the height-delta
-            // compensation rather than leaving the viewport unmoved.
-            after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          if (!this.viewportAnchor) {
+            // No message element to hold on to (a transcript whose blocks carry
+            // no id)   fall back to the height-delta compensation rather than
+            // leaving the viewport unmoved.
+            after.scrollTop =
+              this.viewportStartTop + (after.scrollHeight - this.viewportStartHeight)
           }
           threadScrollPositions.set(this.root.handleAgentEvent.thread.id, {
             top: after.scrollTop,
