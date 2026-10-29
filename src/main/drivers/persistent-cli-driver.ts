@@ -233,7 +233,26 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const session = await this.requireSession(projectPath, sessionId)
     this.deletedSessions.add(session.id)
     this.releaseSessionRuntime(session.id)
+    await this.deleteNativeTranscript(projectPath, session)
     await this.storage.remove(this.sessionPath(session.id))
+  }
+
+  /**
+   * Remove any harness-native transcript this session owns.
+   *
+   * Deleting a session's record is not enough: a harness that keeps its own
+   * transcript on disk (pi's session JSONL, for example) would still hold the
+   * whole conversation, and anything that reads that transcript afterwards can
+   * put a discarded turn back into the thread mirror. A discarded session's
+   * transcript must not outlive the session. Harnesses that own no transcript
+   * file of their own keep this no-op.
+   */
+  protected async deleteNativeTranscript(
+    projectPath: string,
+    session: PersistentCliSession
+  ): Promise<void> {
+    void projectPath
+    void session
   }
 
   /**

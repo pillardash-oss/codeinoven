@@ -972,6 +972,16 @@ export class PiDriver extends PersistentCliDriver {
     await super.deleteSession(projectPath, sessionId)
   }
 
+  /** Pi keeps its own session transcript on disk, so discarding a session has
+   *  to discard that file too: a leftover transcript is what lets removed
+   *  turns be re-read into the thread after an edit or delete. */
+  protected override async deleteNativeTranscript(
+    projectPath: string,
+    session: PersistentCliSession
+  ): Promise<void> {
+    await this.nativeSessions.deleteNativeTranscript(projectPath, session.nativeSessionId)
+  }
+
   /**
    * Park this session instead of releasing it: the record and its native
    * transcript stay on disk so a switch back to pi resumes them, but the live

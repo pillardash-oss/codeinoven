@@ -1,4 +1,5 @@
 import { createWorkQueue } from '../../../lib/bounded-work'
+import type { HistoryHandoffSummary } from './chat-engine-message-text'
 import { join, resolve } from 'path'
 import type { Server } from 'http'
 import { BrainstormAlignmentNotes } from '../brainstorm-alignment-notes'
@@ -437,6 +438,16 @@ export class ChatEngineState {
    * avoid loading provider history a second time (A-13).
    */
   readonly sessionNativeHistory = new Map<string, boolean>()
+  /**
+   * Sessions a rebuild prefilled from only the newest part of the thread, and
+   * the summary of what that prefill left in the database. Such a session
+   * holds the tail natively, so it needs only the pointer (the thread id and
+   * the queries that recover the rest) instead of a rendered replay.
+   */
+  readonly prefilledHistoryBoundaries = new Map<
+    string,
+    { summary: HistoryHandoffSummary; delivered: boolean }
+  >()
 
   /**
    * Where the conversation resumes for a session adopted from a parked branch

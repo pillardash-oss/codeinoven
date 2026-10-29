@@ -17,6 +17,8 @@ import type {
 } from '../../../lib/types'
 import { workerReportsToCoordinator } from '../../../lib/types'
 import { decideModelSwitchCompaction } from '../../../lib/model-switch-compaction'
+import { handoffTailTokenBudget } from '../../../lib/prompt-budget'
+import { selectHistoryTail } from './chat-engine-message-text'
 import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
 import type { PendingQuestionInfo, SessionCompletionWaiter, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
@@ -263,14 +265,34 @@ export class ChatEngineTurnsSessions {
       // A session edited via delete/truncate starts with no harness history
       // of its own. Seed the driver's native transcript from the edited
       // mirror so the next turn resumes the real (edited) conversation
-      // natively instead of replaying it as a history recap.
+      // natively instead of replaying it as a history recap. Only the newest
+      // part of that mirror is seeded: the rest stays in the app database for
+      // the agent to query, exactly as the rendered handoff does, so a rebuilt
+      // session never starts by reading a long thread's stale tool output.
       if (!nativeHistoryBound && !switchedRuntime) {
         try {
           const editedMirror = await this.host.threadManager.loadMessageRecords(projectId, threadId)
-          const prefillMirror =
+          const priorMirror =
             editedMirror.at(-1)?.role === 'user' ? editedMirror.slice(0, -1) : editedMirror
+          const tailBudget = handoffTailTokenBudget(
+            this.host.units['runtime-agents'].selectedModelInputBudget(
+              thread.settings?.providerId,
+              thread.settings?.modelId,
+              projectId
+            )
+          )
+          const { tail, summary } = selectHistoryTail(priorMirror, tailBudget)
+          if (summary.droppedCount > 0) {
+            // The seeded transcript carries the tail only, so the pointer that
+            // names this thread and the queries that recover the rest still has
+            // to reach the model once this session is live.
+            this.host.state.prefilledHistoryBoundaries.set(sessionId, {
+              summary,
+              delivered: false
+            })
+          }
           nativeHistoryBound =
-            (await driver.prefillNativeSession?.(projectPath, sessionId, prefillMirror)) ?? false
+            (await driver.prefillNativeSession?.(projectPath, sessionId, tail)) ?? false
         } catch (error) {
           Logger.dev('Native transcript prefill after session edit failed:', error)
         }

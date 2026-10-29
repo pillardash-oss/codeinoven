@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import type { SearchSummaryRequest } from '../../search/thread-search-summary'
@@ -10,11 +9,11 @@ import {
 import { broadcastThreadUpdate } from '../thread-events'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { instanceRegistry } from '../../system/instance-registry'
-import type { AgentEvent, Thread, ThreadSettings } from '../../../lib/types'
-import { recapTokenBudget } from '../../../lib/prompt-budget'
+import type { AgentEvent, AgentMessage, ThreadSettings } from '../../../lib/types'
+import { handoffTailTokenBudget, recapTokenBudget } from '../../../lib/prompt-budget'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
-import { formatHistoryRecap } from './chat-engine-message-text'
+import { formatHistoryHandoff, formatHistoryPointer } from './chat-engine-message-text'
 import { broadcastToast, isCoordinatorThread } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
 
@@ -145,6 +144,29 @@ export class ChatEngineTranscripts {
     }
   }
 
+  /**
+   * The one-time pointer for a session whose prefill carried only the tail.
+   *
+   * Returned at most once per session: after the turn that delivers it, the
+   * agent knows the thread id and how to query it, and repeating the notice on
+   * every later turn would cost tokens on a conversation that no longer needs
+   * it.
+   */
+  private takePrefilledHistoryPointer(
+    sessionId: string,
+    threadId: string,
+    threadTitle: string | undefined
+  ): string {
+    const boundary = this.host.state.prefilledHistoryBoundaries.get(sessionId)
+    if (!boundary || boundary.delivered) return ''
+    boundary.delivered = true
+    return formatHistoryPointer(boundary.summary, {
+      threadId,
+      ...(threadTitle ? { threadTitle } : {}),
+      maxInputTokens: 0
+    })
+  }
+
   /** Recap of the mirrored transcript when no reusable harness session exists. */
   async buildHistoryRecap(
     projectId: string,
@@ -160,15 +182,31 @@ export class ChatEngineTranscripts {
       thread?.settings?.modelId,
       projectId
     )
-    // The replay is capped by the checkpoint line as well as any caller's own
-    // allowance, so a rebuilt session on a large-window model never
-    // materializes a recap far past what the turn will actually send.
+    // The handoff carries a verbatim tail, not the whole conversation, so it is
+    // capped by the checkpoint line (never crowding the turn's own input) and
+    // by the handoff tail budget (never replaying a long thread's stale tool
+    // output). Everything older is reachable by querying the thread id the
+    // handoff opens with.
     const budget = Math.min(maxInputTokens ?? fallbackBudget, recapTokenBudget(fallbackBudget))
+    const tailBudget = Math.min(budget, handoffTailTokenBudget(fallbackBudget))
+    const handoff = (messages: AgentMessage[], withTitle: boolean): string =>
+      formatHistoryHandoff(messages, {
+        threadId,
+        ...(withTitle && thread?.title ? { threadTitle: thread.title } : {}),
+        maxInputTokens: tailBudget
+      })
 
     // A native resumed session already owns its history. Check that fact before
     // reading the mirror so every ordinary follow-up remains O(1) with respect
     // to thread age.
     if (thread?.sessionId && sameHarness) {
+      // A session seeded from only the newest part of the thread holds that
+      // tail natively and nothing older. It still needs the pointer once, or the
+      // agent would believe the thread simply started there: the thread id and
+      // the queries that recover the rest reach the model as this turn's
+      // continuation notice, and never again after that.
+      const pointer = this.takePrefilledHistoryPointer(thread.sessionId, threadId, thread.title)
+      if (pointer) return pointer
       const nativeHistory = this.host.state.sessionNativeHistory.get(thread.sessionId)
       if (nativeHistory === true) return ''
       if (nativeHistory === undefined) {
@@ -234,7 +272,7 @@ export class ChatEngineTranscripts {
     // silently lost from the conversation   rescue it into a fresh thread
     // rather than let the turn proceed with no memory of it.
     const emitRecap = (): string => {
-      const recap = formatHistoryRecap(mirror, { maxInputTokens: budget })
+      const recap = handoff(mirror, true)
       if (!recap) {
         void this.rescueUnreplayableHistory(projectId, threadId, driverId).catch(() => {})
       }
@@ -264,7 +302,7 @@ export class ChatEngineTranscripts {
       // thread age, so this case is delivered once.
       if (replay.boundary !== null && boundaryIndex < 0) replay.repeat = false
       const delta = boundaryIndex >= 0 ? mirror.slice(boundaryIndex + 1) : mirror
-      const recap = delta.length === 0 ? '' : formatHistoryRecap(delta, { maxInputTokens: budget })
+      const recap = delta.length === 0 ? '' : handoff(delta, false)
       replay.recap = recap
       replay.recapBudget = budget
       return recap

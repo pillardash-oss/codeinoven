@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { join } from 'path'
@@ -72,6 +72,34 @@ export class PiNativeSessions {
       Logger.info('Resumed native Pi session transcript', { sessionId, nativeSessionId: nativeId })
     } catch (error) {
       Logger.dev('Native Pi session resume unavailable; continuing fresh:', error)
+    }
+  }
+
+  /**
+   * Remove pi's own transcript for a discarded session.
+   *
+   * An edited or deleted turn discards its session and keeps the surviving
+   * mirror rows. The native transcript of that discarded session is what lets
+   * its removed turns be re-read and re-persisted into the thread afterwards,
+   * so it is deleted with the session record instead of being left on disk as
+   * a resumable copy of history the user just cleared.
+   */
+  async deleteNativeTranscript(
+    projectPath: string,
+    nativeSessionId: string | undefined
+  ): Promise<void> {
+    if (!nativeSessionId) return
+    try {
+      const file = await findNativePiSessionFile(
+        projectPath,
+        nativeSessionId,
+        this.host.agentDirectory
+      )
+      if (!file) return
+      await rm(file, { force: true })
+      Logger.info('Removed the discarded native Pi transcript', { nativeSessionId })
+    } catch (error) {
+      Logger.dev('Native Pi transcript removal skipped:', error)
     }
   }
 

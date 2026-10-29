@@ -77,6 +77,10 @@ export class ChatEngineThreadsDelete {
       this.host.state.planningSessions.delete(thread.sessionId)
       this.host.state.preparedImplementationSessions.delete(thread.sessionId)
       this.host.state.outboundMessageIdsBySession.delete(thread.sessionId)
+      // A handoff pointer prepared for the discarded session describes a tail
+      // that no longer exists in the thread, so it must never reach a later
+      // session.
+      this.host.state.prefilledHistoryBoundaries.delete(thread.sessionId)
       await this.host.threadManager.clearSessionId(projectId, threadId)
       // Destroy the stale driver record   and with it the native transcript
       // binding   so the pre-edit conversation can never be restored onto a

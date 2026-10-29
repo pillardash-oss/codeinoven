@@ -388,7 +388,10 @@ export {
 export {
   textForMessage,
   formatBrainstormInterviewDecisions,
-  formatHistoryRecap
+  formatHistoryHandoff,
+  formatHistoryPointer,
+  formatHistoryRecap,
+  selectHistoryTail
 } from './chat-engine/chat-engine-message-text'
 export { parseGeneratedSpecContent } from './chat-engine/chat-engine-generated-artifacts'
 export { assertHarnessRequestCapabilities } from './chat-engine/chat-engine-constants'

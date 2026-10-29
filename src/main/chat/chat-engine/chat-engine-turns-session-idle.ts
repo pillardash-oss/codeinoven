@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { stripAbortedRunErrors } from '../stopped-run-errors'
 import { Logger } from '../../system/logger'
 import { latestAgentTodo } from '../../../lib/agent-todos'
@@ -224,12 +223,32 @@ export class ChatEngineTurnsSessionIdle {
       const userAborted = this.host.state.userAbortedSessions.has(sessionId)
       if (userAborted) stripAbortedRunErrors(merged)
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+      // A thread that has already moved to another session discarded this one:
+      // an edited or deleted turn is re-sent on a replacement session, that
+      // session is cleared, and the old transcript must not come back. Writing
+      // this session's messages into the mirror would splice the removed turn
+      // straight back into the history the user just cleared, so the write is
+      // skipped while everything else in this finalization still runs. A thread
+      // whose binding was cleared (an account removal, for example) has no owner
+      // to compare against and keeps its write.
+      const mirrorOwner = await this.host.threadManager.getThread(info.projectId, info.threadId)
+      const mirrorOrphaned =
+        mirrorOwner !== null &&
+        mirrorOwner.sessionId !== null &&
+        mirrorOwner.sessionId !== sessionId
       // The provider transcript is the irreplaceable user data. Persist it
       // before Mermaid validation, usage accounting, specification parsing, or
       // any other optional end-of-turn work can throw. Later upserts may refine
       // visibility or attach validation notices, but can never be the first
       // durable write of a completed response.
-      await this.host.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
+      if (!mirrorOrphaned) {
+        await this.host.threadManager.upsertMessages(
+          info.projectId,
+          info.threadId,
+          merged,
+          sessionId
+        )
+      }
       // The thread this turn belongs to, read fresh. Everything the engine
       // issues on its own initiative below must act on the thread's live turn:
       // a provider failure handled while this transcript was being finalized
@@ -315,7 +334,14 @@ export class ChatEngineTurnsSessionIdle {
           }
         }
       }
-      await this.host.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
+      if (!mirrorOrphaned) {
+        await this.host.threadManager.upsertMessages(
+          info.projectId,
+          info.threadId,
+          merged,
+          sessionId
+        )
+      }
       // The raw transcript may contain hidden user messages that are intentionally
       // filtered out of the persisted mirror. Usage events and turn outcomes
       // reference the durable parent turn, so anchor them to the persisted set.
