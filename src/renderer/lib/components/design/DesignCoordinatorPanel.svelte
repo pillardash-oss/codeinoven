@@ -1489,8 +1489,9 @@
    *
    * The board is a panel that the user widens and narrows, so its column count is
    * a question about the room it has, not about the window: the scope below is the
-   * width a card may share, and three columns arrive once that width can hold them
-   * without shrinking a picture below its own capture.
+   * width a card may share, and three columns arrive once the panel has been
+   * widened past the width it opens at, not merely because it has a few pixels
+   * more than two cards need.
    */
   .screen-board-scope {
     container-type: inline-size;
@@ -1500,7 +1501,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.375rem;
   }
-  @container (min-width: 28rem) {
+  @container (min-width: 34rem) {
     .screen-cards {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
