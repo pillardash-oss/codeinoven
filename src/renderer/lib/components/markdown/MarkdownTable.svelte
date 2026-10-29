@@ -103,7 +103,7 @@
     title={wrapLabel}
     onclick={() => (wrapped = !wrapped)}
   >
-    <CioWrapText size={12} />
+    <CioWrapText size={13} />
   </button>
   {#if withResize}
     <button
@@ -115,9 +115,9 @@
       onclick={() => (unlocked = !unlocked)}
     >
       {#if unlocked}
-        <CioLockOpen size={12} />
+        <CioLockOpen size={13} />
       {:else}
-        <CioLock size={12} />
+        <CioLock size={13} />
       {/if}
     </button>
   {/if}
@@ -129,9 +129,9 @@
     onclick={() => void copyTable()}
   >
     {#if copied}
-      <CioCheck size={12} class="text-success" />
+      <CioCheck size={13} class="text-success" />
     {:else}
-      <CioCopy size={12} />
+      <CioCopy size={13} />
     {/if}
   </button>
   {#if withExpand}
@@ -142,7 +142,7 @@
       title="Expand table"
       onclick={() => (expanded = true)}
     >
-      <CioMaximize size={12} />
+      <CioMaximize size={13} />
     </button>
   {/if}
 {/snippet}
@@ -152,7 +152,7 @@
      rather than on a strip of their own above the rows. -->
 {#snippet fullscreenActions()}
   <div
-    class="flex items-center gap-0.5 border border-border bg-elevated p-0.5"
+    class="flex items-center gap-1 border border-border bg-elevated p-1"
     role="group"
     aria-label="Table controls"
   >

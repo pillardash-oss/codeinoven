@@ -223,7 +223,7 @@
      reader, the tools sit where the surface's own tools sit. -->
 {#snippet fullscreenActions()}
   <div
-    class="flex items-center gap-0.5 border border-border bg-elevated p-0.5"
+    class="flex items-center gap-1 border border-border bg-elevated p-1"
     role="group"
     aria-label="Mermaid diagram controls"
   >

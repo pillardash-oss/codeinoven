@@ -639,8 +639,9 @@ body {
   /* Native table column sizing: every column keeps at least one word of
      width; content wider than the container scrolls inside .md-table-wrap
      instead of squeezing sibling columns. min-width keeps narrow tables
-     filling the container like a normal block. The table carries no frame of
-     its own: it is content of the message, so only the row rules draw. */
+     filling the container like a normal block. The table carries no outer
+     frame: it is content of the message, so the internal rules draw and the
+     edges stay open. */
   width: 100%;
   min-width: max-content;
   border-collapse: collapse;
@@ -649,12 +650,14 @@ body {
 
 .markdown-body th,
 .markdown-body td {
-  /* Rules run across the table, never between cells. The app's own tables
-     (`ui/DataTable.svelte`) draw one border per row and none per column, so
-     a markdown table and a native one read as the same object instead of two
-     languages in one surface. */
+  /* A grid reads as a grid: every cell is ruled off from the cell beside it and
+     from the row above it. Only the outer edges stay open   no top rule over the
+     header band and no rule hanging off the last column or the last row   so the
+     table sits flush in the message while its columns stay countable at a
+     glance. */
   border: 0;
   border-bottom: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
   padding: 0.375em 0.6em;
   text-align: left;
   /* Cells may wrap long tokens inside their own column (GitHub-style):
@@ -670,6 +673,12 @@ body {
 .markdown-body tr:last-child > th,
 .markdown-body tr:last-child > td {
   border-bottom: 0;
+}
+
+/* The first column opens the table, so it has nothing to be separated from. */
+.markdown-body th:first-child,
+.markdown-body td:first-child {
+  border-left: 0;
 }
 
 .markdown-body th {
@@ -693,11 +702,16 @@ body {
   flex-direction: column;
 }
 
+/* One square target per control, the same 1.5rem box the artifact viewer's own
+   header controls use, so the strip on hover and the group in a full screen
+   reader's header are the same object at the same size. */
 .markdown-body .md-table-control {
   display: flex;
+  width: 1.5rem;
+  height: 1.5rem;
   align-items: center;
+  justify-content: center;
   color: var(--color-dimmed);
-  padding: 0.1875rem;
   transition:
     background-color 160ms ease,
     color 160ms ease;
@@ -755,9 +769,8 @@ body {
 
 /* The drag target sits over the column's right padding, flush with the column
    edge the reader drags   and so the cell's own `overflow: hidden` (resize
-   mode) can never clip it. The strip paints its own hover line, which is what
-   the reader aims at now that columns are separated by space rather than by a
-   rule. */
+   mode) can never clip it. The strip paints its own hover line, which thickens
+   the column rule it sits on while the reader aims at it. */
 .markdown-body .md-col-resizer {
   position: absolute;
   inset-block: 0;
