@@ -29,7 +29,6 @@ import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry, type StartupStep } from './system/startup-telemetry'
 import { startupBudgetViolation } from './system/startup-budget'
 import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
-import { installMainThreadWatch } from './system/main-thread-watch'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
@@ -162,8 +161,6 @@ startupTelemetry.mark('process:entry')
 // unhandled rejections are logged and never exit the process   a failed
 // background operation must never kill the app on the user's behalf.
 installProcessCrashDiagnostics()
-// Dev-only: a stalled main thread is what makes a macOS window stop responding.
-installMainThreadWatch()
 
 const state = createBootstrapState()
 
