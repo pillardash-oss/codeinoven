@@ -89,7 +89,7 @@
   data-region={board.submitSpecDecision.showSpecStudio ? undefined : 'conversation'}
 >
   <div
-    class="flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
+    class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
     {@attach board.state.conversationColumn.attachment}
   >
     {#if !board.sources.loaded && board.composerScope.visibleMessages.length === 0}
