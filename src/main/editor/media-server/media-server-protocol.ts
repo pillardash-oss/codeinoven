@@ -19,6 +19,12 @@ export interface MediaServerGrant {
   mime: string
 }
 
+/** Worker to main process: a grant is stored and its URL can be used now. */
+export interface MediaServerGrantAck {
+  type: 'granted'
+  id: string
+}
+
 /** Main process to worker. */
 export type MediaServerUpdate = { type: 'grant'; grant: MediaServerGrant } | { type: 'stop' }
 
@@ -29,4 +35,6 @@ export type MediaServerEvent =
   | { type: 'served' }
   /** Responses currently streaming, so the worker is never stopped mid-read. */
   | { type: 'busy'; active: number }
+  /** A grant is stored; the controller may hand its URL to the renderer. */
+  | MediaServerGrantAck
   | { type: 'failed'; message: string }

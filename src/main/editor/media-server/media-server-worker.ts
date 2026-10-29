@@ -116,6 +116,9 @@ server.on('error', (error) => send({ type: 'failed', message: error.message }))
 port?.on('message', (update: MediaServerUpdate) => {
   if (update.type === 'grant') {
     grants.set(update.grant.id, update.grant)
+    // Answer only once the grant is readable, so a request cannot arrive at the
+    // listener before the id it carries exists.
+    send({ type: 'granted', id: update.grant.id })
     return
   }
   if (update.type === 'stop') {

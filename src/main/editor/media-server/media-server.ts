@@ -15,10 +15,27 @@
 import { randomBytes } from 'node:crypto'
 import type { Worker } from 'node:worker_threads'
 import createMediaServerWorker from './media-server-worker.ts?nodeWorker'
+import { Logger } from '../../system/logger'
 import type { MediaServerEvent, MediaServerUpdate } from './media-server-protocol'
 
-/** How long the worker stays up with nothing to serve. */
-const IDLE_STOP_MS = 60_000
+/**
+ * How long the worker stays up with nothing to serve.
+ *
+ * Generous on purpose: a reader who pauses a video keeps its URL, and a listener
+ * that closes underneath it turns the next range into a failure the player can
+ * only recover from with its retry. Five quiet minutes is enough for that to be
+ * a real absence rather than a pause.
+ */
+const IDLE_STOP_MS = 300_000
+/**
+ * How long a worker may take to come up, or to confirm a grant.
+ *
+ * Both are bounded because the caller is answering a media request: a worker
+ * that never reports in must cost the reader one slow preview and then fall back
+ * to the streamed response, never a request that hangs until the player gives up.
+ */
+const WORKER_READY_TIMEOUT_MS = 2_000
+const GRANT_ACK_TIMEOUT_MS = 2_000
 /**
  * Grants remembered by path, so a scrub back through a video reuses one URL
  * instead of minting another. Past this the oldest is forgotten here; the
@@ -46,6 +63,8 @@ export class MediaServer {
   private handshake?: Promise<WorkerHandshake>
   private readonly ids = new Map<string, string>()
   private activeStreams = 0
+  /** Grants posted to the worker, waiting for it to confirm it holds them. */
+  private readonly grantWaiters = new Map<string, () => void>()
   private idleTimer?: ReturnType<typeof setTimeout>
 
   /**
@@ -60,7 +79,7 @@ export class MediaServer {
     try {
       const handshake = await this.ensureWorker()
       const known = this.ids.get(key)
-      const id = known ?? this.grant(handshake, target)
+      const id = known ?? (await this.grant(target))
       this.ids.set(key, id)
       if (this.ids.size > MAX_CACHED_GRANTS) {
         const oldest = this.ids.keys().next().value
@@ -80,6 +99,7 @@ export class MediaServer {
     this.handshake = undefined
     this.ids.clear()
     this.activeStreams = 0
+    this.grantWaiters.clear()
     const worker = this.worker
     this.worker = undefined
     if (!worker) return
@@ -89,14 +109,34 @@ export class MediaServer {
     setTimeout(() => void worker.terminate().catch(() => undefined), 1_000).unref?.()
   }
 
-  private grant(handshake: WorkerHandshake, target: MediaServeTarget): string {
+  /**
+   * Mint a grant and wait for the worker to hold it.
+   *
+   * The URL is handed to a media element the moment this resolves, so the grant
+   * has to be readable before then: a request that beats the grant answers 404
+   * and the reader sees "This video could not be played" for a file that is
+   * right there.
+   */
+  private async grant(target: MediaServeTarget): Promise<string> {
     const worker = this.worker
     if (!worker) throw new Error('The media server is not running.')
     const id = randomBytes(16).toString('hex')
+    const acknowledged = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.grantWaiters.delete(id)
+        reject(new Error('The media server did not confirm the file in time.'))
+      }, GRANT_ACK_TIMEOUT_MS)
+      timer.unref?.()
+      this.grantWaiters.set(id, () => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
     this.post(worker, {
       type: 'grant',
       grant: { id, path: target.path, extension: target.extension, mime: target.mime }
     })
+    await acknowledged
     return id
   }
 
@@ -134,15 +174,34 @@ export class MediaServer {
     })
     this.worker = worker
     const handshake = new Promise<WorkerHandshake>((resolve, reject) => {
+      const readyTimer = setTimeout(
+        () => fail(new Error('The media server did not start in time.')),
+        WORKER_READY_TIMEOUT_MS
+      )
+      readyTimer.unref?.()
       const fail = (error: Error): void => {
+        clearTimeout(readyTimer)
         if (this.worker === worker) this.stop()
         reject(error)
       }
       worker.on('message', (event: MediaServerEvent) => {
         if (this.worker !== worker) return
         if (event.type === 'ready') {
+          if (readyTimer) clearTimeout(readyTimer)
           this.touchIdle()
           resolve({ port: event.port, token })
+          return
+        }
+        if (event.type === 'granted') {
+          this.grantWaiters.get(event.id)?.()
+          this.grantWaiters.delete(event.id)
+          return
+        }
+        if (event.type === 'failed') {
+          // A worker that cannot serve is a fallback, not a broken preview: the
+          // protocol streams the file itself once this rejects or stops.
+          Logger.error('Media server worker reported a problem:', event.message)
+          fail(new Error(event.message))
           return
         }
         if (event.type === 'served') this.touchIdle()
