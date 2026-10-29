@@ -101,6 +101,7 @@ import {
 import { type BrowserPeekMediaTarget, type BrowserPeekPoint } from './browser-service/browser-peek'
 import { BrowserTabStage } from './browser-service/browser-stage'
 import { BrowserPageKeys } from './browser-service/browser-page-keys'
+import { BrowserLinkPeek } from './browser-service/browser-link-peek'
 import { browserPartitionFor, type BrowserUtilityPage } from './browser-service/browser-validation'
 import { type TabMarkRecogniser } from './browser-service/browser-tab-mark'
 import { type BrowserExtensionPageTab } from './extensions/browser-extension-page-tabs'
@@ -288,6 +289,16 @@ export class BrowserService {
   /** The page-side observer that reports a chord a page did not handle. */
   public readonly pageKeys = new BrowserPageKeys({
     onKey: (contents, key) => this.handlePageKey(contents, key)
+  })
+  /**
+   * The page-side observer that reports an Option-click on a link.
+   *
+   * A click inside a native page view never reaches the app, so "take a peek"
+   * cannot be a normal event handler here. The page names the link and the point
+   * it was pressed at, and the peek grows out of that page's own frame.
+   */
+  public readonly linkPeek = new BrowserLinkPeek({
+    onPeek: (contents, request) => this.newTabsUnit.openPeekFromPage(contents, request)
   })
   /**
    * Which find request each tab's page is answering.

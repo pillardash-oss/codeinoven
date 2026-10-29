@@ -14,7 +14,9 @@ import {
   type BrowserPeekRect
 } from './browser-peek'
 import type { BrowserService } from '../browser-service'
-import { liveWindowContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
+import type { BrowserLinkPeekRequest } from './browser-link-peek'
+import { validateBrowserUrl } from './browser-validation'
 
 /**
  * Tabs opened from inside a page: links, siblings and peeks.
@@ -33,11 +35,13 @@ import { liveWindowContents } from './browser-view-contents'
 export interface NewTabsHost {
   readonly childTabOpeners: BrowserService['childTabOpeners']
   readonly destroy: BrowserService['destroy']
+  readonly displayedTab: BrowserService['displayedTab']
   readonly ensureTab: BrowserService['ensureTab']
   readonly load: BrowserService['load']
   readonly parkTab: BrowserService['parkTab']
   readonly peekTabs: BrowserService['peekTabs']
   readonly requestPanelShortcut: BrowserService['requestPanelShortcut']
+  readonly tabs: BrowserService['tabs']
   readonly window: BrowserService['window']
 }
 
@@ -133,6 +137,50 @@ export class BrowserServiceNewTabs {
         Logger.error('Browser Peek refused a link:', error)
       }
     })
+  }
+
+  /**
+   * Take a peek at a link the page reported an Option-click on.
+   *
+   * The report is what makes this gesture possible at all: a click inside a
+   * native page view never reaches the app, so the page's own relay names the
+   * link and where it was pressed (`browser-link-peek.ts`). Only a tab whose page
+   * is the one on screen can be clicked, and the flight starts from that page's
+   * frame, so a report that arrives while its tab is off screen is dropped rather
+   * than flown out of a frame that is not there.
+   */
+  openPeekFromPage(contents: WebContents, request: BrowserLinkPeekRequest): void {
+    const tabId = this.tabIdForContents(contents)
+    if (!tabId) return
+    const tab = this.host.tabs.get(tabId)
+    if (!tab) return
+    const displayed = this.host.displayedTab
+    if (displayed?.tabId !== tabId) return
+    let url: string
+    try {
+      url = validateBrowserUrl(request.url)
+    } catch {
+      return
+    }
+    // The page reports its own CSS pixels; the frame the peek flies inside is the
+    // window's, and the zoom factor is what converts one into the other.
+    const zoom = contents.isDestroyed() ? 1 : contents.getZoomFactor()
+    const point = { x: Math.round(request.x * zoom), y: Math.round(request.y * zoom) }
+    this.openPeekFrom(
+      { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
+      contents,
+      url,
+      displayed.bounds,
+      point
+    )
+  }
+
+  /** The tab whose page is `contents`, or null when no tab holds it. */
+  private tabIdForContents(contents: WebContents): string | null {
+    for (const [tabId, tab] of this.host.tabs) {
+      if (liveContents(tab.view) === contents) return tabId
+    }
+    return null
   }
 
   /** Where the pointer is, in a page view's own pixels. */

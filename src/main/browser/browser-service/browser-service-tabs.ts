@@ -77,6 +77,7 @@ export interface TabsHost {
   readonly notifyExtensionWebNavigation: BrowserService['notifyExtensionWebNavigation']
   readonly offerExternalNavigation: BrowserService['offerExternalNavigation']
   readonly onTargetUrlReport: BrowserService['onTargetUrlReport']
+  readonly linkPeek: BrowserService['linkPeek']
   readonly pageKeys: BrowserService['pageKeys']
   readonly peekTabs: BrowserService['peekTabs']
   pendingPageFocusTabId: BrowserService['pendingPageFocusTabId']
@@ -326,6 +327,9 @@ export class BrowserServiceTabs {
       // The observer that reports a chord the page did not handle, so the app's
       // own shortcuts still reach the app from inside a page.
       this.host.pageKeys.install(view.webContents)
+      // The observer that reports an Option-click on a link, which is the one
+      // gesture the app cannot see from here: the click belongs to a native page.
+      this.host.linkPeek.install(view.webContents)
       this.host.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
       // The document that just arrived drops the last one's stylesheet, so the
@@ -819,7 +823,10 @@ export class BrowserServiceTabs {
     // Likewise a destroyed page cannot be given the keyboard back on return.
     if (this.host.keyboardOwnerTabId === tabId) this.host.keyboardOwnerTabId = null
     if (this.host.restorePageFocusTabId === tabId) this.host.restorePageFocusTabId = null
-    if (removedContents) this.host.pageKeys.release(removedContents)
+    if (removedContents) {
+      this.host.pageKeys.release(removedContents)
+      this.host.linkPeek.release(removedContents)
+    }
     this.host.injectedDialogLabels.delete(tabId)
     this.host.extensionNavigationUrls.delete(tabId)
     this.host.forgetParked(tabId)
