@@ -188,7 +188,12 @@
   let extensionButton = $state<HTMLButtonElement>()
   /** The Web Store offer this tab's page makes, or null when it makes none. */
   const storeOffer = $derived(
-    storeExtensionOfferForPage({ url: pageState.url, title: pageState.title, boxId: tabBoxId })
+    storeExtensionOfferForPage({
+      projectId: tabProjectId,
+      url: pageState.url,
+      title: pageState.title,
+      boxId: tabBoxId
+    })
   )
   const installableOffer = $derived(storeOffer !== null && storeOffer.installed === null)
   /** Whether an extension install is in flight, so the button says so instead of

@@ -1,6 +1,7 @@
 import type { BrowserExtension } from '../../../../lib/ipc/browser'
 import { getNotificationService } from '../../../notifications/notification-service'
-import { browserJarFor, browserPartitionFor } from '../../browser-service/browser-validation'
+import { extensionJarIdFor } from '../../../../lib/browser/browser-extension-jar'
+import { browserPartitionFor } from '../../browser-service/browser-validation'
 import { type BrowserExtensionMailbox } from '../browser-extension-bridge'
 import { isExtensionId } from '../browser-extension-crx'
 import { extensionRunsInJar, extensionSourceDirectory } from '../browser-extension-registry'
@@ -43,7 +44,7 @@ export class BrowserExtensionServiceQueries {
     if (parsed.protocol !== 'chrome-extension:' || !isExtensionId(parsed.host)) return false
     const record = this.host.registry.get(parsed.host)
     if (!record || !record.enabled) return false
-    return extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)
+    return extensionRunsInJar(record, extensionJarIdFor(projectId, boxId))
   }
 
   /**
@@ -57,6 +58,22 @@ export class BrowserExtensionServiceQueries {
     if (await this.host.registry.forgetBox(boxId)) this.host.host.publish()
   }
 
+  /**
+   * A project was deleted, so its own browser jar goes with everything in it.
+   *
+   * The jar is released before it is forgotten: an extension left loaded in the
+   * session of a project that no longer exists has nothing that could ever unload
+   * it. Boxes are untouched, because a box is the profile's and other contexts
+   * browse it. Returns whether any extension was forgotten.
+   */
+  async forgetProject(projectId: string): Promise<boolean> {
+    await this.host.units['runtime'].onJarEmptied(projectId, null, true)
+    this.host.loaded.delete(browserPartitionFor(projectId, null))
+    const forgotten = await this.host.registry.forgetProjectJars([projectId])
+    if (forgotten) this.host.host.publish()
+    return forgotten
+  }
+
   async setDarkReaderTabScope(
     projectId: string,
     boxId: string | null,
@@ -64,7 +81,7 @@ export class BrowserExtensionServiceQueries {
     action: DarkReaderTabAction
   ): Promise<DarkReaderTabState> {
     const record = this.host.registry.get(DARK_READER_EXTENSION_ID)
-    if (!record || !extensionRunsInJar(record, boxId)) {
+    if (!record || !extensionRunsInJar(record, extensionJarIdFor(projectId, boxId))) {
       throw new Error('Dark Reader is not installed in this box')
     }
     const partition = browserPartitionFor(projectId, boxId)
@@ -156,7 +173,7 @@ export class BrowserExtensionServiceQueries {
     if (state.published.get(key) === serialized) return
     state.published.set(key, serialized)
     this.host.host.publishActivity({
-      boxId: state.boxId ?? '',
+      boxId: extensionJarIdFor(state.projectId, state.boxId),
       extensionId,
       tabId,
       activity

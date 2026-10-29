@@ -2,13 +2,13 @@ import { dialog } from '../../../system/file-dialogs'
 import { existsSync } from 'node:fs'
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve, sep } from 'node:path'
-import { app, type Session } from 'electron'
+import { type Session } from 'electron'
 import { MAX_PINNED_EXTENSIONS } from '../../../../lib/browser/browser-extension-pins'
-import { GLOBAL_BROWSER_PROJECT_ID } from '../../../../lib/ipc/browser'
 import type { BrowserExtension } from '../../../../lib/ipc/browser'
 import { Logger } from '../../../system/logger'
 import { getNotificationService } from '../../../notifications/notification-service'
-import { browserJarFor, browserPartitionFor } from '../../browser-service/browser-validation'
+import { extensionJarIdFor } from '../../../../lib/browser/browser-extension-jar'
+import { browserPartitionFor } from '../../browser-service/browser-validation'
 import {
   type BrowserExtensionCookieRequest,
   type BrowserExtensionCookieResult,
@@ -66,7 +66,7 @@ export class BrowserExtensionServiceRuntime {
   optionsUrlFor(extensionId: string, projectId: string, boxId: string | null): string | null {
     const record = this.host.registry.get(extensionId)
     if (!record || !record.enabled) return null
-    if (!extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)) return null
+    if (!extensionRunsInJar(record, extensionJarIdFor(projectId, boxId))) return null
     return extensionPageUrl(record.id, record.optionsPath)
   }
 
@@ -287,33 +287,23 @@ export class BrowserExtensionServiceRuntime {
   /**
    * The extensions one jar should be running, given what is installed.
    *
-   * The global browser's own jar and the profile's boxes are the jars an extension
-   * may live in. A box's set is the box's, not the caller's: a box is one identity
-   * of the profile, so the extensions the user placed in it are loaded while any
-   * context uses that box. That is also what keeps a shared jar intact: answering
-   * "nothing" for a project's boxed tab would unload the extensions the personal
-   * browser is running in the very same session.
+   * A jar is a session, so this is a question about one: a box's set is the box's,
+   * not the caller's, because a box is one identity of the profile and the
+   * extensions the user placed in it are loaded while any context uses that box.
+   * The profile's own jar answers the same way for the same reason.
    *
-   * A project's own jar loads none. An extension is third-party code that browser
-   * runs, and the panel that installs it, the boxes it can be placed in and the pins
-   * in the header are all the global browser's, so the light browser a conversation
-   * opens beside itself stays free of them.
-   *
-   * The empty jar id is what makes that a rule rather than a filter: it names "the
-   * context's own jar", which read without the context matches every project's jar
-   * too, so a record placed in "No box" would otherwise put an extension renderer,
-   * its service worker and its load warnings behind every thread browser.
+   * A context's own jar loads the extensions placed in that context, and nothing
+   * else. That is what keeps an extension installed beside one project's
+   * conversation inside that project: it is loaded while one of its tabs is open,
+   * it survives every tab being closed, and it never appears in another project's
+   * thread browser. The jar id carries the context, so a project's jar can no
+   * longer read as "every context's own jar".
    */
   desiredForJar(projectId: string, boxId: string | null): BrowserExtensionRecord[] {
-    // Answered about the jar rather than about the choice, for the same reason the
-    // partitions agree: a context in the profile's default box is browsing the
-    // global browser's own jar, and answering "a project's own jar" for it would
-    // unload the set that jar is running.
-    const jar = browserJarFor(projectId, boxId)
-    if (jar.boxId === null && jar.projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
+    const jarId = extensionJarIdFor(projectId, boxId)
     return this.host.registry
       .list()
-      .filter((record) => record.enabled && extensionRunsInJar(record, jar.boxId))
+      .filter((record) => record.enabled && extensionRunsInJar(record, jarId))
   }
 
   async reconcileJar(projectId: string, boxId: string | null, partition: string): Promise<void> {
@@ -704,7 +694,7 @@ export class BrowserExtensionServiceRuntime {
     state.mail.set(extensionId, mail)
     if (restarted) {
       this.host.host.publishActivity({
-        boxId: state.boxId ?? '',
+        boxId: extensionJarIdFor(state.projectId, state.boxId),
         extensionId,
         tabId: null,
         activity: null,

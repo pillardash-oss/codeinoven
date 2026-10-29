@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { Logger } from '../../system/logger'
 import { getConfigRoot } from '../../../lib/utils'
+import { extensionJarIdFor } from '../../../lib/browser/browser-extension-jar'
 import type {
   BrowserExtensionActivityUpdate,
   BrowserExtensionMenuRecord,
@@ -504,7 +505,9 @@ export class BrowserServiceExtensionRuntime {
       if (record.extensionId === null) return false
       const jars = jarsByExtension.get(record.extensionId)
       if (!jars) return true
-      return !jars.has(record.boxId ?? '')
+      // The popup's own jar, not its box: a conversation's popup belongs to that
+      // conversation's jar, which is what a record names.
+      return !jars.has(extensionJarIdFor(record.projectId, record.boxId))
     }, 'its extension was unloaded')
   }
 
@@ -662,7 +665,7 @@ export class BrowserServiceExtensionRuntime {
     this.host.sidePanels.closeWhere((record) => {
       const jars = jarsByExtension.get(record.extensionId)
       if (!jars) return true
-      return !jars.has(record.boxId ?? '')
+      return !jars.has(extensionJarIdFor(record.projectId, record.boxId))
     }, 'its extension was unloaded')
   }
 }

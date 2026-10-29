@@ -1,5 +1,4 @@
-import { isAbsolute, join, resolve, sep } from 'node:path'
-import { app, type BrowserWindow, type Session } from 'electron'
+import { type BrowserWindow, type Session } from 'electron'
 import type {
   BrowserExtension,
   BrowserExtensionActivity,
@@ -15,28 +14,14 @@ import type { BrowserExtensionMenuSection } from '../browser-service/browser-con
 import {
   BrowserExtensionBridge,
   type BrowserExtensionActionPopupRequest,
-  type BrowserExtensionCookieRequest,
-  type BrowserExtensionCookieResult,
   type BrowserExtensionInstalledDetails,
-  type BrowserExtensionMailbox,
-  type BrowserExtensionNotificationRecord,
-  type BrowserExtensionSidePanelMailbox,
-  type BrowserExtensionSidePanelOption,
-  type BrowserExtensionSidePanelRequest
+  type BrowserExtensionMailbox
 } from './browser-extension-bridge'
 import {
-  BROWSER_EXTENSION_SOURCE_DIR,
   BrowserExtensionRegistry,
-  extensionRunsInJar,
-  extensionRunsOnHost,
-  extensionSourceDirectory,
-  resolveBrowserExtensionStoreDir,
-  toExtensionView,
-  type BrowserExtensionRecord,
   type BrowserExtensionRegistryPersistence
 } from './browser-extension-registry'
 import {
-  DARK_READER_EXTENSION_ID,
   type DarkReaderTabAction,
   type DarkReaderTabState
 } from '../../../lib/browser/browser-darkreader-control'
@@ -403,6 +388,10 @@ export class BrowserExtensionService {
   }
   async forgetBox(projectId: string, boxId: string): Promise<void> {
     return this.units['queries'].forgetBox(projectId, boxId)
+  }
+  /** A project was deleted, so the extensions installed for its own browser go. */
+  async forgetProject(projectId: string): Promise<boolean> {
+    return this.units['queries'].forgetProject(projectId)
   }
   async dispose(): Promise<void> {
     return this.units['lifecycle'].dispose()

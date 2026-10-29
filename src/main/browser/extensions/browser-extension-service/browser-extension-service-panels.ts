@@ -1,5 +1,6 @@
 import { Logger } from '../../../system/logger'
-import { browserJarFor, browserPartitionFor } from '../../browser-service/browser-validation'
+import { extensionJarIdFor } from '../../../../lib/browser/browser-extension-jar'
+import { browserPartitionFor } from '../../browser-service/browser-validation'
 import {
   type BrowserExtensionActionPopupRequest,
   type BrowserExtensionMailbox,
@@ -31,9 +32,7 @@ export class BrowserExtensionServicePanels {
   popupUrlFor(extensionId: string, projectId: string, boxId: string | null): string | null {
     const record = this.host.registry.get(extensionId)
     if (!record || !record.enabled) return null
-    // The jar, not the choice: a context in the profile's default box is in the
-    // global browser's own jar, which is the set a popup can be hosted from.
-    if (!extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)) return null
+    if (!extensionRunsInJar(record, extensionJarIdFor(projectId, boxId))) return null
     return extensionPopupUrl(record.id, record.popupPath)
   }
 

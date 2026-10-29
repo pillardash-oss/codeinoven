@@ -12,7 +12,7 @@ import {
   storeOfferInstallVerb
 } from '$lib/stores/browser-extension-store-offer'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-import { DEFAULT_BOX_ID, extensionJarForBox } from '$lib/stores/global-browser-types'
+import { extensionJarIdFor } from '$shared/browser/browser-extension-jar'
 import { reportError } from '$lib/stores/app-errors.svelte'
 
 /**
@@ -41,17 +41,25 @@ export interface ThreadBrowserExtensionTab {
   title: string
 }
 
-/** The jar an extension list is read for, in the shape extension records use. */
+/**
+ * The jar this tab's extensions belong to.
+ *
+ * A boxed tab reads the box's jar, which the profile shares, and an unboxed tab
+ * reads the jar of the conversation it belongs to, which nothing else reads. That
+ * is the whole difference from the profile's own browser: an extension installed
+ * beside a project's conversation is that project's, not everyone's.
+ */
 function jarForTab(tab: ThreadBrowserExtensionTab): string {
-  return extensionJarForBox(tab.boxId ?? DEFAULT_BOX_ID)
+  return extensionJarIdFor(tab.projectId, tab.boxId)
 }
 
 /**
  * The extensions of one tab's jar, as the menu offers them.
  *
- * A disabled extension runs nowhere and a jar an extension is not loaded in has
- * nothing to open, so both are left out: the menu lists what a click can actually
- * reach on this page, which is what a browser's toolbar does.
+ * Exactly the extensions of the selected box, never the profile's list: a disabled
+ * extension runs nowhere and a jar an extension is not loaded in has nothing to
+ * open, so both are left out. The menu lists what a click can actually reach on
+ * this page, which is what a browser's toolbar does.
  */
 function extensionEntries(
   tab: ThreadBrowserExtensionTab
@@ -113,7 +121,7 @@ async function runThreadBrowserExtensionChoice(
     }
     case 'install-offer': {
       if (!offer) return
-      await installStoreExtensionInBox(offer, tab.boxId)
+      await installStoreExtensionInBox(offer, tab.projectId, tab.boxId)
       return
     }
     case 'install-webstore': {

@@ -100,6 +100,10 @@ export class BrowserServiceJars {
   async forgetProject(projectId: string): Promise<string[]> {
     await this.host.extensions.whenReady()
     this.dropProjectTabs(projectId)
+    // The extensions installed for this project's own browser belong to it, so they
+    // go with the project rather than lingering as jars nothing can reach. Boxes are
+    // left alone: a box is the profile's, and other contexts browse it.
+    await this.host.extensions.forgetProject(projectId)
     // Settle the jars that have a live session *before* their directories go: an
     // open database or a connection still in flight would otherwise keep writing
     // into a profile that is being removed underneath it.

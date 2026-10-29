@@ -1,11 +1,13 @@
 import type { BrowserExtension } from '$shared/ipc-contract'
+import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/types/project'
 import {
   webstoreExtensionIdFromUrl,
   webstoreExtensionNameFromTitle
 } from '$shared/browser/browser-webstore'
+import { extensionJarIdFor } from '$shared/browser/browser-extension-jar'
 import { browserExtensions, type BrowserExtensionInstall } from './browser-extensions.svelte'
 import { globalBrowser } from './global-browser.svelte'
-import { DEFAULT_BOX_ID, DEFAULT_BOX_NAME, extensionJarForBox } from './global-browser-types'
+import { DEFAULT_BOX_NAME } from './global-browser-types'
 
 /**
  * The extension the page on screen is, when that page is its Chrome Web Store
@@ -63,21 +65,19 @@ export function storeOfferInstallVerb(offer: StoreExtensionOffer): string | null
 /** The offer the page on screen makes, or null when it makes none. */
 export function storeExtensionOffer(): StoreExtensionOffer | null {
   const tab = globalBrowser.activeTab
-  if (!tab || tab.url === '') return null
-  const id = webstoreExtensionIdFromUrl(tab.url)
-  if (id === null) return null
-  return {
-    id,
-    name: webstoreExtensionNameFromTitle(tab.title),
-    installed:
-      browserExtensions.extensions.find((extension) => extension.webstoreId === id) ?? null,
-    boxName: globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME,
-    install: browserExtensions.installForWebstoreId(id)
-  }
+  if (!tab) return null
+  return storeExtensionOfferForPage({
+    projectId: GLOBAL_BROWSER_PROJECT_ID,
+    url: tab.url,
+    title: tab.title,
+    boxId: tab.boxId
+  })
 }
 
 /** The page a surface is showing, reduced to what an offer is read from. */
 export interface StoreExtensionOfferPage {
+  /** The project (or space) the page's browser belongs to. */
+  projectId: string
   url: string
   title: string
   /** The box the page runs in, or null for a scope's own jar. */
@@ -89,8 +89,12 @@ export interface StoreExtensionOfferPage {
  *
  * The thread browser draws the same extension chrome the global one does, and its
  * pages make the same offer, so the reading is shared: only the page it is read
- * from differs. The box name comes from the profile's boxes either way, because a
- * box is one jar shared by every context that picks it.
+ * from differs, and the jar the install would land in follows from that page.
+ *
+ * "Already installed" is answered for that jar and not for the profile: an
+ * extension installed beside one project's conversation is that project's, so a
+ * store page in another project has one to install, exactly as it would in a box
+ * that does not run it yet.
  */
 export function storeExtensionOfferForPage(
   page: StoreExtensionOfferPage | null
@@ -98,27 +102,33 @@ export function storeExtensionOfferForPage(
   if (!page || page.url === '') return null
   const id = webstoreExtensionIdFromUrl(page.url)
   if (id === null) return null
+  const jarId = extensionJarIdFor(page.projectId, page.boxId)
   const box = page.boxId === null ? null : globalBrowser.boxById(page.boxId)
   return {
     id,
     name: webstoreExtensionNameFromTitle(page.title),
     installed:
-      browserExtensions.extensions.find((extension) => extension.webstoreId === id) ?? null,
+      browserExtensions.extensions.find(
+        (extension) => extension.webstoreId === id && extension.boxes.includes(jarId)
+      ) ?? null,
     boxName: box?.name ?? DEFAULT_BOX_NAME,
     install: browserExtensions.installForWebstoreId(id)
   }
 }
 
 /**
- * Install one offer into one box's jar.
+ * Install one offer into one page's jar.
  *
- * The caller names the box, because the surface that offers the install knows
- * which page made the offer and this module does not. Nothing here waits for
- * another install: it queues behind whatever is running, and every surface that
- * shows the offer says so.
+ * The caller names the context and the box, because the surface that offers the
+ * install knows which page made the offer and this module does not: the same offer
+ * made from a project's thread browser belongs to that project, and one made from
+ * the global browser belongs to the profile. Nothing here waits for another
+ * install: it queues behind whatever is running, and every surface that shows the
+ * offer says so.
  */
 export async function installStoreExtensionInBox(
   offer: StoreExtensionOffer,
+  projectId: string,
   boxId: string | null
 ): Promise<void> {
   if (offer.installed || offer.install) return
@@ -126,7 +136,7 @@ export async function installStoreExtensionInBox(
     {
       source: 'webstore',
       value: offer.id,
-      boxes: [extensionJarForBox(boxId ?? DEFAULT_BOX_ID)]
+      boxes: [extensionJarIdFor(projectId, boxId)]
     },
     offer.name
   )
@@ -147,5 +157,5 @@ export async function installStoreExtensionOffer(): Promise<void> {
   const offer = storeExtensionOffer()
   if (!offer || offer.installed || offer.install) return
   globalBrowser.showExtensionsSidebar()
-  await installStoreExtensionInBox(offer, globalBrowser.activeTabBoxId)
+  await installStoreExtensionInBox(offer, GLOBAL_BROWSER_PROJECT_ID, globalBrowser.activeTabBoxId)
 }
