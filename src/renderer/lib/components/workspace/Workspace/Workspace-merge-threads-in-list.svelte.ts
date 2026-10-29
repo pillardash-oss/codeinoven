@@ -43,12 +43,12 @@ export class WorkspaceMergeThreadsInList {
   }
   hasMoreHistory = $state(true)
 
-  prevCreateThreadCount = $state(0)
+  prevCreateThreadCount = 0
 
   /** Bumped to open the new-assistant dialog from a keyboard shortcut. */
   assistantCreateTrigger = $state(0)
 
-  creatingThread = $state(false)
+  creatingThread = false
 
   /** Resolve the project a pending create-thread request targets: an explicit
    *  scope bucket matching the docked scoped-threads sidebar overrides the
@@ -302,7 +302,7 @@ export class WorkspaceMergeThreadsInList {
         additions.length > 0 ? [...refreshed, ...additions] : refreshed
   }
 
-  threadsViewHydrating = $state(false)
+  threadsViewHydrating = false
 
   async ensureThreadsViewFullyLoaded(): Promise<void> {
     if (this.threadsViewHydrating) return
@@ -331,7 +331,7 @@ export class WorkspaceMergeThreadsInList {
    * its own and folds in when it lands, so the window's own hydration and the
    * first-paint slice are never made to wait on it.
    */
-  threadsViewGuaranteesHydrating = $state(false)
+  threadsViewGuaranteesHydrating = false
 
   async hydrateThreadsViewGuarantees(): Promise<void> {
     if (this.threadsViewGuaranteesHydrating) return

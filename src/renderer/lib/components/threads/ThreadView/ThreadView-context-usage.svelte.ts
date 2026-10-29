@@ -29,6 +29,7 @@ import type {
 } from '$shared/types'
 import { mergeContextUsage } from '../thread-usage-merge'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 /** One concern of the ThreadView board. */
 export class ThreadViewContextUsage {
   #root: ThreadView | undefined
@@ -39,6 +40,11 @@ export class ThreadViewContextUsage {
   }
   constructor(root: ThreadView) {
     this.#root = root
+  }
+
+  /** Reads the audit settings once the board can resolve them. */
+  bindAuditSettings(): void {
+    this.auditSettings = this.root.sources.auditSettingsForThread()
   }
   project = $state<Project | null>(null)
 
@@ -333,7 +339,8 @@ export class ThreadViewContextUsage {
 
   auditReport = $state<AuditReport | null>(null)
 
-  auditSettings = $state<ThreadSettings>(this.root.sources.auditSettingsForThread())
+  /** Set by `bind()`: the settings the audit card reads. */
+  auditSettings = $state<ThreadSettings>(DEFAULT_SETTINGS)
 
   // The coordinator is a sidebar tool, not a floating panel: the thread owns the
   // data and the callbacks, so it publishes the panel as a snippet and the

@@ -49,6 +49,14 @@ export class GitStatusPanelConfirmPrMerge {
   constructor(root: GitStatusPanel) {
     this.#root = root
   }
+
+  /** Restores the pull request view, once the sibling that stores it is bound. */
+  bindPrListState(): void {
+    const saved = this.root.handlePrListAction.savedView
+    this.prListState = saved.prListState
+    this.prListFilter = saved.prListFilter
+    this.prListSort = saved.prListSort
+  }
   /**
    * Whether this panel's Git state comes from an Oven, and which one. The store
    * resolves it from the active scope it already reads against, so the panel
@@ -97,18 +105,21 @@ export class GitStatusPanelConfirmPrMerge {
   remoteUpdates = $state.raw<GitRemoteUpdate[]>([])
 
   /** Invalidates an in-flight reflog read whose drift has already moved on. */
-  remoteUpdatesRequestId = $state(0)
+  remoteUpdatesRequestId = 0
 
   /**
    * Which pull requests the PR view lists, and where its paging stands. Both are
    * panel state rather than list state because the panel draws the filter in its
    * own action row, beside Push and Pull.
    */
-  prListState = $state<PrState>(this.root.handlePrListAction.savedView.prListState)
+  /** Set by `bind()`: the pull request view the panel was left on. */
+  prListState = $state<PrState>('open')
 
-  prListFilter = $state<PrListFilter>(this.root.handlePrListAction.savedView.prListFilter)
+  /** Set by `bind()`: the pull request filter the panel was left on. */
+  prListFilter = $state<PrListFilter>('all')
 
-  prListSort = $state<PrListSort>(this.root.handlePrListAction.savedView.prListSort)
+  /** Set by `bind()`: the pull request sort the panel was left on. */
+  prListSort = $state<PrListSort>('updated')
 
   prListPage = $state(1)
 

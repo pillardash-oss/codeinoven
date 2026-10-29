@@ -54,76 +54,118 @@ export class GitStatusPanelHandlePrListAction {
     this.#root = root
   }
 
+  /** Builds the stashes controller once the units it reads are there. */
+  private createStashes(): GitStatusPanelStashesController {
+    // The accessors below live on an object literal, where `this` is the literal,
+    // so the unit is captured under a name the accessors can close over. This is
+    // the one place an alias of `this` is the point rather than an accident.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const host = this
+    const root = host.root
+    return new GitStatusPanelStashesController({
+      get projectId() {
+        return root.props.projectId
+      },
+      get activeTab() {
+        return host.activeTab
+      },
+      setActiveTab: (id) => (host.activeTab = id),
+      refreshStatus: () => host.refreshStatus(),
+      reloadHistory: () => host.reloadHistory()
+    })
+  }
+
+  /** Builds the workingTree controller once the units it reads are there. */
+  private createWorkingTree(): GitStatusPanelChangesController {
+    // The accessors below live on an object literal, where `this` is the literal,
+    // so the unit is captured under a name the accessors can close over. This is
+    // the one place an alias of `this` is the point rather than an accident.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const host = this
+    const root = host.root
+    return new GitStatusPanelChangesController({
+      get projectId() {
+        return root.props.projectId
+      },
+      get changes() {
+        return root.loadRepoState.changes
+      },
+      get staged() {
+        return root.loadRepoState.staged
+      },
+      refreshStatus: () => host.refreshStatus(),
+      requestCommitMessageFocus: () => (root.confirmAcceptAllConflicts.commitSelection = true)
+    })
+  }
+
+  /** Builds the find controller once the units it reads are there. */
+  private createFind(): GitStatusPanelFindController {
+    // The accessors below live on an object literal, where `this` is the literal,
+    // so the unit is captured under a name the accessors can close over. This is
+    // the one place an alias of `this` is the point rather than an accident.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const host = this
+    const root = host.root
+    return new GitStatusPanelFindController({
+      get projectId() {
+        return root.props.projectId
+      },
+      get activeTab() {
+        return host.activeTab
+      },
+      get githubIdentity() {
+        return host.githubIdentity
+      },
+      get prListState() {
+        return root.confirmPrMerge.prListState
+      },
+      openCommit: (commit) => void host.selectCommit(commit),
+      requestCheckout: (branch) => root.loadRepoState.branches.requestCheckout(branch),
+      openPullRequest: (pr) => {
+        host.selectedPullRequest = pr
+        root.confirmAcceptAllConflicts.prDetailTab = 'conversation'
+      },
+      openRun: (run) => {
+        host.selectedRun = run
+        host.selectedDeployment = null
+      },
+      openDeployment: (deployment) => {
+        host.selectedDeployment = deployment
+        host.selectedRun = null
+      },
+      openStash: (stash) => void host.stashes.selectStash(stash)
+    })
+  }
+
   /** Reads the view the panel was left on, once the board is bound. */
   bindSavedView(): void {
     this.savedView = this.root.confirmAcceptAllConflicts.initialViewState()
+  }
+
+  /** Builds the controllers that read sibling units. */
+  bindControllers(): void {
+    this.find = this.createFind()
+    this.workingTree = this.createWorkingTree()
+    this.stashes = this.createStashes()
   }
   /**
    * The Find bar's own state and answers. The panel supplies where a result
    * opens; the bar stays a reader of results rather than a second navigator.
    */
-  find = new GitStatusPanelFindController({
-    get projectId() {
-      return this.root.props.projectId
-    },
-    get activeTab() {
-      return this.activeTab
-    },
-    get githubIdentity() {
-      return this.githubIdentity
-    },
-    get prListState() {
-      return this.root.confirmPrMerge.prListState
-    },
-    openCommit: (commit) => void this.selectCommit(commit),
-    requestCheckout: (branch) => this.root.loadRepoState.branches.requestCheckout(branch),
-    openPullRequest: (pr) => {
-      this.selectedPullRequest = pr
-      this.root.confirmAcceptAllConflicts.prDetailTab = 'conversation'
-    },
-    openRun: (run) => {
-      this.selectedRun = run
-      this.selectedDeployment = null
-    },
-    openDeployment: (deployment) => {
-      this.selectedDeployment = deployment
-      this.selectedRun = null
-    },
-    openStash: (stash) => void this.stashes.selectStash(stash)
-  })
+  /** Set by `bind()`: built from siblings that do not exist at field time. */
+  find!: GitStatusPanelFindController
 
   /** The working tree: the diffs, the selection, and the index edits. */
-  workingTree = new GitStatusPanelChangesController({
-    get projectId() {
-      return this.root.props.projectId
-    },
-    get changes() {
-      return this.root.loadRepoState.changes
-    },
-    get staged() {
-      return this.root.loadRepoState.staged
-    },
-    refreshStatus: () => this.refreshStatus(),
-    requestCommitMessageFocus: () => (this.root.confirmAcceptAllConflicts.commitSelection = true)
-  })
+  /** Set by `bind()`: built from siblings that do not exist at field time. */
+  workingTree!: GitStatusPanelChangesController
 
   /** The Stashes view: the stash being read, its file diffs, and the list edits. */
-  stashes = new GitStatusPanelStashesController({
-    get projectId() {
-      return this.root.props.projectId
-    },
-    get activeTab() {
-      return this.activeTab
-    },
-    setActiveTab: (id) => (this.activeTab = id),
-    refreshStatus: () => this.refreshStatus(),
-    reloadHistory: () => this.reloadHistory()
-  })
+  /** Set by `bind()`: built from siblings that do not exist at field time. */
+  stashes!: GitStatusPanelStashesController
 
   /** Set by `bind()`: the view the panel was left on. */
-  savedView: ReturnType<
-    GitStatusPanelConfirmAcceptAllConflicts['initialViewState']
-  > = gitPanelView.get('', '')
+  savedView: ReturnType<GitStatusPanelConfirmAcceptAllConflicts['initialViewState']> =
+    gitPanelView.get('', '')
 
   activeTab = $state<GitPanelTabId>(this.savedView.activeTab)
 
@@ -150,7 +192,7 @@ export class GitStatusPanelHandlePrListAction {
   githubConnected = $derived(this.root.confirmPrMerge.githubStatus?.connected === true)
 
   /** Re-entrancy guard for the background deployment probe (not rendered). */
-  detectingDeployments = $state(false)
+  detectingDeployments = false
 
   amendMode = $state(false)
 

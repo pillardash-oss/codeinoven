@@ -128,7 +128,7 @@ export class ChatComposerCaptureComposerRoot {
    * popover to reach it. Plain book-keeping: it is only read while deciding
    * whether a hover-out may close the list, never rendered.
    */
-  referenceMenuOpen = $state(false)
+  referenceMenuOpen = false
 
   startAfterPopoverOpen = $state(false)
 

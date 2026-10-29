@@ -22,6 +22,7 @@ export class DesignBoard {
   readonly effects = new DesignBoardEffects(this)
   constructor(readProps: () => Props) {
     this.readProps = readProps
+    this.gallery.bindDesignState()
     this.effects.init()
   }
   get props(): Props {

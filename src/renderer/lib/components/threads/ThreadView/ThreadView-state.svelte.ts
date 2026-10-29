@@ -87,7 +87,7 @@ export class ThreadViewState {
    * selected value, the meter, and the turn's budget cannot disagree. The guard
    * keeps one write per stale value instead of repeating it on every flush.
    */
-  reconciledContextWindow = $state('')
+  reconciledContextWindow = ''
 
   /** Minimum quiet time before the rendered battery settles mid-turn. */
   CONTEXT_USAGE_SETTLE_MS = 6000
@@ -108,7 +108,7 @@ export class ThreadViewState {
 
   threadViewElement = $state<HTMLDivElement | null>(null)
 
-  imageUrls = $state(new FileBlobUrlManager())
+  imageUrls = new FileBlobUrlManager()
 
   /**
    * Whether an emptied selection happened inside the responses.
@@ -128,7 +128,7 @@ export class ThreadViewState {
     )
   }
 
-  planningResumeRequested = $state(false)
+  planningResumeRequested = false
 
   /** Turning the Independent Audit switch off undocks the coordinator AND
    *  closes the sidebar shell that the switch opened. Tracked per thread so a
@@ -157,7 +157,7 @@ export class ThreadViewState {
    *  so only requests that arrive afterwards may remount the composer. Starting
    *  from zero made every thread switch remount ChatComposer a second time the
    *  moment the first focus request of the session had ever been issued. */
-  prevFocusComposerCount = $state(workspaceState.focusComposerCount)
+  prevFocusComposerCount = workspaceState.focusComposerCount
 
   /** The mounted composer, used to focus the editor in place (no remount). */
   composer: ChatComposer | undefined = $state(undefined)
@@ -211,7 +211,7 @@ export class ThreadViewState {
 
   /** Thread whose foreign run this view marked working, so the same view clears
    *  it and never clears a run this instance's own session owns. */
-  foreignRunMarkedKey = $state('')
+  foreignRunMarkedKey = ''
 
   /** How many durable parts one trace mounts while it fills its own step list.
    *  The rows are one-line fold controls whose content renders only on open, so

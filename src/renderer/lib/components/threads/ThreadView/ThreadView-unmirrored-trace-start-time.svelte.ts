@@ -53,16 +53,16 @@ export class ThreadViewUnmirroredTraceStartTime {
    */
   bindThread(): void {
     this.mountedThread = this.root.props.thread
-    this.savedScrollState = threadScrollPositions.get(
-      this.root.handleAgentEvent.thread.id
-    )
+    this.savedScrollState = threadScrollPositions.get(this.root.handleAgentEvent.thread.id)
   }
+
   // Workspace clears its selected-thread state before this keyed view's
   // teardown runs. Keep using the mounted identity during that short window;
   // normal thread replacements remain reactive through the derived value.
   // svelte-ignore state_referenced_locally
   /** Set by `bind()`: the thread this trace belongs to. */
-  mountedThread = this.root.props.thread
+  /** Set by `bind()`: the thread this trace belongs to. */
+  mountedThread!: Thread
 
   citationThreadContext = $derived({
     projectId: this.root.handleAgentEvent.thread.projectId,
@@ -70,14 +70,16 @@ export class ThreadViewUnmirroredTraceStartTime {
     scopeBucketId: this.root.handleAgentEvent.thread.scopeBucketId
   })
 
-  // Intentional initial-value captures   Workspace keys this view by thread ID.
-  // svelte-ignore state_referenced_locally
-  savedScrollState = threadScrollPositions.get(this.root.handleAgentEvent.thread.id)
+  /**
+   * Set by `bind()`: the scroll position the surface was left at. Workspace keys
+   * this view by thread id, so the capture happens once, at birth.
+   */
+  savedScrollState!: ReturnType<typeof threadScrollPositions.get>
 
   /** Messages mounted per frame while the window auto-fills after mount. */
   INITIAL_REVEAL_BATCH = 12
 
-  initialPaintRevealFrame = $state(0)
+  initialPaintRevealFrame = 0
 
   hasOlderMessages = $derived(
     this.root.props.controller?.hasOlder ??
@@ -164,7 +166,7 @@ export class ThreadViewUnmirroredTraceStartTime {
 
   /** True once the live session probe has completed; prevents persisted
    *  database status from racing or resurrecting stale busy state. */
-  liveStatusKnown = $state(false)
+  liveStatusKnown = false
 
   /** Gentle inline notice when an interrupted compaction ate the user's turn. */
   compactionInterruptedNotice = $state('')
@@ -175,7 +177,7 @@ export class ThreadViewUnmirroredTraceStartTime {
     kind: 'harness'
   })
 
-  contextUsageCommittedAt = $state(0)
+  contextUsageCommittedAt = 0
 
   /** Called when the user stops hovering the usage indicator. Resets the quota
    *  cache so the *next* hover always fetches fresh data   while the user keeps
@@ -207,7 +209,7 @@ export class ThreadViewUnmirroredTraceStartTime {
    */
   imageMarkEditorId = $state<string | null>(null)
 
-  responseRangeRetriesLeft = $state(this.RESPONSE_RANGE_RETRIES)
+  responseRangeRetriesLeft = this.RESPONSE_RANGE_RETRIES
 
   persistResponseReferenceCommentDraft(id: string, comment: string): void {
     // A temporary chat has no stored draft: its reference list is its own only

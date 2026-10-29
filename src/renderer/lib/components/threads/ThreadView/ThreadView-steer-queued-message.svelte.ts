@@ -101,11 +101,11 @@ export class ThreadViewSteerQueuedMessage {
     )
   }
 
-  responseBubblePositionFrame = $state(0)
+  responseBubblePositionFrame = 0
 
   /** Frame handle and budget for the bounded retry that rebuilds a range whose
    *  anchor has not mounted yet (see `syncResponseHighlights`). */
-  responseRangeRetryFrame = $state(0)
+  responseRangeRetryFrame = 0
 
   scheduleResponseBubbleUpdate(): void {
     if (this.responseBubblePositionFrame) return
@@ -349,7 +349,7 @@ export class ThreadViewSteerQueuedMessage {
     return this.annotationReferences.find((reference) => reference.id === id) ?? null
   }
 
-  idleAttentionHandled = $state(false)
+  idleAttentionHandled = false
 
   async handleIdleAttention(): Promise<void> {
     const { projectId, id } = this.root.handleAgentEvent.thread

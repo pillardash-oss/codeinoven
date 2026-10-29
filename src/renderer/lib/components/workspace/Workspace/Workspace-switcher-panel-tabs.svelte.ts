@@ -147,7 +147,7 @@ export class WorkspaceSwitcherPanelTabs {
    * first one is still rendering must not apply the older mode's remembered
    * place to the newer mode's list.
    */
-  sidebarSettleGeneration = $state(0)
+  sidebarSettleGeneration = 0
 
   /**
    * Put the sidebar where the incoming mode's list belongs: the reader's
@@ -406,7 +406,7 @@ export class WorkspaceSwitcherPanelTabs {
    * verdicts are remembered for the run, and the refs that remain are resolved a
    * few at a time.
    */
-  rescuingDraftThreads = $state(false)
+  rescuingDraftThreads = false
 
   /** Whether a project's sidebar list still has unfetched older rows in the DB. */
   projectHasMoreInDb(projectId: string): boolean {

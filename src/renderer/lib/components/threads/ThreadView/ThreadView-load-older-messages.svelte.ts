@@ -15,6 +15,7 @@ import {
 import { HISTORY_WINDOW_SIZE, promptPagesBefore } from '../thread-history'
 import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 /** One concern of the ThreadView board. */
 export class ThreadViewLoadOlderMessages {
   #root: ThreadView | undefined
@@ -26,6 +27,13 @@ export class ThreadViewLoadOlderMessages {
   }
   constructor(root: ThreadView) {
     this.#root = root
+  }
+
+  /** Reads the thread's settings once the board can resolve them. */
+  bindSettings(): void {
+    this.settings = this.hasController
+      ? normalizeChatSettings(this.root.props.controller!.settings)
+      : this.root.sources.initialThreadSettings(this.root.handleAgentEvent.thread)
   }
 
   /**
@@ -46,7 +54,7 @@ export class ThreadViewLoadOlderMessages {
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   hasController = $derived(this.root.props.controller !== undefined)
 
-  alive = $state(true)
+  alive = true
 
   messages = $derived(
     this.root.props.controller?.messages ??
@@ -128,11 +136,8 @@ export class ThreadViewLoadOlderMessages {
   jumpLoading = $state(false)
 
   // svelte-ignore state_referenced_locally
-  settings = $state<ThreadSettings>(
-    this.hasController
-      ? normalizeChatSettings(this.root.props.controller!.settings)
-      : this.root.sources.initialThreadSettings(this.root.handleAgentEvent.thread)
-  )
+  /** Set by `bind()`: the settings this view reads from. */
+  settings = $state<ThreadSettings>(DEFAULT_SETTINGS)
 
   /** Jump target for the header's history dropdown   loads a window around the
    *  target when it lies outside the currently loaded cache, then scrolls to it. */

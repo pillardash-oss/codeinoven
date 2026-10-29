@@ -126,7 +126,7 @@ export class ThreadViewStudioTemporaryChatContext {
 
   storedEfficiencyKpis = $state<UsageEfficiencyKpis | undefined>(undefined)
 
-  efficiencyKpiRequestVersion = $state(0)
+  efficiencyKpiRequestVersion = 0
 
   async refreshEfficiencyKpis(
     projectId = this.root.handleAgentEvent.thread.projectId,

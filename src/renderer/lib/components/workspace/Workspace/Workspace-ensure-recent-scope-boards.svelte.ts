@@ -12,7 +12,7 @@ export class WorkspaceEnsureRecentScopeBoards {
   constructor(root: Workspace) {
     this.#root = root
   }
-  recentScopeLoadRequest = $state(0)
+  recentScopeLoadRequest = 0
 
   async ensureRecentScopeBoards(projectIds: string[]): Promise<void> {
     const request = ++this.recentScopeLoadRequest

@@ -281,7 +281,7 @@ export class ThreadViewCurrentWorkingTraceAttribution {
 
   /** Prevents a slower background reconnect from replacing the session chosen
    *  for a newly submitted prompt. */
-  sessionBindingVersion = $state(0)
+  sessionBindingVersion = 0
 
   async ensureSessionReady(): Promise<string> {
     if (this.root.handleAgentEvent.sessionId) return this.root.handleAgentEvent.sessionId

@@ -50,6 +50,16 @@ export class WorkspaceCreateThreadInProject {
   constructor(root: Workspace) {
     this.#root = root
   }
+
+  /** Builds the project dialogs once the sibling that deletes is there. */
+  bindProjectDialogs(): void {
+    this.projectDialogs = new WorkspaceProjectDialogs({
+      getProjects: () => this.projects,
+      setProjects: (next) => (this.projects = next),
+      getProjectIcons: () => this.projectIcons,
+      deleteProject: this.root.openThreadFromSwitcher.deleteProject
+    })
+  }
   projects = $state<Project[]>([])
 
   allThreads = $state<Thread[]>([])
@@ -59,12 +69,8 @@ export class WorkspaceCreateThreadInProject {
   /** Project icon data URLs keyed by project id. */
   projectIcons = new SvelteMap<string, string>()
 
-  projectDialogs = new WorkspaceProjectDialogs({
-    getProjects: () => this.projects,
-    setProjects: (next) => (this.projects = next),
-    getProjectIcons: () => this.projectIcons,
-    deleteProject: this.root.openThreadFromSwitcher.deleteProject
-  })
+  /** Set by `bind()`: the dialogs, which need a sibling that does not exist yet. */
+  projectDialogs!: WorkspaceProjectDialogs
 
   // ─── Data loading ────────────────────────────────────────────────────────
 

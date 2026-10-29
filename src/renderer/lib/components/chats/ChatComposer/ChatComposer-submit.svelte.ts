@@ -163,7 +163,7 @@ export class ChatComposerSubmit {
   slashIndex = $state(0)
 
   /** Guards the async resolve against a second send landing inside its window. */
-  resolvingSend = $state(false)
+  resolvingSend = false
 
   lastCaretText: string | null = $state(null)
 

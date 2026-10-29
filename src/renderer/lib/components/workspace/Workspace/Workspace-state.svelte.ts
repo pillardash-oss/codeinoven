@@ -49,17 +49,17 @@ export class WorkspaceState {
   /** Which add-project flow the next trigger should start. */
   projectCreateTriggerKind = $state<'local' | 'git-clone'>('local')
 
-  prevAddProjectCount = $state(0)
+  prevAddProjectCount = 0
 
-  prevNewChatCount = $state(0)
+  prevNewChatCount = 0
 
-  prevAssistantTaskCount = $state(0)
+  prevAssistantTaskCount = 0
 
-  prevAssistantCount = $state(0)
+  prevAssistantCount = 0
 
-  prevProjectFileOpenCount = $state(0)
+  prevProjectFileOpenCount = 0
 
-  prevToggleContextSidebarCount = $state(0)
+  prevToggleContextSidebarCount = 0
 
   // Scope actions (edit, pin, archive, worktree lifecycle, merge, delete) shared
   // with the scope board, so the sidebar scope and the board offer the same set.
@@ -104,13 +104,13 @@ export class WorkspaceState {
 
   gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
 
-  sidebarWasVisible = $state(false)
+  sidebarWasVisible = false
 
   /** Whether the sidebar's own panel is the one hosting a window-sized surface,
    *  which has to outlive `sidebarVisible` going false (see above). */
   sidebarHostsFullscreenEditor = $derived(projectFilesWorkspace.fullscreenOpen)
 
-  terminalWasVisible = $state(false)
+  terminalWasVisible = false
 
   /** Assistant runs whose parent task is being fetched, so one selection never
    *  fires two reads for the same run. */

@@ -58,6 +58,10 @@ export class ThreadView {
   readonly effects = new ThreadViewEffects(this)
   constructor(readProps: () => ThreadViewSurfaceProps) {
     this.readProps = readProps
+    this.submitSpecDecision.bindAuditState()
+    this.loadOlderMessages.bindSettings()
+    this.unmirroredTraceStartTime.bindThread()
+    this.contextUsage.bindAuditSettings()
     this.pollStreamParts.bindTraceScope()
     this.unmirroredTraceStartTime.bindThread()
     this.loadOlderMessages.bind()

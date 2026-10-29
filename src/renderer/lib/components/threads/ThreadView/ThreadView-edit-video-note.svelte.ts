@@ -45,7 +45,7 @@ export class ThreadViewEditVideoNote {
   /** Full persisted user-message history for the header's quick-jump list. */
   fullUserMessageHistory = $state<UserMessageSummary[]>([])
 
-  userMessageHistoryLoaded = $state(false)
+  userMessageHistoryLoaded = false
 
   userMessageHistoryLoading: Promise<void> | null = $state(null)
 

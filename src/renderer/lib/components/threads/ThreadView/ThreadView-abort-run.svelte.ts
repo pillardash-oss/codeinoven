@@ -55,7 +55,7 @@ export class ThreadViewAbortRun {
   /** Prevents duplicate manual retries while the paused provider turn is being replaced. */
   providerRetrying = $state(false)
 
-  lastCheckpointThreadId = $state('')
+  lastCheckpointThreadId = ''
 
   checkpointRefreshGuard = new LatestRequestGuard()
 
@@ -73,7 +73,7 @@ export class ThreadViewAbortRun {
       this.root.studioTemporaryChatContext.hasFinalAgentResponse
   )
 
-  locallySubmittedTurnAcknowledged = $state(false)
+  locallySubmittedTurnAcknowledged = false
 
   acknowledgeLocalTurn(): void {
     if (this.root.buildSpecActionPrompt.locallySubmittedTurnId)

@@ -42,6 +42,7 @@ export class Workspace {
   readonly effects = new WorkspaceEffects(this)
   constructor(readProps: () => WorkspaceSurfaceProps) {
     this.readProps = readProps
+    this.createThreadInProject.bindProjectDialogs()
     this.state.bind()
     this.effects.init()
   }

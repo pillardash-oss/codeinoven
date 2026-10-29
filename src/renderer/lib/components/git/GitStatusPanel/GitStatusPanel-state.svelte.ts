@@ -66,9 +66,9 @@ export class GitStatusPanelState {
    *  on purpose: writing them inside an effect must not create dependencies,
    *  they only exist to tell first mount, project changes and pure scope
    *  swaps apart. */
-  appliedProjectId = $state('')
+  appliedProjectId = ''
 
-  appliedScopeBucketId = $state('')
+  appliedScopeBucketId = ''
 
   /** Whether a notification action is in flight, so its controls can hold still. */
   notificationBusy = $derived(githubNotifications.busyThreadId !== null)

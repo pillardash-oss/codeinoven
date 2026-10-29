@@ -30,7 +30,7 @@ export class AppUpdateConfig {
   startAtLoginOfferOpen = $state(false)
 
   /** Set once the first run has been checked, so the guide is offered exactly once. */
-  firstRunChecked = $state(false)
+  firstRunChecked = false
 
   effectiveTheme = $derived(
     this.config.theme === 'system' ? (this.systemDark ? 'dark' : 'light') : this.config.theme

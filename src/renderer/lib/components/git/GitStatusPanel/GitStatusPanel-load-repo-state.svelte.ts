@@ -26,21 +26,37 @@ export class GitStatusPanelLoadRepoState {
   constructor(root: GitStatusPanel) {
     this.#root = root
   }
+
+  /** Builds the branches controller once the units it reads are there. */
+  private createBranches(): GitStatusPanelBranchesController {
+    // The accessors below live on an object literal, where `this` is the literal,
+    // so the unit is captured under a name they can close over.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const host = this
+    const root = host.root
+    return new GitStatusPanelBranchesController({
+      get projectId() {
+        return root.props.projectId
+      },
+      get status() {
+        return host.status
+      },
+      get localBranchNames() {
+        return root.confirmAcceptAllConflicts.localBranchNames
+      }
+    })
+  }
+
+  /** Builds the controllers that read sibling units. */
+  bindControllers(): void {
+    this.branches = this.createBranches()
+  }
   /**
    * The Branches view's state and operations, including the confirmations a
    * checkout and a delete ask for before they touch the working tree.
    */
-  branches = new GitStatusPanelBranchesController({
-    get projectId() {
-      return this.root.props.projectId
-    },
-    get status() {
-      return this.status
-    },
-    get localBranchNames() {
-      return this.root.confirmAcceptAllConflicts.localBranchNames
-    }
-  })
+  /** Set by `bind()`: built from a sibling that does not exist at field time. */
+  branches!: GitStatusPanelBranchesController
 
   /**
    * Why the repository check itself failed, or null.
@@ -72,7 +88,7 @@ export class GitStatusPanelLoadRepoState {
 
   /** Invalidated whenever the panel swaps scope buckets, so a history page
    *  fetched for the previous worktree can never land in the new one's list. */
-  historyRequestId = $state(0)
+  historyRequestId = 0
 
   /** False once a page comes back shorter than requested   there's nothing older left. */
   historyHasMore = $state(true)

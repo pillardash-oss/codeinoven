@@ -224,12 +224,12 @@ export class ThreadViewPollStreamParts {
 
   /** True while a durable read for this mount is current. A late page from a
    *  superseded read must not touch the (shared) cached fold. */
-  streamPartsLoadGeneration = $state(0)
+  streamPartsLoadGeneration = 0
 
   /** Bumped whenever the durable fold is dropped (a steer, a new local turn).
    *  An older-page read started before it must not resurrect entries from the
    *  turn the reader has left. */
-  streamFoldVersion = $state(0)
+  streamFoldVersion = 0
 
   clearStreamParts(): void {
     this.streamPartsLoadGeneration += 1
@@ -273,7 +273,7 @@ export class ThreadViewPollStreamParts {
    */
   completedTurns = $state<TurnStreamCompletedTurn[]>([])
 
-  completedTurnsGeneration = $state(0)
+  completedTurnsGeneration = 0
 
   async loadCompletedTurns(): Promise<void> {
     const { projectId, id } = this.root.handleAgentEvent.thread

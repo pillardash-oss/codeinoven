@@ -223,7 +223,7 @@ export class ThreadViewSwitchProject {
   /** True while a move is in flight. Choosing a second project before the first
    *  create settles would otherwise leave an orphan thread behind in the project
    *  the user skipped past. */
-  switchingProject = $state(false)
+  switchingProject = false
 
   /**
    * Hand this not-yet-used thread to another project.

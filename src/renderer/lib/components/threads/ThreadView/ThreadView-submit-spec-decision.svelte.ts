@@ -27,6 +27,11 @@ export class ThreadViewSubmitSpecDecision {
   constructor(root: ThreadView) {
     this.#root = root
   }
+
+  /** Reads the thread's audit state once the board can resolve it. */
+  bindAuditState(): void {
+    this.auditState = this.root.handleAgentEvent.thread.auditState
+  }
   showSpecStudio = $state(false)
 
   assignment = $state<AssignmentPlan | null>(null)
@@ -41,7 +46,8 @@ export class ThreadViewSubmitSpecDecision {
 
   // Intentional mounted-thread snapshot; live changes are reconciled from persisted thread state.
   // svelte-ignore state_referenced_locally
-  auditState = $state<Thread['auditState']>(this.root.handleAgentEvent.thread.auditState)
+  /** Set by `bind()`: where the audit stands for this thread. */
+  auditState = $state<Thread['auditState']>('offered')
 
   auditBusy = $state(false)
 

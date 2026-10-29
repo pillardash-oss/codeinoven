@@ -24,6 +24,11 @@ export class GitStatusPanelConfirmAcceptAllConflicts {
   constructor(root: GitStatusPanel) {
     this.#root = root
   }
+
+  /** Restores the changes view, once the sibling that stores it is bound. */
+  bindChangesView(): void {
+    this.changesView = this.root.handlePrListAction.savedView.changesView
+  }
   /** Why the Oven could not answer, for the surface overlay, or null. */
   ovenError = $derived(
     this.root.confirmPrMerge.ovenTarget
@@ -40,7 +45,8 @@ export class GitStatusPanelConfirmAcceptAllConflicts {
 
   preflightDetail = $state('')
 
-  changesView = $state<'list' | 'tree'>(this.root.handlePrListAction.savedView.changesView)
+  /** Set by `bind()`: the changes view the panel was left on. */
+  changesView = $state<'list' | 'tree'>('list')
 
   commitSelection = $state(false)
 

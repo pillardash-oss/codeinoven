@@ -28,14 +28,21 @@ export class DesignBoardGallery {
   constructor(root: DesignBoard) {
     this.#root = root
   }
+
+  /** Reads the stored design state, once the board can answer for the props. */
+  bindDesignState(): void {
+    this.designState = designCoordinatorState.stateFor(
+      this.root.props.projectId,
+      this.root.props.threadId
+    )
+  }
   selectionThreadId = $derived(this.root.props.viewingThreadId ?? this.root.props.threadId)
 
   // Seeded from whatever the workspace already fetched, so the panel paints on
   // its first frame instead of flashing a spinner.
   // svelte-ignore state_referenced_locally
-  designState = $state<ThreadDesignState | null>(
-    designCoordinatorState.stateFor(this.root.props.projectId, this.root.props.threadId)
-  )
+  /** Set by `bind()`: the stored design state for this thread. */
+  designState = $state<ThreadDesignState | null>(null)
 
   gallery = $state<DesignScreenShot[]>([])
 
