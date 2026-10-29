@@ -93,6 +93,15 @@
    * the controls that belong to what is on screen.
    */
   let annotationToolbar = $state<HTMLDivElement>()
+  /**
+   * The still itself, as the element the keyboard returns to.
+   *
+   * A comment is a detour from the frame, and the press that follows one is about
+   * the frame: once its editor closes, focus lands here rather than on the pen's
+   * colour control, which would answer a space by opening a palette instead of
+   * letting the picture continue.
+   */
+  let still = $state<HTMLDivElement>()
   setAnnotationToolbarHost({ target: () => annotationToolbar })
 
   /** The box the still is fitted inside, measured as the pane resizes. */
@@ -170,11 +179,13 @@
   frame the user was looking at.
 -->
 <div
-  class="fixed z-40 overflow-hidden bg-black"
+  class="fixed z-40 overflow-hidden bg-black outline-none"
   style:left={`${bounds.x}px`}
   style:top={`${bounds.y}px`}
   style:width={`${bounds.width}px`}
   style:height={`${bounds.height}px`}
+  bind:this={still}
+  tabindex="-1"
 >
   <div class="absolute inset-0" bind:offsetWidth={boxWidth} bind:offsetHeight={boxHeight}>
     <img
@@ -208,6 +219,7 @@
             if (!next) onClose()
           }}
           {onContinue}
+          onFocusSurface={() => still?.focus()}
           hint="Draw on the frame · Space to continue · Esc to finish"
         />
       </div>

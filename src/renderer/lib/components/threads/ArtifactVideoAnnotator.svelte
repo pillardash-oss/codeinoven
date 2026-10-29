@@ -84,6 +84,15 @@
   // turn those DOM writes into state writes. The player owns it now, so it is
   // taken from the player's own hand-over.
   let video: HTMLVideoElement | null = null
+  /**
+   * The player's own box, which is what the keyboard falls back to.
+   *
+   * Finishing a comment must not leave the press that continues the video on one
+   * of the pen's buttons, so the focus is handed here, to the picture being
+   * watched. It is a focus holder, not a control: nothing about the player's own
+   * behaviour changes.
+   */
+  let playerBox = $state<HTMLDivElement>()
   /** Whether the pointer draws on the picture instead of driving the player. */
   let armed = $state(false)
   /** Bound to the element, so a scrubbed frame and a drawn mark agree on the second. */
@@ -226,6 +235,7 @@
           onArmedChange={handleArmedChange}
           onFocusMark={focusMark}
           onContinue={continueFromAnnotation}
+          onFocusSurface={() => playerBox?.focus()}
           activeSeconds={currentTime}
           hint="Draw on the frame · Space to continue · Esc to finish"
         />
@@ -234,7 +244,7 @@
   </div>
 {/snippet}
 
-<div class="flex h-full min-h-0 w-full flex-col">
+<div class="flex h-full min-h-0 w-full flex-col outline-none" bind:this={playerBox} tabindex="-1">
   <!-- The artifact video is played by the app's own player, exactly like the
        plain one in the conversation, so it shares its controls, its failure
        state and the frame it was left on. The mark layer is drawn over the

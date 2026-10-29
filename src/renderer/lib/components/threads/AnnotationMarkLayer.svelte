@@ -100,6 +100,17 @@
      * about a moment, and a moment the user cannot see is not editable.
      */
     onFocusMark?: (mark: ResponseReferenceAnchor) => void
+    /**
+     * Put the keyboard back on the picture.
+     *
+     * The pen's controls are buttons beside the picture, and a focused button
+     * owns the space key: finishing a comment would leave the press that is meant
+     * to continue the video on the colour control, which opens a palette instead.
+     * Writing a comment is a detour from the picture, so its end hands the
+     * keyboard back to the host's picture rather than to the control that opened
+     * it. The host owns what the picture is (a player, a still), so it focuses it.
+     */
+    onFocusSurface?: () => void
   }
 
   let {
@@ -114,7 +125,8 @@
     hint = 'Draw on the picture · Esc to finish',
     activeSeconds = null,
     onFocusMark,
-    onContinue
+    onContinue,
+    onFocusSurface
   }: Props = $props()
 
   const toolbarHost = hasAnnotationToolbarHost() ? getAnnotationToolbarHost() : undefined
@@ -261,6 +273,7 @@
   function closeEditor(): void {
     localEditingId = null
     onEditClosed()
+    onFocusSurface?.()
   }
 
   function saveComment(id: string, comment: string): void {
@@ -312,6 +325,10 @@
       draftPoints = []
     }
     onArmedChange(next)
+    // The control that switched the pen is not where the keyboard belongs: the
+    // next press is about the picture, whether that is drawing on it or letting
+    // it run.
+    onFocusSurface?.()
   }
 
   function remeasure(): void {
@@ -328,25 +345,43 @@
     )
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      // The comment field owns Escape while it is open, so disarming here would
-      // fight the editor for the same key. The pen dropdown owns its
-      // own Escape for the same reason.
-      if (activeEditingId || penOpen) return
-      drawing = false
-      draftPoints = []
-      onArmedChange(false)
-      return
-    }
-    // Continuing is the host's decision, and only when the surface is actually
-    // answering the keyboard: an open comment bubble and a focused field both
-    // mean a space is part of what the user is writing.
-    if (!onContinue || activeEditingId || penOpen) return
-    if (event.defaultPrevented || typing(event)) return
+  /** Whether a dialog that owns the keyboard is in front of this surface. */
+  function dialogOwnsKeyboard(event: KeyboardEvent): boolean {
+    const target = event.target
+    return target instanceof HTMLElement && target.closest('[aria-modal="true"]') !== null
+  }
+
+  /**
+   * The continue key, claimed before the control that holds the focus.
+   *
+   * A space press beside an annotated picture is about the picture, but a focused
+   * button reads it as its own activation, and the pen's colour control answers a
+   * space by opening its palette. So the press is taken in the capture phase,
+   * before the focused control can act on it, and refused only where a space is
+   * genuinely a character or belongs to a dialog in front of this surface.
+   */
+  function handleContinueKeydown(event: KeyboardEvent): void {
+    if (!onContinue || activeEditingId) return
+    if (typing(event) || dialogOwnsKeyboard(event)) return
     if (!keymapState.matches('video-annotation-continue', event)) return
     event.preventDefault()
+    event.stopPropagation()
+    // The pen panel is a choice about the next stroke, not about continuing: a
+    // space keeps the promise the hint makes and puts it away.
+    if (penOpen) penOpen = false
     onContinue()
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape') return
+    // The comment field owns Escape while it is open, so disarming here would
+    // fight the editor for the same key. The pen dropdown owns its
+    // own Escape for the same reason.
+    if (activeEditingId || penOpen) return
+    drawing = false
+    draftPoints = []
+    onArmedChange(false)
+    onFocusSurface?.()
   }
 
   /** Badge wording names a frame's moment, which a still mark has none of. */
@@ -399,7 +434,12 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} onscrollcapture={remeasure} onresize={remeasure} />
+<svelte:window
+  onkeydowncapture={handleContinueKeydown}
+  onkeydown={handleKeydown}
+  onscrollcapture={remeasure}
+  onresize={remeasure}
+/>
 
 <svg
   class="pointer-events-none absolute inset-0 h-full w-full"
@@ -469,7 +509,7 @@
   class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute top-1.5 right-1.5 z-40']}
   {@attach toolbarAttachment}
 >
-  {#if armed}
+  {#if armed && hint}
     <span
       class="hidden bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white sm:inline"
       aria-live="polite"
