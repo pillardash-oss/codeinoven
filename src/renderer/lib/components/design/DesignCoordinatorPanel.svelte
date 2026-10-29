@@ -688,27 +688,33 @@
           screen pictured. List is the same screens as rows, which is how a design of
           thirty screens is read and arranged. The label always names what the click
           will show, and the design in front never changes.
+
+          A composition is not a folder of screens: it is one page with a timeline,
+          so there is no second reading of it to switch to, and the control is not
+          offered there at all.
         -->
-        <button
-          type="button"
-          class="flex h-6 items-center gap-1 px-1.5 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-pressed={board.studio.screensView === 'list'}
-          title={board.studio.screensView === 'cards'
-            ? 'Show the screens of this design as a list'
-            : 'Show the screens of this design as cards'}
-          aria-label={board.studio.screensView === 'cards'
-            ? 'Show the screens of this design as a list'
-            : 'Show the screens of this design as cards'}
-          onclick={() => board.studio.toggleScreensView()}
-        >
-          {#if board.studio.screensView === 'cards'}
-            <CioListTree size={12} />
-            List
-          {:else}
-            <CioLayoutGrid size={12} />
-            Cards
-          {/if}
-        </button>
+        {#if !board.gallery.video}
+          <button
+            type="button"
+            class="flex h-6 items-center gap-1 px-1.5 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            aria-pressed={board.studio.screensView === 'list'}
+            title={board.studio.screensView === 'cards'
+              ? 'Show the screens of this design as a list'
+              : 'Show the screens of this design as cards'}
+            aria-label={board.studio.screensView === 'cards'
+              ? 'Show the screens of this design as a list'
+              : 'Show the screens of this design as cards'}
+            onclick={() => board.studio.toggleScreensView()}
+          >
+            {#if board.studio.screensView === 'cards'}
+              <CioListTree size={12} />
+              List
+            {:else}
+              <CioLayoutGrid size={12} />
+              Cards
+            {/if}
+          </button>
+        {/if}
         {#if board.historyActions.historyActions && board.gallery.selected.directory !== '' && !board.gallery.selectedMissing}
           <DesignHistoryActions
             compact
