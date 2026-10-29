@@ -60,6 +60,15 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       )
   )
 
+  /** True while a large first load is still revealing its tail in batches.
+   *  Publishing a batch bumps this thread's revision, which is what re-runs the
+   *  read; the pending-reveal set itself is plain state owned by the cache. */
+  revealing = $derived.by(() => {
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    threadMessages.streamRevision(projectId, id)
+    return threadMessages.revealing(projectId, id)
+  })
+
   // Intentional initial-value capture   the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
   /**

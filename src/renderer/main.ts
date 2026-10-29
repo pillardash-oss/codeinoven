@@ -37,6 +37,15 @@ const app = mount(App, {
   target: document.getElementById('app')!
 })
 
+// Drop the static first-frame skeleton (index.html) only once the app has
+// painted over it. `mount` builds the DOM synchronously but the compositor draws
+// it a frame later, so removing the skeleton in the same task would expose the
+// empty surface it exists to cover. Two frames: the first commits the app's DOM,
+// the second means it has been drawn.
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => document.getElementById('boot-skeleton')?.remove())
+})
+
 // The spotlight is the app's most-used surface and it is a dynamic import at its
 // render site, reached by a keyboard shortcut. Nothing can warm it on hover, so
 // the first Cmd/Ctrl+K of a session would pay the chunk fetch and module eval on

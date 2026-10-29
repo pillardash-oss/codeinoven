@@ -776,6 +776,7 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
 
   emptyConversation = $derived(
     this.root.sources.loaded &&
+      !this.root.sources.revealing &&
       this.visibleMessages.length === 0 &&
       !this.root.switchProject.busy &&
       !this.root.submitBrainstormDecision.failureRetryVisible &&

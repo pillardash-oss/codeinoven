@@ -131,6 +131,15 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     let readyMessages = 0
     if (thread) {
       await threadMessages.waitForLoad(thread.projectId, thread.id)
+      // Hold the reveal until the transcript has rows, bounded so a genuinely
+      // empty thread (a new one, whose first screen is its composer) never waits.
+      const contentDeadline = Date.now() + 800
+      while (
+        threadMessages.messages(thread.projectId, thread.id).length === 0 &&
+        Date.now() < contentDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 16))
+      }
       // A large first load lands in tail-first batches; revealing the window
       // against the first batch would put the newest rows on screen and then
       // push them down as older ones arrive. Wait for the window to be whole,
@@ -140,11 +149,18 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         await new Promise((resolve) => setTimeout(resolve, 16))
       }
       await tick()
+      // Two frames, not one: the first commits the transcript's DOM, the second
+      // means the compositor has drawn it. The old form raced a 120 ms timer
+      // against a single rAF, so it could resolve before a frame was painted and
+      // reveal the window on an empty column. The timer stays only as a failsafe
+      // for a renderer that cannot produce a frame at all.
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 120)
+        const failsafe = setTimeout(resolve, 1_000)
         requestAnimationFrame(() => {
-          clearTimeout(timer)
-          resolve()
+          requestAnimationFrame(() => {
+            clearTimeout(failsafe)
+            resolve()
+          })
         })
       })
       readyMessages = threadMessages.messages(thread.projectId, thread.id).length

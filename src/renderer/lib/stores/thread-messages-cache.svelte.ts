@@ -312,7 +312,14 @@ export class ThreadMessagesCache {
       revealed = Math.min(merged.length, revealed + LOAD_REVEAL_BATCH_SIZE)
       this.#revealTimers.set(key, setTimeout(publishBatch, LOAD_REVEAL_INTERVAL_MS))
     }
-    this.#revealTimers.set(key, setTimeout(publishBatch, LOAD_REVEAL_INTERVAL_MS))
+    // The first batch publishes in the same turn that marks the thread loaded.
+    // Deferring it opened a window where the thread read as loaded with an empty
+    // transcript: the skeleton had already been replaced, so the conversation
+    // flashed an empty container and the composer jumped to the middle of the
+    // column (the centered head start is for a thread with no messages) before
+    // the tail arrived and pushed it back down. Six messages cost one small
+    // render, so there is nothing to gain by deferring them.
+    publishBatch()
   }
 
   /**

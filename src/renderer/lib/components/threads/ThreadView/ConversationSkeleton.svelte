@@ -15,7 +15,7 @@
    */
 </script>
 
-<div class="animate-pulse space-y-6" aria-hidden="true">
+<div class="animate-pulse space-y-6" aria-hidden="true" data-conversation-skeleton>
   <!-- The prompt the turn was started from. -->
   <div class="space-y-2">
     <div class="h-3 w-[58%] bg-overlay"></div>
