@@ -12,17 +12,11 @@ import { scopeState } from '$lib/stores/scope.svelte'
 import type { PullRequestSummary } from '$shared/types'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the GitStatusPanel board. */
-export class GitStatusPanelConfirmAcceptAllConflicts {
-  #root: GitStatusPanel | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): GitStatusPanel {
-    if (!this.#root)
-      throw new Error('GitStatusPanelConfirmAcceptAllConflicts read its board before it was bound')
-    return this.#root
-  }
+export class GitStatusPanelConfirmAcceptAllConflicts extends BoardUnit<GitStatusPanel> {
   constructor(root: GitStatusPanel) {
-    this.#root = root
+    super(root)
   }
 
   /** Restores the changes view, once the sibling that stores it is bound. */

@@ -51,17 +51,11 @@ import { messageText } from '../thread-message-presentation'
 import { composerContextUsage } from '../thread-usage-merge'
 import type { WorkingModelSelection } from './ThreadView-types'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewCurrentWorkingTraceAttribution {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewCurrentWorkingTraceAttribution read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   /** Staged (intent-only) Independent Audit toggle: turning the switch on
    *  stages the choice and docks the audit coordinator immediately. `null`

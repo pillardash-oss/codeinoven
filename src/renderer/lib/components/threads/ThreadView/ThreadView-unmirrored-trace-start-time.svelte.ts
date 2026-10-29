@@ -32,17 +32,11 @@ import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ComposerStackSlot } from './ThreadView-types'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { previewUrl } from './thread-view-preview-url'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewUnmirroredTraceStartTime {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewUnmirroredTraceStartTime read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
 
   /**

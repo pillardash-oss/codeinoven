@@ -10,6 +10,7 @@ import { GitStatusPanelRefreshAgentTurnState } from './GitStatusPanel-refresh-ag
 import { GitStatusPanelState } from './GitStatusPanel-state.svelte'
 import { GitStatusPanelEffects } from './GitStatusPanel-effects.svelte'
 import type { GitStatusPanelSurfaceProps } from './GitStatusPanel-types'
+import { BoardState } from '$lib/components/board-state'
 /**
  * The GitStatusPanel board: one instance per concern, each holding this board.
  *
@@ -17,8 +18,7 @@ import type { GitStatusPanelSurfaceProps } from './GitStatusPanel-types'
  * is owned by the component and tears down with it. A unit reads the props
  * through this board, so a prop that changes keeps every `$derived` live.
  */
-export class GitStatusPanel {
-  private readonly readProps: () => GitStatusPanelSurfaceProps
+export class GitStatusPanel extends BoardState<GitStatusPanelSurfaceProps> {
   readonly handlePrListAction = new GitStatusPanelHandlePrListAction(this)
   readonly loadRepoState = new GitStatusPanelLoadRepoState(this)
   readonly confirmPrMerge = new GitStatusPanelConfirmPrMerge(this)
@@ -31,16 +31,13 @@ export class GitStatusPanel {
   readonly state = new GitStatusPanelState(this)
   readonly effects = new GitStatusPanelEffects(this)
   constructor(readProps: () => GitStatusPanelSurfaceProps) {
-    this.readProps = readProps
+    super(readProps)
     this.confirmAcceptAllConflicts.bindChangesView()
     this.confirmPrMerge.bindPrListState()
     this.handlePrListAction.bindSavedView()
     this.handlePrListAction.bindControllers()
     this.loadRepoState.bindControllers()
     this.effects.init()
-  }
-  get props(): GitStatusPanelSurfaceProps {
-    return this.readProps()
   }
 }
 /** Build the board from the surface props. */

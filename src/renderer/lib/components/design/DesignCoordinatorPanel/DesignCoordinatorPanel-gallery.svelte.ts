@@ -17,16 +17,11 @@ import type {
   ThreadDesignState
 } from '$shared/ipc-contract'
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the DesignBoard board. */
-export class DesignBoardGallery {
-  #root: DesignBoard | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): DesignBoard {
-    if (!this.#root) throw new Error('DesignBoardGallery read its board before it was bound')
-    return this.#root
-  }
+export class DesignBoardGallery extends BoardUnit<DesignBoard> {
   constructor(root: DesignBoard) {
-    this.#root = root
+    super(root)
   }
 
   /** Reads the stored design state, once the board can answer for the props. */

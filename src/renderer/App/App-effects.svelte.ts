@@ -26,16 +26,11 @@ import { installAppIpcSubscriptions } from '../app-ipc-subscriptions'
 import { guideState } from '$lib/guide/guide-state.svelte'
 import type { View } from './App-types'
 import type { App } from './App-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the App board. */
-export class AppEffects {
-  #root: App | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): App {
-    if (!this.#root) throw new Error('AppEffects read its board before it was bound')
-    return this.#root
-  }
+export class AppEffects extends BoardUnit<App> {
   constructor(root: App) {
-    this.#root = root
+    super(root)
   }
   /**
    * The work the surface used to do as it set itself up: effects, the

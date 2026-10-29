@@ -45,7 +45,8 @@ import {
 } from './checkpoint/checkpoint-maintenance'
 import {
   TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
-  transcriptWriteEvidence
+  transcriptWriteEvidence,
+  type TranscriptEvidenceRow
 } from './checkpoint/checkpoint-transcript-evidence'
 
 export { MAX_CHECKPOINT_FAILURE_LENGTH }
@@ -267,7 +268,9 @@ export class CheckpointManager {
     assertId(threadId)
     const checkpoint = await this.getActive(projectId, threadId)
     if (!checkpoint) return new Map()
-    const rows = await this.queryRows(
+    const rows = await this.queryRows<
+      TranscriptEvidenceRow
+    >(
       `SELECT parts FROM agent_messages
        WHERE thread_id = ? AND role = 'assistant' AND created_at >= ?
        ORDER BY created_at DESC, id DESC`,
@@ -1380,16 +1383,16 @@ export class CheckpointManager {
    * onto the main thread. The primary connection is only consulted when the
    * worker is unavailable (e.g. in-memory test databases).
    */
-  private async queryRows(
+  private async queryRows<Row = Record<string, unknown>>(
     sql: string,
     params: unknown[],
     maxRows: number
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<Row[]> {
     const result = await this.db.queryViaWorker(sql, params, maxRows)
     if (!result.ok) {
-      return this.db.all<Record<string, unknown>>(sql, ...params)
+      return this.db.all<Row>(sql, ...params)
     }
-    return result.rows ?? []
+    return (result.rows ?? []) as Row[]
   }
 
   /** Single write statement on the maintenance worker's connection (primary fallback). */

@@ -174,6 +174,19 @@ class ThreadMessagesStore {
     this.cache.setRunIssue(projectId, threadId, issue)
   }
 
+  /** The provider wait this conversation is parked on, if any. */
+  waitingIssue(projectId: string, threadId: string): AgentProviderIssue | null {
+    return this.cache.waitingIssue(projectId, threadId)
+  }
+
+  setWaitingIssue(
+    projectId: string,
+    threadId: string,
+    issue: AgentProviderIssue | null
+  ): void {
+    this.cache.setWaitingIssue(projectId, threadId, issue)
+  }
+
   /** Whether this user message is held by the engine before harness delivery
    *  (the steer-undo window). */
   isSteerHeld(projectId: string, threadId: string, messageId: string): boolean {

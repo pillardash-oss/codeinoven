@@ -1,15 +1,10 @@
 import { scopeState } from '$lib/stores/scope.svelte'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the GitStatusPanel board. */
-export class GitStatusPanelScopeHealth {
-  #root: GitStatusPanel | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): GitStatusPanel {
-    if (!this.#root) throw new Error('GitStatusPanelScopeHealth read its board before it was bound')
-    return this.#root
-  }
+export class GitStatusPanelScopeHealth extends BoardUnit<GitStatusPanel> {
   constructor(root: GitStatusPanel) {
-    this.#root = root
+    super(root)
   }
   /**
    * Health of the scope this panel is attached to. A managed checkout that is

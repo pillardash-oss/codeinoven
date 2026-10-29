@@ -29,17 +29,11 @@ import {
 } from '../../assistant/assistant-view'
 import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
 import type { Workspace } from './Workspace-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
-export class WorkspaceMergeThreadsInList {
-  #root: Workspace | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): Workspace {
-    if (!this.#root)
-      throw new Error('WorkspaceMergeThreadsInList read its board before it was bound')
-    return this.#root
-  }
+export class WorkspaceMergeThreadsInList extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
-    this.#root = root
+    super(root)
   }
   hasMoreHistory = $state(true)
 

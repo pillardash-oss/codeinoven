@@ -27,17 +27,11 @@ import { annotationFallbackAnchor } from '$lib/selection-anchors'
 import { providerReportedWindows } from '../thread-usage-merge'
 import type { PreviewableFilePart, StudioTemporaryChatDocument } from './ThreadView-types'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewStudioTemporaryChatContext {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewStudioTemporaryChatContext read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewStudioTemporaryChatContext extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   /**
    * What the Assistant tab's composer offers behind an `@`: its assistants and

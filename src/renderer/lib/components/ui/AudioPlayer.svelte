@@ -46,14 +46,7 @@
     class?: string
   }
 
-  let {
-    src,
-    label,
-    onExpand,
-    onError,
-    onElement,
-    class: layout = ''
-  }: Props = $props()
+  let { src, label, onExpand, onError, onElement, class: layout = '' }: Props = $props()
 
   let audio = $state<HTMLAudioElement | null>(null)
   let playing = $state(false)
@@ -72,7 +65,9 @@
     const minutes = Math.floor((total % 3600) / 60)
     const rest = total % 60
     const padded = String(rest).padStart(2, '0')
-    return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${padded}` : `${minutes}:${padded}`
+    return hours > 0
+      ? `${hours}:${String(minutes).padStart(2, '0')}:${padded}`
+      : `${minutes}:${padded}`
   }
 
   async function togglePlay(): Promise<void> {
@@ -118,10 +113,7 @@
 </script>
 
 <div
-  class={[
-    'flex min-w-0 items-center gap-2 border border-border bg-surface px-2 py-1.5',
-    layout
-  ]}
+  class={['flex min-w-0 items-center gap-2 border border-border bg-surface px-2 py-1.5', layout]}
   use:preloadNearViewport={{ media: () => audio }}
 >
   <audio

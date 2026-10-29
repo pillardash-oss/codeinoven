@@ -35,17 +35,11 @@ import {
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { NewAssistantDraft } from '../../assistant/assistant-create'
 import type { Workspace } from './Workspace-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
-export class WorkspaceMarkThreadReadAndApply {
-  #root: Workspace | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): Workspace {
-    if (!this.#root)
-      throw new Error('WorkspaceMarkThreadReadAndApply read its board before it was bound')
-    return this.#root
-  }
+export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
-    this.#root = root
+    super(root)
   }
   /** Remounts the empty-state chats composer to restore a failed first send. */
   chatsComposerRestoreKey = $state(0)

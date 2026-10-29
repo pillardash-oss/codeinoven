@@ -1,17 +1,11 @@
 import { contextSidebarState, type ContextSidebarTab } from '$lib/stores/context-sidebar.svelte'
 import type { Workspace } from './Workspace-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
-export class WorkspaceAppBackgroundPanelKinds {
-  #root: Workspace | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): Workspace {
-    if (!this.#root)
-      throw new Error('WorkspaceAppBackgroundPanelKinds read its board before it was bound')
-    return this.#root
-  }
+export class WorkspaceAppBackgroundPanelKinds extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
-    this.#root = root
+    super(root)
   }
   /**
    * Panels that paint the app background instead of the sidebar's own surface.

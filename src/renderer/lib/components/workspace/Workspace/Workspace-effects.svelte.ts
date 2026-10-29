@@ -48,16 +48,11 @@ import SidebarSearchControl from '../SidebarSearchControl.svelte'
 import { threadHasVisibleWork } from '../workspace-thread-helpers'
 import type { Workspace } from './Workspace-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
-export class WorkspaceEffects {
-  #root: Workspace | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): Workspace {
-    if (!this.#root) throw new Error('WorkspaceEffects read its board before it was bound')
-    return this.#root
-  }
+export class WorkspaceEffects extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
-    this.#root = root
+    super(root)
   }
   /**
    * The work the surface used to do as it set itself up: effects, the

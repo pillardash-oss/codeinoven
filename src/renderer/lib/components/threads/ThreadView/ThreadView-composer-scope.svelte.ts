@@ -56,16 +56,11 @@ import { isActivityOnlyUserMessage } from '../thread-turn-parts'
 import { messageText } from '../thread-message-presentation'
 
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewComposerScope {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root) throw new Error('ThreadViewComposerScope read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   /** Stable empty queue so a controller-driven view never allocates per read. */
   EMPTY_PERMISSION_REQUESTS: PermissionRequest[] = []

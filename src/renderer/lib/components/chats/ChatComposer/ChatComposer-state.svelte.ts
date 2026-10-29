@@ -1,15 +1,10 @@
 import { isMacPlatform } from '$lib/shortcut-display'
 import type { ChatComposer } from './ChatComposer-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ChatComposer board. */
-export class ChatComposerState {
-  #root: ChatComposer | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ChatComposer {
-    if (!this.#root) throw new Error('ChatComposerState read its board before it was bound')
-    return this.#root
-  }
+export class ChatComposerState extends BoardUnit<ChatComposer> {
   constructor(root: ChatComposer) {
-    this.#root = root
+    super(root)
   }
   /** macOS shows ⌘; Windows/Linux show Ctrl   matches the global send shortcut. */
   sendModifierLabel = isMacPlatform() ? '⌘' : 'Ctrl+'

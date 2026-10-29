@@ -219,7 +219,9 @@
     onError={(element) => onLoadError?.(element)}
   />
   {#if armed}
-    <div class="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-3 py-2 text-foreground">
+    <div
+      class="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-3 py-2 text-foreground"
+    >
       <span class="shrink-0 font-mono text-xs tabular-nums">{videoTimecode(currentTime)}</span>
       <input
         type="range"

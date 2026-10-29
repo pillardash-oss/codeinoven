@@ -17,17 +17,11 @@ import { assistants } from '$lib/stores/assistants.svelte'
 import { preloadScopeChunk } from '$lib/page-preload'
 import { ASSISTANT_SPACE_ID, type Assistant } from '$shared/types'
 import type { App } from './App-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the App board. */
-export class AppOpenAssistantFromSearch {
-  #root: App | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): App {
-    if (!this.#root)
-      throw new Error('AppOpenAssistantFromSearch read its board before it was bound')
-    return this.#root
-  }
+export class AppOpenAssistantFromSearch extends BoardUnit<App> {
   constructor(root: App) {
-    this.#root = root
+    super(root)
   }
   /** Content view to return to when leaving Settings or Scope   persisted in the
    *  recovery snapshot so a restart made while on a Settings page or the Scope

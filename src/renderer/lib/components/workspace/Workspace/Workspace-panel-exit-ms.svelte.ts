@@ -3,16 +3,11 @@ import { motionDuration } from '$lib/motion'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
 import type { Workspace } from './Workspace-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
-export class WorkspacePanelExitMs {
-  #root: Workspace | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): Workspace {
-    if (!this.#root) throw new Error('WorkspacePanelExitMs read its board before it was bound')
-    return this.#root
-  }
+export class WorkspacePanelExitMs extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
-    this.#root = root
+    super(root)
   }
   sidebarVisible = $derived(contextSidebarState.sidebarVisible)
 

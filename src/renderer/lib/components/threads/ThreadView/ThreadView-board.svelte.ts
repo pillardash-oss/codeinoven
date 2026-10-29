@@ -23,6 +23,7 @@ import { ThreadViewOpenOvenPicker } from './ThreadView-open-oven-picker.svelte'
 import { ThreadViewState } from './ThreadView-state.svelte'
 import { ThreadViewEffects } from './ThreadView-effects.svelte'
 import type { ThreadViewSurfaceProps } from './ThreadView-types'
+import { BoardState } from '$lib/components/board-state'
 /**
  * The ThreadView board: one instance per concern, each holding this board.
  *
@@ -30,8 +31,7 @@ import type { ThreadViewSurfaceProps } from './ThreadView-types'
  * is owned by the component and tears down with it. A unit reads the props
  * through this board, so a prop that changes keeps every `$derived` live.
  */
-export class ThreadView {
-  private readonly readProps: () => ThreadViewSurfaceProps
+export class ThreadView extends BoardState<ThreadViewSurfaceProps> {
   readonly handleAgentEvent = new ThreadViewHandleAgentEvent(this)
   readonly loadOlderMessages = new ThreadViewLoadOlderMessages(this)
   readonly contextUsage = new ThreadViewContextUsage(this)
@@ -57,7 +57,7 @@ export class ThreadView {
   readonly state = new ThreadViewState(this)
   readonly effects = new ThreadViewEffects(this)
   constructor(readProps: () => ThreadViewSurfaceProps) {
-    this.readProps = readProps
+    super(readProps)
     this.submitSpecDecision.bindAuditState()
     this.loadOlderMessages.bindSettings()
     this.unmirroredTraceStartTime.bindThread()
@@ -66,9 +66,6 @@ export class ThreadView {
     this.unmirroredTraceStartTime.bindThread()
     this.loadOlderMessages.bind()
     this.effects.init()
-  }
-  get props(): ThreadViewSurfaceProps {
-    return this.readProps()
   }
 }
 /** Build the board from the surface props. */

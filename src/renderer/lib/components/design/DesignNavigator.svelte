@@ -376,8 +376,10 @@
   {#if error !== ''}
     <p
       class="mx-2.5 mt-1.5 shrink-0 border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
-      role="alert">{error}</p
+      role="alert"
     >
+      {error}
+    </p>
   {/if}
 
   <div class="min-h-0 flex-1 overflow-y-auto py-1.5 pl-2.5">
@@ -697,8 +699,8 @@
 >
   {#if removing}
     <p>
-      The {nounPlural} in {removing.name} go back to the ungrouped list. Nothing on disk is deleted,
-      and no folder moves.
+      The {nounPlural} in {removing.name} go back to the ungrouped list. Nothing on disk is deleted, and
+      no folder moves.
     </p>
   {/if}
 </ConfirmDialog>

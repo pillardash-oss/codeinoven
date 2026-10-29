@@ -30,16 +30,11 @@ import {
   type TranscriptIndex
 } from '../thread-turn-parts'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewPollStreamParts {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root) throw new Error('ThreadViewPollStreamParts read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
 
   /** Opened from `bind()`: the scope names a thread that exists after build. */

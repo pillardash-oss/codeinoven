@@ -7,16 +7,11 @@ import { appConfigState } from '$lib/stores/app-config.svelte'
 import { type AppConfig, type AppConfigPatch, type ThemePreference } from '$shared/types'
 import { defaultConfig } from '../app-defaults'
 import type { App } from './App-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the App board. */
-export class AppUpdateConfig {
-  #root: App | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): App {
-    if (!this.#root) throw new Error('AppUpdateConfig read its board before it was bound')
-    return this.#root
-  }
+export class AppUpdateConfig extends BoardUnit<App> {
   constructor(root: App) {
-    this.#root = root
+    super(root)
   }
   config = $state<AppConfig>(defaultConfig)
 

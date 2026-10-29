@@ -6,16 +6,11 @@ import { appQuitState } from '$lib/stores/app-quit.svelte'
 import { isTerminalFocused } from '$lib/terminal/focus'
 import { type InstanceRole } from '$shared/types'
 import type { App } from './App-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the App board. */
-export class AppState {
-  #root: App | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): App {
-    if (!this.#root) throw new Error('AppState read its board before it was bound')
-    return this.#root
-  }
+export class AppState extends BoardUnit<App> {
   constructor(root: App) {
-    this.#root = root
+    super(root)
   }
   instanceRole = $state<InstanceRole | null>(null)
 

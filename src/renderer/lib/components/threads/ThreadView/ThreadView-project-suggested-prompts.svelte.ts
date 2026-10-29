@@ -1,15 +1,9 @@
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewProjectSuggestedPrompts {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewProjectSuggestedPrompts read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewProjectSuggestedPrompts extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',

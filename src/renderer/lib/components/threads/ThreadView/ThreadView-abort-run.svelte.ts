@@ -31,16 +31,11 @@ import { resolvedSubagentPart } from '../thread-turn-parts'
 import { HISTORY_WINDOW_SIZE } from '../thread-history'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewAbortRun {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root) throw new Error('ThreadViewAbortRun read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   checkpoints = $state<TurnCheckpointSummary[]>([])
 

@@ -9,16 +9,11 @@ import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the GitStatusPanel board. */
-export class GitStatusPanelEffects {
-  #root: GitStatusPanel | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): GitStatusPanel {
-    if (!this.#root) throw new Error('GitStatusPanelEffects read its board before it was bound')
-    return this.#root
-  }
+export class GitStatusPanelEffects extends BoardUnit<GitStatusPanel> {
   constructor(root: GitStatusPanel) {
-    this.#root = root
+    super(root)
   }
   /**
    * The work the surface used to do as it set itself up: effects, the

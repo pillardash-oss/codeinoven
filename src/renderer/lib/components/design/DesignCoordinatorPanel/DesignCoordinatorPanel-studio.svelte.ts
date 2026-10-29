@@ -15,16 +15,11 @@ import { SCREEN_ORDERS } from './DesignCoordinatorPanel-types'
 import type { ScreenOrder } from './DesignCoordinatorPanel-types'
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
 import { isSiteUrl } from './design-board-reference'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the DesignBoard board. */
-export class DesignBoardStudio {
-  #root: DesignBoard | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): DesignBoard {
-    if (!this.#root) throw new Error('DesignBoardStudio read its board before it was bound')
-    return this.#root
-  }
+export class DesignBoardStudio extends BoardUnit<DesignBoard> {
   constructor(root: DesignBoard) {
-    this.#root = root
+    super(root)
   }
   /**
    * How wide a screen is pictured at.

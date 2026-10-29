@@ -14,17 +14,11 @@ import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
 import type { RepoState, WorktreeState } from './GitStatusPanel-types'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the GitStatusPanel board. */
-export class GitStatusPanelLoadRepoState {
-  #root: GitStatusPanel | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): GitStatusPanel {
-    if (!this.#root)
-      throw new Error('GitStatusPanelLoadRepoState read its board before it was bound')
-    return this.#root
-  }
+export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
   constructor(root: GitStatusPanel) {
-    this.#root = root
+    super(root)
   }
 
   /** Builds the branches controller once the units it reads are there. */

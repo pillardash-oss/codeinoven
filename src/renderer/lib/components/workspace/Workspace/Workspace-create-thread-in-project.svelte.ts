@@ -38,17 +38,11 @@ import {
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { WorkspaceProjectDialogs } from '../WorkspaceProjectDialogs.svelte'
 import type { Workspace } from './Workspace-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
-export class WorkspaceCreateThreadInProject {
-  #root: Workspace | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): Workspace {
-    if (!this.#root)
-      throw new Error('WorkspaceCreateThreadInProject read its board before it was bound')
-    return this.#root
-  }
+export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
-    this.#root = root
+    super(root)
   }
 
   /** Builds the project dialogs once the sibling that deletes is there. */

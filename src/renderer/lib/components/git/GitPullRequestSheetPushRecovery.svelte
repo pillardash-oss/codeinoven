@@ -11,14 +11,8 @@
     onResolveWithAgent: () => void
   }
 
-  let {
-    head,
-    headIsCurrent,
-    pushErrorDetails,
-    recoverMode,
-    onRecover,
-    onResolveWithAgent
-  }: Props = $props()
+  let { head, headIsCurrent, pushErrorDetails, recoverMode, onRecover, onResolveWithAgent }: Props =
+    $props()
 </script>
 
 <div class="border border-warning/30 bg-warning/10 px-3 py-2.5">

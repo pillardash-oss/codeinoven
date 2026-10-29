@@ -46,16 +46,11 @@ import {
 } from '../thread-response-ranges'
 import { messageText } from '../thread-message-presentation'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewSources {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root) throw new Error('ThreadViewSources read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewSources extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   loaded = $derived(
     this.root.props.controller?.loaded ??

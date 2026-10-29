@@ -5,6 +5,7 @@ import { AppUpdateConfig } from './App-update-config.svelte'
 import { AppSettleCloseConfirmationThread } from './App-settle-close-confirmation-thread.svelte'
 import { AppState } from './App-state.svelte'
 import { AppEffects } from './App-effects.svelte'
+import { BoardState } from '$lib/components/board-state'
 /**
  * The App board: one instance per concern, each holding this board.
  *
@@ -12,7 +13,7 @@ import { AppEffects } from './App-effects.svelte'
  * is owned by the component and tears down with it. A unit reads the props
  * through this board, so a prop that changes keeps every `$derived` live.
  */
-export class App {
+export class App extends BoardState<Record<string, never>> {
   readonly onKeydown = new AppOnKeydown(this)
   readonly spotlightPalette = new AppSpotlightPalette(this)
   readonly openAssistantFromSearch = new AppOpenAssistantFromSearch(this)
@@ -21,6 +22,7 @@ export class App {
   readonly state = new AppState(this)
   readonly effects = new AppEffects(this)
   constructor() {
+    super(() => ({}))
     this.effects.init()
   }
 }

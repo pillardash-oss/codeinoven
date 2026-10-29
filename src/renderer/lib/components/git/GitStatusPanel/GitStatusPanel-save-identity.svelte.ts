@@ -1,16 +1,10 @@
 import { gitState } from '$lib/stores/git.svelte'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the GitStatusPanel board. */
-export class GitStatusPanelSaveIdentity {
-  #root: GitStatusPanel | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): GitStatusPanel {
-    if (!this.#root)
-      throw new Error('GitStatusPanelSaveIdentity read its board before it was bound')
-    return this.#root
-  }
+export class GitStatusPanelSaveIdentity extends BoardUnit<GitStatusPanel> {
   constructor(root: GitStatusPanel) {
-    this.#root = root
+    super(root)
   }
   showIdentityForm = $state(false)
 

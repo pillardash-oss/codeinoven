@@ -5,16 +5,11 @@ import type { GitCommitInfo, GitResetMode } from '$shared/types'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the GitStatusPanel board. */
-export class GitStatusPanelState {
-  #root: GitStatusPanel | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): GitStatusPanel {
-    if (!this.#root) throw new Error('GitStatusPanelState read its board before it was bound')
-    return this.#root
-  }
+export class GitStatusPanelState extends BoardUnit<GitStatusPanel> {
   constructor(root: GitStatusPanel) {
-    this.#root = root
+    super(root)
   }
   resetOptions: Array<{ mode: GitResetMode; label: string; hint: string }> = [
     { mode: 'soft', label: 'Soft', hint: 'keep index + worktree' },

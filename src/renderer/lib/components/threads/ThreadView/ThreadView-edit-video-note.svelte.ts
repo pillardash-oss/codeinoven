@@ -29,16 +29,11 @@ import { HISTORY_WINDOW_SIZE, mergedUserMessageSummaries } from '../thread-histo
 import type { ParkedEntrySend, PendingMessageDelete } from './ThreadView-types'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewEditVideoNote {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root) throw new Error('ThreadViewEditVideoNote read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewEditVideoNote extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   loadingNewerMessages = $state(false)
 

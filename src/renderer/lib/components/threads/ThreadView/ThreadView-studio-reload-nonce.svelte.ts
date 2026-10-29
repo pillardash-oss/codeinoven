@@ -1,16 +1,10 @@
 import { resetPanelModule } from '$lib/lazy-panel'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewStudioReloadNonce {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewStudioReloadNonce read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewStudioReloadNonce extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   /**
    * Bumped by a studio's Retry to rebuild its `{#key}` and re-run its `{#await}`.

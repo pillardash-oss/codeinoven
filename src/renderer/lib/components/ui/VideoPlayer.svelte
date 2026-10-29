@@ -106,7 +106,9 @@
     const minutes = Math.floor((total % 3600) / 60)
     const rest = total % 60
     const padded = String(rest).padStart(2, '0')
-    return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${padded}` : `${minutes}:${padded}`
+    return hours > 0
+      ? `${hours}:${String(minutes).padStart(2, '0')}:${padded}`
+      : `${minutes}:${padded}`
   }
 
   async function togglePlay(): Promise<void> {
@@ -233,7 +235,9 @@
         type="button"
         class={[
           'absolute inset-0 flex items-center justify-center transition-opacity duration-150',
-          playing ? 'opacity-0 focus-visible:opacity-100 group-hover/md-video:opacity-100' : 'opacity-100'
+          playing
+            ? 'opacity-0 focus-visible:opacity-100 group-hover/md-video:opacity-100'
+            : 'opacity-100'
         ]}
         aria-label={playing ? `Pause ${label}` : `Play ${label}`}
         title={playing ? `Pause ${label}` : `Play ${label}`}
@@ -282,10 +286,7 @@
   {/if}
 
   {#if failed}
-    <div
-      class="flex items-center gap-2 border-t border-border bg-surface px-2 py-1.5"
-      role="alert"
-    >
+    <div class="flex items-center gap-2 border-t border-border bg-surface px-2 py-1.5" role="alert">
       <CioAlertCircle size={12} class="shrink-0 text-danger" aria-hidden="true" />
       <span class="min-w-0 truncate text-[0.75rem] font-medium text-danger">
         This video could not be played

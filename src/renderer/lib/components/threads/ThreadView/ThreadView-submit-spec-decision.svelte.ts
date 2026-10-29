@@ -15,17 +15,11 @@ import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
 import { workflowActionPresentation } from '$shared/workflow-action-presentation'
 import { specActionLabel } from '../thread-message-presentation'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewSubmitSpecDecision {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewSubmitSpecDecision read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
 
   /** Reads the thread's audit state once the board can resolve it. */

@@ -6,16 +6,11 @@ import { designCopyFor } from '$lib/design-copy-context'
 import { logRendererError } from '$lib/system/renderer-logger'
 import type { ScreenOrder } from './DesignCoordinatorPanel-types'
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the DesignBoard board. */
-export class DesignBoardState {
-  #root: DesignBoard | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): DesignBoard {
-    if (!this.#root) throw new Error('DesignBoardState read its board before it was bound')
-    return this.#root
-  }
+export class DesignBoardState extends BoardUnit<DesignBoard> {
   constructor(root: DesignBoard) {
-    this.#root = root
+    super(root)
   }
   /** Export playback participates in the same sound registry as native views. */
   attachExport: Attachment<HTMLVideoElement> = (element) => {

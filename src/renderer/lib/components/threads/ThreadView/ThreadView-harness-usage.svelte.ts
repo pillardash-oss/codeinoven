@@ -27,16 +27,11 @@ import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
 import { workflowActionPresentation } from '$shared/workflow-action-presentation'
 import type { GuardedSendPayload } from './ThreadView-types'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewHarnessUsage {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root) throw new Error('ThreadViewHarnessUsage read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
 

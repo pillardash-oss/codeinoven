@@ -756,58 +756,58 @@
     <div class="ml-auto flex shrink-0 items-center gap-1.5">
       {#if openSection === 'timeline'}
         <div class="flex shrink-0 items-center gap-1" role="group" aria-label="Timeline tools">
-        <button
-          type="button"
-          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
-          title="Fit the whole video in the timeline"
-          aria-label="Fit the whole video in the timeline"
-          onclick={() =>
-            zoomBy(1 / scale, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
-          >Fit</button
-        >
-        <button
-          type="button"
-          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
-          title="Zoom out of the timeline"
-          aria-label="Zoom out of the timeline"
-          onclick={() =>
-            zoomBy(1 / 1.5, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
-          >−</button
-        >
-        <button
-          type="button"
-          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
-          title="Zoom into the timeline"
-          aria-label="Zoom into the timeline"
-          onclick={() =>
-            zoomBy(1.5, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
-          >+</button
-        >
-        <button
-          type="button"
-          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
-          title="Show individual frames around the playhead"
-          aria-label="Show individual frames around the playhead"
-          onclick={showFrames}>Frames</button
-        >
-        <Popover.Root>
-          <Popover.Trigger
-            class="flex items-center justify-center px-2 py-1 text-muted hover:bg-elevated"
-            title="Show frame and frame rate"
-            aria-label="Show frame and frame rate"
+          <button
+            type="button"
+            class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+            title="Fit the whole video in the timeline"
+            aria-label="Fit the whole video in the timeline"
+            onclick={() =>
+              zoomBy(1 / scale, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
+            >Fit</button
           >
-            <CioTabInfo size={14} aria-hidden="true" />
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              align="end"
-              sideOffset={6}
-              class="z-60 border border-border bg-surface px-3 py-2 text-xs text-foreground shadow-lg"
+          <button
+            type="button"
+            class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+            title="Zoom out of the timeline"
+            aria-label="Zoom out of the timeline"
+            onclick={() =>
+              zoomBy(1 / 1.5, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
+            >−</button
+          >
+          <button
+            type="button"
+            class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+            title="Zoom into the timeline"
+            aria-label="Zoom into the timeline"
+            onclick={() =>
+              zoomBy(1.5, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
+            >+</button
+          >
+          <button
+            type="button"
+            class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+            title="Show individual frames around the playhead"
+            aria-label="Show individual frames around the playhead"
+            onclick={showFrames}>Frames</button
+          >
+          <Popover.Root>
+            <Popover.Trigger
+              class="flex items-center justify-center px-2 py-1 text-muted hover:bg-elevated"
+              title="Show frame and frame rate"
+              aria-label="Show frame and frame rate"
             >
-              <span class="tabular-nums">Frame {frame} · {fps} fps</span>
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+              <CioTabInfo size={14} aria-hidden="true" />
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="end"
+                sideOffset={6}
+                class="z-60 border border-border bg-surface px-3 py-2 text-xs text-foreground shadow-lg"
+              >
+                <span class="tabular-nums">Frame {frame} · {fps} fps</span>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
         </div>
       {/if}
       {#if saveAction}

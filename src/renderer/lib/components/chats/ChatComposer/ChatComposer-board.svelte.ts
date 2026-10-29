@@ -6,6 +6,7 @@ import { ChatComposerHandleDropAnchorChange } from './ChatComposer-handle-drop-a
 import { ChatComposerState } from './ChatComposer-state.svelte'
 import { ChatComposerEffects } from './ChatComposer-effects.svelte'
 import type { ChatComposerSurfaceProps } from './ChatComposer-types'
+import { BoardState } from '$lib/components/board-state'
 /**
  * The ChatComposer board: one instance per concern, each holding this board.
  *
@@ -13,8 +14,7 @@ import type { ChatComposerSurfaceProps } from './ChatComposer-types'
  * is owned by the component and tears down with it. A unit reads the props
  * through this board, so a prop that changes keeps every `$derived` live.
  */
-export class ChatComposer {
-  private readonly readProps: () => ChatComposerSurfaceProps
+export class ChatComposer extends BoardState<ChatComposerSurfaceProps> {
   readonly submit = new ChatComposerSubmit(this)
   readonly handleDropData = new ChatComposerHandleDropData(this)
   readonly captureComposerRoot = new ChatComposerCaptureComposerRoot(this)
@@ -23,16 +23,13 @@ export class ChatComposer {
   readonly state = new ChatComposerState(this)
   readonly effects = new ChatComposerEffects(this)
   constructor(readProps: () => ChatComposerSurfaceProps) {
-    this.readProps = readProps
+    super(readProps)
     this.submit.bindEditorId()
     // The units are built first, so each one that captures props at birth is
     // asked to after every unit exists and the board can answer.
     this.submit.bind()
     this.handleDropData.bind()
     this.effects.init()
-  }
-  get props(): ChatComposerSurfaceProps {
-    return this.readProps()
   }
 }
 /** Build the board from the surface props. */

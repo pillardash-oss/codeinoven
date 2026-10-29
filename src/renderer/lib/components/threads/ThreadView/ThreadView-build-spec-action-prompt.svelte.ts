@@ -23,17 +23,11 @@ import {
 } from '../thread-turn-parts'
 import type { AssignmentAuditDisplayState } from './ThreadView-types'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewBuildSpecActionPrompt {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewBuildSpecActionPrompt read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   /**
    * The transcript as of its last structural change: identity, role, and

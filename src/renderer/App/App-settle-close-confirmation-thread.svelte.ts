@@ -5,17 +5,11 @@ import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { isThreadWorking, type Thread } from '$shared/types'
 import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
 import type { App } from './App-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the App board. */
-export class AppSettleCloseConfirmationThread {
-  #root: App | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): App {
-    if (!this.#root)
-      throw new Error('AppSettleCloseConfirmationThread read its board before it was bound')
-    return this.#root
-  }
+export class AppSettleCloseConfirmationThread extends BoardUnit<App> {
   constructor(root: App) {
-    this.#root = root
+    super(root)
   }
   closeConfirmation = $state<CloseConfirmationPayload | null>(null)
 

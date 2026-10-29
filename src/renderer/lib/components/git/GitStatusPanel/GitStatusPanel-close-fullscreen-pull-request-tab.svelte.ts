@@ -1,18 +1,10 @@
 import type { PullRequestSummary } from '$shared/types'
 import type { GitStatusPanel } from './GitStatusPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the GitStatusPanel board. */
-export class GitStatusPanelCloseFullscreenPullRequestTab {
-  #root: GitStatusPanel | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): GitStatusPanel {
-    if (!this.#root)
-      throw new Error(
-        'GitStatusPanelCloseFullscreenPullRequestTab read its board before it was bound'
-      )
-    return this.#root
-  }
+export class GitStatusPanelCloseFullscreenPullRequestTab extends BoardUnit<GitStatusPanel> {
   constructor(root: GitStatusPanel) {
-    this.#root = root
+    super(root)
   }
   /**
    * Full screen pull request reader. It mirrors the fullscreen terminal and

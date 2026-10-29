@@ -16,17 +16,11 @@ import { HISTORY_WINDOW_SIZE, promptPagesBefore } from '../thread-history'
 import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewLoadOlderMessages {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewLoadOlderMessages read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
 
   /** Reads the thread's settings once the board can resolve them. */

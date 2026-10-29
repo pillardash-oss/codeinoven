@@ -47,8 +47,7 @@
         {#if url}
           <img src={url} alt="" class="h-4 w-4 object-contain" />
         {:else}
-          <span class="h-2 w-2" style:background-color={browserAppearanceAccent(box)}
-          ></span>
+          <span class="h-2 w-2" style:background-color={browserAppearanceAccent(box)}></span>
         {/if}
       </span>
     {/each}

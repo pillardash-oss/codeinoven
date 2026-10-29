@@ -27,17 +27,11 @@ import type { ProjectFamilyLanding } from '../../layout/AppHeaderNavigationContr
 import { type ContextDockItem } from '../../layout/ContextDock.svelte'
 import { type ThreadSwitcherEntry } from '../../threads/thread-switcher-entries'
 import type { Workspace } from './Workspace-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
-export class WorkspaceOpenThreadFromSwitcher {
-  #root: Workspace | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): Workspace {
-    if (!this.#root)
-      throw new Error('WorkspaceOpenThreadFromSwitcher read its board before it was bound')
-    return this.#root
-  }
+export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
-    this.#root = root
+    super(root)
   }
   /** The reader has taken over the scroll for the current thread. Cleared when
    *  they pick another thread, move to another mode, or scroll the active row

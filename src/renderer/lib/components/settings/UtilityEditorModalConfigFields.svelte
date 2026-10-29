@@ -126,8 +126,8 @@
     </label>
     {#if !isNative && draft.id === null}
       <p class="text-[0.6875rem] text-dimmed">
-        Plain environment values are stored with the server. Store a secret as a credential
-        instead, so it stays in encrypted storage.
+        Plain environment values are stored with the server. Store a secret as a credential instead,
+        so it stays in encrypted storage.
       </p>
     {/if}
   {:else if draft.kind === 'skill'}

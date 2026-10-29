@@ -5,6 +5,7 @@ import { DesignBoardMenus } from './DesignCoordinatorPanel-menus.svelte'
 import { DesignBoardState } from './DesignCoordinatorPanel-state.svelte'
 import { DesignBoardEffects } from './DesignCoordinatorPanel-effects.svelte'
 import type { Props } from './DesignCoordinatorPanel-types'
+import { BoardState } from '$lib/components/board-state'
 /**
  * The DesignBoard board: one instance per concern, each holding this board.
  *
@@ -12,8 +13,7 @@ import type { Props } from './DesignCoordinatorPanel-types'
  * is owned by the component and tears down with it. A unit reads the props
  * through this board, so a prop that changes keeps every `$derived` live.
  */
-export class DesignBoard {
-  private readonly readProps: () => Props
+export class DesignBoard extends BoardState<Props> {
   readonly gallery = new DesignBoardGallery(this)
   readonly studio = new DesignBoardStudio(this)
   readonly historyActions = new DesignBoardHistoryActions(this)
@@ -21,12 +21,9 @@ export class DesignBoard {
   readonly state = new DesignBoardState(this)
   readonly effects = new DesignBoardEffects(this)
   constructor(readProps: () => Props) {
-    this.readProps = readProps
+    super(readProps)
     this.gallery.bindDesignState()
     this.effects.init()
-  }
-  get props(): Props {
-    return this.readProps()
   }
 }
 /** Build the board from the surface props. */

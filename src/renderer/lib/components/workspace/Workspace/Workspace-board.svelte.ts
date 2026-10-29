@@ -15,6 +15,7 @@ import { WorkspaceContextPanelColumns } from './Workspace-context-panel-columns.
 import { WorkspaceState } from './Workspace-state.svelte'
 import { WorkspaceEffects } from './Workspace-effects.svelte'
 import type { WorkspaceSurfaceProps } from './Workspace-types'
+import { BoardState } from '$lib/components/board-state'
 /**
  * The Workspace board: one instance per concern, each holding this board.
  *
@@ -22,8 +23,7 @@ import type { WorkspaceSurfaceProps } from './Workspace-types'
  * is owned by the component and tears down with it. A unit reads the props
  * through this board, so a prop that changes keeps every `$derived` live.
  */
-export class Workspace {
-  private readonly readProps: () => WorkspaceSurfaceProps
+export class Workspace extends BoardState<WorkspaceSurfaceProps> {
   readonly createThreadInProject = new WorkspaceCreateThreadInProject(this)
   readonly openThreadFromSwitcher = new WorkspaceOpenThreadFromSwitcher(this)
   readonly markThreadReadAndApply = new WorkspaceMarkThreadReadAndApply(this)
@@ -41,13 +41,10 @@ export class Workspace {
   readonly state = new WorkspaceState(this)
   readonly effects = new WorkspaceEffects(this)
   constructor(readProps: () => WorkspaceSurfaceProps) {
-    this.readProps = readProps
+    super(readProps)
     this.createThreadInProject.bindProjectDialogs()
     this.state.bind()
     this.effects.init()
-  }
-  get props(): WorkspaceSurfaceProps {
-    return this.readProps()
   }
 }
 /** Build the board from the surface props. */

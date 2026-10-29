@@ -1,14 +1,9 @@
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the DesignBoard board. */
-export class DesignBoardHistoryActions {
-  #root: DesignBoard | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): DesignBoard {
-    if (!this.#root) throw new Error('DesignBoardHistoryActions read its board before it was bound')
-    return this.#root
-  }
+export class DesignBoardHistoryActions extends BoardUnit<DesignBoard> {
   constructor(root: DesignBoard) {
-    this.#root = root
+    super(root)
   }
   /**
    * Undo and Redo for the folder in front, published by the history pane.

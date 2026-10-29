@@ -9,7 +9,6 @@ import { clearIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
-import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import {
   coordinatorDockState,
@@ -30,16 +29,11 @@ import type {
 import { mergeContextUsage } from '../thread-usage-merge'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewContextUsage {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root) throw new Error('ThreadViewContextUsage read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
 
   /** Reads the audit settings once the board can resolve them. */
@@ -58,6 +52,12 @@ export class ThreadViewContextUsage {
    * project, no assistant and no page behind it.
    */
   composerIdentity(target: Thread, isNewThread: boolean): ComposerIdentity {
+    // A browser tab's assistant conversation is a thread of the hidden browser
+    // container that happens to be opened with a controller, so its space has to
+    // be read before the controller rule below: that rule describes a side chat,
+    // and naming this one a temporary chat would be wrong twice over (it is
+    // durable, and it is the browsing agent's own).
+    if (target.projectId === GLOBAL_BROWSER_PROJECT_ID) return { kind: 'browser-agent' }
     // A temporary chat is a conversation of its own, not a thread of the project
     // it was opened from. Its thread carries that project's id only because that
     // is where its files are read from, so the space checks below would name it
@@ -70,11 +70,6 @@ export class ThreadViewContextUsage {
       const assistant = assistants.assistantForTask(target)
       if (assistant) return { kind: 'assistant', assistant }
       return { kind: 'task', task: target }
-    }
-    if (target.projectId === GLOBAL_BROWSER_PROJECT_ID) {
-      const tabId = browserAssistant.chatForThread(target.id)?.browserTabId
-      if (tabId) return { kind: 'browser-tab', tabId }
-      return { kind: 'chat' }
     }
     if (!this.root.props.chatMode && this.project) {
       return {

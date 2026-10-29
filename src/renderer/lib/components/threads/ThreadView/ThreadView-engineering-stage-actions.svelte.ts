@@ -1,16 +1,10 @@
 import type { EngineeringLifecycleStage } from '$shared/types'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewEngineeringStageActions {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewEngineeringStageActions read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewEngineeringStageActions extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   /** Engineering lifecycle stages exposed as individual action-menu toggles.
    *  Mirrors the Engineering Toolbox rows so both surfaces stay in sync. */

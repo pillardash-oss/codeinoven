@@ -15,6 +15,10 @@ export interface ThreadMessagesEntry {
   hasOlder: boolean
   error: string
   runIssue: AgentProviderIssue | null
+  /** The provider wait this thread is parked on (a usage/rate-limit reset, or a
+   *  lost connection), so a conversation that is driven by a controller still has
+   *  the waiting card a thread gets from its live session status. */
+  waitingIssue: AgentProviderIssue | null
   /** User messages held by the chat engine before delivery to the harness,
    *  the steer-undo window. Keyed by user message id. */
   heldSteerIds: Set<string>

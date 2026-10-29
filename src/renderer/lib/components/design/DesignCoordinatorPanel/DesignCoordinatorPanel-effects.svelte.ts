@@ -3,16 +3,11 @@ import { subscribe } from '$lib/ipc.svelte'
 import { projectWorkState } from '$lib/stores/project-work.svelte'
 import { isThreadBusyStatus } from '$shared/thread-status-policy'
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the DesignBoard board. */
-export class DesignBoardEffects {
-  #root: DesignBoard | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): DesignBoard {
-    if (!this.#root) throw new Error('DesignBoardEffects read its board before it was bound')
-    return this.#root
-  }
+export class DesignBoardEffects extends BoardUnit<DesignBoard> {
   constructor(root: DesignBoard) {
-    this.#root = root
+    super(root)
   }
   /**
    * The work the surface used to do as it set itself up: effects, the

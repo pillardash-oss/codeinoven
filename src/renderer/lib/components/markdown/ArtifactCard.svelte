@@ -195,7 +195,9 @@
       type="button"
       class={[
         'flex size-6 items-center justify-center transition-colors',
-        showSource ? 'text-dimmed hover:bg-overlay hover:text-foreground' : 'bg-overlay text-foreground'
+        showSource
+          ? 'text-dimmed hover:bg-overlay hover:text-foreground'
+          : 'bg-overlay text-foreground'
       ]}
       aria-pressed={!showSource}
       title="Show rendered {label} preview"
@@ -208,7 +210,9 @@
       type="button"
       class={[
         'flex size-6 items-center justify-center transition-colors',
-        showSource ? 'bg-overlay text-foreground' : 'text-dimmed hover:bg-overlay hover:text-foreground'
+        showSource
+          ? 'bg-overlay text-foreground'
+          : 'text-dimmed hover:bg-overlay hover:text-foreground'
       ]}
       aria-pressed={showSource}
       title="Show {label} source"
@@ -316,7 +320,9 @@
     <div
       class={[
         'w-full transition-opacity duration-200 ease-out',
-        showSource ? 'relative opacity-100' : 'pointer-events-none absolute inset-0 overflow-hidden opacity-0',
+        showSource
+          ? 'relative opacity-100'
+          : 'pointer-events-none absolute inset-0 overflow-hidden opacity-0',
         viewerOpen && 'h-full'
       ]}
       inert={!showSource}
@@ -324,8 +330,6 @@
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
   </div>
-
-
 </div>
 
 {#snippet inspectAction()}

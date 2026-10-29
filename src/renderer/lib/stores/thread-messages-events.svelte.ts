@@ -455,8 +455,10 @@ export class ThreadMessagesEvents {
           // show the waiting card rather than a live trace with no steps; the
           // deadline stays on the entry for the auto-retry that follows.
           this.cache.setRunIssue(projectId, threadId, null)
+          this.cache.setWaitingIssue(projectId, threadId, event.status.issue)
           agentRuns.setWaiting(projectId, threadId, event.status.issue.retryAt ?? null)
         } else if (event.status.state === 'idle') {
+          this.cache.setWaitingIssue(projectId, threadId, null)
           agentRuns.setRetryAt(projectId, threadId, null)
           agentRuns.completeSession(projectId, threadId)
         }

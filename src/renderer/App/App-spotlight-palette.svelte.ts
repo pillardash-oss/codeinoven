@@ -63,16 +63,11 @@ import { guideState } from '$lib/guide/guide-state.svelte'
 import type { View, SpotlightScreenId } from './App-types'
 import type { App } from './App-board.svelte'
 import { SvelteMap } from 'svelte/reactivity'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the App board. */
-export class AppSpotlightPalette {
-  #root: App | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): App {
-    if (!this.#root) throw new Error('AppSpotlightPalette read its board before it was bound')
-    return this.#root
-  }
+export class AppSpotlightPalette extends BoardUnit<App> {
   constructor(root: App) {
-    this.#root = root
+    super(root)
   }
   commandPaletteOpen = $state(false)
 

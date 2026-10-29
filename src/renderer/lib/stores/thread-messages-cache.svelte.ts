@@ -89,6 +89,7 @@ export class ThreadMessagesCache {
         hasOlder: false,
         error: '',
         runIssue: null,
+        waitingIssue: null,
         heldSteerIds: new SvelteSet<string>()
       }
       this.#threads.set(key, entry)
@@ -152,8 +153,32 @@ export class ThreadMessagesCache {
 
   setRunIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
     const entry = this.entry(projectId, threadId)
-    if (entry.runIssue === issue) return
+    // A settled failure and an active provider wait are the same slot on screen,
+    // so writing either one clears the other: a run that ends in an error is no
+    // longer parked, and a run that starts or settles is not waiting.
+    const hadWaiting = entry.waitingIssue !== null
+    entry.waitingIssue = null
+    if (entry.runIssue === issue) {
+      if (hadWaiting) this.notify(projectId, threadId)
+      return
+    }
     entry.runIssue = issue
+    this.notify(projectId, threadId)
+  }
+
+  /** The provider wait this thread is parked on, when it has one. */
+  waitingIssue(projectId: string, threadId: string): AgentProviderIssue | null {
+    return this.threads.get(threadKey(projectId, threadId))?.waitingIssue ?? null
+  }
+
+  setWaitingIssue(
+    projectId: string,
+    threadId: string,
+    issue: AgentProviderIssue | null
+  ): void {
+    const entry = this.entry(projectId, threadId)
+    if (entry.waitingIssue === issue) return
+    entry.waitingIssue = issue
     this.notify(projectId, threadId)
   }
 

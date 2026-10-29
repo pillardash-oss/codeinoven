@@ -677,11 +677,7 @@ ${appInteractiveElementRules()}`
   <!-- Only the artifact itself carries the viewer's zoom. The hover box, the pins
        and the comment box are the app's own DOM placed in this box's pixels, so
        the controls keep their size and stay on their elements at any zoom. -->
-  <div
-    class={['w-full', fill && 'h-full']}
-    style={panZoom.transform}
-    {@attach panZoom.bindTarget}
-  >
+  <div class={['w-full', fill && 'h-full']} style={panZoom.transform} {@attach panZoom.bindTarget}>
     <!-- The picking surface is pointer-driven by nature, exactly like the element
          picker the browser panel uses: an element is chosen by pointing at it. The
          role says so, and the keyboard path is Enter or Space on the element the

@@ -7,16 +7,11 @@ import { projectReferenceToken } from '../chat-composer-attachments'
 import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
 import type { ChatComposer } from './ChatComposer-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ChatComposer board. */
-export class ChatComposerEffects {
-  #root: ChatComposer | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ChatComposer {
-    if (!this.#root) throw new Error('ChatComposerEffects read its board before it was bound')
-    return this.#root
-  }
+export class ChatComposerEffects extends BoardUnit<ChatComposer> {
   constructor(root: ChatComposer) {
-    this.#root = root
+    super(root)
   }
   /**
    * The work the surface used to do as it set itself up: effects, the

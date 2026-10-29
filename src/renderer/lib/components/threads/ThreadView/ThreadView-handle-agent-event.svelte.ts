@@ -31,17 +31,11 @@ import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
 import { LiveGenerationRate, generatedTokens } from '$lib/token-rate.svelte'
 import type { SendPayload } from '../ConversationController.svelte'
 import type { ThreadView } from './ThreadView-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
-export class ThreadViewHandleAgentEvent {
-  #root: ThreadView | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ThreadView {
-    if (!this.#root)
-      throw new Error('ThreadViewHandleAgentEvent read its board before it was bound')
-    return this.#root
-  }
+export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
-    this.#root = root
+    super(root)
   }
   thread = $derived(this.root.props.thread ?? this.root.unmirroredTraceStartTime.mountedThread)
 

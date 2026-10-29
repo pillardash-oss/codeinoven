@@ -1,15 +1,9 @@
 import type { ChatComposer } from './ChatComposer-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ChatComposer board. */
-export class ChatComposerHandleDropAnchorChange {
-  #root: ChatComposer | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ChatComposer {
-    if (!this.#root)
-      throw new Error('ChatComposerHandleDropAnchorChange read its board before it was bound')
-    return this.#root
-  }
+export class ChatComposerHandleDropAnchorChange extends BoardUnit<ChatComposer> {
   constructor(root: ChatComposer) {
-    this.#root = root
+    super(root)
   }
   /** 0x0 out-of-flow element sitting beside the drop overlay. Its viewport
    *  position is the origin the overlay's `position: fixed` resolves against. */

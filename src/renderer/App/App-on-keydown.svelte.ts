@@ -48,16 +48,11 @@ import { ThreadSearchPaletteController } from '../app-thread-search.svelte'
 import { workspaceTourViewFor } from '$lib/guide/guide-stops'
 import type { View } from './App-types'
 import type { App } from './App-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the App board. */
-export class AppOnKeydown {
-  #root: App | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): App {
-    if (!this.#root) throw new Error('AppOnKeydown read its board before it was bound')
-    return this.#root
-  }
+export class AppOnKeydown extends BoardUnit<App> {
   constructor(root: App) {
-    this.#root = root
+    super(root)
   }
   activeView = $state<View>(rendererRecovery.activeView)
 

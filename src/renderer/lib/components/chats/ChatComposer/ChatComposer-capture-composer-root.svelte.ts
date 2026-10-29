@@ -22,17 +22,11 @@ import type { ExpertDecisionInput, ThreadExpertState } from '$shared/ipc-contrac
 import type { PromptAttachment } from '$shared/types'
 import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 import type { ChatComposer } from './ChatComposer-board.svelte'
+import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ChatComposer board. */
-export class ChatComposerCaptureComposerRoot {
-  #root: ChatComposer | undefined
-  /** The board this unit belongs to; set before any member of it runs. */
-  get root(): ChatComposer {
-    if (!this.#root)
-      throw new Error('ChatComposerCaptureComposerRoot read its board before it was bound')
-    return this.#root
-  }
+export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
   constructor(root: ChatComposer) {
-    this.#root = root
+    super(root)
   }
   codeInOvenIconSvg = getVendorIconSvg(APP_NAME)
 
