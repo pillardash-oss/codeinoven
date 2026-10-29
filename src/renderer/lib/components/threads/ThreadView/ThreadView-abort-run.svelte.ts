@@ -1,4 +1,4 @@
-import { invoke } from '$lib/ipc.svelte'
+import { invoke, waitForFeatures } from '$lib/ipc.svelte'
 import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
@@ -229,7 +229,23 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         return
       this.checkpoints = nextCheckpoints
     } catch {
-      // Checkpoint history is supplementary; session recovery remains available.
+      // The post-paint IPC graph registers after the first paint, and a launch
+      // that restores a thread opens it before that, so the very first checkpoint
+      // read can land on a channel that does not exist yet. Dropping it left every
+      // turn card missing for the whole session: the list is read here, once per
+      // open, and a turn card is drawn only for a checkpoint in it. Wait for the
+      // app's own features-ready signal, which is exactly "that graph is
+      // registered", and read once more.
+      try {
+        await waitForFeatures()
+        if (!this.root.loadOlderMessages.alive) return
+        const retried = await invoke('checkpoint:list', projectId, id)
+        if (!this.root.loadOlderMessages.alive || !this.checkpointRefreshGuard.isCurrent(request))
+          return
+        this.checkpoints = retried
+      } catch {
+        // Still supplementary: session recovery remains available without it.
+      }
     }
   }
 

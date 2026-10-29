@@ -1205,7 +1205,14 @@ void app
         conversationFailsafe = undefined
       }
       closeSplash()
-      startPostVisualServices()
+      // Forced: the window is on screen now, so the feature graph must start
+      // regardless of which of the two events arrived first. It used to be gated
+      // on `documentLoaded && visualReady`, and `did-finish-load` no longer
+      // retries the start, so a reveal that beat that event left the whole
+      // post-paint graph unstarted: no `registerIpcHandlers`, which silently cost
+      // every channel it owns, including `checkpoint:list` and with it the file
+      // changes card in every conversation.
+      startPostVisualServices(true)
     }
     window.once('ready-to-show', () => {
       visualReady = true
