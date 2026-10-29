@@ -3,21 +3,29 @@ import type { Attachment } from 'svelte/attachments'
 import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
 
 /**
- * Report where the column a reader is reading starts.
+ * Report where the surface a reader is reading starts.
  *
- * The app header puts the thread's name on that column's left edge instead of on
- * the sidebar's, because the page is the thing the reader is looking at. The
- * conversation's page column is that surface, and measuring it is the whole job:
- * the box's left edge plus its own left padding, because the text starts after
- * that padding and aligning to the box leaves the name a few pixels off the line
- * the messages start on.
+ * The app header puts the thread's name on that surface's own text edge instead
+ * of on the sidebar's, because the page is the thing the reader is looking at.
+ * The conversation's scroll surface is that page, and measuring it is the whole
+ * job: the box's left edge plus its own left padding, which is the same gutter
+ * the message column starts on whenever the page column is narrower than the
+ * pane it sits in.
+ *
+ * What is deliberately NOT measured is the centred message column's own left
+ * edge. That column re-centres inside the surface whenever the surface's width
+ * changes, so a panel opening beside the conversation (a temporary chat, a
+ * browser, a diff: anything the reader docks on the right) would drag the
+ * thread's name sideways with it. A temp chat has nothing to do with the thread
+ * the title names, so the title may not follow it. The surface's gutter only
+ * moves when the surface itself moves, which is the sidebar the title belongs to.
  *
  * A surface the reader cannot see keeps the last coordinate it reported instead
  * of resetting it. Hiding the conversation (a studio taking the pane) is not the
  * same as taking it off screen: resetting there is what dropped the thread's name
  * back to the end of the header's chrome the moment a studio opened, so the name
- * jumped left while everything below it changed. The last real text edge is the
- * honest answer until another reading surface claims the column.
+ * jumped left while everything below it changed. The last real edge is the honest
+ * answer until another reading surface claims the column.
  */
 export function createReadingColumn(): {
   /** Put on the element whose text the header should align to. */
@@ -55,10 +63,10 @@ export function createReadingColumn(): {
     report()
     const observer = new ResizeObserver(report)
     observer.observe(node)
-    /* The page keeps its width while the pane around it narrows, so observing the
-       column alone misses every panel that opens or closes beside it: the column
-       moves without resizing. The pane it sits in is what actually changes size,
-       and observing that catches both. */
+    /* The surface keeps its left edge while a panel narrows it from the right,
+       and moves without resizing when the sidebar beside it changes width, so
+       the box next to it is observed too: between the two, every move and every
+       resize of the surface that matters is caught. */
     const pane = node.parentElement
     if (pane) observer.observe(pane)
     window.addEventListener('resize', report)
