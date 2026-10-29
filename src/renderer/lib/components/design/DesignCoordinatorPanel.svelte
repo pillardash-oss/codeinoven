@@ -13,6 +13,7 @@
   import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
   import CioImageOff from '@pdslng/cio-icon/CioImageOff.svelte'
   import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
+  import CioListTree from '@pdslng/cio-icon/CioListTree.svelte'
   import CioMarquee from '@pdslng/cio-icon/CioMarquee.svelte'
   import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
@@ -1622,14 +1623,16 @@
             {designScreens.length}
           </span>
         {/if}
-        {#if items.length > 1}
-          <span
-            class="flex shrink-0 items-center gap-0.5 pl-0.5 text-[0.625rem] font-medium text-dimmed transition-colors group-hover:text-foreground"
-          >
-            {otherCount} more
-            <CioChevronDown size={10} class="shrink-0" />
-          </span>
-        {/if}
+        <span class="flex shrink-0 items-center gap-0.5 pl-0.5">
+          {#if items.length > 1}
+            <span
+              class="text-[0.625rem] font-medium text-dimmed transition-colors group-hover:text-foreground"
+            >
+              {otherCount} more
+            </span>
+          {/if}
+          <CioChevronDown size={10} class="shrink-0 text-dimmed" />
+        </span>
       </button>
       {#if selectedCreatorThreadId !== '' && selectedCreatorThreadId === selectionThreadId}
         <span
@@ -1639,6 +1642,31 @@
       {/if}
       <span class="min-w-0 flex-1"></span>
       <span class="flex shrink-0 items-center gap-0.5">
+        <!--
+          The way to the designs themselves.
+
+          The design in front is only half of what this panel holds: the rest are
+          grouped behind a click, and a name that happens to be clickable is not an
+          affordance anyone finds. This is the control that says so, and it is
+          there whether the project holds one design or fifty.
+        -->
+        <button
+          type="button"
+          class="flex h-6 items-center gap-1 px-1.5 text-[0.625rem] transition-colors {navigatorOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
+          aria-pressed={navigatorOpen}
+          title={navigatorOpen
+            ? `Back to the ${noun} in front`
+            : `Designs: group, fold and switch between the ${noun}s of this project`}
+          aria-label={navigatorOpen
+            ? `Back to the ${noun} in front`
+            : `Designs: group, fold and switch between the ${noun}s of this project`}
+          onclick={() => (navigatorOpen = !navigatorOpen)}
+        >
+          <CioListTree size={12} />
+          Designs
+        </button>
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
