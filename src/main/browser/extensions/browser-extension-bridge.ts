@@ -61,6 +61,19 @@ const MAILBOX_POLL_INTERVAL_MS = 500
  *  is waited on only until it has. */
 const BRIDGE_LOAD_TIMEOUT_MS = 15_000
 
+/**
+ * How often a worker that owns a native messaging port is touched.
+ *
+ * Chromium keeps an extension's service worker alive for as long as it holds a
+ * native messaging port, and a port's owner keeps its state in the worker: a
+ * password manager's "the desktop app is connected" flag is worker memory, and its
+ * biometric status answer is dropped in favour of "desktop disconnected" the
+ * moment that flag is gone. A released worker here is a new life with no memory of
+ * the port it held, so an idle extension with a host open would offer no biometric
+ * unlock until something else woke it. Chromium's own idle window is 30 s, and the
+ * touch is one message into a worker that is already running. */
+const NATIVE_PORT_KEEP_ALIVE_MS = 20_000
+
 /** One mailbox snapshot: everything the worker wants the app to know. */
 export interface BrowserExtensionMailbox {
   /** Unique per worker life; a new value means the worker restarted and holds
@@ -557,6 +570,8 @@ export class BrowserExtensionBridge {
   private answeringCookies = false
   private answeringPages = false
   private disposed = false
+  /** When the worker that owns a native port was last touched, 0 when it owns none. */
+  private nativeKeepAliveAt = 0
   /** The worker life the last snapshot came from. */
   private generation = ''
   /** The last sequence number seen in that life. */
@@ -609,6 +624,7 @@ export class BrowserExtensionBridge {
           void this.drain()
           void this.answerFrameRequests()
           void this.answerNativeRequests()
+          void this.keepNativeWorkerAlive()
           void this.answerDownloadRequests()
           void this.answerCookieRequests()
           void this.answerPageRequests()
@@ -744,6 +760,26 @@ export class BrowserExtensionBridge {
     } finally {
       this.readingFrames = false
     }
+  }
+
+  /**
+   * Keep the worker of an extension that holds a native messaging port alive.
+   *
+   * Runs inside the poll this bridge already keeps rather than on a timer of its
+   * own, and does nothing at all for the extensions that hold no port, which is all
+   * of them but a password manager. A worker is a new life when it wakes, so this
+   * is about not letting it be released in the first place: nothing here can hand a
+   * new life the port the previous one held.
+   */
+  private keepNativeWorkerAlive(): void {
+    if ((this.deps.nativeMessaging?.portCount() ?? 0) === 0) {
+      this.nativeKeepAliveAt = 0
+      return
+    }
+    const now = Date.now()
+    if (now - this.nativeKeepAliveAt < NATIVE_PORT_KEEP_ALIVE_MS) return
+    this.nativeKeepAliveAt = now
+    void this.push({ kind: 'keep-alive' })
   }
 
   /**

@@ -19,6 +19,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { Logger } from '../../system/logger'
 import {
   resolveNativeHostManifest,
   type NativeHostLookupOptions
@@ -46,6 +47,8 @@ export interface BrowserExtensionNativeMessagingDeps {
 
 interface OpenPort {
   process: NativeHostProcess
+  /** The host name the extension asked for, kept for the trace below. */
+  application: string
 }
 
 export class BrowserExtensionNativeMessaging {
@@ -89,12 +92,15 @@ export class BrowserExtensionNativeMessaging {
     }
     const portId = randomUUID()
     const host = new NativeHostProcess(lookup.host.path, {
-      onMessage: (message) => this.deliver({ kind: 'message', portId, message }),
+      onMessage: (message) => {
+        traceNativeMessage('host-to-extension', application, message)
+        this.deliver({ kind: 'message', portId, message })
+      },
       onExit: (error) => this.closePort(portId, error)
     })
     // Hosts have to be tracked before they can speak: a very fast host can answer
     // before `start()` returns, and its message must find the port already there.
-    this.ports.set(portId, { process: host })
+    this.ports.set(portId, { process: host, application })
     if (host.start() === false) {
       this.ports.delete(portId)
       this.deliverConnectFailure(
@@ -111,6 +117,7 @@ export class BrowserExtensionNativeMessaging {
   post(portId: string, message: unknown): void {
     const port = this.ports.get(portId)
     if (!port) return
+    traceNativeMessage('extension-to-host', port.application, message)
     if (port.process.send(message) === false) {
       this.closePort(portId, 'the native messaging host could not be written to')
     }
@@ -122,6 +129,19 @@ export class BrowserExtensionNativeMessaging {
     if (!port) return
     this.ports.delete(portId)
     port.process.kill()
+  }
+
+  /**
+   * How many hosts this extension currently holds open.
+   *
+   * The bridge reads it to keep a worker alive while it owns a port: Chromium
+   * extends a service worker's life for an open native messaging port, and a
+   * password manager's desktop status (`connected`) lives in the worker's memory,
+   * so a worker that idles out forgets the bridge is up and answers "desktop
+   * disconnected" until it reconnects.
+   */
+  portCount(): number {
+    return this.ports.size
   }
 
   /** Close every port this extension holds and stop delivering. */
@@ -151,6 +171,33 @@ export class BrowserExtensionNativeMessaging {
     if (this.disposed) return
     this.deps.deliver(delivery)
   }
+}
+
+/**
+ * One dev-level line about a native port's traffic.
+ *
+ * A password manager's biometric unlock is decided entirely by this exchange: the
+ * extension asks the desktop app over the port and shows the option only when it
+ * gets an answer, so "the extension offers no Touch ID" is invisible without it.
+ * Only the routing fields and scalar answers are recorded: a host's own payloads
+ * can carry key material (Bitwarden returns the user's key over this port) and
+ * never belong in a log file.
+ */
+const TRACE_FIELDS = ['command', 'type', 'topic', 'response', 'status', 'error'] as const
+
+function traceNativeMessage(direction: string, application: string, message: unknown): void {
+  if (typeof message !== 'object' || message === null) {
+    Logger.dev('Extension native message:', { direction, application, message: typeof message })
+    return
+  }
+  const record = message as Record<string, unknown>
+  const fields: Record<string, unknown> = {}
+  for (const field of TRACE_FIELDS) {
+    const value = record[field]
+    if (typeof value === 'number' || typeof value === 'boolean') fields[field] = value
+    else if (typeof value === 'string') fields[field] = value.slice(0, 120)
+  }
+  Logger.dev('Extension native message:', { direction, application, ...fields })
 }
 
 /** The reason a lookup failed, phrased the way the extension's own users read it. */
