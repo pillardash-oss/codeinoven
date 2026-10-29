@@ -1088,7 +1088,11 @@ void app
     // broken. The file service is resolved lazily from bootPostPaintServices.
     installAppFilePreviewProtocol({
       getProjectFiles: () => state.appfileProjectFiles,
-      getScopedPathResolver: () => state.appfileScopedPathResolver
+      getScopedPathResolver: () => state.appfileScopedPathResolver,
+      // The post-paint boot publishes both, and a preview requested before it
+      // finishes waits for it instead of failing, which is what kept an early
+      // image broken for the whole session. A boot that gave up is not pending.
+      isBootPending: () => !state.startupServicesFailed
     })
 
     const bootContext = {

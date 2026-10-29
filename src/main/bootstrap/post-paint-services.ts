@@ -734,7 +734,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     storage,
     onChanged: (projectId, directory, updatedAt) => {
       for (const window of BrowserWindow.getAllWindows())
-        sendToRenderer(window.webContents, 'design:screenBoardChanged', projectId, directory, updatedAt)
+        sendToRenderer(
+          window.webContents,
+          'design:screenBoardChanged',
+          projectId,
+          directory,
+          updatedAt
+        )
     }
   })
   ipcMain.handle('design:screenBoard', (_event, projectId, directory) =>
@@ -930,7 +936,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     speechService: state.speechService ?? undefined,
     utilityFootprint,
     onScopedPathResolver: (resolve) => {
+      // Published here so the `appfile://` preview protocol authorizes a path
+      // exactly the way privileged IPC does, against the same grants. A preview
+      // requested before this point waits for it rather than failing.
       state.appfileScopedPathResolver = resolve
+      Logger.dev('Scoped path resolver published')
     }
   })
   state.chatEngine.register()

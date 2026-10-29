@@ -20,9 +20,17 @@ const ATTACHMENT_ID_PATTERN = /^[a-f0-9]{24}$/u
 const THREAD_ID_PATTERN = /^[a-zA-Z0-9._-]+$/u
 
 /** How long a preview request waits for the boot to publish what it needs. */
-const READY_TIMEOUT_MS = 5000
+const READY_TIMEOUT_MS = 20_000
 /** How often that wait looks again while the boot is still running. */
 const READY_POLL_MS = 25
+
+/** A preview asked for something the boot has not published yet. */
+export class BootDependencyError extends Error {
+  constructor(label: string) {
+    super(`${label} is not ready`)
+    this.name = 'BootDependencyError'
+  }
+}
 
 /**
  * One boot-published dependency, asked for until it exists.
@@ -30,24 +38,32 @@ const READY_POLL_MS = 25
  * The protocol is installed before the window loads, deliberately, so a preview
  * request can arrive while the post-paint boot is still building the service it
  * needs. Answering `not found` then is what leaves an image permanently broken:
- * a browser does not retry a failed preview, and nothing tells it to. A short
- * bounded wait turns that race into the same successful answer a later request
- * gets, and a service that never arrives still ends the wait with an error the
- * handler already reports.
+ * a browser does not retry a failed preview, and nothing tells it to. So the
+ * request waits for the dependency instead, and the wait follows the boot
+ * rather than a guess: it looks again for as long as the boot says it is still
+ * running, and gives up only once the boot has settled without publishing it.
  *
  * The pending promise is shared per dependency, so a burst of requests during
  * boot costs one poll loop instead of one loop each.
  */
-export function bootDependency<T>(get: () => T | null, label: string): { read: () => Promise<T> } {
+export function bootDependency<T>(
+  get: () => T | null,
+  label: string,
+  isBootPending: () => boolean
+): { read: () => Promise<T> } {
   let pending: Promise<T> | null = null
   const waitOnce = async (): Promise<T> => {
     const deadline = Date.now() + READY_TIMEOUT_MS
     for (;;) {
       const value = get()
       if (value) return value
-      if (Date.now() >= deadline) throw new Error(`${label} is not ready`)
+      // A boot that has finished without publishing this will never publish it,
+      // so waiting on it any longer would only delay the same answer.
+      if (!isBootPending()) break
+      if (Date.now() >= deadline) break
       await new Promise<void>((resolve) => setTimeout(resolve, READY_POLL_MS))
     }
+    throw new BootDependencyError(label)
   }
   return {
     read: () => {
@@ -244,13 +260,14 @@ function decodeSegments(pathname: string): string[] {
  */
 export function installFilePreviewProtocol(
   getProjectFiles: () => ProjectFilesService | null,
-  resolveScopedPath?: (value: unknown) => Promise<string | null>
+  resolveScopedPath: ((value: unknown) => Promise<string | null>) | undefined,
+  isBootPending: () => boolean
 ): void {
   /** Long-lived, so a scrub through a video reuses one grant; idle-stopped. */
   const mediaServer = new MediaServer()
   // The service graph is built by the post-paint boot, so a preview requested in
   // the first frames after hydration waits for it instead of being refused.
-  const projectFiles = bootDependency(getProjectFiles, 'Project file service')
+  const projectFiles = bootDependency(getProjectFiles, 'Project file service', isBootPending)
   protocol.handle(SCHEME, async (request) => {
     try {
       const url = new URL(request.url)
@@ -337,7 +354,12 @@ export function installFilePreviewProtocol(
 
       return notFound()
     } catch (error) {
-      Logger.error('appfile protocol request failed:', error)
+      // A preview asked for before the boot published what it needs is a request
+      // that arrived too early, not a fault: the boot settles and the next
+      // request is served normally, so it is not reported as an error.
+      if (error instanceof BootDependencyError)
+        Logger.dev('appfile preview skipped:', error.message)
+      else Logger.error('appfile protocol request failed:', error)
       return notFound()
     }
   })

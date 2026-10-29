@@ -77,6 +77,8 @@ export function installRendererSessionGuards(deps: RendererSessionGuardDeps): vo
 export interface AppFilePreviewProtocolDeps {
   getProjectFiles: () => ProjectFilesService | null
   getScopedPathResolver: () => ((value: unknown) => Promise<string>) | null
+  /** Whether the boot could still publish the resolver, so a request waits it out. */
+  isBootPending: () => boolean
 }
 
 /**
@@ -91,8 +93,14 @@ export function installAppFilePreviewProtocol(deps: AppFilePreviewProtocolDeps):
   // file service, so a preview of a file the user opened can arrive before it
   // exists. Waiting for it answers that request instead of failing it, which is
   // what left such an image broken until the next reload.
-  const scopedPath = bootDependency(deps.getScopedPathResolver, 'Scoped path resolution')
-  installFilePreviewProtocol(deps.getProjectFiles, (value) =>
-    scopedPath.read().then((resolve) => resolve(value))
+  const scopedPath = bootDependency(
+    deps.getScopedPathResolver,
+    'Scoped path resolution',
+    deps.isBootPending
+  )
+  installFilePreviewProtocol(
+    deps.getProjectFiles,
+    (value) => scopedPath.read().then((resolve) => resolve(value)),
+    deps.isBootPending
   )
 }
