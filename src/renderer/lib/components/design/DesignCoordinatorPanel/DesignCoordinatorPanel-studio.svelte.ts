@@ -229,6 +229,18 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
     this.designScreens.find((screen) => screen.entry === this.LIVE_PREVIEW_ENTRY) ?? null
   )
 
+  /**
+   * The screens the grid itself lists.
+   *
+   * The canvas and the live preview are the design's two doors and are drawn as the
+   * grid's first two cells, so the grid must not repeat the entry page underneath
+   * them: the design's `index.html` is the Live preview card, and listing it again
+   * as a screen made every board open on the same picture twice.
+   */
+  screenCards = $derived(
+    this.designScreens.filter((screen) => screen.entry !== this.LIVE_PREVIEW_ENTRY)
+  )
+
   /** What the canvas entry says while it has no picture to show. */
   canvasEntryNote = $derived(
     !this.root.gallery.canvasRead

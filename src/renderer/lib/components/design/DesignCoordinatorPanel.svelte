@@ -400,16 +400,6 @@
           <CioListTree size={12} />
           Designs
         </button>
-        <button
-          type="button"
-          class="flex h-6 w-6 board.gallery.items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-          disabled={!board.studio.canRevealCreator}
-          title={board.studio.revealLabel}
-          aria-label={board.studio.revealLabel}
-          onclick={() => void board.studio.revealCreator()}
-        >
-          <CioTarget size={12} />
-        </button>
         {#if board.historyActions.historyActions && board.gallery.selected.directory !== '' && !board.gallery.selectedMissing}
           <DesignHistoryActions
             canUndo={board.historyActions.historyActions.canUndo}
@@ -420,20 +410,6 @@
             onRedo={board.historyActions.historyActions.redo}
           />
         {/if}
-        <button
-          type="button"
-          class="flex h-6 w-6 board.gallery.items-center justify-center transition-colors hover:bg-elevated disabled:opacity-40 {board
-            .state.historyOpen
-            ? 'bg-elevated text-foreground'
-            : 'text-dimmed hover:text-foreground'}"
-          disabled={board.gallery.selected.directory === '' || board.gallery.selectedMissing}
-          aria-pressed={board.state.historyOpen}
-          title={`${board.studio.nounTitle} history`}
-          aria-label={`${board.studio.nounTitle} history`}
-          onclick={() => (board.state.historyOpen = !board.state.historyOpen)}
-        >
-          <CioHistory size={12} />
-        </button>
         {#if !board.gallery.video && board.studio.designScreens.length > 1}
           <!--
             The order of the screens grid, one click from the grid itself.
@@ -523,6 +499,30 @@
               >
                 <CioRefresh size={13} class="shrink-0 text-muted" />
                 {board.studio.refreshLabel}
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={board.gallery.selected.directory === '' || board.gallery.selectedMissing}
+                onSelect={() => (board.state.historyOpen = !board.state.historyOpen)}
+              >
+                <CioHistory size={13} class="shrink-0 text-muted" />
+                {`${board.studio.nounTitle} history`}
+                <CioCheck
+                  size={12}
+                  class={[
+                    'ml-auto shrink-0',
+                    board.state.historyOpen ? 'text-primary' : 'invisible'
+                  ]}
+                  aria-hidden="true"
+                />
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={!board.studio.canRevealCreator}
+                onSelect={() => void board.studio.revealCreator()}
+              >
+                <CioTarget size={13} class="shrink-0 text-muted" />
+                {board.studio.revealLabel}
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
@@ -848,7 +848,7 @@
                 onOpen: () => void board.gallery.openPreview(board.studio.LIVE_PREVIEW_ENTRY)
               })}
             {/if}
-            {#each board.studio.designScreens as screen (screen.entry)}
+            {#each board.studio.screenCards as screen (screen.entry)}
               {@render screenCard(screen, board.gallery.video)}
             {/each}
           </div>
