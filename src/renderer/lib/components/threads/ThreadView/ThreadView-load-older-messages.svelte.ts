@@ -303,16 +303,10 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       awayFromBottom: this.userScrolledAway
     })
     this.root.steerQueuedMessage.scheduleResponseBubbleUpdate()
-    // A load in flight keeps correcting for the pages it mounts above the
-    // reader. A scroll the reader caused themselves is not that: rebase the
-    // anchor on what they are looking at now, so the correction never pulls
-    // against their own scrolling.
-    if (
-      this.loadingOlderMessages &&
-      this.viewportAnchor &&
-      Math.abs(this.scrollEl.scrollTop - this.viewportWriteTop) > 1.5
-    ) {
-      this.captureViewportAnchor()
+    // The settle guard pins the seam itself and has to yield to the reader the
+    // moment the scroll is theirs, not the load's.
+    if (this.viewportSettling && Math.abs(this.scrollEl.scrollTop - this.viewportWriteTop) > 1.5) {
+      this.stopViewportSettle()
     }
     // Nothing loads from here: the history row's own visibility observer (see
     // `watchHistoryHead`) is what triggers the conversation-level fetch, and
@@ -321,63 +315,80 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   loadingOlderMessages = $state(false)
 
-  /** The block the reader's viewport is pinned to while history mounts above
-   *  it, plus the distance it kept from the scroller's top edge. Null when no
-   *  mounted block could be measured. Plain, not reactive. */
-  private viewportAnchor: { id: string; offset: number } | null = null
+  /** The one element the reader's viewport is pinned to while history mounts:
+   *  the seam, the first block of the mounted window, which every loaded page
+   *  is inserted above. Pinning it pins every block below it, so the page the
+   *  reader is looking at cannot move while older work lands on top of it.
+   *  Plain, not reactive. */
+  private viewportSeam: { node: HTMLElement; offset: number } | null = null
 
-  /** The scrollTop this unit last wrote itself. A scroll event landing
-   *  anywhere else came from the reader, who owns their viewport. Plain. */
+  /** The scroll amount this unit last wrote itself. A scroll position that is
+   *  anything else came from the reader, who owns their viewport. Plain. */
   private viewportWriteTop = -1
 
-  /** The scroller's scrollTop and content height when the load began, kept for
-   *  the height-delta fallback used when no block could be measured. Plain. */
-  private viewportStartTop = 0
-  private viewportStartHeight = 0
+  /** Set while the seam is being held after an insert. Plain. */
+  private viewportSettling = false
 
-  /** Remember where the reader is looking, before pages are prepended above.
-   *  A block is preferred once it has not already scrolled past the top of the
-   *  viewport, so the anchor is the thing they are actually reading rather
-   *  than a block far above it. */
-  private captureViewportAnchor(): void {
+  private viewportSettleFrame = 0
+
+  /** How long the seam is held after a page lands. The page is laid out by
+   *  then, but content inside it can still find its height a frame or two
+   *  later (a picture without an intrinsic size, a clamped block that measures
+   *  itself, a font that swaps in), and any of those would push the reader's
+   *  view down after the correction had already run. */
+  private static readonly VIEWPORT_SETTLE_MS = 480
+
+  /** Pin the viewport to the seam. Called once before a load inserts anything. */
+  private holdViewportSeam(): void {
     const el = this.scrollEl
-    this.viewportAnchor = null
-    if (!el) return
-    this.viewportStartTop = el.scrollTop
-    this.viewportStartHeight = el.scrollHeight
-    const top = el.getBoundingClientRect().top
-    const mounted = this.root.composerScope.visibleMessages
-    const limit = Math.min(mounted.length, 24)
-    let anchor: { id: string; offset: number } | null = null
-    for (let index = 0; index < limit; index += 1) {
-      const message = mounted[index]
-      if (!message) continue
-      const node = document.getElementById(`msg-${message.id}`)
-      if (!node) continue
-      const offset = node.getBoundingClientRect().top - top
-      anchor = { id: message.id, offset }
-      if (offset >= 0) break
-    }
-    this.viewportAnchor = anchor
+    const seam = this.root.studioTemporaryChatContext.historySeamElement()
+    this.viewportSeam =
+      el && seam instanceof HTMLElement
+        ? { node: seam, offset: seam.getBoundingClientRect().top - el.getBoundingClientRect().top }
+        : null
   }
 
-  /** Put the reader back exactly where they were after a page mounted above
-   *  them. Cheap and idempotent, so it runs after every tick a prepend causes
-   *  instead of once at the end: native scroll anchoring is off on this
-   *  scroller, so an uncorrected prepend is visible on the very next frame. */
-  private restoreViewportAnchor(): void {
+  /** Put the seam back where it was. Idempotent, and cheap enough to run on
+   *  every frame the guard is live. */
+  private restoreViewportSeam(): void {
     const el = this.scrollEl
-    const anchor = this.viewportAnchor
-    if (!el || !anchor) return
-    const node = document.getElementById(`msg-${anchor.id}`)
-    if (!node) return
+    const seam = this.viewportSeam
+    if (!el || !seam || !seam.node.isConnected) return
     const contentOffset =
-      node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
-    const next = Math.max(0, contentOffset - anchor.offset)
+      seam.node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+    const next = Math.max(0, contentOffset - seam.offset)
     if (Math.abs(next - el.scrollTop) > 0.5) {
       this.viewportWriteTop = next
       el.scrollTop = next
     }
+  }
+
+  /** Hold the seam across the frames after the insert, so the loaded page
+   *  settles above the reader instead of dragging their view. Bounded by time
+   *  and abandoned the instant they scroll: the viewport belongs to the reader,
+   *  and this only exists to keep the layout from moving it for them. */
+  private settleViewportSeam(): void {
+    this.stopViewportSettle()
+    if (!this.viewportSeam) return
+    const deadline = performance.now() + ThreadViewLoadOlderMessages.VIEWPORT_SETTLE_MS
+    this.viewportSettling = true
+    const step = (): void => {
+      this.viewportSettleFrame = 0
+      if (!this.alive || !this.viewportSettling) return
+      this.restoreViewportSeam()
+      if (performance.now() < deadline) this.viewportSettleFrame = requestAnimationFrame(step)
+      else {
+        this.viewportSettling = false
+        this.viewportSeam = null
+      }
+    }
+    this.viewportSettleFrame = requestAnimationFrame(step)
+  }
+
+  private stopViewportSettle(): void {
+    if (this.viewportSettleFrame) cancelAnimationFrame(this.viewportSettleFrame)
+    this.viewportSettleFrame = 0
+    this.viewportSettling = false
   }
 
   /** True while the history row entering the viewport may fire one load.
@@ -436,34 +447,37 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
   /** The scroll-triggered load.
    *
    *  A click on the button is a deliberate leave from the live tail, so that
-   *  path pins the viewport for good. A reader whose transcript is shorter
-   *  than the viewport sees the history row without ever scrolling, and
-   *  dropping their tail follow because a page happened to arrive would stop
-   *  a streaming turn from following along. So the follow state is put back
-   *  exactly as it was found once the page has landed. */
+   *  path pins the viewport for good and mounts three turns of history at once.
+   *  A reader whose transcript is shorter than the viewport sees the history
+   *  row without ever scrolling, and dropping their tail follow because a page
+   *  happened to arrive would stop a streaming turn from following along. So
+   *  the follow state is put back exactly as it was found once the page has
+   *  landed, and only one turn is fetched: the page arrives in a few frames and
+   *  the reader keeps scrolling into it, instead of one long freeze followed by
+   *  a wall of blocks mounting at once. */
   private async autoLoadOlderMessages(): Promise<void> {
     if (!this.alive) return
     const atBottom = this.scrollEl
       ? this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
       : false
     try {
-      await this.loadOlderMessages()
+      await this.loadOlderMessages(true)
     } finally {
       if (atBottom && this.alive) this.userScrolledAway = false
     }
   }
 
-  async loadOlderMessages(): Promise<void> {
+  async loadOlderMessages(auto = false): Promise<void> {
     if (
       !this.scrollEl ||
       this.loadingOlderMessages ||
       !this.root.unmirroredTraceStartTime.hasOlderMessages
     )
       return
-    // Where the reader is looking right now. Every page below is prepended
-    // above it, so this one measurement is what keeps the transcript from
-    // moving under them once the page lands.
-    this.captureViewportAnchor()
+    // The block every page below is inserted above. Pinning it is what keeps
+    // the reader's view exactly where they left it, with the new page waiting
+    // off screen above until they scroll up into it.
+    this.holdViewportSeam()
     if (this.root.props.controller) {
       // A controller's transcript mounts every message it holds, so the page that
       // lands above the seam is the page the reader watches arrive.
@@ -471,7 +485,8 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       await this.root.props.controller.loadOlder()
       if (!this.alive) return
       await tick()
-      this.restoreViewportAnchor()
+      this.restoreViewportSeam()
+      this.settleViewportSeam()
       playHistoryArrive(
         this.root.studioTemporaryChatContext.historyArrivedBlocks(seam),
         this.scrollEl ?? null
@@ -490,18 +505,21 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // begins.
     this.windowStartId ??= this.root.composerScope.mountedWindowStartId()
     try {
-      // One click loads THREE turn-aligned pages: the store usually already
-      // holds some of them, so fetch only while it does not   each fetch is a
-      // bounded 40-message page and turns that span more than one page keep
-      // it fetching until three deduped turn starts exist before the anchor.
+      // A click loads THREE turn-aligned pages; the scroll trigger loads ONE, so
+      // the insert stays small, lands fast, and the reader keeps scrolling into
+      // it as if the transcript were simply longer. The store usually already
+      // holds some of it, so fetch only while it does not   each fetch is a
+      // bounded 40-message page and turns that span more than one page keep it
+      // fetching until enough deduped turn starts exist before the anchor.
+      const turnPages = auto ? 1 : 3
       let pagesWithoutTurnStart = 0
-      for (let attempt = 0; attempt < 30; attempt++) {
+      for (let attempt = 0; attempt < (auto ? 1 : 30); attempt++) {
         const startsBefore = turnStartPromptsBefore(
           this.root.buildSpecActionPrompt.structureMessages,
           this.mountedStartIndex,
-          3
+          turnPages
         )
-        if (startsBefore.length === 3) break
+        if (startsBefore.length === turnPages) break
         const el = this.scrollEl
         if (!el || !this.olderMessagesAvailable) break
         const oldest = this.messages[0]
@@ -530,12 +548,6 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         )
         this.mountedCount += page.messages.length
         await tick()
-        // The page landed above the reader and native scroll anchoring is off
-        // on this scroller, so the viewport is put back before the browser gets
-        // a frame to paint the shift. Correcting only after the whole fetch
-        // loop left every intermediate page visibly dragging the transcript
-        // down once per round trip.
-        this.restoreViewportAnchor()
         if (startsBefore.length === 0) {
           pagesWithoutTurnStart += 1
           if (pagesWithoutTurnStart >= 3) break
@@ -545,8 +557,10 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       // mid-turn, cutting that turn's prompt out of the cache entirely   the
       // loaded page would then begin at a working trace with its prompt
       // missing above it. Extend the fetch until the oldest row is a turn's
-      // prompt (or the thread truly has nothing older).
-      for (let align = 0; align < 4; align++) {
+      // prompt (or the thread truly has nothing older). A scroll-triggered load
+      // allows itself one page for this: the reader is scrolling, and every
+      // extra round trip is a stall they can feel.
+      for (let align = 0; align < (auto ? 1 : 4); align++) {
         const oldest = this.messages[0]
         if (!oldest) break
         if (oldest.role === 'user' && !isActivityOnlyUserMessage(oldest)) break
@@ -582,20 +596,21 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         )
         this.mountedCount += page.messages.length
         await tick()
-        this.restoreViewportAnchor()
       }
-      // Move the anchor back three pages   or to the thread's very beginning
-      // when fewer complete pages exist   then keep the reader's viewport
-      // stable across the mount.
+      // Move the window back to the turn the loaded page opens with   or to the
+      // thread's very beginning when fewer complete turns exist. The block at
+      // the old window start is the seam the pages land above, and it is held
+      // exactly where it was, so the loaded page waits off screen above the
+      // reader until they scroll into it.
       // The anchor must be the start of a turn   a user prompt   never a
       // trace row. Landing on a trace presented the loaded page cut off at
       // its beginning, with the turn's prompt missing above it.
       const starts = turnStartPromptsBefore(
         this.root.buildSpecActionPrompt.structureMessages,
         this.mountedStartIndex,
-        3
+        turnPages
       )
-      let target = starts.length === 3 ? starts[starts.length - 1] : 0
+      let target = starts.length >= turnPages ? starts[starts.length - 1] : 0
       const isRealPrompt = (index: number): boolean => {
         const message = this.messages[index]
         return !!message && message.role === 'user' && !isActivityOnlyUserMessage(message)
@@ -608,35 +623,40 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       if (target >= this.mountedStartIndex) target = 0
       if (target < this.mountedStartIndex) {
         const seam = this.root.studioTemporaryChatContext.historySeamElement()
+        const previousHeight = this.scrollEl?.scrollHeight ?? 0
+        const previousTop = this.scrollEl?.scrollTop ?? 0
         this.windowStartId = this.messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
         // the bottom never shrinks the window below what is mounted.
         this.mountedCount = Math.max(this.mountedCount, this.messages.length - target)
         await tick()
-        this.restoreViewportAnchor()
+        // Same task as the mount, so the shifted layout is never painted.
+        this.restoreViewportSeam()
         const after = this.scrollEl
         if (after) {
-          if (!this.viewportAnchor) {
-            // No message element to hold on to (a transcript whose blocks carry
-            // no id)   fall back to the height-delta compensation rather than
-            // leaving the viewport unmoved.
-            after.scrollTop =
-              this.viewportStartTop + (after.scrollHeight - this.viewportStartHeight)
+          if (!this.viewportSeam) {
+            // No seam element to hold on to   fall back to the height-delta
+            // compensation rather than leaving the viewport unmoved.
+            after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
           }
           threadScrollPositions.set(this.root.handleAgentEvent.thread.id, {
             top: after.scrollTop,
             awayFromBottom: this.userScrolledAway
           })
         }
-        // The loaded page is in the document and the viewport is back where the
-        // reader left it, so the blocks that landed inside it can settle into
-        // place instead of blinking on. Blocks above the viewport are left alone,
-        // which is both what the reader can watch and what keeps a three-page
-        // load from animating a hundred blocks at once (`playHistoryArrive`).
+        // The page is mounted and the reader's view is exactly where they left
+        // it, so what landed on screen can fade in instead of blinking on.
+        // Blocks above the viewport are left alone, which is both what the
+        // reader can watch and what keeps a large load from animating a hundred
+        // blocks at once (`playHistoryArrive`).
         playHistoryArrive(
           this.root.studioTemporaryChatContext.historyArrivedBlocks(seam),
           after ?? null
         )
+        // Content inside the page can still find its height a frame or two
+        // later; hold the seam across that window so it never pushes the
+        // reader's view down.
+        this.settleViewportSeam()
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
