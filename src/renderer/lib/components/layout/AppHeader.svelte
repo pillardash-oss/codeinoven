@@ -115,15 +115,13 @@
   let clusterWidth = $state(0)
 
   /** How far the thread's block sits from the end of the chrome so that its left
-   *  edge lands on the conversation column's own left edge. The page being read is
-   *  the bounding box the title aligns to, whether that page is the conversation or
-   *  the document a studio is showing; the panel only decides how much room it has.
+   *  edge lands on the reading column's own left edge. The page being read is the
+   *  bounding box the title aligns to, whether that page is the conversation or the
+   *  document a studio is showing; the panel only decides how much room it has.
    *
-   *  The column's edge is its laid-out one: the reading surface's gutter plus the
-   *  room the page column is centred in, measured against the workspace grid. What
-   *  it never follows is the column's position while a panel on the right narrows
-   *  the pane, because that re-centres the column and would drag the thread's name
-   *  with a temporary chat that has nothing to do with it. */
+   *  The gap is live, not reserved: when a panel beside the conversation re-centres
+   *  the page column, the title travels with that column frame by frame, so the bar
+   *  and the page below it read as one surface instead of two that disagree. */
   let titleInset = $derived.by(() => {
     if (!layoutPanelState.contentVisible) return 0
     const contentLeft = layoutPanelState.readingColumnLeft
