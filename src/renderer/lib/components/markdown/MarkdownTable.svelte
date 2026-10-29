@@ -94,69 +94,67 @@
   }
 </script>
 
-{#snippet tableControls(withResize: boolean, withExpand: boolean)}
+{#snippet tableControls(scope: 'strip' | 'reader', withResize: boolean, withExpand: boolean)}
+  {@const control = scope === 'reader' ? 'md-reader-control' : 'md-table-control'}
+  {@const glyph = scope === 'reader' ? 16 : 13}
   <button
     type="button"
-    class="md-table-control"
+    class={control}
     aria-pressed={wrapped}
     aria-label={wrapLabel}
     title={wrapLabel}
     onclick={() => (wrapped = !wrapped)}
   >
-    <CioWrapText size={13} />
+    <CioWrapText size={glyph} />
   </button>
   {#if withResize}
     <button
       type="button"
-      class="md-table-control"
+      class={control}
       aria-pressed={unlocked}
       aria-label={lockLabel}
       title={lockLabel}
       onclick={() => (unlocked = !unlocked)}
     >
       {#if unlocked}
-        <CioLockOpen size={13} />
+        <CioLockOpen size={glyph} />
       {:else}
-        <CioLock size={13} />
+        <CioLock size={glyph} />
       {/if}
     </button>
   {/if}
   <button
     type="button"
-    class="md-table-control"
+    class={control}
     aria-label="Copy table as Markdown"
     title="Copy table as Markdown"
     onclick={() => void copyTable()}
   >
     {#if copied}
-      <CioCheck size={13} class="text-success" />
+      <CioCheck size={glyph} class="text-success" />
     {:else}
-      <CioCopy size={13} />
+      <CioCopy size={glyph} />
     {/if}
   </button>
   {#if withExpand}
     <button
       type="button"
-      class="md-table-control"
+      class={control}
       aria-label="Expand table"
       title="Expand table"
       onclick={() => (expanded = true)}
     >
-      <CioMaximize size={13} />
+      <CioMaximize size={glyph} />
     </button>
   {/if}
 {/snippet}
 
 <!-- The reader's controls, in the header of the reading surface: a table opened
-     full screen is read there, so its tools sit where the surface's tools sit
-     rather than on a strip of their own above the rows. -->
+     full screen is read there, so its tools stand beside the surface's own
+     dismiss mark rather than in a strip of their own. -->
 {#snippet fullscreenActions()}
-  <div
-    class="flex items-center gap-1 border border-border bg-elevated p-1"
-    role="group"
-    aria-label="Table controls"
-  >
-    {@render tableControls(true, false)}
+  <div class="md-reader-controls" role="group" aria-label="Table controls">
+    {@render tableControls('reader', true, false)}
   </div>
 {/snippet}
 
@@ -166,7 +164,7 @@
     role="group"
     aria-label="Table controls"
   >
-    {@render tableControls(true, true)}
+    {@render tableControls('strip', true, true)}
   </div>
   <div
     class={['md-table-wrap', wrapped && 'md-table-fit', unlocked && 'md-table-resizable']}

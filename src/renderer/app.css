@@ -639,11 +639,13 @@ body {
   /* Native table column sizing: every column keeps at least one word of
      width; content wider than the container scrolls inside .md-table-wrap
      instead of squeezing sibling columns. min-width keeps narrow tables
-     filling the container like a normal block. The table carries no outer
-     frame: it is content of the message, so the internal rules draw and the
-     edges stay open. */
+     filling the container like a normal block. A table is a grid, so it is
+     framed like one: the rules between the cells and the frame around them
+     come from the cells' own borders, collapsing into one line where they
+     meet. */
   width: 100%;
   min-width: max-content;
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   font-size: 0.9em;
 }
@@ -651,10 +653,9 @@ body {
 .markdown-body th,
 .markdown-body td {
   /* A grid reads as a grid: every cell is ruled off from the cell beside it and
-     from the row above it. Only the outer edges stay open   no top rule over the
-     header band and no rule hanging off the last column or the last row   so the
-     table sits flush in the message while its columns stay countable at a
-     glance. */
+     from the row above it, and the table's own border closes the frame around
+     them. The right and bottom edges are the cells' borders meeting the frame in
+     the collapse, so no edge is drawn twice. */
   border: 0;
   border-bottom: 1px solid var(--color-border);
   border-left: 1px solid var(--color-border);
@@ -666,19 +667,6 @@ body {
      wider than the container. */
   overflow-wrap: anywhere;
   word-break: normal;
-}
-
-/* The table's own bottom border is the last row's rule; a second one under it
-   would double the line. */
-.markdown-body tr:last-child > th,
-.markdown-body tr:last-child > td {
-  border-bottom: 0;
-}
-
-/* The first column opens the table, so it has nothing to be separated from. */
-.markdown-body th:first-child,
-.markdown-body td:first-child {
-  border-left: 0;
 }
 
 .markdown-body th {
@@ -730,6 +718,46 @@ body {
 /* An engaged toggle stays readable rather than shouting: the icon keeps its
    size, so switching wrap or the padlock never shifts the strip. */
 .markdown-body .md-table-control[aria-pressed='true'] {
+  color: var(--color-foreground);
+}
+
+/* ─── A reading surface's own controls ─────────────────────────────────── */
+/* A table or a Mermaid diagram opened full screen puts its tools in the modal
+   header, where they are the surface's tools and not a widget parked inside a
+   second frame: no border, no panel, no padding, just the glyphs, spaced well
+   apart and sized to the surface's own dismiss mark (`h-7 w-7`, 16px glyph). A
+   boxed group here read as a control cluster bolted onto the header and crammed
+   its icons together; these are the same marks as the collapse control beside
+   them, so the row of tools is one row. */
+.md-reader-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.md-reader-control {
+  display: flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-muted);
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.md-reader-control:hover {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.md-reader-control:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.md-reader-control[aria-pressed='true'] {
   color: var(--color-foreground);
 }
 

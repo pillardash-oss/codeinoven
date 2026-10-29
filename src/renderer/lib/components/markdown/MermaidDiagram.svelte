@@ -166,10 +166,15 @@
   </div>
 {/snippet}
 
-{#snippet diagramControls(withExpand: boolean, withSource = true)}
+{#snippet diagramControls(scope: 'strip' | 'reader', withExpand: boolean, withSource = true)}
+  {@const control =
+    scope === 'reader'
+      ? 'md-reader-control'
+      : 'p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground'}
+  {@const glyph = scope === 'reader' ? 16 : 13}
   {#if onAnnotate}
     <button
-      class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      class={control}
       aria-label="Annotate Mermaid diagram"
       title="Annotate Mermaid diagram"
       onclick={(event: MouseEvent) => {
@@ -177,57 +182,53 @@
         onAnnotate(code, event)
       }}
     >
-      <CioMessagePlus size={13} />
+      <CioMessagePlus size={glyph} />
     </button>
   {/if}
   {#if withSource}
     <button
       class={[
-        'p-1 transition-colors hover:bg-overlay hover:text-foreground',
-        sourceVisible ? 'bg-overlay text-foreground' : 'text-dimmed'
+        control,
+        scope === 'strip' && (sourceVisible ? 'bg-overlay text-foreground' : 'text-dimmed')
       ]}
       aria-label={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
       title={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
       aria-pressed={sourceVisible}
       onclick={() => (sourceVisible = !sourceVisible)}
     >
-      <CioCode size={13} />
+      <CioCode size={glyph} />
     </button>
   {/if}
   <button
-    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+    class={control}
     aria-label="Copy Mermaid source"
     title="Copy Mermaid source"
     onclick={() => void copySource()}
   >
     {#if copied}
-      <CioCheck size={13} class="text-success" />
+      <CioCheck size={glyph} class="text-success" />
     {:else}
-      <CioCopy size={13} />
+      <CioCopy size={glyph} />
     {/if}
   </button>
   {#if withExpand && svg}
     <button
-      class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      class={control}
       aria-label="Expand Mermaid diagram"
       title="Expand Mermaid diagram"
       onclick={() => (expanded = true)}
     >
-      <CioMaximize size={13} />
+      <CioMaximize size={glyph} />
     </button>
   {/if}
 {/snippet}
 
 <!-- The reader's controls, in the header of the reading surface. The diagram
      itself carries no chrome: hovering it is not a mode change in a full screen
-     reader, the tools sit where the surface's own tools sit. -->
+     reader, the tools stand beside the surface's own dismiss mark. -->
 {#snippet fullscreenActions()}
-  <div
-    class="flex items-center gap-1 border border-border bg-elevated p-1"
-    role="group"
-    aria-label="Mermaid diagram controls"
-  >
-    {@render diagramControls(false, false)}
+  <div class="md-reader-controls" role="group" aria-label="Mermaid diagram controls">
+    {@render diagramControls('reader', false, false)}
   </div>
 {/snippet}
 
@@ -240,7 +241,7 @@
     role="group"
     aria-label="Mermaid diagram controls"
   >
-    {@render diagramControls(true)}
+    {@render diagramControls('strip', true)}
   </div>
 
   {#if error}
