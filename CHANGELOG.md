@@ -22,6 +22,18 @@ All notable changes to CodeInOven are documented here. This project follows
   pays that cold start in the background as soon as it syncs, and a file's
   matching servers now start in parallel instead of one after another.
 
+- **Closing an editor no longer waits behind a language server that is still
+  loading, and two hovers no longer wait for each other.** Every request for one
+  editor shared a single promise chain, so a `close` (the tab unmounted or IDE
+  mode switched off) sat behind a hover that was loading a project and died on
+  that request's 20 s watchdog, and a second hover only started once the first
+  had spent its whole load, which is how `hover timed out` still appeared with a
+  warm server. Only document lifecycle (sync and capabilities) is ordered now,
+  because a request must never reach a server before its `didOpen`; a close
+  discards the queue outright and bumps a generation so work already in flight
+  cannot re-register documents for an editor that is gone
+  (main/editor/ide-worker.ts).
+
 - **A design's comment pins come back on their own, without an edit from the
   composer.** The pins a design page draws are published by the renderer's
   inspection session, and it only publishes for a tab whose design it has

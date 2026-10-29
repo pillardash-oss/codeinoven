@@ -496,6 +496,26 @@ async function grep(
 }
 
 const chains = new Map<string, Promise<unknown>>()
+/**
+ * How a request queues against the other requests of the same editor.
+ *
+ * Everything used to share one promise chain per editor, which was wrong in
+ * both directions. A `close` (the tab unmounted) queued behind a hover that was
+ * still loading a server, so the editor's 20 s watchdog killed a request that
+ * had done nothing but wait. And two hovers queued behind one another, so the
+ * second one answered only after the first had spent its whole load, which is
+ * how a warm server still produced `hover timed out`.
+ *
+ * Only document lifecycle (open/sync/capabilities) needs ordering, because a
+ * request must never reach a language server before its `didOpen`. A close
+ * discards that work outright, and hover, definition and references always wait
+ * for the document to be synced but never for each other.
+ */
+const DOCUMENT_ACTIONS = new Set(['sync', 'capabilities'])
+const INTELLIGENCE_ACTIONS = new Set(['hover', 'definition', 'references'])
+/** Bumped by every close, so work that was already queued cannot resurrect a
+ *  document the editor has left. */
+const generations = new Map<string, number>()
 
 /**
  * Pay a server's cold start before the user asks for an answer.
@@ -753,36 +773,61 @@ port.on(
     }
     const { id, root, request, env } = message
     const key = request.owner
+    const servers = configuredServers ?? message.servers ?? DEFAULT_IDE_LANGUAGE_SERVERS
     if (request.action === 'grep' || request.action === 'close' || request.action === 'cancel')
       searches.get(key)?.kill()
-    const task = (chains.get(key) ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(() =>
-        handle(
-          root,
-          request,
-          env,
-          configuredServers ?? message.servers ?? DEFAULT_IDE_LANGUAGE_SERVERS
-        )
-      )
-    chains.set(key, task)
-    void task
-      .then(
-        (result) =>
-          port.postMessage({
-            id,
-            result,
-            idle: owners.size === 0 && searches.size === 0 && chains.size === 1
-          }),
-        (error) =>
-          port.postMessage({
-            id,
-            error: error instanceof Error ? error.message : String(error),
-            idle: owners.size === 0 && searches.size === 0 && chains.size === 1
-          })
-      )
-      .finally(() => {
-        if (chains.get(key) === task) chains.delete(key)
+    const generation = generations.get(key) ?? 0
+    const reply = (result: IdeResponse | null, error?: unknown): void =>
+      port.postMessage({
+        id,
+        ...(error === undefined
+          ? { result: result ?? {} }
+          : { error: error instanceof Error ? error.message : String(error) }),
+        idle: owners.size === 0 && searches.size === 0 && chains.size <= 1
       })
+    const work = (): Promise<IdeResponse> => {
+      // A close discards the queue: the editor is gone and must not be re-opened
+      // by a sync that was sent a moment before it.
+      if ((generations.get(key) ?? 0) !== generation) return Promise.resolve({})
+      return handle(root, request, env, servers)
+    }
+    let task: Promise<IdeResponse>
+    if (request.action === 'close') {
+      // Bumped before the close runs, so older work is refused and cannot
+      // resurrect the editor's documents afterwards.
+      generations.set(key, generation + 1)
+      chains.delete(key)
+      task = handle(root, request, env, servers)
+    } else if (request.action === 'cancel' || request.action === 'grep') {
+      task = work()
+    } else if (DOCUMENT_ACTIONS.has(request.action)) {
+      task = (chains.get(key) ?? Promise.resolve()).catch(() => undefined).then(work)
+      chains.set(key, task)
+      // Cleared once it settles, so the map is a queue of live work rather than a
+      // record of every editor that was ever open.
+      const settle = (): void => {
+        if (chains.get(key) === task) chains.delete(key)
+      }
+      void task.then(settle, settle)
+    } else if (INTELLIGENCE_ACTIONS.has(request.action)) {
+      // No chains.set: the next hover does not wait for this one.
+      task = (chains.get(key) ?? Promise.resolve()).catch(() => undefined).then(work)
+    } else {
+      task = work()
+    }
+    void task.then(
+      (result) => {
+        // The editor closed while this ran. Its answer is worthless now, and the
+        // documents the request just registered have to go with it, or a session
+        // nobody owns keeps the whole worker alive.
+        if (request.action !== 'close' && (generations.get(key) ?? 0) !== generation) {
+          closeOwner(key)
+          reply({})
+          return
+        }
+        reply(result)
+      },
+      (error: unknown) => reply(null, error)
+    )
   }
 )
