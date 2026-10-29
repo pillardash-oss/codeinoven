@@ -171,11 +171,7 @@ export class ThreadMessagesCache {
     return this.threads.get(threadKey(projectId, threadId))?.waitingIssue ?? null
   }
 
-  setWaitingIssue(
-    projectId: string,
-    threadId: string,
-    issue: AgentProviderIssue | null
-  ): void {
+  setWaitingIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
     const entry = this.entry(projectId, threadId)
     if (entry.waitingIssue === issue) return
     entry.waitingIssue = issue

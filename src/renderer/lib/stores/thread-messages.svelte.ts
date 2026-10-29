@@ -179,11 +179,7 @@ class ThreadMessagesStore {
     return this.cache.waitingIssue(projectId, threadId)
   }
 
-  setWaitingIssue(
-    projectId: string,
-    threadId: string,
-    issue: AgentProviderIssue | null
-  ): void {
+  setWaitingIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
     this.cache.setWaitingIssue(projectId, threadId, issue)
   }
 

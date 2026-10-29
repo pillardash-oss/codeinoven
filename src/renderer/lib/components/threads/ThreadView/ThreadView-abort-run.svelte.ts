@@ -254,7 +254,8 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
     // same state   so this must not bail out before invoking the abort.
     if (
       !this.root.switchProject.busy &&
-      this.root.handleAgentEvent.providerStatus?.state !== 'waiting'
+      this.root.handleAgentEvent.providerStatus?.state !== 'waiting' &&
+      this.root.props.controller?.status?.state !== 'waiting'
     )
       return
     const { projectId, id } = this.root.handleAgentEvent.thread
@@ -278,6 +279,13 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         this.root.props.controller.conversationId
       )
       this.root.handleAgentEvent.providerStatus = null
+      // The panel's waiting card lives in the shared run state, so a stop has to
+      // retire it here too; there is no providerStatus of its own to clear.
+      threadMessages.setWaitingIssue(
+        this.root.props.controller.projectId,
+        this.root.props.controller.conversationId,
+        null
+      )
       this.clearLocalTurn()
       return
     }
