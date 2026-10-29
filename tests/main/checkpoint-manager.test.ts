@@ -625,6 +625,76 @@ describe('CheckpointManager', () => {
     expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
   })
 
+  // Regression: the harness published no live part events at all, and the
+  // finish-time transcript re-read came back without tool calls, so the source
+  // map was empty. The mirrored transcript still held the turn's own edit; the
+  // card reported nothing because the contested diff could not be claimed.
+  it('claims a path the durable transcript proves when the live map is empty', async () => {
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    database.run(
+      `INSERT OR IGNORE INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+       VALUES('project1', 'Project', '/project1', 'local', 'pi', 'default', 70, 'manual', 1, 1)`
+    )
+    database.run(
+      `INSERT INTO threads(id, project_id, provider_id, title, status, pinned, archived, read, scope_bucket_id, created_at, updated_at, last_activity)
+       VALUES('reader', 'project1', '', 'Reader', 'created', 0, 0, 1, 'default', 1, 1, 1)`
+    )
+    await writeFile(join(projectRoot, 'mine.txt'), 'before', 'utf-8')
+    await writeFile(join(projectRoot, 'theirs.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'reader', projectRoot, 'Reader turn', false)
+    await writeFile(join(projectRoot, 'mine.txt'), 'my edit', 'utf-8')
+    await writeFile(join(projectRoot, 'theirs.txt'), 'another turn mid-write', 'utf-8')
+    // The mirror the app wrote: one settlement-only assistant message holding a
+    // completed edit plus the read-only tool that must never claim a file.
+    database.run(
+      `INSERT INTO agent_messages(id, thread_id, role, parts, created_at)
+       VALUES('msg-1', 'reader', 'assistant', ?, ?)`,
+      [
+        JSON.stringify([
+          {
+            type: 'tool',
+            id: 'msg-1:tool:call-1',
+            messageID: 'msg-1',
+            callID: 'call-1',
+            tool: 'edit',
+            state: { status: 'completed', input: { path: join(projectRoot, 'mine.txt') } }
+          },
+          {
+            type: 'tool',
+            id: 'msg-1:tool:call-2',
+            messageID: 'msg-1',
+            callID: 'call-2',
+            tool: 'read',
+            state: { status: 'completed', input: { path: join(projectRoot, 'theirs.txt') } }
+          }
+        ]),
+        turn.before.createdAt
+      ]
+    )
+
+    const evidence = await manager.transcriptWriteEvidence('project1', 'reader', projectRoot)
+    expect([...evidence.keys()]).toEqual(['mine.txt'])
+
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      { changeSources: evidence, contestedDiff: true }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
+    expect(completed.changeSourceRefs?.['mine.txt']?.length).toBe(1)
+    expect(completed.toolSources?.['msg-1:tool:call-1']?.tool).toBe('edit')
+  })
+
   it('bounds the failure text written to a checkpoint', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()

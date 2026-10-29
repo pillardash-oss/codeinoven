@@ -43,6 +43,10 @@ import {
   repairTruncatedLineStats,
   type CheckpointMaintenanceHost
 } from './checkpoint/checkpoint-maintenance'
+import {
+  TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
+  transcriptWriteEvidence
+} from './checkpoint/checkpoint-transcript-evidence'
 
 export { MAX_CHECKPOINT_FAILURE_LENGTH }
 
@@ -246,6 +250,33 @@ export class CheckpointManager {
     return tracker.calculateChanges(before, after).map((change) => change.path)
   }
 
+  /**
+   * Write evidence the durable transcript proves for the turn in flight.
+   *
+   * The mirror is the one transcript every driver shares, so provenance no
+   * longer depends on a driver publishing live part events or on its in-memory
+   * transcript surviving a resume. Only settled mutating tool calls count, and
+   * only from this turn's own window.
+   */
+  async transcriptWriteEvidence(
+    projectId: string,
+    threadId: string,
+    projectPath: string
+  ): Promise<Map<string, FileChangeSource[]>> {
+    assertId(projectId)
+    assertId(threadId)
+    const checkpoint = await this.getActive(projectId, threadId)
+    if (!checkpoint) return new Map()
+    const rows = await this.queryRows(
+      `SELECT parts FROM agent_messages
+       WHERE thread_id = ? AND role = 'assistant' AND created_at >= ?
+       ORDER BY created_at DESC, id DESC`,
+      [threadId, checkpoint.before.createdAt],
+      TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT
+    )
+    return transcriptWriteEvidence(projectPath, rows)
+  }
+
   /** Stat-only project scan used to attribute shell-command mutations to their run window. */
   fingerprint(projectId: string, projectPath: string): Promise<ProjectFingerprint> {
     assertId(projectId)
@@ -324,9 +355,11 @@ export class CheckpointManager {
         let windowedElsewhere = 0
         let borrowedElsewhere = 0
         let userOwned = 0
+        let evidenced = 0
         const claimants = new Set<string>()
         for (const change of allChanges) {
           const path = change.path
+          if (claimedByThisTurn(path)) evidenced += 1
           if (excludedPaths?.has(path) ?? false) userOwned += 1
           else if (foreign?.claimed.has(path) ?? false) claimedElsewhere += 1
           else if (foreign?.window.has(path) ?? false) windowedElsewhere += 1
@@ -345,6 +378,10 @@ export class CheckpointManager {
           userOwned,
           contested: options.contestedDiff === true,
           claimFiltered: changedPaths !== undefined,
+          // A contested diff is claimable only through this turn's own write
+          // evidence, so this count is the first thing to read when a real
+          // change goes missing.
+          evidenced,
           claimants: [...claimants].slice(0, 3),
           sample: allChanges.slice(0, 3).map((change) => change.path)
         })

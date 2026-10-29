@@ -24,6 +24,7 @@ import type {
   AgentContextCapabilities,
   AgentCapabilityCatalog,
   AgentCapabilityEntry,
+  FileChangeSource,
   Thread,
   UsageEventFeature
 } from '../../../lib/types'
@@ -828,6 +829,38 @@ export class ChatEngineUtilitiesTools {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Fold write evidence the durable mirror proves into the turn's own claims.
+   *
+   * A driver that publishes only settled messages, or a session whose in-memory
+   * transcript was re-registered, can hand completion an empty source map while
+   * the mirror still holds the turn's tool calls. Those paths count as this
+   * turn's evidence, never as a change: completion still intersects them with
+   * the real snapshot diff, and another turn's precise claim still wins.
+   */
+  absorbTranscriptEvidence(
+    session: SessionInfo,
+    evidence: ReadonlyMap<string, FileChangeSource[]>
+  ): void {
+    if (evidence.size === 0) return
+    session.changeSources ??= new Map()
+    session.changedPaths ??= new Set()
+    for (const [path, sources] of evidence) {
+      // A path the user saved through the in-app editor is the user's edit.
+      if (session.userTouchedPaths?.has(path)) continue
+      const existing = session.changeSources.get(path) ?? []
+      const merged = [...existing]
+      for (const source of sources) {
+        if (merged.some((entry) => entry.toolPartId === source.toolPartId)) continue
+        if (session.rejectedChangeSources?.get(path)?.has(source.toolPartId)) continue
+        merged.push(source)
+      }
+      if (merged.length === 0) continue
+      session.changeSources.set(path, merged.slice(-4))
+      session.changedPaths.add(path)
     }
   }
 

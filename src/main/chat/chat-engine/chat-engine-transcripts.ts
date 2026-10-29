@@ -381,6 +381,24 @@ export class ChatEngineTranscripts {
     const messages = await this.host.units['speech'].turnTranscriptMessages(info)
     if (info.activeTurnId !== turnId) return
     this.host.reassertTurnToolEvidence(info, messages)
+    // The shareable mirror is the third source of write evidence, and the only
+    // one that survives a driver that publishes no live parts and a transcript
+    // re-read that came back empty. Without it a contested project diff has no
+    // path this turn can prove, and its real work leaves no card at all.
+    const durableEvidence = await this.host.checkpointManager
+      .transcriptWriteEvidence(info.projectId, info.threadId, info.projectPath)
+      .catch((error) => {
+        Logger.dev('Durable transcript evidence read failed:', error)
+        return undefined
+      })
+    if (durableEvidence?.size) {
+      this.host.units['utilities-tools'].absorbTranscriptEvidence(info, durableEvidence)
+      Logger.dev('Durable transcript evidence collected', {
+        projectId: info.projectId,
+        threadId: info.threadId,
+        paths: durableEvidence.size
+      })
+    }
     // A shell tool still in flight (interrupted turn) never emitted a terminal
     // state, so close its window here before the after-snapshot is taken.
     if (info.unboundedWindowStart) this.host.units['utilities-tools'].closeUnboundedToolWindow(info)
