@@ -12,7 +12,7 @@ import { realpath, readFile, stat } from 'node:fs/promises'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isWithinRoot, validateRelativePath } from './project-files/project-files-paths'
-import type { IdeRequest, IdeResponse, IdeLocation } from '../../lib/editor-ide'
+import type { IdeRequest, IdeResponse, IdeLocation, IdeProgress } from '../../lib/editor-ide'
 
 const port = parentPort!
 const MAX_BYTES = 2 * 1024 * 1024
@@ -48,6 +48,10 @@ const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 
 class Session {
+  /** Identity of this session's configuration, so a changed definition retires it. */
+  readonly configurationKey: string
+  /** The settings this session answers `workspace/configuration` from. */
+  readonly settings: Record<string, unknown>
   readonly documents = new Map<string, { text: string; version: number }>()
   /** Documents this session already paid its cold-start request for. */
   readonly warmed = new Set<string>()
@@ -71,9 +75,10 @@ class Session {
     command: string,
     args: string[],
     env: NodeJS.ProcessEnv,
-    readonly settings: Record<string, unknown>,
-    readonly configurationKey: string
+    readonly definition: IdeLanguageServer
   ) {
+    this.configurationKey = JSON.stringify(definition)
+    this.settings = definition.settings
     this.child = spawn(command, args, { cwd: root, env, stdio: 'pipe', windowsHide: true })
     liveSessions.add(this)
     this.child.once('exit', () => liveSessions.delete(this))
@@ -199,6 +204,13 @@ class Session {
       }
       return
     }
+    // Notifications carry no id. The one worth forwarding is the server's own
+    // report about the work it is doing, which is how a loading project becomes
+    // a labelled progress bar instead of a silent wait.
+    if (typeof message.method === 'string') {
+      if (message.method === '$/progress') this.reportProgress(record(message.params))
+      return
+    }
     if (typeof message.id !== 'number') return
     const pending = this.pending.get(message.id)
     if (!pending) return
@@ -207,6 +219,37 @@ class Session {
     if (message.error)
       pending.reject(new Error(String(record(message.error).message ?? 'Language server error')))
     else pending.resolve(message.result)
+  }
+  /** Forward one work item to the app. The server and workspace come from here. */
+  noteProgress(entry: Omit<IdeProgress, 'serverId' | 'name' | 'root'>): void {
+    port.postMessage({
+      progress: {
+        serverId: this.definition.id,
+        name: this.definition.name,
+        root: this.root,
+        ...entry
+      } satisfies IdeProgress
+    })
+  }
+  private reportProgress(params: Record<string, unknown>): void {
+    const value = record(params.value)
+    const kind = value.kind
+    if (kind !== 'begin' && kind !== 'report' && kind !== 'end') return
+    const token = typeof params.token === 'string' ? params.token : String(params.token ?? '')
+    if (!token || token.length > 200) return
+    const text = (candidate: unknown): string | undefined =>
+      typeof candidate === 'string' && candidate.trim() ? candidate.trim().slice(0, 300) : undefined
+    const percentage =
+      typeof value.percentage === 'number' && Number.isFinite(value.percentage)
+        ? Math.min(100, Math.max(0, Math.round(value.percentage)))
+        : undefined
+    this.noteProgress({
+      token,
+      kind,
+      title: text(value.title),
+      message: text(value.message),
+      percentage
+    })
   }
   stop(): void {
     if (this.stopped) return
@@ -316,14 +359,7 @@ async function sessionFor(
         throw new Error(
           `Language server ${definition.name} is not installed or its executable is unavailable. Open Settings > IDE Mode and install ${definition.name}, or configure an absolute executable path. Searched managed tools, project/PATH directories and Neovim Mason installations.`
         )
-      const session = new Session(
-        workspaceRoot,
-        executable,
-        args,
-        localEnv,
-        definition.settings,
-        JSON.stringify(definition)
-      )
+      const session = new Session(workspaceRoot, executable, args, localEnv, definition)
       try {
         const result = record(
           await session.request('initialize', {
@@ -333,6 +369,10 @@ async function sessionFor(
             workspaceFolders: [{ uri: pathToFileURL(workspaceRoot).href, name: workspaceRoot }],
             capabilities: {
               general: { positionEncodings: ['utf-16'] },
+              // A server only reports work-done progress when the client says it
+              // understands it. Declaring it is what turns a silent project load
+              // into the labelled progress the IDE panel shows.
+              window: { workDoneProgress: true },
               workspace: { configuration: true, workspaceFolders: true },
               textDocument: {
                 hover: { contentFormat: ['plaintext', 'markdown'] },
@@ -530,13 +570,19 @@ const generations = new Map<string, number>()
 function warm(session: Session, uri: string): void {
   if (!session.capabilities.hoverProvider || session.warmed.has(uri)) return
   session.warmed.add(uri)
+  // The app knows this request is running, even when the server reports nothing
+  // about its own loading, so the panel names the wait instead of showing a
+  // connected server that silently cannot answer yet. No percentage is invented:
+  // only a server's own report carries one.
+  session.noteProgress({ token: 'warmup', kind: 'begin', title: 'Preparing project' })
+  const settle = (): void => session.noteProgress({ token: 'warmup', kind: 'end' })
   void session
     .request(
       'textDocument/hover',
       { textDocument: { uri }, position: { line: 0, character: 0 } },
       INTELLIGENCE_TIMEOUT_MS
     )
-    .catch(() => undefined)
+    .then(settle, settle)
 }
 
 /** The actions a file offers when any of its servers advertises them. */

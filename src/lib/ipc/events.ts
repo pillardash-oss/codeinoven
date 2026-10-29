@@ -1,4 +1,5 @@
 import type { VideoEditorGesture } from '../video/edit'
+import type { IdeProgress } from '../editor-ide'
 import type {
   NativeDockAck,
   NativeDockCommit,
@@ -298,6 +299,15 @@ export const IPC_EVENT_CONTRACT = {
    * the counters, so a pass never triggers a second read of the queue.
    */
   'account:rankingGradeProgress': [] as unknown as [progress: LocalRankingGradeProgress | null],
+  /**
+   * A language server's own work-done progress for IDE Mode.
+   *
+   * Servers report project loading as a notification, never as the answer to a
+   * request, so this is the only channel that can carry it: the IDE panel shows
+   * the percentage when the server sends one and its message otherwise, and the
+   * entry clears when the server ends the work item.
+   */
+  'projectFiles:ideProgress': [] as unknown as [progress: IdeProgress],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
   /**

@@ -5,6 +5,23 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ## Unreleased
 
+### Added
+
+- **The LSP info panel shows what a language server is doing, including its own
+  percentage.** Servers report project loading as protocol work-done progress
+  (`window/workDoneProgress/create` then `$/progress`), and the IDE worker used
+  to answer the first with `null` and drop the second, so a server that was
+  indexing a large project looked identical to one that had nothing to say. The
+  worker now declares `window.workDoneProgress` on `initialize`, forwards every
+  work item over a new `projectFiles:ideProgress` push channel
+  (`main/editor/ide-worker.ts`, `main/editor/ide-service.ts`), and the panel
+  draws a titled bar with the server's percentage and message, plus the number
+  beside the LSP info button. No percentage is invented: the throwaway warm-up
+  request the app sends when a document syncs appears as the server's
+  "Preparing project" work item, indeterminate, because svelte-language-server
+  and tailwindcss-language-server report nothing numeric while they load and only
+  servers that do (TypeScript, Pyright and friends) fill the bar.
+
 ### Fixed
 
 - **Hover documentation works again in IDE Mode, from the first hover.** A

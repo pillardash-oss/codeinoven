@@ -773,7 +773,16 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   app.on('before-quit', () => ide.stop())
   ipcMain.handle(
     'projectFiles:ide',
-    async (_, projectId: unknown, input: unknown, scopeBucketId?: unknown, threadId?: unknown) => {
+    async (
+      event: IpcMainInvokeEvent,
+      projectId: unknown,
+      input: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
+      // Progress only ever travels away from the worker, so the window that
+      // asked is the one the service remembers for it.
+      ide.attachRenderer(event.sender)
       if (!input || typeof input !== 'object') throw new TypeError('Invalid IDE request')
       const value = input as Record<string, unknown>
       const actions = [
