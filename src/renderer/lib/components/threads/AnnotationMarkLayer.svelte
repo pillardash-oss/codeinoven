@@ -30,6 +30,7 @@
   } from '$lib/stores/response-references.svelte'
   import { referenceLabelNumber } from '$lib/reference-labels'
   import { mediaMarkChatContext, openAnnotationChat } from '$lib/annotation-chat'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { videoTimecode } from '$shared/video/timeline'
 
   /**
@@ -74,6 +75,17 @@
     /** Wording for the hint shown while the picture is being drawn on. */
     hint?: string
     /**
+     * Let the picture continue while the pen is in hand.
+     *
+     * A note is not always about one moment: a user annotating a recording wants
+     * to mark the first problem, let the picture run, and mark the next one
+     * without leaving and reopening the surface. The host owns what continuing
+     * means (a player resumes, a frozen composition hands its live view back), so
+     * the layer only reports the keymap press, and only when no comment field has
+     * the keyboard: pressing space while writing a comment has to type a space.
+     */
+    onContinue?: () => void
+    /**
      * The second whose frame the picture is showing, for a video.
      *
      * A video's marks belong to moments, not to the file: a stroke drawn at 0:05
@@ -101,7 +113,8 @@
     onArmedChange = () => {},
     hint = 'Draw on the picture · Esc to finish',
     activeSeconds = null,
-    onFocusMark
+    onFocusMark,
+    onContinue
   }: Props = $props()
 
   const toolbarHost = hasAnnotationToolbarHost() ? getAnnotationToolbarHost() : undefined
@@ -120,6 +133,19 @@
   let measureToken = $state(0)
   /** Whether the pen panel is open. */
   let penOpen = $state(false)
+  /**
+   * Re-anchor the open comment when the picture underneath it changes frame.
+   *
+   * A bubble hides while its own frame is away and comes back when the frame does,
+   * and the badge it hangs off is drawn in that same pass: the anchor measured
+   * before the badge was on screen holds a stale rectangle, so it is taken again
+   * once the picture has rendered the frame the comment belongs to.
+   */
+  $effect(() => {
+    void activeSeconds
+    if (!activeEditingId) return
+    void tick().then(() => (measureToken += 1))
+  })
 
   /**
    * Where the open comment box anchors: its own badge, as the indicator drew it.
@@ -293,15 +319,34 @@
     measureToken += 1
   }
 
+  /** Whether the keyboard belongs to a field rather than to this surface. */
+  function typing(event: KeyboardEvent): boolean {
+    const target = event.target
+    return (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest('input,textarea,select') !== null)
+    )
+  }
+
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') return
-    // The comment field owns Escape while it is open, so disarming here would
-    // fight the editor for the same key. The pen dropdown owns its
-    // own Escape for the same reason.
-    if (activeEditingId || penOpen) return
-    drawing = false
-    draftPoints = []
-    onArmedChange(false)
+    if (event.key === 'Escape') {
+      // The comment field owns Escape while it is open, so disarming here would
+      // fight the editor for the same key. The pen dropdown owns its
+      // own Escape for the same reason.
+      if (activeEditingId || penOpen) return
+      drawing = false
+      draftPoints = []
+      onArmedChange(false)
+      return
+    }
+    // Continuing is the host's decision, and only when the surface is actually
+    // answering the keyboard: an open comment bubble and a focused field both
+    // mean a space is part of what the user is writing.
+    if (!onContinue || activeEditingId || penOpen) return
+    if (event.defaultPrevented || typing(event)) return
+    if (!keymapState.matches('video-annotation-continue', event)) return
+    event.preventDefault()
+    onContinue()
   }
 
   /** Badge wording names a frame's moment, which a still mark has none of. */
@@ -315,6 +360,16 @@
     if (mark.markSeconds === undefined) return true
     return Math.abs(mark.markSeconds - activeSeconds) <= MARK_FRAME_TOLERANCE_SECONDS
   }
+
+  /**
+   * Whether the open comment belongs to the frame on screen.
+   *
+   * A comment is about a moment, so once the playhead has moved off that moment
+   * its bubble has nothing to point at: it is hidden until the reader comes back
+   * to the frame it was written for, and the draft it was holding is untouched
+   * while it waits.
+   */
+  const editingOnThisPicture = $derived(editingMark ? marksThisPicture(editingMark) : false)
 
   /**
    * The marks that belong on the picture right now, in composer order.
@@ -517,7 +572,7 @@
   </button>
 </div>
 
-{#if editingMark && editorAnchor}
+{#if editingMark && editingOnThisPicture && editorAnchor}
   <ResponseAnnotationComment
     x={editorAnchor.x}
     y={editorAnchor.y}

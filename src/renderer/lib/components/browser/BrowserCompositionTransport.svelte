@@ -9,7 +9,7 @@
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
-  import CompositionFrameNote from './CompositionFrameNote.svelte'
+  import CompositionFrameAnnotator from './CompositionFrameAnnotator.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
@@ -17,6 +17,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { VideoFrameSeeker } from '$lib/video-frame-seeker'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
   import { snapVideoFrame } from '$shared/video/frame-grid'
   import { videoClockLabel, videoTimecode } from '$shared/video/timeline'
@@ -35,6 +36,7 @@
     BrowserCompositionTab,
     BrowserInspectorRect,
     BrowserTransportCommand,
+    BrowserViewBounds,
     CompositionFrameSnapshot
   } from '$shared/ipc-contract'
 
@@ -109,12 +111,31 @@
   /** The frame the user asked to write about, once it has been captured. */
   let frameNote = $state<{
     snapshot: CompositionFrameSnapshot
-    armed: boolean
     /** The mark the surface was opened on, when a composer jump opened it. */
     editingId?: string | null
     /** The marks to draw on this capture, when they were drawn on an earlier one. */
     marks?: ResponseReferenceAnchor[]
   } | null>(null)
+  /**
+   * The pane the still stands in for, taken when the pen takes over.
+   *
+   * The page is a native view over this pane, and the composition surface is what
+   * publishes its rectangle; this copy is the floor for the rare frame where that
+   * publication has gone away with the page it belonged to.
+   */
+  let annotationBounds = $state<BrowserViewBounds | null>(null)
+  /** The occlusion this surface publishes while the still covers the page. */
+  const annotationOcclusionKey = $derived(`composition-annotation-${tabId}`)
+  /**
+   * Whether the page has really settled on paused since the pen took over.
+   *
+   * The playhead reaches this panel by poll, so the first answer after an
+   * annotation starts can still report the run that preceded it. Watching for a
+   * resume, and for a playhead that disagrees with the still, only once a paused
+   * answer has landed is what keeps that stale answer from closing the surface the
+   * user just opened.
+   */
+  let annotationSettled = $state(false)
   /** True while a frame is being drawn and kept, so a click cannot start two. */
   let capturing = $state(false)
   /** Why the last frame capture did not produce a picture. */
@@ -254,23 +275,68 @@
    * The playhead is stopped before the capture, because the picture has to be the
    * frame the user is looking at: a capture taken while the timeline moves can
    * land on a later frame, and the note would then name a moment it does not show.
-   * The second that travels with the picture is the playhead the panel is
-   * showing, to the millisecond, so a note about a frame is unambiguous.
+   * The second that travels with the picture is the playhead the panel is showing,
+   * to the millisecond, so a note about a frame is unambiguous.
+   *
+   * Nothing is opened over the editor: the captured frame is drawn into the pane
+   * the composition was playing in, which is where the user was already looking.
    */
   async function annotateFrame(): Promise<void> {
-    if (!canNote || capturing) return
+    if (!canNote) return
+    // The pen is a switch: pressing it again puts it down and gives the pane back.
+    if (frameNote) {
+      closeAnnotation()
+      return
+    }
+    if (capturing) return
     capturing = true
     captureError = null
     try {
       await send('pause')
       const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
-      if (snapshot) frameNote = { snapshot, armed: true }
+      if (snapshot) openAnnotation({ snapshot })
       else captureError = 'This composition is no longer open. Reopen it before annotating.'
     } catch (cause: unknown) {
       captureError = cause instanceof Error ? cause.message : 'The frame could not be captured.'
     } finally {
       capturing = false
     }
+  }
+
+  /**
+   * Put the captured frame in front of the user, ready to be drawn on.
+   *
+   * The pane's rectangle is read here rather than only from the published frame,
+   * because the page is about to step aside and its own publication follows it:
+   * the still has to land on the rectangle the user was watching, not on a pane
+   * measured after the page went away.
+   */
+  function openAnnotation(opened: {
+    snapshot: CompositionFrameSnapshot
+    editingId?: string | null
+    marks?: ResponseReferenceAnchor[]
+  }): void {
+    annotationBounds = browserVisibility.pageBoundsFor(tabId)
+    annotationSettled = false
+    frameNote = {
+      snapshot: opened.snapshot,
+      ...(opened.editingId !== undefined ? { editingId: opened.editingId } : {}),
+      ...(opened.marks !== undefined ? { marks: opened.marks } : {})
+    }
+  }
+
+  /**
+   * Hand the pane back to the composition page.
+   *
+   * Resuming is the caller's choice: finishing an annotation with Escape leaves the
+   * picture held where the user stopped, while the continue key lets it run, so the
+   * next moment can be marked without reopening anything.
+   */
+  function closeAnnotation(resume = false): void {
+    if (!frameNote) return
+    frameNote = null
+    annotationBounds = null
+    if (resume) void send('play')
   }
 
   /** The comment the open bubble starts with, read from the note it edits. */
@@ -373,6 +439,9 @@
    */
   async function reopenFrame(request: CompositionFrameFocusRequest): Promise<void> {
     if (!canNote || capturing) return
+    // The transport's own playhead moves to the frame the mark was drawn on, so the
+    // picture, the row below it and the comment all name one moment.
+    queueFrame(request.seconds)
     capturing = true
     captureError = null
     try {
@@ -383,10 +452,11 @@
       }
       frameNote = {
         snapshot,
-        armed: true,
         editingId: request.referenceId,
         marks: marksAt(request.seconds)
       }
+      annotationBounds = browserVisibility.pageBoundsFor(tabId)
+      annotationSettled = false
     } catch {
       // The tab can be closed between the click and the capture.
       captureError = 'That frame could not be captured. Try again.'
@@ -464,6 +534,44 @@
     scrubbing = false
     queueFrame(clamp(scrubValue))
   }
+
+  // The page is a native view painted above every DOM node, so the still that
+  // takes its place is only visible once the view steps aside. The overlay rect
+  // is what tells every surface displaying this tab to park it, and releasing it
+  // is what brings the page back on the very next placement.
+  $effect(() => {
+    if (!frameNote) return
+    const rect = browserVisibility.pageBoundsFor(tabId) ?? annotationBounds
+    if (!rect) return
+    browserVisibility.publishOcclusion(annotationOcclusionKey, rect)
+    return () => browserVisibility.clearOcclusion(annotationOcclusionKey)
+  })
+
+  // Annotating is a paused activity. Playback resuming from anywhere (the
+  // continue key, the play button, a keyboard action the editor owns) means the
+  // user is done with this frame, so the page takes its pane back rather than
+  // playing on behind a still picture.
+  $effect(() => {
+    if (!frameNote) {
+      annotationSettled = false
+      return
+    }
+    if (!playing) {
+      annotationSettled = true
+      return
+    }
+    if (annotationSettled) closeAnnotation()
+  })
+
+  // Moving the playhead off the captured second is the same statement as playing: a
+  // still of one frame cannot stand for another. Stepping or scrubbing therefore
+  // ends the annotation instead of leaving a picture the playhead disagrees with.
+  $effect(() => {
+    const note = frameNote
+    if (!note || playing || !annotationSettled) return
+    if (Math.abs(shown - note.snapshot.seconds) <= MARK_FRAME_TOLERANCE_SECONDS) return
+    closeAnnotation()
+  })
 
   function queueFrame(seconds: number): void {
     seekRevision += 1
@@ -611,11 +719,19 @@
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-    aria-label="Annotate this frame"
-    title={canNote
-      ? 'Annotate this frame: circle an area and write why'
-      : 'Annotate a frame from the video panel'}
+    class={[
+      'flex h-7 w-7 shrink-0 items-center justify-center transition-colors disabled:opacity-40',
+      frameNote
+        ? 'bg-primary text-on-primary hover:opacity-90'
+        : 'text-dimmed hover:bg-elevated hover:text-foreground'
+    ]}
+    aria-label={frameNote ? 'Finish annotating this frame' : 'Annotate this frame'}
+    aria-pressed={Boolean(frameNote)}
+    title={!canNote
+      ? 'Annotate a frame from the video panel'
+      : frameNote
+        ? 'Finish annotating: press it again to hand the pane back'
+        : 'Annotate this frame: circle an area and write why'}
     disabled={!canNote || capturing}
     onclick={() => void annotateFrame()}
   >
@@ -623,20 +739,30 @@
   </button>
 </div>
 {#if frameNote}
-  <CompositionFrameNote
-    projectId={projectId ?? ''}
-    threadId={threadId ?? ''}
-    snapshot={frameNote.snapshot}
-    armed={frameNote.armed}
-    editingId={frameNote.editingId ?? null}
-    marks={frameNote.marks}
-    onEditClosed={() => {
-      // The jump named one mark; once its editor is closed the request is spent,
-      // and reopening the surface from the composer must open it again.
-      if (frameNote) frameNote = { ...frameNote, editingId: null }
-    }}
-    onClose={() => (frameNote = null)}
-  />
+  {@const paneBounds = annotationBounds ?? browserVisibility.pageBoundsFor(tabId)}
+  {#if paneBounds}
+    <!--
+      The pen is drawn where the composition plays rather than in a dialog: the
+      user is already in the editor's full screen, and covering it meant losing the
+      player, the timeline and the control row they annotate from. The captured
+      frame takes the page's own pane, and the transport's row below stays put.
+    -->
+    <CompositionFrameAnnotator
+      projectId={projectId ?? ''}
+      threadId={threadId ?? ''}
+      snapshot={frameNote.snapshot}
+      bounds={paneBounds}
+      editingId={frameNote.editingId ?? null}
+      marks={frameNote.marks ?? []}
+      onEditClosed={() => {
+        // The jump named one mark; once its editor is closed the request is spent,
+        // and reopening the surface from the composer must open it again.
+        if (frameNote) frameNote = { ...frameNote, editingId: null }
+      }}
+      onClose={() => closeAnnotation()}
+      onContinue={() => closeAnnotation(true)}
+    />
+  {/if}
 {/if}
 {#if projectId && threadId}
   <!--

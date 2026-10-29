@@ -921,6 +921,13 @@
           "scenario": "Focus is inside the video editor, outside a text field."
         },
         {
+          "id": "video-annotation-continue",
+          "keys": ["space"],
+          "label": "Continue the video from an annotation",
+          "description": "Leaves the annotation pen and lets the video continue, so more frames can be annotated in one pass.",
+          "scenario": "Annotating a video frame or a composition frame, outside a comment field."
+        },
+        {
           "id": "video-edit-split",
           "keys": ["s"],
           "label": "Split the selected clip at the playhead",

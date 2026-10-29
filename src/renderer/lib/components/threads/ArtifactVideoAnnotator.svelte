@@ -14,13 +14,21 @@
    * A video the agent published is the artifact a user most often wants to answer
    * with "that moment, there", and neither a time nor a freeze frame is something
    * they should have to write out. So arming the annotator pauses the picture and
-   * hands over a frame strip: the user picks the second they mean, draws on it,
-   * and writes why. Every stroke is stored with the second it was drawn at, which
-   * is the whole difference between this and a mark on a still, and the send
-   * composes that second's frame with the strokes on it.
+   * hands over the frame on screen: the user draws on it and writes why. Every
+   * stroke is stored with the second it was drawn at, which is the whole
+   * difference between this and a mark on a still, and the send composes that
+   * second's frame with the strokes on it.
    *
-   * The conversation shows the video plain. The player, the strip and the pen are
-   * all decisions about the video, so this host is the lightbox
+   * A note is rarely alone. The frame strip this surface used to draw under the
+   * picture was a second, invented player competing with the app's own, so the
+   * player's controls are the only way to move the picture and the spacebar is
+   * what lets it run again: the pen steps aside, playback continues, and the next
+   * frame is annotated where the user stopped. Strokes and badges are drawn only
+   * while their own frame is up, so a note about 0:05 never paints itself over
+   * the 0:10 frame.
+   *
+   * The conversation shows the video plain. The player and the pen are all
+   * decisions about the video, so this host is the lightbox
    * (`chats/MediaPreview.svelte`), which hands it the whole media area.
    *
    * The drawing itself is {@link AnnotationMarkLayer}, the same component an image
@@ -72,7 +80,6 @@
   let armed = $state(false)
   /** Bound to the element, so a scrubbed frame and a drawn mark agree on the second. */
   let currentTime = $state(0)
-  let duration = $state(0)
   let videoWidth = $state(0)
   let videoHeight = $state(0)
   /** The player's own box, which the picture is letterboxed inside. */
@@ -120,6 +127,29 @@
   function seek(seconds: number): void {
     if (!video || !Number.isFinite(seconds)) return
     video.currentTime = seconds
+  }
+
+  /**
+   * Let the picture continue from an annotation.
+   *
+   * This is the spacebar bound to the player's own play control, and it is the
+   * same press either way: running puts the pen down, because a frame that starts
+   * moving is no longer the frame a stroke would land on, and stopping brings it
+   * back up for the frame the user stopped on, so a pass through a recording is
+   * annotate, space, annotate again rather than a round trip through the pen each
+   * time. Only the element is driven here; the player keeps its own state because
+   * it hears the element's own events.
+   */
+  function continueFromAnnotation(): void {
+    const element = video
+    if (!element) return
+    if (element.paused) {
+      handleArmedChange(false)
+      void element.play().catch(() => {})
+      return
+    }
+    element.pause()
+    armed = true
   }
 
   function focusMark(mark: ResponseReferenceAnchor): void {
@@ -187,7 +217,9 @@
           {armed}
           onArmedChange={handleArmedChange}
           onFocusMark={focusMark}
-          hint="Pick the frame, then draw · Esc to finish"
+          onContinue={continueFromAnnotation}
+          activeSeconds={currentTime}
+          hint="Draw on the frame · Space to continue · Esc to finish"
         />
       </div>
     {/if}
@@ -213,28 +245,8 @@
     onMetadata={(element) => {
       videoWidth = element.videoWidth
       videoHeight = element.videoHeight
-      duration = element.duration
     }}
     onTime={(seconds) => (currentTime = seconds)}
     onError={(element) => onLoadError?.(element)}
   />
-  {#if armed}
-    <div
-      class="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-3 py-2 text-foreground"
-    >
-      <span class="shrink-0 font-mono text-xs tabular-nums">{videoTimecode(currentTime)}</span>
-      <input
-        type="range"
-        class="min-w-0 flex-1"
-        min="0"
-        max={duration > 0 ? duration : 0}
-        step="0.01"
-        value={currentTime}
-        title="The frame the next mark is drawn on"
-        aria-label="Frame to annotate"
-        oninput={(event) => seek(Number(event.currentTarget.value))}
-      />
-      <span class="shrink-0 text-xs tabular-nums">Frame {Math.round(currentTime * 1000)}ms</span>
-    </div>
-  {/if}
 </div>
