@@ -28,27 +28,7 @@
     onOpenScopeView?: () => void | Promise<void>
   }
 
-  /**
-   * What the context holds, as the shoe states it: the five-cell meter and its
-   * number, drawn by `ContextUsageIndicator` before the tips. The composer owns
-   * this reading, so it does not travel through `ComposerShoeData`, which the
-   * host builds.
-   */
-  export interface ComposerUsage {
-    usage?: AgentContextUsage
-    previewContextWindow?: number
-    generationRate?: number | null
-    generationDetails?: import('$lib/generation-details').GenerationDetails
-    efficiencyKpis?: UsageEfficiencyKpis
-    harnessUsage?: AgentHarnessUsage[]
-    canCompact?: boolean
-    compacting?: boolean
-    onCompact?: () => void
-    onActivateBankedReset?: () => void
-    onReveal?: () => void
-    onHide?: () => void
-    refreshing?: boolean
-  }
+  export type { ComposerUsage } from './composer-usage'
 
   /**
    * Everything the shoe states about one composer, in the order it renders:
@@ -75,6 +55,7 @@
 </script>
 
 <script lang="ts">
+  import type { ComposerUsage } from './composer-usage'
   import CioActions from '@pdslng/cio-icon/CioActions.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioClipboardCheck from '@pdslng/cio-icon/CioClipboardCheck.svelte'
