@@ -36,7 +36,6 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { DESIGN_EXPORT_FORMATS } from '$shared/design/design-export'
   import type { DesignScreenShot } from '$shared/ipc-contract'
-  import DesignNavigator from './DesignNavigator.svelte'
   import WorkDetailsDialog from './WorkDetailsDialog.svelte'
   import { SCREEN_ORDERS } from './DesignCoordinatorPanel/DesignCoordinatorPanel-types'
   import { createDesignBoard } from './DesignCoordinatorPanel/DesignCoordinatorPanel-board.svelte'
@@ -92,7 +91,7 @@
       {/key}
     {:else if !board.gallery.playable}
       <div
-        class="flex min-h-0 flex-1 flex-col board.gallery.items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+        class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
       >
         <CioImageOff size={16} />
         <span class="px-4 text-center text-[0.6875rem]">
@@ -130,9 +129,7 @@
             class="min-h-0 flex-1 object-contain"
           />
         {:else}
-          <div
-            class="flex min-h-0 flex-1 board.gallery.items-center justify-center gap-1.5 text-dimmed"
-          >
+          <div class="flex min-h-0 flex-1 items-center justify-center gap-1.5 text-dimmed">
             {#if board.studio.galleryBusy}
               <CioSpinner size={14} class="animate-spin" />
               <span class="text-[0.625rem]">Capturing…</span>
@@ -143,7 +140,7 @@
           </div>
         {/if}
         <div
-          class="flex shrink-0 board.gallery.items-center justify-between gap-2 border-t border-border px-2 py-1.5"
+          class="flex shrink-0 items-center justify-between gap-2 border-t border-border px-2 py-1.5"
         >
           <span class="min-w-0 truncate text-[0.625rem] text-dimmed">
             {board.gallery.composing === board.gallery.selected.directory
@@ -197,7 +194,7 @@
             />
           {:else}
             <span
-              class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1 text-dimmed"
+              class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
             >
               {#if board.studio.galleryBusy}
                 <CioSpinner size={14} class="animate-spin" />
@@ -209,12 +206,12 @@
             </span>
           {/if}
           <span
-            class="absolute inset-x-0 bottom-0 flex board.gallery.items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
+            class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
           >
             <span class="truncate text-[0.625rem] font-medium text-white">{screen.name}</span>
           </span>
           <span
-            class="absolute inset-0 flex board.gallery.items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+            class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
           >
             <span class="text-[0.625rem] font-medium text-white"
               >{board.gallery.video
@@ -227,7 +224,7 @@
       <ContextMenu.Portal>
         <ContextMenu.Content class="z-50 min-w-44 border border-border bg-surface p-1 shadow-lg">
           <ContextMenu.Item
-            class="flex cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
             onSelect={() =>
               void board.state.copyDesignPath(board.gallery.selected.directory, screen.entry)}
           >
@@ -237,7 +234,7 @@
           {#if !board.gallery.video}
             <ContextMenu.Sub>
               <ContextMenu.SubTrigger
-                class="flex cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated"
               >
                 <CioDownload size={13} class="shrink-0 text-muted" />
                 Export
@@ -249,7 +246,7 @@
                 >
                   {#each DESIGN_EXPORT_FORMATS as format (format)}
                     <ContextMenu.Item
-                      class="flex cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                       onSelect={() => board.studio.startExport(screen.entry, format)}
                       >Export screen as {format.toUpperCase()}</ContextMenu.Item
                     >
@@ -261,6 +258,43 @@
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  {/snippet}
+
+  {#snippet screenRow(input: {
+    icon?: typeof CioDisplay
+    shot: DesignScreenShot | null
+    name: string
+    detail: string
+    label: string
+    busy?: boolean
+    onOpen: () => void
+  })}
+    <button
+      type="button"
+      class="group flex w-full items-center gap-2 border border-border bg-elevated p-1 text-left transition-colors hover:border-primary/60"
+      title={input.label}
+      aria-label={input.label}
+      onclick={input.onOpen}
+    >
+      <span
+        class="flex h-9 w-14 shrink-0 items-center justify-center overflow-hidden border border-border bg-app text-dimmed"
+      >
+        {#if input.busy}
+          <CioSpinner size={12} class="animate-spin" />
+        {:else if input.shot?.dataUrl}
+          <img src={input.shot.dataUrl} alt="" class="h-full w-full object-cover object-top" />
+        {:else if input.icon}
+          {@const RowIcon = input.icon}
+          <RowIcon size={14} />
+        {:else}
+          <CioImageOff size={14} />
+        {/if}
+      </span>
+      <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
+        >{input.name}</span
+      >
+      <span class="max-w-28 shrink-0 truncate text-[0.625rem] text-dimmed">{input.detail}</span>
+    </button>
   {/snippet}
 
   {#snippet entryCard(input: {
@@ -290,7 +324,7 @@
         />
       {:else}
         <span
-          class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1 text-dimmed"
+          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
         >
           {#if input.busy}
             <CioSpinner size={14} class="animate-spin" />
@@ -301,14 +335,14 @@
         </span>
       {/if}
       <span
-        class="absolute inset-x-0 bottom-0 flex board.gallery.items-center gap-1 bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
+        class="absolute inset-x-0 bottom-0 flex items-center gap-1 bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
       >
         <Icon size={11} class="shrink-0 text-white/90" aria-hidden="true" />
         <span class="truncate text-[0.625rem] font-medium text-white">{input.name}</span>
       </span>
       {#if input.ready}
         <span
-          class="absolute inset-0 flex board.gallery.items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+          class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
         >
           <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
         </span>
@@ -316,76 +350,106 @@
     </button>
   {/snippet}
 
-  {#snippet designsListing()}
-    <!--
-      The project's designs, grouped and folded. One reading only: the header's own
-      List control is what opens this, and its Cards control is what comes back, so
-      the list never becomes a second, unrelated view of the same work.
-    -->
-    <DesignNavigator
-      projectId={board.props.projectId}
-      threadId={board.props.threadId}
-      kind={board.gallery.requestedKind}
-      items={board.gallery.items}
-      selectedDirectory={board.gallery.selected.directory}
-      onSelect={(directory) => {
-        board.gallery.selectDesign(directory)
-        board.state.navigatorOpen = false
-      }}
-    />
-  {/snippet}
-
   <header class="shrink-0 border-b border-border">
-    <div class="flex board.gallery.items-center gap-1.5 py-1.5 pl-2.5">
+    <div class="flex items-center gap-1.5 py-1.5 pl-2.5">
       <!--
         The design in front, and the way to the rest of them.
 
-        A project with a dozen designs used to hide them behind a menu list, which
-        answers "which one is this" and nothing else. The name now opens the
-        navigator: the project's own designs, grouped and foldable, so the board
-        can be arranged instead of scrolled. The tab never moves, so the design in
-        front is never lost while the user looks for another one.
+        One design is in front and every other design of the project waits behind
+        the name beside it: a project accumulates designs faster than it deletes
+        them, and a strip of tabs would only scroll them out of reach. Picking a row
+        brings that design on screen, which is the whole gesture.
       -->
-      <button
-        type="button"
-        class="group flex h-6 max-w-56 min-w-0 cursor-pointer board.gallery.items-center gap-1 px-1.5 transition-colors hover:bg-elevated {board
-          .state.navigatorOpen
-          ? 'bg-elevated'
-          : ''}"
-        title={board.state.navigatorOpen
-          ? `Back to the ${board.gallery.noun} in front`
-          : `${board.gallery.switchLabel}, currently ${board.gallery.selectedName === '' ? board.studio.nounTitle : board.gallery.selectedName}`}
-        aria-label={board.state.navigatorOpen
-          ? `Back to the ${board.gallery.noun} in front`
-          : `${board.gallery.switchLabel}, currently ${board.gallery.selectedName === '' ? board.studio.nounTitle : board.gallery.selectedName}`}
-        aria-expanded={board.state.navigatorOpen}
-        onclick={() => void board.studio.toggleDesignsListing()}
-      >
-        <board.studio.WorkIcon size={13} class="shrink-0 text-accent" />
-        <span
-          class="min-w-0 truncate text-xs font-semibold text-foreground"
-          title={board.gallery.selected.directory}
-        >
-          {board.gallery.selectedName === '' ? board.studio.nounTitle : board.gallery.selectedName}
-        </span>
-        {#if !board.gallery.video && board.studio.designScreens.length > 0}
-          <span
-            class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+      {#if board.gallery.items.length > 1}
+        <DropdownMenu.Root bind:open={board.menus.menus.list}>
+          <DropdownMenu.Trigger
+            class="group flex h-6 max-w-56 min-w-0 cursor-pointer items-center gap-1 px-1.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+            title={`${board.gallery.switchLabel}, currently ${board.gallery.selectedName === '' ? board.studio.nounTitle : board.gallery.selectedName}`}
+            aria-label={`${board.gallery.switchLabel}, currently ${board.gallery.selectedName === '' ? board.studio.nounTitle : board.gallery.selectedName}`}
           >
-            {board.studio.designScreens.length}
-          </span>
-        {/if}
-        <span class="flex shrink-0 board.gallery.items-center gap-0.5 pl-0.5">
-          {#if board.gallery.items.length > 1}
+            <board.studio.WorkIcon size={13} class="shrink-0 text-accent" />
             <span
-              class="text-[0.625rem] font-medium text-dimmed transition-colors group-hover:text-foreground"
+              class="min-w-0 truncate text-xs font-semibold text-foreground"
+              title={board.gallery.selected.directory}
+            >
+              {board.gallery.selectedName === ''
+                ? board.studio.nounTitle
+                : board.gallery.selectedName}
+            </span>
+            {#if !board.gallery.video && board.studio.designScreens.length > 0}
+              <span
+                class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+              >
+                {board.studio.designScreens.length}
+              </span>
+            {/if}
+            <span
+              class="flex shrink-0 items-center gap-0.5 pl-0.5 text-[0.625rem] font-medium text-dimmed transition-colors group-hover:text-foreground"
             >
               {board.gallery.otherCount} more
+              <CioChevronDown size={10} class="shrink-0" />
             </span>
-          {/if}
-          <CioChevronDown size={10} class="shrink-0 text-dimmed" />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={8}
+              class="z-50 max-h-72 w-64 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
+              aria-label={`Other ${board.gallery.noun}s in this project`}
+            >
+              <DropdownMenu.RadioGroup
+                value={board.gallery.selected.directory}
+                onValueChange={(directory) => board.gallery.selectDesign(directory)}
+              >
+                {#each board.gallery.items as item (item.directory)}
+                  <DropdownMenu.RadioItem
+                    value={item.directory}
+                    class="flex w-full min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    title={item.directory}
+                  >
+                    <board.studio.WorkIcon size={12} class="shrink-0 text-dimmed" />
+                    <span class="min-w-0 flex-1 truncate">{item.name}</span>
+                    {#if item.missing}
+                      <span class="shrink-0 text-[0.625rem] text-warning">Not found</span>
+                    {/if}
+                    {#if item.creatorThreadId === board.gallery.selectionThreadId}
+                      <span
+                        class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+                      >
+                        Current
+                      </span>
+                    {/if}
+                    <CioCheck
+                      size={12}
+                      class={[
+                        'shrink-0',
+                        item.directory === board.gallery.selected.directory
+                          ? 'text-primary'
+                          : 'invisible'
+                      ]}
+                      aria-hidden="true"
+                    />
+                  </DropdownMenu.RadioItem>
+                {/each}
+              </DropdownMenu.RadioGroup>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {:else}
+        <span class="flex h-6 min-w-0 max-w-56 items-center gap-1 px-1.5">
+          <board.studio.WorkIcon size={13} class="shrink-0 text-accent" />
+          <span
+            class="min-w-0 truncate text-xs font-semibold text-foreground"
+            title={board.gallery.selected.directory}
+          >
+            {board.gallery.selectedName === ''
+              ? board.studio.nounTitle
+              : board.gallery.selectedName}
+          </span>
         </span>
-      </button>
+      {/if}
       {#if board.studio.selectedCreatorThreadId !== '' && board.studio.selectedCreatorThreadId === board.gallery.selectionThreadId}
         <span
           class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
@@ -393,38 +457,33 @@
         >
       {/if}
       <span class="min-w-0 flex-1"></span>
-      <span class="flex shrink-0 board.gallery.items-center gap-0.5">
+      <span class="flex shrink-0 items-center gap-0.5">
         <!--
-          The two readings of this panel, one control.
+          The two readings of this design's screens, one control.
 
-          Closed, the panel shows the design in front as cards: the Screen Canvas,
-          the live preview, then every screen of the design. That is the default
-          view, and it is what "Cards" returns to. Open, it shows the project's
-          designs as the list the user arranges: groups, folded, so a project of
-          fifty designs is still readable. The label always names what the click
-          will show, so the control is never a mystery.
+          Cards is the board's grid: the Screen Canvas, the live preview, then every
+          screen pictured. List is the same screens as rows, which is how a design of
+          thirty screens is read and arranged. The label always names what the click
+          will show, and the design in front never changes.
         -->
         <button
           type="button"
-          class="flex h-6 board.gallery.items-center gap-1 px-1.5 text-[0.625rem] transition-colors {board
-            .state.navigatorOpen
-            ? 'bg-elevated text-foreground'
-            : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
-          aria-pressed={board.state.navigatorOpen}
-          title={board.state.navigatorOpen
-            ? `Back to the ${board.gallery.noun} in front, as cards`
-            : `Show the ${board.gallery.noun}s of this project as a list`}
-          aria-label={board.state.navigatorOpen
-            ? `Back to the ${board.gallery.noun} in front, as cards`
-            : `Show the ${board.gallery.noun}s of this project as a list`}
-          onclick={() => void board.studio.toggleDesignsListing()}
+          class="flex h-6 items-center gap-1 px-1.5 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-pressed={board.state.screensView === 'list'}
+          title={board.state.screensView === 'cards'
+            ? 'Show the screens of this design as a list'
+            : 'Show the screens of this design as cards'}
+          aria-label={board.state.screensView === 'cards'
+            ? 'Show the screens of this design as a list'
+            : 'Show the screens of this design as cards'}
+          onclick={() => board.studio.toggleScreensView()}
         >
-          {#if board.state.navigatorOpen}
-            <CioLayoutGrid size={12} />
-            Cards
-          {:else}
+          {#if board.state.screensView === 'cards'}
             <CioListTree size={12} />
             List
+          {:else}
+            <CioLayoutGrid size={12} />
+            Cards
           {/if}
         </button>
         {#if board.historyActions.historyActions && board.gallery.selected.directory !== '' && !board.gallery.selectedMissing}
@@ -449,7 +508,7 @@
           -->
           <DropdownMenu.Root bind:open={board.menus.menus.sort}>
             <DropdownMenu.Trigger
-              class="flex h-6 w-6 board.gallery.items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
               title={`Sort the screens (${board.state.SCREEN_ORDER_LABELS[board.studio.screenOrder]})`}
               aria-label={`Sort the screens (${board.state.SCREEN_ORDER_LABELS[board.studio.screenOrder]})`}
             >
@@ -471,7 +530,7 @@
                   {#each SCREEN_ORDERS as order (order)}
                     <DropdownMenu.RadioItem
                       value={order}
-                      class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                     >
                       <span class="min-w-0 flex-1 truncate"
                         >{board.state.SCREEN_ORDER_LABELS[order]}</span
@@ -493,7 +552,7 @@
         {/if}
         <button
           type="button"
-          class="flex h-6 w-6 board.gallery.items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={board.studio.galleryBusy || board.gallery.selected.directory === ''}
           title={board.studio.refreshLabel}
           aria-label={board.studio.refreshLabel}
@@ -507,7 +566,7 @@
         </button>
         <DropdownMenu.Root bind:open={board.menus.menus.options}>
           <DropdownMenu.Trigger
-            class="flex h-6 w-6 board.gallery.items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
             title={`${board.studio.nounTitle} options`}
             aria-label={`${board.studio.nounTitle} options`}
           >
@@ -522,14 +581,14 @@
               class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
             >
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={board.gallery.refreshBoard}
               >
                 <CioRefresh size={13} class="shrink-0 text-muted" />
                 {board.studio.refreshLabel}
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={board.gallery.selected.directory === '' || board.gallery.selectedMissing}
                 onSelect={() => (board.state.historyOpen = !board.state.historyOpen)}
               >
@@ -545,7 +604,7 @@
                 />
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={!board.studio.canRevealCreator}
                 onSelect={() => void board.studio.revealCreator()}
               >
@@ -553,7 +612,7 @@
                 {board.studio.revealLabel}
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={board.gallery.selected.directory === ''}
                 onSelect={() => void board.state.copyDesignPath(board.gallery.selected.directory)}
               >
@@ -561,7 +620,7 @@
                 Copy path
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={board.gallery.selected.directory === ''}
                 onSelect={() => void board.state.revealDesignPath(board.gallery.selected.directory)}
               >
@@ -570,7 +629,7 @@
               </DropdownMenu.Item>
               <DropdownMenu.Sub>
                 <DropdownMenu.SubTrigger
-                  class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={board.gallery.selected.directory === ''}
                 >
                   <CioDownload size={13} class="shrink-0 text-muted" />
@@ -584,7 +643,7 @@
                   >
                     {#if board.gallery.video}
                       <DropdownMenu.Item
-                        class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                         disabled={board.gallery.selected.directory === '' ||
                           board.studio.videoJobs.some((job) => job.state === 'running')}
                         onSelect={() => void board.gallery.exportVideo()}
@@ -594,7 +653,7 @@
                     {:else}
                       {#each DESIGN_EXPORT_FORMATS as format (format)}
                         <DropdownMenu.Item
-                          class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                          class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                           disabled={board.gallery.selected.directory === ''}
                           onSelect={() => board.studio.startExport(null, format)}
                           >Export design as {format.toUpperCase()}</DropdownMenu.Item
@@ -606,7 +665,7 @@
               </DropdownMenu.Sub>
               {#if !board.gallery.video}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={board.gallery.canvasBusy !== '' ||
                     board.gallery.selected.directory === ''}
                   onSelect={() => void board.gallery.requestDesignAction('contract')}
@@ -616,7 +675,7 @@
                 </DropdownMenu.Item>
                 <DropdownMenu.Sub>
                   <DropdownMenu.SubTrigger
-                    class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                    class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                     disabled={board.gallery.canvasBusy !== '' ||
                       board.gallery.selected.directory === ''}
                   >
@@ -630,14 +689,14 @@
                       sideOffset={4}
                     >
                       <DropdownMenu.Item
-                        class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                         disabled={board.gallery.canvasBusy !== '' ||
                           board.gallery.selected.directory === ''}
                         onSelect={() => void board.gallery.requestDesignAction('critique')}
                         ><CioPalette size={13} class="shrink-0 text-muted" />Review design quality</DropdownMenu.Item
                       >
                       <DropdownMenu.Item
-                        class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                         disabled={board.gallery.canvasBusy !== '' ||
                           board.gallery.selected.directory === ''}
                         onSelect={() => void board.gallery.requestDesignAction('tweaks')}
@@ -649,7 +708,7 @@
                   </DropdownMenu.Portal>
                 </DropdownMenu.Sub>
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={board.gallery.canvasBusy !== '' ||
                     board.gallery.selected.directory === ''}
                   onSelect={board.studio.openReferencePrompt}
@@ -658,7 +717,7 @@
                 >
 
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   data-external-url="https://github.com/nexu-io/open-design/tree/main/design-templates"
                   onSelect={() =>
                     void openInBrowser(
@@ -671,7 +730,7 @@
               {/if}
               {#if !board.gallery.video && board.gallery.canvasRead && (!board.gallery.liveReady || (board.gallery.canvasState?.sketches.length ?? 0) > 0)}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={board.gallery.canvasBusy !== '' ||
                     board.gallery.selected.directory === ''}
                   onSelect={() => void board.gallery.requestLivePreview()}
@@ -682,7 +741,7 @@
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={board.gallery.selected.directory === '' || board.gallery.selectedMissing}
                 onSelect={() => (board.state.historyOpen = !board.state.historyOpen)}
               >
@@ -691,7 +750,7 @@
               </DropdownMenu.Item>
               <DropdownMenu.Sub>
                 <DropdownMenu.SubTrigger
-                  class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   disabled={board.gallery.selected.directory === '' ||
                     board.gallery.selectedMissing}
                 >
@@ -705,7 +764,7 @@
                 >
                   {#each [{ mode: 'this', label: 'Change this save path' }, { mode: 'all', label: 'Change all save paths' }, { mode: 'rename', label: `Rename ${board.gallery.noun}` }] as action (action.mode)}
                     <DropdownMenu.Item
-                      class="flex w-full cursor-pointer board.gallery.items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                       onSelect={() => {
                         if (
                           action.mode === 'this' ||
@@ -723,7 +782,7 @@
         </DropdownMenu.Root>
         <button
           type="button"
-          class="ml-0.5 flex h-6 w-6 board.gallery.items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+          class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
           disabled={board.gallery.opening ||
             !board.gallery.playable ||
             board.gallery.selected.directory === '' ||
@@ -760,21 +819,11 @@
       </p>
     {/if}
 
-    {#if !board.gallery.video || !board.state.navigatorOpen}
-      <!--
-        The design in front and the project's designs list are one surface, so the
-        board stays mounted under the list and comes back exactly as it was: its
-        cards, their pictures and its history are not rebuilt because the user
-        looked at the other designs for a moment.
-
-        A composition is the exception, and deliberately: its stage is a native view
-        that no `display: none` can take off screen, so watching it and reading the
-        list at the same time is not a thing this panel can do.
-      -->
-      <div class="flex min-h-0 flex-1 flex-col" class:hidden={board.state.navigatorOpen}>
+    {#if true}
+      <div class="flex min-h-0 flex-1 flex-col">
         {#if board.gallery.selectedMissing}
           <div
-            class="flex min-h-0 flex-1 flex-col board.gallery.items-center justify-center gap-3 p-4 text-center"
+            class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-center"
           >
             <CioImageOff size={20} class="text-warning" />
             <p class="text-sm font-medium">{board.studio.nounTitle} not found</p>
@@ -784,7 +833,7 @@
             </p>
             <button
               type="button"
-              class="flex board.gallery.items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
+              class="flex items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
               onclick={() => (board.studio.removeRequested = board.gallery.selectedItem)}
               ><CioTrash size={13} />Remove from panel</button
             >
@@ -823,7 +872,7 @@
           <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
             {#if board.gallery.video}
               <div
-                class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+                class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
               >
                 <CioImageOff size={16} />
                 <span class="px-4 text-center text-[0.6875rem]">
@@ -832,7 +881,7 @@
               </div>
             {:else if board.gallery.gallery.length === 0}
               <div
-                class="flex aspect-[16/10] w-full flex-col board.gallery.items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+                class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
               >
                 {#if board.studio.galleryBusy}
                   <CioSpinner size={16} class="animate-spin" />
@@ -845,6 +894,38 @@
                       : 'No preview captured yet.'}
                   </span>
                 {/if}
+              </div>
+            {:else if board.state.screensView === 'list'}
+              <div class="flex flex-col gap-1" aria-label={board.studio.screensLabel}>
+                {#if !board.gallery.video}
+                  {@render screenRow({
+                    icon: CioDisplay,
+                    shot: board.studio.canvasShot,
+                    name: 'Screen Canvas',
+                    detail: 'canvas',
+                    label: 'Open the Screen Canvas in the in-app browser',
+                    busy: !board.gallery.canvasRead || board.gallery.openingCanvas,
+                    onOpen: () => void board.gallery.openCanvas()
+                  })}
+                  {@render screenRow({
+                    icon: CioLayers,
+                    shot: board.studio.liveShot,
+                    name: 'Live preview',
+                    detail: board.studio.LIVE_PREVIEW_ENTRY,
+                    label: `Open the live preview of this ${board.gallery.noun} in the in-app browser`,
+                    busy: board.gallery.opening,
+                    onOpen: () => void board.gallery.openPreview(board.studio.LIVE_PREVIEW_ENTRY)
+                  })}
+                {/if}
+                {#each board.studio.screenCards as screen (screen.entry)}
+                  {@render screenRow({
+                    shot: screen,
+                    name: screen.name,
+                    detail: screen.entry,
+                    label: `Open the ${board.gallery.noun} screen ${screen.name} in the in-app browser`,
+                    onOpen: () => void board.gallery.openPreview(screen.entry)
+                  })}
+                {/each}
               </div>
             {:else}
               <div class="grid grid-cols-2 gap-1.5" aria-label={board.studio.screensLabel}>
@@ -877,7 +958,7 @@
               {#if !board.gallery.video && board.studio.designScreens.length === 0}
                 {#if board.studio.galleryBusy}
                   <p
-                    class="mt-2 flex board.gallery.items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed"
+                    class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed"
                   >
                     <CioSpinner size={12} class="animate-spin" />
                     Capturing the {board.gallery.noun}…
@@ -893,10 +974,7 @@
         {/if}
       </div>
     {/if}
-    {#if board.state.navigatorOpen}
-      {@render designsListing()}
-    {/if}
-    {#if board.gallery.selected.directory !== '' && !board.gallery.selectedMissing && !board.state.navigatorOpen}
+    {#if board.gallery.selected.directory !== '' && !board.gallery.selectedMissing}
       {#key `${board.props.projectId}:${board.props.threadId}:${board.gallery.selected.directory}`}
         <DesignHistoryPanel
           projectId={board.props.projectId}

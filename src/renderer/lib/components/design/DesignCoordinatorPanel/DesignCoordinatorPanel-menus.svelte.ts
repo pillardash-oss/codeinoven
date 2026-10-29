@@ -15,7 +15,9 @@ export class DesignBoardMenus extends BoardUnit<DesignBoard> {
    * modal gives, which is why every root here is watched rather than only the one
    * the user happened to open first.
    */
-  menus = $state({ sort: false, options: false, card: false })
+  menus = $state({ list: false, sort: false, options: false, card: false })
 
-  menuOpen = $derived(this.menus.sort || this.menus.options || this.menus.card)
+  menuOpen = $derived(
+    this.menus.list || this.menus.sort || this.menus.options || this.menus.card
+  )
 }

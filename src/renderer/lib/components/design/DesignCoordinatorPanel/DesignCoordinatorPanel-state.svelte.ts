@@ -61,15 +61,15 @@ export class DesignBoardState extends BoardUnit<DesignBoard> {
   historyOpen = $state(false)
 
   /**
-   * Whether the board is showing the designs themselves instead of the one in
-   * front.
+   * How the screens of the design in front are drawn.
    *
-   * The navigator is the board's listing surface, not a dialog: a project's
-   * designs are grouped and folded there, and picking one returns the board to
-   * that design. It is a view state of this panel, so closing the panel closes the
-   * navigator with it rather than leaving a listing behind on its own.
+   * Both readings are the same screens of the same design: `cards` is the board's
+   * grid, its Screen Canvas and live preview first and then every screen pictured,
+   * and `list` is the same set as rows, which is what a design of thirty screens
+   * is read in. Nothing about which design is in front changes here, which is why
+   * switching readings never reloads the design.
    */
-  navigatorOpen = $state(false)
+  screensView = $state<'cards' | 'list'>('cards')
 
   detailsMode = $state<'this' | 'all' | 'rename' | null>(null)
 
