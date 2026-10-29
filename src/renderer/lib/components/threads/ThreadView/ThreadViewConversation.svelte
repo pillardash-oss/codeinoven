@@ -92,10 +92,26 @@
     {@attach board.state.conversationColumn.attachment}
   >
     {#if !board.sources.loaded && board.composerScope.visibleMessages.length === 0}
-      <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
-        <CioSpinner size={16} class="animate-spin" />
-        Loading conversation...
-      </div>
+      {#if board.loadOlderMessages.loadError}
+        <!-- A failed read is information, not a permanent spinner: the
+             conversation could not be fetched, so say so and offer the retry. -->
+        <div class="flex flex-col items-start gap-2 py-8 text-sm" role="alert">
+          <p class="text-danger">The conversation could not be loaded.</p>
+          <p class="text-xs break-words text-dimmed">{board.loadOlderMessages.loadError}</p>
+          <button
+            type="button"
+            class="mt-1 border border-border bg-surface px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-elevated"
+            onclick={() => board.loadOlderMessages.retryLoad()}
+          >
+            Retry
+          </button>
+        </div>
+      {:else}
+        <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
+          <CioSpinner size={16} class="animate-spin" />
+          Loading conversation...
+        </div>
+      {/if}
     {:else}
       {#if board.unmirroredTraceStartTime.hasOlderMessages}
         <div

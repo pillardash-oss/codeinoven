@@ -2,6 +2,7 @@ import { WORKING_TRACE_PAGE_SIZE, type Thread, type ThreadStatus } from '$shared
 import { invoke } from '$lib/ipc.svelte'
 import { isThreadLiveWorking } from '$lib/thread-status-badge'
 import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadTraceCache } from '$lib/stores/thread-trace-cache.svelte'
 
@@ -84,4 +85,22 @@ export function preloadThreadConversation(thread: Thread): void {
   prefetchThreadTrace(thread)
   if (threadMessages.loaded(thread.projectId, thread.id)) return
   void threadMessages.preload(thread.projectId, thread.id)
+}
+
+/**
+ * Warm the conversation this launch is going to restore.
+ *
+ * Startup used to read that thread's transcript only after `thread:listRecentPerProject`
+ * resolved, found the saved row, and called `openThread`: three steps that all
+ * had to finish before the first message IPC even left the renderer. Reading it
+ * from the persisted selection the moment the renderer boots overlaps that read
+ * with the whole hydration pass, so the view mounts into a warm cache instead
+ * of starting its own read, and the conversation is on screen as soon as the
+ * thread does. Idempotent and safe when nothing was selected.
+ */
+export function preloadRestoredThreadConversation(): void {
+  const saved = rendererRecovery.selectedThread
+  if (!saved) return
+  if (threadMessages.loaded(saved.projectId, saved.threadId)) return
+  void threadMessages.preload(saved.projectId, saved.threadId)
 }

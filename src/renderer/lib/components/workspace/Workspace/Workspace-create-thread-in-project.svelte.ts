@@ -124,9 +124,18 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       // frame. The hidden assistant container itself is created by the main
       // process before navigation, so its project record is already in
       // `project:list`.
-      const [projectList, threadList] = await Promise.all([
+      const saved = rendererRecovery.selectedThread
+      // The saved thread is restored onto, so its own row is worth reading in
+      // the same pass as the lists instead of one serial step afterwards: a
+      // saved thread that fell outside the bounded recent slice used to cost a
+      // second round trip before it could open, which read as the conversation
+      // simply not loading at launch.
+      const [projectList, threadList, savedThread] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listRecentPerProject')
+        invoke('thread:listRecentPerProject'),
+        saved
+          ? invoke('thread:get', saved.projectId, saved.threadId).catch(() => null)
+          : Promise.resolve(null)
       ])
       this.projects = projectList
       const uniqueThreads = this.uniqueThreadList(threadList)
@@ -150,7 +159,6 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         for (const [projectId, iconUrl] of icons) this.projectIcons.set(projectId, iconUrl)
         scopeState.setScopesFromProjects(projectList, this.projectIcons)
       })
-      const saved = rendererRecovery.selectedThread
       const restoredThread = saved
         ? uniqueThreads.find(
             (candidate) =>
@@ -169,19 +177,14 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
       } else if (saved) {
         // The saved thread may sit beyond the bounded recent hydration list
-        // (e.g. it was manually reordered below the cut). Fetch it directly so
-        // the workspace restores onto the same thread instead of clearing it.
-        try {
-          const savedThread = await invoke('thread:get', saved.projectId, saved.threadId)
-          const project = projectList.find((candidate) => candidate.id === saved.projectId) ?? null
-          if (savedThread && !savedThread.archived) {
-            this.upsertThreadInList(savedThread)
-            workspaceState.openThread(savedThread, project)
-            void scopeState.ensureBoardLoaded(saved.projectId)
-          } else {
-            rendererRecovery.clearSelectedThread()
-          }
-        } catch {
+        // (e.g. it was manually reordered below the cut), so its own read
+        // decides whether the selection is still valid.
+        const project = projectList.find((candidate) => candidate.id === saved.projectId) ?? null
+        if (savedThread && !savedThread.archived) {
+          this.upsertThreadInList(savedThread)
+          workspaceState.openThread(savedThread, project)
+          void scopeState.ensureBoardLoaded(saved.projectId)
+        } else {
           rendererRecovery.clearSelectedThread()
         }
       }

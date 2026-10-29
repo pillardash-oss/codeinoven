@@ -127,6 +127,23 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   olderMessagesAvailable = $state(false)
 
+  /** Why the transcript could not be read, when it is empty and unloaded. */
+  loadError = $derived(
+    this.root.props.controller
+      ? ''
+      : threadMessages.error(
+          this.root.handleAgentEvent.thread.projectId,
+          this.root.handleAgentEvent.thread.id
+        )
+  )
+
+  /** Retry a transcript that failed to load, from the same path an open uses. */
+  retryLoad(): void {
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    threadMessages.clearLoadError(projectId, id)
+    void this.loadLocal(1)
+  }
+
   jumpLoading = $state(false)
 
   // svelte-ignore state_referenced_locally
@@ -513,6 +530,13 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
     const { projectId, id } = this.root.handleAgentEvent.thread
     await threadMessages.waitForLoad(projectId, id)
+    // The eager boot preload (or a hover preload) may have already landed while
+    // the view was mounting. Mount the tail right here instead of holding the
+    // conversation behind the settings and config reads below: those enrich the
+    // chrome, never the transcript.
+    if (threadMessages.messages(projectId, id).length > 0) {
+      this.root.composerScope.beginInitialPaintReveal()
+    }
     // New empty thread seeded as loaded before mount must render the
     // composer instantly   zero IPC on the critical path. All persistence
     // reads enrich state in the background without ever blocking typing
@@ -630,10 +654,13 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       this.root.composerScope.restoreResponseReferences()
     } catch {
       // A single transient failure must not silently drop the settings, mirror,
-      // and status restore   retry once, then degrade gracefully.
+      // and status restore   retry once, then degrade gracefully. Anything the
+      // failed pass already merged still paints: a metadata read failing is not
+      // a reason to hide a transcript that is in memory.
       if (attempt === 0) {
         return this.loadLocal(1)
       }
+      this.root.composerScope.beginInitialPaintReveal()
     }
   }
 
