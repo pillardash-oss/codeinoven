@@ -34,6 +34,7 @@
   import CompositionStage from '$lib/components/design/CompositionStage.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
+  import { slide } from 'svelte/transition'
   import { screenBoardState } from '$lib/stores/screen-board.svelte'
   import VideoEditWorkspace from '$lib/components/design/VideoEditWorkspace.svelte'
   import { usesThreadWorkspaceMount } from '$shared/types'
@@ -187,51 +188,66 @@
       : `Copy ${board.gallery.noun} screen: ${screen.name}`}
     <ContextMenu.Root bind:open={board.menus.menus.card}>
       <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
-        <button
-          type="button"
-          class="group relative block w-full overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen
+        <div
+          class="flex flex-col overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen
             ? 'border-accent/60'
             : 'border-border'}"
-          title={cardLabel}
-          aria-label={cardLabel}
-          onclick={() => void board.gallery.openPreview(screen.entry)}
         >
-          {#if screen.dataUrl}
-            <img
-              src={screen.dataUrl}
-              alt={board.gallery.video
-                ? `Preview of the ${board.gallery.noun} ${board.gallery.selectedName}`
-                : `Preview of the ${board.gallery.noun} screen ${screen.name}`}
-              class="block max-h-44 w-full object-cover object-top"
-            />
-          {:else}
+          <button
+            type="button"
+            class="group relative block w-full overflow-hidden"
+            title={cardLabel}
+            aria-label={cardLabel}
+            onclick={() => void board.gallery.openPreview(screen.entry)}
+          >
+            {#if screen.dataUrl}
+              <img
+                src={screen.dataUrl}
+                alt={board.gallery.video
+                  ? `Preview of the ${board.gallery.noun} ${board.gallery.selectedName}`
+                  : `Preview of the ${board.gallery.noun} screen ${screen.name}`}
+                class="block max-h-44 w-full object-cover object-top"
+              />
+            {:else}
+              <span
+                class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+              >
+                {#if board.studio.galleryBusy}
+                  <CioSpinner size={14} class="animate-spin" />
+                  <span class="text-[0.625rem]">Capturing…</span>
+                {:else}
+                  <CioImageOff size={14} />
+                  <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
+                {/if}
+              </span>
+            {/if}
             <span
-              class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+              class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
             >
-              {#if board.studio.galleryBusy}
-                <CioSpinner size={14} class="animate-spin" />
-                <span class="text-[0.625rem]">Capturing…</span>
-              {:else}
-                <CioImageOff size={14} />
-                <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
-              {/if}
+              <span class="text-[0.625rem] font-medium text-white"
+                >{board.gallery.video
+                  ? 'Watch full screen in the in-app browser'
+                  : 'Open in the in-app browser'}</span
+              >
             </span>
-          {/if}
-          <span
-            class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
-          >
-            <span class="truncate text-[0.625rem] font-medium text-white">{screen.name}</span>
-          </span>
-          <span
-            class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
-          >
-            <span class="text-[0.625rem] font-medium text-white"
-              >{board.gallery.video
-                ? 'Watch full screen in the in-app browser'
-                : 'Open in the in-app browser'}</span
+          </button>
+          <!-- The card's own bar: the drag handle, the selection and the screen's
+               name, on the card rather than floating over its picture. It sits at
+               the bottom so the group's bar above the cards never collides with it. -->
+          <div class="flex items-center gap-1 border-t border-border px-0.5 py-px">
+            {@render screenGrip(screen.entry)}
+            {@render screenSelection(screen.entry)}
+            <button
+              type="button"
+              class="min-w-0 flex-1 truncate text-left text-[0.625rem] font-medium text-foreground"
+              title={cardLabel}
+              aria-label={cardLabel}
+              onclick={() => void board.gallery.openPreview(screen.entry)}
             >
-          </span>
-        </button>
+              {screen.name}
+            </button>
+          </div>
+        </div>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content class="z-50 min-w-44 border border-border bg-surface p-1 shadow-lg">
@@ -393,10 +409,6 @@
       }}
     >
       {@render screenCard(screen, board.gallery.video)}
-      <span class="absolute top-1 left-1 flex items-center gap-1 bg-app/85 px-1 py-0.5">
-        {@render screenGrip(screen.entry)}
-        {@render screenSelection(screen.entry)}
-      </span>
     </div>
   {/snippet}
 
@@ -407,15 +419,31 @@
       ondragover={(event) => {
         if (!group) return
         event.preventDefault()
-        board.studio.hoverScreenDrop(group.id, null)
+        if (board.studio.dragGroup !== '') board.studio.hoverGroupDrop(group.id)
+        else board.studio.hoverScreenDrop(group.id, null)
       }}
       ondrop={(event) => {
         if (!group) return
         event.preventDefault()
-        void board.studio.dropScreens(group.id, null)
+        if (board.studio.dragGroup !== '') void board.studio.dropGroupOnto(group.id)
+        else void board.studio.dropScreens(group.id, null)
       }}
     >
       {#if group}
+        <button
+          type="button"
+          class="flex h-5 w-4 shrink-0 cursor-grab items-center justify-center text-dimmed hover:text-foreground"
+          draggable="true"
+          title={`Drag to reorder the group ${group.name}`}
+          aria-label={`Drag to reorder the group ${group.name}`}
+          ondragstart={(event) => {
+            event.dataTransfer?.setData('text/plain', group.id)
+            board.studio.beginGroupDrag(group.id)
+          }}
+          ondragend={() => board.studio.endScreenDrag()}
+        >
+          <CioGrip size={11} />
+        </button>
         <button
           type="button"
           class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed hover:text-foreground"
@@ -1098,7 +1126,10 @@
                       {@render screenGroupHeader(section.group, section.screens.length)}
                     {/if}
                     {#if !section.group?.collapsed}
-                      <div class="flex flex-col gap-1 {section.group ? 'pl-3' : ''}">
+                      <div
+                        class="flex flex-col gap-1 {section.group ? 'pl-3' : ''}"
+                        transition:slide={{ duration: 140 }}
+                      >
                         {#each section.screens as screen (screen.entry)}
                           {@render screenListRow(screen, section.group?.id ?? null)}
                         {/each}
@@ -1142,9 +1173,14 @@
                       {/if}
                     </div>
                     {#if !section.group?.collapsed}
-                      {#each section.screens as screen (screen.entry)}
-                        {@render screenCardItem(screen, section.group?.id ?? null)}
-                      {/each}
+                      <div
+                        class="col-span-full grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-1.5"
+                        transition:slide={{ duration: 140 }}
+                      >
+                        {#each section.screens as screen (screen.entry)}
+                          {@render screenCardItem(screen, section.group?.id ?? null)}
+                        {/each}
+                      </div>
                     {/if}
                   {/if}
                 {/each}

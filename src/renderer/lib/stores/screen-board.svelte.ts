@@ -112,6 +112,13 @@ class ScreenBoardStore {
     return this.#mutate(invoke('design:screenBoardRemoveGroup', projectId, directory, groupId))
   }
 
+  /** Set the order of a design's groups, which a drag on a group expresses. */
+  reorderGroups(projectId: string, directory: string, groupIds: string[]): Promise<void> {
+    return this.#mutate(
+      invoke('design:screenBoardReorderGroups', projectId, directory, groupIds)
+    )
+  }
+
   /** Fold a group away, or open it, which the record remembers with it. */
   setCollapsed(
     projectId: string,

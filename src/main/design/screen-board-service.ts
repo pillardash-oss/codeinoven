@@ -301,6 +301,38 @@ export class ScreenBoardService {
   }
 
   /**
+   * Set the order of a design's groups.
+   *
+   * A group is the user's own section of the board, so dragging one past another
+   * is the whole of "this comes first": the ids arrive in their new order and
+   * positions are rewritten from that list. A group the caller left out keeps its
+   * place after the listed ones rather than disappearing from the board.
+   */
+  async reorderGroups(
+    projectId: unknown,
+    directory: unknown,
+    groupIds: unknown
+  ): Promise<ScreenBoardState> {
+    const project = requireId(projectId, 'project id')
+    const folder = requireDirectory(directory)
+    if (!Array.isArray(groupIds) || groupIds.length > MAX_GROUPS)
+      throw new TypeError('A reorder needs a list of groups')
+    const store = await this.ensureLoaded()
+    const record = this.recordFor(store, project, folder)
+    const ordered = groupIds.map((id) => requireId(id, 'group id'))
+    const position = new Map(ordered.map((id, index) => [id, index]))
+    record.groups = record.groups
+      .map((group) => ({
+        ...group,
+        position: position.get(group.id) ?? ordered.length + group.position
+      }))
+      .toSorted((left, right) => left.position - right.position)
+    record.groups.forEach((group, index) => (group.position = index))
+    record.updatedAt = Date.now()
+    return this.commit(store, project, folder, record)
+  }
+
+  /**
    * Set one group's screens, in the order given.
    *
    * The caller sends the group as the user arranged it, which is what makes a drop

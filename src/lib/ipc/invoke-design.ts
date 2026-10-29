@@ -352,6 +352,10 @@ export const invokeDesignContract = {
     [projectId: string, directory: string, groupId: string],
     ScreenBoardState
   >,
+  'design:screenBoardReorderGroups': {} as Contract<
+    [projectId: string, directory: string, groupIds: string[]],
+    ScreenBoardState
+  >,
   'design:screenBoardCollapseGroup': {} as Contract<
     [projectId: string, directory: string, groupId: string, collapsed: boolean],
     ScreenBoardState

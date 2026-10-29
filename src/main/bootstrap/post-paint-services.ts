@@ -753,6 +753,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   ipcMain.handle('design:screenBoardRemoveGroup', (_event, projectId, directory, groupId) =>
     screenBoards.removeGroup(projectId, directory, groupId)
   )
+  ipcMain.handle('design:screenBoardReorderGroups', (_event, projectId, directory, groupIds) =>
+    screenBoards.reorderGroups(projectId, directory, groupIds)
+  )
   ipcMain.handle(
     'design:screenBoardCollapseGroup',
     (_event, projectId, directory, groupId, collapsed) =>

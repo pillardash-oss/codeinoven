@@ -114,6 +114,9 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
   /** The screens a drag is carrying, in the order they will land. */
   dragScreens = $state<string[]>([])
 
+  /** The group a drag is carrying, or an empty string while none is dragged. */
+  dragGroup = $state('')
+
   /** Where a drag would land, for the highlighted drop target. */
   dropTarget = $state<{ groupId: string | null; before: string | null } | null>(null)
 
@@ -165,7 +168,47 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
 
   endScreenDrag(): void {
     this.dragScreens = []
+    this.dragGroup = ''
     this.dropTarget = null
+  }
+
+  /** Start dragging one group, to put it before another. */
+  beginGroupDrag(groupId: string): void {
+    this.dragGroup = groupId
+  }
+
+  /** Drag a group header over another: the carried group takes its place. */
+  hoverGroupDrop(groupId: string): void {
+    if (this.dragGroup === '' || this.dragGroup === groupId) return
+    this.dropTarget = { groupId, before: groupId }
+  }
+
+  /**
+   * Drop the carried group on another one, taking its position.
+   *
+   * The order sent is the whole list, so dropping is unambiguous: the carried
+   * group lands where the target was and every other group shifts by one.
+   */
+  async dropGroupOnto(targetGroupId: string): Promise<void> {
+    const carried = this.dragGroup
+    this.endScreenDrag()
+    if (carried === '' || carried === targetGroupId) return
+    const ordered = this.screenGroups
+      .toSorted((left, right) => left.position - right.position)
+      .map((group) => group.id)
+      .filter((id) => id !== carried)
+    const index = ordered.indexOf(targetGroupId)
+    ordered.splice(index < 0 ? ordered.length : index, 0, carried)
+    try {
+      await screenBoardState.reorderGroups(
+        this.root.props.projectId,
+        this.root.gallery.selected.directory,
+        ordered
+      )
+    } catch (error) {
+      logRendererError('The groups could not be rearranged.', error)
+      toast.error('The groups could not be rearranged.')
+    }
   }
 
   /** Highlight the place a drop would land, while the drag is over it. */
