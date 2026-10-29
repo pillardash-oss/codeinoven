@@ -57,6 +57,10 @@ export interface ViewLifecycleHost {
 }
 
 export class BrowserServiceViewLifecycle {
+  /** The app renderer this class already guarded, so a second registration for
+   *  the same window cannot stack a second pair of listeners on one page. */
+  private guardedContentsId: number | null = null
+
   constructor(private readonly host: ViewLifecycleHost) {}
 
   /**
@@ -80,6 +84,11 @@ export class BrowserServiceViewLifecycle {
    */
   guardAgainstStrandedView(): void {
     const contents = this.host.window.webContents
+    // The IPC surface is registered per window and a window can be registered
+    // again, so the listeners are claimed once for this renderer. A rebuild
+    // that replaces the page is a different contents and is guarded again.
+    if (this.guardedContentsId === contents.id) return
+    this.guardedContentsId = contents.id
     contents.on('did-start-navigation', (details) => {
       if (details.isMainFrame && !details.isSameDocument) this.releaseRendererSurfaces()
     })

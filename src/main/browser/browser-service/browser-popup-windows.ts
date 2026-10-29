@@ -182,6 +182,12 @@ export class BrowserPopupWindows {
     contents: WebContents,
     context: { owner: BrowserPageOwner; url: string; viewport: BrowserViewport | null }
   ): WebContents {
+    // A page is hosted once. Handing the same `WebContents` to `track` twice adds
+    // a second listener for every event it follows, and Electron reports the pile
+    // up as a listener leak once enough popups ride one page. Chromium can report
+    // one popup's contents more than once (a document that opens another window
+    // in place), so the page is the identity here, not the call.
+    if (this.recordForContents(contents.id)) return contents
     const record: BrowserPopupWindowRecord = {
       id: `popup:${crypto.randomUUID()}`,
       tabId: context.owner.tabId,
@@ -232,6 +238,8 @@ export class BrowserPopupWindows {
     view: WebContentsView
     viewport: BrowserViewport | null
   }): string {
+    const already = this.recordForContents(context.view.webContents.id)
+    if (already) return already.id
     const record: BrowserPopupWindowRecord = {
       id: `popup:${crypto.randomUUID()}`,
       tabId: context.owner.tabId,
