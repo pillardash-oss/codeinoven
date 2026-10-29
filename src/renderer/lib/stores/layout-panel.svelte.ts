@@ -36,23 +36,16 @@ class LayoutPanelState {
    *
    * The header's thread block aligns to that column rather than to the panel: the
    * page is the thing the reader is looking at, and the panel is only how much
-   * room it has. The surface on screen owns it, and a surface that is hidden rather
-   * than gone (a studio taking the pane) keeps the last edge it measured, so the
-   * thread's name stays put through the toggle instead of jumping back to the end
-   * of the header's chrome. Zero until a reading surface has reported.
+   * room it has. It is a live coordinate, so a column that moves (a panel opening
+   * beside it, a window resize, a sidebar drag) carries the thread's name with it,
+   * frame by frame and with no snap at the end of the motion.
    *
-   * The column holds its place, so this coordinate does not move for anything a
-   * panel does: the panel narrows the column, never shifts it.
+   * A surface that is hidden rather than gone (a studio taking the pane) keeps the
+   * last edge it measured, so the thread's name stays put through the toggle
+   * instead of jumping back to the end of the header's chrome. Zero until a
+   * reading surface has reported.
    */
   private readingColumn = $state<{ owner: object; left: number } | null>(null)
-  /**
-   * The same column's left offset inside its pane, in pixels.
-   *
-   * This is the value the conversation's gutters are padded with, so the messages
-   * and the composer start where the name starts. It is published rather than
-   * hardcoded because only the surface knows the room the page was laid out for.
-   */
-  readingColumnOffset = $state(0)
   /**
    * The same ownership kept where no effect can see it.
    *
@@ -122,15 +115,11 @@ class LayoutPanelState {
    * hidden one's own resize reports arrive in either order. Whoever is on screen
    * reports, and the surface that is not on screen never overwrites it.
    */
-  setReadingColumn(owner: object, left: number, offset: number): void {
-    if (this.readingOwner === owner && this.readingLeft === left) {
-      if (this.readingColumnOffset !== offset) this.readingColumnOffset = offset
-      return
-    }
+  setReadingColumn(owner: object, left: number): void {
+    if (this.readingOwner === owner && this.readingLeft === left) return
     this.readingOwner = owner
     this.readingLeft = left
     this.readingColumn = { owner, left }
-    this.readingColumnOffset = offset
   }
 
   /** Give the reading column up, but only if this surface still holds it. */

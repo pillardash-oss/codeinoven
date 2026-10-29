@@ -87,10 +87,12 @@
   role="log"
   aria-label="Conversation"
   data-region={board.submitSpecDecision.showSpecStudio ? undefined : 'conversation'}
-  {@attach board.state.conversationColumn.attachment}
 >
-  <div class="flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
-    {#if board.composerScope.visibleMessages.length === 0 && !board.composerScope.emptyConversation}
+  <div
+    class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
+    {@attach board.state.conversationColumn.attachment}
+  >
+    {#if !board.sources.loaded && board.composerScope.visibleMessages.length === 0}
       {#if board.loadOlderMessages.loadError}
         <!-- A failed read is information, not a permanent spinner: the
              conversation could not be fetched, so say so and offer the retry. -->
@@ -107,15 +109,9 @@
         </div>
       {:else}
         <!-- A skeleton of the transcript, in the transcript's own container, is
-             the loading state. The test is "nothing to show", not "the read has
-             not reported": a thread that reads as loaded while its window is
-             still empty (a batched reveal between batches, a restore whose
-             window has not been mounted) used to fall through to the message
-             branch and render its chrome   the working trace's header, the
-             message toolbar, the composer   around no content at all. The one
-             case that is legitimately empty is a conversation with no messages
-             yet, and that is exactly what `emptyConversation` means, so its
-             composer head start still shows. -->
+             the loading state: a spinner on one line reads as a container that
+             failed to fill, and it also collapsed the column's height before the
+             messages arrived. -->
         <ConversationSkeleton />
       {/if}
     {:else}
