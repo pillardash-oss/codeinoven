@@ -52,6 +52,14 @@
     initiallyFolded?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
+    /**
+     * When this trace's turn closed, when the caller knows it.
+     *
+     * A folded trace mounts no entries, so it has no span of its own to measure:
+     * a settled turn reports its duration from its own close instead of from
+     * whatever window happens to be on screen.
+     */
+    endTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
     /** True while this trace is on screen. A hidden trace   the workspace keeps
@@ -107,6 +115,7 @@
     initialUserOpened = false,
     initiallyFolded = false,
     startTime,
+    endTime,
     active = true,
     totalSteps = 0,
     olderPartsAvailable = false,
@@ -313,10 +322,11 @@
    *  frozen span once it settles. Null when no entry reported a timestamp. */
   const totalDurationSeconds = $derived.by((): number | null => {
     if (busy && effectiveStartTime) return elapsed
-    if (traceSpan && effectiveStartTime) {
-      return Math.max(0, (traceSpan.end - effectiveStartTime) / 1000)
+    const spanEnd = traceSpan?.end ?? endTime
+    if (spanEnd !== undefined && effectiveStartTime) {
+      return Math.max(0, (spanEnd - effectiveStartTime) / 1000)
     }
-    if (traceSpan) return (traceSpan.end - traceSpan.start) / 1000
+    if (spanEnd !== undefined && traceSpan) return (spanEnd - traceSpan.start) / 1000
     return null
   })
   // Convert file:// image URLs to blob: Object URLs so attached images render

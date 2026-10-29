@@ -274,8 +274,12 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     const { projectId, id } = this.root.handleAgentEvent.thread
     const generation = ++this.completedTurnsGeneration
     try {
+      // Totals only. A turn's trace is folded until the reader opens it, and the
+      // step count and duration come from these totals, so opening a thread with
+      // a thousand steps in it must not ship those steps to paint a header.
       const result = await invoke('thread:loadStreamParts', projectId, id, {
-        completedTurns: true
+        completedTurns: true,
+        summaryOnly: true
       })
       if (!this.root.loadOlderMessages.alive || generation !== this.completedTurnsGeneration) return
       if (result.kind !== 'completedTurns') return
@@ -286,16 +290,16 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
   }
 
   /**
-   * Page a closed turn's older entries.
+   * Read a closed turn's trace one page at a time.
    *
-   * A closed turn can hold hundreds of steps, so it ships its newest window and
-   * reads the rest only when the reader opens it, exactly as the live trace
-   * does.
+   * The turn arrives as totals only, so the first call (the reader opening the
+   * trace) reads its newest window, and each later call at the top of the mounted
+   * work reads the page older than it, exactly as the live trace does.
    */
   async loadOlderCompletedTurnParts(endTs: number): Promise<void> {
     const turn = this.completedTurns.find((candidate) => candidate.endTs === endTs)
-    const oldest = turn?.parts[0]
-    if (!turn || !turn.hasOlder || !oldest) return
+    if (!turn || !turn.hasOlder) return
+    const oldest = turn.parts[0]
     const generation = this.completedTurnsGeneration
     try {
       const page = await invoke(
@@ -304,7 +308,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
         this.root.handleAgentEvent.thread.id,
         {
           turnEndTs: endTs,
-          beforeId: oldest.id,
+          ...(oldest ? { beforeId: oldest.id } : {}),
           limit: COMPLETED_TURN_PAGE_SIZE
         }
       )
@@ -314,7 +318,8 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
         candidate.endTs === endTs
           ? {
               ...candidate,
-              parts: [...page.parts, ...candidate.parts],
+              // The first read has nothing to prepend to.
+              parts: oldest ? [...page.parts, ...candidate.parts] : page.parts,
               start: page.start,
               hasOlder: page.hasOlder,
               total: page.total,

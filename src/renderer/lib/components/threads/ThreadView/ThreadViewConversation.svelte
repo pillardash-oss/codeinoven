@@ -233,6 +233,8 @@
           done
           busy={false}
           totalSteps={turn.totalSteps}
+          startTime={turn.startTs}
+          endTime={turn.endTs}
           active={board.props.active}
           olderPartsAvailable={turn.hasOlder}
           onLoadOlderParts={() => board.pollStreamParts.loadOlderCompletedTurnParts(turn.endTs)}

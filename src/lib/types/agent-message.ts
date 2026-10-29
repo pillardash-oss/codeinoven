@@ -367,11 +367,15 @@ export interface ThreadMessagePage {
 export const WORKING_TRACE_PAGE_SIZE = 15
 
 /**
- * Trace entries a completed turn ships at once. Higher than the live window
- * because a reader opens a settled trace to read its steps, and the rows render
- * folded; a turn with more than this pages its older entries in on scroll.
+ * Trace entries one completed turn ships per page.
+ *
+ * A settled trace is folded until the reader opens it, so nothing is read for it
+ * while it sits in the transcript: the header's step count and duration come
+ * from the turn's folded totals, and the first window is read on the gesture
+ * that opens it. A thread whose turns hold a thousand steps between them must
+ * never ship them to paint a header, which is what a larger page here did.
  */
-export const COMPLETED_TURN_PAGE_SIZE = 400
+export const COMPLETED_TURN_PAGE_SIZE = 40
 
 /**
  * Bounded window request over a thread's durable working-trace stream.
@@ -413,6 +417,15 @@ export interface TurnStreamPartsQuery {
    * `beforeId`. `turnStartTs` on the page is then that turn's own start.
    */
   turnEndTs?: number
+  /**
+   * Report completed turns by their totals only, with no entries.
+   *
+   * The transcript draws a settled turn's trace folded, so the header needs the
+   * step total and the span of the work, never its rows. A summary request is
+   * what lets a thread with a very long turn open without shipping that turn's
+   * steps; the window is then read by the gesture that opens the trace.
+   */
+  summaryOnly?: boolean
 }
 
 /** One completed turn of the run in flight, folded from the durable log. */
