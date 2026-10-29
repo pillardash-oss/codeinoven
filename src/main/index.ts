@@ -512,13 +512,20 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     // The renderer is about to die with the window; tear down everything in
     // main that would otherwise keep running page content or a shell with no
     // visible window.
+    // Detach before tearing down. A teardown that throws part way through must
+    // not leave this window's service installed: the next window would then read
+    // a destroyed page through it, which is exactly how a click on a design came
+    // back as `Object has been destroyed` after the app was parked and reopened.
+    const browser = state.browserService
+    state.browserService = null
     try {
       // Commit every open tab's Back/Forward stack before the views are closed
       // with the window. The app keeps running here rather than quitting, so the
       // write is started and left to finish on its own.
-      void state.browserService?.flushTabHistory()
-      state.browserService?.dispose()
-      state.browserService = null
+      void browser?.flushTabHistory().catch((error: unknown) => {
+        Logger.error('Browser tab history could not be committed while parking', error)
+      })
+      browser?.dispose()
     } catch (error) {
       Logger.error('Browser teardown while parking failed', error)
     }

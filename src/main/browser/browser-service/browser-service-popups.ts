@@ -20,6 +20,7 @@ import {
 } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import { consoleFrameUrl } from './browser-service-common'
+import { liveWindowContents } from './browser-view-contents'
 import {
   PANEL_SHORTCUT_TARGETS,
   POPUP_UNCLAIMED_ACTIONS,
@@ -439,9 +440,9 @@ export class BrowserServicePopups {
 
   /** Publish the popup windows the browser holds, whole, after any change. */
   publishPopupWindows(): void {
-    if (this.host.window.webContents.isDestroyed()) return
+    if (!liveWindowContents(this.host.window)) return
     sendToRenderer(
-      this.host.window.webContents,
+      liveWindowContents(this.host.window),
       'browser:popupWindows',
       this.host.popupWindows.list()
     )
@@ -474,7 +475,7 @@ export class BrowserServicePopups {
     ): void => {
       if (!this.host.popupWindows.find(record.id) || this.host.window.isDestroyed()) return
       sendToRenderer(
-        this.host.window.webContents,
+        liveWindowContents(this.host.window),
         'browser:popupWindowAction',
         record.id,
         action,

@@ -7,7 +7,7 @@ import type {
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { type BrowserTab } from './browser-types'
 import { MAX_CONSOLE_ENTRIES } from './browser-validation'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -77,13 +77,10 @@ export class BrowserServicePageState {
 
   publishState(tabId: string): void {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || this.host.window.webContents.isDestroyed()) return
-    sendToRenderer(this.host.window.webContents, 'browser:state', this.stateFor(tabId, tab))
-    sendToRenderer(
-      this.host.window.webContents,
-      'browser:devToolsChanged',
-      this.devToolsStateFor(tabId, tab)
-    )
+    const owner = liveWindowContents(this.host.window)
+    if (!tab || !owner) return
+    sendToRenderer(owner, 'browser:state', this.stateFor(tabId, tab))
+    sendToRenderer(owner, 'browser:devToolsChanged', this.devToolsStateFor(tabId, tab))
   }
 
   devToolsStateFor(tabId: string, tab: BrowserTab): BrowserDevToolsState {

@@ -3,7 +3,7 @@ import type { Project, Thread } from '../../../lib/types'
 import type { BrowserPermissionRequest } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
 import { dialogContextScript } from './browser-dialog-context'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 import {
   permissionGrantKeys,
   permissionLedgerForPartition,
@@ -151,7 +151,7 @@ export class BrowserServicePermissions {
     const target = externalProtocolTarget(url)
     if (!target) return false
     const tab = this.host.tabs.get(owner.tabId)
-    if (!tab || this.host.window.webContents.isDestroyed()) return false
+    if (!tab || !liveWindowContents(this.host.window)) return false
     // An embedded frame that asked for the handoff names itself on the card; a
     // main-frame navigation names the page it is on. Only an http(s) requester
     // can ask at all: a page with no origin of its own (a blank document, a

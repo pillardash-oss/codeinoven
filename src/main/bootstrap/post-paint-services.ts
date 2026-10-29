@@ -89,13 +89,29 @@ async function attachBrowserService(
   const { state, storage, database, designService } = context
   const chatEngine = state.chatEngine
   if (!chatEngine) return
+  // The previous window's tabs are about to lose their views, so their stacks
+  // are committed first. This await is what makes the write survive: `dispose()`
+  // closes the views and nothing would be left to read a stack from afterwards.
+  //
+  // The old service is detached and then torn down defensively. A teardown that
+  // throws (a page that already destroyed its own view, a view whose contents are
+  // gone) used to abort this attach entirely, leaving the dead window's service
+  // installed: every later preview, browser call and design open then reached a
+  // destroyed window and the app answered `Object has been destroyed`. Nothing
+  // about an old window may stand between the user and a working new one.
   if (state.browserService) {
-    // The previous window's tabs are about to lose their views, so their stacks
-    // are committed first. This await is what makes the write survive: `dispose()`
-    // closes the views and nothing would be left to read a stack from afterwards.
-    await state.browserService.flushTabHistory()
-    state.browserService.dispose()
+    const previous = state.browserService
     state.browserService = null
+    try {
+      await previous.flushTabHistory()
+    } catch (error) {
+      Logger.error('Browser tab history could not be committed before reattach:', error)
+    }
+    try {
+      previous.dispose()
+    } catch (error) {
+      Logger.error('The previous window\u2019s browser could not be torn down:', error)
+    }
   }
   // The download manager is deliberately *not* created per window. Downloads
   // belong to their project's session and keep running while no window shows
@@ -110,6 +126,13 @@ async function attachBrowserService(
   await state.browserDownloads.hydrate()
   const service = new BrowserService(window, database, storage, state.browserDownloads)
   state.browserService = service
+  // Whoever destroys the window, the service stops being this app's browser for
+  // it. The park path detaches first and this then finds nothing to do; a window
+  // that goes away on any other route would otherwise leave a service behind, and
+  // the next click that reached it would be answered with a destroyed object.
+  window.once('closed', () => {
+    if (state.browserService === service) state.browserService = null
+  })
   // Remembered permission decisions load before the service accepts browser
   // IPC, so a site is never re-prompted for a permission the user already
   // granted in this or an earlier run.

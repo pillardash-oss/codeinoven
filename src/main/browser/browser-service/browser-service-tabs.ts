@@ -18,7 +18,7 @@ import { browserFindResultFor } from './browser-find'
 import type { BrowserService } from '../browser-service'
 import { consoleFrameUrl } from './browser-service-common'
 import { pageKeyFromInput } from './browser-service-keyboard'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 
 /**
  * A browser tab: creating it, finding it, and destroying it.
@@ -222,14 +222,15 @@ export class BrowserServiceTabs {
       // Native focus can precede mouseDown. Let that click claim ownership
       // before rejecting an unsolicited handover, and recheck after the turn.
       setImmediate(() => {
-        if (this.host.window.isDestroyed() || view.webContents.isDestroyed()) return
-        if (!view.webContents.isFocused() || this.host.keyboardOwnerTabId === tabId) return
+        const page = liveContents(view)
+        if (!page) return
+        if (!page.isFocused() || this.host.keyboardOwnerTabId === tabId) return
         const ownerId = this.host.keyboardOwnerTabId
         const owner = ownerId ? this.host.tabs.get(ownerId) : undefined
         if (ownerId && owner && this.host.isPageOnScreen(ownerId)) {
           this.host.focusPageView(ownerId, owner)
-        } else if (!this.host.window.webContents.isDestroyed()) {
-          this.host.window.webContents.focus()
+        } else {
+          liveWindowContents(this.host.window)?.focus()
         }
       })
     })
@@ -301,8 +302,7 @@ export class BrowserServiceTabs {
         void view.webContents
           .executeJavaScript('globalThis.CIOVideo?.editing === true')
           .then((editing: unknown) => {
-            if (editing !== true && !view.webContents.isDestroyed())
-              this.host.showTabContextMenu(tabId, params)
+            if (editing !== true && liveContents(view)) this.host.showTabContextMenu(tabId, params)
           })
           .catch(() => {})
         return
@@ -485,7 +485,7 @@ export class BrowserServiceTabs {
       const findSession = this.host.findSessions.take(tabId)
       if (findSession && !this.host.window.isDestroyed()) {
         sendToRenderer(
-          this.host.window.webContents,
+          liveWindowContents(this.host.window),
           'browser:findResult',
           browserFindResultFor(tabId, findSession.text, { matches: 0, activeMatchOrdinal: 0 })
         )
@@ -547,13 +547,14 @@ export class BrowserServiceTabs {
         // An answer for a document the tab has already left is remembered for that
         // document's origin and goes no further, so the icon on screen always
         // belongs to the origin on screen.
-        if (view.webContents.isDestroyed()) return
-        if (declaredBy !== faviconOriginOf(view.webContents.getURL())) return
+        const live = liveContents(view)
+        if (!live) return
+        if (declaredBy !== faviconOriginOf(live.getURL())) return
         if (tab.favicon === favicon) return
         tab.favicon = favicon
         publish()
         this.host.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onUpdated', [
-          tab.view.webContents.id,
+          live.id,
           { favIconUrl: source },
           this.host.extensionTabInfo(tabId, tab)
         ])

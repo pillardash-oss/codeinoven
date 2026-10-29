@@ -14,7 +14,7 @@ import {
 } from './browser-validation'
 import { compositionBoardTabId } from './composition-board-tab'
 import { designScreenTabId } from './design-screen-tab'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -55,6 +55,22 @@ export interface SurfacesHost {
 export class BrowserServiceSurfaces {
   constructor(private readonly host: SurfacesHost) {}
 
+  /**
+   * Refuse to build a page for a window that is already gone.
+   *
+   * The service is normally detached before its window is destroyed, so this is
+   * the last line of defence rather than the first: a window torn down while a
+   * caller was mid-flight used to surface Electron's own
+   * `Object has been destroyed` in the UI, which says nothing to the user about
+   * what happened or what to do.
+   */
+  private requireWindow(): void {
+    if (!liveWindowContents(this.host.window))
+      throw new Error(
+        'The app window is no longer open, so a browser page cannot be shown. Reopen the window and try again.'
+      )
+  }
+
   /** The agent tab bound to a project and thread, or null when it has none.
    *  A preview uses this to decide between navigating the thread's existing tab
    *  and creating its first one, so the answer comes from the browser rather
@@ -88,6 +104,7 @@ export class BrowserServiceSurfaces {
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
+    this.requireWindow()
     const movedTab = [...this.host.tabs].find(
       ([id, tab]) =>
         id.startsWith('browser:screen:') &&
@@ -122,7 +139,7 @@ export class BrowserServiceSurfaces {
     // a page the thread already has open. A screen tab is the user's, not the
     // agent's: nothing here claims the thread's agent tab, so no later preview
     // replaces this page under them.
-    sendToRenderer(this.host.window.webContents, 'browser:openRequested', input.url, {
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:openRequested', input.url, {
       projectId: input.projectId,
       threadId: input.threadId,
       requestedTabId: tabId,
@@ -155,6 +172,7 @@ export class BrowserServiceSurfaces {
     attention: 'focus' | 'background'
     reveal: boolean
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
+    this.requireWindow()
     const projectId = validateProjectId(input.projectId)
     const threadId = validateThreadId(input.threadId)
     const url = validateBrowserUrl(input.url)
@@ -178,7 +196,7 @@ export class BrowserServiceSurfaces {
     const reveal =
       input.reveal || (!reused && input.attention === 'focus' && !this.host.isRelaxed(threadId))
     if (reveal) this.host.rememberReveal(tabId, threadId)
-    sendToRenderer(this.host.window.webContents, 'browser:openRequested', url, {
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:openRequested', url, {
       projectId,
       threadId,
       requestedTabId: tabId,
@@ -210,6 +228,7 @@ export class BrowserServiceSurfaces {
     directory: string
     url: string
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
+    this.requireWindow()
     const projectId = validateProjectId(input.projectId)
     const threadId = validateThreadId(input.threadId)
     const url = validateBrowserUrl(input.url)
@@ -282,9 +301,9 @@ export class BrowserServiceSurfaces {
    */
   revealTab(tabId: string): void {
     const tab = this.host.tabs.get(tabId)
-    if (!tab || this.host.window.webContents.isDestroyed()) return
+    if (!tab || !liveWindowContents(this.host.window)) return
     sendToRenderer(
-      this.host.window.webContents,
+      liveWindowContents(this.host.window),
       'browser:openRequested',
       tab.view.webContents.getURL(),
       {
@@ -420,8 +439,8 @@ export class BrowserServiceSurfaces {
   reloadPreviewOrigin(origin: string): number {
     let reloaded = 0
     for (const [tabId, tab] of this.host.tabs) {
-      const contents = tab.view.webContents
-      if (contents.isDestroyed()) continue
+      const contents = liveContents(tab.view)
+      if (!contents) continue
       if (!isPreviewOriginUrl(contents.getURL(), origin)) continue
       // Reloading is deferred until the tab's playhead has been read, so a
       // composition the agent just edited resumes where it was instead of being
@@ -445,8 +464,9 @@ export class BrowserServiceSurfaces {
    */
   async reloadKeepingPlayhead(tabId: string, tab: BrowserTab): Promise<void> {
     if (tab.composition) await this.rememberPlayhead(tabId, tab)
-    const contents = tab.view.webContents
-    if (!contents.isDestroyed()) contents.reload()
+    // A page that destroyed its own view leaves the view carrying nothing, so the
+    // reload is skipped rather than asked of a page that is no longer there.
+    liveContents(tab.view)?.reload()
   }
 
   /** A composition tab's playhead as the page reports it, or null. */

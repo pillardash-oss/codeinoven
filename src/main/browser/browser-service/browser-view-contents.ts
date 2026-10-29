@@ -1,4 +1,4 @@
-import type { WebContents, WebContentsView } from 'electron'
+import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
 
 /**
  * The live page behind a native view, or `undefined` once its page is gone.
@@ -21,4 +21,27 @@ export function liveContents(view: WebContentsView | null | undefined): WebConte
   const contents: WebContents | undefined = view.webContents
   if (!contents || contents.isDestroyed()) return undefined
   return contents
+}
+
+/**
+ * The app window's own page, or null once that window is gone.
+ *
+ * A destroyed `BrowserWindow` throws on `.webContents` itself, so even asking
+ * whether the page is alive has to be guarded: a browser unit reaching for the
+ * window it was built around after the user closed that window used to raise
+ * `Object has been destroyed` inside an event handler, which aborts the rest of
+ * the handler and surfaces as an uncaught exception in the app's logs.
+ */
+export function liveWindowContents(
+  window: BrowserWindow | null | undefined
+): WebContents | undefined {
+  if (!window) return undefined
+  try {
+    if (window.isDestroyed()) return undefined
+    const contents: WebContents | undefined = window.webContents
+    if (!contents || contents.isDestroyed()) return undefined
+    return contents
+  } catch {
+    return undefined
+  }
 }

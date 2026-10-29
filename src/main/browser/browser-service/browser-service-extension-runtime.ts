@@ -34,6 +34,7 @@ import {
 import { resolveBrowserExtensionStoreDir } from '../extensions/browser-extension-registry'
 import type { BrowserService } from '../browser-service'
 import type { BrowserMenuPage } from './browser-service-common'
+import { liveWindowContents } from './browser-view-contents'
 
 /**
  * What installed extensions are told and shown.
@@ -120,14 +121,18 @@ export class BrowserServiceExtensionRuntime {
   publishExtensions(): void {
     this.reconcileExtensionPopups()
     this.reconcileExtensionSidePanels()
-    if (this.host.window.webContents.isDestroyed()) return
-    sendToRenderer(this.host.window.webContents, 'browser:extensions', this.host.extensions.list())
+    if (!liveWindowContents(this.host.window)) return
+    sendToRenderer(
+      liveWindowContents(this.host.window),
+      'browser:extensions',
+      this.host.extensions.list()
+    )
   }
 
   /** One extension's action state, published the moment its worker reports it. */
   publishExtensionActivity(update: BrowserExtensionActivityUpdate): void {
-    if (this.host.window.webContents.isDestroyed()) return
-    sendToRenderer(this.host.window.webContents, 'browser:extensionActivity', update)
+    if (!liveWindowContents(this.host.window)) return
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:extensionActivity', update)
   }
 
   // ─── Extensions beside a page ──────────────────────────────────────────────
@@ -512,8 +517,8 @@ export class BrowserServiceExtensionRuntime {
   }
 
   publishExtensionProgress(progress: BrowserExtensionProgress): void {
-    if (this.host.window.webContents.isDestroyed()) return
-    sendToRenderer(this.host.window.webContents, 'browser:extensionProgress', progress)
+    if (!liveWindowContents(this.host.window)) return
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:extensionProgress', progress)
   }
 
   /**
@@ -640,9 +645,9 @@ export class BrowserServiceExtensionRuntime {
 
   /** Publish the extension side panels the browser holds, whole, after any change. */
   publishExtensionSidePanels(): void {
-    if (this.host.window.webContents.isDestroyed()) return
+    if (!liveWindowContents(this.host.window)) return
     sendToRenderer(
-      this.host.window.webContents,
+      liveWindowContents(this.host.window),
       'browser:extensionSidePanels',
       this.host.sidePanels.list()
     )

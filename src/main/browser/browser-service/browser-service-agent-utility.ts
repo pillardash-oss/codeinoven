@@ -36,7 +36,7 @@ import {
 } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import { asObject, safeOrigin } from './browser-service-common'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 import {
   ATTACHED_PAGE_MUTATION_OPERATIONS,
   ATTACHED_PAGE_READ_OPERATIONS
@@ -152,7 +152,7 @@ export class BrowserServiceAgentUtility {
       const relaxed = attention === 'focus' && this.host.isRelaxed(threadId)
       const reveal = attention === 'focus' && !relaxed
       if (reveal) this.host.rememberReveal(tabId, threadId)
-      sendToRenderer(this.host.window.webContents, 'browser:openRequested', url, {
+      sendToRenderer(liveWindowContents(this.host.window), 'browser:openRequested', url, {
         projectId,
         threadId,
         requestedTabId: tabId,

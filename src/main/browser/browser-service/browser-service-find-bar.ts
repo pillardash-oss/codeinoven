@@ -1,7 +1,7 @@
 import type { BrowserFindRequest, BrowserFindStopAction } from '../../../lib/ipc-contract'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { browserFindResultFor } from './browser-find'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -83,7 +83,7 @@ export class BrowserServiceFindBar {
     if (!session) return
     if (this.host.window.isDestroyed()) return
     sendToRenderer(
-      this.host.window.webContents,
+      liveWindowContents(this.host.window),
       'browser:findResult',
       browserFindResultFor(tabId, session.text, report)
     )

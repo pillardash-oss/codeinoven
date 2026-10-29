@@ -14,6 +14,7 @@ import {
   type BrowserPeekRect
 } from './browser-peek'
 import type { BrowserService } from '../browser-service'
+import { liveWindowContents } from './browser-view-contents'
 
 /**
  * Tabs opened from inside a page: links, siblings and peeks.
@@ -89,7 +90,7 @@ export class BrowserServiceNewTabs {
     this.host.parkTab(tabId)
     // Electron navigates adopted children, including their original POST body.
     if (!childContents) this.host.load(tabId, url)
-    sendToRenderer(this.host.window.webContents, 'browser:openRequested', url, {
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:openRequested', url, {
       projectId: owner.projectId,
       threadId: owner.threadId,
       requestedTabId: tabId,

@@ -11,7 +11,7 @@ import {
   type ShortcutKeyInput
 } from './browser-shortcuts'
 import { MAX_ZOOM_LEVEL, ZOOM_STEP } from './browser-validation'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 import { designScreenEntryFromUrl } from '../../../lib/design/screens'
 import type { BrowserService } from '../browser-service'
 
@@ -189,9 +189,10 @@ export class BrowserServiceKeyboard {
    */
   consumeSwitcherKey(input: ShortcutKeyInput): boolean {
     if (!matchesBrowserChord(input, this.host.switcherBindings)) return false
-    if (!this.host.window.webContents.isDestroyed()) {
-      this.host.window.webContents.focus()
-      sendToRenderer(this.host.window.webContents, 'browser:switcherKey', { backward: input.shift })
+    const owner = liveWindowContents(this.host.window)
+    if (owner) {
+      owner.focus()
+      sendToRenderer(owner, 'browser:switcherKey', { backward: input.shift })
     }
     return true
   }
@@ -214,11 +215,11 @@ export class BrowserServiceKeyboard {
     // which reached the durable log as an uncaught exception on 2026-10-27.
     // The window and its contents are destroyed in that order, so both are
     // checked here.
-    if (this.host.window.isDestroyed() || this.host.window.webContents.isDestroyed()) return
+    if (!liveWindowContents(this.host.window)) return
     if (action === 'focus-address' || action === 'new-tab') {
-      this.host.window.webContents.focus()
+      liveWindowContents(this.host.window)?.focus()
     }
-    sendToRenderer(this.host.window.webContents, 'browser:panelShortcut', tabId, action)
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:panelShortcut', tabId, action)
   }
 
   /**
@@ -278,9 +279,9 @@ export class BrowserServiceKeyboard {
    * while a page holds the OS keyboard.
    */
   dispatchPageKey(key: BrowserPageKey): void {
-    if (this.host.window.webContents.isDestroyed()) return
-    this.host.window.webContents.focus()
-    sendToRenderer(this.host.window.webContents, 'browser:pageKey', key)
+    if (!liveWindowContents(this.host.window)) return
+    liveWindowContents(this.host.window)?.focus()
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:pageKey', key)
   }
 
   /**

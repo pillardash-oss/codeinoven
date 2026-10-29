@@ -20,6 +20,7 @@ import {
   toStringHeaders
 } from './browser-client-hints'
 import type { BrowserService } from '../browser-service'
+import { liveWindowContents } from './browser-view-contents'
 
 /**
  * The Electron session (the cookie jar) one project's box browses in.
@@ -100,7 +101,7 @@ export class BrowserServiceSessions {
       // configured by whichever context reached it first and then serves every
       // other one, so the tab's own project is what names the request.
       const owner = this.host.tabForContents(contents.id)
-      if (!owner || !origin || this.host.window.webContents.isDestroyed()) {
+      if (!owner || !origin || !liveWindowContents(this.host.window)) {
         callback(false)
         return
       }

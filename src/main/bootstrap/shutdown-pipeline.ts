@@ -168,9 +168,12 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
 
   try {
     state.browserService?.dispose()
-    state.browserService = null
   } catch (error) {
     Logger.error('Browser service cleanup failed during shutdown:', error)
+  } finally {
+    // Detached even when the teardown threw, so no other part of the shutdown
+    // path can reach a destroyed window through a half-torn-down service.
+    state.browserService = null
   }
 
   try {

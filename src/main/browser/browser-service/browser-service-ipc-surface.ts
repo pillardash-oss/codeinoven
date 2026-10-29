@@ -77,7 +77,7 @@ import {
   EXTENSION_PAGE_TABS_CHANNEL
 } from '../extensions/browser-extension-page-tabs'
 import { validateBrowserFindRequest, validateBrowserFindStopAction } from './browser-find'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
 import { popupPageOwner } from './browser-service-popups'
 
@@ -453,11 +453,11 @@ export class BrowserServiceIpcSurface {
         this.host.overlay.setDockFocus(report.id, report.target)
         return
       }
-      sendToRenderer(this.host.window.webContents, 'browser:overlay:dockEvent', report)
+      sendToRenderer(liveWindowContents(this.host.window), 'browser:overlay:dockEvent', report)
     })
     replaceHandler('browser:overlayDockDrawn', (_event, rawAck) => {
       sendToRenderer(
-        this.host.window.webContents,
+        liveWindowContents(this.host.window),
         'browser:overlay:dockDrawn',
         validateNativeDockAck(rawAck)
       )
@@ -484,13 +484,13 @@ export class BrowserServiceIpcSurface {
       // The overlay carries no handlers, so an interaction is only a fact about
       // what the user did: the app renderer owns the toast and runs its handler.
       const report = validateToastOverlayInteraction(rawReport)
-      sendToRenderer(this.host.window.webContents, 'browser:overlay:event', report)
+      sendToRenderer(liveWindowContents(this.host.window), 'browser:overlay:event', report)
     })
     replaceHandler('browser:overlayStripInteract', (_event, rawReport) => {
       // The same contract one surface over: the overlay reports what the user did
       // to the strip, and the app renderer owns what it means.
       const report = validateBrowserStripInteraction(rawReport)
-      sendToRenderer(this.host.window.webContents, 'browser:overlay:stripEvent', report)
+      sendToRenderer(liveWindowContents(this.host.window), 'browser:overlay:stripEvent', report)
     })
     replaceHandler('browser:overlayDrawn', (_event, rawAck) => {
       // The content the overlay drew carries handlers that live in the app
@@ -498,7 +498,7 @@ export class BrowserServiceIpcSurface {
       // relayed rather than answered here: only the renderer that published a
       // revision knows which one it is waiting for.
       const ack = validateToastOverlayAck(rawAck)
-      sendToRenderer(this.host.window.webContents, 'browser:overlay:drawn', ack)
+      sendToRenderer(liveWindowContents(this.host.window), 'browser:overlay:drawn', ack)
     })
     replaceHandler('browser:overlayPointer', (_event, rawOverContent) => {
       this.host.overlay.setPointerOverContent(rawOverContent === true)

@@ -22,7 +22,7 @@ import {
 import { safeBasename, validateBrowserUrl, validateOptionalBoxId } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import type { BrowserMenuPage } from './browser-service-common'
-import { liveContents } from './browser-view-contents'
+import { liveContents, liveWindowContents } from './browser-view-contents'
 
 /**
  * The native menus a page raises, and the actions behind their rows.
@@ -300,7 +300,7 @@ export class BrowserServiceMenus {
     sourceTab.initialNavigationStarted = true
     this.host.parkTab(tabId)
     this.host.navigateTo(tabId, target)
-    sendToRenderer(this.host.window.webContents, 'browser:openRequested', target, {
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:openRequested', target, {
       projectId: page.owner.projectId,
       threadId: page.owner.threadId,
       requestedTabId: tabId,
@@ -347,8 +347,8 @@ export class BrowserServiceMenus {
       await contents.savePage(filePath, 'HTMLComplete')
     } catch (error: unknown) {
       Logger.error('Browser page could not be saved:', error)
-      if (this.host.window.webContents.isDestroyed()) return
-      sendToRenderer(this.host.window.webContents, 'app:toast', {
+      if (!liveWindowContents(this.host.window)) return
+      sendToRenderer(liveWindowContents(this.host.window), 'app:toast', {
         message: 'This page could not be saved to that file.',
         type: 'error'
       })
