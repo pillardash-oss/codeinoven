@@ -2,6 +2,7 @@ import { mount } from 'svelte'
 import App from './App.svelte'
 import './app.css'
 import { installRendererErrorCapture } from './lib/system/renderer-logger'
+import { installStallWatch } from './lib/system/stall-watch'
 import { installNotificationSound } from './lib/notification-sound'
 import { scheduleDeferredWork } from './lib/deferred-work'
 import { preloadSpotlightChunk } from './lib/page-preload'
@@ -12,6 +13,9 @@ import { warmOverlayHostOnFirstGesture } from './lib/overlay-host-warm'
 // console.error output) from the first renderer statement and forward them to
 // the main-process durable log so client crashes are diagnosable on disk.
 installRendererErrorCapture()
+// Dev-only: report frame gaps and long tasks, so a freeze is measured where it
+// happens instead of being guessed at afterwards.
+installStallWatch()
 
 /**
  * Alerts are split by surface. While the app is in the background the main
