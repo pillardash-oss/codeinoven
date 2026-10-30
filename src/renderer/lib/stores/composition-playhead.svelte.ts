@@ -150,8 +150,10 @@ class CompositionPlayhead {
   ): Promise<BrowserCompositionPlayback | null> {
     this.dropScrub()
     this.revision += 1
+    const before = this.playback
     try {
       const next = await invoke('browser:transport', this.tabId, command, value)
+      if (next && this.rearmedUnderneath(before, next, command)) return this.playback
       this.apply(next)
       return next
     } catch {
@@ -267,6 +269,32 @@ class CompositionPlayhead {
     this.revivals += 1
     this.revivedAt = Date.now()
     void this.command('pause')
+  }
+
+  /**
+   * Whether a command's answer is a document that came back at the start.
+   *
+   * A composition that lost its runtime is armed again by the next command, and
+   * arming draws the first frame and answers with zero. The command that triggered it
+   * was about the second the user was on, not about the start, so the answer is
+   * corrected to that second and the page is put back on it: pressing pause while
+   * annotating must not send the seek head to zero, and closing the annotation must
+   * not leave it there while the picture sits on the frame the user chose.
+   *
+   * Read against the answer that came before, never against a remembered one: a
+   * composition that was at zero and is played from zero is not a reset.
+   */
+  private rearmedUnderneath(
+    before: BrowserCompositionPlayback | null,
+    next: BrowserCompositionPlayback,
+    command: BrowserTransportCommand
+  ): boolean {
+    if (command === 'stop') return false
+    if (next.time > 0.25) return false
+    if (!before || before.time <= 0.25) return false
+    this.apply({ ...next, time: before.time })
+    this.request('seek', before.time)
+    return true
   }
 
   private apply(next: BrowserCompositionPlayback | null): void {
