@@ -3,6 +3,7 @@ import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
 import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
 import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
 import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
+import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
 import { onDestroy, onMount, tick } from 'svelte'
 import { onVoiceComposerReset } from '../../../speech/voice-send'
 import { findNavState } from '$lib/stores/find-nav.svelte'
@@ -22,6 +23,7 @@ import {
   coordinatorDockState,
   ORCHESTRATION_COORDINATOR_COMPONENTS
 } from '$lib/stores/coordinator-dock.svelte'
+import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
 import { publishDraftActivity, onRemoteDraftCleared } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
@@ -291,6 +293,24 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       return () => observer.disconnect()
     })
 
+    /**
+     * Keep the orchestrator board's ledger read in step with the on-screen thread.
+     *
+     * A dispatch lands mid-thread, inside the very turn that asks for it, so the
+     * board has to appear then rather than after the user reopens the thread. The
+     * row a board belongs to is the dock row, which is the coordinator for a
+     * worker/auditor child and the thread itself otherwise.
+     */
+    $effect(() => {
+      const thread = this.root.handleAgentEvent.thread
+      // Read as a dependency: new activity on this thread re-runs the read.
+      void thread.lastActivity
+      void orchestrationCoordinatorState.refresh(
+        thread.projectId,
+        this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+      )
+    })
+
     $effect(() => {
       const kind = this.root.submitBrainstormDecision.coordinatorKind
       if (!kind) return
@@ -299,7 +319,9 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           ? 'Assignment coordinator'
           : kind === 'achievement'
             ? 'Achievement coordinator'
-            : 'Audit coordinator'
+            : kind === 'orchestrator'
+              ? 'Orchestrator'
+              : 'Audit coordinator'
       const panel = this.root.contextUsage.coordinatorPanel(kind)
       if (!panel) return
       // No unmount cleanup: publishing is a prop update for the row, and the
@@ -311,7 +333,13 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         threadId: this.root.currentWorkingTraceAttribution.coordinatorDockThreadId,
         label,
         icon:
-          kind === 'assignment' ? CioNetwork : kind === 'achievement' ? CioTarget : CioShieldCheck,
+          kind === 'assignment'
+            ? CioNetwork
+            : kind === 'achievement'
+              ? CioTarget
+              : kind === 'orchestrator'
+                ? CioMonogram
+                : CioShieldCheck,
         panel
       })
       // Docks itself the first time a thread starts coordinating, unless the user

@@ -36,7 +36,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * without a bump reaches fresh installs only and silently skips every database
  * already on disk.
  */
-export const DATABASE_SCHEMA_VERSION = 3
+export const DATABASE_SCHEMA_VERSION = 4
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -848,7 +848,35 @@ CREATE TABLE IF NOT EXISTS cio_cleanup_exclusions (
   path            TEXT NOT NULL,
   created_at      INTEGER NOT NULL,
   PRIMARY KEY (project_id, scope_bucket_id, thread_id, path)
-);`
+);
+
+-- ─── Orchestration dispatches ──────────────────────────────────────────────
+-- One row per thread a workstation-control turn started with
+-- cio_orchestrate_dispatch, keyed by the child thread it created and pointing
+-- back at the thread that asked for it. The initiator's board reads these rows
+-- to list every run it dispatched, across projects, including after a restart:
+-- the in-memory dispatch book that steers an outcome back into the initiator is
+-- gone with the app, and the row is what keeps the list from emptying on boot.
+-- Live status is never copied here: the board reads it from the child thread's
+-- own row, which is the single source of truth for how the run is doing.
+CREATE TABLE IF NOT EXISTS orchestration_dispatches (
+  child_project_id     TEXT NOT NULL,
+  child_thread_id      TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  initiator_project_id TEXT NOT NULL,
+  initiator_thread_id  TEXT NOT NULL,
+  title                TEXT NOT NULL,
+  oven_id              TEXT NOT NULL,
+  oven_name            TEXT NOT NULL,
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT NOT NULL,
+  model_id             TEXT NOT NULL,
+  thinking_level       TEXT,
+  created_at           INTEGER NOT NULL,
+  PRIMARY KEY (child_project_id, child_thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_dispatches_initiator
+  ON orchestration_dispatches(initiator_project_id, initiator_thread_id);`
 
 export const USAGE_EVENTS_COLUMNS_SQL = `
   id                    TEXT PRIMARY KEY NOT NULL,

@@ -539,6 +539,14 @@
               {:catch error}
                 {@render panelLoadFailed(PANEL_KEYS.achievementCoordinator, 'Achievement', error)}
               {/await}
+            {:else if board.panel.component === 'orchestrate'}
+              {#await loadCachedPanelModule(PANEL_KEYS.orchestrateCoordinator, () => import('../threads/OrchestrateCoordinatorPanel.svelte'))}
+                {@render panelLoading('Orchestrator')}
+              {:then { default: OrchestrateCoordinatorPanel }}
+                <OrchestrateCoordinatorPanel {...board.panel.props} />
+              {:catch error}
+                {@render panelLoadFailed(PANEL_KEYS.orchestrateCoordinator, 'Orchestrator', error)}
+              {/await}
             {:else if board.panel.component === 'design'}
               {#await loadCachedPanelModule(PANEL_KEYS.designCoordinator, () => import('../design/DesignCoordinatorPanel.svelte'))}
                 {@render panelLoading('Design')}

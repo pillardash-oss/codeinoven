@@ -50,6 +50,7 @@ import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
+import { OrchestrationDispatchRepo } from '../database/repositories/orchestration-dispatch-repo'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
@@ -83,6 +84,7 @@ import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
 import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
+import { registerOrchestrationHandlers } from './handlers/orchestration-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
@@ -271,6 +273,7 @@ export function registerIpcHandlers(
   // purge can clear the queue together with the aggregates it feeds.
   const rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
   const noteRepo = new NoteRepo(database)
+  const orchestrationDispatchRepo = new OrchestrationDispatchRepo(database)
 
   /**
    * Optimistic renderer creates return before their database row is written.
@@ -489,6 +492,7 @@ export function registerIpcHandlers(
     modelRankingRepo,
     rankingSnapshotRepo,
     noteRepo,
+    orchestrationDispatchRepo,
     assistantManager,
     assistantScheduler: options.assistantScheduler,
     autoAnswerStore: options.autoAnswerStore,
@@ -526,4 +530,5 @@ export function registerIpcHandlers(
   registerUpdaterHandlers(ctx)
   registerAssistantHandlers(ctx)
   registerCioCleanupHandlers(ctx)
+  registerOrchestrationHandlers(ctx)
 }

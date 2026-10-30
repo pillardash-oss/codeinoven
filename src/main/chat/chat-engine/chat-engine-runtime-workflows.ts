@@ -7,6 +7,7 @@ import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 import { OvenRegistry } from '../../ovens/oven-registry'
 import { OvenService } from '../../ovens/oven-service'
 import { OvenHarnessService } from '../../ovens/oven-harness-service'
+import { OrchestrationDispatchRepo } from '../../database/repositories/orchestration-dispatch-repo'
 import type { AgentEvent, PromptAttachment, Thread } from '../../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID } from '../../../lib/types'
 import { workflowGroupThreads } from '../../../lib/engines/thread-manager-lineage'
@@ -178,6 +179,9 @@ export class ChatEngineRuntimeWorkflows {
   attachOrchestrationRuntime(): void {
     const ovenRegistry = new OvenRegistry(this.host.storage, this.host.state.secretVault)
     const ovenHarness = new OvenHarnessService(new OvenService(ovenRegistry), this.host.storage)
+    // The dispatch ledger the orchestrator board reads. Written here, read by IPC:
+    // both sides are stateless views over the same database file.
+    const dispatchRepo = new OrchestrationDispatchRepo(this.host.database)
     this.host.orchestration = createOrchestrationRuntime({
       listProviderCatalogs: (projectId) => this.host.listProviderSnapshot(projectId),
       // A dispatch that cannot find its model discovers once instead of
@@ -216,6 +220,7 @@ export class ChatEngineRuntimeWorkflows {
         return null
       },
       createThread: (input) => this.host.units['threads-create'].createOrchestrationThread(input),
+      recordDispatch: (input) => dispatchRepo.record(input),
       sendPrompt: async (input) => {
         await this.host.sendPrompt(
           input.projectId,

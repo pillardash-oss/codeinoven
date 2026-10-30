@@ -19,6 +19,7 @@ import {
 import { isRemoteOvenId, LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { listHarnesses } from '../agents/harness-registry'
+import { Logger } from '../system/logger'
 import { ORCHESTRATION_STATUS_TOOL_NAME } from '../../lib/orchestration-tools'
 import type {
   OrchestrationExecutor,
@@ -124,6 +125,27 @@ export interface OrchestrationDeps {
     threadId: string
     settings: ThreadSettings
     text: string
+  }) => Promise<void>
+  /**
+   * Write the dispatch down, so the board that lists a thread's dispatched work
+   * still knows about it after the in-memory book is gone.
+   *
+   * Best-effort by design: a ledger write that fails must never turn an accepted
+   * dispatch into an error the agent has to explain, because the thread it
+   * started is real and already running.
+   */
+  recordDispatch: (input: {
+    initiatorProjectId: string
+    initiatorThreadId: string
+    childProjectId: string
+    childThreadId: string
+    title: string
+    ovenId: string
+    ovenName: string
+    harnessId: string
+    providerId: string
+    modelId: string
+    thinkingLevel?: string
   }) => Promise<void>
 }
 
@@ -409,6 +431,28 @@ async function dispatchWork(
     settings,
     createdAt: Date.now()
   })
+  // Write the dispatch down before the run is sent. The board that lists this
+  // thread's dispatched work reads the ledger, and the in-memory book above is
+  // only alive for as long as this process is: after a restart the thread rows
+  // are all that would be left, with nothing tying them to the thread that
+  // started them. A failed write never blocks the run.
+  try {
+    await deps.recordDispatch({
+      initiatorProjectId: context.projectId,
+      initiatorThreadId: context.threadId,
+      childProjectId: projectId,
+      childThreadId: thread.id,
+      title,
+      ovenId: oven.id,
+      ovenName: oven.name,
+      harnessId,
+      providerId: catalog.id,
+      modelId: model.id,
+      ...(thinkingLevel ? { thinkingLevel } : {})
+    })
+  } catch (error) {
+    Logger.dev('Orchestration dispatch was not recorded:', error)
+  }
 
   await deps.sendPrompt({ projectId, threadId: thread.id, settings, text: prompt })
 

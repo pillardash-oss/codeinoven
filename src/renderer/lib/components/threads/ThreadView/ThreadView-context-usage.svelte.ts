@@ -346,7 +346,22 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   // renders the matching component. The sidebar picks the component from the
   // registration, so a task update or a worker/auditor switch updates props
   // instead of remounting the panel.
-  coordinatorPanel(kind: 'assignment' | 'achievement' | 'audit'): CoordinatorDockPanel | null {
+  coordinatorPanel(
+    kind: 'assignment' | 'achievement' | 'audit' | 'orchestrator'
+  ): CoordinatorDockPanel | null {
+    // The workstation board is the one board that is not about this thread's own
+    // Engineering state: it lists the runs this thread dispatched into any project,
+    // so it needs nothing but the ids it was published under and reads its rows
+    // from the dispatch ledger itself.
+    if (kind === 'orchestrator') {
+      return {
+        component: 'orchestrate',
+        props: {
+          projectId: this.root.handleAgentEvent.thread.projectId,
+          threadId: this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+        }
+      }
+    }
     // Only an orchestration child carries the way back to the Sr. Engineer.
     const onBackToCoordinator = this.root.currentWorkingTraceAttribution.coordinatorParentId
       ? this.root.currentWorkingTraceAttribution.openCoordinatorParent

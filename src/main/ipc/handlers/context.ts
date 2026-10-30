@@ -50,6 +50,7 @@ import type { HarnessUsageRepo } from '../../database/repositories/harness-usage
 import type { ModelRankingRepo } from '../../database/repositories/model-ranking-repo'
 import type { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { NoteRepo } from '../../database/repositories/note-repo'
+import type { OrchestrationDispatchRepo } from '../../database/repositories/orchestration-dispatch-repo'
 import type { AssistantManager } from '../../../lib/engines/assistant-manager'
 import type { AssistantSchedulerService } from '../../scheduler/assistant-scheduler-service'
 import type { AutoAnswerStore } from '../../system/auto-answer-store'
@@ -229,6 +230,8 @@ export interface IpcHandlerContext {
   /** Transient grading queue behind the ranking aggregates, cleared with them. */
   rankingSnapshotRepo: ModelRankingSnapshotRepo
   noteRepo: NoteRepo
+  /** The dispatch ledger the orchestrator board reads. */
+  orchestrationDispatchRepo: OrchestrationDispatchRepo
   assistantManager: AssistantManager
   assistantScheduler: AssistantSchedulerService | undefined
   autoAnswerStore: AutoAnswerStore | undefined

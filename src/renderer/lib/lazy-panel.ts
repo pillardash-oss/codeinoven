@@ -49,6 +49,7 @@ export const PANEL_KEYS = {
   assistantKnowledge: 'panel:assistant-knowledge',
   assignmentCoordinator: 'panel:assignment-coordinator',
   achievementCoordinator: 'panel:achievement-coordinator',
+  orchestrateCoordinator: 'panel:orchestrate-coordinator',
   designCoordinator: 'panel:design-coordinator',
   independentAuditCoordinator: 'panel:independent-audit-coordinator',
   memory: 'panel:memory',
