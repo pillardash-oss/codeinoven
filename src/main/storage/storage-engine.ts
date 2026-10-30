@@ -155,7 +155,8 @@ const VISION_MODELS_FILE = 'vision-models.json'
  * Where one-time storage migrations record that they already ran.
  *
  * Two layers need a "did this happen yet" answer: the SQLite schema chain reads
- * `db_meta.schema_version` in `src/main/database/database.ts`, and this
+ * `db_meta.schema_version` in `src/main/database/migrations/schema-upgrade.ts`,
+ * and this
  * filesystem layer needs the same answer before a database connection exists,
  * because `initialize()` runs concurrently with `database.init()` in
  * `src/main/index.ts` and the storage engine holds no database handle. The file

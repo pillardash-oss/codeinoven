@@ -47,9 +47,10 @@ interface SyncReadAllowance {
 
 const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   {
-    file: 'src/main/database/database.ts',
+    file: 'src/main/database/database/database-sql-fallbacks.ts',
     maxSites: 1,
-    reason: 'the synchronous API itself and its own worker fallback'
+    reason:
+      'the primary-connection fallback a worker-backed bounded read takes when no worker exists'
   },
   {
     file: 'src/main/database/repositories/agent-message-repo.ts',
