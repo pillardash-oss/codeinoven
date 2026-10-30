@@ -41,9 +41,23 @@
     covered?: boolean
     /** Re-measure when history changes the board layout. */
     layoutRevision?: number
+    /**
+     * Whether a space pressed over this stage plays and pauses the composition.
+     *
+     * A video board is a player: the picture, the bar and the editor below it are
+     * one surface, and space over a video is play and pause. A design board is a
+     * page, where space is the page's own scroll, so only a video asks for the key.
+     */
+    ownsPlaybackKey?: boolean
   }
 
-  let { tab, active = true, covered = false, layoutRevision = 0 }: Props = $props()
+  let {
+    tab,
+    active = true,
+    covered = false,
+    layoutRevision = 0,
+    ownsPlaybackKey = false
+  }: Props = $props()
 
   const surface = 'panel' as const
   // The tab identity is snapshotted at construction: the key is this stage's entry
@@ -346,6 +360,7 @@
     projectId={placedTab.projectId}
     threadId={placedTab.threadId}
     active={active && placed}
+    {ownsPlaybackKey}
   />
   <div
     {@attach (element) => {

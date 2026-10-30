@@ -31,6 +31,8 @@
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
   import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { on } from 'svelte/events'
   import type { VideoStudioDocument } from '$shared/video/studio'
   import type {
     BrowserCompositionTab,
@@ -63,6 +65,16 @@
      */
     projectId?: string
     threadId?: string
+    /**
+     * Whether a space pressed here plays and pauses the composition.
+     *
+     * The bar is the composition's own player, so it answers the play/pause key
+     * wherever the focus is inside it, and on nothing at all when the bar is the
+     * only surface left. It stands down when the full screen editor is around it:
+     * that editor claims the key for the whole window, and both answering it would
+     * toggle twice and land back where the user started.
+     */
+    ownsPlaybackKey?: boolean
   }
 
   let {
@@ -73,7 +85,8 @@
     projectId,
     threadId,
     titlebar = false,
-    compact = false
+    compact = false,
+    ownsPlaybackKey = true
   }: Props = $props()
 
   /**
@@ -180,6 +193,92 @@
   const shown = $derived(Math.min(scrubbing ? scrubValue : time, duration))
   /** A note needs a picture and a conversation, and a composition declares both. */
   const canNote = $derived(Boolean(projectId && threadId))
+  /**
+   * The control that had the keyboard before a comment or the pen took it.
+   *
+   * A comment is written in its own window above the picture, and the pen draws on
+   * it, so neither is the app window's keyboard while it is open. Remembering what
+   * was focused is what lets the bar take the keyboard back when they close: space
+   * over a video is play and pause, and that only works while a surface that
+   * answers it is the one being typed at.
+   */
+  let focusBeforeOverlay: HTMLElement | null = null
+  let playButton = $state<HTMLButtonElement>()
+
+  /** Remember the surface the user was working on, before an overlay takes it. */
+  function rememberFocus(): void {
+    const focused = document.activeElement
+    focusBeforeOverlay =
+      focused instanceof HTMLElement && focused !== document.body ? focused : null
+  }
+
+  /**
+   * Give the keyboard back to the bar once an overlay closes.
+   *
+   * The comment window holds the operating system's focus while it is open, so the
+   * app window is brought forward first and the play control is what takes the
+   * caret: it is the control space is for, and focusing it is what makes the panel
+   * visibly the surface being typed at again.
+   *
+   * The handover is deferred by one task because the bubble is still in the tree
+   * when this is called: closing it moves the app's own DOM back into the window and
+   * focuses the control that was clicked, and that runs after this. Taking the
+   * keyboard after it settles is what leaves the caret in the panel rather than on a
+   * button the bubble just removed.
+   */
+  function returnFocus(): void {
+    setTimeout(() => {
+      const target = focusBeforeOverlay?.isConnected ? focusBeforeOverlay : playButton
+      focusBeforeOverlay = null
+      window.focus()
+      target?.focus({ preventScroll: true })
+    }, 0)
+  }
+
+  /**
+   * Whether a key pressed here belongs to a field or to the pen.
+   *
+   * A space typed into a comment is a space, and a space beside an annotated frame
+   * continues the video through the pen's own binding, so both keep it.
+   */
+  function overlayOwnsKeys(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false
+    if (target.isContentEditable) return true
+    return (
+      target.closest('input,textarea,select,[data-floating-document],[data-annotation-surface]') !==
+      null
+    )
+  }
+
+  /**
+   * Space plays and pauses the composition, wherever the focus is in this bar.
+   *
+   * A page is a native view, so a key pressed over it never reaches the app; this
+   * bar is the app's own surface for that page, and it answers the key the way the
+   * full screen editor does. A press that lands on no control at all is the bar's
+   * too, because a composition the user is watching is the surface space belongs
+   * to, and nothing else in the app does anything with it.
+   */
+  function playbackKey(event: KeyboardEvent): void {
+    if (!active || !ownsPlaybackKey || event.defaultPrevented) return
+    const target = event.target
+    const inside = target instanceof Node && root?.contains(target)
+    const unfocused =
+      target === document.body || target === document || target === document.documentElement
+    if (!inside && !unfocused) return
+    if (overlayOwnsKeys(target)) return
+    if (!keymapState.matches('video-edit-play', event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    // A held key is one press, not a toggle at the keyboard's repeat rate.
+    if (!event.repeat) togglePlay()
+  }
+
+  let root: HTMLDivElement | undefined
+  $effect(() => {
+    if (!active || !ownsPlaybackKey) return
+    return on(window, 'keydown', playbackKey, { capture: true })
+  })
 
   /**
    * Bring a freshly armed page onto the user's looping preference.
@@ -251,6 +350,7 @@
    */
   async function annotateFrame(): Promise<void> {
     if (!canNote || capturing || frameNote) return
+    rememberFocus()
     capturing = true
     captureError = null
     try {
@@ -296,6 +396,7 @@
     if (!frameNote) return
     frameNote = null
     annotationBounds = null
+    returnFocus()
     if (resume) void playhead.command('play')
   }
 
@@ -354,6 +455,7 @@
     const project = projectId
     const thread = threadId
     if (!project || !thread) return
+    rememberFocus()
     const seconds = shown
     try {
       studio = (await invoke('video:studio', project, threadId, composition.directory)).document
@@ -404,6 +506,7 @@
    */
   async function reopenFrame(request: CompositionFrameFocusRequest): Promise<void> {
     if (!canNote || capturing) return
+    rememberFocus()
     // The transport's own playhead moves to the frame the mark was drawn on, so the
     // picture, the row below it and the comment all name one moment.
     playhead.hold(request.seconds)
@@ -434,6 +537,7 @@
     const current = editing
     editing = null
     anchor = null
+    returnFocus()
     if (!current || !projectId || !threadId) return
     const note = responseReferencesState
       .forThread(projectId, threadId)
@@ -474,6 +578,7 @@
     writeNote(projectId, threadId, id, editing?.seconds ?? shown, comment, studio)
     editing = null
     anchor = null
+    returnFocus()
   }
 
   function draftComment(id: string, comment: string): void {
@@ -491,6 +596,7 @@
     if (editing?.id === id) {
       editing = null
       anchor = null
+      returnFocus()
     }
   }
 
@@ -578,6 +684,7 @@
 </script>
 
 <div
+  bind:this={root}
   class={[
     'titlebar-no-drag flex shrink-0 items-center border-b border-border bg-surface px-2',
     compact ? 'gap-1' : 'gap-2',
@@ -588,6 +695,7 @@
 >
   <button
     type="button"
+    bind:this={playButton}
     class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={playing ? 'Pause the composition' : 'Play the composition'}
     title={playing ? 'Pause the composition' : 'Play the composition'}

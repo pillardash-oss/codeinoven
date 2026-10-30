@@ -917,8 +917,8 @@
           "id": "video-edit-play",
           "keys": ["space"],
           "label": "Play or pause the video",
-          "description": "Play or pause the video the editor is showing, whichever control has the focus.",
-          "scenario": "Focus is anywhere in the video editor, its buttons and seek bar included, outside a text field and outside an open annotation pen."
+          "description": "Play or pause the video, whichever control has the focus, and while nothing is focused but the surface itself.",
+          "scenario": "Focus is anywhere in the video editor or in the composition player, its buttons and seek bar included, outside a text field, a list and an open annotation pen. Finishing a comment puts the focus back on the player."
         },
         {
           "id": "video-annotation-continue",

@@ -539,17 +539,48 @@
    * and the point on screen it belongs to.
    */
   let commentEditor = $state<{ id: string; x: number; y: number } | null>(null)
+  /**
+   * What had the keyboard before the comment bubble took it.
+   *
+   * A comment is typed in a bubble over the timeline, so while it is open the
+   * bubble owns the keyboard. When it closes, the editor has to be the surface
+   * being typed at again: space over a video is play and pause, and a focus left on
+   * nothing means the editor never hears the next press.
+   */
+  let commentReturnFocus: HTMLElement | null = null
   const editingComment = $derived(
     commentEditor
       ? (comments.find((comment) => comment.reference.id === commentEditor?.id) ?? null)
       : null
   )
   const editingCommentId = $derived(editingComment?.reference.id ?? '')
+  /** Remember the surface the bubble is taking the keyboard from. */
+  function rememberCommentFocus(): void {
+    const focused = document.activeElement
+    commentReturnFocus =
+      focused instanceof HTMLElement && focused !== document.body ? focused : (viewport ?? null)
+  }
+
+  /** Give the keyboard back to the timeline once the bubble closes. */
+  function restoreTimelineFocus(): void {
+    const remembered = commentReturnFocus
+    commentReturnFocus = null
+    // The bubble is still in the tree while this runs, so the handover waits for
+    // the frame that removes it: a caret placed now would be undone by the
+    // unmounting bubble's own teardown.
+    setTimeout(() => {
+      const target = remembered?.isConnected ? remembered : viewport
+      window.focus()
+      target?.focus({ preventScroll: true })
+    }, 0)
+  }
+
   /** Seek to a comment and read it, which is what clicking its marker means. */
   function openComment(event: MouseEvent, comment: TimelineComment): void {
     editor.seek(comment.seconds)
     const marker = event.currentTarget
     if (!(marker instanceof HTMLElement)) return
+    rememberCommentFocus()
     const bounds = marker.getBoundingClientRect()
     commentEditor = {
       id: comment.reference.id,
@@ -567,6 +598,7 @@
   function closeComment(): void {
     const current = commentEditor
     commentEditor = null
+    restoreTimelineFocus()
     if (!current) return
     const note = responseReferencesState
       .forThread(editor.projectId, editor.threadId)
@@ -596,6 +628,7 @@
   function saveComment(comment: string): void {
     const current = editingComment
     commentEditor = null
+    restoreTimelineFocus()
     if (!current) return
     responseReferencesState.updateComment(
       editor.projectId,
@@ -607,6 +640,7 @@
   function removeComment(): void {
     const current = editingComment
     commentEditor = null
+    restoreTimelineFocus()
     if (!current) return
     removeReference(current.reference.id)
   }
@@ -628,6 +662,7 @@
     const seconds = inside ? editor.time : clip.start
     const id = newVideoNoteId()
     const existing = responseReferencesState.forThread(editor.projectId, editor.threadId)
+    rememberCommentFocus()
     responseReferencesState.setForThread(editor.projectId, editor.threadId, [
       ...existing,
       {
@@ -674,6 +709,7 @@
     const marker = commentMarker(comment.reference.id)
     if (!marker) return
     marker.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    rememberCommentFocus()
     const bounds = marker.getBoundingClientRect()
     commentEditor = {
       id: comment.reference.id,
@@ -685,6 +721,7 @@
   function chatAboutComment(mode: 'elaborate' | 'quick'): void {
     const current = editingComment
     commentEditor = null
+    commentReturnFocus = null
     if (!current) return
     openAnnotationChat({
       projectId: editor.projectId,
@@ -839,6 +876,7 @@
         }
       }}
       class="flex min-h-0 flex-1 overflow-auto"
+      tabindex="-1"
       aria-label="Timeline tracks"
       onscroll={(event) => {
         scrollLeft = event.currentTarget.scrollLeft

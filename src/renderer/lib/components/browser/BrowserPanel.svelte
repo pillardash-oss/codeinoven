@@ -901,6 +901,7 @@
           projectId={pageState.projectId}
           threadId={pageState.threadId}
           active={panelVisible}
+          ownsPlaybackKey={!playerInEditor}
         />
       </div>
       {#if compositionPlayer && onExpandVideo}

@@ -63,6 +63,19 @@ export const TRANSPORT_MEDIA_RESYNC_SECONDS = 0.25
  */
 export const TRANSPORT_SETTLE_TIMEOUT_MS = 250
 
+/**
+ * Ceiling on one freeze wait, in milliseconds.
+ *
+ * A freeze draws the frame it was asked for and then waits for that draw to
+ * finish, because the app's next command must not land in the middle of the last
+ * one. The draw is the page's own function and may await something that never
+ * arrives — a decode, a font, a media element that never seeks — and a freeze that
+ * waited forever would leave the app's command outstanding for the life of the
+ * tab, which is a scrub that never releases the one after it. The frame drawn so
+ * far is a better answer than one that never comes.
+ */
+export const TRANSPORT_FREEZE_TIMEOUT_MS = 2000
+
 /** Wait only during composition startup. Assets and fonts may settle after load. */
 export function compositionRenderReadyScript(): string {
   return `new Promise((resolve) => {
@@ -156,6 +169,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   const MAX_TICK = ${JSON.stringify(TRANSPORT_MAX_TICK_SECONDS)};
   const RESYNC = ${JSON.stringify(TRANSPORT_MEDIA_RESYNC_SECONDS)};
   const SETTLE_TIMEOUT = ${JSON.stringify(TRANSPORT_SETTLE_TIMEOUT_MS)};
+  const FREEZE_TIMEOUT = ${JSON.stringify(TRANSPORT_FREEZE_TIMEOUT_MS)};
   const previous = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
   if (previous && typeof previous.dispose === 'function') previous.dispose();
   const render = globalThis.${COMPOSITION_RENDER_GLOBAL} || globalThis.cioRenderFrame;
@@ -541,6 +555,23 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     return state();
   }
 
+  /**
+   * Wait for the frame a freeze asked for, and give up rather than hang.
+   *
+   * Bounded for the same reason {@link TRANSPORT_SETTLE_TIMEOUT_MS} is: a draw the
+   * page never finishes must not hold the app's command open, because the app sends
+   * the next one behind it.
+   */
+  async function awaitedFrame() {
+    if (!pendingFrame) return;
+    let timer;
+    await Promise.race([
+      pendingFrame,
+      new Promise((resolve) => { timer = setTimeout(resolve, FREEZE_TIMEOUT); })
+    ]);
+    clearTimeout(timer);
+  }
+
   /** Freeze on one frame, for a capture: the frame is the answer, not playback. */
   async function freezeAt(seconds) {
     transport.playing = false;
@@ -548,7 +579,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     transport.time = clampTime(seconds);
     syncMedia(false);
     renderAt(transport.time);
-    while (pendingFrame) await pendingFrame;
+    await awaitedFrame();
     return state();
   }
 
@@ -581,6 +612,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   function dispose() {
     transport.playing = false;
     stopDriver();
+    if (typeof transport.releaseKeys === 'function') transport.releaseKeys();
     // The picture and the sound both stop with the runtime, so a disposed runtime
     // cannot leave a tab playing under a bar that no longer answers.
     syncMedia(false);
@@ -614,6 +646,31 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   transport.settle = settle;
   transport.state = state;
   transport.dispose = dispose;
+
+  /**
+   * A space pressed on the picture itself.
+   *
+   * A page is a native view, so a key pressed over it never reaches the app's own
+   * handlers, and the play/pause key is the one key a viewer expects a picture to
+   * answer. A composition page has no fields of its own to type into, and the key is
+   * only taken when nothing else claimed it and no modifier is held, so a page that
+   * binds space itself keeps its binding.
+   */
+  function onPagePlayKey(event) {
+    if (event.defaultPrevented || event.repeat || event.isComposing) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key !== ' ' && event.code !== 'Space') return;
+    const target = event.target;
+    if (target && typeof target.closest === 'function' &&
+        target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]'))
+      return;
+    event.preventDefault();
+    toggle();
+  }
+  window.addEventListener('keydown', onPagePlayKey);
+  transport.releaseKeys = function () {
+    window.removeEventListener('keydown', onPagePlayKey);
+  };
   // The runtime owns the page from here: its loop is parked so it cannot repaint
   // over the transport's frame, its soundtrack is reachable wherever the page put
   // it, and its audio contexts are remembered so they settle with the picture.

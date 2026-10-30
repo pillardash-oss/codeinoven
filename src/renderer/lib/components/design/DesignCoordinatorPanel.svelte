@@ -100,6 +100,7 @@
           active={board.props.active}
           covered={board.menus.menuOpen}
           layoutRevision={Number(board.state.historyOpen)}
+          ownsPlaybackKey={board.gallery.video}
         />
       {/key}
     {:else if !board.gallery.playable}
