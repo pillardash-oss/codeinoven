@@ -101,6 +101,8 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
   'browser:overlay:dockCommit': [] as unknown as [request: NativeDockCommit],
   'browser:overlay:dockKey': [] as unknown as [input: NativeDockKey],
+  /** The shared overlay document died, so nothing projected into it can draw. */
+  'browser:overlay:failed': [] as [],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**

@@ -306,7 +306,10 @@ export default defineConfig(({ mode }) => {
         rollupOptions: {
           external: ['electron'],
           input: {
-            index: resolve(__dirname, 'src/preload/index.ts')
+            index: resolve(__dirname, 'src/preload/index.ts'),
+            // A window built with no bridge at all points here: Electron rejects
+            // an empty `preload` string, so "none" has to be a real file.
+            blank: resolve(__dirname, 'src/preload/blank.ts')
           },
           // Sandboxed Electron preloads execute in a CommonJS-like isolated
           // context. Emitting ESM here makes production fail before the bridge

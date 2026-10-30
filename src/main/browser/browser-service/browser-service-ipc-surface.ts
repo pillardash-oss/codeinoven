@@ -445,6 +445,14 @@ export class BrowserServiceIpcSurface {
         ? this.host.nativeStrip.applyDock(request)
         : this.host.overlay.applyDock(id, request)
     })
+    replaceHandler('browser:overlayDocumentFailed', (event, rawReason) => {
+      // A toast or strip surface has its own window, so only the shared dock
+      // host dying is news to the panels projected into it.
+      if (this.host.nativeToasts.owns(event.sender.id)) return
+      if (this.host.nativeStrip.owns(event.sender.id)) return
+      const reason = typeof rawReason === 'string' ? rawReason.slice(0, 300) : 'unknown'
+      this.host.overlay.reportDocumentFailure(reason)
+    })
     replaceHandler('browser:overlayDockInteract', (_event, rawReport) => {
       const report = validateNativeDockInteraction(rawReport)
       // Which control a modal's document has focused is state the window needs

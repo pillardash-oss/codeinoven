@@ -80,6 +80,13 @@ export const invokeBrowserContract = {
     boolean
   >,
   'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
+  /**
+   * The overlay document could not mount, so nothing it is handed can ever be
+   * drawn. The host answers it by replacing the window and telling the app, so a
+   * panel waiting on a dead document falls back to the app window at once
+   * instead of waiting out its acknowledgement deadline.
+   */
+  'browser:overlayDocumentFailed': {} as Contract<[reason: string], void>,
   'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
   'browser:commitDockOverlay': {} as Contract<[request: NativeDockCommit], boolean>,
   'browser:focusDockOverlay': {} as Contract<[id: string], boolean>,
