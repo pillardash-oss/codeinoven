@@ -135,10 +135,10 @@
 </script>
 
 <SettingsEntry {expanded}>
-  <div
-    class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
-  >
-    <div class="flex min-w-0 items-center gap-3">
+  <!-- The name and the controls it acts on share one line at every width; only
+       the machine details below reflow. -->
+  <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+    <div class="flex min-w-0 flex-1 basis-48 items-center gap-3">
       <div
         class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
       >
@@ -152,47 +152,7 @@
       </div>
     </div>
 
-    <div class="col-span-2 min-w-0 @5xl:col-span-1">
-      <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Path</p>
-      <div class="mt-0.5 flex items-center gap-1.5">
-        <span class="min-w-0 truncate font-mono text-xs text-muted" title={runtime?.path}>
-          {runtime?.path ||
-            (detectError ? detectError : installed ? 'Not available' : 'Not found on PATH')}
-        </span>
-        {#if runtime?.path}
-          <button
-            type="button"
-            class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            title="Copy path"
-            aria-label="Copy llama-server path"
-            onclick={() => void copyPath()}
-          >
-            {#if copied}
-              <CioCheckCircle size={11} class="text-success" />
-            {:else}
-              <CioCopy size={11} />
-            {/if}
-          </button>
-        {/if}
-      </div>
-    </div>
-
-    <div class="col-span-2 min-w-0 @5xl:col-span-1">
-      <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
-        Installer
-      </p>
-      <p class="mt-0.5 truncate text-xs text-muted">
-        {runtime?.installer === 'homebrew'
-          ? 'Homebrew'
-          : installed
-            ? 'Managed outside the app'
-            : 'None detected'}
-      </p>
-    </div>
-
-    <div
-      class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
-    >
+    <div class="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
       {#if !updateAvailable}
         <!-- An available update is carried by the controls themselves, so the
              row never says "update" twice. -->
@@ -240,6 +200,46 @@
         title={`${expanded ? 'Hide' : 'Show'} llama.cpp details`}
         onclick={() => (expanded = !expanded)}
       />
+    </div>
+  </div>
+
+  <div class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 @2xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div class="min-w-0">
+      <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Path</p>
+      <div class="mt-0.5 flex items-center gap-1.5">
+        <span class="min-w-0 truncate font-mono text-xs text-muted" title={runtime?.path}>
+          {runtime?.path ||
+            (detectError ? detectError : installed ? 'Not available' : 'Not found on PATH')}
+        </span>
+        {#if runtime?.path}
+          <button
+            type="button"
+            class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Copy path"
+            aria-label="Copy llama-server path"
+            onclick={() => void copyPath()}
+          >
+            {#if copied}
+              <CioCheckCircle size={11} class="text-success" />
+            {:else}
+              <CioCopy size={11} />
+            {/if}
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    <div class="min-w-0">
+      <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+        Installer
+      </p>
+      <p class="mt-0.5 truncate text-xs text-muted">
+        {runtime?.installer === 'homebrew'
+          ? 'Homebrew'
+          : installed
+            ? 'Managed outside the app'
+            : 'None detected'}
+      </p>
     </div>
   </div>
 

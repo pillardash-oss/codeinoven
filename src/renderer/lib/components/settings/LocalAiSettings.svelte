@@ -145,7 +145,7 @@
     </p>
   </div>
 
-  <div class="mb-8">
+  <div class="mb-8 @container">
     <LocalAiRuntimeCard
       {runtime}
       {detecting}
