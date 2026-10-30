@@ -42,7 +42,8 @@ class OrchestrationCoordinatorState {
 
   /** How many of this thread's runs are still working. */
   runningCount(projectId: string, threadId: string): number {
-    return this.rowsFor(projectId, threadId).filter((row) => isThreadBusyStatus(row.status)).length
+    return this.rowsFor(projectId, threadId).filter((row) => isThreadBusyStatus(row.thread.status))
+      .length
   }
 
   /** Whether this thread has dispatched anything, so no board should dock for it. */
@@ -83,14 +84,14 @@ class OrchestrationCoordinatorState {
   private apply(key: string, next: OrchestrationDispatch[]): void {
     const previous = this.rows.get(key) ?? []
     for (const row of previous) {
-      this.childIndex.get(row.childThreadId)?.delete(key)
+      this.childIndex.get(row.thread.id)?.delete(key)
     }
     this.rows.set(key, next)
     for (const row of next) {
-      let owners = this.childIndex.get(row.childThreadId)
+      let owners = this.childIndex.get(row.thread.id)
       if (!owners) {
         owners = new SvelteSet<string>()
-        this.childIndex.set(row.childThreadId, owners)
+        this.childIndex.set(row.thread.id, owners)
       }
       owners.add(key)
     }

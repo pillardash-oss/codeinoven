@@ -1,26 +1,21 @@
-import type { ThreadStatus } from './thread'
+import type { Thread } from './thread'
 
 /**
  * One thread a workstation-control turn dispatched, as the orchestrator board
  * lists it.
  *
- * The row carries the target's identity (which project, which thread) and the
- * exact machine and model the run was started with, and nothing about how the
- * run is going: `status` and `title` are read from the child thread's own row
- * at read time, so a board never shows a status it remembered instead of the
- * one the run actually has. A dispatch is a pointer, not a copy.
+ * The row carries the child thread itself, not a summary of it: the board draws
+ * a dispatched run with the same thread row the Threads view draws, so title,
+ * status, branch, scope and activity stamp all come from the thread and can
+ * never disagree with the sidebar. Everything beside `thread` is what the
+ * dispatch chose and the thread cannot know about itself: the project it was
+ * started in, the machine, and the exact model.
  */
 export interface OrchestrationDispatch {
-  /** Project the dispatched thread lives in. */
-  childProjectId: string
-  /** Name of that project, so a row can name its project without a second read. */
-  childProjectName: string
-  /** The dispatched thread. */
-  childThreadId: string
-  /** The thread's own title, as it reads in the sidebar today. */
-  title: string
-  /** The run's live status, from the child thread row. */
-  status: ThreadStatus
+  /** The dispatched thread, as the app stores it. */
+  thread: Thread
+  /** Name of the project the thread lives in, for the board's grouping. */
+  projectName: string
   /** Machine the run was dispatched to. `local` is this computer. */
   ovenId: string
   ovenName: string
@@ -31,8 +26,6 @@ export interface OrchestrationDispatch {
   thinkingLevel?: string
   /** When the dispatch was accepted. */
   createdAt: number
-  /** When the child thread last changed, so a board can order by activity. */
-  updatedAt: number
 }
 
 /** Props for the orchestrator board, which loads its own rows from its ids. */
