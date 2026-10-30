@@ -1,6 +1,6 @@
 import type { Database } from '../database'
 import { ThreadRepo } from './thread-repo'
-import type { OrchestrationDispatch } from '../../../lib/types'
+import type { Thread } from '../../../lib/types'
 
 /** One dispatch accepted by a workstation-control turn, before it is settled. */
 export interface OrchestrationDispatchInput {
@@ -15,20 +15,6 @@ export interface OrchestrationDispatchInput {
   providerId: string
   modelId: string
   thinkingLevel?: string
-}
-
-/** The dispatch row, before the child thread is resolved for it. */
-interface DispatchRow {
-  child_project_id: string
-  child_thread_id: string
-  oven_id: string
-  oven_name: string
-  harness_id: string
-  provider_id: string
-  model_id: string
-  thinking_level: string | null
-  created_at: number
-  project_name: string
 }
 
 /**
@@ -84,51 +70,33 @@ export class OrchestrationDispatchRepo {
   }
 
   /**
-   * Every dispatch one thread started, newest first.
+   * Every thread one thread dispatched, newest dispatch first.
    *
    * The child threads are read as whole `Thread` rows through the same repo the
    * sidebar uses, so a board row is a real thread row: the same title, status,
-   * branch and activity stamp the Threads view renders, never a parallel
-   * description of them. A dispatch whose thread was deleted or archived drops
-   * out instead of pointing at nothing.
+   * project, branch and activity stamp the Threads view renders, never a parallel
+   * description of them. A dispatch whose thread was deleted or archived drops out
+   * instead of pointing at nothing.
    */
-  async listByInitiator(
-    initiatorProjectId: string,
-    initiatorThreadId: string
-  ): Promise<OrchestrationDispatch[]> {
+  async listByInitiator(initiatorProjectId: string, initiatorThreadId: string): Promise<Thread[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT d.child_project_id, d.child_thread_id, d.oven_id, d.oven_name,
-              d.harness_id, d.provider_id, d.model_id, d.thinking_level, d.created_at,
-              p.name AS project_name
-         FROM orchestration_dispatches d
-         JOIN projects p ON p.id = d.child_project_id
-        WHERE d.initiator_project_id = ? AND d.initiator_thread_id = ?
-        ORDER BY d.created_at DESC`,
+      `SELECT child_thread_id
+         FROM orchestration_dispatches
+        WHERE initiator_project_id = ? AND initiator_thread_id = ?
+        ORDER BY created_at DESC`,
       [initiatorProjectId, initiatorThreadId],
       0
     )
     if (!result.ok || result.rows.length === 0) return []
-    const dispatches = result.rows as unknown as DispatchRow[]
-    const threads = await this.threads.listByIdsViaWorker(
-      dispatches.map((row) => row.child_thread_id)
+    const ids = (result.rows as unknown as { child_thread_id: string }[]).map(
+      (row) => row.child_thread_id
     )
+    // The ledger orders the runs, so restore that order after the id lookup.
+    const threads = await this.threads.listByIdsViaWorker(ids)
     const byId = new Map(threads.map((thread) => [thread.id, thread]))
-    return dispatches.flatMap((row) => {
-      const thread = byId.get(row.child_thread_id)
-      if (!thread) return []
-      return [
-        {
-          thread,
-          projectName: row.project_name,
-          ovenId: row.oven_id,
-          ovenName: row.oven_name,
-          harnessId: row.harness_id,
-          providerId: row.provider_id,
-          modelId: row.model_id,
-          ...(row.thinking_level ? { thinkingLevel: row.thinking_level } : {}),
-          createdAt: row.created_at
-        }
-      ]
+    return ids.flatMap((id) => {
+      const thread = byId.get(id)
+      return thread ? [thread] : []
     })
   }
 }

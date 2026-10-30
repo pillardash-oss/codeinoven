@@ -3,7 +3,7 @@ import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 import { isThreadBusyStatus } from '$shared/thread-status-policy'
-import type { OrchestrationDispatch, Thread } from '$shared/types'
+import type { Thread } from '$shared/types'
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}\u0000${threadId}`
@@ -15,8 +15,8 @@ function threadKey(projectId: string, threadId: string): string {
  * A workstation-control turn starts real threads in other projects, and the
  * board that lists them belongs to the thread that asked for them, not to the
  * projects those runs live in. So this store answers one question per initiator
- * thread: every run it dispatched, with each run's own project, machine, model
- * and live status.
+ * thread: every thread it dispatched, as the thread rows their own projects
+ * carry them.
  *
  * Nothing here decides whether a thread is an orchestrator: main answers that,
  * from the dispatch ledger, which is what makes the board survive a restart and
@@ -24,7 +24,7 @@ function threadKey(projectId: string, threadId: string): string {
  */
 class OrchestrationCoordinatorState {
   /** Last answer per initiator thread, so the board paints before its own read settles. */
-  private readonly rows = new SvelteMap<string, OrchestrationDispatch[]>()
+  private readonly rows = new SvelteMap<string, Thread[]>()
   /** Initiators with a read in flight, so a burst of activity cannot stack reads. */
   private readonly pending = new Set<string>()
   /** Initiators whose data changed while a read was in flight: read once more. */
@@ -36,14 +36,13 @@ class OrchestrationCoordinatorState {
   private listening = false
 
   /** Every run this thread dispatched, newest first. */
-  rowsFor(projectId: string, threadId: string): OrchestrationDispatch[] {
+  rowsFor(projectId: string, threadId: string): Thread[] {
     return this.rows.get(threadKey(projectId, threadId)) ?? []
   }
 
   /** How many of this thread's runs are still working. */
   runningCount(projectId: string, threadId: string): number {
-    return this.rowsFor(projectId, threadId).filter((row) => isThreadBusyStatus(row.thread.status))
-      .length
+    return this.rowsFor(projectId, threadId).filter((row) => isThreadBusyStatus(row.status)).length
   }
 
   /** Whether this thread has dispatched anything, so no board should dock for it. */
@@ -81,17 +80,17 @@ class OrchestrationCoordinatorState {
   }
 
   /** Replace one initiator's rows and keep the child index in step with them. */
-  private apply(key: string, next: OrchestrationDispatch[]): void {
+  private apply(key: string, next: Thread[]): void {
     const previous = this.rows.get(key) ?? []
     for (const row of previous) {
-      this.childIndex.get(row.thread.id)?.delete(key)
+      this.childIndex.get(row.id)?.delete(key)
     }
     this.rows.set(key, next)
     for (const row of next) {
-      let owners = this.childIndex.get(row.thread.id)
+      let owners = this.childIndex.get(row.id)
       if (!owners) {
         owners = new SvelteSet<string>()
-        this.childIndex.set(row.thread.id, owners)
+        this.childIndex.set(row.id, owners)
       }
       owners.add(key)
     }
