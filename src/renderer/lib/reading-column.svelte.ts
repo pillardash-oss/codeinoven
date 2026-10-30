@@ -11,7 +11,9 @@ import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
  * conversation's page column is that surface, and measuring it is the whole job:
  * the box's left edge plus its own left padding, because the text starts after
  * that padding and aligning to the box leaves the name a few pixels off the line
- * the messages start on.
+ * the messages start on. Its width is reported with its edge, because the name is
+ * bounded by the page it names: it truncates at that page's right edge instead of
+ * running on over whatever sits beside it.
  *
  * It is measured live, not against the layout the workspace was built for. A
  * panel sliding in on the right narrows the pane, the centred column re-centres,
@@ -44,10 +46,8 @@ export function createReadingColumn(): {
       target.getClientRects().length > 0 && getComputedStyle(target).visibility !== 'hidden'
     if (!onScreen) return
     const padding = Number.parseFloat(getComputedStyle(target).paddingLeft) || 0
-    layoutPanelState.setReadingColumn(
-      owner,
-      Math.round(target.getBoundingClientRect().left + padding)
-    )
+    const box = target.getBoundingClientRect()
+    layoutPanelState.setReadingColumn(owner, Math.round(box.left + padding), Math.round(box.width))
   }
 
   /* A surface that comes back on screen has not necessarily resized (the shell

@@ -117,7 +117,26 @@
   let titleLeft = $derived(
     studioPane ? `${studioPane.left + Math.round(studioPane.width / 2)}px` : undefined
   )
-  let titleMaxWidth = $derived(studioPane ? `${studioPane.width}px` : undefined)
+  /**
+   * How wide the column the thread's name belongs to is.
+   *
+   * The name is bounded by the page it names: it ends where that page ends, so a
+   * long title truncates at the conversation's right edge instead of running on
+   * over a panel beside it or into the window's own corner. Zero until the
+   * conversation has measured itself, and never applied over a studio, whose own
+   * pane is the bound there.
+   */
+  let readingColumnWidth = $derived(
+    !studioOpen && layoutPanelState.contentVisible ? layoutPanelState.readingColumnWidth : 0
+  )
+
+  let titleMaxWidth = $derived(
+    studioPane
+      ? `${studioPane.width}px`
+      : readingColumnWidth > 0
+        ? `${Math.max(titleInset, 8) + readingColumnWidth}px`
+        : undefined
+  )
 
   /**
    * The assistant an assistant thread belongs to, so the header can wear the same
@@ -168,11 +187,10 @@
     {@const isForeignRun = foreignRuns.isForeign(thread.projectId, thread.id)}
     {@const activeRunActivity = agentRuns.activity(thread.projectId, thread.id)}
     {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
-    <!-- The block is as wide as the room the bar leaves it, so a long thread name
-         uses the whole column before it gives up any of itself. -->
-    <!-- No width cap of its own: the block takes every pixel the bar leaves between
-         the chrome and the trailing controls, and the name truncates there. A second,
-         measured bound is what trimmed it while the conversation was still wide. -->
+    <!-- The block is as wide as the room the bar leaves it, never wider than the
+         page it names: a long thread name uses the whole column and then truncates
+         at the column's right edge instead of running on over whatever sits beside
+         it. -->
     <div class="titlebar-no-drag relative flex min-w-0 items-center gap-2">
       {#if thread.projectId === ASSISTANT_SPACE_ID}
         <!-- An assistant thread wears its assistant's icon, exactly as its sidebar
@@ -220,7 +238,10 @@
             <!-- One control, two menus. The icon's left click is the project's own
                  dropdown; its context menu is the thread's actions, which is why
                  the bar carries no second ellipsis button. The corner cue is the
-                 only thing that says a second menu exists. -->
+                 only thing that says a second menu exists. The wrapper itself is
+                 not a control: the two menus inside it are buttons, and the
+                 shortcut only reaches the one the icon already focuses. -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="header-project-menu pointer-events-auto relative shrink-0"
               oncontextmenu={(event: MouseEvent) => {

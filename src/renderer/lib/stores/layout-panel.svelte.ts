@@ -32,7 +32,8 @@ class LayoutPanelState {
    */
   minimumWidth = $state(0)
   /**
-   * Where the column the reader is reading starts, in window pixels.
+   * Where the column the reader is reading starts, in window pixels, and how wide
+   * that column is.
    *
    * The header's thread block aligns to that column rather than to the panel: the
    * page is the thing the reader is looking at, and the panel is only how much
@@ -40,12 +41,16 @@ class LayoutPanelState {
    * beside it, a window resize, a sidebar drag) carries the thread's name with it,
    * frame by frame and with no snap at the end of the motion.
    *
+   * The width is what bounds the name: the thread's name belongs to the page it
+   * names, so it truncates at that page's right edge instead of running on over a
+   * panel or into the window's own edge.
+   *
    * A surface that is hidden rather than gone (a studio taking the pane) keeps the
    * last edge it measured, so the thread's name stays put through the toggle
    * instead of jumping back to the end of the header's chrome. Zero until a
    * reading surface has reported.
    */
-  private readingColumn = $state<{ owner: object; left: number } | null>(null)
+  private readingColumn = $state<{ owner: object; left: number; width: number } | null>(null)
   /**
    * The same ownership kept where no effect can see it.
    *
@@ -56,6 +61,7 @@ class LayoutPanelState {
    */
   private readingOwner: object | null = null
   private readingLeft = 0
+  private readingWidth = 0
   /**
    * Whether the workspace shell is the page on screen. The shell stays mounted
    * across views so returning to a thread never reloads it, which means a
@@ -66,6 +72,12 @@ class LayoutPanelState {
 
   get readingColumnLeft(): number {
     return this.readingColumn?.left ?? 0
+  }
+
+  /** How wide the reading column is, so the header can end the name where the
+   *  page it names ends. Zero until a reading surface has reported. */
+  get readingColumnWidth(): number {
+    return this.readingColumn?.width ?? 0
   }
 
   /**
@@ -115,11 +127,13 @@ class LayoutPanelState {
    * hidden one's own resize reports arrive in either order. Whoever is on screen
    * reports, and the surface that is not on screen never overwrites it.
    */
-  setReadingColumn(owner: object, left: number): void {
-    if (this.readingOwner === owner && this.readingLeft === left) return
+  setReadingColumn(owner: object, left: number, width: number): void {
+    if (this.readingOwner === owner && this.readingLeft === left && this.readingWidth === width)
+      return
     this.readingOwner = owner
     this.readingLeft = left
-    this.readingColumn = { owner, left }
+    this.readingWidth = width
+    this.readingColumn = { owner, left, width }
   }
 
   /** Give the reading column up, but only if this surface still holds it. */
@@ -127,6 +141,7 @@ class LayoutPanelState {
     if (this.readingOwner !== owner) return
     this.readingOwner = null
     this.readingLeft = 0
+    this.readingWidth = 0
     this.readingColumn = null
   }
 
