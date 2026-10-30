@@ -1,5 +1,4 @@
-import { join, resolve } from 'path'
-import { runningWorkers } from '../thread-transfer-service/thread-transfer-workers'
+import { join } from 'path'
 import { Logger } from '../../system/logger'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'

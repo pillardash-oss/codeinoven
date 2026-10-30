@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
@@ -7,7 +6,6 @@ import type {
   AgentModelSelection,
   ModelIdentity,
   ScopedHarnessCommand,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import { computePromptBudget } from '../../../lib/prompt-budget'

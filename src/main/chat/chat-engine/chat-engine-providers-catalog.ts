@@ -1,5 +1,4 @@
 import { mapInBatches } from '../../../lib/bounded-work'
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import {
   createOpenCodeHarnessDriver,

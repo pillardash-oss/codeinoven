@@ -4,7 +4,7 @@ import { InactiveQuestionTurnError, QuestionRequestGoneError } from '../../drive
 import type { TypesafeDecisionService } from '../../typesafe/typesafe-decision-service'
 import type { TypesafeDecisionStatus } from '../../../lib/types/typesafe'
 import { isUtilitySuggestionQuestion } from '../../../lib/utility-suggestion'
-import type { AgentQuestionRequest, AgentQuestionResolution, Thread } from '../../../lib/types'
+import type { AgentQuestionRequest, AgentQuestionResolution } from '../../../lib/types'
 import type { PendingQuestionInfo, RankingGradeCandidate } from './chat-engine-types'
 import {
   inactiveQuestionDecision,

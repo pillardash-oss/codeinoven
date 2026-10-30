@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { createOpenCodeHarnessDriver } from '../../drivers/opencode-harness-driver'
 import { ClaudeCodeDriver } from '../../drivers/claude-code-driver'
@@ -14,8 +13,7 @@ import type {
   AgentAccountUsage,
   AgentProviderIssue,
   CustomProviderUsage,
-  ProviderCatalog,
-  Thread
+  ProviderCatalog
 } from '../../../lib/types'
 import { INBOX_PROJECT_ID } from '../../../lib/types'
 import { openUsageProviderCandidates } from '../../usage/openusage-client'

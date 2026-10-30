@@ -1,4 +1,3 @@
-import { join } from 'path'
 import { Logger } from '../../system/logger'
 import { broadcastThreadUpdate } from '../thread-events'
 import type { Thread, ThreadSettings } from '../../../lib/types'

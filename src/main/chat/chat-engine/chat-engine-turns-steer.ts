@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import { Logger } from '../../system/logger'
 import type { IsolatedSessionHandle } from '../../drivers/isolated-session'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
@@ -18,7 +17,6 @@ import type {
   PromptProjectReference,
   PromptReference,
   UserMessagePresentation,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import { isAssistantSetupThread } from '../../../lib/types'

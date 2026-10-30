@@ -1,4 +1,4 @@
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { createHash, randomInt } from 'crypto'
 import { Logger } from '../../system/logger'
 import { broadcastThreadUpdate, notifyIndependentAudit } from '../thread-events'

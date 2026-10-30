@@ -7,7 +7,7 @@ import {
   projectIdForWorkingDirectory
 } from '../../agents/process-project-attribution'
 import { appServiceRegistry } from '../../system/app-service-registry'
-import type { AgentRunningProcess, TaskManagerSnapshot, Thread } from '../../../lib/types'
+import type { AgentRunningProcess, TaskManagerSnapshot } from '../../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID } from '../../../lib/types'
 import type { SessionInfo } from './chat-engine-types'
 import { USER_TERMINAL_SETTLE_MS } from './chat-engine-constants'

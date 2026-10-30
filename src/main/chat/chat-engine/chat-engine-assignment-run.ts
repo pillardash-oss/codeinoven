@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import { createHash, randomBytes } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, ServerResponse } from 'http'

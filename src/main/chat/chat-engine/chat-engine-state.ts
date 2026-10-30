@@ -1,7 +1,6 @@
 import { createWorkQueue } from '../../../lib/bounded-work'
 import type { HistoryHandoffSummary } from './chat-engine-message-text'
 import type { CapacityContinueState } from './chat-engine-capacity-continue'
-import { join, resolve } from 'path'
 import type { Server } from 'http'
 import { BrainstormAlignmentNotes } from '../brainstorm-alignment-notes'
 import { AssistantAuthoringCheckpoints } from '../assistant-authoring-checkpoints'

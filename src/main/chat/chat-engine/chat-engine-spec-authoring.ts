@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
@@ -12,8 +11,7 @@ import type {
   AgentSessionStatus,
   EngineeringSpec,
   EngineeringSpecContent,
-  SpecGenerationRequest,
-  Thread
+  SpecGenerationRequest
 } from '../../../lib/types'
 import { modelKey } from '../../../lib/model-keys'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../../../lib/project-artifacts'

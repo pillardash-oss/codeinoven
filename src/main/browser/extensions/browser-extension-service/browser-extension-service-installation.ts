@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, rename, rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import preambleSource from '../compat/cio-compat-preamble.js?raw'
 import { missingExtensionCapabilities } from '../../../../lib/browser/browser-extension-capabilities'
 import type { BrowserExtension, BrowserExtensionInstallInput } from '../../../../lib/ipc/browser'

@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import type { ImageDescriptorExecutorRequest } from '../../providers/image-descriptor-provider'
 import {
   IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES,

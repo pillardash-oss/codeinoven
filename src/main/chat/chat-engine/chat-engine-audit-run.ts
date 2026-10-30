@@ -1,4 +1,4 @@
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'

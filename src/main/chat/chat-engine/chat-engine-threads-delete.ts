@@ -1,9 +1,9 @@
 import { rm } from 'fs/promises'
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { validateEntityId } from '../../ipc/ipc-validation'
-import type { AgentMessage, Thread } from '../../../lib/types'
+import type { AgentMessage } from '../../../lib/types'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   LEGACY_CHATS_ARTIFACTS_DIRECTORY,

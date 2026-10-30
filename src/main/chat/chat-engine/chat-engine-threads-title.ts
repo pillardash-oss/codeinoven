@@ -1,5 +1,5 @@
-import { readFile, stat } from 'fs/promises'
-import { join, resolve } from 'path'
+import { readFile } from 'fs/promises'
+import { join } from 'path'
 import { handedOffWorkersNote } from '../thread-transfer-service/thread-transfer-workers'
 import type { ThreadTransferRelease } from '../thread-transfer-service/thread-transfer-workers'
 import type { HandoffReleaseDetails } from '../../system/instance-handoff-bus'
@@ -11,7 +11,6 @@ import { validateEntityId } from '../../ipc/ipc-validation'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { instanceRegistry } from '../../system/instance-registry'
 import type {
-  Thread,
   ThreadSettings,
   ThreadTransferResult,
   TurnCheckpointChangeSummary,

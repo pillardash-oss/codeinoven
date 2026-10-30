@@ -1,4 +1,3 @@
-import { join } from 'path'
 import { Logger } from '../../system/logger'
 import type { AgentEvent } from '../../../lib/types'
 import {

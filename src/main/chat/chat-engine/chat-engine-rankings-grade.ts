@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import {

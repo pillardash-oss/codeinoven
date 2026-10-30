@@ -1,6 +1,5 @@
 import { unarchivedThreadSql } from '../../../lib/archives'
 import { net } from 'electron'
-import { join, resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { updateRetryWakeWindow } from '../thread-events'
 import type { RetrySchedulerService } from '../../system/retry-scheduler-service'

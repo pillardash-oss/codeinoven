@@ -1,4 +1,4 @@
-import { basename, join, resolve } from 'path'
+import { basename, join } from 'path'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { validateEntityId, validateThreadSettings } from '../../ipc/ipc-validation'
@@ -8,7 +8,6 @@ import type {
   AgentSessionStatus,
   EngineeringSpec,
   EngineeringSpecContent,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import {

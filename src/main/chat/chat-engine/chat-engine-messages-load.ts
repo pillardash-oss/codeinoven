@@ -1,10 +1,8 @@
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import type {
   AgentMessage,
-  Thread,
   TurnStreamPartsChange,
   TurnStreamPartsPage,
   TurnStreamPartsQuery,

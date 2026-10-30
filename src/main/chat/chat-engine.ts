@@ -1,24 +1,13 @@
 import { wireChatEngine } from './chat-engine/chat-engine-wiring'
 import { ChatEngineState } from './chat-engine/chat-engine-state'
-import { basename, isAbsolute, join, resolve } from 'path'
-import type {
-  HandedOffWorker,
-  ThreadTransferRelease
-} from './thread-transfer-service/thread-transfer-workers'
+import type { ThreadTransferRelease } from './thread-transfer-service/thread-transfer-workers'
 import type { HandoffReleaseDetails } from '../system/instance-handoff-bus'
 import { ThreadCreationCoordinator } from './thread-creation-coordinator'
-import { ThreadManager, remapCopiedMessages } from '../../lib/engines/thread-manager'
-import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
+import { ThreadManager } from '../../lib/engines/thread-manager'
+import { CheckpointManager } from '../storage/checkpoint-manager'
 import type { SearchSummaryRequest } from '../search/thread-search-summary'
 import type { ProjectFingerprint } from '../git/change-tracking-service'
-import type {
-  AuxiliaryModelCandidate,
-  CompactionFallbackContext,
-  HarnessDriver,
-  SendPromptOptions,
-  SteerPromptOptions,
-  PreparedUtilityRuntime
-} from '../drivers/driver.interface'
+import type { HarnessDriver } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
@@ -35,24 +24,14 @@ import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { ConnectivitySource } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
-import {
-  AgentSecretService,
-  type AgentSecretResolution,
-  type AgentStoredSecret
-} from '../utilities/agent-secret-service'
-import {
-  buildOrchestrationReportPrompt,
-  createOrchestrationRuntime,
-  type OrchestrationRuntime,
-  type PendingOrchestrationDispatch
-} from './chat-engine-orchestration'
+import { type AgentSecretResolution } from '../utilities/agent-secret-service'
+import { type OrchestrationRuntime } from './chat-engine-orchestration'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
-import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
+import { type EffectiveExperts } from '../../lib/experts'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
 import {
-  createDesignAssignmentExecutor,
   type DesignAssignmentRunRequest,
   type DesignAssignmentRunResult
 } from '../design/design-assignment-executor'
@@ -65,92 +44,43 @@ import type {
   VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
-  UtilitySuggestionContext,
-  UtilityResultAttribution,
-  UtilityTurnBudgetContext,
-  UtilityTurnGateway
+  UtilitySuggestionContext
 } from '../utilities/utility-orchestration-service'
 import type { EngineeringToolOperation } from '../../lib/engineering-tools'
-import {
-  isUtilitySuggestionQuestion,
-  utilitySuggestionQuestion,
-  utilitySuggestionResolution,
-  type UtilitySuggestionResolution
-} from '../../lib/utility-suggestion'
+import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
 import type {
   ImageDescriptorExecutorRequest,
-  ImageDescriptorResult,
-  ResolvedImageEntry
+  ImageDescriptorResult
 } from '../providers/image-descriptor-provider'
-import {
-  IMAGE_DESCRIPTOR_BATCH_OUTPUT_SCHEMA,
-  IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES,
-  imageDescriptorBatchCapability,
-  imageDescriptorBatchPrompt,
-  runImageDescriptorBatch
-} from '../services/image-descriptor'
-import type {
-  ImageDescriptorBatchCapability,
-  ImageDescriptorBatchRun
-} from '../services/image-descriptor'
+import type { ImageDescriptorBatchCapability } from '../services/image-descriptor'
 import type {
   AgentAccountUsage,
   AgentAccountUsageOverrides,
   AgentArtifact,
   AgentEvent,
   AgentMessage,
-  ThreadMessageCursor,
   AgentModelSelection,
-  AgentPart,
   AgentQuestionRequest,
-  AgentQuestionResolution,
   AgentProviderIssue,
-  AgentProviderIssueKind,
-  AgentQuestion,
   AgentSessionStatus,
-  AgentSubagentActivity,
-  AgentToolStatus,
   AgentToolCatalog,
-  AgentToolDefinition,
-  AgentToolHarness,
   AgentContextCapabilities,
   AgentCapabilityCatalog,
-  AgentCapabilityEntry,
   AgentCapabilitySource,
   AgentRunningProcess,
-  NativeMcpContent,
-  SkillRelocationRequest,
   TaskManagerSnapshot,
-  UsageBearingMessage,
   AssignmentPlan,
-  AssignmentPlanContent,
-  AssignmentProvenance,
-  AssignmentTask,
-  AssignmentToolResult,
-  AssignmentTaskReport,
-  AssignmentTaskReview,
-  AutoAnswerEntry,
   AuditGenerationRequest,
   AuditReport,
-  AuditReportContent,
-  AuditVerificationCheck,
-  AuditVerificationCheckKind,
-  BrainstormContent,
   BrainstormDocument,
   BrainstormEntryChoice,
-  PrdContent,
   PrdDocument,
-  CustomProviderUsage,
   PendingAgentQuestionRequest,
   EngineeringSpec,
   EngineeringSpecContent,
-  HarnessCommand,
   HarnessRuntimeRestartResult,
-  HeartbeatConfig,
   ImageDescriptorErrorRequest,
   ImageDescriptorReplyAction,
-  MemoryScope,
-  ModelIdentity,
   PermissionLevel,
   PermissionReply,
   PermissionRequest,
@@ -162,7 +92,6 @@ import type {
   ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
   AgentUtilitySuggestionEntry,
-  SessionAgentEvent,
   SpecGenerationRequest,
   SpecActionIntent,
   UserMessagePresentation,
@@ -171,196 +100,24 @@ import type {
   Thread,
   ThreadSettings,
   ThreadTransferResult,
-  TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
   TurnStreamPartsChange,
   TurnStreamPartsPage,
   TurnStreamPartsQuery,
   TurnStreamCompletedTurns,
   ThinkingLevel,
-  UsageEventCost,
-  UsageEventDetails,
-  UsageEventFeature,
-  UsagePricingProvenance,
   BrainstormPrototypeFidelity,
-  ModelRankingSnapshotRow,
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
-  RankingJudgeConfig,
-  AssistantAgents,
-  UtilityKind
+  AssistantAgents
 } from '../../lib/types'
 import { ModelPricingService } from '../providers/model-pricing-service'
 import type {
-  ActiveAssignmentDraftSession,
-  ActiveBrainstormConversationTurn,
-  ActiveBrainstormSession,
-  ActiveInitialSpecSession,
-  AgentMemoryProposalInput,
-  AssignmentApiCapability,
-  AssignmentAuditRepairManifest,
-  AssignmentGenerationSource,
-  AuxiliaryRoute,
-  AssignmentWorkerContext,
-  AssignmentWorkerRoutingResult,
-  FallbackRankingJudgeRoute,
-  ChildSessionInfo,
-  CoordinatorHandoffQueue,
   AutoAnswerReport,
-  HeldSteer,
-  ImageDescriptorUserDecision,
-  PendingImageDescriptorDecision,
-  PendingInitialSpecGeneration,
-  PendingAssignmentTurn,
-  PendingMemoryDecision,
-  PendingPermissionInfo,
-  PendingPrdTurn,
   PendingQuestionInfo,
-  PendingSpecRevision,
-  PersistedAuditAttempt,
-  PersistedProviderCatalog,
-  QueuedCoordinatorHandoff,
-  RankingGradeCandidate,
-  RankingDrainOutcome,
-  RankingJudgeOutcome,
-  RankingPassPlan,
-  RejectedSpecArtifact,
-  SessionCompletionWaiter,
   SessionInfo,
-  SpecGenerationFormatMode,
-  SpecGenerationLesson,
-  SpecGenerationMemory,
-  StructuredMemoryProposal,
-  TemporaryChatDisplayHistory,
-  TemporaryChatSession,
-  TurnStreamCacheEntry,
-  CompletedTurnFold,
   VirtualTaskOptions
 } from './chat-engine/chat-engine-types'
-import {
-  classifyProviderMessages,
-  isDedicatedAssignmentAuditorThread,
-  mergeAgentMessages,
-  mergeProviderCatalogs,
-  presentableMessages,
-  restoreMirrorAccount,
-  restoreMirrorThinkingLevel,
-  stampAccount,
-  stampHarnessId,
-  withoutTransportParts
-} from './chat-engine/chat-engine-message-merge'
-import {
-  MAX_PERSISTED_DELTA,
-  MEMORY_PREVIOUS_MESSAGE_CHARACTERS,
-  QUESTION_ANSWER_MESSAGE_PREFIX,
-  assistantAdmitsIncompleteSpec,
-  assistantMemoryDecisionContext,
-  assistantText,
-  composeMemoryCandidateInput,
-  composeMemoryUserInput,
-  formatBrainstormInterviewDecisions,
-  formatConversationTranscript,
-  formatHistoryRecap,
-  formatInterviewDecisions,
-  formatProjectReferenceContext,
-  formatTemporaryReferenceContext,
-  hasTerminalSpecContractMarker,
-  mermaidValidationFailureMessage,
-  mermaidValidationNotice,
-  rejectedAnswerMessage,
-  rejectedMermaidMessage,
-  terminalAssistantMessage,
-  textForMessage,
-  titleAttemptsFromDriver
-} from './chat-engine/chat-engine-message-text'
-import {
-  BRAINSTORM_GENERATION_TIMEOUT_MS,
-  CONNECTION_LOSS_GRACE_MS,
-  CONNECTION_WAIT_MESSAGE,
-  CONTINUATION_REQUEST_PAGE_MESSAGES,
-  COORDINATOR_HANDOFF_QUEUE_DIR,
-  CURRENT_SPEC_GENERATION_VERSION,
-  DEFAULT_QUESTION_TIMEOUT_MS,
-  IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS,
-  INCOMPLETE_TURN_CONTINUATION_PROMPT,
-  INCOMPLETE_TURN_MESSAGE,
-  LOOP_MAX_ITERATIONS,
-  MAX_COORDINATOR_HANDOFFS,
-  MAX_RECAP_TOKENS,
-  MAX_SPEC_INSTRUCTIONS_LENGTH,
-  PROVIDER_CATALOG_TTL_MS,
-  RETRY_FIRE_GRACE_MS,
-  SPEC_CONTRACT_BLOCKED_MARKER,
-  SPEC_CONTRACT_COMPLETE_MARKER,
-  SPEC_CONTRACT_CONTINUATION_PROMPT,
-  SPEC_GENERATION_FAILURE_USER_MESSAGE,
-  SPEC_GENERATION_MAX_ATTEMPTS,
-  taskReconcilePrompt,
-  SPEC_GENERATION_TIMEOUT_MS,
-  SPEC_MEMORY_MAX_LESSONS,
-  SUPERSEDED_TURN_MESSAGE,
-  SYSTEM_LAYER_RESERVE_TOKENS,
-  TOOL_CATALOG_TTL_MS,
-  TRANSFER_SETTLE_POLL_MS,
-  TRANSFER_SETTLE_TIMEOUT_MS,
-  USAGE_RESET_FALLBACK_RETRY_MS,
-  USER_TERMINAL_SETTLE_MS,
-  assertHarnessRequestCapabilities,
-  attributionModeFor,
-  dedupeCapabilities,
-  isIdleSignalEvent,
-  isTerminalSubagentPatch,
-  mcpDetail,
-  scopeAppliesToThread,
-  traceLeanAgent
-} from './chat-engine/chat-engine-constants'
-import {
-  ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
-  ASSIGNMENT_GENERATION_INSTRUCTION,
-  ASSIGNMENT_WORKER_REPORT_DISABLED_INSTRUCTION,
-  AUDIT_ALLOWED_TOOLS,
-  BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT,
-  BRAINSTORM_DOCUMENT_WRITE_TOOLS,
-  BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
-  BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
-  CHAT_WORKSPACE_TOOLS,
-  chatGatewayAllowedTools,
-  CONVERSATION_ASSIGNMENT_INSTRUCTION,
-  ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
-  IMAGE_DESCRIPTOR_SYSTEM_NOTE,
-  MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
-  MERMAID_OUTPUT_INSTRUCTION,
-  PROMPT_READ_ONLY_TOOLS,
-  SPEC_BRAINSTORM_ALLOWED_TOOLS,
-  SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
-  TEMPORARY_CHAT_ALLOWED_TOOLS,
-  brainstormDocumentWriteEnabled,
-  buildSpecRevisionSystemPrompt,
-  chatFilesystemBoundaryInstruction,
-  composeBrainstormSystemPrompt,
-  composeTurnSystemPrompt,
-  engineeringArtifactBoundaryInstruction,
-  formatOpenAnnotations
-} from './chat-engine/chat-engine-prompts'
-import {
-  isRecord,
-  memoryProposalSchemaProperties,
-  parseGeneratedJson,
-  parseGeneratedSpecContent,
-  parseStructuredMemoryProposal,
-  permissionCommands,
-  specGenerationSchema,
-  stringifyRejectedSpecOutput,
-  validateGeneratedSpecContent,
-  validateStructuredMemoryProposal
-} from './chat-engine/chat-engine-generated-artifacts'
-import {
-  UNBOUNDED_MUTATING_TOOLS,
-  changedPathsFromTool,
-  fileChangeSource,
-  normalizedToolName,
-  projectRelativePath
-} from './chat-engine/chat-engine-changes'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
 
 export {
@@ -724,9 +481,7 @@ export class ChatEngine {
       computerUsePip,
       harnessManifest,
       threadCreation,
-      processJournalPath,
-      scopeRoots,
-      modelPricing
+      processJournalPath
     )
   }
   async driverForAccount(harnessId: string, accountId?: string): Promise<HarnessDriver> {

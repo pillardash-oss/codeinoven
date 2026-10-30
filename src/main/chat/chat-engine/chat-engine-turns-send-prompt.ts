@@ -1,5 +1,5 @@
 import { unarchivedThreadSql } from '../../../lib/archives'
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { CheckpointLimitError } from '../../git/change-tracking-service'
@@ -30,7 +30,6 @@ import type {
   PromptReference,
   SpecActionIntent,
   UserMessagePresentation,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, isAssistantSetupThread } from '../../../lib/types'

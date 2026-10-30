@@ -1,88 +1,34 @@
 import type { TurnStepTimer } from '../chat/turn-dispatch-timer'
 import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
+import { type Server } from 'http'
 import type {
   ResolvedUtility,
   UtilityDefinition,
   UtilityDefinitionFor,
-  McpUtilityConfig,
-  UtilityKind,
   PermissionLevel,
   AgentUtilitySuggestionEntry,
-  UtilityDefinitionInput,
   ThreadSearchResult
 } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import {
-  APP_BROWSER_UTILITY_ID,
-  APP_IMAGE_DESCRIPTOR_UTILITY_ID,
-  APP_SCOPE_UTILITY_ID,
-  UtilityRegistryService
-} from './utility-registry-service'
-import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
-import { designSessionBriefing, type DesignSessionMode } from './cio-design-prompt'
-import { videoSessionBriefing, type VideoSessionMode } from './cio-video-prompt'
+import { UtilityRegistryService } from './utility-registry-service'
+import { CuaBridgeService } from './cua-bridge-service'
+import { type DesignSessionMode } from './cio-design-prompt'
+import { type VideoSessionMode } from './cio-video-prompt'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
-import {
-  ASK_SECRET_TOOL_NAME,
-  GATEWAY_TOOLS,
-  GATEWAY_CAPABILITY_ID,
-  GATEWAY_DISCOVERY_INSTRUCTION,
-  initialGatewayTools,
-  type GatewayToolDefinition,
-  UTILITY_SEARCH_TOOL_NAME,
-  UTILITY_ACTIVATE_TOOL_NAME,
-  UTILITY_INVOKE_TOOL_NAME,
-  UTILITY_DOCS_TOOL_NAME,
-  UTILITY_MANAGE_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME
-} from '../../lib/gateway-tools'
-import {
-  CREATE_ASSIGNMENT_TOOL_NAME,
-  CREATE_BRAINSTORM_TOOL_NAME,
-  CREATE_PRD_TOOL_NAME,
-  CREATE_SPEC_TOOL_NAME,
-  isEngineeringTool,
-  type EngineeringToolOperation
-} from '../../lib/engineering-tools'
-import {
-  cuaActionReference,
-  cuaRefusal,
-  cuaSnapshotView,
-  foreignSnapshotAdvice,
-  groundCuaAction,
-  isSupersededSnapshotRefusal,
-  reanchorCuaAction,
-  shapeCuaResult,
-  type CuaSnapshotView
-} from '../../lib/cua-driver'
+import { type GatewayToolDefinition } from '../../lib/gateway-tools'
+import { type EngineeringToolOperation } from '../../lib/engineering-tools'
+import { type CuaSnapshotView } from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { type McpClient } from '../agents/mcp-stdio-client'
-import {
-  IMAGE_DESCRIPTOR_INPUT_SCHEMA,
-  IMAGE_DESCRIPTOR_OUTPUT_SCHEMA,
-  resolveImageEntries,
-  type ImageDescriptorExecutor
-} from '../providers/image-descriptor-provider'
-import { gatewayHarnessTimeoutMs, type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
+import { type ImageDescriptorExecutor } from '../providers/image-descriptor-provider'
+import { type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import type { AgentSecretResolution } from './agent-secret-service'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
-import {
-  UtilityScopeFootprintService,
-  type UtilityScopeFootprintDeps
-} from './utility-scope-footprint'
-import {
-  type ThreadBankEntry,
-  forgetUtility,
-  reconcileActivated
-} from './utility-orchestration/utility-turn-state'
-import {
-  utilityInstallSource,
-  type UtilitySuggestionResolution
-} from '../../lib/utility-suggestion'
+import { UtilityScopeFootprintService } from './utility-scope-footprint'
+import { type ThreadBankEntry } from './utility-orchestration/utility-turn-state'
+import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
 import type { McpOAuthService } from './mcp-oauth/mcp-oauth-service'
 import { buildUtilityOrchestrationServiceUnits } from './utility-orchestration-service/utility-orchestration-service-units'
 

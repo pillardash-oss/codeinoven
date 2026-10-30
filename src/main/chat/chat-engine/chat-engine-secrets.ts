@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
@@ -14,7 +13,7 @@ import {
   secretRequestQuestions,
   type AgentSecretPlanEntry
 } from '../../../lib/secret-request'
-import type { AgentSecretSubmission, Thread } from '../../../lib/types'
+import type { AgentSecretSubmission } from '../../../lib/types'
 import type { PendingQuestionInfo } from './chat-engine-types'
 import { SECRET_ANSWER_PLACEHOLDER, validateSecretSubmissions } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'

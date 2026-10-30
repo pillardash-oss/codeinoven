@@ -1,5 +1,5 @@
 import { deliverWithWorkPathNotices } from '../../design/work-path-notices'
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
@@ -27,7 +27,6 @@ import type {
   AuditReport,
   HeartbeatConfig,
   PromptAttachment,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import { INBOX_PROJECT_ID } from '../../../lib/types'

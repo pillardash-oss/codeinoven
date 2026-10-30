@@ -1,5 +1,4 @@
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
-import { join, resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import {
@@ -30,7 +29,6 @@ import type {
 } from '../../providers/image-descriptor-provider'
 import {
   IMAGE_DESCRIPTOR_BATCH_OUTPUT_SCHEMA,
-  imageDescriptorBatchCapability,
   imageDescriptorBatchPrompt,
   runImageDescriptorBatch
 } from '../../services/image-descriptor'
@@ -44,7 +42,6 @@ import type {
   ImageDescriptorReplyAction,
   PromptAttachment,
   ThreadStatus,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import { classifyProviderIssue } from '../../../lib/provider-issue'

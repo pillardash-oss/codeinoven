@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import type { IsolatedSessionHandle } from '../../drivers/isolated-session'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
@@ -14,7 +13,6 @@ import type {
   PrdContent,
   PrdDocument,
   PromptAttachment,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import { PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME } from '../../../lib/agent-tools'

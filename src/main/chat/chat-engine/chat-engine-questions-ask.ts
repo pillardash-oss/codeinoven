@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import { createHash } from 'crypto'
 import { Logger } from '../../system/logger'
 import {
@@ -15,8 +14,7 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentQuestionResolution,
-  PendingAgentQuestionRequest,
-  Thread
+  PendingAgentQuestionRequest
 } from '../../../lib/types'
 import type { PendingQuestionInfo } from './chat-engine-types'
 import { QUESTION_ANSWER_MESSAGE_PREFIX } from './chat-engine-message-text'

@@ -1,4 +1,4 @@
-import { readFile, stat } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 import { createHash } from 'crypto'
@@ -25,7 +25,6 @@ import type {
   AgentCapabilityCatalog,
   AgentCapabilityEntry,
   FileChangeSource,
-  Thread,
   UsageEventFeature
 } from '../../../lib/types'
 import { APPLICATION_AGENT_TOOLS } from '../../../lib/agent-tools'

@@ -13,7 +13,6 @@ import type {
   BrainstormEntryChoice,
   EngineeringSpec,
   UserMessagePresentation,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import {

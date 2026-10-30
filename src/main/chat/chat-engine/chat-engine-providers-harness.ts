@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { HarnessCommand, HarnessRuntimeRestartResult } from '../../../lib/types'

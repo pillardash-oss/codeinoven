@@ -23,7 +23,6 @@ import type {
   SpecGenerationRequest,
   SpecActionIntent,
   UserMessagePresentation,
-  Thread,
   ThreadSettings,
   TurnStreamPartsQuery,
   BrainstormPrototypeFidelity

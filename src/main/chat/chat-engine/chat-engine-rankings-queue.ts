@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { RANKING_RUBRIC_VERSION } from '../turn-grader-prompt'
@@ -13,7 +12,7 @@ import type {
   SessionInfo
 } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
-import { assistantText, textForMessage } from './chat-engine-message-text'
+import { textForMessage } from './chat-engine-message-text'
 import {
   assistantTurnCostAccounting,
   toRankingCandidate,

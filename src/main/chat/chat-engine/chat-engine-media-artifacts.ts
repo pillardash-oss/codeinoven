@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { validateEntityId } from '../../ipc/ipc-validation'
-import type { AgentArtifact, ImageDescriptorErrorRequest, Thread } from '../../../lib/types'
+import type { AgentArtifact, ImageDescriptorErrorRequest } from '../../../lib/types'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../../../lib/project-artifacts'
 import type { ChatEngine } from '../chat-engine'
 

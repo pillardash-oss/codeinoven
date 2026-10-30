@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { estimateTokens } from '../memory-service'

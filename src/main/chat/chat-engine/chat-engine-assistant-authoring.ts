@@ -1,5 +1,4 @@
 import type { AssistantReportingPatch } from '../../../lib/assistant-authoring'
-import { join } from 'path'
 import { Logger } from '../../system/logger'
 import {
   broadcastAssistantCheckpointChanged,

@@ -1,4 +1,3 @@
-import { join } from 'path'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'

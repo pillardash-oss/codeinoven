@@ -1,4 +1,3 @@
-import { join, resolve } from 'path'
 import {
   isPawnWorkerThread,
   runningWorkers

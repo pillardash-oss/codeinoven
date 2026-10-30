@@ -1,5 +1,4 @@
 import { BrowserWindow } from 'electron'
-import { resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { BrainstormAlignmentNotes } from '../brainstorm-alignment-notes'
 import { AssistantAuthoringCheckpoints } from '../assistant-authoring-checkpoints'
@@ -66,9 +65,7 @@ export function wireChatEngine(
   computerUsePip?: import('../../utilities/computer-use-pip-service').ComputerUsePipService,
   harnessManifest?: import('../../agents/harness-manifest-service').HarnessManifestService,
   threadCreation?: ThreadCreationCoordinator,
-  processJournalPath?: string,
-  scopeRoots?: import('../../../lib/engines/thread-manager').ThreadScopeRootProvider,
-  modelPricing?: ModelPricingService
+  processJournalPath?: string
 ): void {
   {
     engine.modelPricing ??= new ModelPricingService(storage)

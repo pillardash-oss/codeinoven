@@ -1,16 +1,13 @@
 import { createWorkQueue } from '../../lib/bounded-work'
-import { spawn, type ChildProcess } from 'child_process'
+import { type ChildProcess } from 'child_process'
 import {
   type AgentBankedResets,
   type AgentEvent,
   type AgentMessage,
-  type AgentProviderIssue,
   type AgentRateLimitWindow,
-  type AgentTokenUsage,
   type AgentUsageCredits,
   type HarnessCommand,
   type PermissionReply,
-  type PromptAttachment,
   type ProviderCatalog,
   type ProviderModel,
   type ThinkingLevel,
@@ -27,8 +24,6 @@ import { buildProcessEnvironmentAsync } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
 import { attachmentReference } from './attachment-reference'
 import {
-  InactiveQuestionTurnError,
-  QuestionRequestGoneError,
   type GenerateTitleOptions,
   type GradeTurnOptions,
   type HarnessCapabilities,
@@ -48,62 +43,20 @@ import {
   type TitleModelCandidate
 } from './persistent-cli-driver'
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
-import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
+import { runHarnessCommand } from './harness-runtime'
+import { type CodexWindowCatalog } from './codex/codex-catalog'
 import {
-  codexContextWindowOptions,
-  emptyCodexWindowCatalog,
-  parseCodexWindowCatalog,
-  type CodexWindowCatalog
-} from './codex/codex-catalog'
-import {
-  CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
-  CODEX_COMPACTION_TIMEOUT_MS,
-  CODEX_USAGE_TIMEOUT_MS,
   type CodexAppServerHost,
   type CodexAppServerTurn,
   type CodexCompactionRun,
   type CodexContextUsageWaiter,
   type CodexServerRequest
 } from './codex/codex-protocol'
-import {
-  CODEX_ASYNC_QUESTION_METHOD,
-  CODEX_DEFAULT_QUESTION_CONFIG,
-  CODEX_DYNAMIC_QUESTION_METHOD,
-  CODEX_QUESTION_TOOL_NAME,
-  codexApprovalPolicy,
-  codexEffort,
-  codexQuestionDecisionText,
-  codexQuestionIds,
-  codexQuestionTool,
-  codexSandboxPolicy,
-  isCodexAsyncQuestion,
-  isCodexDynamicQuestion,
-  isCodexDynamicQuestionItem,
-  isCodexPermissionRequest,
-  isCodexQuestionRequest,
-  isUnsupportedReasoningSummary,
-  normalizeAppServerItem,
-  parseCodexConfigEdits,
-  sandboxFor,
-  tomlString,
-  tomlStringArray,
-  tomlStringMap,
-  utilityKey
-} from './codex/codex-tools'
-import {
-  codexComputerUseAgeMs,
-  peekCodexComputerUse,
-  refreshCodexComputerUse,
-  type CodexComputerUseReadiness
-} from './codex/codex-computer-use'
-import { mapCodexRateLimits, mapCodexTotalUsage, mapCodexUsage } from './codex/codex-usage'
-import {
-  codexAuxiliaryConfig,
-  codexDeveloperInstructions,
-  composePrompt,
-  localAttachmentPath
-} from './codex/codex-prompts'
-import { namespacedMessage, parseCodexJsonLine, parseItem } from './codex/codex-stream-fold'
+import { sandboxFor, tomlString } from './codex/codex-tools'
+import { type CodexComputerUseReadiness } from './codex/codex-computer-use'
+import { mapCodexRateLimits, mapCodexUsage } from './codex/codex-usage'
+import { codexAuxiliaryConfig, composePrompt, localAttachmentPath } from './codex/codex-prompts'
+import { parseCodexJsonLine } from './codex/codex-stream-fold'
 import { buildCodexDriverUnits } from './codex-driver/codex-driver-units'
 
 export { mapCodexRateLimits, mapCodexUsage }
@@ -500,6 +453,9 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   private buildBaseHost() {
+    // The host is a plain object literal: its getters/setters run with the
+    // literal as `this`, so every member reaches the driver through this alias.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const driver = this
     return {
       appendUserMessage: (

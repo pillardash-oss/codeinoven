@@ -10,7 +10,6 @@ import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validatio
 import type {
   BrainstormContent,
   BrainstormDocument,
-  Thread,
   BrainstormPrototypeFidelity
 } from '../../../lib/types'
 import { workflowActionPresentation } from '../../../lib/workflow-action-presentation'

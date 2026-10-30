@@ -1,4 +1,4 @@
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { subscribe } from '$lib/ipc.svelte'
 import { ovenSurfaceCacheKey, readOvenSurface, writeOvenSurface } from '$lib/oven-surface-cache'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { parseOvenRootKey } from '$shared/oven-root-routing'

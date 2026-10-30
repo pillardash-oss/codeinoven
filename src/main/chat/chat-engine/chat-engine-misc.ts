@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
@@ -20,7 +19,6 @@ import type {
   AgentQuestion,
   AutoAnswerEntry,
   PermissionRequest,
-  Thread,
   ThreadSettings
 } from '../../../lib/types'
 import { type TurnStepTimer } from '../turn-dispatch-timer'

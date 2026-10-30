@@ -1,5 +1,4 @@
 import type { AssistantReportingPatch } from '../../../lib/assistant-authoring'
-import { join, resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
 import type { HarnessDriver, PreparedUtilityRuntime } from '../../drivers/driver.interface'
@@ -39,12 +38,7 @@ import {
   utilitySuggestionQuestion,
   type UtilitySuggestionResolution
 } from '../../../lib/utility-suggestion'
-import type {
-  AgentUtilitySuggestionEntry,
-  Thread,
-  ThreadSettings,
-  UtilityKind
-} from '../../../lib/types'
+import type { AgentUtilitySuggestionEntry, ThreadSettings, UtilityKind } from '../../../lib/types'
 import { type TurnStepTimer } from '../turn-dispatch-timer'
 import type { PendingQuestionInfo } from './chat-engine-types'
 import type { ChatEngine } from '../chat-engine'

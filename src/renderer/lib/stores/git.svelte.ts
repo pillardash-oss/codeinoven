@@ -1,12 +1,10 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { parseOvenRootKey } from '$shared/oven-root-routing'
 import {
-  GITHUB_PROBE_TTL_MS,
   deploymentDetailKey,
   deploymentKey,
   deploymentLogKey,
   deploymentPageKey,
-  errorMessage,
   issueBundleKey,
   issuePageKey,
   prBundleKey,
@@ -30,7 +28,6 @@ import {
 import { GitGitHubAuth } from './git-store-github.svelte'
 import { GitLocalOperations } from './git-store-local-operations.svelte'
 import {
-  INBOX_PROJECT_ID,
   type GitBranchInfo,
   type GitCredentialStatus,
   type GitHubAuthStatus,
