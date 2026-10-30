@@ -896,7 +896,7 @@
       the pen is open: a space beside an annotated frame continues the video, and
       the editor's own play/pause has to stand aside for it.
     -->
-    <div data-annotation-surface class="contents">
+    <div data-annotation-surface data-video-chrome class="contents">
       <CompositionFrameAnnotator
         projectId={projectId ?? ''}
         threadId={threadId ?? ''}
