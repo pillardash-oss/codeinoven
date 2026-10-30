@@ -12,7 +12,6 @@
   import CompositionFrameAnnotator from './CompositionFrameAnnotator.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
-  import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
@@ -154,16 +153,6 @@
   let annotationBounds = $state<BrowserViewBounds | null>(null)
   /** The occlusion this surface publishes while the still covers the page. */
   const annotationOcclusionKey = $derived(`composition-annotation-${tabId}`)
-  /**
-   * Where the pen's own controls are mounted while a frame is being annotated.
-   *
-   * The mark layer draws the pen and its colour as one toolbar, and it mounts them
-   * here: annotating changes the pen control that started it into the palette and
-   * the finish mark, instead of adding a strip over the picture naming a moment the
-   * user can already see.
-   */
-  let annotationToolbar = $state<HTMLDivElement>()
-  setAnnotationToolbarHost({ target: () => annotationToolbar })
   /**
    * Whether the pen is in hand.
    *
@@ -877,31 +866,30 @@
   >
     <CioMessagePlus size={13} />
   </button>
-  {#if frameNote}
-    <!-- The pen and its colour, mounted by the mark layer right where the pen was
-         pressed. Finishing is the same control turned into a check mark, so the
-         picture is the picture and nothing else. -->
-    <div class="flex shrink-0 items-center empty:hidden" bind:this={annotationToolbar}></div>
-  {:else}
-    <button
-      type="button"
-      class={[
-        'flex h-7 w-7 shrink-0 items-center justify-center transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
-        penArmed ? 'bg-elevated text-foreground' : 'text-dimmed'
-      ]}
-      aria-label={penArmed ? 'Finish annotating' : 'Annotate this frame'}
-      aria-pressed={penArmed}
-      title={!canNote
-        ? 'Annotate a frame from the video panel'
-        : penArmed
-          ? 'Finish annotating: the pen stays in hand while the video plays, and comes back when you stop it'
-          : 'Annotate this frame: circle an area and write why'}
-      disabled={!canNote || capturing}
-      onclick={() => (penArmed ? closeAnnotation() : void annotateFrame())}
-    >
-      <CioPencil size={13} />
-    </button>
-  {/if}
+  <!--
+    The pen's own controls are drawn on the picture it marks, never here. This row is
+    the player's, and a strip that appeared above the video the moment the pen opened
+    was chrome between the user and the frame they were drawing on: the pen control
+    below only reports whether the pen is in hand.
+  -->
+  <button
+    type="button"
+    class={[
+      'flex h-7 w-7 shrink-0 items-center justify-center transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
+      penArmed ? 'bg-elevated text-foreground' : 'text-dimmed'
+    ]}
+    aria-label={penArmed ? 'Finish annotating' : 'Annotate this frame'}
+    aria-pressed={penArmed}
+    title={!canNote
+      ? 'Annotate a frame from the video panel'
+      : penArmed
+        ? 'Finish annotating: the pen stays in hand while the video plays, and comes back when you stop it'
+        : 'Annotate this frame: circle an area and write why'}
+    disabled={!canNote || capturing}
+    onclick={() => (penArmed ? closeAnnotation() : void annotateFrame())}
+  >
+    <CioPencil size={13} />
+  </button>
 </div>
 {#if frameNote}
   {@const paneBounds = annotationBounds ?? browserVisibility.pageBoundsFor(tabId)}

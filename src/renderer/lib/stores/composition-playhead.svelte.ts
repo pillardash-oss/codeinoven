@@ -218,10 +218,11 @@ class CompositionPlayhead {
       const next = await invoke('browser:transportState', this.tabId).catch(() => null)
       if (next) this.revivals = 0
       else this.revive()
+      const adopted = next ? this.fromTheStart(next) : next
       // An answer to a poll that was in flight when the last reader left is not a
       // playhead anymore: the tab has stopped being watched, and a surface that
       // attaches next must not be handed the second this one saw.
-      if (this.timer !== undefined) await this.handOver(next)
+      if (this.timer !== undefined) await this.handOver(adopted)
     } catch {
       // A tab can be closed while a poll is in flight.
     } finally {
@@ -331,6 +332,30 @@ class CompositionPlayhead {
     this.apply({ ...next, time: before.time })
     this.request('seek', before.time)
     return true
+  }
+
+  /** When the last second was put back after a poll answered from the start. */
+  private restoredAt = 0
+
+  /**
+   * A poll that answered from the start of a film the surface was not at.
+   *
+   * A composition's page is re-armed when its runtime was lost, and arming draws the
+   * first frame: for a few seconds the row would then report zero while the picture
+   * the user was watching sat somewhere else, which reads as a seek that resets
+   * itself. The second and the run flag the surface was on are kept, and the page is
+   * put back on that second, at most once a second so a document that keeps
+   * answering from the start cannot be seeked in a loop.
+   */
+  private fromTheStart(next: BrowserCompositionPlayback): BrowserCompositionPlayback {
+    const before = this.playback
+    if (!before || before.time <= 0.25 || next.time > 0.25) return next
+    if (Date.now() - this.restoredAt >= 1000) {
+      this.restoredAt = Date.now()
+      this.request('seek', before.time)
+      if (before.playing && !next.playing) void this.command('play')
+    }
+    return { ...next, time: before.time, playing: before.playing }
   }
 
   private apply(next: BrowserCompositionPlayback | null): void {

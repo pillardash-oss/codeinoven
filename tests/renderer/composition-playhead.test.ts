@@ -123,3 +123,19 @@ describe('the bar while the page is answering', () => {
     expect(playhead.playing).toBe(false)
   })
 })
+
+describe('a poll that answers from the start of the film', () => {
+  it('does not reset a second the surface is already on', async () => {
+    const playhead = freshPlayhead()
+    answer = () => playback(30)
+    const release = playhead.attach()
+    await new Promise((resolve) => setTimeout(resolve, 320))
+    expect(playhead.time).toBe(30)
+
+    // The page answers the seek it was given, and reports the start otherwise.
+    answer = (command, value) => (command === 'seek' ? playback(Number(value)) : playback(0))
+    await new Promise((resolve) => setTimeout(resolve, 320))
+    expect(playhead.time).toBe(30)
+    release()
+  })
+})
