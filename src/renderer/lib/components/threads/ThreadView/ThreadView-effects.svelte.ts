@@ -63,6 +63,18 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * so every effect here is owned by the component.
    */
   init(): void {
+    // A trace the reader expanded belongs to the visit that expanded it: opening
+    // this thread again starts from the fold each turn asks for, so a settled
+    // thread never returns with an old turn's work expanded. Only the running
+    // turn re-opens, which it does by itself once it is live.
+    agentRuns.resetTraceView(
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.pollStreamParts.conversationId
+    )
+    agentRuns.resetTraceView(
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.handleAgentEvent.thread.id
+    )
     // A persisted in-flight status is only a recovery hint. Start every mount in
     // a settled idle state unless this thread is already receiving live activity;
     // `connectSession` will promote it to busy when the live session confirms it.
