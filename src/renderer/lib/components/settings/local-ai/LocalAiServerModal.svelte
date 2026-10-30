@@ -174,7 +174,7 @@
         testResult = {
           address,
           ok: false,
-          message: `Nothing answered at ${address} (${result.error}). Start the server to test the loaded model.`
+          message: await offlineMessage(address, result.error)
         }
       }
     } catch (failure) {
@@ -186,6 +186,28 @@
     } finally {
       testing = false
     }
+  }
+
+  /**
+   * Why the endpoint did not answer, said in terms the row can act on: a local
+   * row whose `.gguf` is missing would fail its first start, and a Hugging Face
+   * row has nothing to download until it starts.
+   */
+  async function offlineMessage(address: string, reason: string): Promise<string> {
+    if (source === 'local') {
+      const path = modelPath.trim()
+      if (path.length === 0) {
+        return `Nothing answered at ${address} (${reason}). Choose a model file first.`
+      }
+      const checked = await invoke('llamaCpp:checkModel', path)
+      return checked.exists
+        ? `Nothing answered at ${address} (${reason}). The model file is on disk, so start this row to serve it.`
+        : `Nothing answered at ${address} (${reason}). The model file is not on disk at ${path}.`
+    }
+    const reference = modelReference.trim()
+    return reference.length > 0
+      ? `Nothing answered at ${address} (${reason}). llama.cpp downloads ${reference} on the first start.`
+      : `Nothing answered at ${address} (${reason}). Add a Hugging Face reference first.`
   }
 
   function submit(): void {
@@ -387,6 +409,24 @@
           {/if}
           Test connection
         </button>
+        {#if testing}
+          <span class="text-[0.6875rem] text-muted" role="status">Testing…</span>
+        {:else if visibleTest}
+          <span
+            class="flex items-center gap-1 text-[0.6875rem] font-medium {visibleTest.ok
+              ? 'text-success'
+              : 'text-warning'}"
+            role="status"
+          >
+            {#if visibleTest.ok}
+              <CioCheckCircle size={11} />
+              Connected
+            {:else}
+              <CioAlertCircle size={11} />
+              Not answering
+            {/if}
+          </span>
+        {/if}
       </div>
       <button
         type="submit"

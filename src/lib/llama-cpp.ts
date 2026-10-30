@@ -375,6 +375,14 @@ export interface LlamaCppRuntimeStatus {
   detail: string
 }
 
+/** What the editor learns about a local model file before starting anything. */
+export interface LlamaCppModelFileCheck {
+  path: string
+  exists: boolean
+  /** Size on disk, zero when the file is missing or unreadable. */
+  sizeBytes: number
+}
+
 /** The readiness answer for a started server. */
 export interface LlamaCppProbeResult {
   ready: boolean

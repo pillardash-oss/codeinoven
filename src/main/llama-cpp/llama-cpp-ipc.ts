@@ -9,7 +9,11 @@ import { BrowserWindow, dialog } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { validateEntityId } from '../ipc/ipc-validation'
 import { isLlamaCppHostValid, isLlamaCppPortValid } from '../../lib/llama-cpp'
-import { detectLlamaCppRuntime, probeLlamaCppServer } from './llama-cpp-service'
+import {
+  checkLlamaCppModelFile,
+  detectLlamaCppRuntime,
+  probeLlamaCppServer
+} from './llama-cpp-service'
 
 export interface LlamaCppIpcDeps {
   /**
@@ -34,6 +38,14 @@ export function registerLlamaCppIpc(deps: LlamaCppIpcDeps): void {
     // which is where that server listens too.
     const host = rawHost.trim() === '0.0.0.0' ? '127.0.0.1' : rawHost.trim()
     return probeLlamaCppServer(`http://${host}:${port}`)
+  })
+
+  ipcMain.handle('llamaCpp:checkModel', (_, rawPath: unknown) => {
+    if (typeof rawPath !== 'string' || rawPath.trim().length === 0 || rawPath.length > 4_096) {
+      return { path: '', exists: false, sizeBytes: 0 }
+    }
+    if (rawPath.includes('\0')) return { path: '', exists: false, sizeBytes: 0 }
+    return checkLlamaCppModelFile(rawPath)
   })
 
   ipcMain.handle('llamaCpp:pickModel', async () => {
