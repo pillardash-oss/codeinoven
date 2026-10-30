@@ -917,8 +917,8 @@
           "id": "video-edit-play",
           "keys": ["space"],
           "label": "Play or pause the video",
-          "description": "Play or pause the video.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "description": "Play or pause the video the editor is showing, whichever control has the focus.",
+          "scenario": "Focus is anywhere in the video editor, its buttons and seek bar included, outside a text field and outside an open annotation pen."
         },
         {
           "id": "video-annotation-continue",

@@ -16,7 +16,7 @@
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
-  import { VideoFrameSeeker } from '$lib/video-frame-seeker'
+  import { compositionPlayheadFor } from '$lib/stores/composition-playhead.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
@@ -33,10 +33,8 @@
   import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
   import type { VideoStudioDocument } from '$shared/video/studio'
   import type {
-    BrowserCompositionPlayback,
     BrowserCompositionTab,
     BrowserInspectorRect,
-    BrowserTransportCommand,
     BrowserViewBounds,
     CompositionFrameSnapshot
   } from '$shared/ipc-contract'
@@ -78,21 +76,29 @@
     compact = false
   }: Props = $props()
 
-  /** How often the scrubber catches up with the page it is driving. */
-  const POLL_MS = 250
-
   /**
-   * The playhead as the page reports it.
+   * How long the bar keeps the second a scrub settled on.
    *
-   * Null until the first answer, because the app does not assume where a
-   * composition starts: it asks the tab that is playing it.
+   * The page is asked for that frame and answers within a round trip, but the bar
+   * is what the user let go of, so it holds their second for a moment instead of
+   * snapping back to where the playhead was. The timer is also what releases it:
+   * a composition that never answers must not leave the bar on a second the
+   * picture is not on.
    */
-  let playback = $state<BrowserCompositionPlayback | null>(null)
-  /** True while the user holds the scrubber, so a poll cannot yank it back. */
+  const SCRUB_SETTLE_MS = 400
+
+  // The tab's identity is this bar's identity, so the bar reads the one playhead
+  // every other surface of the same tab reads: the picture, the timeline and this
+  // row cannot show different seconds, because they show the same answer.
+  // svelte-ignore state_referenced_locally
+  const playhead = compositionPlayheadFor(tabId)
+  /** The page's answer. Null until the first one, because where a composition
+   *  starts is the page's to say rather than the app's to assume. */
+  const playback = $derived(playhead.playback)
+  /** True while the user holds the scrubber, so the bar shows their second. */
   let scrubbing = $state(false)
   let scrubValue = $state(0)
-  let pendingFrame = $state<number | null>(null)
-  let seekRevision = 0
+  let scrubRelease: ReturnType<typeof setTimeout> | undefined
   /** Mute follows the native tab across sidebar and fullscreen surfaces. */
   const muted = $derived(contextSidebarState.browserRuntime(tabId).muted)
   let muteBusy = $state(false)
@@ -171,78 +177,31 @@
    */
   const loop = $derived(playback?.loop ?? compositionPlaybackPrefs.loopFor(tabId))
   const error = $derived(playback?.error ?? null)
-  const shown = $derived(Math.min(scrubbing ? scrubValue : (pendingFrame ?? time), duration))
-  const seeker = new VideoFrameSeeker(
-    (id, seconds) => invoke('browser:transport', id, 'freeze', seconds),
-    (id, next) => {
-      if (id === tabId) {
-        apply(next)
-        seekRevision += 1
-        pendingFrame = null
-      }
-    }
-  )
+  const shown = $derived(Math.min(scrubbing ? scrubValue : time, duration))
   /** A note needs a picture and a conversation, and a composition declares both. */
   const canNote = $derived(Boolean(projectId && threadId))
-
-  /** One answer from the page, applied only when it carries a playhead. A null
-   *  means the tab is no longer armed, which the next state report settles. */
-  function apply(next: BrowserCompositionPlayback | null): void {
-    if (!next) return
-    playback = next
-    if (!scrubbing) scrubValue = next.time
-  }
-
-  async function refresh(): Promise<void> {
-    try {
-      const revision = seekRevision
-      const next = await invoke('browser:transportState', tabId)
-      if (revision === seekRevision && !scrubbing && pendingFrame === null) apply(next)
-      syncLoop(next)
-    } catch {
-      // The tab can be closed while a poll is in flight.
-    }
-  }
 
   /**
    * Bring a freshly armed page onto the user's looping preference.
    *
    * A reload, or a preview switched to another composition, installs a new
-   * transport that starts with its own default. The poll is what notices, so the
-   * preference is restored where the state is read, before the end of a film the
-   * user asked to play once. The handover happens once per answer the page gives,
-   * because a page that keeps reporting the default must not be re-commanded on
-   * every tick.
+   * transport that starts with its own default. An answer from the page is what
+   * notices, so the preference is restored where the state is read, before the end
+   * of a film the user asked to play once. The handover happens once per answer the
+   * page gives, because a page that keeps reporting the default must not be
+   * re-commanded on every tick.
    */
-  function syncLoop(next: BrowserCompositionPlayback | null): void {
-    if (!next) return
-    if (next.loop === observedLoop) return
+  $effect(() => {
+    const next = playback
+    if (!next || next.loop === observedLoop) return
     observedLoop = next.loop
     const wanted = compositionPlaybackPrefs.loopFor(tabId)
     if (loopSyncing || next.loop === wanted) return
     loopSyncing = true
-    void invoke('browser:transport', tabId, 'loop', wanted)
-      .catch(() => {
-        // The tab can be closed before the preference lands.
-      })
-      .finally(() => {
-        loopSyncing = false
-      })
-  }
-
-  async function send(
-    command: BrowserTransportCommand,
-    value: number | boolean = 0
-  ): Promise<void> {
-    seeker.clear()
-    seekRevision += 1
-    pendingFrame = null
-    try {
-      apply(await invoke('browser:transport', tabId, command, value))
-    } catch {
-      // The tab can be closed between the click and the command.
-    }
-  }
+    void playhead.command('loop', wanted).finally(() => {
+      loopSyncing = false
+    })
+  })
 
   /**
    * Take a request that names a mark to reopen.
@@ -261,21 +220,21 @@
   })
 
   function togglePlay(): void {
-    void send('toggle')
+    void playhead.command('toggle')
   }
 
   function stop(): void {
-    void send('stop')
+    void playhead.command('stop')
   }
 
   function step(direction: 1 | -1): void {
-    queueFrame(clamp(shown + direction * frameStep))
+    playhead.hold(clamp(shown + direction * frameStep))
   }
 
   function toggleLoop(): void {
     const next = !loop
     compositionPlaybackPrefs.setLoop(tabId, next)
-    void send('loop', next)
+    void playhead.command('loop', next)
   }
 
   /**
@@ -295,7 +254,7 @@
     capturing = true
     captureError = null
     try {
-      await send('pause')
+      await playhead.command('pause')
       const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
       if (snapshot) openAnnotation({ snapshot })
       else captureError = 'This composition is no longer open. Reopen it before annotating.'
@@ -337,7 +296,7 @@
     if (!frameNote) return
     frameNote = null
     annotationBounds = null
-    if (resume) void send('play')
+    if (resume) void playhead.command('play')
   }
 
   /** The comment the open bubble starts with, read from the note it edits. */
@@ -447,7 +406,7 @@
     if (!canNote || capturing) return
     // The transport's own playhead moves to the frame the mark was drawn on, so the
     // picture, the row below it and the comment all name one moment.
-    queueFrame(request.seconds)
+    playhead.hold(request.seconds)
     capturing = true
     captureError = null
     try {
@@ -535,9 +494,26 @@
     }
   }
 
+  /** Hold the picture on one second, because a scrub is still moving. */
+  function holdSecond(seconds: number): void {
+    scrubValue = clamp(seconds)
+    scrubbing = true
+    playhead.hold(scrubValue)
+  }
+
+  /**
+   * Settle the second the user released.
+   *
+   * The bar keeps their second until the page answers with it, and this timer is
+   * what lets it go either way. Nothing else has to hold that frame: the page owns
+   * it, and the answer it gives is what every surface of this tab shows next.
+   */
   function commitScrub(): void {
-    scrubbing = false
-    queueFrame(clamp(scrubValue))
+    holdSecond(scrubValue)
+    clearTimeout(scrubRelease)
+    scrubRelease = setTimeout(() => {
+      scrubbing = false
+    }, SCRUB_SETTLE_MS)
   }
 
   // The page is a native view painted above every DOM node, so the still that
@@ -578,12 +554,6 @@
     closeAnnotation()
   })
 
-  function queueFrame(seconds: number): void {
-    seekRevision += 1
-    pendingFrame = seconds
-    seeker.seek(tabId, seconds)
-  }
-
   function clamp(seconds: number): number {
     return snapVideoFrame(seconds, duration, composition.fps)
   }
@@ -593,21 +563,16 @@
     return videoTimecode(seconds)
   }
 
-  // The page owns the clock, so the panel reads it rather than running one of its
-  // own. Only the two props the poll depends on are read here, so a state report
-  // cannot restart the timer it just fed.
+  // The page owns the clock, so the bar follows the tab's one playhead while it is
+  // on screen and gives it back when it leaves. Only the two props this depends on
+  // are read here, so an answer from the page cannot restart the timer it just fed.
   $effect(() => {
     if (!active) return
-    const playbackTabId = tabId
     const pauseOnHide = pauseWhenHidden
-    void refresh()
-    const timer = setInterval(() => void refresh(), POLL_MS)
+    const release = playhead.attach()
     return () => {
-      clearInterval(timer)
-      seeker.clear()
-      seekRevision += 1
-      pendingFrame = null
-      if (pauseOnHide) void invoke('browser:transport', playbackTabId, 'pause', 0).catch(() => {})
+      release()
+      if (pauseOnHide) void playhead.command('pause')
     }
   })
 </script>
@@ -676,11 +641,7 @@
     step={frameStep}
     label="Seek the composition"
     title="Seek the composition"
-    onInput={(seconds) => {
-      scrubbing = true
-      scrubValue = clamp(seconds)
-      queueFrame(scrubValue)
-    }}
+    onInput={(seconds) => holdSecond(seconds)}
     onCommit={() => commitScrub()}
   />
   <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed" title={format(duration)}
@@ -750,22 +711,28 @@
       user is already in the editor's full screen, and covering it meant losing the
       player, the timeline and the control row they annotate from. The captured
       frame takes the page's own pane, and the transport's row below stays put.
+
+      `data-annotation-surface` is what tells the editor around this picture that
+      the pen is open: a space beside an annotated frame continues the video, and
+      the editor's own play/pause has to stand aside for it.
     -->
-    <CompositionFrameAnnotator
-      projectId={projectId ?? ''}
-      threadId={threadId ?? ''}
-      snapshot={frameNote.snapshot}
-      bounds={paneBounds}
-      editingId={frameNote.editingId ?? null}
-      marks={marksAt(frameNote.snapshot.seconds)}
-      onEditClosed={() => {
-        // The jump named one mark; once its editor is closed the request is spent,
-        // and reopening the surface from the composer must open it again.
-        if (frameNote) frameNote = { ...frameNote, editingId: null }
-      }}
-      onClose={() => closeAnnotation()}
-      onContinue={() => closeAnnotation(true)}
-    />
+    <div data-annotation-surface class="contents">
+      <CompositionFrameAnnotator
+        projectId={projectId ?? ''}
+        threadId={threadId ?? ''}
+        snapshot={frameNote.snapshot}
+        bounds={paneBounds}
+        editingId={frameNote.editingId ?? null}
+        marks={marksAt(frameNote.snapshot.seconds)}
+        onEditClosed={() => {
+          // The jump named one mark; once its editor is closed the request is spent,
+          // and reopening the surface from the composer must open it again.
+          if (frameNote) frameNote = { ...frameNote, editingId: null }
+        }}
+        onClose={() => closeAnnotation()}
+        onContinue={() => closeAnnotation(true)}
+      />
+    </div>
   {/if}
 {/if}
 {#if projectId && threadId}

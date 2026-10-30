@@ -17,11 +17,32 @@
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import type { VideoEditorController } from '$lib/stores/video-editor.svelte'
+  import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
+  import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
+  import {
+    mediaMarkChatContext,
+    openAnnotationChat,
+    videoMomentChatContext
+  } from '$lib/annotation-chat'
+  import type { VideoEditChange } from '$shared/video/edit'
   import { snapEditTime } from '$shared/video/edit'
   import { videoTimecode } from '$shared/video/timeline'
   import { visibleClipFrames, videoThumbnailClips } from '$shared/video/frame-grid'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
+  import {
+    clusterTimelineMarks,
+    commentsInsideClip,
+    timelineComments,
+    type TimelineCluster,
+    type TimelineComment
+  } from './VideoEditTimeline/timeline-lanes'
 
   let {
     editor,
@@ -34,6 +55,23 @@
     caption: { icon: CioCaptions, label: 'Captions' },
     overlay: { icon: CioLayers, label: 'Overlays' }
   }
+  /**
+   * The two lanes under the tracks: the comments written on this composition and
+   * the edits the agent made to it.
+   *
+   * They are rows in the same rhythm as a track, with their own remembered
+   * height, because they sit in both columns: the label column names the lane and
+   * the content column draws its markers, and both read the height from the one
+   * place so the two halves cannot drift apart.
+   */
+  const AGENT_ROW = 'agent-edits'
+  const COMMENTS_ROW = 'comments'
+  const LANE_HEIGHT = 34
+  const LANE_MIN_HEIGHT = 24
+  const LANE_MAX_HEIGHT = 120
+  /** Marker widths, which are also the gap under which two marks read as one. */
+  const AGENT_MARKER_WIDTH = 16
+  const COMMENT_MARKER_WIDTH = 26
   let labelWidth = $state(208)
   let rowHeights = $state<Record<string, number>>({})
   let contextTrack = $state('')
@@ -61,6 +99,8 @@
     }
   }
   const trackHeight = (id: string): number => rowHeights[id] ?? 64
+  const laneHeight = (id: string): number => rowHeights[id] ?? LANE_HEIGHT
+  const isLane = (id: string): boolean => id === AGENT_ROW || id === COMMENTS_ROW
   function rememberRows(): void {
     localStorage.setItem('cio:video-editor-tracks', JSON.stringify({ labelWidth, rowHeights }))
   }
@@ -79,7 +119,12 @@
               (entry): entry is [string, number] =>
                 typeof entry[1] === 'number' && Number.isFinite(entry[1])
             )
-            .map(([key, height]) => [key, Math.max(40, Math.min(220, height))])
+            .map(([key, height]) => [
+              key,
+              isLane(key)
+                ? Math.max(LANE_MIN_HEIGHT, Math.min(LANE_MAX_HEIGHT, height))
+                : Math.max(40, Math.min(220, height))
+            ])
         )
     } catch {
       /* Invalid preferences do not block editing. */
@@ -113,8 +158,61 @@
   const frameCells = $derived(
     visibleClipFrames(videoThumbnailClips(editor.document), editor.fps, start, end, scale)
   )
-  const pendingChanges = $derived(
-    editor.edit?.changes.filter((change) => change.author === 'agent').slice(-200) ?? []
+  /**
+   * The agent's edits on this composition, in time order.
+   *
+   * One marker per edit reads as one marker per edit only while the edits are far
+   * apart: a burst sits inside a few pixels at the fit zoom, so marks that would
+   * overlap are folded into one badge that carries their count. Every cluster
+   * keeps the span it covers, which is what the lane underlines.
+   */
+  const agentEdits = $derived(
+    (editor.edit?.changes ?? [])
+      .filter((change) => change.author === 'agent')
+      .slice(-200)
+      .sort((left, right) => left.start - right.start)
+  )
+  const agentPending = $derived(agentEdits.filter((change) => !change.reviewed).length)
+  const agentClusters = $derived(
+    clusterTimelineMarks(
+      agentEdits,
+      (change) => change.start * scale,
+      (change) => change.id,
+      AGENT_MARKER_WIDTH
+    ).map((cluster) => {
+      const pending = cluster.items.filter((change) => !change.reviewed).length
+      return {
+        key: cluster.key,
+        x: cluster.x,
+        items: cluster.items,
+        pending,
+        from: cluster.items[0].start,
+        to: Math.max(...cluster.items.map((change) => change.end))
+      }
+    })
+  )
+  /**
+   * Every comment on this composition, from any of the three ways to write one:
+   * a note on the moment, a note on the selected clip, and a stroke drawn on a
+   * frame with the annotation tool.
+   *
+   * Each keeps the number it has in the conversation's reference list, which is
+   * the number its composer chip and the model use, so a comment pinned here and
+   * a chip in the composer name the same thing.
+   */
+  const comments = $derived(
+    timelineComments(
+      responseReferencesState.forThread(editor.projectId, editor.threadId),
+      editor.directory
+    )
+  )
+  const commentClusters = $derived(
+    clusterTimelineMarks(
+      comments,
+      (comment) => comment.seconds * scale,
+      (comment) => comment.reference.id,
+      COMMENT_MARKER_WIDTH
+    )
   )
   const visibleClips = $derived.by(() => {
     const items =
@@ -137,6 +235,31 @@
         index % stride === 0 ||
         (editor.selection?.kind === 'caption' && editor.selection.index === item.index)
     )
+  })
+  /**
+   * A comment also marks the clip it falls inside, on that clip's own track row.
+   *
+   * A note carries the second it was written at and no clip id, so where it
+   * belongs on the tracks is answered by the clips themselves: the moment is on
+   * every clip playing it, which is the row the reader is looking at when they
+   * wonder what was commented there.
+   */
+  const clipCommentMarks = $derived.by(() => {
+    const marks: {
+      key: string
+      comment: TimelineComment
+      trackId: string
+      x: number
+    }[] = []
+    for (const clip of visibleClips)
+      for (const comment of commentsInsideClip(comments, clip))
+        marks.push({
+          key: `${clip.id}:${comment.reference.id}`,
+          comment,
+          trackId: clip.trackId,
+          x: (comment.seconds - clip.start) * scale
+        })
+    return marks
   })
   const tickStep = $derived(
     [1 / editor.fps, 0.1, 0.5, 1, 5, 10, 30, 60, 300, 600].find((step) => step * scale >= 65) ?? 600
@@ -382,6 +505,197 @@
       if (track) track[key] = !track[key]
     })
   }
+
+  /** What a cluster of agent edits says about itself, in one sentence. */
+  function agentClusterLabel(cluster: { items: VideoEditChange[]; pending: number }): string {
+    const first = cluster.items[0]
+    const state =
+      cluster.pending === 0
+        ? 'all reviewed'
+        : `${cluster.pending} of ${cluster.items.length} still to review`
+    if (cluster.items.length === 1)
+      return `${first.reviewed ? 'Agent edit reviewed' : 'Agent edit to review'}: ${first.label} at ${videoTimecode(first.start)}`
+    return `${cluster.items.length} agent edits, ${state}, starting at ${videoTimecode(first.start)} with ${first.label}`
+  }
+
+  /** What one comment is called wherever the timeline names it. */
+  function commentLabel(comment: TimelineComment): string {
+    const text = (comment.reference.comment ?? '').trim()
+    const kind = comment.annotation ? 'Frame annotation' : 'Video note'
+    return `${kind} ${comment.number} at ${videoTimecode(comment.seconds)}${text ? `: ${text}` : ''}`
+  }
+
+  /** A cluster of comments, named by the one the reader would land on. */
+  function commentClusterLabel(cluster: TimelineCluster<TimelineComment>): string {
+    if (cluster.items.length === 1) return commentLabel(cluster.items[0])
+    return `${cluster.items.length} comments at this moment, starting with ${commentLabel(cluster.items[0])}`
+  }
+
+  /**
+   * The open comment and where its bubble is anchored.
+   *
+   * A comment is read and written in the one comment bubble the app draws, the
+   * same one the composer's jump opens, so the lane only has to name the comment
+   * and the point on screen it belongs to.
+   */
+  let commentEditor = $state<{ id: string; x: number; y: number } | null>(null)
+  const editingComment = $derived(
+    commentEditor
+      ? (comments.find((comment) => comment.reference.id === commentEditor?.id) ?? null)
+      : null
+  )
+  const editingCommentId = $derived(editingComment?.reference.id ?? '')
+  /** Seek to a comment and read it, which is what clicking its marker means. */
+  function openComment(event: MouseEvent, comment: TimelineComment): void {
+    editor.seek(comment.seconds)
+    const marker = event.currentTarget
+    if (!(marker instanceof HTMLElement)) return
+    const bounds = marker.getBoundingClientRect()
+    commentEditor = {
+      id: comment.reference.id,
+      x: bounds.left + bounds.width / 2,
+      y: bounds.bottom
+    }
+  }
+  /**
+   * Close the bubble, dropping a comment the user left blank.
+   *
+   * The bubble is opened before the comment is written, so a comment opened and
+   * then dismissed without a word is not a note: it would sit on the lane as an
+   * empty marker the reader has to open to find out it says nothing.
+   */
+  function closeComment(): void {
+    const current = commentEditor
+    commentEditor = null
+    if (!current) return
+    const note = responseReferencesState
+      .forThread(editor.projectId, editor.threadId)
+      .find((reference) => reference.id === current.id)
+    if (note && (note.comment ?? '').trim() === '') removeReference(current.id)
+  }
+
+  function removeReference(id: string): void {
+    const existing = responseReferencesState.forThread(editor.projectId, editor.threadId)
+    if (!existing.some((reference) => reference.id === id)) return
+    responseReferencesState.setForThread(
+      editor.projectId,
+      editor.threadId,
+      existing.filter((reference) => reference.id !== id)
+    )
+  }
+  function draftComment(comment: string): void {
+    const current = editingComment
+    if (!current) return
+    responseReferencesState.updateCommentDraft(
+      editor.projectId,
+      editor.threadId,
+      current.reference.id,
+      comment
+    )
+  }
+  function saveComment(comment: string): void {
+    const current = editingComment
+    commentEditor = null
+    if (!current) return
+    responseReferencesState.updateComment(
+      editor.projectId,
+      editor.threadId,
+      current.reference.id,
+      comment
+    )
+  }
+  function removeComment(): void {
+    const current = editingComment
+    commentEditor = null
+    if (!current) return
+    removeReference(current.reference.id)
+  }
+
+  /**
+   * Comment on the selected item, from the item itself.
+   *
+   * A comment on a moment names a second; a comment on an item names the clip the
+   * reader picked, so it is written at the playhead when the playhead is already
+   * inside that clip and at the clip's own first frame otherwise. Either way it is
+   * the same note the other two routes write, so it lands on the comments lane and
+   * on the clip's own row, and the model reads it as a comment on this moment of
+   * this composition.
+   */
+  async function commentOnSelection(): Promise<void> {
+    const clip = editor.selectedClip
+    if (!clip) return
+    const inside = editor.time >= clip.start && editor.time < clip.start + clip.duration
+    const seconds = inside ? editor.time : clip.start
+    const id = newVideoNoteId()
+    const existing = responseReferencesState.forThread(editor.projectId, editor.threadId)
+    responseReferencesState.setForThread(editor.projectId, editor.threadId, [
+      ...existing,
+      {
+        ...videoNoteReference(id, seconds, {
+          directory: editor.directory,
+          composition: { fps: editor.fps, duration: editor.duration },
+          document: editor.document,
+          ...(editor.tabId ? { tabId: editor.tabId } : {})
+        }),
+        comment: ''
+      }
+    ])
+    editor.seek(seconds)
+    await tick()
+    const marker = commentMarker(id)
+    if (!marker) return
+    marker.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const bounds = marker.getBoundingClientRect()
+    commentEditor = { id, x: bounds.left + bounds.width / 2, y: bounds.bottom }
+  }
+  /** The marker drawn for one comment, so a jump can anchor to it. */
+  function commentMarker(id: string): HTMLElement | null {
+    const markers = viewport?.querySelectorAll<HTMLElement>('[data-video-comments]')
+    if (!markers) return null
+    for (const marker of markers)
+      if ((marker.dataset.videoComments ?? '').split(' ').includes(id)) return marker
+    return null
+  }
+  /**
+   * A jump from the composer names the comment it wants opened.
+   *
+   * This timeline is the surface that draws a composition's comments, so it takes
+   * the request the way the board's own timeline did: seek to the comment, bring
+   * its marker into view and open it, so a chip in the conversation lands on the
+   * row it names rather than on the composition's first frame.
+   */
+  $effect(() => {
+    const request = videoNoteFocusState.pending(editor.projectId, editor.threadId)
+    if (!request || request.directory !== editor.directory) return
+    const comment = comments.find((entry) => entry.reference.id === request.referenceId) ?? null
+    videoNoteFocusState.consume(request.token)
+    editor.seek(request.seconds)
+    if (!comment) return
+    const marker = commentMarker(comment.reference.id)
+    if (!marker) return
+    marker.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const bounds = marker.getBoundingClientRect()
+    commentEditor = {
+      id: comment.reference.id,
+      x: bounds.left + bounds.width / 2,
+      y: bounds.bottom
+    }
+  })
+  /** Ask about the moment or the annotated frame, in the read-only side chat. */
+  function chatAboutComment(mode: 'elaborate' | 'quick'): void {
+    const current = editingComment
+    commentEditor = null
+    if (!current) return
+    openAnnotationChat({
+      projectId: editor.projectId,
+      threadId: editor.threadId,
+      mode,
+      selection: current.reference.text,
+      context: current.annotation
+        ? mediaMarkChatContext('video frame')
+        : videoMomentChatContext(editor.directory)
+    })
+  }
 </script>
 
 {#snippet captionItems(track: VideoEditTrack)}
@@ -613,7 +927,58 @@
             />
           </div>
         {/each}
-        <div class="flex h-6 items-center px-2 text-[0.625rem] text-muted">Agent review</div>
+        <div
+          class="relative flex items-center gap-1 border-b border-border px-2"
+          style:height={`${laneHeight(COMMENTS_ROW)}px`}
+          role="group"
+          aria-label="Comments lane"
+        >
+          <CioMessage size={11} class="shrink-0 text-dimmed" />
+          <span class="truncate text-[0.625rem] text-muted">Comments</span>
+          <span class="ml-auto shrink-0 text-[0.625rem] text-dimmed tabular-nums"
+            >{comments.length}</span
+          >
+          <StudioSidebarResizeHandle
+            sidebarLabel="comments lane height"
+            axis="y"
+            value={laneHeight(COMMENTS_ROW)}
+            min={LANE_MIN_HEIGHT}
+            max={LANE_MAX_HEIGHT}
+            onResize={(value) => (rowHeights[COMMENTS_ROW] = value)}
+            onCommit={rememberRows}
+            class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+          />
+        </div>
+        <div
+          class="relative flex items-center gap-1 border-b border-border px-2"
+          style:height={`${laneHeight(AGENT_ROW)}px`}
+          role="group"
+          aria-label="Agent review lane"
+        >
+          <CioSparkles size={11} class="shrink-0 text-dimmed" />
+          <span class="truncate text-[0.625rem] text-muted">Agent review</span>
+          <span
+            class={[
+              'ml-auto shrink-0 text-[0.625rem] tabular-nums',
+              agentPending ? 'text-primary' : 'text-dimmed'
+            ]}
+            >{agentEdits.length === 0
+              ? 'None'
+              : agentPending === 0
+                ? 'Reviewed'
+                : `${agentPending} new`}</span
+          >
+          <StudioSidebarResizeHandle
+            sidebarLabel="agent review lane height"
+            axis="y"
+            value={laneHeight(AGENT_ROW)}
+            min={LANE_MIN_HEIGHT}
+            max={LANE_MAX_HEIGHT}
+            onResize={(value) => (rowHeights[AGENT_ROW] = value)}
+            onCommit={rememberRows}
+            class="absolute inset-x-0 bottom-0 z-10 h-1.5 w-full cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+          />
+        </div>
       </div>
       <StudioSidebarResizeHandle
         sidebarLabel="track labels"
@@ -750,6 +1115,28 @@
                   ></span>
                 </button>
               {/each}
+              <!--
+                A comment that falls inside a clip is also marked on that clip's
+                row: the lane below says a moment was commented on, and the row
+                is what says on which moment of which track.
+              -->
+              {#each clipCommentMarks.filter((mark) => mark.trackId === track.id) as mark (mark.key)}
+                <button
+                  type="button"
+                  class="absolute top-0.5 z-10 flex h-4 -translate-x-1/2 items-center gap-0.5 border border-accent/60 bg-surface px-0.5 text-[0.5625rem] text-foreground tabular-nums hover:border-accent hover:bg-elevated"
+                  style:left={`${Math.max(8, mark.x)}px`}
+                  data-video-comments={mark.comment.reference.id}
+                  title={commentLabel(mark.comment)}
+                  aria-label={commentLabel(mark.comment)}
+                  onpointerdown={(event) => event.stopPropagation()}
+                  onclick={(event) => openComment(event, mark.comment)}
+                >
+                  {#if mark.comment.annotation}<CioPencil size={8} />{:else}<CioClapper
+                      size={8}
+                    />{/if}
+                  <span>{mark.comment.number}</span>
+                </button>
+              {/each}
               <StudioSidebarResizeHandle
                 sidebarLabel={`${track.name} track height`}
                 axis="y"
@@ -762,22 +1149,82 @@
               />
             </div>
           {/each}
-          <div class="relative h-6" role="group" aria-label="Agent edit review markers">
-            {#each pendingChanges as change (change.id)}
-              <button
-                type="button"
-                class={[
-                  'absolute top-1 h-4 overflow-hidden px-1 text-[0.5625rem]',
-                  change.reviewed ? 'bg-elevated text-dimmed' : 'bg-primary/30 text-primary'
-                ]}
-                style:left={`${change.start * scale}px`}
-                style:width={`${Math.max(10, (change.end - change.start) * scale)}px`}
-                title={`${change.reviewed ? 'Reviewed' : 'Needs review'}: ${change.label}`}
-                aria-label={change.label}
-                onclick={() => editor.seek(change.start)}
-                >{change.reviewed ? 'Reviewed' : 'Review'}</button
+          <div
+            class="relative border-b border-border bg-app"
+            style:height={`${laneHeight(COMMENTS_ROW)}px`}
+            role="group"
+            aria-label="Comments on this composition"
+          >
+            {#if comments.length === 0}
+              <span class="flex h-full items-center px-2 text-[0.625rem] text-dimmed"
+                >No comments on this composition yet</span
               >
-            {/each}
+            {:else}
+              {#each commentClusters as cluster (cluster.key)}
+                {@const first = cluster.items[0]}
+                <button
+                  type="button"
+                  class={[
+                    'absolute top-1/2 flex h-4 -translate-y-1/2 items-center gap-0.5 border px-1 text-[0.5625rem] tabular-nums',
+                    cluster.items.some((item) => item.reference.id === editingCommentId)
+                      ? 'border-accent bg-accent/30 text-foreground'
+                      : 'border-accent/45 bg-accent/10 text-foreground hover:border-accent hover:bg-accent/20'
+                  ]}
+                  style:left={`${cluster.x}px`}
+                  data-video-comments={cluster.items.map((item) => item.reference.id).join(' ')}
+                  title={commentClusterLabel(cluster)}
+                  aria-label={commentClusterLabel(cluster)}
+                  onclick={(event) => openComment(event, first)}
+                >
+                  {#if first.annotation}<CioPencil size={9} />{:else}<CioClapper size={9} />{/if}
+                  <span>{cluster.items.length > 1 ? cluster.items.length : first.number}</span>
+                </button>
+              {/each}
+            {/if}
+          </div>
+          <div
+            class="relative border-b border-border bg-app"
+            style:height={`${laneHeight(AGENT_ROW)}px`}
+            role="group"
+            aria-label="Agent edit review markers"
+          >
+            {#if agentEdits.length === 0}
+              <span class="flex h-full items-center px-2 text-[0.625rem] text-dimmed"
+                >No agent edits to review</span
+              >
+            {:else}
+              {#each agentClusters as cluster (cluster.key)}
+                {#if cluster.to > cluster.from}
+                  <span
+                    class="pointer-events-none absolute bottom-0.5 h-0.5 bg-primary/30"
+                    style:left={`${cluster.from * scale}px`}
+                    style:width={`${Math.max(1, (cluster.to - cluster.from) * scale)}px`}
+                  ></span>
+                {/if}
+                <button
+                  type="button"
+                  class={[
+                    'absolute top-1/2 flex h-4 -translate-y-1/2 items-center justify-center border text-[0.5625rem] tabular-nums',
+                    cluster.items.length > 1 ? 'min-w-4 px-0.5' : 'w-4',
+                    cluster.pending > 0
+                      ? 'border-primary bg-primary/20 text-primary hover:bg-primary/30'
+                      : 'border-border bg-elevated text-dimmed hover:text-foreground'
+                  ]}
+                  style:left={`${cluster.x}px`}
+                  title={agentClusterLabel(cluster)}
+                  aria-label={agentClusterLabel(cluster)}
+                  onclick={() => editor.seek(cluster.from)}
+                >
+                  {#if cluster.items.length > 1}
+                    <span>{cluster.items.length}</span>
+                  {:else if cluster.pending > 0}
+                    <CioSparkles size={10} />
+                  {:else}
+                    <CioCheck size={10} />
+                  {/if}
+                </button>
+              {/each}
+            {/if}
           </div>
           <div
             class="pointer-events-none absolute inset-y-0 z-10 w-px bg-primary"
@@ -794,6 +1241,15 @@
       class="z-80 flex max-h-[min(70vh,32rem)] min-w-64 flex-col overflow-y-auto overscroll-contain border border-border bg-surface py-1 shadow-lg"
     >
       {@render contextActions?.()}
+      {#if editor.selectedClip}
+        <ContextMenu.Separator class="my-1 h-px bg-border" />
+        <ContextMenu.Item
+          class="flex cursor-pointer items-center px-3 py-1.5 text-xs outline-none data-highlighted:bg-elevated"
+          onSelect={() => void commentOnSelection()}
+        >
+          <span class="flex-1">Comment on the selected item</span>
+        </ContextMenu.Item>
+      {/if}
       {#if contextTrack}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         <ContextMenu.Item
@@ -818,3 +1274,40 @@
     </ContextMenu.Content>
   </ContextMenu.Portal>
 </ContextMenu.Root>
+
+{#if commentEditor && editingComment}
+  <!--
+    The one comment bubble the app draws, anchored to the marker the reader
+    clicked. A comment written on a moment, on a selected clip and drawn on a
+    frame are all the same reference, so all three are read, edited and asked
+    about here.
+
+    The wrapper lifts the bubble over the surface the timeline is drawn on: the
+    fullscreen editor is a modal, and a bubble painted under it would be a comment
+    the user could see their marker for and never read.
+  -->
+  <div data-layer-above-modal class="relative z-80 pointer-events-auto">
+    <ResponseAnnotationComment
+      x={commentEditor.x}
+      y={commentEditor.y}
+      title={editingComment.annotation ? 'Comment on frame annotation' : 'Comment on moment'}
+      dragHandleTitle={editingComment.annotation
+        ? 'Move frame annotation comment'
+        : 'Move moment comment'}
+      closeLabel="Close comment"
+      removeTitle={editingComment.annotation
+        ? 'Remove this frame annotation and its comment'
+        : 'Remove this note and its comment'}
+      initialComment={editingComment.reference.comment ?? ''}
+      targetId={`video-timeline-comment-${editor.threadId}-${editingComment.reference.id}`}
+      scope={{ kind: 'project', projectId: editor.projectId }}
+      chatSubject={editingComment.annotation ? 'frame annotation' : 'moment'}
+      onDraftChange={draftComment}
+      onDone={saveComment}
+      onRemove={removeComment}
+      onClose={closeComment}
+      onExplain={() => chatAboutComment('elaborate')}
+      onQuickChat={() => chatAboutComment('quick')}
+    />
+  </div>
+{/if}

@@ -1,6 +1,9 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { VideoFrameSeeker } from '$lib/video-frame-seeker'
+import {
+  compositionPlayheadFor,
+  type CompositionPlayhead
+} from '$lib/stores/composition-playhead.svelte'
 import {
   validateVideoStudio,
   type VideoCaption,
@@ -91,11 +94,20 @@ export class VideoEditorController {
     { tabId: string; active: boolean; onDirtyChange?: (dirty: boolean) => void }
   >()
   private unsubscribe: (() => void)[] = []
-  private poll: ReturnType<typeof setInterval> | undefined
+  /**
+   * The tab's one playhead, while a tab is attached.
+   *
+   * The editor draws a timeline of the picture another surface is showing, so it
+   * reads that surface's playhead rather than polling the page for a second copy of
+   * it: one answer moves the seek bar, the clock, the picture and these tracks
+   * together. A timeline on its own clock is what let the bar freeze while the
+   * playhead kept running.
+   */
+  private playhead: CompositionPlayhead | null = null
+  private releasePlayhead: (() => void) | null = null
   private previewTimer: ReturnType<typeof setTimeout> | undefined
   private previewBusy = false
   private previewAgain = false
-  private reading = false
   private disposed = false
   private gestureBefore: string | null = null
   private gestureWasDirty = false
@@ -202,10 +214,6 @@ export class VideoEditorController {
       })
     }
   }
-  private seeker = new VideoFrameSeeker(
-    (tabId, time) => invoke('browser:transport', tabId, 'seek', time),
-    (_tabId, state) => this.adoptPlayback(state)
-  )
 
   constructor(
     readonly projectId: string,
@@ -376,13 +384,21 @@ export class VideoEditorController {
     )
   }
   private syncActivity(): void {
-    clearInterval(this.poll)
-    this.poll = undefined
-    if (this.tabId && !this.disposed) {
-      void this.readPlayback()
-      this.poll = setInterval(() => {
-        void this.readPlayback()
-      }, 250)
+    this.releasePlayhead?.()
+    this.releasePlayhead = null
+    this.playhead = null
+    const tabId = this.tabId
+    if (tabId && !this.disposed) {
+      // One playhead for the tab, shared with the transport row above the picture
+      // and with any other surface showing it: the timeline follows the page the
+      // same way the seek bar does, so the two cannot disagree about the second.
+      const playhead = compositionPlayheadFor(tabId)
+      this.playhead = playhead
+      this.releasePlayhead = playhead.attach((state) => {
+        // A gesture in progress owns the playhead it started from, so a poll cannot
+        // move the frame out from under a clip being dragged.
+        if (!this.gestureBefore && !this.disposed) this.adoptPlayback(state)
+      })
       this.queuePreview()
     } else if (this.document)
       void invoke('video:stopEditing', this.projectId, this.threadId, this.directory).catch(
@@ -393,18 +409,6 @@ export class VideoEditorController {
     this.time = state.time
     this.playing = state.playing
     if (state.error) this.error = state.error
-  }
-  private async readPlayback(): Promise<void> {
-    if (this.reading || !this.tabId) return
-    this.reading = true
-    try {
-      const state = await invoke('browser:transportState', this.tabId)
-      if (state && !this.disposed && !this.gestureBefore) this.adoptPlayback(state)
-    } catch {
-      /* A board changing folders releases this view. */
-    } finally {
-      this.reading = false
-    }
   }
 
   async load(enable: boolean): Promise<void> {
@@ -547,29 +551,36 @@ export class VideoEditorController {
     }
     if (this.selectionAnchor && !live.has(this.selectionAnchor)) this.selectionAnchor = null
   }
+  /**
+   * Move the playhead to a second.
+   *
+   * The second is shown at once, so a dragged playhead follows the pointer, and the
+   * page is asked for it through the tab's one playhead: seeking keeps whatever the
+   * transport was doing, and the answer it gives is the second that settles every
+   * surface of this tab.
+   */
   seek(seconds: number): void {
     this.time = Math.min(this.duration, snapEditTime(seconds, this.fps))
-    if (this.tabId) this.seeker.seek(this.tabId, this.time)
+    this.playhead?.seek(this.time)
   }
   async paintBlur(): Promise<void> {
-    try {
-      if (this.playing && this.tabId) {
-        const state = await invoke('browser:transport', this.tabId, 'pause', 0)
-        if (state) this.adoptPlayback(state)
-      }
-      this.select(this.selection?.kind === 'brush' ? null : { kind: 'brush', size: 0.04 })
-    } catch (cause) {
-      this.error = cause instanceof Error ? cause.message : String(cause)
-    }
+    if (this.playing && this.playhead) await this.playhead.command('pause')
+    this.select(this.selection?.kind === 'brush' ? null : { kind: 'brush', size: 0.04 })
   }
+  /**
+   * Play or pause the composition.
+   *
+   * The answer is the page's, not an assumption: a play that ended immediately, or
+   * one whose frame threw, shows here as it happened. The command also drops a scrub
+   * still waiting to be sent, so a freeze cannot land after this play and stop a
+   * picture the user just started.
+   */
   async togglePlayback(): Promise<void> {
-    if (!this.tabId) return
-    try {
-      const state = await invoke('browser:transport', this.tabId, 'toggle', 0)
-      if (state) this.adoptPlayback(state)
-    } catch (cause) {
-      this.error = cause instanceof Error ? cause.message : String(cause)
-    }
+    const playhead = this.playhead
+    if (!playhead) return
+    const state = await playhead.command('toggle')
+    if (state) this.adoptPlayback(state)
+    else this.error = 'The composition did not answer. Reopen it to keep playing.'
   }
 
   private pushUndo(before: string): void {
@@ -1313,11 +1324,14 @@ export class VideoEditorController {
     }
   }
   private dispose(): void {
-    clearInterval(this.poll)
     clearTimeout(this.previewTimer)
     clearTimeout(this.frameTimer)
     this.frameRequest = null
-    this.seeker.clear()
+    // The playhead belongs to the tab, not to this view: leaving gives it back so a
+    // surface that is still showing the composition keeps reading it.
+    this.releasePlayhead?.()
+    this.releasePlayhead = null
+    this.playhead = null
     for (const unsubscribe of this.unsubscribe) unsubscribe()
     this.unsubscribe = []
     void invoke('video:stopEditing', this.projectId, this.threadId, this.directory).catch(

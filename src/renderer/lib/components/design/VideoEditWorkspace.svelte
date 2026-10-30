@@ -302,6 +302,29 @@
     return input instanceof HTMLInputElement && !['number', 'range', 'color'].includes(input.type)
   }
 
+  /**
+   * Whether a pen is open on a picture over this editor.
+   *
+   * An annotated frame answers a space by continuing the video, which is the pen's
+   * own `video-annotation-continue` binding and is the same key as play/pause. The
+   * pen also owns Escape and its own comment fields, so while it is armed the
+   * editor stands aside rather than competing with the surface in front of it.
+   */
+  function penOwnsKeyboard(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && target.closest('[data-annotation-surface]') !== null
+  }
+
+  /**
+   * Whether a control answers a space by itself.
+   *
+   * A `select` opens its list on a space, so that press is the control's. A button
+   * or a seek track does nothing useful with it: in this editor space is the
+   * play/pause key wherever the focus is.
+   */
+  function controlOwnsSpace(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && target.closest('select') !== null
+  }
+
   function keydown(event: KeyboardEvent): void {
     if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
     const fromPage = event.target === document
@@ -312,8 +335,23 @@
     )
       return
     // The keys of a field in front of the editor are the field's, and this runs in
-    // the capture phase, before the field itself answers them.
+    // the capture phase, before the field itself answers them. A space typed into a
+    // comment or a track name is a space.
     if (typingInTextEntry(event.target)) return
+    // The pen in front of a frame claims its own keys, a space included.
+    if (penOwnsKeyboard(event.target)) return
+    // Play/pause is the one key that fires wherever the focus is inside the editor:
+    // on a clip, on the seek track, on a toolbar button. It is answered before the
+    // controls below are given their own keys, because none of them do anything
+    // useful with a space.
+    if (!controlOwnsSpace(event.target) && keymapState.matches('video-edit-play', event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      // A held key is one press: repeating it would flip play and pause at the
+      // keyboard's repeat rate.
+      if (!event.repeat) void editor.togglePlayback()
+      return
+    }
     if (keymapState.matches('video-primary-action', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -373,12 +411,6 @@
         'video-edit-import',
         () => {
           void editor.importFiles()
-        }
-      ],
-      [
-        'video-edit-play',
-        () => {
-          void editor.togglePlayback()
         }
       ],
       ['video-edit-frame-back', () => editor.seek(editor.time - 1 / editor.fps)],
