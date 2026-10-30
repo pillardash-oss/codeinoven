@@ -834,13 +834,20 @@ function asConfigRecord(config: UtilityConfigMap[UtilityKind]): Record<string, u
 }
 
 /**
- * Keeps an app-owned entry's name and description equal to what this build
- * ships.
+ * Keeps an app-owned entry's name, description and skill text equal to what
+ * this build ships.
  *
  * App-owned identity is the app's call, so a registry written by an earlier
  * build must not keep calling a renamed utility by its old name: the seed only
  * adds missing ids, and an entry renamed in place (see
  * `migrateLegacyAppUtilities`) would otherwise carry its old label forever.
+ *
+ * The skill text is refreshed for the same reason and it matters more, because
+ * an agent only ever reads the registry's copy of it (`capabilityFor` hands back
+ * `config.instructions`). A build that rewrote a capability's contract, as the
+ * video and artifact capabilities were rewritten to separate a throwaway video
+ * delivery from an editable composition, would otherwise keep serving the old
+ * contract to every existing install, and the fix would exist only in the source.
  */
 function refreshAppOwnedPresentation(
   registry: UtilityRegistryFile,
@@ -853,6 +860,24 @@ function refreshAppOwnedPresentation(
     if (!utility.appOwned) continue
     const current = shipped.get(utility.id)
     if (!current) continue
+    // A skill's instructions are app-authored too, and the entry is the only
+    // copy an activation hands back, so a shipped rewrite has to land here.
+    const instructionSource = isRecord(current.config) ? current.config['instructions'] : null
+    if (
+      utility.kind === 'skill' &&
+      typeof instructionSource === 'string' &&
+      utility.config.instructions !== instructionSource
+    ) {
+      registry.utilities[index] = {
+        ...utility,
+        name: current.name,
+        description: current.description,
+        config: { ...utility.config, instructions: instructionSource },
+        updatedAt: Date.now()
+      }
+      changed = true
+      continue
+    }
     if (utility.name === current.name && utility.description === current.description) continue
     registry.utilities[index] = {
       ...utility,

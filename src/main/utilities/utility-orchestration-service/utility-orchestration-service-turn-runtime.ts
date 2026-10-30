@@ -315,7 +315,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)
         ? [
-            `For requested inline artifacts, activate ${APP_ARTIFACT_UTILITY_ID} before producing output; it covers image, audio, video, HTML and SVG delivery. Ordinary design or video work uses its task-specific capability.`
+            `For requested inline artifacts, activate ${APP_ARTIFACT_UTILITY_ID} before producing output: it renders images, audio, HTML and SVG, and it delivers a video the video capability exported. It never makes a video itself, so a video request goes to ${APP_VIDEO_UTILITY_ID} first and is rendered here afterwards. Ordinary design or video work uses its task-specific capability.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
@@ -330,7 +330,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(hasVideoCapability
         ? [
-            `Video work is a session, not a file: before writing a composition, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate ${APP_VIDEO_UTILITY_ID}. Activating it is what opens the thread's video session, serves the folder, lists the composition on the board and docks the panel the user is watching. Its playbook covers composition, preview, checkpoints and frame capture. Inspect every changed frame and use ${APP_BROWSER_UTILITY_ID} for motion. Follow project motion guidance first.`
+            `Video work is a session, not a file: before writing a composition, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate ${APP_VIDEO_UTILITY_ID}. It is the only capability that makes a video, so a request for a video, a walkthrough of the work you did or a recap to watch is a call to it, never a page, a screenshot sequence or prose of your own. Activating it is what opens the thread's video session, serves the folder, lists the composition on the board and docks the panel the user is watching. Its playbook covers composition, preview, checkpoints and frame capture, and it opens with the one decision to make first: a film the user will keep and iterate on is an editable composition, while a throwaway walkthrough of finished work is built in scratch, exported once and delivered inline through ${APP_ARTIFACT_UTILITY_ID}. It needs nothing installed to make that film, and anything extra it genuinely needs is the user's to approve, so name it and keep building. Inspect every changed frame and use ${APP_BROWSER_UTILITY_ID} for motion. Follow project motion guidance first.`
           ]
         : []),
       ...(hasOnDemand

@@ -32,9 +32,16 @@ import {
 /** Display name shown in a search result, the Utilities UI and the thread bank. */
 export const VIDEO_CAPABILITY_NAME = 'Video studio (compositions)'
 
-/** One-line summary, shown with the name wherever the capability is listed. */
+/**
+ * One-line summary, shown with the name wherever the capability is listed.
+ *
+ * It names both deliverables on purpose, because this is the sentence an agent
+ * reads in a search result before it decides anything: this capability makes
+ * every video the user asks for, a throwaway recap included, and the answer to
+ * a video request is never to improvise one somewhere else.
+ */
 export const VIDEO_CAPABILITY_SUMMARY =
-  "Cuts and composites a video as a small web project: a timeline drawn by the browser, watched live in this project and thread's preview tab, with any exact frame capturable so the work can be looked at while it is being made."
+  'Makes any video the user asks for as a small web project drawn by the browser: an editable composition watched live in this thread, or a throwaway walkthrough of finished work that is exported once and delivered inline in the conversation. Nothing needs installing to start.'
 
 /**
  * Search query advertised in the turn instructions. One word on purpose: the
@@ -71,6 +78,15 @@ export function videoCapabilityDocs(
 
 Make a video as a small web project, then watch it in this app while the turn is still running. A title sequence, a product walkthrough, a captioned social cut, an explainer, an animated chart, a montage: anything that is a piece of motion rather than a page.
 
+## Which video the user is asking for
+
+Two deliverables come out of this capability, and the request decides which one before you write a frame:
+
+- An editable composition, for a film the user will keep, review or change, or asked for in its own right: a launch piece, a promo, a product demo, a title sequence, a social cut. It lives in \`${videoRoot}/<name>/\`, stays open for edits, and is previewed rather than exported.
+- A throwaway delivery, for a video the user watches once to understand something: "give me a video", "a walkthrough", "explain what you did", a recap of the pipeline you just built, a clip to send someone. Build the barest film that reads, export it once, and deliver the MP4 inline in the conversation with the artifact capability. The user does not want a project to edit, a timeline to review or a board card out of this.
+
+The request decides it, not habit: a film someone will work on is a composition, and a recap of work already finished is a delivery. Build a delivery in \`.cio/work/<feature>/recap/\` so it never appears on the board, and say which of the two you made. A delivery is still a real film: same beat map, same motion, same care. "Throwaway" describes what happens to it afterwards, not how good it looks.
+
 ${authoredWorkCheckpointGuidance('video')}
 
 ## Preview first, export on request
@@ -78,6 +94,14 @@ ${authoredWorkCheckpointGuidance('video')}
 The default deliverable is the editable composition and its live preview. Keep changes in the source, preview them, capture frames and grade the current revision. Do not call \`export\` automatically when creating a video, finishing a scene, passing critique or wrapping up a turn. A request to make or improve a video does not by itself request an MP4.
 
 Export only when the user explicitly asks for an export, render or downloadable video file, or directly starts an export from the app. Do not ask about exporting at the end of every edit. A previous export request does not authorize automatic re-exports after later edits unless the user explicitly asked to keep the exported file updated. Until export is requested, report the composition folder, preview URL and review result; the absence of an MP4 is not a defect or a reason to fail critique. Run exported-file checks and review exported frames and audio only when delivering a requested export.
+
+A request to watch something is an export request. For a throwaway delivery the exported file is the deliverable: export it once, render the MP4 inline with the artifact capability, and tell the user what they are about to watch. That is the one export this section authorizes without a further question, and it still does not authorize re-exporting after every later edit unless the user asks for the file to be kept current.
+
+## Work with what is installed
+
+The barest minimum makes a real video, and it needs nothing installed: a folder, \`index.html\`, \`composition.json\` and a canvas that draws every frame from \`cioRenderFrame\`. Type, colour, geometry, charts, counters and motion are yours to draw, and \`scaffold\` can start from a film the app already ships. An uninstalled extra never ends the work.
+
+The extras each belong to the user: the optional video pack for tracking and background removal, the ASR model in Sounds for \`transcribe\`, the generation model they assigned to an image, video or audio craft for \`generate\`, and the models they assigned for \`delegate\`. When the film genuinely needs one, name the exact thing that is missing, ask for it in the same turn, and build the version that needs nothing so there is a film to watch meanwhile. Never install a pack, download a model or pick a model yourself, and never answer a video request with prose, a slide deck of frames or a promise that a file exists.
 
 ## Establish the brand before the first frame
 
@@ -104,6 +128,8 @@ Write one composition per folder under \`${videoRoot}/<name>/\`:
 ${workRootGuidance(videoRoot)} Do not write into \`.cio/specs/<feature>/prototypes/\`, which belongs to the engineering prototype phase.
 
 That folder is the composition's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a composition written there is one the user cannot find, because the board lists the folders under \`${videoRoot}\` and nothing else. A composition belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a composition is neither. If part of this composition already sits somewhere else, move it under \`${videoRoot}/<name>/\` before you continue, because work left in another folder is work the user cannot find.
+
+One exception, and only one: a throwaway delivery, the walkthrough or recap of finished work the user watches once and throws away. That film is built in \`.cio/work/<feature>/recap/\` precisely so it never reaches the board, and its deliverable is the exported MP4 rendered in the conversation, not a folder the user is asked to keep. Every other video belongs under \`${videoRoot}/<name>/\`. If you cannot tell which one the user asked for, it is a delivery when they asked to watch something about work already finished and a composition when there is a film to make.
 
 ## Start from a shipped film
 
@@ -211,7 +237,7 @@ The tab is a player. The user can pause it, drag the scrubber, step a frame, sto
 
 The video board is an editable multitrack workspace. Its outer expand opens the complete editor, with assets and inspector on the left, video on the right and timeline below; the video's own expand opens clean playback. Users can import source files into the composition's assets folder, drag them onto tracks, split, trim, move, duplicate and remove clips, undo and redo drafts, place captions and privacy regions on the stage, adjust clip colour and sound, and save revision-checked history checkpoints. Never replace this editable master with an exported movie.
 
-Use \`editor\` with the composition directory to enable the source-preserving document. Known source-to-timeline cut maps are retained, and unsupported code-based compositions remain as the background. Re-read \`studio\` before changes. The document's \`edit\` holds local assets, named video/audio/caption/overlay tracks, clips with sourceStart/start/duration/speed, normalized placement and crop, per-clip grade and audio settings, incoming transitions, timed blur/pixelate/cover regions, and reviewed/unreviewed change ranges. Captions and privacy regions carry trackId values for caption and overlay tracks respectively. Track locks protect content and hidden tracks do not render. The UI Extract audio action detaches the selected video clip onto a new audio track with the same timeline start, duration, source in and speed. Captions have optional appearance fields for position, width, app font, size, weight, colour and background. Use \`editor\` with the returned revision and bounded incremental operations to split, trim, move or patch clips and add regions; use \`studio\` for captions and other document edits while preserving fields you did not change. A stale revision is refused. Saves create before/after history and agent change markers. Never write studio.json, composition.json or the composition page with a script: those files are app-owned, and a write that bypasses \`editor\` skips validation, change markers and history. An asset's source, name and duration are measured from the file by the app, never typed, and a timeline rebuilt from a cut map goes through one replaceClips call per track. A video the conversation plays inline is a delivery, not a composition: have the artifact capability render it where artifacts live, and never write it into the video work root, because that root is the board's list of editable compositions. The canonical runtime renders that document in both preview and export, including clip audio, processing and transitions.
+Use \`editor\` with the composition directory to enable the source-preserving document. Known source-to-timeline cut maps are retained, and unsupported code-based compositions remain as the background. Re-read \`studio\` before changes. The document's \`edit\` holds local assets, named video/audio/caption/overlay tracks, clips with sourceStart/start/duration/speed, normalized placement and crop, per-clip grade and audio settings, incoming transitions, timed blur/pixelate/cover regions, and reviewed/unreviewed change ranges. Captions and privacy regions carry trackId values for caption and overlay tracks respectively. Track locks protect content and hidden tracks do not render. The UI Extract audio action detaches the selected video clip onto a new audio track with the same timeline start, duration, source in and speed. Captions have optional appearance fields for position, width, app font, size, weight, colour and background. Use \`editor\` with the returned revision and bounded incremental operations to split, trim, move or patch clips and add regions; use \`studio\` for captions and other document edits while preserving fields you did not change. A stale revision is refused. Saves create before/after history and agent change markers. Never write studio.json, composition.json or the composition page with a script: those files are app-owned, and a write that bypasses \`editor\` skips validation, change markers and history. An asset's source, name and duration are measured from the file by the app, never typed, and a timeline rebuilt from a cut map goes through one replaceClips call per track. A video the conversation plays inline is a delivery, not a composition: export it, have the artifact capability render the MP4 where artifacts live, and never write the delivered file into the video work root, because that root is the board's list of editable compositions. The canonical runtime renders that document in both preview and export, including clip audio, processing and transitions.
 
 The user can click the ruler and annotate an exact frame. Notes carry the composition folder, timecode, frame number and any caption or declared control covering that moment. Address the stored edit at that second, and re-read \`studio\` after changes that could retime it.
 
