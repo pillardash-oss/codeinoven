@@ -34,7 +34,6 @@ export interface TransportHost {
   readonly playheads: BrowserService['playheads']
   readonly publishState: BrowserService['publishState']
   readonly readPlayhead: BrowserService['readPlayhead']
-  readonly requireTab: BrowserService['requireTab']
   readonly tabs: BrowserService['tabs']
   readonly takePlayhead: BrowserService['takePlayhead']
 }
@@ -211,16 +210,23 @@ export class BrowserServiceTransport {
    * The page owns the frame, so the answer is read back rather than assumed: a play
    * that ended immediately, or a seek the composition clamped to its own length,
    * shows in the panel exactly as it happened.
+   *
+   * A command names the tab a surface drew a moment ago, so by the time it lands the
+   * tab can be closed, and it can have navigated off the composition it is marked
+   * for. Neither is a fault: a transport command is a best-effort control over a
+   * page the app does not own, so nothing to drive answers null, the same as
+   * `captureCompositionFrame` and the page controls reached through `liveTab`. It
+   * used to throw, and a close that raced a seek or a poll reached the user as
+   * "Browser tab does not exist" and "Playback is available on a composition
+   * preview only" in the main log for a tab that was already gone.
    */
   async transport(
     tabId: string,
     command: BrowserTransportCommand,
     value: number | boolean
   ): Promise<BrowserCompositionPlayback | null> {
-    const tab = this.host.requireTab(tabId)
-    if (!tab.composition) {
-      throw new TypeError('Playback is available on a composition preview only')
-    }
+    const tab = this.host.tabs.get(tabId)
+    if (!tab?.composition) return null
     // A user action can recover a document that completed startup after the
     // bounded initial wait, without keeping a failed preview polling forever.
     const recovering = !tab.transport
