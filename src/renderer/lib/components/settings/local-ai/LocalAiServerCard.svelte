@@ -224,18 +224,30 @@
   </div>
 
   {#if expanded}
-    <div class="mt-3 space-y-2.5 border-t border-border pt-3" transition:slide={{ duration: 150 }}>
-      <p class="truncate font-mono text-[0.625rem] text-dimmed" title={command}>{command}</p>
+    <div class="mt-3 space-y-2 border-t border-border pt-3" transition:slide={{ duration: 150 }}>
+      <div class="border bg-raised p-3">
+        <p class="text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">Command</p>
+        <p class="mt-1 break-all font-mono text-[0.6875rem] leading-relaxed text-muted">
+          {command}
+        </p>
+      </div>
       {#if status === 'failed' && notice}
-        <div class="border border-danger/30 bg-danger/10 px-3 py-2">
-          <p class="text-xs font-medium text-danger">The server could not start</p>
+        <div class="border border-danger/30 bg-danger/10 p-3">
+          <p class="text-[0.6875rem] font-medium uppercase tracking-wide text-danger">
+            The server could not start
+          </p>
           <pre
-            class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.625rem] leading-relaxed text-danger/90">{notice}</pre>
+            class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.6875rem] leading-relaxed text-danger/90">{notice}</pre>
         </div>
       {/if}
-      <pre
-        {@attach followLog}
-        class="max-h-64 min-h-24 overflow-auto whitespace-pre-wrap break-words border bg-raised px-3 py-2 font-mono text-[0.625rem] leading-relaxed text-muted">{logText}</pre>
+      <div class="border bg-raised">
+        <p class="px-3 pt-2 text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">
+          Log
+        </p>
+        <pre
+          {@attach followLog}
+          class="max-h-64 min-h-24 overflow-auto whitespace-pre-wrap break-words px-3 pb-2 font-mono text-[0.6875rem] leading-relaxed text-muted">{logText}</pre>
+      </div>
     </div>
   {/if}
 </SettingsEntry>

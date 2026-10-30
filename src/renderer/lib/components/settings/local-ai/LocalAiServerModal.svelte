@@ -1,12 +1,12 @@
 <script lang="ts">
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     DEFAULT_LLAMA_CPP_HOST,
+    buildLlamaServerArgs,
     describeLlamaServerCommand,
     formatHuggingFaceModelReference,
-    isLlamaCppHostValid,
-    isLlamaCppPortValid,
     llamaCppEntryProblem,
     parseHuggingFaceModelReference,
     type LlamaCppServerEntry
@@ -24,7 +24,9 @@
 
   let { initial, entries, onClose, onSave }: Props = $props()
 
-  const fieldClass = 'w-full border bg-elevated px-3 py-2 text-sm text-foreground'
+  const fieldClass = 'h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary'
+  const monoFieldClass =
+    'h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary'
 
   // The page remounts this editor for every open, so the first values of
   // `initial` are exactly what the form should start from.
@@ -44,20 +46,19 @@
   let extraFlags = $state(initial.extraFlags)
 
   /**
-   * Which source the form is editing. This is user intent, not a fact derived
-   * from the two fields: picking Hugging Face on an empty row has to show the
-   * reference field at once, otherwise there is nowhere to paste the URL.
+   * Which model source the user is filling in. This is intent, not a fact read
+   * back from the two fields: the choice has to hold on an empty row, where
+   * both fields are still blank and the reference field must open for a paste.
    */
   // svelte-ignore state_referenced_locally
   let source = $state<'local' | 'huggingface'>(
     initial.modelReference.trim().length > 0 ? 'huggingface' : 'local'
   )
-  // svelte-ignore state_referenced_locally
-  let advanced = $state(initial.host !== DEFAULT_LLAMA_CPP_HOST || initial.extraFlags.length > 0)
   let error = $state('')
+
   /**
-   * The reference input itself, captured by an attachment: the Hugging Face
-   * toggle exists to put the caret where the URL goes.
+   * The reference input, captured by an attachment: choosing Hugging Face is
+   * only useful if the caret lands where the URL goes.
    */
   let referenceField: HTMLInputElement | undefined
   function captureReference(node: HTMLInputElement): () => void {
@@ -82,17 +83,34 @@
   })
 
   const command = $derived(
-    isLlamaCppHostValid(draft.host) && isLlamaCppPortValid(draft.port)
-      ? describeLlamaServerCommand(draft)
-      : ''
+    buildLlamaServerArgs(draft).length > 0 ? describeLlamaServerCommand(draft) : ''
   )
+
+  const sourceChoices: Array<{
+    id: 'local' | 'huggingface'
+    title: string
+    hint: string
+    icon: typeof CioFolder
+  }> = [
+    {
+      id: 'local',
+      title: 'Local GGUF file',
+      hint: 'A file already on this machine, referenced where it lives.',
+      icon: CioFolder
+    },
+    {
+      id: 'huggingface',
+      title: 'Hugging Face',
+      hint: 'llama.cpp downloads the model on the first start.',
+      icon: CioDownload
+    }
+  ]
 
   async function chooseSource(next: 'local' | 'huggingface'): Promise<void> {
     if (source === next) return
     source = next
     error = ''
     if (next === 'huggingface') {
-      // The reference field is the reason the toggle exists: put the caret in it.
       await tick()
       referenceField?.focus()
     }
@@ -128,145 +146,149 @@
       submit()
     }}
   >
-    {#if error}<p class="text-sm text-danger" role="alert">{error}</p>{/if}
+    {#if error}
+      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+    {/if}
 
-    <label class="block space-y-1 text-xs font-medium text-muted"
-      >Name<input
-        class={fieldClass}
-        bind:value={name}
-        required
-        maxlength={120}
-        placeholder="LFM2.5 local"
-      /></label
-    >
+    <div class="border bg-raised p-4">
+      <p class="text-sm font-semibold">A llama-server process on this machine</p>
+      <p class="mt-1 text-xs leading-relaxed text-muted">
+        One row is one model served on a port. The app starts it, streams its log, and offers the
+        loaded model to your agent through the llama-cpp provider.
+      </p>
+    </div>
 
-    <div class="space-y-2">
-      <p class="text-xs font-medium text-muted">Model</p>
-      <div class="flex flex-wrap gap-2">
-        <button
-          type="button"
-          class="border px-2 py-1 text-xs transition-colors {source === 'local'
-            ? 'border-primary bg-primary/10 text-foreground'
-            : 'text-muted hover:bg-elevated'}"
-          aria-pressed={source === 'local'}
-          onclick={() => void chooseSource('local')}
-        >
-          Local GGUF file
-        </button>
-        <button
-          type="button"
-          class="border px-2 py-1 text-xs transition-colors {source === 'huggingface'
-            ? 'border-primary bg-primary/10 text-foreground'
-            : 'text-muted hover:bg-elevated'}"
-          aria-pressed={source === 'huggingface'}
-          onclick={() => void chooseSource('huggingface')}
-        >
-          Hugging Face
-        </button>
+    <fieldset class="space-y-3 border p-3">
+      <legend class="px-1 text-xs font-semibold">Server</legend>
+      <label class="block space-y-1 text-xs font-medium">
+        <span>Name</span>
+        <input class={fieldClass} bind:value={name} required maxlength={120} placeholder="LFM2.5" />
+      </label>
+    </fieldset>
+
+    <fieldset class="space-y-3 border p-3">
+      <legend class="px-1 text-xs font-semibold">Model</legend>
+      <div class="grid gap-2 md:grid-cols-2">
+        {#each sourceChoices as choice (choice.id)}
+          <button
+            type="button"
+            class="group border p-3 text-left transition-colors hover:border-primary hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary {source ===
+            choice.id
+              ? 'border-primary bg-primary/10'
+              : 'bg-elevated'}"
+            aria-pressed={source === choice.id}
+            onclick={() => void chooseSource(choice.id)}
+          >
+            <span class="flex items-center gap-2">
+              <choice.icon size={14} class="shrink-0 text-muted group-hover:text-foreground" />
+              <span class="text-xs font-semibold">{choice.title}</span>
+            </span>
+            <span class="mt-1 block text-[0.6875rem] leading-relaxed text-muted">
+              {choice.hint}
+            </span>
+          </button>
+        {/each}
       </div>
 
       {#if source === 'local'}
         <div class="flex gap-2">
           <input
-            class={fieldClass}
+            class={`${monoFieldClass} min-w-0 flex-1`}
             bind:value={modelPath}
             placeholder="/path/to/model.gguf"
             aria-label="Path of the GGUF model"
           />
           <button
             type="button"
-            class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-3 py-2 text-xs hover:bg-elevated"
+            class="flex h-9 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
             onclick={() => void pickFile()}
           >
             <CioFolder size={13} />
             Choose file
           </button>
         </div>
-        <p class="text-xs leading-relaxed text-dimmed">
-          The file is referenced where it lives; nothing is copied.
-        </p>
       {:else}
-        <input
-          class={fieldClass}
-          {@attach captureReference}
-          bind:value={modelReference}
-          placeholder="LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M"
-          aria-label="Hugging Face model reference"
-        />
+        <label class="block space-y-1 text-xs font-medium">
+          <span>Reference</span>
+          <input
+            class={monoFieldClass}
+            {@attach captureReference}
+            bind:value={modelReference}
+            placeholder="LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M"
+          />
+        </label>
         {#if parsedReference}
-          <p class="text-xs leading-relaxed text-dimmed">
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
             llama.cpp downloads <span class="font-mono"
               >{formatHuggingFaceModelReference(parsedReference)}</span
             >
-            on first start.
+            on the first start.
           </p>
         {:else if modelReference.trim().length > 0}
-          <p class="text-xs text-danger">
+          <p class="text-[0.6875rem] text-danger">
             Use <span class="font-mono">owner/repo</span>,
             <span class="font-mono">owner/repo:quant</span>, or a huggingface.co file URL.
           </p>
         {:else}
-          <p class="text-xs leading-relaxed text-dimmed">
-            Paste a repository such as <span class="font-mono">LiquidAI/LFM2.5-2.6B-GGUF</span>, a
-            quant as <span class="font-mono">owner/repo:Q5_K_M</span>, or a specific file URL.
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            Paste <span class="font-mono">LiquidAI/LFM2.5-2.6B-GGUF</span>, a quant
+            <span class="font-mono">owner/repo:Q5_K_M</span>, or a specific file URL.
           </p>
         {/if}
       {/if}
-    </div>
+    </fieldset>
 
-    <div class="space-y-2">
-      <button
-        type="button"
-        class="text-xs font-medium text-muted transition-colors hover:text-foreground"
-        aria-expanded={advanced}
-        onclick={() => (advanced = !advanced)}
-      >
-        {advanced ? 'Hide advanced' : 'Advanced (host, port, flags)'}
-      </button>
-      {#if advanced}
-        <div class="grid grid-cols-[minmax(0,1fr)_8rem] gap-2">
-          <label class="block space-y-1 text-xs font-medium text-muted"
-            >Host<input class={fieldClass} bind:value={host} placeholder="127.0.0.1" /></label
-          >
-          <label class="block space-y-1 text-xs font-medium text-muted"
-            >Port<input
-              class={fieldClass}
-              bind:value={port}
-              inputmode="numeric"
-              placeholder="8080"
-            /></label
-          >
-        </div>
-        <label class="block space-y-1 text-xs font-medium text-muted"
-          >Extra flags<input
-            class={fieldClass}
-            bind:value={extraFlags}
-            placeholder="--ctx-size 8192 --threads 8"
-          /></label
-        >
-      {/if}
-    </div>
+    <fieldset class="space-y-3 border p-3">
+      <legend class="px-1 text-xs font-semibold">Connection</legend>
+      <div class="grid grid-cols-[minmax(0,1fr)_7rem] gap-2">
+        <label class="block space-y-1 text-xs font-medium">
+          <span>Host</span>
+          <input class={monoFieldClass} bind:value={host} placeholder="127.0.0.1" />
+        </label>
+        <label class="block space-y-1 text-xs font-medium">
+          <span>Port</span>
+          <input class={monoFieldClass} bind:value={port} inputmode="numeric" placeholder="8080" />
+        </label>
+      </div>
+      <label class="block space-y-1 text-xs font-medium">
+        <span>Extra flags</span>
+        <input
+          class={monoFieldClass}
+          bind:value={extraFlags}
+          placeholder="--ctx-size 8192 --threads 8"
+        />
+      </label>
+      <p class="text-[0.6875rem] leading-relaxed text-muted">
+        A host of <span class="font-mono">127.0.0.1</span> keeps the server on this machine;
+        <span class="font-mono">0.0.0.0</span> exposes it to your network.
+      </p>
+    </fieldset>
 
     {#if command}
-      <p class="truncate border-t border-border pt-3 font-mono text-[0.625rem] text-dimmed">
-        {command}
-      </p>
+      <div class="border bg-raised p-3">
+        <p class="text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">Command</p>
+        <p class="mt-1 break-all font-mono text-[0.6875rem] leading-relaxed text-muted">
+          {command}
+        </p>
+      </div>
     {/if}
   </form>
 
   {#snippet footer()}
-    <div class="flex w-full flex-wrap items-center justify-between gap-2">
+    <div class="flex w-full items-center justify-between gap-2">
       <button
         type="button"
         data-modal-dismiss
-        class="border px-3 py-2 text-sm hover:bg-elevated"
-        onclick={onClose}>Cancel</button
+        class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+        onclick={onClose}
       >
+        Cancel
+      </button>
       <button
         type="submit"
         form="local-ai-server"
         data-modal-primary
-        class="flex items-center gap-2 bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
+        class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       >
         {editing ? 'Save server' : 'Add server'}
       </button>
