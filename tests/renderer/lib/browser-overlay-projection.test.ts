@@ -6,6 +6,15 @@ import type { ToastT } from 'svelte-sonner'
 // window; the projection itself is pure and is what this suite exercises.
 vi.mock('$lib/stores/memory-proposal-open', () => ({ openMemoryProposal: vi.fn() }))
 
+// The same graph subscribes to IPC channels while its stores are constructed, and
+// a jsdom run has no preload bridge to subscribe on. The projection under test
+// neither sends nor receives anything, so a no-op channel is enough.
+vi.mock('$lib/ipc.svelte', () => ({
+  invoke: vi.fn(),
+  subscribe: vi.fn(() => () => {}),
+  subscribeGuarded: vi.fn(() => () => {})
+}))
+
 import { projectStack, projectToast } from '$lib/browser-overlay-bridge'
 import ClipboardToastIcon from '$lib/components/ui/ClipboardToastIcon.svelte'
 import MemoryToastComponent from '$lib/components/ui/MemoryToast.svelte'
