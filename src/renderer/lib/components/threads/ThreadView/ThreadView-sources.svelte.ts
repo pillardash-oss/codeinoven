@@ -171,9 +171,11 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
    *
    * The menu is the same one a highlight opens, at the cursor instead of beside
    * the selection, so the two ways of reaching a passage's actions are one
-   * control. When the click landed on a passage the user has already commented
-   * on, that comment's bubble opens with the menu, which is how a comment is
-   * found again from the words it was written about.
+   * control. A passage the user has already commented on is offered that
+   * comment's edit item, and the bubble itself opens only when the item is
+   * chosen or the indicator is clicked: a right-click is a request for the
+   * menu, so opening the bubble along with it would cover the actions the user
+   * just asked for on every right-click of an annotated passage.
    */
   claimResponseSelectionMenu(event: MouseEvent): boolean {
     const target = event.target
@@ -194,7 +196,6 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
     if (!live) return false
     event.preventDefault()
     event.stopPropagation()
-    if (annotatedId) this.root.steerQueuedMessage.commentEditorReferenceId = annotatedId
     this.responseSelection = live
     return true
   }

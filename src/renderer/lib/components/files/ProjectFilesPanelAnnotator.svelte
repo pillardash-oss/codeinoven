@@ -225,9 +225,10 @@
    *
    * The menu is the one a highlight opens, at the cursor instead of beside the
    * passage, so both ways of reaching a passage's actions are one control. A
-   * click on a passage that already carries a note opens that note's editor
-   * along with the menu, which is how a note is found again from the words it
-   * was written about.
+   * passage that already carries a note is offered that note's edit item, and
+   * the note editor opens only when the item is chosen or the note indicator is
+   * clicked: a right-click asks for the menu, so opening the editor with it
+   * would cover the actions the user just asked for.
    */
   function claimDocumentSelectionMenu(event: MouseEvent): boolean {
     const target = event.target
@@ -244,7 +245,6 @@
     if (!candidate) return false
     event.preventDefault()
     event.stopPropagation()
-    if (annotatedId) editingId = annotatedId
     pendingSelection = candidate
     return true
   }
