@@ -12,6 +12,7 @@
   import CompositionFrameAnnotator from './CompositionFrameAnnotator.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
+  import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
@@ -113,8 +114,6 @@
     snapshot: CompositionFrameSnapshot
     /** The mark the surface was opened on, when a composer jump opened it. */
     editingId?: string | null
-    /** The marks to draw on this capture, when they were drawn on an earlier one. */
-    marks?: ResponseReferenceAnchor[]
   } | null>(null)
   /**
    * The pane the still stands in for, taken when the pen takes over.
@@ -126,6 +125,16 @@
   let annotationBounds = $state<BrowserViewBounds | null>(null)
   /** The occlusion this surface publishes while the still covers the page. */
   const annotationOcclusionKey = $derived(`composition-annotation-${tabId}`)
+  /**
+   * Where the pen's own controls are mounted while a frame is being annotated.
+   *
+   * The mark layer draws the pen and its colour as one toolbar, and it mounts them
+   * here: annotating changes the pen control that started it into the palette and
+   * the finish mark, instead of adding a strip over the picture naming a moment the
+   * user can already see.
+   */
+  let annotationToolbar = $state<HTMLDivElement>()
+  setAnnotationToolbarHost({ target: () => annotationToolbar })
   /**
    * Whether the page has really settled on paused since the pen took over.
    *
@@ -282,13 +291,7 @@
    * the composition was playing in, which is where the user was already looking.
    */
   async function annotateFrame(): Promise<void> {
-    if (!canNote) return
-    // The pen is a switch: pressing it again puts it down and gives the pane back.
-    if (frameNote) {
-      closeAnnotation()
-      return
-    }
-    if (capturing) return
+    if (!canNote || capturing || frameNote) return
     capturing = true
     captureError = null
     try {
@@ -314,14 +317,12 @@
   function openAnnotation(opened: {
     snapshot: CompositionFrameSnapshot
     editingId?: string | null
-    marks?: ResponseReferenceAnchor[]
   }): void {
     annotationBounds = browserVisibility.pageBoundsFor(tabId)
     annotationSettled = false
     frameNote = {
       snapshot: opened.snapshot,
-      ...(opened.editingId !== undefined ? { editingId: opened.editingId } : {}),
-      ...(opened.marks !== undefined ? { marks: opened.marks } : {})
+      ...(opened.editingId !== undefined ? { editingId: opened.editingId } : {})
     }
   }
 
@@ -415,6 +416,11 @@
    * mark cannot be found by its URL alone: the moment and the folder are what
    * say which frame it was drawn on, and the layer then draws it on whichever
    * capture of that second is in front of the reader.
+   *
+   * Read from the store every time the surface needs it, because a mark the user
+   * draws is written to the store and nowhere else: a list captured when the
+   * surface opened would keep showing the reader an empty frame they had already
+   * drawn on.
    */
   function marksAt(seconds: number): ResponseReferenceAnchor[] {
     if (!projectId || !threadId) return []
@@ -452,8 +458,7 @@
       }
       frameNote = {
         snapshot,
-        editingId: request.referenceId,
-        marks: marksAt(request.seconds)
+        editingId: request.referenceId
       }
       annotationBounds = browserVisibility.pageBoundsFor(tabId)
       annotationSettled = false
@@ -717,26 +722,25 @@
   >
     <CioMessagePlus size={13} />
   </button>
-  <button
-    type="button"
-    class={[
-      'flex h-7 w-7 shrink-0 items-center justify-center transition-colors disabled:opacity-40',
-      frameNote
-        ? 'bg-primary text-on-primary hover:opacity-90'
-        : 'text-dimmed hover:bg-elevated hover:text-foreground'
-    ]}
-    aria-label={frameNote ? 'Finish annotating this frame' : 'Annotate this frame'}
-    aria-pressed={Boolean(frameNote)}
-    title={!canNote
-      ? 'Annotate a frame from the video panel'
-      : frameNote
-        ? 'Finish annotating: press it again to hand the pane back'
-        : 'Annotate this frame: circle an area and write why'}
-    disabled={!canNote || capturing}
-    onclick={() => void annotateFrame()}
-  >
-    <CioPencil size={13} />
-  </button>
+  {#if frameNote}
+    <!-- The pen and its colour, mounted by the mark layer right where the pen was
+         pressed. Finishing is the same control turned into a check mark, so the
+         picture is the picture and nothing else. -->
+    <div class="flex shrink-0 items-center" bind:this={annotationToolbar}></div>
+  {:else}
+    <button
+      type="button"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+      aria-label="Annotate this frame"
+      title={canNote
+        ? 'Annotate this frame: circle an area and write why'
+        : 'Annotate a frame from the video panel'}
+      disabled={!canNote || capturing}
+      onclick={() => void annotateFrame()}
+    >
+      <CioPencil size={13} />
+    </button>
+  {/if}
 </div>
 {#if frameNote}
   {@const paneBounds = annotationBounds ?? browserVisibility.pageBoundsFor(tabId)}
@@ -753,7 +757,7 @@
       snapshot={frameNote.snapshot}
       bounds={paneBounds}
       editingId={frameNote.editingId ?? null}
-      marks={frameNote.marks ?? []}
+      marks={marksAt(frameNote.snapshot.seconds)}
       onEditClosed={() => {
         // The jump named one mark; once its editor is closed the request is spent,
         // and reopening the surface from the composer must open it again.

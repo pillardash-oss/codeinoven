@@ -1,8 +1,5 @@
 <script lang="ts">
-  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
-  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import type { BrowserViewBounds, CompositionFrameSnapshot } from '$shared/ipc-contract'
-  import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { markContentBox, markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
     responseReferencesState,
@@ -21,11 +18,12 @@
    * It is not a modal, because there is nothing to open: the video editor is
    * already the full screen surface, and covering it with a dialog meant leaving
    * the player, the timeline and its own control row behind. So the captured frame
-   * is drawn exactly over the pane the live page occupies, the pen's controls land
-   * in a band over the picture, and the transport's own playback row stays where it
-   * was underneath. Pressing the continue key hands the pane back and lets the
-   * picture run, so a user marking several moments does it in one pass instead of
-   * opening, drawing, closing and reopening for each frame.
+   * is drawn exactly over the pane the live page occupies and nothing else: the pen
+   * and its colour are the transport's own pen control in that row, which becomes
+   * the finish mark while this surface is up, so the picture keeps every pixel it
+   * had and no second toolbar is invented over it. Pressing the continue key hands
+   * the pane back and lets it run, so a user marking several moments does it in one
+   * pass instead of opening, drawing, closing and reopening for each frame.
    *
    * The strokes are what reach the agent, and each one carries the moment: the
    * descriptor names the composition, the timecode to the millisecond, the exact
@@ -85,15 +83,6 @@
   }: Props = $props()
 
   /**
-   * The band where the mark layer's own controls are mounted.
-   *
-   * The layer draws its pen, its colour and its finish control as one toolbar, and
-   * a surface hands it somewhere to put them instead of floating a second copy
-   * over the picture. Here that is the moment band, which is where this app puts
-   * the controls that belong to what is on screen.
-   */
-  let annotationToolbar = $state<HTMLDivElement>()
-  /**
    * The still itself, as the element the keyboard returns to.
    *
    * A comment is a detour from the frame, and the press that follows one is about
@@ -102,7 +91,6 @@
    * letting the picture continue.
    */
   let still = $state<HTMLDivElement>()
-  setAnnotationToolbarHost({ target: () => annotationToolbar })
 
   /** The box the still is fitted inside, measured as the pane resizes. */
   let boxWidth = $state(0)
@@ -220,41 +208,9 @@
           }}
           {onContinue}
           onFocusSurface={() => still?.focus()}
-          hint="Draw on the frame · Space to continue · Esc to finish"
+          hint=""
         />
       </div>
     {/if}
-  </div>
-
-  <!-- The moment band. It names the frame the marks belong to and carries the pen
-       controls the layer mounts here, so the surface states its own moment instead
-       of leaving the reader to guess which second they are drawing on. -->
-  <div
-    class="absolute inset-x-0 top-0 flex h-9 items-center gap-2 bg-black/55 px-2 text-white"
-    role="group"
-    aria-label={`Annotating ${snapshot.timecode}`}
-  >
-    <span
-      class="flex shrink-0 items-center gap-1.5 font-mono text-xs font-semibold"
-      title={`Frame ${snapshot.frame} of ${snapshot.directory}`}
-    >
-      <CioClapper size={12} class="text-white/60" />
-      {snapshot.timecode}
-    </span>
-    <span class="shrink-0 tabular-nums text-[0.6875rem] text-white/60">frame {snapshot.frame}</span>
-    <span class="shrink-0 tabular-nums text-[0.6875rem] text-white/40">{snapshot.fps} fps</span>
-    <span class="min-w-0 truncate text-[0.6875rem] text-white/50" title={snapshot.directory}>
-      {snapshot.directory}
-    </span>
-    <div class="ml-auto min-w-0" bind:this={annotationToolbar}></div>
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-      aria-label="Finish annotating this frame"
-      title="Finish annotating (Esc)"
-      onclick={onClose}
-    >
-      <CioMinimize size={14} />
-    </button>
   </div>
 </div>
