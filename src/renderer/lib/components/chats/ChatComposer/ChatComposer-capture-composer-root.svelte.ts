@@ -278,10 +278,12 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
 
   /** True when an attached reference is a payload in its own right, so an
    *  otherwise empty message can still be sent: a commented selection is the
-   *  comment, and a mark drawn on a picture is the mark. */
+   *  comment, and a mark drawn on a picture is the mark. The comment is
+   *  measured trimmed, because a space typed into the comment box is not a
+   *  comment a conversation could send. */
   hasCommentReference = $derived(
     this.root.props.references.some(
-      (reference) => Boolean(reference.comment) || reference.kind === 'image'
+      (reference) => Boolean(reference.comment?.trim()) || reference.kind === 'image'
     )
   )
 

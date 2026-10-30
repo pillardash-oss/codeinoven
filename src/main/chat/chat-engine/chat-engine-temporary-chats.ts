@@ -1,5 +1,4 @@
 import { BrowserWindow } from 'electron'
-import { join, resolve } from 'path'
 import { Logger } from '../../system/logger'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { remapCopiedMessages } from '../../../lib/engines/thread-manager'
@@ -135,7 +134,7 @@ export class ChatEngineTemporaryChats {
     threadId = validateEntityId(threadId, 'Thread ID')
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
     settings = validateThreadSettings(settings)
-    text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    text = validateBoundedString(text, 'Prompt', 0, 200_000)
     const validatedReferences = validatePromptReferences(references)
     const safeDisplayText = displayText
       ? validateBoundedString(displayText, 'Display text', 1, 200_000)
@@ -177,6 +176,11 @@ export class ChatEngineTemporaryChats {
       )
     }
     const referenceBlock = formatTemporaryReferenceContext(validatedReferences)
+    // The message may be nothing but its payload (a commented passage, a file),
+    // exactly as a thread allows, but it can never be nothing at all.
+    if (!text && !referenceBlock && validatedAttachments.length === 0) {
+      throw new TypeError('A temporary chat message needs text, an attachment, or a comment')
+    }
     let context = initialContext
       ? validateBoundedString(initialContext, 'Temporary chat context', 1, 100_000)
       : ''
@@ -278,7 +282,11 @@ export class ChatEngineTemporaryChats {
     )
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
-    const promptText = referenceBlock ? `${referenceBlock}\n\nUser request:\n${text}` : text
+    const promptText = referenceBlock
+      ? text
+        ? `${referenceBlock}\n\nUser request:\n${text}`
+        : referenceBlock
+      : text
     const completion = this.host.units['turns-sessions'].waitForSessionCompletion(
       temporary.sessionId,
       null,
@@ -438,7 +446,7 @@ export class ChatEngineTemporaryChats {
     threadId = validateEntityId(threadId, 'Thread ID')
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
     settings = validateThreadSettings(settings)
-    text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    text = validateBoundedString(text, 'Prompt', 0, 200_000)
     const validatedReferences = validatePromptReferences(references)
     const safeDisplayText = displayText
       ? validateBoundedString(displayText, 'Display text', 1, 200_000)
@@ -490,7 +498,16 @@ export class ChatEngineTemporaryChats {
     }
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
     const referenceBlock = formatTemporaryReferenceContext(validatedReferences)
-    const promptText = referenceBlock ? `${referenceBlock}\n\nUser request:\n${text}` : text
+    // Same rule as a fresh turn: a commented passage or a file is a steer even
+    // with no text typed, but nothing at all is not.
+    if (!text && !referenceBlock && validatedAttachments.length === 0) {
+      throw new TypeError('A temporary chat message needs text, an attachment, or a comment')
+    }
+    const promptText = referenceBlock
+      ? text
+        ? `${referenceBlock}\n\nUser request:\n${text}`
+        : referenceBlock
+      : text
     const steerUserMessageId = userMessageId
       ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
       : createMessageId()

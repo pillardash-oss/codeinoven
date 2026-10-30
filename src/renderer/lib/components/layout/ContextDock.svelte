@@ -40,6 +40,12 @@
      *  (same vocabulary as thread rows and `StatusBadge`), so the rail can
      *  mirror any thread tone, including `working-paused` for will-retry. */
     badge?: ThreadStatusTone
+    /**
+     * The exact accent for a badge whose state has no status tone, e.g. the
+     * unread green a finished quick-chat response wears. Takes precedence over
+     * `badge`, and may be set on its own.
+     */
+    badgeColor?: string
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
     /** Renders a compact neutral count badge above the tool icon. */
@@ -200,7 +206,7 @@
               ]}
             />
           {/if}
-          {#if item.badge}
+          {#if item.badge || item.badgeColor}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">
               {#if item.badge === 'working' || item.badge === 'working-paused'}
                 <StatusBadge
@@ -209,7 +215,11 @@
                   title={item.badgeTitle ?? item.label}
                 />
               {:else}
-                <StatusBadge tone={item.badge} title={item.badgeTitle ?? item.label} />
+                <StatusBadge
+                  tone={item.badge}
+                  color={item.badgeColor}
+                  title={item.badgeTitle ?? item.label}
+                />
               {/if}
             </span>
           {/if}

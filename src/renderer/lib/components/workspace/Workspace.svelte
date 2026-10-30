@@ -301,14 +301,17 @@
 
     // Temporary chats get their own hairline-separated slot: they are ephemeral
     // side conversations, not standing tools, and one button toggles the whole
-    // set because the panel tabs them. The dashed mark is the whole signal   a
-    // side chat carries no indicator colour, so it reads as one more entry.
+    // set because the panel tabs them. The dashed mark names the tool; the mark
+    // it carries is the set's own unread state, because a response that landed
+    // while the panel was closed or parked on another tab has nowhere else to
+    // surface.
     const temporaryChats: ContextDockItem[] = []
     if (board.temporaryChatTabs.temporaryChatTabs.length > 0) {
       const name =
         board.temporaryChatTabs.temporaryChatTabs.length === 1
           ? (board.temporaryChatTabs.temporaryChatTabs.at(-1)?.title ?? 'Quick chat')
           : `${board.temporaryChatTabs.temporaryChatTabs.length} quick chats`
+      const unreadChats = board.temporaryChatTabs.unreadTemporaryChats.length
       temporaryChats.push({
         id: 'temporary-chat',
         label: board.switcherPanelTabs.dockKindActive('temporary-chat')
@@ -316,6 +319,15 @@
           : `Show ${name}`,
         icon: CioTemporaryChat,
         active: board.switcherPanelTabs.dockKindActive('temporary-chat'),
+        ...(unreadChats > 0
+          ? {
+              badgeColor: 'var(--color-thread-unread)',
+              badgeTitle:
+                unreadChats === 1
+                  ? '1 quick chat has a response you have not read'
+                  : `${unreadChats} quick chats have responses you have not read`
+            }
+          : {}),
         onSelect: () =>
           board.switcherPanelTabs.toggleDockPanel(
             'temporary-chat',

@@ -7,7 +7,12 @@ import { SvelteMap } from 'svelte/reactivity'
  * the side-chat panel is focused (or the chat expires, is closed, or the
  * thread is deleted). Regular thread unread state (the persisted `thread.read`
  * flag) is untouched: the parent thread's own status never changes when a side
- * chat completes, so this store exists purely for the row badge.
+ * chat completes, so this store exists purely for the badge.
+ *
+ * "Focused" means the chat's own panel is the one on screen for that thread: a
+ * side chat that finishes while the user is looking at another tab of the same
+ * sidebar was not read either, which is why the marks are kept per chat id and
+ * not only as a per-thread flag.
  *
  * Each entry also records when the unread state was marked, so the row can
  * apply "last action wins" between a side chat landing and the parent
@@ -41,6 +46,18 @@ class TemporaryChatUnreadState {
   /** Whether any side chat of this thread is still waiting to be read. */
   hasUnread(projectId: string, threadId: string): boolean {
     return (this.#unreadByThread.get(threadKey(projectId, threadId))?.size ?? 0) > 0
+  }
+
+  /**
+   * Whether one side chat is still waiting to be read.
+   *
+   * The per-thread flag answers "does this thread hold anything unread" for the
+   * thread row; a surface that draws one side chat at a time (the context rail
+   * icon, a strip tab) needs the same answer for that single chat, so the chat
+   * id the flag was marked under is exposed rather than only its count.
+   */
+  hasUnreadChat(projectId: string, threadId: string, temporaryChatId: string): boolean {
+    return this.#unreadByThread.get(threadKey(projectId, threadId))?.has(temporaryChatId) ?? false
   }
 
   /** When the most recent unread side chat of this thread landed, or 0 when
