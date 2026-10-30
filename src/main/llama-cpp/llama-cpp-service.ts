@@ -8,15 +8,11 @@
  * in the embedded terminal, never an `exec` inside this service.
  */
 import { execFile } from 'child_process'
-import { access, constants, stat } from 'fs/promises'
+import { access, constants } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
-import type {
-  LlamaCppModelFileCheck,
-  LlamaCppProbeResult,
-  LlamaCppRuntimeStatus
-} from '../../lib/llama-cpp'
+import type { LlamaCppProbeResult, LlamaCppRuntimeStatus } from '../../lib/llama-cpp'
 
 const run = promisify(execFile)
 
@@ -224,18 +220,4 @@ function readModelIds(body: unknown): string[] {
     if (typeof id === 'string' && id.length > 0 && id.length <= 512) ids.push(id)
   }
   return ids
-}
-
-/**
- * Whether a row's local model file is on disk, which is what the editor's
- * connection test reports when no server is listening yet: a row whose `.gguf`
- * is missing would fail its first start, and that is worth saying before Save.
- */
-export async function checkLlamaCppModelFile(path: string): Promise<LlamaCppModelFileCheck> {
-  try {
-    const info = await stat(path)
-    return { path, exists: info.isFile(), sizeBytes: info.isFile() ? info.size : 0 }
-  } catch {
-    return { path, exists: false, sizeBytes: 0 }
-  }
 }

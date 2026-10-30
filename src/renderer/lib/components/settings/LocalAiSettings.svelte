@@ -208,6 +208,7 @@
     <LocalAiServerModal
       initial={editing}
       {entries}
+      {executable}
       onClose={() => (modalOpen = false)}
       onSave={save}
     />

@@ -13,11 +13,7 @@ import type { NativeFloatingPanelBounds } from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
-import type {
-  LlamaCppModelFileCheck,
-  LlamaCppProbeResult,
-  LlamaCppRuntimeStatus
-} from '../llama-cpp'
+import type { LlamaCppProbeResult, LlamaCppRuntimeStatus } from '../llama-cpp'
 
 /** One file the user explicitly chooses to save from the renderer. */
 export interface SaveFileInput {
@@ -56,8 +52,6 @@ export const invokeAppContract = {
   'llamaCpp:detect': {} as Contract<[], LlamaCppRuntimeStatus>,
   /** Ask a started server for its loaded model ids, which is what readiness means. */
   'llamaCpp:probe': {} as Contract<[host: string, port: number], LlamaCppProbeResult>,
-  /** Whether a row's local `.gguf` is on disk, before anything is started. */
-  'llamaCpp:checkModel': {} as Contract<[path: string], LlamaCppModelFileCheck>,
   /** Pick a local `.gguf` file; the row references it where it lives. */
   'llamaCpp:pickModel': {} as Contract<[], string | null>,
   /** Re-discover the base-URL provider models after a server became ready. */

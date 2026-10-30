@@ -6,7 +6,7 @@
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { panelReveal } from '$lib/components/layout/page-reveal'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import {
     DEFAULT_LLAMA_CPP_HOST,
     buildLlamaServerArgs,
@@ -15,22 +15,26 @@
     isLlamaCppHostValid,
     isLlamaCppPortValid,
     llamaCppEntryProblem,
+    llamaCppModelLabel,
     parseHuggingFaceModelReference,
     type LlamaCppServerEntry
   } from '$shared/llama-cpp'
   import { uuidv7 } from '$shared/id'
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { fly } from 'svelte/transition'
   import Modal from '../../ui/Modal.svelte'
+  import { stripTerminalEscapes } from './local-ai-controller.svelte'
 
   interface Props {
     initial: LlamaCppServerEntry
     entries: readonly LlamaCppServerEntry[]
+    /** The resolved `llama-server` a row would launch. */
+    executable: string
     onClose: () => void
     onSave: (entry: LlamaCppServerEntry) => void | Promise<void>
   }
 
-  let { initial, entries, onClose, onSave }: Props = $props()
+  let { initial, entries, executable, onClose, onSave }: Props = $props()
 
   const fieldClass = 'h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary'
   const monoFieldClass =
@@ -69,7 +73,12 @@
    * can therefore keep the answer visible while it is still true and drop it the
    * moment the host or port moves, without an effect watching the fields.
    */
-  let testResult = $state<{ address: string; ok: boolean; message: string } | null>(null)
+  let testResult = $state<{
+    address: string
+    ok: boolean
+    label: string
+    message: string
+  } | null>(null)
   let testing = $state(false)
   const testedAddress = $derived(`${host.trim()}:${Number(port)}`)
   const visibleTest = $derived(
@@ -150,11 +159,21 @@
   async function testConnection(): Promise<void> {
     const address = `${host.trim()}:${Number(port)}`
     if (!isLlamaCppHostValid(host)) {
-      testResult = { address, ok: false, message: 'Enter a host such as 127.0.0.1.' }
+      testResult = {
+        address,
+        ok: false,
+        label: 'Not run',
+        message: 'Enter a host such as 127.0.0.1.'
+      }
       return
     }
     if (!isLlamaCppPortValid(Number(port))) {
-      testResult = { address, ok: false, message: 'Enter a port between 1 and 65535.' }
+      testResult = {
+        address,
+        ok: false,
+        label: 'Not run',
+        message: 'Enter a port between 1 and 65535.'
+      }
       return
     }
     testing = true
@@ -165,49 +184,134 @@
         testResult = {
           address,
           ok: true,
+          label: 'Connected',
           message:
             result.models.length > 0
               ? `Connected · ${models}${result.models.length > 3 ? ` and ${result.models.length - 3} more` : ''}`
               : 'Connected, but the server reports no models.'
         }
       } else {
-        testResult = {
-          address,
-          ok: false,
-          message: await offlineMessage(address, result.error)
-        }
+        // Nothing answers yet, so prove the row itself: launch it exactly as
+        // Start would, watch for llama.cpp beginning to load the model, and
+        // stop it right there. A full load is not what this test is for.
+        await startAndStop(address)
       }
+      testing = false
     } catch (failure) {
       testResult = {
         address,
         ok: false,
+        label: 'Failed',
         message: failure instanceof Error ? failure.message : 'The test could not run.'
       }
-    } finally {
       testing = false
     }
   }
 
-  /**
-   * Why the endpoint did not answer, said in terms the row can act on: a local
-   * row whose `.gguf` is missing would fail its first start, and a Hugging Face
-   * row has nothing to download until it starts.
-   */
-  async function offlineMessage(address: string, reason: string): Promise<string> {
-    if (source === 'local') {
-      const path = modelPath.trim()
-      if (path.length === 0) {
-        return `Nothing answered at ${address} (${reason}). Choose a model file first.`
-      }
-      const checked = await invoke('llamaCpp:checkModel', path)
-      return checked.exists
-        ? `Nothing answered at ${address} (${reason}). The model file is on disk, so start this row to serve it.`
-        : `Nothing answered at ${address} (${reason}). The model file is not on disk at ${path}.`
+  /** The PTY a running test owns, kept so closing the editor cannot orphan it. */
+  let testTerminalId = $state<string | null>(null)
+  const testSubscriptions: Array<() => void> = []
+  let testTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** llama.cpp announces the moment it starts reading the weights. */
+  const LOAD_MARKERS = [
+    /load_model: loading model/iu,
+    /loading model '/iu,
+    /llama_model_load_from_file/iu,
+    /llm_load_tensors/iu
+  ]
+  /** A Hugging Face row fetches the file before there are weights to load. */
+  const DOWNLOAD_MARKER = /download/iu
+
+  /** Kill the test's process and drop its listeners, whatever state it is in. */
+  function stopTestRun(terminalId: string | null): void {
+    if (testTimer) {
+      clearTimeout(testTimer)
+      testTimer = null
     }
-    const reference = modelReference.trim()
-    return reference.length > 0
-      ? `Nothing answered at ${address} (${reason}). llama.cpp downloads ${reference} on the first start.`
-      : `Nothing answered at ${address} (${reason}). Add a Hugging Face reference first.`
+    for (const unsubscribe of testSubscriptions.splice(0)) unsubscribe()
+    if (terminalId) void invoke('pty:destroy', terminalId)
+    testTerminalId = null
+  }
+
+  onDestroy(() => stopTestRun(testTerminalId))
+
+  /**
+   * Prove the row the way a start would prove it, without loading the weights:
+   * launch the same command Start uses, watch its own output, and stop it the
+   * moment llama.cpp says it began loading the model. A bad path, a bad flag or
+   * a port that cannot bind fails here instead of on the first real start.
+   */
+  async function startAndStop(address: string): Promise<void> {
+    const terminalId = `local-ai-test-${Date.now()}`
+    const tail: string[] = []
+    let settled = false
+    testTerminalId = terminalId
+
+    const finish = (ok: boolean, label: string, message: string): void => {
+      if (settled) return
+      settled = true
+      stopTestRun(terminalId)
+      testResult = { address, ok, label, message }
+      testing = false
+    }
+
+    const inspect = (chunk: string): void => {
+      for (const raw of stripTerminalEscapes(chunk).split(/\r?\n/u)) {
+        const line = raw.trim()
+        if (line.length === 0) continue
+        tail.push(line)
+        if (tail.length > 60) tail.shift()
+        if (LOAD_MARKERS.some((marker) => marker.test(line))) {
+          finish(
+            true,
+            'Loads',
+            `llama-server started and began loading ${llamaCppModelLabel(draft)}; the test stopped it.`
+          )
+          return
+        }
+        if (DOWNLOAD_MARKER.test(line)) {
+          finish(
+            true,
+            'Downloads',
+            'llama-server started and is fetching the model from Hugging Face; the test stopped it.'
+          )
+          return
+        }
+      }
+    }
+
+    const tailText = (): string => tail.slice(-3).join(' ') || 'it printed nothing'
+
+    testSubscriptions.push(
+      subscribe(`pty:data:${terminalId}`, (chunk) => {
+        if (typeof chunk === 'string') inspect(chunk)
+      }),
+      subscribe(`pty:exit:${terminalId}`, (code) => {
+        const exitCode = typeof code === 'number' ? code : 0
+        finish(false, 'Failed', `llama-server exited with code ${exitCode}: ${tailText()}`)
+      })
+    )
+    testTimer = setTimeout(() => {
+      finish(false, 'Failed', `llama-server never reached the model load in 20s: ${tailText()}`)
+    }, 20_000)
+
+    try {
+      await invoke(
+        'pty:createCommand',
+        terminalId,
+        executable,
+        buildLlamaServerArgs(draft),
+        100,
+        30
+      )
+    } catch (error) {
+      finish(
+        false,
+        'Failed',
+        error instanceof Error ? error.message : 'llama-server could not be started.'
+      )
+    }
   }
 
   function submit(): void {
@@ -390,7 +494,7 @@
         <button
           type="button"
           class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          title="Probe {testedAddress} for a running llama-server"
+          title="Start the row on {testedAddress}, stop it once llama.cpp begins loading the model"
           disabled={testing}
           onclick={() => void testConnection()}
         >
@@ -412,10 +516,10 @@
           >
             {#if visibleTest.ok}
               <CioCheckCircle size={11} />
-              Connected
+              {visibleTest.label}
             {:else}
               <CioAlertCircle size={11} />
-              Not answering
+              {visibleTest.label}
             {/if}
           </span>
         {/if}
