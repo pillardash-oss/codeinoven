@@ -305,10 +305,10 @@
   /**
    * Whether a pen is open on a picture over this editor.
    *
-   * An annotated frame answers a space by continuing the video, which is the pen's
-   * own `video-annotation-continue` binding and is the same key as play/pause. The
-   * pen also owns Escape and its own comment fields, so while it is armed the
-   * editor stands aside rather than competing with the surface in front of it.
+   * The pen owns Escape and its own comment fields, so while it is armed the editor
+   * stands aside for those keys rather than competing with the surface in front of
+   * it. The play/pause key is not one of them: a space beside an annotated frame
+   * plays and pauses the picture the pen is drawing on, and the pen stays in hand.
    */
   function penOwnsKeyboard(target: EventTarget | null): boolean {
     return target instanceof HTMLElement && target.closest('[data-annotation-surface]') !== null
@@ -325,25 +325,37 @@
     return target instanceof HTMLElement && target.closest('select') !== null
   }
 
+  /**
+   * Whether a press belongs to this editor.
+   *
+   * The editor's own tree, the page it is drawn in, and — full screen — the modal it
+   * is drawn in. A full screen surface is a modal that focuses its own panel rather
+   * than a control, so a press on that panel is a press in the editor; a dialog
+   * elsewhere on screen is not, and neither is a field in front of it.
+   */
+  function ownsTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Node)) return false
+    if (root?.contains(target)) return true
+    if (target === document) return true
+    if (mode !== 'fullscreen') return false
+    if (target === document.body) return true
+    const element = target instanceof HTMLElement ? target : null
+    const modal = element?.closest('[aria-modal="true"]') ?? null
+    return modal !== null && root !== undefined && modal.contains(root)
+  }
+
   function keydown(event: KeyboardEvent): void {
-    if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
-    const fromPage = event.target === document
-    if (
-      !root?.contains(event.target) &&
-      !fromPage &&
-      !(mode === 'fullscreen' && event.target === document.body)
-    )
-      return
+    if (!active || event.defaultPrevented) return
+    if (!ownsTarget(event.target)) return
     // The keys of a field in front of the editor are the field's, and this runs in
     // the capture phase, before the field itself answers them. A space typed into a
     // comment or a track name is a space.
     if (typingInTextEntry(event.target)) return
-    // The pen in front of a frame claims its own keys, a space included.
-    if (penOwnsKeyboard(event.target)) return
     // Play/pause is the one key that fires wherever the focus is inside the editor:
-    // on a clip, on the seek track, on a toolbar button. It is answered before the
-    // controls below are given their own keys, because none of them do anything
-    // useful with a space.
+    // on a clip, on the seek track, on a toolbar button, on a frame the pen is
+    // drawing on. It is answered before the pen and the controls below are given
+    // their own keys, because none of them do anything useful with a space and the
+    // pen's own continue key is not this one.
     if (!controlOwnsSpace(event.target) && keymapState.matches('video-edit-play', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -352,6 +364,8 @@
       if (!event.repeat) void editor.togglePlayback()
       return
     }
+    // The pen in front of a frame claims the rest of its own keys.
+    if (penOwnsKeyboard(event.target)) return
     if (keymapState.matches('video-primary-action', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -589,6 +603,7 @@
     }
   }}
   class="flex h-full min-h-0 flex-col overflow-hidden bg-app"
+  tabindex="-1"
   aria-label="Video editor"
   data-drop-region="video-editor"
 >
@@ -599,19 +614,27 @@
     ]}
     style={mode === 'fullscreen' ? trafficLightInsetStyle() : undefined}
   >
-    {#if mode === 'fullscreen'}<div class="titlebar-no-drag w-36 shrink-0">
-        <EnumSelect
-          options={mode === 'fullscreen'
-            ? sections.filter((item) => item.id !== 'assets')
-            : sections}
-          value={section}
-          placeholder="Inspector"
-          ariaLabel="Editor section"
-          title="Inspector, local assets or captions"
-          menuMinWidth="20rem"
-          compact
-          onChange={(value) => (section = value)}
-        />
+    {#if mode === 'fullscreen'}<div class="titlebar-no-drag flex w-64 shrink-0 items-center gap-2">
+        <!--
+          The surface names itself, and the picker beside it names the section.
+
+          The picker shows the open section as its value, so a header that held only
+          the picker read as though the panel were called "Inspector": the title is
+          the surface, and the picker is what changes inside it.
+        -->
+        <span class="shrink-0 text-xs font-medium text-foreground">Video editor</span>
+        <div class="min-w-0 flex-1">
+          <EnumSelect
+            options={sections.filter((item) => item.id !== 'assets')}
+            value={section}
+            placeholder="Inspector"
+            ariaLabel="Editor section"
+            title="Inspector, local assets or captions"
+            menuMinWidth="20rem"
+            compact
+            onChange={(value) => (section = value)}
+          />
+        </div>
       </div>{:else}<button
         type="button"
         class="titlebar-no-drag flex h-7 items-center gap-2 text-xs text-foreground hover:text-primary"

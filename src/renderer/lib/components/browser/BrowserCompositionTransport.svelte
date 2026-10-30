@@ -154,16 +154,6 @@
    */
   let annotationToolbar = $state<HTMLDivElement>()
   setAnnotationToolbarHost({ target: () => annotationToolbar })
-  /**
-   * Whether the page has really settled on paused since the pen took over.
-   *
-   * The playhead reaches this panel by poll, so the first answer after an
-   * annotation starts can still report the run that preceded it. Watching for a
-   * resume, and for a playhead that disagrees with the still, only once a paused
-   * answer has landed is what keeps that stale answer from closing the surface the
-   * user just opened.
-   */
-  let annotationSettled = $state(false)
   /** True while a frame is being drawn and kept, so a click cannot start two. */
   let capturing = $state(false)
   /** Why the last frame capture did not produce a picture. */
@@ -236,18 +226,16 @@
   }
 
   /**
-   * Whether a key pressed here belongs to a field or to the pen.
+   * Whether a key pressed here belongs to a field.
    *
-   * A space typed into a comment is a space, and a space beside an annotated frame
-   * continues the video through the pen's own binding, so both keep it.
+   * A space typed into a comment is a space. The pen is not a field: its surface is
+   * the picture, and the play/pause key over a picture plays and pauses it without
+   * putting the pen away.
    */
   function overlayOwnsKeys(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false
     if (target.isContentEditable) return true
-    return (
-      target.closest('input,textarea,select,[data-floating-document],[data-annotation-surface]') !==
-      null
-    )
+    return target.closest('input,textarea,select,[data-floating-document]') !== null
   }
 
   /**
@@ -259,13 +247,28 @@
    * too, because a composition the user is watching is the surface space belongs
    * to, and nothing else in the app does anything with it.
    */
+  /**
+   * Whether a press belongs to this player.
+   *
+   * Three places are the player's: the bar itself, a window with nothing focused in
+   * it, and the modal the bar is drawn in. A modal focuses its own panel rather than
+   * a control, so a press that lands on that panel is still a press in the player; a
+   * dialog somewhere else on screen is not.
+   */
+  function pressBelongsToPlayer(target: EventTarget | null): boolean {
+    if (target === document || target === document.body || target === document.documentElement)
+      return true
+    const bar = root
+    if (!(target instanceof HTMLElement) || !bar) return false
+    if (bar.contains(target)) return true
+    const modal = target.closest('[aria-modal="true"]')
+    return modal !== null && modal.contains(bar)
+  }
+
   function playbackKey(event: KeyboardEvent): void {
     if (!active || !ownsPlaybackKey || event.defaultPrevented) return
     const target = event.target
-    const inside = target instanceof Node && root?.contains(target)
-    const unfocused =
-      target === document.body || target === document || target === document.documentElement
-    if (!inside && !unfocused) return
+    if (!pressBelongsToPlayer(target)) return
     if (overlayOwnsKeys(target)) return
     if (!keymapState.matches('video-edit-play', event)) return
     event.preventDefault()
@@ -378,7 +381,6 @@
     editingId?: string | null
   }): void {
     annotationBounds = browserVisibility.pageBoundsFor(tabId)
-    annotationSettled = false
     frameNote = {
       snapshot: opened.snapshot,
       ...(opened.editingId !== undefined ? { editingId: opened.editingId } : {})
@@ -523,7 +525,6 @@
         editingId: request.referenceId
       }
       annotationBounds = browserVisibility.pageBoundsFor(tabId)
-      annotationSettled = false
     } catch {
       // The tab can be closed between the click and the capture.
       captureError = 'That frame could not be captured. Try again.'
@@ -634,31 +635,13 @@
     return () => browserVisibility.clearOcclusion(annotationOcclusionKey)
   })
 
-  // Annotating is a paused activity. Playback resuming from anywhere (the
-  // continue key, the play button, a keyboard action the editor owns) means the
-  // user is done with this frame, so the page takes its pane back rather than
-  // playing on behind a still picture.
-  $effect(() => {
-    if (!frameNote) {
-      annotationSettled = false
-      return
-    }
-    if (!playing) {
-      annotationSettled = true
-      return
-    }
-    if (annotationSettled) closeAnnotation()
-  })
-
-  // Moving the playhead off the captured second is the same statement as playing: a
-  // still of one frame cannot stand for another. Stepping or scrubbing therefore
-  // ends the annotation instead of leaving a picture the playhead disagrees with.
-  $effect(() => {
-    const note = frameNote
-    if (!note || playing || !annotationSettled) return
-    if (Math.abs(shown - note.snapshot.seconds) <= MARK_FRAME_TOLERANCE_SECONDS) return
-    closeAnnotation()
-  })
+  // The pen stays in hand until the check mark ends it.
+  //
+  // Annotating is a paused activity, but resuming the picture is not the pen being
+  // done: a user who presses space to pause, circles a moment and writes about it
+  // presses space again for the next moment, and taking the drawn frame away on that
+  // press would throw away the note they were halfway through. One control ends an
+  // annotation, and it is the one that says so.
 
   function clamp(seconds: number): number {
     return snapVideoFrame(seconds, duration, composition.fps)
@@ -693,9 +676,19 @@
   role="group"
   aria-label={`Playback of ${composition.directory}`}
 >
+  {#if titlebar}
+    <!--
+      The surface names itself before its controls. This row is the title bar of the
+      window the video is watched in, so it carries the title the way the editor's own
+      row does, and the controls follow it instead of starting at the window edge.
+    -->
+    <span class="shrink-0 text-xs font-medium text-foreground">Video player</span>
+    <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+  {/if}
   <button
     type="button"
     bind:this={playButton}
+    data-video-play
     class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={playing ? 'Pause the composition' : 'Play the composition'}
     title={playing ? 'Pause the composition' : 'Play the composition'}

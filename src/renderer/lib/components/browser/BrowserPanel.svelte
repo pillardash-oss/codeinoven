@@ -900,7 +900,7 @@
           titlebar={compositionPlayer && !playerInEditor}
           projectId={pageState.projectId}
           threadId={pageState.threadId}
-          active={panelVisible}
+          active={fullscreen || panelVisible}
           ownsPlaybackKey={!playerInEditor}
         />
       </div>

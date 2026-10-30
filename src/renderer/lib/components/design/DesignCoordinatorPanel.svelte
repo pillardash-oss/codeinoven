@@ -62,6 +62,26 @@
    */
   const shownFullscreenTab = $derived(board.studio.shownFullscreenTab)
 
+  /**
+   * Where the caret lands when the composition's full screen surface opens.
+   *
+   * A modal focuses its first field, and a player's first field is a search box, so
+   * the space that means "pause the video" was typed into that box instead. The
+   * picture's own play control is what a viewer reaches for, so it takes the caret
+   * and the play/pause key works from the first press.
+   */
+  function claimPlayerFocus(panel: HTMLElement): boolean {
+    const play = panel.querySelector<HTMLElement>('[data-video-play]')
+    // The picture's own control when it is already drawn, and the editor's own
+    // surface otherwise: the panel's preview arrives by import, so the play control
+    // can be a frame away, and a claim that failed would put the caret back in the
+    // asset search field the space key must not be typed into.
+    const target = play ?? panel.querySelector<HTMLElement>('[data-drop-region="video-editor"]')
+    if (!target) return false
+    target.focus({ preventScroll: true })
+    return true
+  }
+
   // The arrangement of the design in front is read when it changes, so a board a
   // window reopens on shows the user's own groups without waiting for a drag.
   $effect(() => {
@@ -1434,6 +1454,7 @@
     minimizeLabel="Minimize the composition"
     hostsBrowserView
     hideStrip
+    claimInitialFocus={claimPlayerFocus}
     onSelect={() => {}}
     onMinimize={board.studio.minimizeCompositionEditor}
   >
@@ -1452,7 +1473,7 @@
             threadId={board.props.threadId}
             directory={board.gallery.selected.directory}
             tabId={board.gallery.boardTabId}
-            active={board.props.active}
+            active={true}
             mode="fullscreen"
             onMinimize={board.studio.minimizeCompositionEditor}
             onDirtyChange={board.studio.setStudioDirty}
