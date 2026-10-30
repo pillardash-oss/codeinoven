@@ -25,12 +25,6 @@ export function legacyHarnessAccountId(harnessId: string): string {
 }
 
 /**
- * A reserve-only account id (`prepare`) exists in this process's memory and
- * never survives a restart. Anything persisted with one of these ids   a
- * thread's session binding, for example   names no account once it is gone, so
- * the id must never be read as an identity that moved.
- */
-/**
  * Whether an id is shaped like a reserved container.
  *
  * The reserve prefix is not a statement about finalization: `finalizePending`
