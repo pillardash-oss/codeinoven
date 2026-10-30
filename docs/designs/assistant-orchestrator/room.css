@@ -1,0 +1,1718 @@
+/* The assistant room
+   -------------------------------------------------------------------------
+   Three spatial ideas, one language:
+
+   · The House. Assistants are not a list you scroll, they are a household
+     drawn around the orchestrator: marks on an orbit, each with its own
+     dial position and its own schedule ticks. Opening the assistant page
+     should feel like stepping into a room where the staff is standing.
+   · The Despatch. A conversation with an orchestrator is not a chat log, it
+     is a spine: inbound turns arrive at the rule, every dispatch leaves it
+     on an elbow toward the assistant that took it. You can read the whole
+     session down one line.
+   · The Bench. Taking one assistant over leaves the room for that
+     assistant's own workbench, with the house still visible behind it.
+
+   Everything is hairline, gold used structurally (the spine, the seal, the
+   now-hand), obsidian in dark. Sharp corners: this app has no rounded
+   boxes and the room keeps that. */
+
+/* Two derived inks, mixed from the app's own tokens, for the places where a
+   state colour becomes small text. Gold at 1.9:1 is a rule, not a label, so a
+   gold label uses a darker mix in light mode and the accent itself in dark,
+   and the same holds for the error red, which is 3.8:1 on a dark surface. */
+:root {
+  --gold-ink: color-mix(in oklab, var(--color-accent) 58%, var(--color-foreground));
+  --error-ink: var(--color-thread-error);
+}
+
+.dark {
+  --gold-ink: var(--color-accent);
+  --error-ink: color-mix(in oklab, var(--color-thread-error) 74%, var(--color-foreground));
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-app);
+  color: var(--color-foreground);
+  font-family: var(--font-app);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Shell ──────────────────────────────────────────────────────────────── */
+
+.room {
+  display: grid;
+  grid-template-columns: 3.25rem 1fr;
+  height: 100vh;
+  min-height: 42rem;
+  overflow: hidden;
+}
+
+.spine-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.625rem 0;
+  border-right: 1px solid var(--color-border);
+}
+
+/* A phone mock shows the room without the desktop rail, so the one column is
+   the only column. */
+.room[data-bare='true'] {
+  grid-template-columns: 1fr;
+}
+
+.spine-rail .mark {
+  margin-bottom: 0.75rem;
+}
+
+.rail-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.rail-btn:hover {
+  color: var(--color-foreground);
+  background: var(--color-elevated);
+}
+
+.rail-btn[aria-current='page'] {
+  color: var(--color-foreground);
+}
+
+.rail-btn[aria-current='page']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.375rem;
+  bottom: 0.375rem;
+  width: 2px;
+  background: var(--color-accent);
+}
+
+.rail-gap {
+  flex: 1;
+}
+
+/* The seal: the app mark, used as the orchestrator's face. */
+.mark {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--color-foreground);
+}
+
+.mark svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ─── Room header ───────────────────────────────────────────────────────── */
+
+.room-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.room-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  height: 3rem;
+  flex: none;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.room-id {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.room-id h1 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.room-id .role {
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--color-border);
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.modes {
+  display: flex;
+  border: 1px solid var(--color-border);
+}
+
+.modes button {
+  padding: 0.25rem 0.625rem;
+  border: 0;
+  background: transparent;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+
+.modes button + button {
+  border-left: 1px solid var(--color-border);
+}
+
+.modes button[aria-pressed='true'] {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.modes button:hover {
+  color: var(--color-foreground);
+}
+
+.head-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ─── The House ─────────────────────────────────────────────────────────── */
+
+.house {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  overflow: hidden;
+}
+
+/* The floor: one very wide, very low warmth under the orbit, so the room has
+   a ground without a gradient wash. */
+.house::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6rem;
+  max-width: 100%;
+  width: min(64rem, 140%);
+  height: 22rem;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in oklab, var(--color-accent) 7%, transparent) 0%,
+    transparent 62%
+  );
+  pointer-events: none;
+}
+
+.greeting {
+  position: relative;
+  max-width: 34rem;
+  text-align: center;
+  padding: 0 1.5rem;
+}
+
+.greeting .eyebrow {
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.greeting h2 {
+  margin-top: 0.5rem;
+  font-size: 1.5rem;
+  line-height: 1.28;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+.greeting h2 em {
+  font-style: normal;
+  color: var(--color-accent);
+}
+
+.greeting p {
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--color-muted);
+}
+
+/* The orbit stage: fixed square, everything positioned inside it. */
+.orbit {
+  position: relative;
+  width: min(34rem, 42vh);
+  height: min(34rem, 42vh);
+  flex: none;
+}
+
+.orbit-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+}
+
+/* One ring holds the whole house. An assistant with an hour stands on that
+   hour; one without an hour fills the widest gap, so nothing ever lands on
+   top of anything else at any window size. */
+.orbit-ring[data-ring='outer'] {
+  inset: -5.833%;
+  border-color: color-mix(in oklab, var(--color-border) 55%, transparent);
+}
+
+/* The schedule dial: a 24-hour face. A tick is a spoke from the centre that
+   only paints its last few pixels, so the tick marks sit exactly on the ring
+   at any orbit size. Passed hours are gold; the hand is now. */
+.dial {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.dial-tick {
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 1px;
+  height: 50%;
+  transform-origin: 50% 100%;
+  background: linear-gradient(
+    to top,
+    transparent calc(100% - 0.3125rem),
+    var(--color-border-strong) 0
+  );
+}
+
+.dial-tick[data-major='true'] {
+  background: linear-gradient(to top, transparent calc(100% - 0.5rem), var(--color-muted) 0);
+}
+
+.dial-tick[data-past='true'] {
+  background: linear-gradient(to top, transparent calc(100% - 0.375rem), var(--color-accent) 0);
+}
+
+/* Tethers: an active assistant is joined to the seat, so the room reads as one
+   connected body rather than a diagram of separate things. Drawn in one SVG
+   that stretches with the orbit (preserveAspectRatio none), so the endpoints
+   stay on the nodes at every size. */
+.tethers {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.tethers line {
+  stroke: var(--color-thread-working);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.38;
+  stroke-dasharray: 2 4;
+}
+
+.tethers line[data-kind='attention'] {
+  stroke: var(--color-warning);
+}
+
+.tethers line[data-kind='error'] {
+  stroke: var(--color-thread-error);
+}
+
+/* The seat gets a bloom so the centre holds the eye without a gradient wash. */
+.seat::before {
+  content: '';
+  position: absolute;
+  width: 13rem;
+  height: 13rem;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle at center,
+    color-mix(in oklab, var(--color-accent) 10%, transparent) 0%,
+    transparent 68%
+  );
+  pointer-events: none;
+  z-index: -1;
+}
+
+.seat {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  text-align: center;
+  z-index: 1;
+}
+
+.now-hand {
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 1px;
+  height: 50%;
+  transform-origin: 50% 100%;
+  transform: rotate(138deg);
+  background: linear-gradient(
+    to top,
+    transparent calc(100% - 2.25rem),
+    color-mix(in oklab, var(--color-accent) 55%, transparent) 0
+  );
+}
+
+.now-hand::after {
+  content: '';
+  position: absolute;
+  top: -0.1875rem;
+  left: -0.1875rem;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.now-label {
+  position: absolute;
+  right: 0.25rem;
+  bottom: 3rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  color: var(--gold-ink);
+  background: var(--color-app);
+  padding: 0 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The orchestrator sits in the middle of its own house. */
+.seat {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 1.25rem;
+  text-align: center;
+}
+
+.seat .mark {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.seat-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.seat-note {
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+  max-width: 6.5rem;
+  line-height: 1.45;
+}
+
+/* An assistant on the orbit. The mark carries the state arc. */
+.node {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  width: 4.5rem;
+  padding: 0.125rem;
+  border: 0;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.node-disc {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-foreground);
+}
+
+.node:hover .node-disc {
+  border-color: var(--color-foreground);
+}
+
+.node-name {
+  font-size: 0.6875rem;
+  line-height: 1.25;
+  color: var(--color-muted);
+  max-width: 4.5rem;
+}
+
+.node:hover .node-name {
+  color: var(--color-foreground);
+}
+
+/* State arc: a partial ring drawn on the disc, in the app's state colours. */
+.node-disc::after {
+  content: '';
+  position: absolute;
+  inset: -0.3125rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.node[data-state='working'] .node-disc::after {
+  border-color: var(--color-thread-working);
+  border-top-color: transparent;
+  border-right-color: transparent;
+  transform: rotate(-30deg);
+}
+
+.node[data-state='working'] .node-disc {
+  border-color: var(--color-thread-working);
+}
+
+.node[data-state='attention'] .node-disc {
+  border-color: var(--color-warning);
+}
+
+.node[data-state='error'] .node-disc {
+  border-color: var(--color-thread-error);
+}
+
+.node[data-state='error'] .node-name {
+  color: var(--error-ink);
+}
+
+.node[data-state='done'] .node-disc {
+  border-color: color-mix(in oklab, var(--color-chat-success) 65%, var(--color-border));
+}
+
+.node[data-state='idle'] .node-disc {
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.node-time {
+  font-size: 0.625rem;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.node-time[data-kind='working'] {
+  color: var(--color-thread-working);
+}
+
+.node-time[data-kind='error'] {
+  color: var(--error-ink);
+}
+
+/* The ledger under the house: what is happening, in one row of three. */
+.ledger {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(100% - 3rem, 52rem);
+  border-top: 1px solid var(--color-border);
+}
+
+.ledger-item {
+  padding: 0.625rem 0.875rem 0.625rem 0;
+  border-right: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.ledger-item:last-child {
+  border-right: 0;
+}
+
+.ledger-item + .ledger-item {
+  padding-left: 0.875rem;
+}
+
+.ledger-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.ledger-body {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--color-foreground);
+}
+
+.ledger-body .dim {
+  color: var(--color-muted);
+}
+
+/* ─── The lectern ───────────────────────────────────────────────────────── */
+
+.lectern-wrap {
+  flex: none;
+  padding: 0 1.5rem 1.25rem;
+}
+
+.lectern {
+  position: relative;
+  width: min(100%, 52rem);
+  margin: 0 auto;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+.lectern::before {
+  /* The seal-edge: a gold hairline that only exists along the top of the
+     lectern, so the writing surface is marked as the orchestrator's. */
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in oklab, var(--color-accent) 85%, transparent) 18%,
+    color-mix(in oklab, var(--color-accent) 85%, transparent) 82%,
+    transparent
+  );
+}
+
+.lectern:focus-within {
+  border-color: var(--color-foreground);
+}
+
+.lectern textarea {
+  display: block;
+  width: 100%;
+  min-height: 3.5rem;
+  padding: 0.75rem 0.875rem 0.25rem;
+  border: 0;
+  background: transparent;
+  resize: none;
+  outline: none;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.lectern textarea::placeholder {
+  color: var(--color-muted);
+}
+
+.lectern-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3125rem 0.4375rem 0.4375rem;
+}
+
+.commission {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 1.5rem;
+  padding: 0.1875rem 0.4375rem;
+  border: 1px solid color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+  background: color-mix(in oklab, var(--color-accent) 8%, var(--color-surface));
+  font-size: 0.6875rem;
+  color: var(--color-foreground);
+}
+
+.commission:hover {
+  background: color-mix(in oklab, var(--color-accent) 14%, var(--color-surface));
+}
+
+.commission .dot {
+  width: 0.3125rem;
+  height: 0.3125rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  min-height: 1.5rem;
+  padding: 0.1875rem 0.4375rem;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+.chip-btn:hover {
+  border-color: var(--color-border);
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.foot-gap {
+  flex: 1;
+}
+
+.send {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.625rem;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.send:hover {
+  background: var(--color-primary-hover);
+}
+
+.send kbd {
+  font: inherit;
+  font-weight: 400;
+  opacity: 0.55;
+}
+
+.lectern-note {
+  width: min(100%, 52rem);
+  margin: 0.4375rem auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+.lectern-note .count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* ─── The Despatch (spine) ──────────────────────────────────────────────── */
+
+.stream {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  overflow: hidden;
+}
+
+.scroller {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.5rem 0 2.5rem;
+}
+
+.spine {
+  position: relative;
+  width: min(100% - 3rem, 60rem);
+  margin: 0 auto;
+  padding-left: 11rem;
+}
+
+/* The rule: one continuous line down the session. It is the session. */
+.spine::before {
+  content: '';
+  position: absolute;
+  left: 9.5rem;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  width: 1px;
+  background: var(--color-border-strong);
+}
+
+.turn {
+  position: relative;
+  padding: 0 0 1.5rem;
+}
+
+/* Left gutter: who spoke, in the room's own hand. */
+.turn-who {
+  position: absolute;
+  left: -11rem;
+  width: 9.5rem;
+  text-align: right;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+
+.turn-who strong {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+
+.turn-who time {
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The node on the rule. */
+.turn-node {
+  position: absolute;
+  left: -1.875rem;
+  top: 0.3125rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-app);
+  border-radius: 999px;
+}
+
+.turn[data-who='you'] .turn-node {
+  background: var(--color-foreground);
+  border-color: var(--color-foreground);
+}
+
+.turn[data-who='chief'] .turn-node {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.turn-body {
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  max-width: 36rem;
+}
+
+.turn-body p + p {
+  margin-top: 0.5rem;
+}
+
+.turn[data-who='you'] .turn-body {
+  color: var(--color-muted);
+}
+
+/* A dispatch leaves the spine on an elbow and lands on the assistant. */
+.dispatch-row {
+  position: relative;
+  padding: 0 0 1.125rem;
+}
+
+.dispatch-elbow {
+  overflow: visible;
+  position: absolute;
+  left: -1.625rem;
+  top: 0.875rem;
+  width: 1.125rem;
+  height: 1px;
+  background: var(--color-border-strong);
+}
+
+.dispatch-elbow::after {
+  content: '';
+  position: absolute;
+  right: -0.1875rem;
+  top: -0.125rem;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.dispatch-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 0.5rem 0.625rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-surface);
+  text-align: left;
+}
+
+.dispatch-card:hover {
+  border-color: var(--color-border-strong);
+  border-left-color: var(--color-accent);
+}
+
+.dispatch-card[data-state='working'] {
+  border-left-color: var(--color-thread-working);
+}
+
+.dispatch-card[data-state='error'] {
+  border-left-color: var(--color-thread-error);
+}
+
+.dispatch-card[data-state='done'] {
+  border-left-color: var(--color-chat-success);
+}
+
+.disc-sm {
+  display: grid;
+  place-items: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  flex: none;
+  border: 1px solid var(--color-border-strong);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+
+.dispatch-main {
+  min-width: 0;
+}
+
+.dispatch-to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.125rem 0.4375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.dispatch-to .arrow {
+  font-weight: 400;
+  color: var(--color-muted);
+}
+
+.dispatch-why {
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+
+.dispatch-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.dispatch-state[data-kind='working'] {
+  color: var(--color-thread-working);
+}
+
+.dispatch-state[data-kind='error'] {
+  color: var(--error-ink);
+}
+
+.dispatch-state[data-kind='done'] {
+  color: var(--color-chat-success);
+}
+
+.dispatch-steps {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: 0.125rem;
+  margin-top: 0.125rem;
+}
+
+.step-pip {
+  height: 2px;
+  flex: 1;
+  background: var(--color-border);
+}
+
+.step-pip[data-state='done'] {
+  background: var(--color-chat-success);
+}
+
+.step-pip[data-state='running'] {
+  background: var(--color-thread-working);
+}
+
+/* A separator on the rule when the session crosses a boundary. */
+.spine-break {
+  position: relative;
+  margin: 0 0 1.5rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.spine-break::before {
+  content: '';
+  position: absolute;
+  left: -1.875rem;
+  top: 0.5rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1px solid var(--color-muted);
+  background: var(--color-app);
+  transform: rotate(45deg);
+}
+
+/* ─── The Bench (taken-over assistant) ──────────────────────────────────── */
+
+.bench {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 19rem 1fr;
+  overflow: hidden;
+}
+
+.bench-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--color-border);
+}
+
+.bench-owner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 1rem 1.125rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.bench-owner .disc {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  border: 1px solid var(--color-border-strong);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.bench-owner h2 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.bench-owner p {
+  margin-top: 0.1875rem;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+
+.bench-tasks {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem 0.5rem 1rem;
+}
+
+.bench-group {
+  padding: 0.5rem 0.625rem 0.25rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.task-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4375rem 0.625rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.task-row:hover {
+  background: var(--color-elevated);
+}
+
+.task-row[aria-current='true'] {
+  background: var(--color-selected);
+}
+
+.task-title {
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.task-meta {
+  font-size: 0.625rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-from {
+  display: block;
+  margin-top: 0.0625rem;
+  font-size: 0.625rem;
+  color: var(--gold-ink);
+}
+
+.bench foot {
+  display: block;
+}
+
+.bench-back {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+.takeover {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.1875rem 0.4375rem;
+  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  font-size: 0.6875rem;
+}
+
+.takeover:hover {
+  background: var(--color-elevated);
+}
+
+.bench-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.bench-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.625rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.75rem;
+}
+
+.bench-head .title {
+  font-weight: 600;
+}
+
+.bench-head .from {
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+/* Provenance card: the same elbow language as the spine, so the desk knows
+   where the sheet came from. */
+.provenance {
+  position: relative;
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-surface);
+  padding: 0.625rem 0.75rem;
+  max-width: 36rem;
+}
+
+.provenance-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gold-ink);
+}
+
+.provenance p {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.provenance dl {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.125rem 0.5rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.6875rem;
+}
+
+.provenance dt {
+  color: var(--color-muted);
+}
+
+.provenance dd {
+  margin: 0;
+}
+
+/* ─── Cover (index) ─────────────────────────────────────────────────────── */
+
+.cover {
+  width: min(100% - 4rem, 76rem);
+  margin: 0 auto;
+  padding: 2.5rem 0 5rem;
+}
+
+.cover-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 1rem;
+}
+
+.brandline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+.brandline .mark {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.theme-switch {
+  display: flex;
+  border: 1px solid var(--color-border-strong);
+}
+
+.theme-switch button {
+  padding: 0.3125rem 0.625rem;
+  border: 0;
+  background: transparent;
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+.theme-switch button[aria-pressed='true'] {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.cover h1 {
+  margin-top: 2rem;
+  max-width: 36rem;
+  font-size: 2rem;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.cover .eyebrow {
+  margin-top: 2rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.cover .lede {
+  margin-top: 0.875rem;
+  max-width: 40rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--color-muted);
+}
+
+.ideas {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.ideas h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.ideas p {
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1.65;
+  color: var(--color-muted);
+}
+
+.frames {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 2.5rem;
+}
+
+.frame {
+  display: block;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  text-decoration: none;
+}
+
+.frame:hover {
+  border-color: var(--color-border-strong);
+}
+
+.frame-slot {
+  position: relative;
+  display: block;
+  height: 17rem;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-app);
+}
+
+.frame-slot iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1440px;
+  height: 900px;
+  border: 0;
+  transform: scale(0.36);
+  transform-origin: top left;
+  pointer-events: none;
+}
+
+.frame-slot[data-size='phone'] iframe {
+  width: 390px;
+  height: 844px;
+  transform: scale(0.5);
+}
+
+.frame-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem 0.75rem;
+}
+
+.frame-copy strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.frame-copy span {
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+  text-align: right;
+}
+
+.cover-foot {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.cover-foot h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.cover-foot p {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.65;
+  color: var(--color-muted);
+}
+
+/* ─── Narrow ────────────────────────────────────────────────────────────── */
+
+@media (max-width: 72rem) {
+  .bench {
+    grid-template-columns: 15rem 1fr;
+  }
+}
+
+/* The room keeps its ring and drops what the ring cannot hold: the seat
+   caption goes first, then the time line, because the dial already says when
+   each assistant runs. */
+@media (max-width: 84rem) {
+  .seat-note,
+  .node-time {
+    display: none;
+  }
+
+  .seat {
+    padding: 0.75rem;
+  }
+}
+
+@media (max-width: 60rem) {
+  /* At this width a label on the ring would sit on its neighbour, so the
+     house becomes a constellation of marks: the name is the button's own
+     accessible name and its tooltip, and the ledger below carries the two
+     that matter right now. */
+  .node-name {
+    display: none;
+  }
+
+  .node {
+    width: 2.5rem;
+    min-height: 2.5rem;
+  }
+
+  .node-disc {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .node:is(:hover, :focus-visible) .node-name {
+    display: block;
+    position: absolute;
+    top: 100%;
+    z-index: 3;
+    padding: 0.125rem 0.3125rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    color: var(--color-foreground);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 60rem) {
+  .spine {
+    padding-left: 0;
+  }
+
+  .spine::before {
+    left: 0.375rem;
+  }
+
+  .turn-who {
+    position: static;
+    width: auto;
+    display: flex;
+    align-items: baseline;
+    gap: 0.375rem;
+    margin-bottom: 0.25rem;
+    padding-left: 1.5rem;
+    text-align: left;
+  }
+
+  .turn-who strong {
+    display: inline;
+  }
+
+  .turn-node {
+    left: 0.1875rem;
+    top: 0.3125rem;
+  }
+
+  .turn {
+    padding-left: 1.5rem;
+  }
+
+  .dispatch-row {
+    padding-left: 1.5rem;
+  }
+
+  .dispatch-elbow {
+    left: -0.5rem;
+    width: 0.625rem;
+  }
+
+  .spine-break {
+    padding-left: 1.5rem;
+  }
+
+  .spine-break::before {
+    left: 0.1875rem;
+  }
+
+  .bench {
+    grid-template-columns: 1fr;
+  }
+
+  .bench-side {
+    display: none;
+  }
+
+  .ledger {
+    grid-template-columns: 1fr;
+  }
+
+  .ledger-item {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+    padding-left: 0;
+  }
+
+  .ledger-item + .ledger-item {
+    padding-left: 0;
+  }
+
+  .ledger-item:last-child {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 44rem) {
+  .room {
+    grid-template-columns: 1fr;
+  }
+
+  .spine-rail {
+    display: none;
+  }
+
+  .room-head {
+    padding: 0 0.875rem;
+    gap: 0.75rem;
+  }
+
+  .room-id .role {
+    display: none;
+  }
+
+  .modes button {
+    padding: 0.25rem 0.4375rem;
+  }
+
+  .house {
+    gap: 1rem;
+    justify-content: flex-start;
+    padding-top: 1rem;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .greeting h2 {
+    font-size: 1.125rem;
+  }
+
+  .orbit {
+    width: min(19rem, 62vw);
+    height: min(19rem, 62vw);
+  }
+
+  .node-disc {
+    width: 1.75rem;
+    height: 1.75rem;
+    font-size: 0.625rem;
+  }
+
+  .seat .mark {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .seat {
+    padding: 0.5rem;
+  }
+
+  .seat-note {
+    display: none;
+  }
+
+  .seat-name {
+    font-size: 0.75rem;
+  }
+
+  .ledger {
+    width: calc(100% - 1.75rem);
+  }
+
+  .lectern-wrap {
+    padding: 0 0.875rem 0.875rem;
+  }
+
+  .lectern-note {
+    display: none;
+  }
+
+  .scroll-hint {
+    display: none;
+  }
+
+  .cover,
+  .frames,
+  .ideas,
+  .cover-foot {
+    grid-template-columns: 1fr;
+  }
+
+  .cover {
+    width: calc(100% - 2rem);
+    padding-top: 1.5rem;
+  }
+
+  .cover h1 {
+    font-size: 1.5rem;
+  }
+
+  .frame-slot iframe {
+    transform: scale(0.22);
+  }
+
+  .frame-slot[data-size='phone'] iframe {
+    transform: scale(0.44);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* ─── The log on a narrow window ───────────────────────────────────────────
+   A five-column table cannot shrink into a docked window honestly, so below
+   this width each row becomes its own small block: who, what, and the state
+   on the same line, with the reason underneath. */
+@media (max-width: 52rem) {
+  .log-table,
+  .log-table tbody,
+  .log-table tr,
+  .log-table td {
+    display: block;
+    width: auto;
+  }
+
+  .log-table thead {
+    display: none;
+  }
+
+  .log-table tr {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .log-table td {
+    padding: 0;
+    border: 0;
+  }
+
+  .log-table td.time {
+    font-size: 0.625rem;
+    letter-spacing: 0.06em;
+    width: auto;
+  }
+
+  .log-table td.who {
+    width: auto;
+    margin-top: 0.125rem;
+  }
+
+  .log-table td.state-cell {
+    width: auto;
+    margin-top: 0.25rem;
+  }
+
+  .log-table td.hide-narrow {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.6875rem;
+  }
+}
