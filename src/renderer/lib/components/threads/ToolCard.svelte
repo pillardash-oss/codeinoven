@@ -158,8 +158,30 @@
 
   /** A code-mode call orchestrates other tools by script, so it reads as a
    *  distinct kind of step in the trace instead of an unnamed tool. */
+  /**
+   * The row's headline: the first of these that actually says something.
+   *
+   * A part's title can be present and EMPTY: a harness that reports
+   * `title: <command>` sends an empty string while the command is still being
+   * written, and a nullish fallback treats that as a value and renders a blank
+   * row for the whole time the call is running. Blank values are skipped, so a
+   * running row always names what it is doing.
+   */
+  function firstSpoken(...values: Array<string | undefined>): string {
+    for (const value of values) {
+      const trimmed = value?.trim()
+      if (trimmed) return trimmed
+    }
+    return ''
+  }
+
   const codeModeLabel = $derived(
-    part.state.title ?? part.actionLabel ?? (toolKind === 'code' ? 'Code mode' : part.tool)
+    firstSpoken(
+      part.state.title,
+      part.actionLabel,
+      toolKind === 'code' ? 'Code mode' : undefined,
+      part.tool
+    )
   )
 
   /** True when the row's label describes the action rather than repeating the
@@ -235,54 +257,61 @@
     }}
   >
     {#if working}
-      <span class="working-row-glow -z-10" aria-hidden="true"></span>
-      <span class="sr-only">Running</span>
-    {:else if failed}
-      <CioCrossCircle size={14} class="shrink-0 text-danger" />
-      <span class="sr-only">Failed</span>
+      <span class="working-row-glow" aria-hidden="true"></span>
     {/if}
-    {#if toolKind === 'cio'}
-      <CioMonogram size={12} class={kindIconClass} />
-    {:else if toolKind === 'code'}
-      <CioCode size={12} class={kindIconClass} />
-    {:else if toolKind === 'read'}
-      <CioFileText size={12} class={kindIconClass} />
-    {:else if toolKind === 'edit'}
-      <CioFilePen size={12} class={kindIconClass} />
-    {:else if toolKind === 'write'}
-      <CioFilePlus size={12} class={kindIconClass} />
-    {:else if toolKind === 'search'}
-      <CioSearch size={12} class={kindIconClass} />
-    {:else if toolKind === 'web'}
-      <CioBrowser size={ICON_SIZE.inline} class={kindIconClass} />
-    {:else if toolKind === 'shell'}
-      <CioTerminal size={12} class={kindIconClass} />
-    {:else}
-      <CioWrench size={12} class={kindIconClass} />
-    {/if}
-    <span class="shrink-0 font-medium">
-      {codeModeLabel}
+    <!-- The row's own content is positioned, so it always paints over the glow
+         behind it: the glow reports that work is going on, and it must never
+         cost the reader the label, the duration or the command while it does. -->
+    <span class="relative flex min-w-0 flex-1 items-center gap-1.5">
+      {#if working}
+        <span class="sr-only">Running</span>
+      {:else if failed}
+        <CioCrossCircle size={14} class="shrink-0 text-danger" />
+        <span class="sr-only">Failed</span>
+      {/if}
+      {#if toolKind === 'cio'}
+        <CioMonogram size={12} class={kindIconClass} />
+      {:else if toolKind === 'code'}
+        <CioCode size={12} class={kindIconClass} />
+      {:else if toolKind === 'read'}
+        <CioFileText size={12} class={kindIconClass} />
+      {:else if toolKind === 'edit'}
+        <CioFilePen size={12} class={kindIconClass} />
+      {:else if toolKind === 'write'}
+        <CioFilePlus size={12} class={kindIconClass} />
+      {:else if toolKind === 'search'}
+        <CioSearch size={12} class={kindIconClass} />
+      {:else if toolKind === 'web'}
+        <CioBrowser size={ICON_SIZE.inline} class={kindIconClass} />
+      {:else if toolKind === 'shell'}
+        <CioTerminal size={12} class={kindIconClass} />
+      {:else}
+        <CioWrench size={12} class={kindIconClass} />
+      {/if}
+      <span class="shrink-0 font-medium">
+        {codeModeLabel}
+      </span>
+      {#if start}
+        <span
+          class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/tool:text-muted"
+          >{formatDurationMs(elapsed * 1000)}</span
+        >
+      {/if}
+      {#if !open && inputPreview}
+        <span
+          class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed transition-colors group-hover/tool:text-muted"
+          >{inputPreview}</span
+        >
+      {:else}
+        <span class="flex-1"></span>
+      {/if}
+      <CioForward
+        size={13}
+        class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
+          ? 'rotate-90'
+          : ''}"
+      />
     </span>
-    {#if start}
-      <span
-        class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/tool:text-muted"
-        >{formatDurationMs(elapsed * 1000)}</span
-      >
-    {/if}
-    {#if !open && inputPreview}
-      <span
-        class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed transition-colors group-hover/tool:text-muted"
-        >{inputPreview}</span
-      >
-    {:else}
-      <span class="flex-1"></span>
-    {/if}
-    <CioForward
-      size={13}
-      class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
-        ? 'rotate-90'
-        : ''}"
-    />
   </button>
 
   {#if open}
