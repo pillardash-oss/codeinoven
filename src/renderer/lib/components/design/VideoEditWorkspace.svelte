@@ -24,6 +24,7 @@
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { appConfirm } from '$lib/stores/app-confirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { videoEditorController } from '$lib/stores/video-editor.svelte'
   import VideoEditTimeline from './VideoEditTimeline.svelte'
   import VideoEditAssets from './VideoEditAssets.svelte'
@@ -606,13 +607,17 @@
   aria-label="Video editor"
   data-drop-region="video-editor"
 >
+  <!--
+    This surface's own header stays at the top, where every full screen surface in
+    this app keeps the thing it is showing and the way out of it. The playback row
+    under the picture is a different row, moved by the panel that draws the page.
+  -->
   <div
     class={[
-      'flex shrink-0 items-center gap-2 bg-surface px-2',
-      mode === 'fullscreen'
-        ? 'order-last h-10 border-t border-border'
-        : 'h-9 border-b border-border'
+      'flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2',
+      mode === 'fullscreen' ? 'titlebar-drag h-10' : 'h-9'
     ]}
+    style={mode === 'fullscreen' ? trafficLightInsetStyle() : undefined}
   >
     {#if mode === 'fullscreen'}<div class="titlebar-no-drag flex w-64 shrink-0 items-center gap-2">
         <!--

@@ -14,6 +14,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { designElementChatContext, openAnnotationChat } from '$lib/annotation-chat'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
   import { designScreenEntryFromUrl } from '$shared/design/screens'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
@@ -895,9 +896,10 @@
     <div
       class={[
         'titlebar-no-drag flex shrink-0 items-stretch bg-surface',
-        compositionPlayer && 'order-last border-t border-b-0',
+        playerInEditor && 'order-last border-t border-border',
         compositionPlayer && !playerInEditor && 'h-10'
       ]}
+      style={compositionPlayer && !playerInEditor ? trafficLightInsetStyle() : undefined}
     >
       <div class="min-w-0 flex-1">
         <BrowserCompositionTransport
