@@ -139,21 +139,22 @@ export class ChatEngineTurnsSessions {
     const sessionOwnerAccount = thread.sessionId
       ? (thread.sessionAccountId ?? legacyHarnessAccountId(sessionOwner ?? driverId))
       : undefined
-    // An account id is only an identity while the registry can still resolve it.
-    // A reserve that never finalized belongs to the process that created it, so
-    // a thread stamped with one names no account at all after a restart: reading
-    // that as a second account made every single turn look like a harness
-    // switch, which parked the live session and minted a new one each time
-    // until a bound record was pruned out from under the thread. A managed
-    // account, by contrast, is listed in the registry even though its id keeps
-    // the reserve prefix   asking the prefix instead of the registry made a real
-    // account switch read as "no change", so the replaced account's session and
-    // credentials kept serving the turn after the user moved to another one.
-    const sessionOwnerAccountKnown =
-      await this.host.state.accountRegistry.isResolvableAccountId(sessionOwnerAccount)
-    const sessionAccountMoved = Boolean(
-      sessionOwnerAccount && sessionOwnerAccountKnown && sessionOwnerAccount !== accountId
-    )
+    // Ask the registry, never the id shape. A managed account keeps the
+    // `pending-<uuid>` id of the reserve it was created from, so the prefix says
+    // nothing about whether the account still exists, and a reserve that never
+    // finalized (it died with the process that created it) names no account at
+    // all. Reading the prefix instead of the registry answered "no account" for
+    // every managed account: a real account switch then read as "no change", so
+    // the replaced account's session and credentials kept serving the turn after
+    // the user moved to another one, while a dead reserve made every single turn
+    // look like a switch and mint a new session each time. The registry is only
+    // consulted when the stamp disagrees with the resolved account, which is the
+    // one case where its answer decides the session.
+    let sessionAccountMoved = false
+    if (sessionOwnerAccount && sessionOwnerAccount !== accountId) {
+      sessionAccountMoved =
+        await this.host.state.accountRegistry.isResolvableAccountId(sessionOwnerAccount)
+    }
     const switchedRuntime = Boolean(
       thread.sessionId && sessionOwner && (sessionOwner !== driverId || sessionAccountMoved)
     )
@@ -424,6 +425,7 @@ export class ChatEngineTurnsSessions {
     // same "different account" mismatch on every later turn.
     if (
       thread.sessionAccountId &&
+      thread.sessionAccountId !== accountId &&
       !(await this.host.state.accountRegistry.isResolvableAccountId(thread.sessionAccountId))
     ) {
       try {
