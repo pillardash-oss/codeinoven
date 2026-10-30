@@ -10,6 +10,7 @@ import type {
   AgentMessage,
   AgentProviderIssue,
   AgentSessionStatus,
+  PromptAttachment,
   ThreadSettings
 } from '$shared/types'
 import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -318,11 +319,28 @@ export class TemporaryChatController implements ConversationController {
     }
   }
 
+  /**
+   * Whether a payload carries something of its own, so the typed text is
+   * optional.
+   *
+   * The composer already decides a send is possible on exactly this rule (a
+   * commented passage, or an attached file, is the message). A side chat that
+   * demanded text on top of it dropped the send after the composer had handed
+   * its draft away, which looked like a send button that did nothing.
+   */
+  #carriesPayload(attachments: PromptAttachment[]): boolean {
+    return (
+      attachments.length > 0 ||
+      this.references.some((reference) => Boolean(reference.comment?.trim()))
+    )
+  }
+
   async send(payload: SendPayload): Promise<void> {
     const { text, attachments, transportText, promptReferences: _promptReferences } = payload
     const prompt = text.trim()
     const backendPrompt = (transportText ?? text).trim()
-    if (!prompt || !backendPrompt || this.#tab.expired) return
+    if (this.#tab.expired) return
+    if (!prompt && !backendPrompt && !this.#carriesPayload(attachments)) return
 
     this.#touch()
 
@@ -376,6 +394,7 @@ export class TemporaryChatController implements ConversationController {
     const { text, attachments, promptReferences: _promptReferences } = payload
     const prompt = text.trim()
     if (!agentRuns.isBusy(this.projectId, this.conversationId) || this.#tab.expired) return
+    if (!prompt && !this.#carriesPayload(attachments)) return
 
     this.#touch()
     const references = this.#selectionReferences()

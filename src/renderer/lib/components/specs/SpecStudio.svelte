@@ -6,7 +6,7 @@
   import { onDestroy, tick } from 'svelte'
   import { exportEngineeringSpecMarkdown } from '$shared/spec/spec-markdown'
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -1122,7 +1122,7 @@
   >
     {#snippet bodyView(annotation: { body: string })}
       <div class="mt-3 text-xs leading-relaxed text-foreground">
-        <MarkdownView text={annotation.body} />
+        <DeferredMarkdownView text={annotation.body} />
       </div>
     {/snippet}
   </StudioAnnotationDetailPopover>

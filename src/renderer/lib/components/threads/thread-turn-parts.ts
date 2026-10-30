@@ -1,7 +1,13 @@
 import { mergeSubagentParts } from '$lib/working-trace-parts'
 import { isTodoToolPart } from '$lib/agent-todos'
 import { checkpointForTurn } from '$lib/threads/checkpoint-matching'
-import type { AgentMessage, AgentPart, AuditReport, TurnCheckpointSummary } from '$shared/types'
+import type {
+  AgentMessage,
+  AgentPart,
+  AuditReport,
+  TurnCheckpointChangeSummary,
+  TurnCheckpointSummary
+} from '$shared/types'
 
 /**
  * Pure turn-partitioning rules for the conversation transcript.
@@ -119,6 +125,8 @@ export interface TranscriptIndex {
   duration: (number | null)[]
   /** Final text part id of the turn ending at this index, or ''. */
   finalTextId: string[]
+  /** Message id -> its index in the transcript. */
+  messageIndexById: Map<string, number>
   /** The checkpoint behind the assistant message at this index, or null. */
   checkpoint: (TurnCheckpointSummary | null)[]
   /**
@@ -126,6 +134,12 @@ export interface TranscriptIndex {
    * turn's final assistant, resolved by identity rather than by clock.
    */
   checkpointCard: boolean[]
+  /**
+   * The steered prompt that splits this card's turn, when a "changes so far"
+   * card renders at this index instead of the whole turn's card. Null
+   * everywhere else.
+   */
+  steerCard: (number | null)[]
   /** Whether the turn that opens at this index has completed. */
   turnCompleted: boolean[]
 }
@@ -152,7 +166,10 @@ export interface TranscriptIndex {
  *
  * A card states what a finished turn changed, so it only lands on the assistant
  * message that ends its own turn. A card sitting under a live trace reads as if
- * the work on screen already produced those files.
+ * the work on screen already produced those files. A prompt sent mid-turn (a
+ * steer, an answered question) belongs to the turn it interrupted, so it never
+ * ends that turn's window or takes its card: the card still reports the whole
+ * turn, once the turn is over.
  *
  * Checkpoints that predate `sourceMessageId`, or whose prompt is not in the
  * loaded transcript, keep the timestamp-window match as a fallback and only
@@ -161,9 +178,15 @@ export interface TranscriptIndex {
 function resolveCheckpointOwners(
   messages: readonly AgentMessage[],
   checkpoints: readonly TurnCheckpointSummary[]
-): { owners: (TurnCheckpointSummary | null)[]; card: boolean[] } {
+): {
+  messageIndexById: Map<string, number>
+  owners: (TurnCheckpointSummary | null)[]
+  card: boolean[]
+  steer: (number | null)[]
+} {
   const owners: (TurnCheckpointSummary | null)[] = new Array(messages.length).fill(null)
   const card: boolean[] = new Array(messages.length).fill(false)
+  const steer: (number | null)[] = new Array(messages.length).fill(null)
   /** Assistant indices a turn already decided, whether or not it owns them. */
   const claimed: boolean[] = new Array(messages.length).fill(false)
 
@@ -195,83 +218,152 @@ function resolveCheckpointOwners(
   for (let i = 0; i < starts.length; i++) {
     const start = starts[i]!
     const checkpoint = anchors.get(start)!
-    // The turn ends at its own last assistant message, never at one that joins
-    // the window later because the next prompt has no checkpoint of its own.
-    const limit = Math.min(
-      starts[i + 1] ?? messages.length,
-      nextTurnBoundaryIndex(messages, start + 1)
-    )
+    // The turn owns every message until the next anchored prompt, and it ends
+    // at the last assistant message before the first prompt that was sent once
+    // it had already finished. A prompt that arrives while the turn is still
+    // running is a steer of that same turn, so it never splits the turn or
+    // takes its card elsewhere.
+    const windowEnd = starts[i + 1] ?? messages.length
+    const turnEnd = nextTurnStartIndex(messages, start, windowEnd)
     let cardIndex = -1
-    for (let index = start; index < limit; index++) {
+    for (let index = start; index < windowEnd; index++) {
       const message = messages[index]
       if (!message || message.role !== 'assistant' || message.inlineArtifact) continue
-      // A run that is still working owns its indices for card placement but
-      // keeps them out of the fallback, so the attempt it replaced cannot
-      // leave its own card behind under the work being redone.
+      // A run that is still working claims its indices but places no card: the
+      // attempt it replaced must not leave a card behind under the work being
+      // redone, and a turn in flight reports its changes only once it ends.
       claimed[index] = true
       if (!isCompleted(checkpoint)) continue
       owners[index] = checkpoint
-      cardIndex = index
+      if (index < turnEnd) cardIndex = index
     }
     if (cardIndex >= 0 && isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
+    // A steer splits the turn into the work already done and the work it was
+    // steered into, so the earlier half gets its own card above the steered
+    // message, listing only the files recorded up to that point. The turn's own
+    // card stays at its end with every file, the steered half's included.
+    if (cardIndex < 0 || !isCompleted(checkpoint)) continue
+    for (let index = start + 1; index < turnEnd; index++) {
+      const message = messages[index]
+      if (!message || message.role !== 'user' || isTurnTransparentUserMessage(message)) continue
+      if (!promptContinuesTurn(messages, index, start)) continue
+      const boundary = previousAssistantIndex(messages, index)
+      if (boundary <= start || boundary >= cardIndex) continue
+      if (isTurnEndIndex(messages, boundary)) steer[boundary] = index
+    }
   }
 
-  const fallbackLast = new Map<string, number>()
+  // Fallback for a checkpoint whose prompt is not in the loaded transcript: a
+  // long thread loads a window of its messages, and the prompt that opened the
+  // turn usually sits above it. Matching by timestamp then cut the turn at
+  // `completedAt`, so a final assistant message the harness flushed after the
+  // checkpoint settled fell outside the window, and the card lost its turn end
+  // and disappeared even though the checkpoint held the changes. A turn also
+  // runs until the next prompt that opens one, so the fallback adopts the run
+  // up to that prompt instead of stopping at the completion clock.
   for (let index = 0; index < messages.length; index++) {
     if (claimed[index] || owners[index]) continue
     const owner = checkpointForTurn(messages, checkpoints, index)
+    if (!owner) continue
     owners[index] = owner
-    if (owner) fallbackLast.set(owner.id, index)
-  }
-  // The fallback can match a trailing assistant of a run a later attempt
-  // replaced, so it too places a card only where a turn actually ends.
-  for (const index of fallbackLast.values()) {
-    if (isTurnEndIndex(messages, index)) card[index] = true
+    let cardIndex = index
+    for (let next = index + 1; next < messages.length; next++) {
+      const message = messages[next]
+      // An index another turn already decided belongs to that turn, so the run
+      // ends here rather than adopting someone else's answer.
+      if (!message || claimed[next] || owners[next]) break
+      if (message.role === 'user' && !isTurnTransparentUserMessage(message)) break
+      if (message.role !== 'assistant' || message.inlineArtifact) continue
+      owners[next] = owner
+      cardIndex = next
+    }
+    // The fallback can match a trailing assistant of a run a later attempt
+    // replaced, so it too places a card only where a turn actually ends.
+    if (isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
+    index = cardIndex
   }
 
-  return { owners, card }
+  return { messageIndexById: indexByMessageId, owners, card, steer }
 }
 
 /**
- * Index of the next prompt that opens its own turn at or after `from`, or the
- * message count when the turn runs to the end of the transcript. A user message
- * an app action produced, and one that answers the turn's own question, both
- * continue the turn they belong to instead of ending the window.
+ * Index of the first prompt at or after `from` that begins the next turn, or
+ * `limit` when the turn runs to the end of the transcript.
+ *
+ * A prompt sent while the turn's last assistant message was still open belongs
+ * to that turn: a steer continues it, and an answered question resumes it. Only
+ * a prompt written after that message closed begins the next turn, which is why
+ * this reads the message that was streaming rather than a checkpoint clock: the
+ * two orders are independent, and the turn a prompt interrupted is a fact of the
+ * transcript.
  */
-function nextTurnBoundaryIndex(messages: readonly AgentMessage[], from: number): number {
-  for (let index = from; index < messages.length; index++) {
+function nextTurnStartIndex(
+  messages: readonly AgentMessage[],
+  start: number,
+  limit: number
+): number {
+  for (let index = start + 1; index < limit; index++) {
     const message = messages[index]
     if (!message || message.role !== 'user' || isTurnTransparentUserMessage(message)) continue
-    if (isAppActionMessage(message) || isQuestionAnswer(messages, index)) continue
+    if (promptContinuesTurn(messages, index, start)) continue
     return index
   }
-  return messages.length
+  return limit
 }
 
-/**
- * A user message an app action produced   an answered question, a connection
- * retry, a spec apply   carries presentation parts and no authored text, so it
- * continues the turn that triggered it.
- */
-function isAppActionMessage(message: AgentMessage): boolean {
-  return (
-    message.parts.length > 0 && message.parts.every((part) => part.type === 'user-presentation')
-  )
-}
-
-/** Whether this user message answers the question the turn was waiting on. */
-function isQuestionAnswer(messages: readonly AgentMessage[], index: number): boolean {
+/** Whether this prompt arrived while the turn that owns `start` was still writing. */
+function promptContinuesTurn(
+  messages: readonly AgentMessage[],
+  index: number,
+  start: number
+): boolean {
+  const prompt = messages[index]
+  if (!prompt) return false
   for (let cursor = index - 1; cursor >= 0; cursor--) {
     const message = messages[cursor]
     if (!message) return false
     if (message.inlineArtifact) continue
     if (message.role === 'user') {
       if (isTurnTransparentUserMessage(message)) continue
-      return false
+      // A second prompt before the agent answered anything is the same turn's
+      // steer, not a turn of its own.
+      return cursor === start
     }
-    return turnEndsOnQuestion(messages, cursor)
+    return message.completedAt === undefined || message.completedAt > prompt.createdAt
   }
   return false
+}
+
+/** Index of the assistant message the prompt at `index` interrupted, or -1. */
+function previousAssistantIndex(messages: readonly AgentMessage[], index: number): number {
+  for (let cursor = index - 1; cursor >= 0; cursor--) {
+    const message = messages[cursor]
+    if (!message || message.inlineArtifact) continue
+    return message.role === 'assistant' ? cursor : -1
+  }
+  return -1
+}
+
+/**
+ * The files a turn had already changed when it was steered.
+ *
+ * Each recorded change names the tool messages that produced it, and a change
+ * counts as done before the steer when any of those messages was written before
+ * the steered prompt. Changes with no recorded source cannot be placed in time,
+ * so they stay out of the "so far" card rather than implying the steer caused
+ * them; the turn's own card at its end still lists every file.
+ */
+export function changesBeforeSteer(
+  checkpoint: TurnCheckpointSummary,
+  messageIndexById: ReadonlyMap<string, number>,
+  promptIndex: number
+): TurnCheckpointChangeSummary[] {
+  return checkpoint.changes.filter((change) =>
+    change.sources?.some((source) => {
+      const at = messageIndexById.get(source.messageId)
+      return at !== undefined && at < promptIndex
+    })
+  )
 }
 
 /** Whether a checkpoint has finished its turn and may show a changes card. */
@@ -312,6 +404,7 @@ export function buildTranscriptIndex(
   const finalTextId: string[] = new Array(count)
   const checkpoint: (TurnCheckpointSummary | null)[] = new Array(count)
   const checkpointCard: boolean[] = new Array(count)
+  const steerCard: (number | null)[] = new Array(count)
   const turnCompleted: boolean[] = new Array(count)
 
   for (let index = 0; index < count; index++) {
@@ -322,7 +415,7 @@ export function buildTranscriptIndex(
     }
   }
 
-  const { owners, card } = resolveCheckpointOwners(messages, checkpoints)
+  const { messageIndexById, owners, card, steer } = resolveCheckpointOwners(messages, checkpoints)
   for (let index = 0; index < count; index++) {
     const opens = isTurnStartIndex(messages, index)
     const closes = isTurnEndIndex(messages, index)
@@ -333,6 +426,7 @@ export function buildTranscriptIndex(
     finalTextId[index] = closes ? (getTurnFinalText(messages, index)?.id ?? '') : ''
     checkpoint[index] = owners[index] ?? null
     checkpointCard[index] = card[index] ?? false
+    steerCard[index] = steer[index] ?? null
     turnCompleted[index] = opens ? isTurnCompleted(messages, index) : false
   }
 
@@ -343,8 +437,10 @@ export function buildTranscriptIndex(
     isTurnEnd,
     duration,
     finalTextId,
+    messageIndexById,
     checkpoint,
     checkpointCard,
+    steerCard,
     turnCompleted
   }
 }

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
@@ -8,22 +7,29 @@
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
-  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { designElementChatContext, openAnnotationChat } from '$lib/annotation-chat'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
   import { designScreenEntryFromUrl } from '$shared/design/screens'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
   import BrowserBlankTab from './BrowserBlankTab.svelte'
   import BrowserBoxButton from './BrowserBoxButton.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
+  import BrowserExtensionDropdown from './BrowserExtensionDropdown.svelte'
+  import { openThreadBrowserExtensionMenu } from './browser-extension-bar-menus'
   import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import { browserExtensionDropdown } from '$lib/stores/browser-extension-dropdown.svelte'
+  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
+  import { storeExtensionOfferForPage } from '$lib/stores/browser-extension-store-offer'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
@@ -41,7 +47,6 @@
   } from './browser-chrome-menus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import type {
-    BrowserDevToolsState,
     BrowserPageState,
     BrowserPanelShortcutAction,
     BrowserViewBounds
@@ -178,7 +183,51 @@
   $effect(synchronizePageFrame)
 
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
-  let devToolsOpen = $state(false)
+  /**
+   * Whether this row is watching a picture the reader can see.
+   *
+   * A full screen surface is on screen by definition, a pane whose page is placed is
+   * on screen, and the context sidebar is on screen whenever it is open on this tab —
+   * the visibility answer is about where the native page was placed, not about
+   * whether this row is the surface in front of the reader. A row that decided it was
+   * hidden went deaf, which is a play/pause key that does nothing in the sidebar and
+   * nowhere else.
+   */
+  let transportActive = $derived(
+    fullscreen ||
+      panelVisible ||
+      (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTabId === tabId)
+  )
+  /** The extension button tucked under the toolbar's own row, which the dropdown
+   *  card hangs from. */
+  let extensionButton = $state<HTMLButtonElement>()
+  /** The Web Store offer this tab's page makes, or null when it makes none. */
+  const storeOffer = $derived(
+    storeExtensionOfferForPage({
+      projectId: tabProjectId,
+      url: pageState.url,
+      title: pageState.title,
+      boxId: tabBoxId
+    })
+  )
+  const installableOffer = $derived(storeOffer !== null && storeOffer.installed === null)
+  /** Whether an extension install is in flight, so the button says so instead of
+   *  quietly accepting a second click. */
+  const installingExtensions = $derived(browserExtensions.installs.length > 0)
+  /**
+   * The tab, in the shape the extension menu and its popups act on.
+   *
+   * Read from the live page state rather than the tab captured at construction, so
+   * the offer and the jar always describe what the toolbar is showing now.
+   */
+  const extensionTab = $derived({
+    tabId,
+    projectId: tabProjectId,
+    threadId: tabThreadId,
+    boxId: tabBoxId,
+    url: pageState.url,
+    title: pageState.title
+  })
   /** A blank tab has no address yet: show the empty state instead of a native page. */
   let isBlank = $derived(pageState.url === '' && !pageState.loading && !pageState.loadError)
   /**
@@ -290,6 +339,11 @@
     if (!bar) return
     if (!panelVisible) return
     if (!browserAddressFocus.take(tabId)) return
+    // A request belongs to the moment a blank tab opens. By the time this panel
+    // is the one on screen the user may already have given the tab an address,
+    // and selecting the address of a page they already navigated would take the
+    // keyboard for a field they are done with: the request is spent either way.
+    if (!isBlank) return
     bar.focusAndSelect()
   }
   $effect(claimRequestedAddressFocus)
@@ -473,10 +527,26 @@
 
   /** Open a resolved address in this tab. */
   function navigate(url: string): void {
+    const previous = pageState
     address = url
     browserBlankDraft.clear(tabId)
     contextSidebarState.updateBrowserTab(tabId, url)
-    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {})
+    // The tab is on the address from the moment it is submitted, not from the
+    // first report main sends back. Without this the panel keeps the empty state
+    // (or the previous page's state) for the whole handover, and returning to a
+    // tab that is only just loading looks like a tab that was never given an
+    // address. The snapshot is replaced as soon as a real report lands.
+    const optimistic = { ...previous, url, loading: true, loadError: null }
+    pageState = optimistic
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {
+      // The tab can be destroyed between the submit and the call. Put the page
+      // the tab is really on back rather than leaving an address that never
+      // loaded on screen.
+      if (pageState !== optimistic) return
+      pageState = previous
+      address = previous.url
+      contextSidebarState.updateBrowserTab(tabId, previous.url)
+    })
   }
 
   function applyPageState(next: BrowserPageState): void {
@@ -490,17 +560,18 @@
     contextSidebarState.applyBrowserPageState(next)
   }
 
-  async function toggleDevTools(): Promise<void> {
-    try {
-      devToolsOpen = await invoke('browser:toggleDevTools', tabId)
-    } catch {
-      // Tab already destroyed.
-    }
-  }
-
-  function applyDevToolsState(state: BrowserDevToolsState): void {
-    if (state.tabId !== tabId) return
-    devToolsOpen = state.open
+  /**
+   * Open the extensions menu under the button.
+   *
+   * A left-click lists the box's extensions and heads the list with the Web Store
+   * offer the page is making; a right-click adds the two ways to install. Both go
+   * through one native menu, because the page on screen is a native view above the
+   * renderer and a document dropdown would be drawn behind it.
+   */
+  function openExtensionMenu(installDoors: boolean): void {
+    const anchor = extensionButton
+    if (!anchor) return
+    void openThreadBrowserExtensionMenu(extensionTab, anchor, installDoors)
   }
 
   /** Arm or disarm element inspection for this tab, through the shared session. */
@@ -576,7 +647,6 @@
     })
     let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
-    const unsubscribeDevTools = subscribe('browser:devToolsChanged', applyDevToolsState)
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     // Only the sidebar report is focus-driven: a single panel decides it for the
     // whole sidebar, so one listener is enough. The full screen overlay claims
@@ -623,7 +693,6 @@
       releaseBrowserClaim()
       unsubscribeSiteMenu()
       unsubscribeState()
-      unsubscribeDevTools()
       unsubscribePanelShortcut()
       // The bar is gone with this column, so its search ends with it: the page is
       // parked rather than destroyed, and a highlight left on it would still be
@@ -645,6 +714,7 @@
 
 <div
   {@attach panelVisible && !pageState.loadError && !isBlank && manageNativeBrowserView}
+  data-composition-player={compositionPlayer || undefined}
   class="flex h-full min-h-0 flex-col bg-app"
 >
   {#if !compositionPlayer}
@@ -727,25 +797,53 @@
           </span>
         {/if}
       </button>
-      <button
-        type="button"
-        class={[
-          'relative flex h-7 shrink-0 items-center justify-center transition-colors',
-          fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-          devToolsOpen
-            ? 'bg-elevated text-foreground'
-            : 'text-dimmed hover:bg-elevated hover:text-foreground'
-        ]}
-        aria-label="Toggle browser DevTools"
-        aria-pressed={devToolsOpen}
-        title="Toggle browser DevTools"
-        onclick={() => void toggleDevTools()}
-      >
-        <CioTerminal size={13} />
-        {#if fullscreen}
-          <span>Console</span>
+      <!-- The extension button, where a browser puts it: the last chrome before the
+           page, and the anchor for the dropdown an extension's own popup drops
+           into. DevTools is not a toolbar button any more (right-clicking a page
+           offers Inspect Element, and the keymap still has its chord), so this is
+           the control that belongs here. -->
+      <div class="shrink-0">
+        <button
+          bind:this={extensionButton}
+          type="button"
+          class={[
+            'relative flex h-7 shrink-0 items-center justify-center transition-colors',
+            fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
+            browserExtensionDropdown.forTab(tabId)
+              ? 'bg-elevated text-foreground'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-label="Extensions"
+          aria-haspopup="menu"
+          aria-pressed={browserExtensionDropdown.forTab(tabId) !== null}
+          title={installableOffer
+            ? `Extensions: ${storeOffer?.name ?? 'one from this store page'} can be installed from here`
+            : 'Extensions'}
+          onclick={() => openExtensionMenu(false)}
+          oncontextmenu={(event) => {
+            event.preventDefault()
+            openExtensionMenu(true)
+          }}
+        >
+          {#if installingExtensions}
+            <CioSpinner size={13} />
+          {:else}
+            <CioTabExtensions size={14} />
+          {/if}
+          {#if fullscreen}
+            <span>Extensions</span>
+          {/if}
+          {#if installableOffer}
+            <!-- The indicator the store page earns: there is something to install
+                 here, and the top row of both menus installs it. -->
+            <span class="absolute right-0.5 top-0.5 h-1.5 w-1.5 bg-accent" aria-hidden="true"
+            ></span>
+          {/if}
+        </button>
+        {#if panelVisible}
+          <BrowserExtensionDropdown {tabId} anchor={extensionButton} />
         {/if}
-      </button>
+      </div>
       {#if authoredWork}
         <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
         {#if screenEntry}
@@ -803,10 +901,23 @@
     </div>
   {/if}
   {#if pageState.composition}
+    <!--
+      The playback row sits under the picture, not over it.
+
+      A player is watched, not titled: the row above a full screen video reads as a
+      window header full of controls the viewer has to find, and the control that
+      leaves the player was the last thing on the right of it. Under the picture it is
+      where a viewer already looks for a playhead, and the picture gets the height.
+    -->
     <div
       class={[
         'titlebar-no-drag flex shrink-0 items-stretch bg-surface',
-        compositionPlayer && !playerInEditor && 'h-10'
+        playerInEditor && 'order-last border-t border-border',
+        // A composition shown without the editor is a whole full screen surface,
+        // so its transport row is the window title bar and takes the canonical
+        // `h-12` band: at `h-10` the row centred its controls two pixels above the
+        // macOS traffic lights drawn over it.
+        compositionPlayer && !playerInEditor && 'h-12'
       ]}
       style={compositionPlayer && !playerInEditor ? trafficLightInsetStyle() : undefined}
     >
@@ -818,7 +929,9 @@
           titlebar={compositionPlayer && !playerInEditor}
           projectId={pageState.projectId}
           threadId={pageState.threadId}
-          active={panelVisible}
+          active={transportActive}
+          ownsPlaybackKey={!playerInEditor}
+          claimsFocus={fullscreen}
         />
       </div>
       {#if compositionPlayer && onExpandVideo}

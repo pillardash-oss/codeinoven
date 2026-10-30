@@ -13,6 +13,7 @@ import {
   CIO_SUBAGENT_STREAM_STATUS_KEY
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
+import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
 
 export function piCoreToolsSubagentSource(): string {
   return `  // ── Sub-agent spawning ──────────────────────────────────────────────
@@ -21,6 +22,12 @@ export function piCoreToolsSubagentSource(): string {
   // recurse; their permission requests ride the parent's extension-UI
   // context so the permission card appears on the primary thread.
   const CIO_SUBAGENT_MARKER = 'cio-subagent:'
+  // Workers running at the same time in this one harness process. Each is a
+  // full nested session with its own model stream and tool loop, so this caps
+  // the fan-out the user's machine and provider quota see at once. Overflow
+  // does not raise the ceiling: the primary agent queues behind it, and the
+  // one way past it is a single pawn agent on its own thread, which is what
+  // the refusal message below and the prompt guidelines point at.
   const CIO_SUBAGENT_MAX_CONCURRENT = 4
   const CIO_SUBAGENT_OUTPUT_CAP = 20000
   const CIO_SUBAGENT_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
@@ -778,7 +785,9 @@ export function piCoreToolsSubagentSource(): string {
     if (runningCount >= CIO_SUBAGENT_MAX_CONCURRENT) {
       return {
         error:
-          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Wait for one to finish (${CIO_AGENT_STATUS_TOOL_NAME} with wait: true), read its result with ${CIO_AGENT_OUTPUT_TOOL_NAME}, and only then spawn another.'
+          'Too many sub-agents are running (' +
+          CIO_SUBAGENT_MAX_CONCURRENT +
+          ' max). Wait for one to finish (${CIO_AGENT_STATUS_TOOL_NAME} with wait: true), read its result with ${CIO_AGENT_OUTPUT_TOOL_NAME}, and only then spawn another. Do not work around this ceiling by default: queue the remaining work behind the cap. Only when the work genuinely needs more runs in flight at once and waiting would stall it   or when the user explicitly asked for pawns   hand the overflow to one pawn agent (${PAWN_AGENT_TOOL_NAME}), never to several.'
       }
     }
     let resolvedModel = parentCtx.model
@@ -1027,7 +1036,7 @@ export function piCoreToolsSubagentSource(): string {
     name: '${CIO_SPAWN_AGENT_TOOL_NAME}',
     label: 'Spawn a sub-agent',
     description:
-      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default, unless the user explicitly asks you to use sub-agents differently, delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true; each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly; use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides. When the user asks to split work across workers and wants to prompt or steer those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead: an Assignment gives each worker a thread the user can direct independently, while a sub-agent only reports back to you.',
+      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default, unless the user explicitly asks you to use sub-agents differently, delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true; each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly; use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides. At most four sub-agents run at once and anything past that is refused, so queue the rest behind the cap. Only when the work genuinely needs five or more worker runs in flight at the same time and waiting for a free slot would stall it, or when the user explicitly asks for pawns, hand the overflow to a pawn agent (${PAWN_AGENT_TOOL_NAME})   one, not several   instead of splitting the fan-out. When the user asks to split work across workers and wants to prompt or steer those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead: an Assignment gives each worker a thread the user can direct independently, while a sub-agent only reports back to you.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: CIO_SUBAGENT_PROMPT_GUIDELINES,
     parameters: Type.Object({

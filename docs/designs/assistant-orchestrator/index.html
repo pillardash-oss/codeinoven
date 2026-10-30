@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The assistant room · design study · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./room.css" />
+  </head>
+  <body>
+    <main class="cover">
+      <header class="cover-top">
+        <div class="brandline">
+          <span class="mark" aria-hidden="true">
+            <svg viewBox="0 0 96 96">
+              <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+              <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+              <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+              <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+            </svg>
+          </span>
+          <span>CodeInOven / the assistant room</span>
+        </div>
+        <div class="theme-switch" role="group" aria-label="Preview theme">
+          <button type="button" data-theme-choice="light" aria-pressed="true">Light</button>
+          <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+        </div>
+      </header>
+
+      <div class="eyebrow">Design study · not implemented</div>
+      <h1>The assistant page is a room, not a list.</h1>
+      <p class="lede">
+        The page you land on should feel like walking into a place where your staff is already
+        standing: the orchestrator at the centre, every assistant around it at the hour it runs, and
+        everything that needs you visible without opening anything. Talking to it is not a chat
+        window, it is a despatch spine: your words arrive on the line, and every hand-off leaves it
+        on its own elbow toward the assistant that took it.
+      </p>
+
+      <div class="ideas">
+        <div>
+          <h3>The House</h3>
+          <p>
+            Seven assistants sit on a 24-hour face. A ring position is a time, so Release Notes at
+            17:00 really is standing where 17:00 is, and the gold hand is now. Marks carry the app's
+            own state colours: blue running, amber waiting on you, red blocked.
+          </p>
+        </div>
+        <div>
+          <h3>The Despatch</h3>
+          <p>
+            One rule runs down the session. Who spoke is in the gutter, each dispatch branches off
+            toward its owner with the reason it went there, and a blocked assistant shows up as a
+            blocked line instead of a silent failure.
+          </p>
+        </div>
+        <div>
+          <h3>The Bench</h3>
+          <p>
+            Open any assistant and the room becomes its workbench, with the house still one click
+            behind. The task that arrived from the orchestrator wears its provenance at the top and
+            hands back to Chief from the header.
+          </p>
+        </div>
+      </div>
+
+      <div class="frames">
+        <a class="frame" href="./01-house.html">
+          <span class="frame-slot">
+            <iframe src="./01-house.html" title="The room: the orchestrator at the centre of its house" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>01 · The room</strong>
+            <span>Arrival: the house, the dial, the ledger, the lectern</span>
+          </span>
+        </a>
+        <a class="frame" href="./02-despatch.html">
+          <span class="frame-slot">
+            <iframe src="./02-despatch.html" title="The despatch spine with hand-offs" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>02 · The despatch</strong>
+            <span>One session down one line: replies, elbows, a blocked owner</span>
+          </span>
+        </a>
+        <a class="frame" href="./03-bench.html">
+          <span class="frame-slot">
+            <iframe src="./03-bench.html" title="An assistant's bench with the provenance of a handed-over task" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>03 · The bench</strong>
+            <span>Take an assistant over: its tasks, its provenance, its own desk</span>
+          </span>
+        </a>
+        <a class="frame" href="./04-phone.html">
+          <span class="frame-slot" data-size="phone">
+            <iframe src="./04-phone.html" title="The room at phone width" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>04 · The room, phone width</strong>
+            <span>A docked window: the house shrinks, the ledger speaks first</span>
+          </span>
+        </a>
+      </div>
+
+      <div class="cover-foot">
+        <div>
+          <h3>What it keeps</h3>
+          <p>
+            The app's tokens, its two bundled faces, hairline rules, sharp corners and gold used for
+            structure rather than glow. No gradient wash, no glass, no purple.
+          </p>
+        </div>
+        <div>
+          <h3>What it changes</h3>
+          <p>
+            The assistant page stops being a directory of rows. The orchestrator becomes a place you
+            stand in, and every assistant is a body in that room instead of an item in a list.
+          </p>
+        </div>
+        <div>
+          <h3>The open question</h3>
+          <p>
+            Whether a dispatched task reports into the despatch automatically, or only when it has
+            something you must decide. These screens copy the first reading.
+          </p>
+        </div>
+      </div>
+    </main>
+    <script src="./theme.js"></script>
+  </body>
+</html>

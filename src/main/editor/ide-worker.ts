@@ -2,6 +2,7 @@ import { resolveIdeExecutable } from './ide-executables'
 import { ideInstallations } from './ide-installations'
 import {
   DEFAULT_IDE_LANGUAGE_SERVERS,
+  type IdeLanguageMapping,
   type IdeLanguageServer
 } from '../../lib/ide-language-servers'
 import { StringDecoder } from 'node:string_decoder'
@@ -11,20 +12,49 @@ import { realpath, readFile, stat } from 'node:fs/promises'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isWithinRoot, validateRelativePath } from './project-files/project-files-paths'
-import type { IdeRequest, IdeResponse, IdeLocation } from '../../lib/editor-ide'
+import type { IdeRequest, IdeResponse, IdeLocation, IdeProgress } from '../../lib/editor-ide'
 
 const port = parentPort!
 const MAX_BYTES = 2 * 1024 * 1024
+/**
+ * How long one language-server request may take.
+ *
+ * A warm server answers in milliseconds, so this bound exists only to stop a
+ * hung child from occupying a slot forever. Hover, definition and references are
+ * the exception and use `INTELLIGENCE_TIMEOUT_MS`: the first of them after a
+ * document opens pays that server's own project load, which measured 11.8 s for
+ * svelte-language-server on this repository (the rest of the hovers on the same
+ * document answered in 20-70 ms). The old flat 12 s bound sat inside that load,
+ * so the first hover was cancelled, every hover queued behind it blew the IDE
+ * service's own watchdog, and the editor reported "Editor intelligence timed
+ * out" with nothing else to act on.
+ */
+const REQUEST_TIMEOUT_MS = 12_000
+const INTELLIGENCE_TIMEOUT_MS = 30_000
 const sessions = new Map<string, Promise<Session>>()
 const liveSessions = new Set<Session>()
 let configuredServers: IdeLanguageServer[] | undefined
-const owners = new Map<string, { session: Session; uri: string }>()
+const owners = new Map<string, OwnedDocument[]>()
+interface OwnedDocument {
+  session: Session
+  uri: string
+}
+interface Selection {
+  server: IdeLanguageServer
+  mapping: IdeLanguageMapping
+}
 const searches = new Map<string, ReturnType<typeof spawn>>()
 const record = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
 
 class Session {
+  /** Identity of this session's configuration, so a changed definition retires it. */
+  readonly configurationKey: string
+  /** The settings this session answers `workspace/configuration` from. */
+  readonly settings: Record<string, unknown>
   readonly documents = new Map<string, { text: string; version: number }>()
+  /** Documents this session already paid its cold-start request for. */
+  readonly warmed = new Set<string>()
   capabilities: Record<string, unknown> = {}
   private stopped = false
   private failure = ''
@@ -45,9 +75,10 @@ class Session {
     command: string,
     args: string[],
     env: NodeJS.ProcessEnv,
-    readonly settings: Record<string, unknown>,
-    readonly configurationKey: string
+    readonly definition: IdeLanguageServer
   ) {
+    this.configurationKey = JSON.stringify(definition)
+    this.settings = definition.settings
     this.child = spawn(command, args, { cwd: root, env, stdio: 'pipe', windowsHide: true })
     liveSessions.add(this)
     this.child.once('exit', () => liveSessions.delete(this))
@@ -116,14 +147,14 @@ class Session {
       )
     }
   }
-  request(method: string, params: unknown): Promise<unknown> {
+  request(method: string, params: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = ++this.sequence
       const timer = setTimeout(() => {
         this.pending.delete(id)
         this.notify('$/cancelRequest', { id })
-        reject(new Error('Language server request timed out'))
-      }, 12_000)
+        reject(new Error(`The language server did not answer ${method} in time`))
+      }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
       try {
         this.send({ id, method, params })
@@ -173,6 +204,13 @@ class Session {
       }
       return
     }
+    // Notifications carry no id. The one worth forwarding is the server's own
+    // report about the work it is doing, which is how a loading project becomes
+    // a labelled progress bar instead of a silent wait.
+    if (typeof message.method === 'string') {
+      if (message.method === '$/progress') this.reportProgress(record(message.params))
+      return
+    }
     if (typeof message.id !== 'number') return
     const pending = this.pending.get(message.id)
     if (!pending) return
@@ -181,6 +219,37 @@ class Session {
     if (message.error)
       pending.reject(new Error(String(record(message.error).message ?? 'Language server error')))
     else pending.resolve(message.result)
+  }
+  /** Forward one work item to the app. The server and workspace come from here. */
+  noteProgress(entry: Omit<IdeProgress, 'serverId' | 'name' | 'root'>): void {
+    port.postMessage({
+      progress: {
+        serverId: this.definition.id,
+        name: this.definition.name,
+        root: this.root,
+        ...entry
+      } satisfies IdeProgress
+    })
+  }
+  private reportProgress(params: Record<string, unknown>): void {
+    const value = record(params.value)
+    const kind = value.kind
+    if (kind !== 'begin' && kind !== 'report' && kind !== 'end') return
+    const token = typeof params.token === 'string' ? params.token : String(params.token ?? '')
+    if (!token || token.length > 200) return
+    const text = (candidate: unknown): string | undefined =>
+      typeof candidate === 'string' && candidate.trim() ? candidate.trim().slice(0, 300) : undefined
+    const percentage =
+      typeof value.percentage === 'number' && Number.isFinite(value.percentage)
+        ? Math.min(100, Math.max(0, Math.round(value.percentage)))
+        : undefined
+    this.noteProgress({
+      token,
+      kind,
+      title: text(value.title),
+      message: text(value.message),
+      percentage
+    })
   }
   stop(): void {
     if (this.stopped) return
@@ -210,31 +279,36 @@ class Session {
   }
 }
 
-function selectDefinition(path: string, servers: IdeLanguageServer[]) {
-  return servers
-    .flatMap((server) =>
-      server.enabled
-        ? server.languages
-            .filter((mapping) => path.toLowerCase().endsWith(mapping.extension))
-            .map((mapping) => ({ server, mapping }))
-        : []
-    )
-    .sort((left, right) => right.mapping.extension.length - left.mapping.extension.length)[0]
+/**
+ * Every enabled server that handles this file, most specific extension first.
+ *
+ * A file routinely needs more than one server: Svelte or TypeScript structure
+ * plus Tailwind class documentation, exactly as a full editor runs them side by
+ * side. One server is listed once even when two of its extensions match.
+ */
+function selectDefinitions(path: string, servers: IdeLanguageServer[]): Selection[] {
+  const lower = path.toLowerCase()
+  const byServer = new Map<string, Selection>()
+  for (const server of servers) {
+    if (!server.enabled) continue
+    for (const mapping of server.languages) {
+      if (!lower.endsWith(mapping.extension)) continue
+      const existing = byServer.get(server.id)
+      if (existing && existing.mapping.extension.length >= mapping.extension.length) continue
+      byServer.set(server.id, { server, mapping })
+    }
+  }
+  return [...byServer.values()].sort(
+    (left, right) => right.mapping.extension.length - left.mapping.extension.length
+  )
 }
 
 async function sessionFor(
   root: string,
   path: string,
   env: NodeJS.ProcessEnv,
-  servers: IdeLanguageServer[]
-): Promise<{ session: Session; language: string }> {
-  const selected = selectDefinition(path, servers)
-  if (!selected)
-    throw new Error(
-      'No enabled language server for this file type. Configure one in Settings > IDE Mode.'
-    )
-  const definition = selected.server
-  const language = selected.mapping.languageId
+  definition: IdeLanguageServer
+): Promise<Session> {
   const { command, args } = definition
   let workspaceRoot = root
   if (definition.rootMarkers.length) {
@@ -261,8 +335,10 @@ async function sessionFor(
   const key = `${workspaceRoot}\0${JSON.stringify(definition)}`
   let pending = sessions.get(key)
   if (!pending) {
-    if (sessions.size >= 4)
-      throw new Error('IDE Mode supports four active language servers. Close unused editors first.')
+    if (sessions.size >= 8)
+      throw new Error(
+        'IDE Mode supports eight active language servers. Close unused editors first.'
+      )
     pending = (async () => {
       const overrides = Object.fromEntries(
         Object.entries(definition.env).map(([key, value]) => [
@@ -283,14 +359,7 @@ async function sessionFor(
         throw new Error(
           `Language server ${definition.name} is not installed or its executable is unavailable. Open Settings > IDE Mode and install ${definition.name}, or configure an absolute executable path. Searched managed tools, project/PATH directories and Neovim Mason installations.`
         )
-      const session = new Session(
-        workspaceRoot,
-        executable,
-        args,
-        localEnv,
-        definition.settings,
-        JSON.stringify(definition)
-      )
+      const session = new Session(workspaceRoot, executable, args, localEnv, definition)
       try {
         const result = record(
           await session.request('initialize', {
@@ -300,6 +369,10 @@ async function sessionFor(
             workspaceFolders: [{ uri: pathToFileURL(workspaceRoot).href, name: workspaceRoot }],
             capabilities: {
               general: { positionEncodings: ['utf-16'] },
+              // A server only reports work-done progress when the client says it
+              // understands it. Declaring it is what turns a silent project load
+              // into the labelled progress the IDE panel shows.
+              window: { workDoneProgress: true },
               workspace: { configuration: true, workspaceFolders: true },
               textDocument: {
                 hover: { contentFormat: ['plaintext', 'markdown'] },
@@ -327,24 +400,28 @@ async function sessionFor(
       if (sessions.get(key) === pending) sessions.delete(key)
     })
   }
-  return { session: await pending, language }
+  return pending
 }
 
-function closeOwner(owner: string): void {
+function closeOwner(owner: string, keep?: ReadonlySet<Session>, nextUri?: string): void {
   searches.get(owner)?.kill()
   searches.delete(owner)
-  const owned = owners.get(owner)
+  const owned = owners.get(owner) ?? []
   owners.delete(owner)
-  if (!owned) return
-  if (
-    ![...owners.values()].some(
-      (value) => value.session === owned.session && value.uri === owned.uri
+  if (!owned.length) return
+  const remaining = [...owners.values()].flat()
+  for (const entry of owned) {
+    const kept = keep?.has(entry.session) ?? false
+    const shared = remaining.some(
+      (value) => value.session === entry.session && value.uri === entry.uri
     )
-  ) {
-    owned.session.notify('textDocument/didClose', { textDocument: { uri: owned.uri } })
-    owned.session.documents.delete(owned.uri)
+    // A kept session still has to drop the document this editor is leaving.
+    if (!(kept ? entry.uri === nextUri : shared)) {
+      entry.session.notify('textDocument/didClose', { textDocument: { uri: entry.uri } })
+      entry.session.documents.delete(entry.uri)
+    }
+    if (!kept && !remaining.some((value) => value.session === entry.session)) entry.session.stop()
   }
-  if (![...owners.values()].some((value) => value.session === owned.session)) owned.session.stop()
 }
 async function locations(root: string, result: unknown): Promise<IdeLocation[]> {
   const values = Array.isArray(result) ? result : result ? [result] : []
@@ -459,6 +536,98 @@ async function grep(
 }
 
 const chains = new Map<string, Promise<unknown>>()
+/**
+ * How a request queues against the other requests of the same editor.
+ *
+ * Everything used to share one promise chain per editor, which was wrong in
+ * both directions. A `close` (the tab unmounted) queued behind a hover that was
+ * still loading a server, so the editor's 20 s watchdog killed a request that
+ * had done nothing but wait. And two hovers queued behind one another, so the
+ * second one answered only after the first had spent its whole load, which is
+ * how a warm server still produced `hover timed out`.
+ *
+ * Only document lifecycle (open/sync/capabilities) needs ordering, because a
+ * request must never reach a language server before its `didOpen`. A close
+ * discards that work outright, and hover, definition and references always wait
+ * for the document to be synced but never for each other.
+ */
+const DOCUMENT_ACTIONS = new Set(['sync', 'capabilities'])
+const INTELLIGENCE_ACTIONS = new Set(['hover', 'definition', 'references'])
+/** Bumped by every close, so work that was already queued cannot resurrect a
+ *  document the editor has left. */
+const generations = new Map<string, number>()
+
+/**
+ * Pay a server's cold start before the user asks for an answer.
+ *
+ * A language server loads its project lazily, on the first request that needs
+ * it: svelte-language-server took 11.8 s on this repository to answer the first
+ * hover and 20-70 ms for every hover after that. Sending one throwaway hover as
+ * soon as the document is synced moves that cost off the request the user is
+ * waiting on, and the answer is discarded. Failures are ignored on purpose: the
+ * real request reports them with the server's name attached.
+ */
+function warm(session: Session, uri: string): void {
+  if (!session.capabilities.hoverProvider || session.warmed.has(uri)) return
+  session.warmed.add(uri)
+  // The app knows this request is running, even when the server reports nothing
+  // about its own loading, so the panel names the wait instead of showing a
+  // connected server that silently cannot answer yet. No percentage is invented:
+  // only a server's own report carries one.
+  session.noteProgress({ token: 'warmup', kind: 'begin', title: 'Preparing project' })
+  const settle = (): void => session.noteProgress({ token: 'warmup', kind: 'end' })
+  void session
+    .request(
+      'textDocument/hover',
+      { textDocument: { uri }, position: { line: 0, character: 0 } },
+      INTELLIGENCE_TIMEOUT_MS
+    )
+    .then(settle, settle)
+}
+
+/** The actions a file offers when any of its servers advertises them. */
+function capabilitiesOf(sessions: Session[]) {
+  return {
+    definition: sessions.some((session) => Boolean(session.capabilities.definitionProvider)),
+    references: sessions.some((session) => Boolean(session.capabilities.referencesProvider)),
+    hover: sessions.some((session) => Boolean(session.capabilities.hoverProvider))
+  }
+}
+
+/** Keep one server's copy of a document current, in the sync mode it asked for. */
+function syncDocument(session: Session, uri: string, language: string, text: string): void {
+  const previous = session.documents.get(uri)
+  if (!previous) {
+    session.notify('textDocument/didOpen', {
+      textDocument: { uri, languageId: language, version: 1, text }
+    })
+    session.documents.set(uri, { text, version: 1 })
+    return
+  }
+  if (text === previous.text) return
+  const version = previous.version + 1
+  const sync = session.capabilities.textDocumentSync
+  const kind = typeof sync === 'number' ? sync : record(sync).change
+  const change =
+    kind === 2
+      ? {
+          range: {
+            start: { line: 0, character: 0 },
+            end: {
+              line: previous.text.split('\n').length - 1,
+              character: previous.text.slice(previous.text.lastIndexOf('\n') + 1).length
+            }
+          },
+          text
+        }
+      : { text }
+  if (kind !== 0)
+    session.notify('textDocument/didChange', {
+      textDocument: { uri, version },
+      contentChanges: [change]
+    })
+  session.documents.set(uri, { text, version })
+}
 async function handle(
   root: string,
   request: IdeRequest,
@@ -485,108 +654,142 @@ async function handle(
   if (request.action === 'check') {
     const definition = servers.find((server) => server.id === request.serverId)
     if (!definition) throw new Error('Language server configuration not found')
-    const { session } = await sessionFor(
+    const session = await sessionFor(
       root,
       join(root, `__ide_check${definition.languages[0].extension}`),
       env,
-      [{ ...definition, enabled: true }]
+      { ...definition, enabled: true }
     )
-    const capabilities = {
-      definition: Boolean(session.capabilities.definitionProvider),
-      references: Boolean(session.capabilities.referencesProvider),
-      hover: Boolean(session.capabilities.hoverProvider)
-    }
-    if (![...owners.values()].some((owner) => owner.session === session)) session.stop()
+    const capabilities = capabilitiesOf([session])
+    if (![...owners.values()].flat().some((owner) => owner.session === session)) session.stop()
     return { capabilities }
   }
   if (request.action === 'grep') return grep(root, request, env)
   validateRelativePath(request.path, false)
   const path = await realpath(resolve(root, request.path))
   if (!isWithinRoot(root, path)) throw new Error('File is outside the project')
-  const currentOwner = owners.get(request.owner)
-  const selected = selectDefinition(path, servers)
-  if (currentOwner && currentOwner.session.configurationKey !== JSON.stringify(selected?.server))
-    closeOwner(request.owner)
-  const { session, language } = await sessionFor(root, path, env, servers)
-  if (
-    selected &&
-    (!currentOwner || currentOwner.session.configurationKey !== JSON.stringify(selected.server))
-  )
-    void ideInstallations(env, [selected.server], true).catch(() => undefined)
+  const selections = selectDefinitions(path, servers)
+  if (!selections.length)
+    throw new Error(
+      'No enabled language server for this file type. Configure one in Settings > IDE Mode.'
+    )
   const uri = pathToFileURL(path).href
-  const owned = owners.get(request.owner)
-  owners.set(request.owner, { session, uri })
-  if (owned && (owned.session !== session || owned.uri !== uri)) {
-    const previousOwner = `${request.owner}:previous`
-    owners.set(previousOwner, owned)
-    closeOwner(previousOwner)
-  }
   const text = request.text ?? (await readFile(path, 'utf8'))
   if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('File is too large for IDE Mode')
-  const previous = session.documents.get(uri)
-  if (!previous) {
-    session.notify('textDocument/didOpen', {
-      textDocument: { uri, languageId: language, version: 1, text }
-    })
-    session.documents.set(uri, { text, version: 1 })
-  } else if (text !== previous.text) {
-    const version = previous.version + 1
-    const sync = session.capabilities.textDocumentSync
-    const kind = typeof sync === 'number' ? sync : record(sync).change
-    const change =
-      kind === 2
-        ? {
-            range: {
-              start: { line: 0, character: 0 },
-              end: {
-                line: previous.text.split('\n').length - 1,
-                character: previous.text.slice(previous.text.lastIndexOf('\n') + 1).length
-              }
-            },
-            text
-          }
-        : { text }
-    if (kind !== 0)
-      session.notify('textDocument/didChange', {
-        textDocument: { uri, version },
-        contentChanges: [change]
-      })
-    session.documents.set(uri, { text, version })
+  const entries: { session: Session; selection: Selection }[] = []
+  let failure: unknown
+  // Servers start in parallel: their loads are independent, and starting them
+  // one after another made the slowest one's wait add up for every later
+  // server instead of overlapping with it.
+  const started = await Promise.allSettled(
+    selections.map(async (selection) => ({
+      session: await sessionFor(root, path, env, selection.server),
+      selection
+    }))
+  )
+  for (const result of started) {
+    if (result.status === 'fulfilled') entries.push(result.value)
+    // One server that is missing or broken must not disable the rest.
+    else failure ??= result.reason
   }
-  const capabilities = {
-    definition: Boolean(session.capabilities.definitionProvider),
-    references: Boolean(session.capabilities.referencesProvider),
-    hover: Boolean(session.capabilities.hoverProvider)
+  if (!entries.length)
+    throw failure instanceof Error
+      ? failure
+      : new Error(String(failure ?? 'No language server could be started'))
+  const currentOwner = owners.get(request.owner) ?? []
+  const settled =
+    currentOwner.length === entries.length &&
+    currentOwner.every(
+      (entry, index) => entry.session === entries[index].session && entry.uri === uri
+    )
+  if (currentOwner.length && !settled)
+    closeOwner(request.owner, new Set(entries.map((entry) => entry.session)), uri)
+  if (!settled) void ideInstallations(env, [selections[0].server], true).catch(() => undefined)
+  for (const entry of entries) {
+    syncDocument(entry.session, uri, entry.selection.mapping.languageId, text)
+    warm(entry.session, uri)
   }
-  const connected = [
-    {
-      id: selected!.server.id,
-      name: selected!.server.name,
-      executable: session.child.spawnfile,
-      root: session.root,
-      language,
-      languages:
-        selected!.server.command === 'svelteserver'
-          ? ['Svelte', 'HTML', 'CSS', 'JavaScript', 'TypeScript']
-          : [language]
-    }
-  ]
+  owners.set(
+    request.owner,
+    entries.map((entry) => ({ session: entry.session, uri }))
+  )
+  const capabilities = capabilitiesOf(entries.map((entry) => entry.session))
+  const connected = entries.map(({ session, selection }) => ({
+    id: selection.server.id,
+    name: selection.server.name,
+    executable: session.child.spawnfile,
+    root: session.root,
+    language: selection.mapping.languageId,
+    languages:
+      selection.server.command === 'svelteserver'
+        ? ['Svelte', 'HTML', 'CSS', 'JavaScript', 'TypeScript']
+        : [selection.mapping.languageId]
+  }))
   if (request.action === 'capabilities' || request.action === 'sync')
     return {
       capabilities,
       servers: connected,
-      installations: await ideInstallations(env, selected ? [selected.server] : [], false)
+      installations: await ideInstallations(
+        env,
+        selections.map((selection) => selection.server),
+        false
+      )
     }
   if (!capabilities[request.action]) return { capabilities, locations: [] }
-  const result = await session.request(`textDocument/${request.action}`, {
+  const params = {
     textDocument: { uri },
     position: { line: request.line ?? 0, character: request.character ?? 0 },
     ...(request.action === 'references' ? { context: { includeDeclaration: true } } : {})
-  })
-  if (!result || (Array.isArray(result) && result.length === 0)) session.explainEmptyResult()
-  return request.action === 'hover'
-    ? { capabilities, documentation: documentation(record(result).contents).slice(0, 32_000) }
-    : { capabilities, locations: await locations(root, result) }
+  }
+  const providers = entries.filter((entry) =>
+    Boolean(entry.session.capabilities[`${request.action}Provider`])
+  )
+  const results = await Promise.allSettled(
+    providers.map((entry) =>
+      entry.session
+        .request(
+          `textDocument/${request.action}`,
+          params,
+          request.action === 'references' ||
+            request.action === 'hover' ||
+            request.action === 'definition'
+            ? INTELLIGENCE_TIMEOUT_MS
+            : REQUEST_TIMEOUT_MS
+        )
+        .catch((error: unknown) => {
+          throw new Error(
+            `${entry.selection.server.name} could not answer ${request.action}. ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error }
+          )
+        })
+    )
+  )
+  const answers: unknown[] = []
+  let rejection: unknown
+  for (const result of results) {
+    if (result.status === 'fulfilled') answers.push(result.value)
+    else rejection ??= result.reason
+  }
+  // One server failing must not hide the answers the others already produced.
+  if (!answers.length && rejection !== undefined)
+    throw new Error(rejection instanceof Error ? rejection.message : String(rejection))
+  if (request.action === 'hover') {
+    const docs = [
+      ...new Set(
+        answers
+          .map((answer) => documentation(record(answer).contents).trim())
+          .filter((value) => value.length > 0)
+      )
+    ]
+    if (!docs.length) entries[0].session.explainEmptyResult()
+    return { capabilities, documentation: docs.join('\n\n---\n\n').slice(0, 32_000) }
+  }
+  const merged = new Map<string, IdeLocation>()
+  for (const answer of answers)
+    for (const location of await locations(root, answer))
+      merged.set(`${location.path}:${location.line}:${location.character}`, location)
+  if (!merged.size) entries[0].session.explainEmptyResult()
+  return { capabilities, locations: [...merged.values()].slice(0, 200) }
 }
 port.on(
   'message',
@@ -605,7 +808,7 @@ port.on(
         message.configure.filter((server) => server.enabled).map((server) => JSON.stringify(server))
       )
       for (const [owner, owned] of owners)
-        if (!allowed.has(owned.session.configurationKey)) closeOwner(owner)
+        if (owned.some((entry) => !allowed.has(entry.session.configurationKey))) closeOwner(owner)
       for (const session of liveSessions) if (!allowed.has(session.configurationKey)) session.stop()
       return
     }
@@ -616,36 +819,61 @@ port.on(
     }
     const { id, root, request, env } = message
     const key = request.owner
+    const servers = configuredServers ?? message.servers ?? DEFAULT_IDE_LANGUAGE_SERVERS
     if (request.action === 'grep' || request.action === 'close' || request.action === 'cancel')
       searches.get(key)?.kill()
-    const task = (chains.get(key) ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(() =>
-        handle(
-          root,
-          request,
-          env,
-          configuredServers ?? message.servers ?? DEFAULT_IDE_LANGUAGE_SERVERS
-        )
-      )
-    chains.set(key, task)
-    void task
-      .then(
-        (result) =>
-          port.postMessage({
-            id,
-            result,
-            idle: owners.size === 0 && searches.size === 0 && chains.size === 1
-          }),
-        (error) =>
-          port.postMessage({
-            id,
-            error: error instanceof Error ? error.message : String(error),
-            idle: owners.size === 0 && searches.size === 0 && chains.size === 1
-          })
-      )
-      .finally(() => {
-        if (chains.get(key) === task) chains.delete(key)
+    const generation = generations.get(key) ?? 0
+    const reply = (result: IdeResponse | null, error?: unknown): void =>
+      port.postMessage({
+        id,
+        ...(error === undefined
+          ? { result: result ?? {} }
+          : { error: error instanceof Error ? error.message : String(error) }),
+        idle: owners.size === 0 && searches.size === 0 && chains.size <= 1
       })
+    const work = (): Promise<IdeResponse> => {
+      // A close discards the queue: the editor is gone and must not be re-opened
+      // by a sync that was sent a moment before it.
+      if ((generations.get(key) ?? 0) !== generation) return Promise.resolve({})
+      return handle(root, request, env, servers)
+    }
+    let task: Promise<IdeResponse>
+    if (request.action === 'close') {
+      // Bumped before the close runs, so older work is refused and cannot
+      // resurrect the editor's documents afterwards.
+      generations.set(key, generation + 1)
+      chains.delete(key)
+      task = handle(root, request, env, servers)
+    } else if (request.action === 'cancel' || request.action === 'grep') {
+      task = work()
+    } else if (DOCUMENT_ACTIONS.has(request.action)) {
+      task = (chains.get(key) ?? Promise.resolve()).catch(() => undefined).then(work)
+      chains.set(key, task)
+      // Cleared once it settles, so the map is a queue of live work rather than a
+      // record of every editor that was ever open.
+      const settle = (): void => {
+        if (chains.get(key) === task) chains.delete(key)
+      }
+      void task.then(settle, settle)
+    } else if (INTELLIGENCE_ACTIONS.has(request.action)) {
+      // No chains.set: the next hover does not wait for this one.
+      task = (chains.get(key) ?? Promise.resolve()).catch(() => undefined).then(work)
+    } else {
+      task = work()
+    }
+    void task.then(
+      (result) => {
+        // The editor closed while this ran. Its answer is worthless now, and the
+        // documents the request just registered have to go with it, or a session
+        // nobody owns keeps the whole worker alive.
+        if (request.action !== 'close' && (generations.get(key) ?? 0) !== generation) {
+          closeOwner(key)
+          reply({})
+          return
+        }
+        reply(result)
+      },
+      (error: unknown) => reply(null, error)
+    )
   }
 )

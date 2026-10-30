@@ -271,8 +271,13 @@ export function isWorkflowCoordinatorThread(thread: Thread | null | undefined): 
   return thread?.assignmentRole === 'coordinator' || thread?.achievementRole === 'coordinator'
 }
 
-export function isOrchestrationChildThread(thread: Thread): boolean {
-  if (isWorkflowCoordinatorThread(thread)) {
+export function isOrchestrationChildThread(
+  thread: Pick<
+    Thread,
+    'achievementRole' | 'assignmentRole' | 'assignmentId' | 'coordinatorThreadId'
+  >
+): boolean {
+  if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
     return false
   }
   return (

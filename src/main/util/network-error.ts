@@ -43,6 +43,31 @@ const NETWORK_ERROR_NAMES = new Set(['AbortError', 'TimeoutError'])
  * as opposed to an application-level failure that should still be surfaced
  * as-is.
  */
+/**
+ * The lowest-level system code in a failure's cause chain (`ENOTFOUND`,
+ * `ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`, …), or null when none carries one.
+ *
+ * Undici reports every transport problem as `TypeError: fetch failed` and keeps
+ * the reason in `cause`, which an IPC rejection drops. This is what lets a
+ * surfaced message say which part of the connection failed, and what lets a log
+ * line name it without dumping the whole chain.
+ */
+export function networkErrorCode(error: unknown, depth = 0): string | null {
+  if (depth > 5 || typeof error !== 'object' || error === null) return null
+  const code = (error as { code?: unknown }).code
+  if (typeof code === 'string' && code.length > 0) return code
+  // A dual-stack connect failure arrives as one AggregateError holding one entry
+  // per address family, so the code may live one level to the side.
+  const nested = (error as { errors?: unknown }).errors
+  if (Array.isArray(nested)) {
+    for (const entry of nested) {
+      const found = networkErrorCode(entry, depth + 1)
+      if (found) return found
+    }
+  }
+  return networkErrorCode((error as { cause?: unknown }).cause, depth + 1)
+}
+
 export function isNetworkError(error: unknown, depth = 0): boolean {
   if (depth > 5 || typeof error !== 'object' || error === null) return false
   const code = (error as { code?: unknown }).code

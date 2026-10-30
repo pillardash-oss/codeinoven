@@ -80,11 +80,15 @@ const VIDEO_SESSION_STEPS = `How to run the session:
    a generation link expires. When neither exists for work the composition needs,
    say which work needs one and ask; never choose a model yourself, and never
    leave an empty frame where a real asset was asked for.
-7. Default to an editable composition and live preview. Do not export at the end
-   of creation or edits, or because critique passed. Export only when the user
-   explicitly requests a rendered/downloadable file or directly starts an export.
-   Do not repeatedly ask whether to export. A prior export request does not mean
-   every later edit should be exported unless the user explicitly requested that.
+7. Decide which deliverable the request is before you export. Default to an
+   editable composition and live preview: do not export at the end of creation
+   or edits, or because critique passed. Export when the user explicitly requests
+   a rendered/downloadable file or directly starts an export, and when the user
+   asked for something to watch rather than something to keep, such as a
+   walkthrough or recap of the work: for that throwaway delivery the exported MP4
+   is the deliverable, so export it once and render it inline with the artifact
+   capability. Do not repeatedly ask whether to export, and do not re-export after
+   later edits unless the user asked for the file to be kept current.
 8. Before delivery, follow the playbook's grading step and call \`critique\` for
    the current composition. Inspect opening, middle and closing frames, playback
    and audio. Supply evidence for all five dimensions and list unresolved critical
@@ -92,8 +96,12 @@ const VIDEO_SESSION_STEPS = `How to run the session:
    returned grade honestly; do not silently repeat assessments to chase a pass.
    An unrequested export is not required to pass this preview review.
 9. Report in the user's terms: what a viewer sees, how long it runs, the shape it
-   is in, the folder the composition lives in, and the URL that shows it. If a
-   decision was a guess, say which one and what would settle it.
+   is in, where the film lives or the file the user can watch, and the URL that
+   shows it. If a decision was a guess, say which one and what would settle it.
+   Work with what is installed: a canvas composition and its manifest need
+   nothing else, so an uninstalled pack or model changes the film rather than
+   stopping it. Name what is missing, ask for it, and deliver the version that
+   needs nothing in the same turn.
 
 Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
 
@@ -114,7 +122,7 @@ export function videoSessionBriefing(opened: 'tag' | 'activation', root: string)
 
 ${lead} The app-owned video capability is active: its playbook is in your context and its preview and capture operations are callable now. Making this video is the work of this turn, not a preliminary to it.
 
-Where the composition goes: \`${root}\`. Write it as \`${root}/<name>/\`, and if any of it already sits somewhere else (a scratch folder such as \`.cio/work\`, \`.cio/tmp\`, or the repository root), move it into \`${root}/<name>/\` now and continue there. The board lists the folders under \`${root}\` and nothing else, so a composition left in another folder is one the user never sees. This is the folder for the rest of the session: it is the project's live record, a save-path change moves it, and it outranks any path named in an older message.
+Where the composition goes: \`${root}\`. First decide which deliverable this is, because the folder follows the answer. A film the user will keep, review or change is written as \`${root}/<name>/\`, and if any of it already sits somewhere else (a scratch folder such as \`.cio/work\`, \`.cio/tmp\`, or the repository root), move it into \`${root}/<name>/\` now and continue there: the board lists the folders under \`${root}\` and nothing else, so a composition left in another folder is one the user never sees. A throwaway delivery is the opposite case: a walkthrough or recap of finished work the user watches once is built in \`.cio/work/<feature>/recap/\`, exported once, delivered inline with the artifact capability, and never moved onto the board, because an entry the user has to maintain is exactly what they did not ask for. Either way the folder is stated here rather than left to the playbook, and it outranks any path named in an older message.
 
 ${VIDEO_SESSION_STEPS}`
 }
@@ -131,7 +139,9 @@ ${VIDEO_SESSION_STEPS}`
 export function videoSessionContinuation(root: string): string {
   return `This thread is in a video session, and the video capability stays active. The composition folder is \`${root}\`, and the work belongs there: move anything of this composition that sits elsewhere into it, then keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Preserve the confirmed brand identity unless the user changes the direction. If brand discovery has not happened in this session, follow the playbook's brand-discovery step before editing frames. Report what changed and what a viewer now sees.
 
-Keep this revision editable and preview it. Do not export or re-export after edits unless the user explicitly requests it; a previous export does not make later exports automatic. Do not repeatedly ask whether to export.
+Keep this revision editable and preview it. Do not export or re-export after edits unless the user explicitly requests it, and remember what the user actually asked for: a composition they keep stays editable, while a throwaway walkthrough was delivered as the exported file and does not need re-exporting unless they ask. A previous export does not make later exports automatic. Do not repeatedly ask whether to export.
+
+Work with what is installed. The barest composition needs nothing beyond its own files, so a missing optional pack or model narrows the film rather than stopping it: name what is missing, ask for it, and keep the version that needs nothing.
 
 Before calling the changed film finished, follow the playbook's grading step and call \`critique\` on the current revision with captured-frame, playback and audio evidence. A mean below 8/10 or any unresolved critical issue means unfinished. Report the returned grade; previous scores do not cover new edits. The absence of an unrequested export is not a critical issue.
 

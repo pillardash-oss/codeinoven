@@ -3,7 +3,7 @@ import { app, BrowserWindow, Notification, shell } from 'electron'
 import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { requireString } from '../ipc/handlers/shared'
-import { NotificationInboxStore } from './notification-inbox-store'
+import { NotificationInboxStore, familyOf } from './notification-inbox-store'
 import { APP_ID, APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -32,6 +32,7 @@ import {
   notificationSoundKind,
   type AgentNotificationKind,
   type AgentNotificationPayload,
+  type NotificationFamily,
   type NotificationSoundKind,
   type NotificationSource,
   type PersistedAgentNotification,
@@ -44,6 +45,13 @@ const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set(
   THREAD_STATUSES.filter((status) => threadStatusPolicy(status).notificationKind !== undefined)
 )
 const MAX_RETAINED_NOTIFICATIONS = 200
+/**
+ * How many instance-local notifications are held. These are the notices for
+ * work that only exists inside this process   a temporary (side) chat   so the
+ * cap is small on purpose: their side chats expire, and nothing here survives a
+ * restart.
+ */
+const MAX_EPHEMERAL_NOTIFICATIONS = 20
 const BADGE_STATE_PATH = 'state/notification-badge.json'
 const PERMISSION_STATE_PATH = 'state/notification-permission.json'
 /**
@@ -155,6 +163,18 @@ export class NotificationService {
    * rather than issued twice against the same file.
    */
   private inboxLoad: Promise<void> | undefined
+  /**
+   * Notifications for work this instance alone owns, newest last.
+   *
+   * A temporary (side) chat lives and dies inside the process that opened it: it
+   * has no thread row, no session anywhere else, and no way to be resumed by a
+   * sibling window. Persisting its completion notice in the shared inbox file is
+   * therefore a lie every other instance reads back as its own   a notice claiming
+   * a response is ready in a side chat that instance cannot even open. These
+   * entries are served to this process's notification panel beside the durable
+   * ones and never touch the shared file.
+   */
+  private readonly ephemeralInbox = new Map<string, PersistedAgentNotification>()
 
   constructor(
     storage: StorageEngine,
@@ -184,7 +204,9 @@ export class NotificationService {
       // faster than the deferred start), so await it rather than answering from
       // an empty store and leaving the panel blank for the rest of the session.
       await this.inboxReady()
-      const notifications = this.inbox.list()
+      const notifications = [...this.inbox.list(), ...this.ephemeralInbox.values()].sort(
+        (left, right) => left.timestamp - right.timestamp
+      )
       const visibleIds = new Set<string>()
       for (let offset = 0; offset < notifications.length; offset += 128) {
         const ids = notifications.slice(offset, offset + 128).map((entry) => entry.threadId)
@@ -208,6 +230,7 @@ export class NotificationService {
     ipcMain.handle('notification:dismissInbox', async (_, id: unknown) => {
       const notificationId = requireString(id, 'Notification ID').slice(0, 300)
       await this.inboxReady()
+      if (this.ephemeralInbox.delete(notificationId)) return
       this.inbox.dismiss(notificationId)
     })
     ipcMain.handle(
@@ -216,6 +239,7 @@ export class NotificationService {
         const project = requireString(projectId, 'Project ID').slice(0, 200)
         const thread = requireString(threadId, 'Thread ID').slice(0, 200)
         await this.inboxReady()
+        this.dropEphemeralForThread(project, thread)
         this.inbox.dismissForThread(project, thread)
       }
     )
@@ -230,9 +254,42 @@ export class NotificationService {
         throw new TypeError('Notification family is invalid')
       }
       await this.inboxReady()
+      this.clearEphemeral(family === undefined || family === null ? undefined : family)
       if (family === undefined || family === null) this.inbox.clear()
       else this.inbox.clear(family)
     })
+  }
+
+  /**
+   * Record the notice for work only this instance owns.
+   *
+   * Kept apart from the durable inbox on purpose (see `ephemeralInbox`): a
+   * sibling instance must never learn about a side chat it cannot have. Bounded
+   * by arrival time so a long session cannot grow the list without end.
+   */
+  private addEphemeral(notification: PersistedAgentNotification): void {
+    this.ephemeralInbox.delete(notification.id)
+    this.ephemeralInbox.set(notification.id, notification)
+    while (this.ephemeralInbox.size > MAX_EPHEMERAL_NOTIFICATIONS) {
+      const oldest = this.ephemeralInbox.keys().next().value
+      if (oldest === undefined) break
+      this.ephemeralInbox.delete(oldest)
+    }
+  }
+
+  private dropEphemeralForThread(projectId: string, threadId: string): void {
+    for (const [id, entry] of this.ephemeralInbox) {
+      if (entry.projectId === projectId && entry.threadId === threadId) {
+        this.ephemeralInbox.delete(id)
+      }
+    }
+  }
+
+  private clearEphemeral(family: NotificationFamily | undefined): void {
+    for (const [id, entry] of this.ephemeralInbox) {
+      if (family !== undefined && familyOf(entry) !== family) continue
+      this.ephemeralInbox.delete(id)
+    }
   }
 
   /** Resolves once the durable inbox has been read, at most once per service. */
@@ -713,11 +770,21 @@ export class NotificationService {
       badgeThreadKey?: string
       clickPayload: ThreadClickedPayload
       logLabel: string
+      /**
+       * Whether the notice also belongs in the shared durable inbox. False for
+       * work that exists only in this process (a temporary chat): a sibling
+       * instance reads the same file, and it must never receive a notice for a
+       * side chat it cannot open, resume, or even see.
+       */
+      durable?: boolean
     }
   ): Promise<void> {
-    void this.inboxReady().then(() =>
-      this.inbox.add({ ...payload, timestamp: Date.now() } satisfies PersistedAgentNotification)
-    )
+    const entry = { ...payload, timestamp: Date.now() } satisfies PersistedAgentNotification
+    if (options.durable === false) {
+      this.addEphemeral(entry)
+    } else {
+      void this.inboxReady().then(() => this.inbox.add(entry))
+    }
     const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     // The one focus verdict for this notification, taken once here and carried
     // to the renderer with the card. The renderer must never decide focus for
@@ -898,7 +965,10 @@ export class NotificationService {
     await this.deliverNotification(payload, {
       retainKey: `${threadKey}:temp:${temporaryChatId}`,
       clickPayload: { projectId: thread.projectId, threadId: thread.id, temporaryChatId },
-      logLabel: 'Temporary chat'
+      logLabel: 'Temporary chat',
+      // A side chat is this instance's own: announcing it anywhere else would
+      // claim work the sibling cannot see.
+      durable: false
     })
   }
 

@@ -306,7 +306,10 @@ export default defineConfig(({ mode }) => {
         rollupOptions: {
           external: ['electron'],
           input: {
-            index: resolve(__dirname, 'src/preload/index.ts')
+            index: resolve(__dirname, 'src/preload/index.ts'),
+            // A window built with no bridge at all points here: Electron rejects
+            // an empty `preload` string, so "none" has to be a real file.
+            blank: resolve(__dirname, 'src/preload/blank.ts')
           },
           // Sandboxed Electron preloads execute in a CommonJS-like isolated
           // context. Emitting ESM here makes production fail before the bridge
@@ -385,6 +388,14 @@ export default defineConfig(({ mode }) => {
         // rendered, hydrated workspace with it on. Never disable it to "make a
         // bug reproducible": run a dev build instead.
         minify: 'oxc',
+        // A per-chunk stylesheet means a render-blocking request per chunk, and
+        // the first screen reaches seven of them: index.html carried 153,558 B of
+        // CSS split across seven files, so the first paint waited on seven
+        // round trips for styles every one of which belongs to that same screen.
+        // The app has no route-level CSS boundary to preserve (a lazily loaded
+        // panel's sheet becomes part of the one sheet, not a reason to hold the
+        // first paint), so the renderer emits one stylesheet for the whole app.
+        cssCodeSplit: false,
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/renderer/index.html'),
@@ -405,7 +416,15 @@ export default defineConfig(({ mode }) => {
             // of its own because it draws the card with the app's stylesheet,
             // and runs nothing else of the app.
             'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html')
-          }
+          },
+          // Chunks are left to the bundler's own splitter. Naming groups was
+          // tried and reverted: forcing the Svelte packages into a `vendor`
+          // group split the runtime's own helpers from the code that calls
+          // them, and the production bundle threw `TypeError: w is not a
+          // function` from Svelte's own proxy the first time it created a
+          // `$state`, so the shipped window rendered nothing at all. Default
+          // splitting is less tidy-looking and it is correct.
+          output: {}
         }
       }
     }

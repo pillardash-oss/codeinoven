@@ -339,46 +339,50 @@ export function piCoreToolsEventsSource(): string {
         permission: command === undefined ? event.toolName : 'shell',
         patterns: command === undefined && path !== undefined ? [path] : [],
         tool: event.toolName,
+        reason: 'This action must stay inside this chat workspace or use an authorized external path',
         ...(command === undefined ? {} : { command }),
         ...(CIO_PI_BUILTIN_TOOLS.has(event.toolName) ? {} : { surface: event.toolName })
       }
-      const approved = await ctx.ui.confirm(
-        'Permission check: ' + event.toolName + ' must stay inside this chat workspace or use an authorized external path',
-        CIO_PERMISSION_MARKER + JSON.stringify(payload)
-      )
-      if (approved) return undefined
+      const answer = await ctx.ui.input(CIO_PERMISSION_MARKER + JSON.stringify(payload), 'Allow once')
+      if (answer === 'allow') return undefined
       return {
         block: true,
-        reason:
-          'This action was denied by the chat file-access policy. Keep work inside this chat workspace and use only authorized external inputs. Do not retry the denied action unchanged.'
+        reason: permissionDenialReason(
+          'the chat file-access policy needs an authorized path',
+          answer
+        ) +
+          ' Keep work inside this chat workspace and use only authorized external inputs.'
       }
     }
     if (!hit) return undefined
+    // The card asks the user only after the model has said why it needs the
+    // file, so the decision carries an argument instead of a bare path.
+    let justification
+    if (!skipSensitive && hit.permission === 'bundled-pi-sensitive-files') {
+      justification = takeSensitiveAccessJustification(hit.patterns)
+      if (justification === undefined) {
+        rememberBlockedSensitivePaths(hit.patterns)
+        return { block: true, reason: sensitiveAccessReasonRequest(hit.patterns) }
+      }
+    }
     const payload = {
       permission: hit.permission,
       patterns: hit.patterns,
       tool: event.toolName,
+      reason: hit.reason,
       ...(hit.command === undefined ? {} : { command: hit.command }),
       ...(hit.review === undefined ? {} : { review: hit.review }),
-      ...(hit.surface === undefined ? {} : { surface: hit.surface })
+      ...(hit.surface === undefined ? {} : { surface: hit.surface }),
+      ...(justification === undefined ? {} : { justification })
     }
-    const approved = await ctx.ui.confirm(
-      'Permission needed: ' + hit.reason,
-      CIO_PERMISSION_MARKER + JSON.stringify(payload)
-    )
-    if (approved) {
+    const answer = await ctx.ui.input(CIO_PERMISSION_MARKER + JSON.stringify(payload), 'Allow once')
+    if (answer === 'allow') {
       // Disabling or approving this file check must not skip the tool's
       // ordinary scope and destructive-action checks.
       if (!skipSensitive && hit.permission === 'bundled-pi-sensitive-files') return gateToolCall(event, ctx, true)
       return undefined
     }
-    return {
-      block: true,
-      reason:
-        'The user denied this action (' +
-        hit.reason +
-        '). Do not retry it as-is; continue the turn with a safe alternative.'
-    }
+    return { block: true, reason: permissionDenialReason(hit.reason, answer) }
   }
   pi.on('tool_call', gateToolCall)
 }

@@ -43,6 +43,11 @@ import {
   repairTruncatedLineStats,
   type CheckpointMaintenanceHost
 } from './checkpoint/checkpoint-maintenance'
+import {
+  TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
+  transcriptWriteEvidence,
+  type TranscriptEvidenceRow
+} from './checkpoint/checkpoint-transcript-evidence'
 
 export { MAX_CHECKPOINT_FAILURE_LENGTH }
 
@@ -146,6 +151,14 @@ const ABANDONED_CHECKPOINT_SCAN_LIMIT = 200
 const ABANDONED_CHECKPOINT_SETTLE_LIMIT = 50
 const ABANDONED_CHECKPOINT_MESSAGE =
   'No process was left to finish this turn, so its checkpoint was closed without a file diff.'
+/** A checkpoint younger than this may still be waiting for the turn that owns
+ *  it: the row and the checkpoint are written together, but the ledger insert
+ *  is a separate statement, so a just-started turn is never settled. */
+const ORPHANED_CHECKPOINT_MIN_AGE_MS = 60_000
+/** One settlement pass closes at most this many rows for one thread. */
+const ORPHANED_CHECKPOINT_SETTLE_LIMIT = 20
+const ORPHANED_CHECKPOINT_MESSAGE =
+  'This turn stopped before the agent finished, so its checkpoint closed with the changes recorded at that point.'
 
 /** How recent a completed checkpoint must be for a late file-tool claim to
  *  reopen it. Bounds the risk of resurrecting an old turn for an unrelated
@@ -238,6 +251,33 @@ export class CheckpointManager {
     return tracker.calculateChanges(before, after).map((change) => change.path)
   }
 
+  /**
+   * Write evidence the durable transcript proves for the turn in flight.
+   *
+   * The mirror is the one transcript every driver shares, so provenance no
+   * longer depends on a driver publishing live part events or on its in-memory
+   * transcript surviving a resume. Only settled mutating tool calls count, and
+   * only from this turn's own window.
+   */
+  async transcriptWriteEvidence(
+    projectId: string,
+    threadId: string,
+    projectPath: string
+  ): Promise<Map<string, FileChangeSource[]>> {
+    assertId(projectId)
+    assertId(threadId)
+    const checkpoint = await this.getActive(projectId, threadId)
+    if (!checkpoint) return new Map()
+    const rows = await this.queryRows<TranscriptEvidenceRow>(
+      `SELECT parts FROM agent_messages
+       WHERE thread_id = ? AND role = 'assistant' AND created_at >= ?
+       ORDER BY created_at DESC, id DESC`,
+      [threadId, checkpoint.before.createdAt],
+      TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT
+    )
+    return transcriptWriteEvidence(projectPath, rows)
+  }
+
   /** Stat-only project scan used to attribute shell-command mutations to their run window. */
   fingerprint(projectId: string, projectPath: string): Promise<ProjectFingerprint> {
     assertId(projectId)
@@ -316,9 +356,11 @@ export class CheckpointManager {
         let windowedElsewhere = 0
         let borrowedElsewhere = 0
         let userOwned = 0
+        let evidenced = 0
         const claimants = new Set<string>()
         for (const change of allChanges) {
           const path = change.path
+          if (claimedByThisTurn(path)) evidenced += 1
           if (excludedPaths?.has(path) ?? false) userOwned += 1
           else if (foreign?.claimed.has(path) ?? false) claimedElsewhere += 1
           else if (foreign?.window.has(path) ?? false) windowedElsewhere += 1
@@ -337,6 +379,10 @@ export class CheckpointManager {
           userOwned,
           contested: options.contestedDiff === true,
           claimFiltered: changedPaths !== undefined,
+          // A contested diff is claimable only through this turn's own write
+          // evidence, so this count is the first thing to read when a real
+          // change goes missing.
+          evidenced,
           claimants: [...claimants].slice(0, 3),
           sample: allChanges.slice(0, 3).map((change) => change.path)
         })
@@ -907,6 +953,65 @@ export class CheckpointManager {
   }
 
   /**
+   * Close the active checkpoints of one thread that no turn owns any more.
+   *
+   * A checkpoint and its `active_turns` row are written together at turn start,
+   * so a checkpoint still marked `active` while no row names its turn is a run
+   * nothing can ever finalize: the next turn took the ledger slot, a stale
+   * driver registration swallowed the terminal idle, or a late-claim reopen
+   * never saw another claim. Until it is settled the renderer hides the turn's
+   * file card (a card is only honest once the turn is over) and a sibling
+   * instance keeps reading the thread as work in progress.
+   *
+   * The diff is deliberately not recomputed: the working tree has moved on since
+   * that turn ran, so a fresh `before` → now comparison would charge later turns'
+   * edits to it. The changes recorded live during the run are kept as they are,
+   * and the stop is reported as `app-closed` because the app simply stopped
+   * tracking the turn rather than the provider failing it.
+   */
+  async settleOrphanedThreadCheckpoints(projectId: string, threadId: string): Promise<number> {
+    assertId(projectId)
+    assertId(threadId)
+    const cutoff = Date.now() - ORPHANED_CHECKPOINT_MIN_AGE_MS
+    const rows = await this.queryRows(
+      `SELECT tc.turn_id AS turn_id
+         FROM turn_checkpoints tc
+        WHERE tc.project_id = ? AND tc.thread_id = ?
+          AND json_extract(tc.data, '$.status') = 'active'
+          AND json_extract(tc.data, '$.createdAt') <= ?
+          AND NOT EXISTS (SELECT 1 FROM active_turns at WHERE at.turn_id = tc.turn_id)
+        ORDER BY json_extract(tc.data, '$.createdAt') ASC`,
+      [projectId, threadId, cutoff],
+      ORPHANED_CHECKPOINT_SETTLE_LIMIT
+    )
+    let settled = 0
+    for (const row of rows) {
+      const turnId = row['turn_id']
+      if (typeof turnId !== 'string') continue
+      try {
+        await this.writeRow(
+          `UPDATE turn_checkpoints
+              SET data = json_set(data,
+                    '$.status', 'interrupted',
+                    '$.completedAt', json_extract(data, '$.createdAt'),
+                    '$.stopReason', 'app-closed',
+                    '$.failure', json_quote(?))
+            WHERE turn_id = ? AND json_extract(data, '$.status') = 'active'`,
+          [ORPHANED_CHECKPOINT_MESSAGE, turnId]
+        )
+        settled += 1
+      } catch (error) {
+        Logger.error('Orphaned checkpoint settlement failed (non-fatal):', error)
+        continue
+      }
+      // A settled row rewrites its stored snapshots, so one pass must never
+      // hold the main process: yield between rows.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return settled
+  }
+
+  /**
    * The newest finished turn's summary, or null.
    *
    * A single-row read for readers that only need to know what the last turn
@@ -1276,16 +1381,16 @@ export class CheckpointManager {
    * onto the main thread. The primary connection is only consulted when the
    * worker is unavailable (e.g. in-memory test databases).
    */
-  private async queryRows(
+  private async queryRows<Row = Record<string, unknown>>(
     sql: string,
     params: unknown[],
     maxRows: number
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<Row[]> {
     const result = await this.db.queryViaWorker(sql, params, maxRows)
     if (!result.ok) {
-      return this.db.all<Record<string, unknown>>(sql, ...params)
+      return this.db.all<Row>(sql, ...params)
     }
-    return result.rows ?? []
+    return (result.rows ?? []) as Row[]
   }
 
   /** Single write statement on the maintenance worker's connection (primary fallback). */

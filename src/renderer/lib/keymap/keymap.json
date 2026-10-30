@@ -356,6 +356,13 @@
           "scenario": "Any rich text editor."
         },
         {
+          "id": "editor-select-all",
+          "keys": ["mod", "a"],
+          "label": "Select all",
+          "description": "Selects the whole field, including any code block, wherever the caret sits.",
+          "scenario": "Any rich text editor."
+        },
+        {
           "id": "editor-bold",
           "keys": ["mod", "b"],
           "label": "Bold",
@@ -917,8 +924,15 @@
           "id": "video-edit-play",
           "keys": ["space"],
           "label": "Play or pause the video",
-          "description": "Play or pause the video.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "description": "Play or pause the video, whichever control has the focus, and while nothing is focused but the surface itself.",
+          "scenario": "Focus is anywhere in the video editor or in the composition player, its buttons and seek bar included, outside a text field, a list and an open annotation pen. Finishing a comment puts the focus back on the player."
+        },
+        {
+          "id": "video-annotation-continue",
+          "keys": [],
+          "label": "Continue the video from an annotation",
+          "description": "Lets the video continue while the pen stays in hand. Unbound by default: space is play and pause, and the pen is only put down by its own check mark.",
+          "scenario": "Annotating a video frame or a composition frame, outside a comment field. Bind a key here to resume the picture from the keyboard."
         },
         {
           "id": "video-edit-split",

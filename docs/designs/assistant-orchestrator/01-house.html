@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chief · the room · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./room.css" />
+  </head>
+  <body>
+    <div class="room">
+      <nav class="spine-rail" aria-label="Primary">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 96 96">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+        </span>
+        <button class="rail-btn" type="button" title="Projects" aria-label="Projects">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="0.5" /><path d="M1.75 6h12.5" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="Threads" aria-label="Threads">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="The room" aria-label="The room" aria-current="page">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.5" /><circle cx="8" cy="8" r="6" /><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="Browser" aria-label="Browser">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <circle cx="8" cy="8" r="6" /><path d="M2 8h12" />
+          </svg>
+        </button>
+        <span class="rail-gap"></span>
+        <button class="rail-btn" type="button" title="Two things need you" aria-label="Two things need you">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M4 7a4 4 0 1 1 8 0c0 2.4.8 3.4 1.2 3.9H2.8C3.2 10.4 4 9.4 4 7Z" /><path d="M6.4 13a1.7 1.7 0 0 0 3.2 0" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="CodeInOven settings" aria-label="CodeInOven settings">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.25" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2 3.4 12.6" />
+          </svg>
+        </button>
+      </nav>
+
+      <div class="room-main">
+        <header class="room-head">
+          <div class="room-id">
+            <span class="mark" aria-hidden="true">
+              <svg viewBox="0 0 96 96">
+                <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+                <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+                <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+                <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+              </svg>
+            </span>
+            <h1>Chief</h1>
+            <span class="role">orchestrator · 7 assistants · codeinoven</span>
+          </div>
+          <div class="head-tools">
+            <div class="modes" role="group" aria-label="Assistant view">
+              <button type="button" data-mode="01-house.html" aria-pressed="true">Room</button>
+              <button type="button" data-mode="02-despatch.html" aria-pressed="false">Despatch</button>
+              <button type="button" data-mode="05-log.html" aria-pressed="false">Log</button>
+            </div>
+          </div>
+        </header>
+
+        <div class="house">
+          <div class="greeting">
+            <div class="eyebrow">Wednesday 4 February · 09:12</div>
+            <h2>The house is awake. <em>Two things need you.</em></h2>
+            <p>
+              Everyone else is working. Say what you want done and I will put it in the right
+              hands, or take it myself when nobody owns it.
+            </p>
+          </div>
+
+          <div class="orbit">
+            <div class="orbit-ring" data-ring="outer" aria-hidden="true"></div>
+            <div class="orbit-ring" data-ring="inner" aria-hidden="true"></div>
+            <div class="dial" data-dial data-now="138" aria-hidden="true"></div>
+            <div class="now-hand" aria-hidden="true"></div>
+            <div class="now-label">09:12</div>
+
+            <svg class="tethers" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <line x1="50" y1="50" x2="72.0" y2="11.89" data-kind="working" />
+              <line x1="50" y1="50" x2="92.5" y2="38.61" data-kind="working" />
+              <line x1="50" y1="50" x2="18.89" y2="18.89" data-kind="error" />
+            </svg>
+
+            <div class="seat">
+              <span class="mark" aria-hidden="true">
+                <svg viewBox="0 0 96 96">
+                  <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+                  <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+                  <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+                  <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+                </svg>
+              </span>
+              <div class="seat-name">Chief</div>
+              <div class="seat-note">Reads every message · answers, dispatches, or does it</div>
+            </div>
+
+            <button class="node" type="button" data-state="working" style="left: 72.0%; top: 11.89%">
+              <span class="node-disc" aria-hidden="true">NQ</span>
+              <span class="node-name">Nightly QA</span>
+              <span class="node-time" data-kind="working">Running · 4m</span>
+            </button>
+            <button class="node" type="button" data-state="error" style="left: 18.89%; top: 18.89%">
+              <span class="node-disc" aria-hidden="true">DW</span>
+              <span class="node-name">Dependency Watch</span>
+              <span class="node-time" data-kind="error">Needs a token</span>
+            </button>
+            <button class="node" type="button" data-state="attention" style="left: 7.5%; top: 61.39%">
+              <span class="node-disc" aria-hidden="true">RN</span>
+              <span class="node-name">Release Notes</span>
+              <span class="node-time">Runs 17:00</span>
+            </button>
+            <button class="node" type="button" data-state="done" style="left: 88.11%; top: 72.0%">
+              <span class="node-disc" aria-hidden="true">DD</span>
+              <span class="node-name">Daily Digest</span>
+              <span class="node-time">Done 08:00</span>
+            </button>
+            <button class="node" type="button" data-state="working" style="left: 92.5%; top: 38.61%">
+              <span class="node-disc" aria-hidden="true">IR</span>
+              <span class="node-name">Inbox Reply</span>
+              <span class="node-time" data-kind="working">Drafting</span>
+            </button>
+            <button class="node" type="button" data-state="idle" style="left: 44.26%; top: 6.38%">
+              <span class="node-disc" aria-hidden="true">SR</span>
+              <span class="node-name">Spec Reviewer</span>
+              <span class="node-time">No model</span>
+            </button>
+            <button class="node" type="button" data-state="idle" style="left: 44.26%; top: 93.62%">
+              <span class="node-disc" aria-hidden="true">PT</span>
+              <span class="node-name">PR Triage</span>
+              <span class="node-time">Runs 30m</span>
+            </button>
+          </div>
+
+          <div class="ledger">
+            <div class="ledger-item">
+              <div class="ledger-label"><span class="dot" style="background: var(--color-thread-working)"></span>Working</div>
+              <div class="ledger-body">Nightly QA · step 4 of 6 <span class="dim">· 4 min</span></div>
+            </div>
+            <div class="ledger-item">
+              <div class="ledger-label"><span class="dot" style="background: var(--color-warning)"></span>Needs you</div>
+              <div class="ledger-body">Dependency Watch lost its token <span class="dim">· 09:00</span></div>
+            </div>
+            <div class="ledger-item">
+              <div class="ledger-label"><span class="dot" style="background: var(--color-border-strong)"></span>Next up</div>
+              <div class="ledger-body">Release Notes at 17:00 <span class="dim">· 7h 48m</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lectern-wrap">
+          <div class="lectern">
+            <label class="sr-only" for="ask">Ask Chief</label>
+            <textarea id="ask" rows="2" placeholder="Tell me what should happen, in your words"></textarea>
+            <div class="lectern-foot">
+              <button class="commission" type="button" title="Who takes this message" aria-label="Who takes this message: Chief decides">
+                <span class="dot" aria-hidden="true"></span>
+                Chief decides
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                  <path d="M4 6.5 8 10.5l4-4" />
+                </svg>
+              </button>
+              <button class="chip-btn" type="button" title="Attach a file or thread" aria-label="Attach a file or thread">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <path d="M9.5 4 6 7.5a2 2 0 0 0 2.8 2.8l4-4a3 3 0 0 0-4.2-4.2L3.4 7.3a4 4 0 0 0 5.6 5.6" />
+                </svg>
+                Attach
+              </button>
+              <button class="chip-btn" type="button" title="Only this project" aria-label="Only this project">codeinoven</button>
+              <span class="foot-gap"></span>
+              <button class="chip-btn" type="button" title="Speak instead of typing" aria-label="Speak instead of typing">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <rect x="6" y="2" width="4" height="7.5" rx="1.6" /><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5V14" />
+                </svg>
+              </button>
+              <button class="send" type="button">Send <kbd>⌘↵</kbd></button>
+            </div>
+          </div>
+          <div class="lectern-note">
+            <span class="count"><span data-word-count>Nothing yet</span> · Chief answers in the Despatch, not in a popup</span>
+            <span>Everything stays on this machine</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="./room.js"></script>
+    <script src="./theme.js"></script>
+  </body>
+</html>

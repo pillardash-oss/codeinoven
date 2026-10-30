@@ -66,6 +66,15 @@
      *  caller then owns the way out through its own body, so this is only for a
      *  body that draws its own controls and its own minimize. */
     hideStrip?: boolean
+    /**
+     * Where the caret lands when the surface opens.
+     *
+     * A modal focuses its first field, which is right for a form and wrong for a
+     * player: the first field here is a search box, so a space typed to pause the
+     * video landed in it instead. The caller that shows a picture claims the focus
+     * for the picture's own control.
+     */
+    claimInitialFocus?: (panel: HTMLElement) => boolean
   }
 
   let {
@@ -87,7 +96,8 @@
     children,
     hostsBrowserView = false,
     scrim = true,
-    hideStrip = false
+    hideStrip = false,
+    claimInitialFocus
   }: Props = $props()
 
   /** The dialog is named after the tab it is showing, which is also the label
@@ -163,6 +173,7 @@
   panelClass="bg-app"
   trapFocus={false}
   escapeCloses={false}
+  {claimInitialFocus}
   scrim={scrim && !hostsBrowserView}
   blocksBrowserView={!hostsBrowserView}
 >

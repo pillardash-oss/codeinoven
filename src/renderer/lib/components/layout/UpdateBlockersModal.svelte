@@ -1,9 +1,17 @@
 <script lang="ts">
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
+  import BrowserDownloadProgress from '$lib/components/browser/BrowserDownloadProgress.svelte'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
+  import {
+    browserDownloadDetail,
+    browserDownloadStateLabel,
+    browserDownloadTone
+  } from '$lib/components/browser/browser-download-format'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import type { UpdateBlockers } from '$shared/ipc-contract'
 
@@ -16,13 +24,18 @@
   let { payload, onDismiss }: Props = $props()
 
   const VISIBLE_TERMINALS = 6
+  const VISIBLE_DOWNLOADS = 4
 
   let hasThreads = $derived((payload?.projects.length ?? 0) > 0)
   let terminals = $derived(payload?.terminals ?? [])
   let visibleTerminals = $derived(terminals.slice(0, VISIBLE_TERMINALS))
   let remainingTerminalCount = $derived(Math.max(0, terminals.length - VISIBLE_TERMINALS))
   let hasTerminals = $derived(terminals.length > 0)
-  let hasListings = $derived(hasThreads || hasTerminals)
+  let downloads = $derived(payload?.downloads ?? [])
+  let visibleDownloads = $derived(downloads.slice(0, VISIBLE_DOWNLOADS))
+  let remainingDownloadCount = $derived(Math.max(0, downloads.length - VISIBLE_DOWNLOADS))
+  let hasDownloads = $derived(downloads.length > 0)
+  let hasListings = $derived(hasThreads || hasTerminals || hasDownloads)
   let forcing = $derived(updateBlockers.forcing)
   let failure = $derived(updateBlockers.failure)
 
@@ -31,15 +44,21 @@
    *
    * Unlike the close gate, nothing here pauses instead of stopping: a thread
    * interrupted mid-turn comes back as a failed turn to retry, and a shell is
-   * closed for good. So there is deliberately no "it continues later" branch
-   * here for the copy to make.
+   * closed for good. A download is the exception the close gate already draws:
+   * its bytes are kept and the next launch continues it, so it is named as a
+   * pause rather than left unexplained.
    */
   let costs = $derived.by(() => {
     const parts: string[] = []
     if (hasThreads) parts.push('working threads stop mid-turn')
     if (hasTerminals) parts.push('running terminals close')
+    if (hasDownloads) parts.push('running downloads pause and continue next time')
     if (parts.length === 0) return ''
-    return `${parts.length === 1 ? parts[0] : parts.join(' and ')}.`
+    const listed =
+      parts.length === 1
+        ? parts[0]
+        : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+    return `${listed}.`
   })
 
   let restartSentence = $derived(
@@ -62,6 +81,13 @@
         } with no thread or terminal to show.`
       : ''
   )
+
+  /** What installing does to the downloads above: a pause with the bytes kept,
+   *  not a loss, so it says where they continue instead of what it costs. */
+  let downloadsNote = $derived.by(() => {
+    const many = downloads.length > 1
+    return `Installing ${many ? 'pauses them' : 'pauses it'} and keeps the bytes already downloaded. On a server that supports resuming, ${many ? 'they continue' : 'it continues'} where ${many ? 'they left' : 'it left'} off the next time you open the app.`
+  })
 </script>
 
 <Modal open={payload !== null} title="Update waiting on active work" size="lg" onClose={onDismiss}>
@@ -95,6 +121,40 @@
               <li class="pl-5 text-xs text-dimmed">+{remainingTerminalCount} more</li>
             {/if}
           </ul>
+        </div>
+      {/if}
+
+      {#if hasDownloads}
+        <div class="space-y-2">
+          <p class="text-sm text-muted">These downloads are still running:</p>
+          <ul class="space-y-2.5">
+            {#each visibleDownloads as download (download.id)}
+              <li class="space-y-1">
+                <div class="flex min-w-0 items-center gap-2 text-xs">
+                  <CioDownload size={13} class="shrink-0 text-dimmed" />
+                  <span class="min-w-0 flex-1 truncate text-foreground" title={download.fileName}>
+                    {download.fileName}
+                  </span>
+                  <span class="shrink-0 text-dimmed">{browserDownloadDetail(download)}</span>
+                  <StatusPill tone={browserDownloadTone(download)} dot>
+                    {browserDownloadStateLabel(download)}
+                  </StatusPill>
+                </div>
+                <BrowserDownloadProgress
+                  percent={download.progress}
+                  fileName={download.fileName}
+                  class="pl-5"
+                />
+              </li>
+            {/each}
+            {#if remainingDownloadCount > 0}
+              <li class="pl-5 text-xs text-dimmed">
+                +{remainingDownloadCount} more
+                {remainingDownloadCount === 1 ? 'download' : 'downloads'}
+              </li>
+            {/if}
+          </ul>
+          <p class="text-xs leading-relaxed text-dimmed">{downloadsNote}</p>
         </div>
       {/if}
 

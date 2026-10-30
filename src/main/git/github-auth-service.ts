@@ -10,6 +10,7 @@ import { CrossProcessMutex, GITHUB_CREDENTIAL_LOCK_NAME } from '../system/cross-
 import { Logger } from '../system/logger'
 import { clearRepeatedFailure, reportRepeatedFailure } from '../system/repeated-failure-log'
 import type { SecretVault } from '../storage/secret-vault'
+import { isNetworkError, networkErrorCode } from '../util/network-error'
 
 declare global {
   /**
@@ -48,6 +49,18 @@ const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
 const REFRESH_GRANT_TYPE = 'refresh_token'
 
 const NETWORK_TIMEOUT_MS = 15_000
+
+/**
+ * How long the device-code request keeps retrying a transport failure.
+ *
+ * A click on "Sign in" is the only thing that can start a flow, so one dropped
+ * connection there (a flap, a VPN reconnecting, a resolver hiccup) cost the user
+ * the whole attempt until they clicked again. The request is an idempotent POST
+ * that GitHub answers with a fresh code, and a request that never arrived issued
+ * none, so retrying it costs one round trip and saves the click.
+ */
+const DEVICE_CODE_RETRY_DELAYS_MS = [250, 750] as const
+
 const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000
 const ACCOUNTS_VERSION = 1
 
@@ -98,6 +111,8 @@ const GITHUB_USER_CACHE_TTL_MS = 5 * 60 * 1000
  */
 const STATUS_FAILURE_LABEL = 'GitHub auth status failed'
 const REFRESH_FAILURE_LABEL = 'GitHub token refresh failed'
+const DEVICE_FLOW_FAILURE_LABEL = 'GitHub device flow start failed'
+const DEVICE_POLL_FAILURE_LABEL = 'GitHub device flow poll failed'
 
 /** Refuse to inline an avatar larger than this (guards the IPC payload). */
 const AVATAR_MAX_BYTES = 512 * 1024
@@ -333,10 +348,7 @@ export class GitHubAuthService {
     if (!this.configured) {
       throw new Error('GitHub client ID is not configured')
     }
-    const response = await this.postJson(DEVICE_CODE_URL, {
-      client_id: this.clientId,
-      scope: GITHUB_OAUTH_SCOPES
-    })
+    const response = await this.requestDeviceCode()
     const record = response as Record<string, unknown>
     const deviceCode = this.readString(record, 'device_code')
     const userCode = this.readString(record, 'user_code')
@@ -360,6 +372,35 @@ export class GitHubAuthService {
     }
   }
 
+  /**
+   * Ask GitHub for a device code, riding out a transport failure on the way.
+   *
+   * The failure is recorded once in `error.log` with its whole cause chain. The
+   * panel can only show one sentence, and a `TypeError: fetch failed` that
+   * crossed IPC with no line behind it is what made an unreachable GitHub
+   * indistinguishable from a broken sign-in.
+   */
+  private async requestDeviceCode(): Promise<unknown> {
+    const retryDelays = DEVICE_CODE_RETRY_DELAYS_MS
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const response = await this.postJson(DEVICE_CODE_URL, {
+          client_id: this.clientId,
+          scope: GITHUB_OAUTH_SCOPES
+        })
+        clearRepeatedFailure(DEVICE_FLOW_FAILURE_LABEL)
+        return response
+      } catch (failure) {
+        if (!isNetworkError(failure) || attempt >= retryDelays.length) {
+          reportRepeatedFailure(DEVICE_FLOW_FAILURE_LABEL, failure)
+          throw failure
+        }
+        Logger.dev('GitHub device code request failed, retrying', failure)
+        await sleep(retryDelays[attempt] ?? 0)
+      }
+    }
+  }
+
   async pollAccessToken(deviceCode: string): Promise<GitHubPollResult> {
     if (!this.configured) {
       return { status: 'error', message: 'GitHub client ID is not configured' }
@@ -371,6 +412,7 @@ export class GitHubAuthService {
         grant_type: GRANT_TYPE
       })
       const record = response as Record<string, unknown>
+      clearRepeatedFailure(DEVICE_POLL_FAILURE_LABEL)
       const token = this.readString(record, 'access_token')
       if (token) {
         await this.addAccount(record)
@@ -391,6 +433,14 @@ export class GitHubAuthService {
       }
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : 'GitHub token poll failed'
+      // A poll that never reached GitHub says nothing about the code the user is
+      // typing. Ending the attempt over it asked them to start a whole new
+      // sign-in because their connection had one bad moment, so this reports the
+      // reason and lets the flow keep waiting on the same code.
+      if (isNetworkError(failure)) {
+        reportRepeatedFailure(DEVICE_POLL_FAILURE_LABEL, failure)
+        return { status: 'retrying', message }
+      }
       return { status: 'error', message }
     }
   }
@@ -1003,13 +1053,39 @@ export class GitHubAuthService {
       }
       return await response.json()
     } catch (failure) {
-      if (failure instanceof Error && failure.name === 'AbortError') {
-        throw new Error('GitHub request timed out', { cause: failure })
-      }
-      throw failure
+      throw this.readableTransportError(failure)
     } finally {
       clearTimeout(timer)
     }
+  }
+
+  /**
+   * The failure to surface for a request GitHub did not answer.
+   *
+   * Node's fetch reports every transport problem as `TypeError: fetch failed` and
+   * keeps the reason (a DNS miss, a refused connection, a TLS rejection) in
+   * `cause`, which the IPC boundary drops. The panel showed that bare sentence,
+   * so a user could not tell a dropped connection from a broken feature. The
+   * message below names the state and the next step, the cause chain stays on the
+   * error for the call sites that log it, and an HTTP or OAuth verdict passes
+   * through untouched because it is a real answer rather than a transport story.
+   */
+  private readableTransportError(failure: unknown): Error {
+    if (failure instanceof Error && failure.name === 'AbortError') {
+      return new Error(`GitHub did not answer within ${Math.round(NETWORK_TIMEOUT_MS / 1000)}s`, {
+        cause: failure
+      })
+    }
+    if (!isNetworkError(failure)) {
+      return failure instanceof Error ? failure : new Error('GitHub request failed')
+    }
+    const code = networkErrorCode(failure)
+    return new Error(
+      code
+        ? `GitHub could not be reached (${code}). Check your connection and try again.`
+        : 'GitHub could not be reached. Check your connection and try again.',
+      { cause: failure }
+    )
   }
 
   /**

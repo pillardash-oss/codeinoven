@@ -19,6 +19,7 @@ import type { DirectoryPreviewService } from '../preview/directory-preview-servi
 import { authoredWorkRoot } from '../design/authored-work-root'
 import { videoFile, videoFolder } from './video-paths'
 import { probeVideo } from './video-inspection'
+import { requireCompositionManifest } from './video-manifest'
 import { migrateVideoEdit } from './video-edit-migration'
 import { installVideoRuntime } from './video-runtime-install'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -57,14 +58,18 @@ export class VideoEditorService {
 
   async enable(projectId: string, threadId: string, directory: string): Promise<VideoEditorRead> {
     const state = await this.options.read(projectId, threadId, directory)
-    if (!state.manifest) throw new Error('The composition needs a manifest before it can be edited')
     const folder = await this.folder(projectId, threadId, directory)
+    // Reading the manifest here rather than trusting the first answer is what
+    // separates a delivery from a manifest that is merely being rewritten: a
+    // folder the author is saving must open, and a folder whose manifest is wrong
+    // must say which field is wrong instead of claiming there is no manifest.
+    const manifest = await requireCompositionManifest(folder, directory, state.manifest)
     await installVideoRuntime(folder, folder)
     if (state.document.edit) return state
     const edit = await migrateVideoEdit(
       folder,
       state.document,
-      state.manifest,
+      manifest,
       new AbortController().signal
     )
     return this.options.save(

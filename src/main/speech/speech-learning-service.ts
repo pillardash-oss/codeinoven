@@ -186,10 +186,16 @@ function hasMeaningfulChange(inserted: string, sent: string): boolean {
 }
 
 function instructionKey(instruction: string): string {
-  return instruction.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  return instruction
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
 }
 
-function mergeExamples(current: SpeechLesson['examples'], incoming: SpeechLesson['examples']): SpeechLesson['examples'] {
+function mergeExamples(
+  current: SpeechLesson['examples'],
+  incoming: SpeechLesson['examples']
+): SpeechLesson['examples'] {
   const merged = [...current]
   for (const example of incoming) {
     if (merged.some((item) => item.from === example.from && item.to === example.to)) continue

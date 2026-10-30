@@ -182,18 +182,37 @@ function installVideoRuntime(
     if (!caption || studio.edit?.tracks.find((track) => track.id === caption.trackId)?.hidden)
       return
     ctx.save()
+    // A caption arrives its own way: a cut, a fade, or a rise from below. Its words
+    // are not a picture, so it never slides sideways or dissolves into a frame.
+    const transition = caption.transition ??
+      studio.captionTransition ?? { kind: 'cut', duration: 0 }
+    const arrive =
+      transition.kind === 'cut'
+        ? 1
+        : Math.min(1, Math.max(0, (seconds - caption.start) / Math.max(0.001, transition.duration)))
+    const leave =
+      transition.kind === 'cut'
+        ? 1
+        : Math.min(1, Math.max(0, (caption.end - seconds) / Math.max(0.001, transition.duration)))
+    const shown = Math.min(arrive, leave)
+    if (shown <= 0) {
+      ctx.restore()
+      return
+    }
+    if (transition.kind === 'rise') ctx.translate(0, (1 - shown) * height * 0.02)
+    ctx.globalAlpha = shown
     const { appearance, lines, lineHeight, top, gap } = captionLayout(ctx, caption, width, height)
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = appearance.background
-    ctx.globalAlpha = appearance.backgroundOpacity
+    ctx.globalAlpha = appearance.backgroundOpacity * shown
     ctx.fillRect(
       width * (appearance.x - appearance.width / 2),
       top - lineHeight * 0.7,
       width * appearance.width,
       lines.length * lineHeight + lineHeight * 0.4
     )
-    ctx.globalAlpha = 1
+    ctx.globalAlpha = shown
     lines.forEach((line, row) => {
       const total =
         line.reduce((sum, word) => sum + ctx.measureText(word.text).width, 0) +

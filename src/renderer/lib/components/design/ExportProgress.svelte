@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import DockableModal from '$lib/components/ui/DockableModal.svelte'
@@ -62,7 +62,7 @@
         aria-label="Show export progress"
         onclick={() => (state.minimized = false)}
       >
-        {#if state.running}<CioSpinner size={14} class="animate-spin" />{:else}<CioDownload
+        {#if state.running}<CioSpinner size={14} class="animate-spin" />{:else}<CioUpload
             size={14}
           />{/if}
         {chipLabel}

@@ -1,6 +1,7 @@
 import { RECONCILE_THREAD_CONTEXT_USAGE_SQL } from '../thread-context-usage-sql'
 import { Logger } from '../../system/logger'
 import { purgeRowsViaWorker, type RowsPurged } from '../worker-purge'
+import { reconcileRecordedCost } from '../../providers/usage-cost-reconcile'
 import type { Database } from '../database'
 import type {
   AccountActivityDay,
@@ -243,8 +244,9 @@ export class HarnessUsageRepo {
   /** Persist one immutable usage attempt. Replaying its stable identity is a no-op. */
   recordEvent(event: UsageEvent): void {
     try {
-      this.insertEvent(event)
-      this.reconcileContextCost(event)
+      const reconciled = reconcileRecordedCost(event)
+      this.insertEvent(reconciled)
+      this.reconcileContextCost(reconciled)
     } catch (error) {
       Logger.dev('Failed to record usage event; dropping telemetry', {
         feature: event.feature,
@@ -266,15 +268,16 @@ export class HarnessUsageRepo {
    */
   recordReplacingEvent(event: UsageEvent): void {
     try {
+      const reconciled = reconcileRecordedCost(event)
       this.db.transaction(() => {
         this.db.run(
           'DELETE FROM usage_events WHERE parent_turn_id = ? AND feature = ?',
           event.parentTurnId,
           event.feature
         )
-        this.insertEvent(event)
+        this.insertEvent(reconciled)
       })
-      this.reconcileContextCost(event)
+      this.reconcileContextCost(reconciled)
     } catch (error) {
       Logger.dev('Failed to replace usage event; dropping telemetry', {
         feature: event.feature,
@@ -352,6 +355,7 @@ export class HarnessUsageRepo {
     )
   }
 
+  /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
   /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
   costCoverage(threadId?: string): UsageCostCoverage {
     const row = this.db.get<{

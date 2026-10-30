@@ -375,12 +375,13 @@ export interface ScreenCanvasState {
 /**
  * How far a save-path change reaches, stated by the caller that asked for it.
  *
- * One change is either about a single folder or about the project, and there is
- * no third combination to guess: `work` moves the one folder the change names and
- * leaves the project's folder for new work alone, `project` points the project at
- * the new folder and moves every folder of that kind into it. The two sides used
- * to be spelled as separate booleans, which let a request mean one thing on the
- * board and another in the settings page.
+ * One change is either about a single folder or about where new work is written,
+ * and there is no third combination to guess: `work` moves the one folder the
+ * change names and leaves the project's folder for new work alone, `project`
+ * records the project's folder for new work and moves nothing, because a folder
+ * that already holds a design or a composition is not the setting's to move. The
+ * two sides used to be spelled as separate booleans, which let a request mean one
+ * thing on the board and another in the settings page.
  */
 export type WorkDetailsScope = 'work' | 'project'
 
@@ -392,6 +393,143 @@ export interface UpdateWorkDetails {
   name?: string
 }
 export interface UpdateWorkDetailsResult {
+  /** The folder the board should show: the moved folder, or the one it asked about. */
   directory: string
+  /** How many folders moved. A save-folder change moves none. */
   moved: number
+}
+
+/**
+ * How the board draws a project's designs: pictures of them, or a folded list.
+ *
+ * A grid of thumbnails answers "which one is this"; a list of groups answers
+ * "where is it" once a project holds more designs than fit on one screen. The
+ * same folders are behind both, so this is a reading of the work rather than a
+ * different set of it.
+ */
+export type WorkGroupView = 'cards' | 'list'
+
+/**
+ * One named group of a project's authored work.
+ *
+ * A group is the user's own organisation of the board, not a place on disk: the
+ * folders stay exactly where they are and the group is a record about them. That
+ * is what makes grouping safe to do freely, and it is why deleting a group
+ * returns its designs to the board ungrouped instead of touching a single file.
+ */
+export interface WorkGroup {
+  /** Stable id, mentioned by the agent and used to move designs between groups. */
+  id: string
+  /** Which session's work the group holds. */
+  kind: AuthoredWorkKind
+  /** Name the user gave it, e.g. `Marketing site`. */
+  name: string
+  /** Position among the project's groups of this kind, lowest first. */
+  position: number
+  /** Whether the board shows the group's designs folded away. Persisted so a
+   *  folded group is still folded after a restart. */
+  collapsed: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * One design's place in a group, and its order inside it.
+ *
+ * A design with no membership row is ungrouped: the absence of a record is the
+ * whole of "not in a group", so no design has to be written to when a project
+ * starts using groups.
+ */
+export interface WorkGroupMember {
+  /** Project-relative folder with forward slashes. */
+  directory: string
+  /** The group holding it. */
+  groupId: string
+  /** Position inside that group, lowest first. */
+  position: number
+}
+
+/**
+ * Everything the board knows about how a project's designs are organised.
+ *
+ * Groups and memberships travel together with the view and one change stamp,
+ * because the board draws all of it at once and an agent asking what the user
+ * arranged needs the same answer in one read.
+ */
+export interface WorkGroupState {
+  projectId: string
+  kind: AuthoredWorkKind
+  /** Groups in board order. */
+  groups: WorkGroup[]
+  /** Membership of every grouped design; a folder absent from this list is
+   *  ungrouped. */
+  members: WorkGroupMember[]
+  /** How the board draws the work: pictures, or the folded list. */
+  view: WorkGroupView
+  /**
+   * When the user last changed the organisation (ms), or 0 when they never have.
+   *
+   * It is the stamp that tells a reader its answer is stale: an agent that read
+   * the groups earlier compares this against what it read, and the board uses it
+   * to know a change came from another window.
+   */
+  updatedAt: number
+}
+
+/** One design the board should put in a group, for a single drop. */
+export interface WorkGroupMove {
+  /** Project-relative folder with forward slashes. */
+  directory: string
+  /** Destination group, or null to return the design to the ungrouped list. */
+  groupId: string | null
+  /** Position inside the destination group; omitted appends to the end. */
+  position?: number
+}
+
+/**
+ * How the screens of one design are ordered.
+ *
+ * The four automatic orders are read off the files themselves; `custom` is the
+ * arrangement the user dragged, and a screen written after that arrangement is
+ * drawn before the placed ones rather than appended to them.
+ */
+export type ScreenBoardOrder = 'latest' | 'name' | 'name-desc' | 'oldest' | 'custom'
+
+/** One named group of one design's screens. */
+export interface ScreenGroup {
+  id: string
+  name: string
+  /** Position among the design's groups, lowest first. */
+  position: number
+  /** Whether the board draws the group folded. Persisted, so it reopens folded. */
+  collapsed: boolean
+}
+
+/** One screen's group and its place in the order the user arranged. */
+export interface ScreenBoardPlacement {
+  /** Project-relative screen path inside the design folder, e.g. `checkout.html`. */
+  entry: string
+  /** The group holding it, or null when it sits in the ungrouped list. */
+  groupId: string | null
+  /** Position among its group's screens, lowest first. */
+  position: number
+}
+
+/**
+ * Everything the board knows about how one design's screens are organised.
+ *
+ * The reading itself (`view`) is app-wide and travels with every answer, so one
+ * window's click is the reading every design board shows, including one opened
+ * afterwards.
+ */
+export interface ScreenBoardState {
+  projectId: string
+  /** Project-relative design folder with forward slashes. */
+  directory: string
+  groups: ScreenGroup[]
+  placements: ScreenBoardPlacement[]
+  order: ScreenBoardOrder
+  view: WorkGroupView
+  /** When the user last changed the arrangement (ms), or 0 when they never have. */
+  updatedAt: number
 }

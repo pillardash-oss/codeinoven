@@ -51,3 +51,27 @@ export interface IdeInstallation {
   latestVersion?: string
   updateError?: string
 }
+/**
+ * A language server's own report about work it is doing.
+ *
+ * Servers announce project loading through the protocol's work-done progress
+ * (`window/workDoneProgress/create` followed by `$/progress`), which is the only
+ * truthful answer to "how far along is indexing". Many servers report a
+ * percentage; the ones that do not report a message instead, so `percentage` is
+ * optional and the panel shows the message when it is absent.
+ */
+export interface IdeProgress {
+  /** The IDE Mode server definition that reported it. */
+  serverId: string
+  /** The server's configured name, so a panel can label progress without the settings list. */
+  name: string
+  /** Workspace the reporting server was started in. */
+  root: string
+  /** The server's own token, scoped to this server and workspace. */
+  token: string
+  kind: 'begin' | 'report' | 'end'
+  title?: string
+  message?: string
+  /** 0-100, present only when the server reports a percentage. */
+  percentage?: number
+}

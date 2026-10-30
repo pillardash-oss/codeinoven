@@ -93,7 +93,8 @@ describe('RendererRecoveryStore', () => {
           startAfterThreads: [
             { id: 'source-1', title: 'Source one' },
             { id: 'source-2', title: 'Source two' }
-          ]
+          ],
+          threadReferences: []
         }
       },
       collapsedFolders: [],
@@ -155,7 +156,8 @@ describe('RendererRecoveryStore', () => {
       startAfterThreads: [
         { id: 'source-1', title: 'Source one' },
         { id: 'source-2', title: 'Source two' }
-      ]
+      ],
+      threadReferences: []
     })
     expect(storage.values.has(RENDERER_RECOVERY_STORAGE_KEY)).toBe(true)
   })
@@ -196,7 +198,8 @@ describe('RendererRecoveryStore', () => {
         projectReferences: [],
         taskReferences: [],
         promptReferences: [],
-        startAfterThreads: []
+        startAfterThreads: [],
+        threadReferences: []
       }
     })
   })

@@ -8,7 +8,7 @@
   import { isImageMime } from '$lib/mime'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { AgentPart } from '$shared/types'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import SubagentCard from './SubagentCard.svelte'
   import ThinkingBlock from './ThinkingBlock.svelte'
   import ToolCard from './ToolCard.svelte'
@@ -58,7 +58,7 @@
   <div class="border border-border bg-elevated px-3 py-2">
     <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Compaction summary</p>
     <div class="text-sm text-muted">
-      <MarkdownView text={part.text} {onCiteFile} />
+      <DeferredMarkdownView text={part.text} {onCiteFile} />
     </div>
   </div>
 {:else if part.type === 'step-finish'}
@@ -109,7 +109,7 @@
         transition:slide={foldSlide()}
         class="border-t border-border px-3 py-2 text-sm text-muted"
       >
-        <MarkdownView text={part.summary} {onCiteFile} />
+        <DeferredMarkdownView text={part.summary} {onCiteFile} />
       </div>
     {/if}
   </div>

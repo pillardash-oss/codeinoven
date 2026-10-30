@@ -666,9 +666,7 @@ describe('DatabaseWorker production wrapper', () => {
     await db.close()
   })
 
-  it(
-    'returns the full history beyond one page without omission (bounded worker reads)',
-    async () => {
+  it('returns the full history beyond one page without omission (bounded worker reads)', async () => {
     const dir = makeDir()
     const db = await openDatabase(dir)
     new ProjectRepo(db).upsert({
@@ -713,9 +711,7 @@ describe('DatabaseWorker production wrapper', () => {
     expect(loaded[total - 1].content).toBe(`large entry ${total - 1}`)
 
     await db.close()
-    },
-    // 1250 chunked appends + full cursor-paged load exceed the 5s default on
-    // slow Windows runners, and the hosted runner's disk can push it past 20s.
-    60000
-  )
+  }, // 1250 chunked appends + full cursor-paged load exceed the 5s default on
+  // slow Windows runners, and the hosted runner's disk can push it past 20s.
+  60000)
 })

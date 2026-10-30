@@ -35,7 +35,7 @@ export function buildLessonExtractionUserPrompt(
 
 export function parseLessonExtraction(text: string): SpeechExtractedLesson[] | null {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/u.exec(text)?.[1]
-  const source = (fenced ?? extractJsonObject(text)) ?? ''
+  const source = fenced ?? extractJsonObject(text) ?? ''
   if (!source) return null
   try {
     const parsed: unknown = JSON.parse(source.trim())
@@ -48,7 +48,8 @@ export function parseLessonExtraction(text: string): SpeechExtractedLesson[] | n
         if (typeof entry !== 'object' || entry === null) return null
         const lesson = entry as Record<string, unknown>
         const kind = typeof lesson['kind'] === 'string' ? lesson['kind'] : ''
-        const instruction = typeof lesson['instruction'] === 'string' ? lesson['instruction'].trim() : ''
+        const instruction =
+          typeof lesson['instruction'] === 'string' ? lesson['instruction'].trim() : ''
         if (!allowedKinds.has(kind) || !instruction || instruction.length > 300) return null
         const examples: Array<{ from: string; to: string }> = Array.isArray(lesson['examples'])
           ? (lesson['examples'] as unknown[])

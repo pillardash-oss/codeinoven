@@ -73,6 +73,12 @@ async function latest(packageName: string): Promise<UpdateRecord> {
   return pending
 }
 
+/** The bare package name of an npm spec such as `@scope/name@latest`. */
+function packageSpecName(spec: string): string {
+  const separator = spec.lastIndexOf('@')
+  return separator > 0 ? spec.slice(0, separator) : spec
+}
+
 /** Called only by the IDE worker. No timers or polling; checks follow user activity. */
 export async function ideInstallations(
   env: NodeJS.ProcessEnv,
@@ -86,7 +92,8 @@ export async function ideInstallations(
   const cached = await readUpdates(file)
   const installations: IdeInstallation[] = []
   for (const server of servers) {
-    const packageName = IDE_SERVER_PACKAGES[server.command]?.[0].split('@')[0]
+    const spec = IDE_SERVER_PACKAGES[server.command]?.[0]
+    const packageName = spec ? packageSpecName(spec) : undefined
     const managed = join(bin, server.command)
     const executable = await resolveIdeExecutable(server.command, env)
     let version: string | undefined

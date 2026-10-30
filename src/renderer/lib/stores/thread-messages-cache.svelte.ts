@@ -89,6 +89,7 @@ export class ThreadMessagesCache {
         hasOlder: false,
         error: '',
         runIssue: null,
+        waitingIssue: null,
         heldSteerIds: new SvelteSet<string>()
       }
       this.#threads.set(key, entry)
@@ -152,8 +153,28 @@ export class ThreadMessagesCache {
 
   setRunIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
     const entry = this.entry(projectId, threadId)
-    if (entry.runIssue === issue) return
+    // A settled failure and an active provider wait are the same slot on screen,
+    // so writing either one clears the other: a run that ends in an error is no
+    // longer parked, and a run that starts or settles is not waiting.
+    const hadWaiting = entry.waitingIssue !== null
+    entry.waitingIssue = null
+    if (entry.runIssue === issue) {
+      if (hadWaiting) this.notify(projectId, threadId)
+      return
+    }
     entry.runIssue = issue
+    this.notify(projectId, threadId)
+  }
+
+  /** The provider wait this thread is parked on, when it has one. */
+  waitingIssue(projectId: string, threadId: string): AgentProviderIssue | null {
+    return this.threads.get(threadKey(projectId, threadId))?.waitingIssue ?? null
+  }
+
+  setWaitingIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
+    const entry = this.entry(projectId, threadId)
+    if (entry.waitingIssue === issue) return
+    entry.waitingIssue = issue
     this.notify(projectId, threadId)
   }
 
@@ -291,7 +312,23 @@ export class ThreadMessagesCache {
       revealed = Math.min(merged.length, revealed + LOAD_REVEAL_BATCH_SIZE)
       this.#revealTimers.set(key, setTimeout(publishBatch, LOAD_REVEAL_INTERVAL_MS))
     }
-    this.#revealTimers.set(key, setTimeout(publishBatch, LOAD_REVEAL_INTERVAL_MS))
+    // The first batch publishes in the same turn that marks the thread loaded.
+    // Deferring it opened a window where the thread read as loaded with an empty
+    // transcript: the skeleton had already been replaced, so the conversation
+    // flashed an empty container and the composer jumped to the middle of the
+    // column (the centered head start is for a thread with no messages) before
+    // the tail arrived and pushed it back down. Six messages cost one small
+    // render, so there is nothing to gain by deferring them.
+    publishBatch()
+  }
+
+  /**
+   * Whether this thread's large initial load is still being revealed in
+   * batches. A window that reads its messages mid-reveal holds a partial set,
+   * so anything that measures or anchors the transcript has to wait for it.
+   */
+  revealing(projectId: string, threadId: string): boolean {
+    return this.#revealPending.has(threadKey(projectId, threadId))
   }
 
   /** Stop any in-flight batched reveal for a thread. */

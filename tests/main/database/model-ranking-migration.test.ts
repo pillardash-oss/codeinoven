@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createTestDb, destroyTestDb } from './test-helper'
 import type { Database } from '../../../src/main/database/database'
+import { versionTwoMigration } from '../../../src/main/database/migrations/v002'
 
 /**
  * Seeds the legacy `turn_feedback` ledger exactly as the pre-ranking schema
@@ -146,7 +147,7 @@ describe('model ranking legacy migration', () => {
         }
       ])
 
-      db.migrateModelRankingTables()
+      versionTwoMigration.apply(db.raw())
 
       const aggregates = db.all(
         'SELECT * FROM model_rankings ORDER BY harness_id'
@@ -212,7 +213,7 @@ describe('model ranking legacy migration', () => {
          ) VALUES('ranking:old', 'p', 'first_shot', 'pending', 'pi', 'gpt-5', 1, 2, 3, 1)`
       )
 
-      db.migrateModelRankingSnapshotClaimToken()
+      versionTwoMigration.apply(db.raw())
 
       const columns = (
         db.all('PRAGMA table_info(model_ranking_snapshots)') as Array<{ name: string }>
@@ -226,7 +227,7 @@ describe('model ranking legacy migration', () => {
       expect(row?.id).toBe('ranking:old')
       expect(row?.claim_token).toBeNull()
       // Idempotent re-run is a no-op.
-      expect(() => db.migrateModelRankingSnapshotClaimToken()).not.toThrow()
+      expect(() => versionTwoMigration.apply(db.raw())).not.toThrow()
     } finally {
       destroyTestDb(db)
     }
@@ -235,7 +236,7 @@ describe('model ranking legacy migration', () => {
   it('is a no-op on databases that never carried the legacy table', async () => {
     const db = await createTestDb()
     try {
-      expect(() => db.migrateModelRankingTables()).not.toThrow()
+      expect(() => versionTwoMigration.apply(db.raw())).not.toThrow()
       expect(db.all('SELECT * FROM model_rankings')).toHaveLength(0)
       expect(db.all('SELECT * FROM model_ranking_snapshots')).toHaveLength(0)
     } finally {
@@ -267,7 +268,7 @@ describe('model ranking legacy migration', () => {
         multiShot: { scoreSum: 0, samples: 0, durationSumMs: 0, costUsd: 0 }
       })
 
-      db.migrateModelRankingCostPlausibility()
+      versionTwoMigration.apply(db.raw())
 
       const poisoned = aggregate(db, 'pi:opencode-go:deepseek-v4.1-flash:high')
       expect(poisoned?.one_shot_cost_usd).toBe(0)
@@ -282,7 +283,7 @@ describe('model ranking legacy migration', () => {
       expect(priced?.one_shot_cost_usd).toBeCloseTo(104.19, 10)
 
       // Idempotent: a repaired row is already below the ceiling.
-      db.migrateModelRankingCostPlausibility()
+      versionTwoMigration.apply(db.raw())
       expect(aggregate(db, 'pi:opencode-go:deepseek-v4.1-flash:high')?.one_shot_cost_usd).toBe(0)
       expect(aggregate(db, 'claude-code:anthropic:default:high')?.one_shot_cost_usd).toBeCloseTo(
         104.19,

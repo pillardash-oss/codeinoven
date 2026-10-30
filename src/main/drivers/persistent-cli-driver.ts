@@ -233,7 +233,26 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const session = await this.requireSession(projectPath, sessionId)
     this.deletedSessions.add(session.id)
     this.releaseSessionRuntime(session.id)
+    await this.deleteNativeTranscript(projectPath, session)
     await this.storage.remove(this.sessionPath(session.id))
+  }
+
+  /**
+   * Remove any harness-native transcript this session owns.
+   *
+   * Deleting a session's record is not enough: a harness that keeps its own
+   * transcript on disk (pi's session JSONL, for example) would still hold the
+   * whole conversation, and anything that reads that transcript afterwards can
+   * put a discarded turn back into the thread mirror. A discarded session's
+   * transcript must not outlive the session. Harnesses that own no transcript
+   * file of their own keep this no-op.
+   */
+  protected async deleteNativeTranscript(
+    projectPath: string,
+    session: PersistentCliSession
+  ): Promise<void> {
+    void projectPath
+    void session
   }
 
   /**
@@ -1214,6 +1233,23 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 
   /**
+   * Whether this driver's durable store still holds the session's record.
+   *
+   * `requireSession` answers from the in-memory cache first, so a record that
+   * vanished   deleted by another instance sharing this data root, or lost to a
+   * prune   stays invisible until the cache is released and the next dispatch
+   * fails with "CLI session is unavailable". This reads the store.
+   */
+  async hasSessionRecord(projectPath: string, sessionId: string): Promise<boolean> {
+    try {
+      const session = await this.storage.read<PersistentCliSession>(this.sessionPath(sessionId))
+      return session !== null && session.projectPathHash === cliProjectPathHash(projectPath)
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * The session this driver can still resume for a thread after a harness
    * switch parked it. `native` reports whether the record carries a native
    * conversation binding: a record without one only holds the engine's mirror,
@@ -1240,9 +1276,29 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * keeps exactly one parked branch per harness instead of growing without
    * bound. The transcripts are already mirrored before this runs.
    */
+  /**
+   * Park a session after the thread moved to another harness: keep its record
+   * so this harness can resume it later, and drop the older records this
+   * driver still holds for the same thread so a thread that keeps switching
+   * keeps exactly one parked branch per harness instead of growing without
+   * bound. The transcripts are already mirrored before this runs.
+   *
+   * Only records strictly older than the parked one are dropped. A newer
+   * sibling is the thread's live binding: another instance sharing this data
+   * root rebound the thread while this process still held the previous id, so
+   * deleting it pulled the session out from under the running turn (the next
+   * dispatch after a cache release failed with "CLI session is unavailable").
+   */
   async parkThreadSession(projectPath: string, threadId: string, sessionId: string): Promise<void> {
     this.releaseSessionRuntime(sessionId)
     await this.tagSessionThread(projectPath, sessionId, threadId)
+    const parked = await this.storage
+      .read<PersistentCliSession>(this.sessionPath(sessionId))
+      .catch(() => null)
+    // Nothing to park means nothing to prune against: without the parked
+    // record there is no way to tell a stale branch from the thread's current
+    // session, and guessing deletes a session that is still in use.
+    if (!parked) return
     const hash = cliProjectPathHash(projectPath)
     let names: string[]
     try {
@@ -1260,6 +1316,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         )
         if (!record || record.projectPathHash !== hash) continue
         if (record.threadId !== threadId) continue
+        if (record.updatedAt >= parked.updatedAt) continue
         await this.deleteSession(projectPath, parkedId)
       } catch {
         // An unreadable record cannot be this thread's branch; leave it alone.

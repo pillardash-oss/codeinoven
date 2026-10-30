@@ -10,7 +10,7 @@
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { traceChainMarkers, traceChainSpan, type TraceChain } from '$lib/working-trace-parts'
   import type { AgentPart } from '$shared/types'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import WorkingTraceRow from './WorkingTraceRow.svelte'
 
   interface Props {
@@ -181,7 +181,7 @@
     {@const outputText = formatOutput ? formatOutput(chain.output.text) : chain.output.text}
     {#if outputText.trim() !== ''}
       <div class="min-w-0 text-[0.8125rem] text-foreground">
-        <MarkdownView text={outputText} {onCiteFile} />
+        <DeferredMarkdownView text={outputText} {onCiteFile} />
       </div>
     {/if}
   {/if}

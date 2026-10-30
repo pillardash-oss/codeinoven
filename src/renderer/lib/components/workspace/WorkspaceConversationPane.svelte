@@ -2,11 +2,13 @@
   import { SvelteMap } from 'svelte/reactivity'
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
+  import ConversationSkeleton from '$lib/components/threads/ThreadView/ConversationSkeleton.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { threadReveal } from '$lib/components/layout/page-reveal'
   import { fly } from 'svelte/transition'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
   import { assistantKnowledgeComplete, type Project, type Thread } from '$shared/types'
@@ -90,6 +92,20 @@
       threadId: thread.id
     })
   }
+
+  /**
+   * The thread this launch is restoring, while the workspace is still resolving
+   * its row.
+   *
+   * The persisted selection is known before any list is: the conversation's own
+   * transcript is already being read against it (see
+   * `preloadRestoredThreadConversation`), so the first screen can show what the
+   * user was reading instead of holding an empty surface until the thread list,
+   * the projects and the conversation renderer have all arrived.
+   */
+  let restoringSelection = $derived(
+    workspaceState.restoringLastThread ? rendererRecovery.selectedThread : null
+  )
 </script>
 
 <div
@@ -113,6 +129,7 @@
           <ThreadView
             thread={selectedThread}
             {active}
+            ownsReadingColumn
             chatMode={mode === 'chats' || mode === 'assistant'}
             assistantMode={mode === 'assistant'}
             {assistantId}
@@ -157,6 +174,15 @@
         </svelte:boundary>
       </div>
     {/key}
+  {:else if restoringSelection}
+    <!-- The saved thread is being restored: paint the part that is already in
+         hand instead of flashing the Welcome screen through a blank surface.
+         `ThreadView` replaces this the moment the workspace resolves the row. -->
+    <div class="flex h-full min-h-0 flex-col overflow-hidden px-6 pb-6">
+      <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
+        <ConversationSkeleton />
+      </div>
+    </div>
   {:else if mode === 'chats'}
     <WelcomeStart
       variant="chats"

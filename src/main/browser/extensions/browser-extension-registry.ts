@@ -19,6 +19,7 @@
  */
 
 import { isUnpackagedElectronLaunch } from '../../../lib/utils'
+import { projectExtensionJar } from '../../../lib/browser/browser-extension-jar'
 import { isExtensionId } from './browser-extension-crx'
 import type {
   BrowserExtension,
@@ -141,7 +142,8 @@ export interface BrowserExtensionRecord {
   /** Whether it is loaded into any jar at all. */
   enabled: boolean
   /**
-   * The jars it runs in: box ids, with the empty string for the context's own jar.
+   * The jars it runs in, as jar ids: a box id, the empty string for the profile's
+   * own jar, or a project's own jar named after it (see `extensionJarIdFor`).
    * Empty means installed and loaded nowhere, which is where an install starts.
    */
   boxes: string[]
@@ -335,12 +337,14 @@ export function extensionSourceDirectory(configRoot: string, id: string): string
   return `${configRoot}/${resolveBrowserExtensionStoreDir()}/${id}/${BROWSER_EXTENSION_SOURCE_DIR}`
 }
 
-/** Whether an extension runs in a jar. The empty id is the context's own jar. */
+/** Whether an extension runs in a jar. The jar is what `extensionJarIdFor`
+ *  answers: a box id, the empty string for the profile's own jar, or a project's
+ *  own jar named after it. */
 export function extensionRunsInJar(
   record: Pick<BrowserExtensionRecord, 'boxes'>,
-  boxId: string | null
+  jarId: string
 ): boolean {
-  return record.boxes.includes(boxId ?? '')
+  return record.boxes.includes(jarId)
 }
 
 /** The record as the renderer sees it: no paths, and the runtime warnings it has
@@ -375,6 +379,25 @@ export function toExtensionView(
     injected: record.injected,
     installedAt: record.installedAt
   }
+}
+
+/**
+ * Forget one project's own jar in the registry file, for a path that removes a
+ * project while no browser is open.
+ *
+ * The running extension service owns the registry whenever there is one, and its
+ * own forget path is what a live browser uses. This is the same removal for the
+ * case where there is no service to ask: the project's browser profiles are being
+ * removed directly, so its extensions have to be forgotten by reading the file the
+ * next launch would load. It answers whether anything changed.
+ */
+export async function forgetProjectJarOnDisk(
+  persistence: BrowserExtensionRegistryPersistence,
+  projectId: string
+): Promise<boolean> {
+  const registry = new BrowserExtensionRegistry(persistence)
+  await registry.load()
+  return registry.forgetProjectJars([projectId])
 }
 
 export class BrowserExtensionRegistry {
@@ -526,12 +549,48 @@ export class BrowserExtensionRegistry {
    *  restored by a re-created id, so leaving it named here would be a jar that
    *  never exists again. Returns whether anything changed. */
   async forgetBox(boxId: string): Promise<boolean> {
+    return this.forgetJars([boxId], false)
+  }
+
+  /**
+   * Forget projects from every extension's jar list, dropping the ones that are
+   * left in no jar at all.
+   *
+   * A project's browser is one project's, so an extension installed beside that
+   * project's conversation is that project's too: when the project goes, the
+   * extension goes with it, exactly as an extension is removed by uninstalling it.
+   * An extension that runs somewhere else as well is only forgotten here, because
+   * the other jars still run it.
+   *
+   * Returns whether anything changed.
+   */
+  async forgetProjectJars(projectIds: readonly string[]): Promise<boolean> {
+    return this.forgetJars(projectIds.map(projectExtensionJar), true)
+  }
+
+  /**
+   * Remove a set of jars from every record.
+   *
+   * `dropEmptied` decides what happens to a record left in no jar at all. It is off
+   * for a box, whose removal only means "not here any more": the user may have
+   * disabled the extension everywhere on purpose, and a record is what holds its
+   * settings, its update state and its per-site rules. It is on for a project,
+   * because there the extension was installed for that project's browser and has
+   * nothing left to belong to.
+   */
+  private async forgetJars(jarIds: readonly string[], dropEmptied: boolean): Promise<boolean> {
+    const removed = new Set(jarIds.filter((jarId) => jarId.length > 0))
+    if (removed.size === 0) return false
     let changed = false
-    for (const record of this.records.values()) {
-      const next = record.boxes.filter((jar) => jar !== boxId)
+    for (const [id, record] of [...this.records]) {
+      const next = record.boxes.filter((jar) => !removed.has(jar))
       if (next.length === record.boxes.length) continue
-      record.boxes = next
       changed = true
+      if (dropEmptied && next.length === 0) {
+        this.records.delete(id)
+        continue
+      }
+      record.boxes = next
     }
     if (changed) await this.persist()
     return changed

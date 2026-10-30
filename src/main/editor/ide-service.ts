@@ -6,9 +6,10 @@ import {
 } from '../../lib/ide-language-servers'
 import createWorker from './ide-worker.ts?nodeWorker'
 import type { Worker } from 'node:worker_threads'
-import type { IdeRequest, IdeResponse } from '../../lib/editor-ide'
+import type { IdeRequest, IdeResponse, IdeProgress } from '../../lib/editor-ide'
 import { buildProcessEnvironmentAsync, resolvePackageCommand } from '../drivers/cli-environment'
-import { app } from 'electron'
+import { sendToRenderer } from '../ipc/renderer-delivery'
+import { app, type WebContents } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
@@ -23,6 +24,16 @@ export class IdeService {
   private installs = new Map<string, Promise<void>>()
   private stopping = false
   private documentOwners = new Set<string>()
+  /**
+   * Windows that have asked this service for editor intelligence.
+   *
+   * Progress travels the other way: a language server reports work-done
+   * progress as a notification, never as the answer to a request, so the
+   * renderer can only receive it through a push channel. A window is remembered
+   * the first time it makes an IDE request and dropped as soon as delivery to it
+   * fails, which is what keeps a reloaded or closed window out of the set.
+   */
+  private readonly renderers = new Set<WebContents>()
   get hasOpenDocuments(): boolean {
     return this.documentOwners.size > 0
   }
@@ -34,6 +45,21 @@ export class IdeService {
       timer: ReturnType<typeof setTimeout>
     }
   >()
+
+  /** Remember a window so a language server's progress can reach it. */
+  attachRenderer(target: WebContents): void {
+    for (const existing of this.renderers)
+      if (existing.isDestroyed()) this.renderers.delete(existing)
+    this.renderers.add(target)
+  }
+
+  private publishProgress(progress: IdeProgress): void {
+    for (const target of this.renderers)
+      // A window that cannot take the event is gone or reloading; it re-attaches
+      // on its next IDE request rather than collecting pushes nobody renders.
+      if (!sendToRenderer(target, 'projectFiles:ideProgress', progress))
+        this.renderers.delete(target)
+  }
 
   async request(
     root: string,
@@ -146,7 +172,12 @@ export class IdeService {
           serverPid?: number
           add?: boolean
           idle?: boolean
+          progress?: IdeProgress
         }) => {
+          if (message.progress) {
+            this.publishProgress(message.progress)
+            return
+          }
           if (message.serverPid !== undefined) {
             if (message.add) this.serverPids.add(message.serverPid)
             else this.serverPids.delete(message.serverPid)
@@ -187,9 +218,17 @@ export class IdeService {
       const timer = setTimeout(
         () => {
           this.pending.delete(id)
-          reject(new Error('Editor intelligence timed out'))
+          reject(new Error(`${request.action} timed out. The language server is still starting.`))
         },
-        request.action === 'inventory' ? 150_000 : 20_000
+        // The worker answers or rejects every request itself, so this watchdog
+        // only catches a worker that stopped replying. It has to outlive the
+        // worker's own bound, or a request that is legitimately still loading a
+        // project would be reported as an editor failure instead of an answer.
+        request.action === 'inventory'
+          ? 150_000
+          : ['hover', 'definition', 'references', 'sync', 'capabilities'].includes(request.action)
+            ? 45_000
+            : 20_000
       )
       this.pending.set(id, { resolve, reject, timer })
       worker.postMessage({ id, root, request, env, servers })

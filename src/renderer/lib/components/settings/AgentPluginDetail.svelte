@@ -26,7 +26,7 @@
   } from '$shared/types'
 
   import { onMount } from 'svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
 
   interface Props {
@@ -255,7 +255,7 @@
             <div class="h-4 w-4/5 animate-pulse bg-raised"></div>
           </div>
         {:else if detail?.readme}
-          <MarkdownView text={detail.readme} />
+          <DeferredMarkdownView text={detail.readme} />
         {:else}
           <p class="text-sm text-muted">This plugin's repository has no README.</p>
         {/if}

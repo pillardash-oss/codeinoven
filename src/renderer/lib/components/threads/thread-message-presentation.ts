@@ -7,6 +7,9 @@ import {
   type ComposerBuiltInTag
 } from '../chats/composer-mentions'
 import { assistantTagIconHtml } from '$lib/components/assistant/assistant-tag-badge'
+import { threadComposerTag } from '$lib/components/chats/composer-tag'
+import { scopeState } from '$lib/stores/scope.svelte'
+import { taggedThreads } from '$lib/stores/tagged-threads.svelte'
 import { assistantAccentColor } from '$lib/assistant-icons'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
@@ -237,6 +240,31 @@ function assistantTagChips(
   return chips
 }
 
+/**
+ * Chips for thread tags this session picked from another project's search.
+ *
+ * A tag is an id: the Assistant tab names its own threads, and the threads it
+ * never listed are named by the search that found them. The chip wears the icon
+ * of the project the thread lives in, because that is what tells the reader
+ * which thread a title belongs to once it is no longer beside its picker.
+ */
+function taggedThreadChips(text: string): Array<{ token: string; html: string }> {
+  const chips: Array<{ token: string; html: string }> = []
+  for (const match of text.matchAll(/@thread:([\w-]+)/gu)) {
+    const threadId = match[1]
+    if (!threadId) continue
+    const thread = taggedThreads.get(threadId)
+    if (!thread) continue
+    const project = scopeState.projects.find((entry) => entry.id === thread.projectId)
+    const tag = threadComposerTag(thread, project)
+    chips.push({
+      token: composerAssistantTagToken(tag),
+      html: inlineAssistantTagChipHtml(tag, tag.name)
+    })
+  }
+  return chips
+}
+
 export function inlineFileTagsForMessage(
   msg: AgentMessage,
   /**
@@ -254,6 +282,11 @@ export function inlineFileTagsForMessage(
     if (text.includes(tag.token)) tags.push({ token: tag.token, html: inlineTagChipHtml(tag) })
   }
   if (assistantTags) tags.push(...assistantTagChips(text, assistantTags))
+  // A thread tagged from another project: the assistant list cannot name it,
+  // so the search that found it does.
+  for (const chip of taggedThreadChips(text)) {
+    if (!tags.some((tag) => tag.token === chip.token)) tags.push(chip)
+  }
   if (!msg.projectReferences?.length) return tags
   // Only inline references that actually appear as `@path` in the stored text;
   // remaining references will still render as the legacy top pills so no tag

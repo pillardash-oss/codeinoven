@@ -11,8 +11,10 @@ import {
   CIO_SPAWN_AGENT_TOOL_NAME
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
+import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
 import { unmanagedCuaShellReason } from '../../../../lib/agent-control-policy'
 import { sensitiveFileTargets } from '../../../../lib/sensitive-file-targets'
+import { CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME } from '../../../../lib/core-tools'
 import {
   DEFAULT_BUNDLED_PI_FILE_PATTERNS,
   PERMANENT_BUNDLED_PI_FILE_PATTERNS
@@ -59,11 +61,86 @@ const CIO_PERMANENT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(
 
 const sensitiveFileTargets = ${sensitiveFileTargets.toString()}
 
+// Why the run says it needs a protected file, recorded before the card asks and
+// spent once when that card appears. A reason is only accepted for a path this
+// session was already blocked on, so nothing can be pre-approved silently.
+const sensitiveAccessJustifications = new Map()
+const sensitiveAccessBlockedPaths = new Set()
+
+function sensitiveAccessPathKey(path) {
+  return String(path).replaceAll('\\\\', '/')
+}
+
+function rememberBlockedSensitivePaths(paths) {
+  for (const path of paths || []) sensitiveAccessBlockedPaths.add(sensitiveAccessPathKey(path))
+}
+
+function recordSensitiveAccessReason(paths, reason) {
+  const text = typeof reason === 'string' ? reason.trim().slice(0, 600) : ''
+  if (!text) return { recorded: [], ignored: [], error: 'A reason is required.' }
+  const recorded = []
+  const ignored = []
+  for (const path of paths || []) {
+    const key = sensitiveAccessPathKey(path)
+    if (!sensitiveAccessBlockedPaths.has(key)) {
+      ignored.push(String(path))
+      continue
+    }
+    sensitiveAccessJustifications.set(key, text)
+    recorded.push(String(path))
+  }
+  return { recorded, ignored }
+}
+
+function takeSensitiveAccessJustification(paths) {
+  const keys = []
+  const reasons = []
+  for (const path of paths || []) {
+    const key = sensitiveAccessPathKey(path)
+    const reason = sensitiveAccessJustifications.get(key)
+    if (reason === undefined) return undefined
+    keys.push(key)
+    reasons.push(reason)
+  }
+  if (keys.length === 0) return undefined
+  for (const key of keys) sensitiveAccessJustifications.delete(key)
+  return Array.from(new Set(reasons)).join('\\n\\n')
+}
+
+function sensitiveAccessReasonRequest(paths) {
+  return (
+    'Access to a protected file needs a stated reason before the user is asked.\\n' +
+    'Call ${CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME} once with the paths below and one or two sentences on why this run needs them, then retry this exact call:\\n' +
+    JSON.stringify({ paths: paths || [], reason: 'why this run needs the file' })
+  )
+}
+
+/** The tool result the model sees after a denial. When the user wrote an
+ *  alternative, it is the result text itself: the model must continue from the
+ *  user's own words, not from a generic refusal. */
+function permissionDenialReason(reason, answer) {
+  const alternative = typeof answer === 'string' ? answer.trim() : ''
+  if (alternative && alternative !== 'deny') {
+    return (
+      'The user denied this action (' +
+      reason +
+      ') and provided this alternative:\\n\\n' +
+      alternative +
+      '\\n\\nFollow the alternative instead of retrying the denied action.'
+    )
+  }
+  return (
+    'The user denied this action (' +
+    reason +
+    '). Do not retry it as-is; continue the turn with a safe alternative.'
+  )
+}
+
 function bundledPiSensitiveFileGate(toolName, input, cwd) {
   if (!CIO_SENSITIVE_FILE_POLICY_PATH) return null
   // Code-mode orchestration is not itself a file read. Its inner tools reach
   // this gate with their actual arguments, like tools called directly.
-  if (['cio_ask_user', 'cio_todo_write', 'cio_agent_status', 'cio_agent_output'].includes(toolName)) return null
+  if (['cio_ask_user', 'cio_todo_write', 'cio_agent_status', 'cio_agent_output', '${CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME}'].includes(toolName)) return null
   let patterns = CIO_DEFAULT_SENSITIVE_FILE_PATTERNS
   try {
     if (statSync(CIO_SENSITIVE_FILE_POLICY_PATH).size > 262144) throw new Error('Oversized file policy')
@@ -204,7 +281,8 @@ const CIO_SUBAGENT_PROMPT_GUIDELINES = [
   'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
   'When the user asks to split work across workers and wants to prompt those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead of ${CIO_SPAWN_AGENT_TOOL_NAME}: both can be monitored, but only Assignment workers can be prompted independently. Ask with cio_ask_user which the user wants when they have not already said, and do not ask again once they have.',
   'Every worker inherits the project rules you follow: scope its instructions to the files it owns, tell it to verify only those files (a project-wide check is forbidden for a worker), and never ask it to commit, stage or stash.',
-  'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
+  'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.',
+  'At most four sub-agents run at the same time and the fifth is refused, so keep the fan-out inside that and queue the remaining work behind it. Reach for a pawn agent (${PAWN_AGENT_TOOL_NAME}) only when the work genuinely needs five or more worker runs in flight at once and waiting for a free sub-agent slot would stall it, or when the user explicitly asks for pawns   then hand the overflow to a single pawn, never a batch of them, and never use a pawn to dodge the cap when the same work can simply run in sequence.'
 ]
 
 // Pi's own bundled system prompt opens with a "you are an assistant" framing

@@ -1,7 +1,7 @@
 import { session } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { installFilePreviewProtocol } from '../editor/file-preview-protocol'
-import type { ProjectFilesService } from '../editor/project-files-service'
+import { appfileProjectFilesGate, scopedPathResolverGate } from './boot-gate'
 import type { PrivilegedIpcValidator } from '../ipc/ipc-validation'
 import { localDownloadName } from '../system/local-download-names'
 
@@ -74,22 +74,20 @@ export function installRendererSessionGuards(deps: RendererSessionGuardDeps): vo
   })
 }
 
-export interface AppFilePreviewProtocolDeps {
-  getProjectFiles: () => ProjectFilesService | null
-  getScopedPathResolver: () => ((value: unknown) => Promise<string>) | null
-}
-
 /**
  * Install the `appfile://` preview protocol before the renderer loads: the
  * packaged renderer requests preview images as soon as it hydrates, and if the
  * handler is not yet registered Chromium rejects those early requests with
  * `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently broken.
- * The file service is resolved lazily from the post-paint boot.
+ *
+ * The services it needs are published later by the post-paint boot, so the
+ * request awaits the boot's gate rather than reading a maybe-empty slot: a
+ * preview requested in the first frames after hydration is then served when the
+ * service arrives, instead of being refused for the rest of the session.
  */
-export function installAppFilePreviewProtocol(deps: AppFilePreviewProtocolDeps): void {
-  installFilePreviewProtocol(deps.getProjectFiles, (value) => {
-    const resolveScopedPath = deps.getScopedPathResolver()
-    if (!resolveScopedPath) throw new Error('Scoped path resolution is not ready')
-    return resolveScopedPath(value)
+export function installAppFilePreviewProtocol(): void {
+  installFilePreviewProtocol({
+    projectFiles: () => appfileProjectFilesGate.read(),
+    resolveScopedPath: (value) => scopedPathResolverGate.read().then((resolve) => resolve(value))
   })
 }

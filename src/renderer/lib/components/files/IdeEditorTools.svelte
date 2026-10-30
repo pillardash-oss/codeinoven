@@ -12,14 +12,14 @@
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { navigateTo } from '$lib/app-control/app-control-actions'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import type { AppPanelPortal } from '$lib/app-panel-portal'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import type { IdeAction, IdeLocation, IdeResponse } from '$shared/editor-ide'
+  import type { IdeAction, IdeLocation, IdeProgress, IdeResponse } from '$shared/editor-ide'
   import type { IdeToken, IdeMenuAction } from '$lib/editor/ide-context'
 
   interface Props {
@@ -68,6 +68,13 @@
   let locationTitle = $state('Code locations')
   let truncated = $state(false)
   let hover = $state<{ text: string; x: number; y: number } | null>(null)
+  /**
+   * What the language servers themselves report doing, keyed by server and work
+   * item. A server announces project loading as work-done progress, so this is
+   * the only honest source for an "indexing" percentage.
+   */
+  let progress = $state.raw<Record<string, IdeProgress>>({})
+  let progressEntries = $state.raw<IdeProgress[]>([])
   let sequence = 0
   let alive = false
   let searchTimer: ReturnType<typeof setTimeout> | undefined
@@ -122,10 +129,27 @@
           resolvedProjectName = context.projectId
         })
     serverError = ''
+    // One window may hold several editors; the subscription is per editor so the
+    // panel only ever shows progress while the file it belongs to is on screen.
+    const stopProgress = subscribeGuarded('projectFiles:ideProgress', (entry) => {
+      const key = `${entry.serverId}:${entry.token}`
+      const next = { ...progress }
+      if (entry.kind === 'end') delete next[key]
+      else next[key] = entry
+      progress = next
+      progressEntries = Object.values(next).sort(
+        (left, right) =>
+          left.serverId.localeCompare(right.serverId) ||
+          (left.title ?? '').localeCompare(right.title ?? '')
+      )
+    })
     failedRetry = -1
     return () => {
       alive = false
       infoOpen = false
+      stopProgress()
+      progress = {}
+      progressEntries = []
       connectedServers = undefined
       clearTimeout(hoverLeaveTimer)
       capabilities = undefined
@@ -480,6 +504,13 @@
   >
     <div class="flex min-w-0 items-center gap-1 whitespace-nowrap">
       {#if connecting}<CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />{/if}
+      {#if progressEntries.length}
+        <span class="shrink-0 font-mono text-muted"
+          >{progressEntries[0].percentage !== undefined
+            ? `${progressEntries[0].percentage}%`
+            : 'Loading'}</span
+        >
+      {/if}
       <button
         type="button"
         class="shrink-0 px-2 py-1 text-foreground hover:bg-elevated"
@@ -498,7 +529,7 @@
     </p>{/if}
   {#if mode === 'documentation' || hover}
     <div class="min-h-0 overflow-auto px-2 py-1 text-xs text-foreground">
-      <MarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
+      <DeferredMarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
     </div>
   {:else}
     <div
@@ -629,6 +660,7 @@
         >{/if}
       {#each connectedServers ?? [] as server (server.id)}
         {@const installation = installations.find((item) => item.serverId === server.id)}
+        {@const reports = progressEntries.filter((entry) => entry.serverId === server.id)}
         <section class="space-y-3 border border-border bg-elevated p-3">
           <div class="flex flex-wrap items-center gap-2">
             <span class="font-semibold">{server.name}</span><SettingsStatusBadge
@@ -640,6 +672,39 @@
           <p class="leading-relaxed text-muted">
             {(server.languages ?? [server.language]).join(', ')}
           </p>
+          {#if reports.length}
+            <div class="space-y-2" aria-live="polite">
+              {#each reports as entry (`${entry.serverId}:${entry.token}`)}
+                <div>
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="min-w-0 truncate text-muted"
+                      >{entry.message ?? entry.title ?? 'Preparing project...'}</span
+                    >
+                    {#if entry.percentage !== undefined}<span
+                        class="shrink-0 font-mono text-foreground">{entry.percentage}%</span
+                      >{/if}
+                  </div>
+                  {#if entry.percentage !== undefined}
+                    <div
+                      class="mt-1 h-1 w-full bg-overlay"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={entry.percentage}
+                      aria-label={`${server.name}: ${entry.title ?? 'preparing project'}`}
+                    >
+                      <div class="h-full bg-primary" style:width={`${entry.percentage}%`}></div>
+                    </div>
+                  {:else}
+                    <div class="mt-1 flex items-center gap-2 text-muted">
+                      <CioSpinner size={11} class="animate-spin" aria-hidden="true" />
+                      <span>{entry.title ?? 'Working'}</span>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
           {#if installation?.latestVersion && installation.version && installation.latestVersion.localeCompare( installation.version, undefined, { numeric: true } ) > 0}<CardNotice
               >Update available: {installation.latestVersion}. Open LSP settings to update.</CardNotice
             >{/if}

@@ -58,6 +58,7 @@
     type TerminalPlacement
   } from '$lib/stores/context-sidebar.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import { SvelteSet } from 'svelte/reactivity'
@@ -239,6 +240,21 @@
   /** Closing a popup rail tab destroys that popup page. */
   function closeLabel(tab: ContextSidebarTab): string {
     return `Close ${titleFor(tab)}`
+  }
+
+  /**
+   * Whether a side chat finished a response the user has not read yet.
+   *
+   * Only side chats can be unread here: a browser agent's conversation is read
+   * where it lives, and every other tab is a tool rather than a conversation.
+   * The mark is what names the unread chat inside a strip that may hold several
+   * of them, so the rail's own unread dot always has something to point at.
+   */
+  function hasUnreadResponse(tab: ContextSidebarTab): boolean {
+    return (
+      tab.kind === 'temporary-chat' &&
+      temporaryChatUnread.hasUnreadChat(tab.projectId, tab.threadId, tab.temporaryChatId)
+    )
   }
 
   /** Files are headerless like the other single-panel tools right up until a
@@ -479,8 +495,9 @@
         <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'temporary-chat'}
-      <!-- The dashed bubble is the whole signal: a side chat carries the same
-           neutral mark as every other tab, never an indicator colour. -->
+      <!-- The dashed bubble is the tool's mark: a side chat wears the same
+           neutral glyph as every other tab. Its unread state is a status, so it
+           rides the strip row's badge slot instead of recolouring the glyph. -->
       <CioTemporaryChat size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'browser-agent'}
       <!-- The assistant conversation of a browser tab wears the Chats view's own
@@ -626,6 +643,10 @@
         {#if conversation}
           {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}
             <StatusBadge kind="attention" title="Needs attention" />
+          {:else if hasUnreadResponse(tab)}
+            <!-- A finished response nobody has opened: the same unread green a
+                 thread row wears, so one read state looks the same everywhere. -->
+            <StatusBadge color="var(--color-thread-unread)" title="Unread response" />
           {:else if agentRuns.isBusy(conversation.projectId, conversation.conversationId)}
             <StatusBadge stage="working" title="Working" />
           {/if}

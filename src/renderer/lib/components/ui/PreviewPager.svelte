@@ -1,24 +1,13 @@
 <script module lang="ts">
-  /**
-   * Sibling navigation for a fullscreen preview opened over several files.
-   *
-   * `index` is zero-based into the caller's own previewable list, which already
-   * excludes every file no preview can render: stepping never lands on an empty
-   * frame, it moves straight to the next attachment that can be shown.
-   */
-  export interface PreviewPagerState {
-    index: number
-    count: number
-    onPrevious: () => void
-    onNext: () => void
-  }
+  export type { PreviewPagerState } from './preview-pager-state'
 </script>
 
 <script lang="ts">
+  import type { PreviewPagerState as PreviewPagerStateData } from './preview-pager-state'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   interface Props {
-    pager: PreviewPagerState
+    pager: PreviewPagerStateData
     class?: string
   }
 

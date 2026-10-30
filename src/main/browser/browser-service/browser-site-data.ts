@@ -10,6 +10,7 @@ import type { BrowserSiteDataScope, BrowserSitePermissionState } from '../../../
 import { Logger } from '../../system/logger'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { SCOPE_STORAGE_TYPES, browserPartitionFor } from './browser-validation'
+import { liveContents } from './browser-view-contents'
 import { SITE_MENU_ACTIONS, type BrowserTab, type SiteMenuAction } from './browser-types'
 import { SITE_PERMISSION_CATALOG, type SitePermissionState } from './browser-permissions'
 
@@ -252,7 +253,7 @@ export class BrowserSiteDataService {
     this.deps.forEachTab((tab) => {
       if (!cleared.has(browserPartitionFor(tab.projectId, tab.boxId))) return
       if (!tab.initialNavigationStarted) return
-      tab.view.webContents.reload()
+      liveContents(tab.view)?.reload()
     })
   }
 }

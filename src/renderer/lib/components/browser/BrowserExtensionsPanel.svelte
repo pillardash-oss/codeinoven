@@ -30,6 +30,7 @@
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { WEBSTORE_HOME_URL } from '$shared/browser/browser-webstore'
   import { MAX_PINNED_EXTENSIONS } from '$shared/browser/browser-extension-pins'
+  import { isProjectExtensionJar } from '$shared/browser/browser-extension-jar'
   import BrowserExtensionInstallProgress from './BrowserExtensionInstallProgress.svelte'
   import BrowserBoxChips from './BrowserBoxChips.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
@@ -162,10 +163,24 @@
     return globalBrowser.boxes.find((box) => box.id === boxId)?.name ?? 'Missing box'
   }
 
+  /**
+   * What one jar of a record is called on this row.
+   *
+   * A conversation's own jar is named by the context it belongs to rather than by a
+   * box, and this panel is the profile's: those are installs a thread browser made
+   * for its own project, and they go when that project does. Naming them here keeps
+   * a row honest without pretending they are a box this panel can toggle.
+   */
+  function jarName(jarId: string): string {
+    if (jarId === '') return 'No box'
+    if (isProjectExtensionJar(jarId)) return 'A conversation'
+    return boxName(jarId)
+  }
+
   /** Where an extension runs, in the one line the row has room for. */
   function describeBoxes(extension: BrowserExtension): string {
     if (extension.boxes.length === 0) return 'Not loaded anywhere yet'
-    return extension.boxes.map((id) => (id === '' ? 'No box' : boxName(id))).join(', ')
+    return extension.boxes.map(jarName).join(', ')
   }
 
   /** The one-line reason the warning triangle is on a row. */

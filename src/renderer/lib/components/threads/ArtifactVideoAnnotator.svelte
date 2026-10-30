@@ -1,5 +1,6 @@
 <script lang="ts">
   import AnnotationMarkLayer from './AnnotationMarkLayer.svelte'
+  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import { markContentBox, markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
     responseReferencesState,
@@ -13,13 +14,21 @@
    * A video the agent published is the artifact a user most often wants to answer
    * with "that moment, there", and neither a time nor a freeze frame is something
    * they should have to write out. So arming the annotator pauses the picture and
-   * hands over a frame strip: the user picks the second they mean, draws on it,
-   * and writes why. Every stroke is stored with the second it was drawn at, which
-   * is the whole difference between this and a mark on a still, and the send
-   * composes that second's frame with the strokes on it.
+   * hands over the frame on screen: the user draws on it and writes why. Every
+   * stroke is stored with the second it was drawn at, which is the whole
+   * difference between this and a mark on a still, and the send composes that
+   * second's frame with the strokes on it.
    *
-   * The conversation shows the video plain. The player, the strip and the pen are
-   * all decisions about the video, so this host is the lightbox
+   * A note is rarely alone. The frame strip this surface used to draw under the
+   * picture was a second, invented player competing with the app's own, so the
+   * player's controls are the only way to move the picture and the spacebar is
+   * what lets it run again: the pen steps aside, playback continues, and the next
+   * frame is annotated where the user stopped. Strokes and badges are drawn only
+   * while their own frame is up, so a note about 0:05 never paints itself over
+   * the 0:10 frame.
+   *
+   * The conversation shows the video plain. The player and the pen are all
+   * decisions about the video, so this host is the lightbox
    * (`chats/MediaPreview.svelte`), which hands it the whole media area.
    *
    * The drawing itself is {@link AnnotationMarkLayer}, the same component an image
@@ -29,8 +38,20 @@
   interface Props {
     projectId: string
     threadId: string
+    /** The artifact's own url, which is what a mark names. */
     url: string
+    /** The resolved source the player loads, which may be a scoped blob url. */
+    src: string
     filename: string
+    /** Where playback resumes, so a viewer opened from the inline player keeps its frame. */
+    startAt?: number
+    /**
+     * Whether the recording was running when it was handed over.
+     *
+     * The inline player is stopped on the way here, because both stay mounted; the
+     * viewer picks the recording up instead of leaving the user on a still frame.
+     */
+    autoPlay?: boolean
     /** The message the video arrived in, so a mark can be jumped back to. */
     messageId?: string
     /** Marks already drawn on this video, in composer order. */
@@ -47,7 +68,10 @@
     projectId,
     threadId,
     url,
+    src,
     filename,
+    startAt,
+    autoPlay = false,
     messageId,
     marks,
     editingId,
@@ -57,19 +81,22 @@
 
   // Held rather than bound through `bind:this`: only `pause`, `seek` and the
   // playhead sync read the element, and turning the reference into state would
-  // turn those DOM writes into state writes.
+  // turn those DOM writes into state writes. The player owns it now, so it is
+  // taken from the player's own hand-over.
   let video: HTMLVideoElement | null = null
-  const videoAttachment = (node: HTMLVideoElement): (() => void) => {
-    video = node
-    return () => {
-      if (video === node) video = null
-    }
-  }
+  /**
+   * The player's own box, which is what the keyboard falls back to.
+   *
+   * Finishing a comment must not leave the press that continues the video on one
+   * of the pen's buttons, so the focus is handed here, to the picture being
+   * watched. It is a focus holder, not a control: nothing about the player's own
+   * behaviour changes.
+   */
+  let playerBox = $state<HTMLDivElement>()
   /** Whether the pointer draws on the picture instead of driving the player. */
   let armed = $state(false)
   /** Bound to the element, so a scrubbed frame and a drawn mark agree on the second. */
   let currentTime = $state(0)
-  let duration = $state(0)
   let videoWidth = $state(0)
   let videoHeight = $state(0)
   /** The player's own box, which the picture is letterboxed inside. */
@@ -114,13 +141,32 @@
     if (next) video?.pause()
   }
 
-  function handleMediaError(event: Event): void {
-    onLoadError?.(event.currentTarget as HTMLMediaElement)
-  }
-
   function seek(seconds: number): void {
     if (!video || !Number.isFinite(seconds)) return
     video.currentTime = seconds
+  }
+
+  /**
+   * Let the picture continue from an annotation.
+   *
+   * This is the spacebar bound to the player's own play control, and it is the
+   * same press either way: running puts the pen down, because a frame that starts
+   * moving is no longer the frame a stroke would land on, and stopping brings it
+   * back up for the frame the user stopped on, so a pass through a recording is
+   * annotate, space, annotate again rather than a round trip through the pen each
+   * time. Only the element is driven here; the player keeps its own state because
+   * it hears the element's own events.
+   */
+  function continueFromAnnotation(): void {
+    const element = video
+    if (!element) return
+    if (element.paused) {
+      handleArmedChange(false)
+      void element.play().catch(() => {})
+      return
+    }
+    element.pause()
+    armed = true
   }
 
   function focusMark(mark: ResponseReferenceAnchor): void {
@@ -166,23 +212,8 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 w-full flex-col">
-  <div class="relative min-h-0 flex-1" bind:offsetWidth={boxWidth} bind:offsetHeight={boxHeight}>
-    <video
-      {@attach videoAttachment}
-      class="absolute inset-0 h-full w-full object-contain"
-      src={url}
-      controls={!armed}
-      preload="metadata"
-      playsinline
-      bind:currentTime
-      bind:duration
-      bind:videoWidth
-      bind:videoHeight
-      onerror={handleMediaError}
-    >
-      <track kind="captions" />
-    </video>
+{#snippet markOverlay()}
+  <div class="absolute inset-0" bind:offsetWidth={boxWidth} bind:offsetHeight={boxHeight}>
     {#if contentBox}
       <!-- The layer fills the picture rather than the player: outside this box
            there is letterbox, and a mark belongs on the picture. -->
@@ -203,26 +234,38 @@
           {armed}
           onArmedChange={handleArmedChange}
           onFocusMark={focusMark}
-          hint="Pick the frame, then draw · Esc to finish"
+          onContinue={continueFromAnnotation}
+          onFocusSurface={() => playerBox?.focus()}
+          activeSeconds={currentTime}
+          hint="Draw on the frame · Space to continue · Esc to finish"
         />
       </div>
     {/if}
   </div>
-  {#if armed}
-    <div class="flex shrink-0 items-center gap-2 border-t border-white/10 px-3 py-2 text-white/80">
-      <span class="shrink-0 font-mono text-xs">{videoTimecode(currentTime)}</span>
-      <input
-        type="range"
-        class="min-w-0 flex-1"
-        min="0"
-        max={duration > 0 ? duration : 0}
-        step="0.01"
-        value={currentTime}
-        title="The frame the next mark is drawn on"
-        aria-label="Frame to annotate"
-        oninput={(event) => seek(Number(event.currentTarget.value))}
-      />
-      <span class="shrink-0 text-xs">Frame {Math.round(currentTime * 1000)}ms</span>
-    </div>
-  {/if}
+{/snippet}
+
+<div class="flex h-full min-h-0 w-full flex-col outline-none" bind:this={playerBox} tabindex="-1">
+  <!-- The artifact video is played by the app's own player, exactly like the
+       plain one in the conversation, so it shares its controls, its failure
+       state and the frame it was left on. The mark layer is drawn over the
+       picture: a surface that answers a video cannot also turn every press into
+       play, so the player leaves the pointer to the pen here. -->
+  <VideoPlayer
+    {src}
+    label={filename}
+    {startAt}
+    {autoPlay}
+    fit="fill"
+    interactive={false}
+    showCenterControl={!armed}
+    overlay={markOverlay}
+    class="min-h-0 flex-1"
+    onElement={(element) => (video = element)}
+    onMetadata={(element) => {
+      videoWidth = element.videoWidth
+      videoHeight = element.videoHeight
+    }}
+    onTime={(seconds) => (currentTime = seconds)}
+    onError={(element) => onLoadError?.(element)}
+  />
 </div>

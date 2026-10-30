@@ -3,10 +3,10 @@
   import type { Token, Tokens } from 'marked'
   import CodeBlock from './CodeBlock.svelte'
   import LongTextBlock from './LongTextBlock.svelte'
-  import MarkdownTable from './MarkdownTable.svelte'
-  import MermaidDiagram from './MermaidDiagram.svelte'
+  import DeferredMarkdownTable from './DeferredMarkdownTable.svelte'
+  import DeferredMermaidDiagram from './DeferredMermaidDiagram.svelte'
   import FileCitationContextMenu from './FileCitationContextMenu.svelte'
-  import ArtifactCard from './ArtifactCard.svelte'
+  import DeferredArtifactCard from './DeferredArtifactCard.svelte'
   import { artifactKindForLang, artifactNeedsCodeFallback } from './artifact'
   import {
     blockHtml,
@@ -493,9 +493,9 @@
       {@const language = node.token.lang?.split(/\s+/)[0]?.toLowerCase()}
       {@const artifactKind = artifactKindForLang(language)}
       {#if language === 'mermaid' && isCompleteFence(node.token)}
-        <MermaidDiagram code={node.token.text} onAnnotate={onAnnotateMermaid} />
+        <DeferredMermaidDiagram code={node.token.text} onAnnotate={onAnnotateMermaid} />
       {:else if artifactKind && isCompleteFence(node.token) && !artifactNeedsCodeFallback(node.token.text)}
-        <ArtifactCard code={node.token.text} kind={artifactKind} {annotationScope} />
+        <DeferredArtifactCard code={node.token.text} kind={artifactKind} {annotationScope} />
       {:else}
         <CodeBlock code={node.token.text} lang={language} />
       {/if}
@@ -525,7 +525,7 @@
       <!-- Tables own their scroll wrapper (the table sizes to its content, min
            100% of the container, so no column is starved by a sibling column's
            long tokens) plus the per-table wrap and column-resize controls. -->
-      <MarkdownTable html={renderBlockHtml(node.token)} />
+      <DeferredMarkdownTable html={renderBlockHtml(node.token)} />
     {:else if node.token.type !== 'space'}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
       {@html renderBlockHtml(node.token)}

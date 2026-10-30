@@ -7,7 +7,7 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioRedo from '@pdslng/cio-icon/CioRedo.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
-  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '$lib/components/speech/VoiceInputButton.svelte'
   import FindInSurface from '$lib/components/threads/FindInSurface.svelte'
@@ -324,7 +324,7 @@
             <p class="px-3.5 pb-3 text-sm text-danger" role="alert">{note.saveError}</p>
           {/if}
         {:else if note.body.trim()}
-          <MarkdownView text={note.body} class="w-full px-3.5 py-3 text-sm leading-5" />
+          <DeferredMarkdownView text={note.body} class="w-full px-3.5 py-3 text-sm leading-5" />
         {:else}
           <p class="px-3.5 py-3 text-sm leading-5 text-dimmed">Nothing written yet.</p>
         {/if}

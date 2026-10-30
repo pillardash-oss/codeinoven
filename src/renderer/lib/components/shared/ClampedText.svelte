@@ -132,14 +132,14 @@ lands, when there is nothing to animate. -->
       <div
         class="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent"
         transition:fade={{ duration: motionDuration(120) }}
-        aria-hidden="true"
       ></div>
     {/if}
   </div>
   {#if showToggle}
+    <!-- The whole row under the fold is the target, not just the words in it. -->
     <button
       type="button"
-      class="mt-1 text-xs font-medium text-muted transition-colors hover:text-foreground"
+      class="mt-1 block w-full cursor-pointer text-left text-xs font-medium text-muted transition-colors hover:text-foreground"
       aria-expanded={expanded}
       aria-label={collapsed ? `Show the full ${label}` : `Fold the ${label}`}
       title={collapsed ? `Show the full ${label}` : `Fold the ${label}`}

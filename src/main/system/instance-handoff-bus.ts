@@ -40,6 +40,7 @@ import {
 import { join } from 'node:path'
 import type { FSWatcher } from 'node:fs'
 import { getConfigRoot } from '../../lib/utils'
+import type { HandedOffWorker } from '../chat/thread-transfer-service/thread-transfer-workers'
 import { Logger } from './logger'
 
 /** How long a requester waits for the target's verdict before giving up. */
@@ -86,12 +87,30 @@ export interface HandoffRequest {
   lockToken?: string
 }
 
+/**
+ * What the releasing instance hands back with an accepted transfer.
+ *
+ * A hand-off moves a thread, not the work running under it: nested workers and
+ * pawns end with the process that hosted them. The roster rides the ack because
+ * it is the only place the receiving instance can learn it: by the time the
+ * adopter looks at the shared database those workers are already settled, and a
+ * settled card cannot say whether it finished or was stopped by the move.
+ */
+export interface HandoffReleaseDetails {
+  /** Workers the release had to stop, as the resuming agent must hear them. */
+  workers?: readonly HandedOffWorker[]
+  /** Pawn threads whose runs were stopped so the adopter can resume them. */
+  pawnThreadIds?: readonly string[]
+}
+
 export interface HandoffAck {
   requestId: string
   requesterPid: number
   targetPid: number
   status: 'accepted' | 'refused' | 'not-owner'
   reason?: string
+  /** Present on an accepted `release-run` when the release has something to say. */
+  details?: HandoffReleaseDetails
   createdAt: number
 }
 
@@ -247,7 +266,8 @@ export class InstanceHandoffBus {
   async respond(
     request: HandoffRequest,
     status: HandoffAck['status'],
-    reason?: string
+    reason?: string,
+    details?: HandoffReleaseDetails
   ): Promise<void> {
     const ack: HandoffAck = {
       requestId: request.requestId,
@@ -255,6 +275,7 @@ export class InstanceHandoffBus {
       targetPid: request.targetPid,
       status,
       ...(reason ? { reason } : {}),
+      ...(details ? { details } : {}),
       createdAt: Date.now()
     }
     try {

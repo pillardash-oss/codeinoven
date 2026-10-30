@@ -24,8 +24,8 @@
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { appConfirm } from '$lib/stores/app-confirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { videoEditorController } from '$lib/stores/video-editor.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { videoEditorController } from '$lib/stores/video-editor.svelte'
   import VideoEditTimeline from './VideoEditTimeline.svelte'
   import VideoEditAssets from './VideoEditAssets.svelte'
   import VideoEditInspector from './VideoEditInspector.svelte'
@@ -40,7 +40,24 @@
     onDirtyChange?: (dirty: boolean) => void
     onSaved?: () => void
     onExport: () => void
+    /**
+     * Watch the composition full screen from the panel, without the editor.
+     *
+     * A viewer who only wants to watch should not have to open the editor to reach
+     * the player, so the panel offers the picture first and the workbench second.
+     */
+    onPlayFullscreen?: () => void
     mode?: 'embedded' | 'fullscreen'
+    /**
+     * The composition alone, watched.
+     *
+     * Watching full screen is not a second player: it is this editor's own preview
+     * with the work taken away. The page, its transport and the playhead stay the
+     * ones the editor already has, so the second, the play button and the picture
+     * carry over instead of a new bar starting at zero beside a video that is
+     * already running.
+     */
+    playerOnly?: boolean
     preview?: Snippet
     onMinimize?: () => void
     onExpand?: () => void
@@ -54,7 +71,9 @@
     onDirtyChange,
     onSaved,
     onExport,
+    onPlayFullscreen,
     mode = 'embedded',
+    playerOnly = false,
     preview,
     onMinimize,
     onExpand
@@ -285,15 +304,105 @@
     )
   }
   const timelineMenu = $derived(timelineMenuRows())
+
+  /**
+   * Whether the event came from a field that is having text typed into it.
+   *
+   * A field owns its modifier shortcuts: the comment written on a frame saves with
+   * the same mod+Enter this workspace saves and exports with, and a comment must
+   * never export a movie. Numeric, range and colour inputs are excluded because
+   * their undo and redo belong to the workspace rather than to the field.
+   */
+  function typingInTextEntry(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false
+    if (target.isContentEditable) return true
+    if (target.closest('textarea,[data-floating-document]')) return true
+    const input = target.closest('input')
+    return input instanceof HTMLInputElement && !['number', 'range', 'color'].includes(input.type)
+  }
+
+  /**
+   * Whether a pen is open on a picture over this editor.
+   *
+   * The pen owns Escape and its own comment fields, so while it is armed the editor
+   * stands aside for those keys rather than competing with the surface in front of
+   * it. The play/pause key is not one of them: a space beside an annotated frame
+   * plays and pauses the picture the pen is drawing on, and the pen stays in hand.
+   */
+  function penOwnsKeyboard(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && target.closest('[data-annotation-surface]') !== null
+  }
+
+  /**
+   * Whether a control answers a space by itself.
+   *
+   * A `select` opens its list on a space, so that press is the control's. A button
+   * or a seek track does nothing useful with it: in this editor space is the
+   * play/pause key wherever the focus is.
+   */
+  function controlOwnsSpace(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && target.closest('select') !== null
+  }
+
+  /**
+   * Whether a press belongs to this editor.
+   *
+   * The editor's own tree, the page it is drawn in, and — full screen — the modal it
+   * is drawn in. A full screen surface is a modal that focuses its own panel rather
+   * than a control, so a press on that panel is a press in the editor; a dialog
+   * elsewhere on screen is not, and neither is a field in front of it.
+   */
+  function ownsTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Node)) return false
+    if (root?.contains(target)) return true
+    if (target === document) return true
+    if (mode !== 'fullscreen') return false
+    if (target === document.body) return true
+    const element = target instanceof HTMLElement ? target : null
+    const modal = element?.closest('[aria-modal="true"]') ?? null
+    return modal !== null && root !== undefined && modal.contains(root)
+  }
+
+  /**
+   * A press on something that is not a timeline item, not a control and not a
+   * field means the user has moved on from what they picked.
+   *
+   * The check is written as "what keeps the selection" rather than "what clears
+   * it" so a new control never silently starts dropping a selection: clips,
+   * captions, regions, buttons, fields, the ruler and sliders all keep it.
+   */
+  const SELECTION_KEEPS =
+    '[data-video-clip],[data-video-caption],[data-video-region],button,input,select,textarea,[contenteditable="true"],[role="slider"]'
+
+  function pressOnEmpty(event: PointerEvent): void {
+    if (event.button !== 0 || !active) return
+    const target = event.target instanceof Element ? event.target : null
+    if (target?.closest(SELECTION_KEEPS)) return
+    editor.clearSelection()
+  }
+
   function keydown(event: KeyboardEvent): void {
-    if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
-    const fromPage = event.target === document
-    if (
-      !root?.contains(event.target) &&
-      !fromPage &&
-      !(mode === 'fullscreen' && event.target === document.body)
-    )
+    if (!active || event.defaultPrevented) return
+    if (!ownsTarget(event.target)) return
+    // The keys of a field in front of the editor are the field's, and this runs in
+    // the capture phase, before the field itself answers them. A space typed into a
+    // comment or a track name is a space.
+    if (typingInTextEntry(event.target)) return
+    // Play/pause is the one key that fires wherever the focus is inside the editor:
+    // on a clip, on the seek track, on a toolbar button, on a frame the pen is
+    // drawing on. It is answered before the pen and the controls below are given
+    // their own keys, because none of them do anything useful with a space and the
+    // pen's own continue key is not this one.
+    if (!controlOwnsSpace(event.target) && keymapState.matches('video-edit-play', event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      // A held key is one press: repeating it would flip play and pause at the
+      // keyboard's repeat rate.
+      if (!event.repeat) void editor.togglePlayback()
       return
+    }
+    // The pen in front of a frame claims the rest of its own keys.
+    if (penOwnsKeyboard(event.target)) return
     if (keymapState.matches('video-primary-action', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -355,12 +464,6 @@
           void editor.importFiles()
         }
       ],
-      [
-        'video-edit-play',
-        () => {
-          void editor.togglePlayback()
-        }
-      ],
       ['video-edit-frame-back', () => editor.seek(editor.time - 1 / editor.fps)],
       ['video-edit-frame-forward', () => editor.seek(editor.time + 1 / editor.fps)]
     ]
@@ -392,27 +495,25 @@
   >
 {/snippet}
 
+{#snippet timelineAddTrack()}
+  <EnumSelect
+    options={additions}
+    value={null}
+    placeholder="Add track"
+    ariaLabel="Add track"
+    title="Add a video, audio or overlay track"
+    menuMinWidth="22rem"
+    compact
+    class="w-full"
+    onChange={add}
+  />
+{/snippet}
+
 {#snippet timelineTools()}
-  <div class="w-56 min-w-40 shrink-0">
-    <EnumSelect
-      options={additions}
-      value={null}
-      placeholder="Add track"
-      ariaLabel="Add track"
-      title="Add a video, audio or overlay track"
-      menuMinWidth="22rem"
-      compact
-      onChange={add}
-    />
-  </div>
-  <label class="flex shrink-0 items-center gap-1 px-2 text-xs text-muted"
-    ><Switch
-      title="Magnetic timeline: move following clips together and close gaps on delete"
-      aria-label="Magnetic timeline"
-      checked={editor.snapEnabled}
-      onchange={(value) => (editor.snapEnabled = value)}
-    />Snap</label
-  >
+  <!--
+    The scope answers "what does the magnetic timeline move", so it is read before
+    the switch that turns that behaviour on, and the pair sits left of the actions.
+  -->
   <div class="w-40 shrink-0">
     <EnumSelect
       options={[
@@ -429,6 +530,14 @@
       onChange={(value) => (editor.magneticScope = value)}
     />
   </div>
+  <label class="flex shrink-0 items-center gap-1 px-2 text-xs text-muted"
+    ><Switch
+      title="Magnetic timeline: move following clips together and close gaps on delete"
+      aria-label="Magnetic timeline"
+      checked={editor.snapEnabled}
+      onchange={(value) => (editor.snapEnabled = value)}
+    />Snap</label
+  >
   {@render action(
     CioPencil,
     editor.selection?.kind === 'brush' ? 'Stop painting blur' : 'Paint blur on the preview',
@@ -510,7 +619,7 @@
     !editor.selection
   )}
   {@render action(
-    CioUpload,
+    CioDownload,
     'Import media and stickers into assets',
     () => {
       void editor.importFiles()
@@ -537,57 +646,92 @@
     }
   }}
   class="flex h-full min-h-0 flex-col overflow-hidden bg-app"
+  data-video-chrome
+  onpointerdown={pressOnEmpty}
   aria-label="Video editor"
   data-drop-region="video-editor"
 >
+  <!--
+    This surface's own header stays at the top, where every full screen surface in
+    this app keeps the thing it is showing and the way out of it. The playback row
+    under the picture is a different row, moved by the panel that draws the page.
+
+    Full screen, this header is the window title bar, so it takes the canonical
+    `h-12` band the app header, a fullscreen modal's own title and the fullscreen
+    file editor all use. That height is what puts the title, the picker and the
+    macOS traffic lights on one centre line; a bespoke `h-10` band centred the
+    title two pixels above the lights and read as a header sagging under them.
+    The editor's embedded row in the board is not the title bar and keeps `h-9`.
+  -->
   <div
     class={[
       'flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2',
-      mode === 'fullscreen' ? 'titlebar-drag h-10' : 'h-9'
+      mode === 'fullscreen' ? 'titlebar-drag h-12' : 'h-9'
     ]}
     style={mode === 'fullscreen' ? trafficLightInsetStyle() : undefined}
   >
-    {#if mode === 'fullscreen'}<div class="titlebar-no-drag w-36 shrink-0">
-        <EnumSelect
-          options={mode === 'fullscreen'
-            ? sections.filter((item) => item.id !== 'assets')
-            : sections}
-          value={section}
-          placeholder="Inspector"
-          ariaLabel="Editor section"
-          title="Inspector, local assets or captions"
-          menuMinWidth="20rem"
-          compact
-          onChange={(value) => (section = value)}
-        />
+    {#if playerOnly}<span class="titlebar-no-drag shrink-0 text-xs font-medium text-foreground"
+        >Video player</span
+      >{:else if mode === 'fullscreen'}<div
+        class="titlebar-no-drag flex w-64 shrink-0 items-center gap-2"
+      >
+        <!--
+          The surface names itself, and the picker beside it names the section.
+
+          The picker shows the open section as its value, so a header that held only
+          the picker read as though the panel were called "Inspector": the title is
+          the surface, and the picker is what changes inside it.
+        -->
+        <span class="shrink-0 text-xs font-medium text-foreground">Video editor</span>
+        <div class="min-w-0 flex-1">
+          <EnumSelect
+            options={sections.filter((item) => item.id !== 'assets')}
+            value={section}
+            placeholder="Inspector"
+            ariaLabel="Editor section"
+            title="Inspector, local assets or captions"
+            menuMinWidth="20rem"
+            compact
+            onChange={(value) => (section = value)}
+          />
+        </div>
       </div>{:else}<button
         type="button"
-        class="titlebar-no-drag flex h-7 items-center gap-2 text-xs text-foreground hover:text-primary"
-        title="Open the full video editor"
-        aria-label="Open Editor"
-        onclick={onExpand}><CioMaximize size={13} />Open Editor</button
+        class="titlebar-no-drag flex h-7 items-center gap-2 text-xs text-foreground hover:text-primary disabled:opacity-40"
+        title="Watch this composition fullscreen, without the editor"
+        aria-label="Fullscreen"
+        disabled={!onPlayFullscreen || !editor.edit}
+        onclick={onPlayFullscreen}><CioMaximize size={13} />Fullscreen</button
       >{/if}
     <div class="min-w-0 flex-1"></div>
-    {@render action(
-      CioDownload,
-      'Export this composition as MP4',
-      () => {
-        void exportMovie()
-      },
-      editor.loading || editor.saving || !editor.document
-    )}
-    <button
-      type="button"
-      class="titlebar-no-drag ml-1 flex h-7 w-7 shrink-0 items-center justify-center bg-primary text-on-primary hover:opacity-90 disabled:opacity-30"
-      title={`Save the composition (${keymapState.labelFor('video-primary-action')})`}
-      aria-label="Save the composition"
-      disabled={!editor.dirty || editor.saving}
-      onclick={() => void save()}
-    >
-      {#if editor.saving}<CioSpinner size={12} class="animate-spin" />{:else}<CioSave
-          size={12}
-        />{/if}
-    </button>
+    {#if mode === 'embedded'}<button
+        type="button"
+        class="titlebar-no-drag flex h-7 shrink-0 items-center gap-2 text-xs text-foreground hover:text-primary"
+        title="Open the full video editor"
+        aria-label="Open video editor"
+        onclick={onExpand}><CioClapper size={13} />Open video editor</button
+      >{/if}
+    {#if !playerOnly}{@render action(
+        CioUpload,
+        'Export this composition as MP4',
+        () => {
+          void exportMovie()
+        },
+        editor.loading || editor.saving || !editor.document
+      )}
+      <button
+        type="button"
+        class="titlebar-no-drag ml-1 flex h-7 w-7 shrink-0 items-center justify-center bg-primary text-on-primary hover:opacity-90 disabled:opacity-30"
+        title={`Save the composition (${keymapState.labelFor('video-primary-action')})`}
+        aria-label="Save the composition"
+        hidden={playerOnly}
+        disabled={!editor.dirty || editor.saving}
+        onclick={() => void save()}
+      >
+        {#if editor.saving}<CioSpinner size={12} class="animate-spin" />{:else}<CioSave
+            size={12}
+          />{/if}
+      </button>{/if}
     {#if mode === 'fullscreen' && onMinimize}{@render action(
         CioMinimize,
         'Return to the docked video editor',
@@ -628,7 +772,11 @@
       <CioSpinner size={14} class="animate-spin" />Loading editable tracks…
     </div>
   {:else if editor.edit}
-    {#if mode === 'fullscreen'}
+    {#if playerOnly}
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col bg-app" aria-label="Video preview">
+        {@render preview?.()}
+      </div>
+    {:else if mode === 'fullscreen'}
       <div
         class="grid min-h-40 shrink-0"
         style:height={`${shownUpperHeight}px`}
@@ -705,7 +853,12 @@
         class="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
       />
       <div class="flex min-h-32 flex-1 flex-col">
-        <VideoEditTimeline {editor} tools={timelineTools} contextActions={timelineContextActions} />
+        <VideoEditTimeline
+          {editor}
+          tools={timelineTools}
+          addTrack={timelineAddTrack}
+          contextActions={timelineContextActions}
+        />
       </div>
     {/if}
   {:else}<div class="p-3 text-xs text-muted">

@@ -27,6 +27,10 @@ import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry, type StartupStep } from './system/startup-telemetry'
+// `post-paint-services` is deliberately not imported here. Its graph is 87
+// modules and 0.92 MB of source (browser, search, model pricing, checkpointing,
+// assistant helpers), none of which the first paint touches, so it is imported
+// at the three places that actually start it.
 import { startupBudgetViolation } from './system/startup-budget'
 import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
@@ -43,7 +47,7 @@ import {
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
 import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
-import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
+import { createSplashWindow, closeSplash, withSplashDeadline } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
 import {
   armQuitFailsafe,
@@ -52,7 +56,6 @@ import {
   requestCloseConfirmation
 } from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
-import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
 import { isShippedBuild } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
@@ -71,6 +74,7 @@ import {
   installAppFilePreviewProtocol,
   installRendererSessionGuards
 } from './bootstrap/session-guards'
+import { closeAppfileGates } from './bootstrap/boot-gate'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_APP_VERSION__: string
@@ -199,6 +203,10 @@ ipcMain.handle('app:parkWindow', async () => {
 // must be cancelled here, or it force-exits an app the user just kept open.
 ipcMain.handle('app:abandonClose', () => {
   disarmQuitFailsafe(state)
+  // A declined close is also a declined install when the quit it interrupted was
+  // the updater's: the dispatch is undone so the update goes back to "downloaded"
+  // instead of being lost with the app still running.
+  state.updaterService?.handleInstallDeclined()
 })
 
 // Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+D) is the menu bar's
@@ -247,6 +255,9 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
  * unfulfilled, so this can never pass a release check as a healthy launch.
  */
 function releaseFeaturesAfterBootFailure(): void {
+  // A boot that died publishes nothing more, so the preview protocol stops
+  // waiting for the services it was installed without.
+  closeAppfileGates('The boot that publishes it failed')
   if (state.featuresReady) return
   state.featuresReady = true
   state.resolveFeaturesReady?.()
@@ -283,11 +294,16 @@ function paintPathFeatures(): Record<string, string> {
  * Storage, the database and the platform probe run together, so the phase delta
  * covering them is one number for three workloads. Naming each task is what
  * turns "startup took six seconds" into "the database open took six seconds".
+ *
+ * The task is taken as a thunk, never as an already-started promise: a step has
+ * to open before the work begins, and `trackStartupStep('database:init',
+ * database.init())` started the work while building the argument, so the step
+ * reported 0 ms for every boot that completed it synchronously.
  */
-async function trackStartupStep<T>(step: StartupStep, work: Promise<T>): Promise<T> {
+async function trackStartupStep<T>(step: StartupStep, work: () => Promise<T>): Promise<T> {
   const finish = startupTelemetry.beginStep(step)
   try {
-    return await work
+    return await work()
   } finally {
     finish()
   }
@@ -403,6 +419,28 @@ ipcMain.handle('app:setWindowControls', (event, symbolColor: unknown, headerHeig
  * interactive workspace. Idempotent: repeated signals (e.g. renderer reload)
  * never re-record phases or re-emit the report.
  */
+/**
+ * The renderer reports that the conversation it restored has painted.
+ *
+ * This is a real milestone, not a timer: the splash is held for exactly as long
+ * as the work takes, and it drops the moment this lands. A launch with no
+ * conversation to restore reports it as soon as the empty state is decided.
+ */
+let resolveConversationReady: (() => void) | null = null
+let conversationReadyReported = false
+
+ipcMain.handle('app:conversationReady', (_event, readyMessages: unknown) => {
+  if (conversationReadyReported) return
+  conversationReadyReported = true
+  startupTelemetry.mark('conversation:ready')
+  Logger.dev('Conversation ready for reveal', {
+    mountedMessages: typeof readyMessages === 'number' ? readyMessages : null
+  })
+  const resolve = resolveConversationReady
+  resolveConversationReady = null
+  resolve?.()
+})
+
 ipcMain.handle('app:rendererReady', async () => {
   if (state.rendererReadyReported) return
   state.rendererReadyReported = true
@@ -508,13 +546,20 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     // The renderer is about to die with the window; tear down everything in
     // main that would otherwise keep running page content or a shell with no
     // visible window.
+    // Detach before tearing down. A teardown that throws part way through must
+    // not leave this window's service installed: the next window would then read
+    // a destroyed page through it, which is exactly how a click on a design came
+    // back as `Object has been destroyed` after the app was parked and reopened.
+    const browser = state.browserService
+    state.browserService = null
     try {
       // Commit every open tab's Back/Forward stack before the views are closed
       // with the window. The app keeps running here rather than quitting, so the
       // write is started and left to finish on its own.
-      void state.browserService?.flushTabHistory()
-      state.browserService?.dispose()
-      state.browserService = null
+      void browser?.flushTabHistory().catch((error: unknown) => {
+        Logger.error('Browser tab history could not be committed while parking', error)
+      })
+      browser?.dispose()
     } catch (error) {
       Logger.error('Browser teardown while parking failed', error)
     }
@@ -867,9 +912,9 @@ function createWindow(): BrowserWindow {
   // the current state. On a reopen after parking this also rebuilds the
   // window-bound services (browser, PTY) the previous window owned.
   state.backgroundLifecycle?.onWindowOpened(window)
-  void attachWindowServices(state, window).catch((error) =>
-    Logger.error('Window service attach failed', error)
-  )
+  void import('./bootstrap/post-paint-services')
+    .then(({ attachWindowServices }) => attachWindowServices(state, window))
+    .catch((error: unknown) => Logger.error('Window service attach failed', error))
 
   return window
 }
@@ -952,12 +997,19 @@ void app
         isProduction
       )
       startupTelemetry.mark('splash:created')
-      // The barrier is waited on so the splash has a frame before synchronous
-      // database work can starve it. Waiting is therefore real elapsed time that
-      // the phase deltas would otherwise attribute to storage, so it is timed as
-      // its own step: on a machine where the splash never paints it costs the
-      // whole 5 s budget, and that has to be visible as what it is.
-      splashOutcome = await trackStartupStep('splash:barrier', splashVisualReady)
+      // The barrier is bounded: the splash shows its background the instant the
+      // window exists, so the boot waits only briefly for the logo before it
+      // starts storage. The wait is still its own step, because a barrier that
+      // publishes minutes of dead time into the phase deltas would hide the very
+      // cost this instrumentation exists to expose.
+      void splashVisualReady.then((outcome) => {
+        // The frame can arrive after the deadline. Record it when it does: the
+        // phase reports what painted, not what the boot was willing to wait for.
+        if (outcome === 'ready') startupTelemetry.mark('splash:visualReady')
+      })
+      splashOutcome = await trackStartupStep('splash:barrier', () =>
+        withSplashDeadline(splashVisualReady)
+      )
       if (splashOutcome === 'ready') {
         startupTelemetry.mark('splash:visualReady')
       }
@@ -977,7 +1029,7 @@ void app
     mkdirSync(storage.resolve(LOGS_DIRECTORY), { recursive: true })
     Logger.initialize(storage.resolve(LOGS_DIRECTORY))
     logConfiguredDataRoot()
-    if (!startHidden && splashOutcome !== 'ready') {
+    if (!startHidden && splashOutcome !== 'ready' && splashOutcome !== 'deadline') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
         outcome: splashOutcome,
         ...paintPathFeatures()
@@ -992,11 +1044,11 @@ void app
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([
       storage.initialize(),
-      trackStartupStep('database:init', database.init()),
+      trackStartupStep('database:init', () => database.init()),
       // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
       // here guarantees the flag is ready before `createWindow()` runs without
       // serializing behind the heavier startup work.
-      trackStartupStep('trafficLight:warm', warmTrafficLightDetection())
+      trackStartupStep('trafficLight:warm', () => warmTrafficLightDetection())
     ])
     if (state.startupRecovery) return
     // Analytics never delays window creation and never runs in a probe.
@@ -1038,10 +1090,10 @@ void app
     // the handler is not yet registered Chromium rejects those early requests
     // with `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently
     // broken. The file service is resolved lazily from bootPostPaintServices.
-    installAppFilePreviewProtocol({
-      getProjectFiles: () => state.appfileProjectFiles,
-      getScopedPathResolver: () => state.appfileScopedPathResolver
-    })
+    // The services it serves from are published by the post-paint boot, which
+    // starts after the first paint, so the protocol awaits the boot's gate
+    // instead of reading a slot that may still be empty.
+    installAppFilePreviewProtocol()
 
     const bootContext = {
       state,
@@ -1059,11 +1111,13 @@ void app
       // graph boots directly so the scheduler, chat engine, and notifications
       // are live. Window-bound services (browser, PTY) attach the first time a
       // window is opened, from the menu bar or a notification click.
-      void bootPostPaintServices(bootContext).catch((error) => {
-        state.startupServicesFailed = true
-        releaseFeaturesAfterBootFailure()
-        Logger.error('Headless service boot failed; background work is degraded', error)
-      })
+      void import('./bootstrap/post-paint-services')
+        .then(({ bootPostPaintServices }) => bootPostPaintServices(bootContext))
+        .catch((error: unknown) => {
+          state.startupServicesFailed = true
+          releaseFeaturesAfterBootFailure()
+          Logger.error('Headless service boot failed; background work is degraded', error)
+        })
       app.on('activate', () => {
         if (state.quitCleanupStarted) return
         if (BrowserWindow.getAllWindows().length === 0) openMainWindow()
@@ -1071,6 +1125,9 @@ void app
       return
     }
 
+    // Each window waits on its own conversation paint.
+    conversationReadyReported = false
+    resolveConversationReady = null
     const window = createWindow()
     startupTelemetry.mark('window:created')
 
@@ -1093,11 +1150,16 @@ void app
       // already-registered services stay alive, and the failure is fully
       // logged for diagnosis. A background feature failing must never exit
       // the whole app on the user's behalf.
-      void bootPostPaintServices(bootContext).catch((error) => {
-        state.startupServicesFailed = true
-        releaseFeaturesAfterBootFailure()
-        Logger.error('Post-paint service boot failed; app continues with degraded features', error)
-      })
+      void import('./bootstrap/post-paint-services')
+        .then(({ bootPostPaintServices }) => bootPostPaintServices(bootContext))
+        .catch((error: unknown) => {
+          state.startupServicesFailed = true
+          releaseFeaturesAfterBootFailure()
+          Logger.error(
+            'Post-paint service boot failed; app continues with degraded features',
+            error
+          )
+        })
     }
 
     const splashFailsafe = setTimeout(() => {
@@ -1120,23 +1182,63 @@ void app
     window.webContents.once('did-finish-load', () => {
       documentLoaded = true
       startupTelemetry.mark('renderer:documentLoaded')
-      startPostVisualServices()
       // A hand-off that landed while the renderer was still loading could not
       // be pushed (its listeners did not exist yet) and was not drained either
       // (its mount-time drain had already run). Deliver it now.
       flushOpenedPathsToRenderer(state)
       void completeStartupIfReady()
     })
+    // The splash covers the renderer's restore, not an artificial pause: it is
+    // dismissed the instant the restored conversation has painted, and every
+    // optional surface (the feature graph, the context panel, provider
+    // discovery) starts only after that reveal. A renderer that never reports
+    // would otherwise strand the user on the splash, so the wait is bounded.
+    const CONVERSATION_SPLASH_BUDGET_MS = 4_000
+    let conversationFailsafe: ReturnType<typeof setTimeout> | undefined
+    let splashRevealed = false
+    const revealWorkspace = (): void => {
+      if (splashRevealed) return
+      splashRevealed = true
+      // The moment the user actually sees the app: the splash comes down on a
+      // restored conversation. `window:visualReady` is only the first frame of
+      // the window, which the splash still covers, so this is the phase the
+      // first-paint budget is measured on.
+      startupTelemetry.mark('window:revealed')
+      if (conversationFailsafe !== undefined) {
+        clearTimeout(conversationFailsafe)
+        conversationFailsafe = undefined
+      }
+      closeSplash()
+      // Forced: the window is on screen now, so the feature graph must start
+      // regardless of which of the two events arrived first. It used to be gated
+      // on `documentLoaded && visualReady`, and `did-finish-load` no longer
+      // retries the start, so a reveal that beat that event left the whole
+      // post-paint graph unstarted: no `registerIpcHandlers`, which silently cost
+      // every channel it owns, including `checkpoint:list` and with it the file
+      // changes card in every conversation.
+      startPostVisualServices(true)
+    }
     window.once('ready-to-show', () => {
       visualReady = true
       startupTelemetry.mark('window:visualReady')
       clearTimeout(splashFailsafe)
-      closeSplash()
-      startPostVisualServices()
+      if (conversationReadyReported) {
+        revealWorkspace()
+      } else {
+        conversationFailsafe = setTimeout(() => {
+          Logger.dev('Conversation restore did not report within the splash budget; revealing')
+          revealWorkspace()
+        }, CONVERSATION_SPLASH_BUDGET_MS)
+        void new Promise<void>((resolve) => {
+          resolveConversationReady = resolve
+        }).then(() => revealWorkspace())
+      }
       void completeStartupIfReady()
     })
     window.once('closed', () => {
       clearTimeout(splashFailsafe)
+      if (conversationFailsafe !== undefined) clearTimeout(conversationFailsafe)
+      resolveConversationReady = null
       closeSplash()
     })
 
@@ -1210,7 +1312,15 @@ app.on('before-quit', (event) => {
   // If the user hasn't explicitly approved a force close, gate the quit on the
   // close-confirmation flow (which proceeds immediately when nothing is working).
   if (!state.quitConfirmed) {
-    requestCloseConfirmation({ state, database, window: state.mainWindow })
+    // The install this quit belongs to must stop counting down while the user is
+    // being asked: the prompt is progress, not a wedged installer.
+    state.updaterService?.pauseInstallQuitWatchdog()
+    requestCloseConfirmation({
+      state,
+      database,
+      window: state.mainWindow,
+      install: quitForUpdate
+    })
     return
   }
   state.quitCleanupStarted = true

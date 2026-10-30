@@ -32,20 +32,36 @@ class LayoutPanelState {
    */
   minimumWidth = $state(0)
   /**
-   * Where the conversation's own page column starts, in window pixels.
+   * Where the column the reader is reading starts, in window pixels, and how wide
+   * that column is.
    *
    * The header's thread block aligns to that column rather than to the panel: the
    * page is the thing the reader is looking at, and the panel is only how much
-   * room it has. Zero when no conversation is on screen, which leaves the block at
-   * the end of the header's chrome.
+   * room it has. It is a live coordinate, so a column that moves (a panel opening
+   * beside it, a window resize, a sidebar drag) carries the thread's name with it,
+   * frame by frame and with no snap at the end of the motion.
+   *
+   * The width is what bounds the name: the thread's name belongs to the page it
+   * names, so it truncates at that page's right edge instead of running on over a
+   * panel or into the window's own edge.
+   *
+   * A surface that is hidden rather than gone (a studio taking the pane) keeps the
+   * last edge it measured, so the thread's name stays put through the toggle
+   * instead of jumping back to the end of the header's chrome. Zero until a
+   * reading surface has reported.
    */
-  conversationLeft = $state(0)
+  private readingColumn = $state<{ owner: object; left: number; width: number } | null>(null)
   /**
-   * The conversation page's own width, in pixels. The thread's name is as wide as
-   * the page a reader is looking at and no wider: a title that ran past the text
-   * column would be a line the reader cannot finish.
+   * The same ownership kept where no effect can see it.
+   *
+   * A reporter runs inside an effect, so the comparison that decides whether a
+   * report is news must not read the state it is about to write: an effect that
+   * reads and writes one piece of state is an infinite update loop. These plain
+   * fields are that comparison.
    */
-  conversationWidth = $state(0)
+  private readingOwner: object | null = null
+  private readingLeft = 0
+  private readingWidth = 0
   /**
    * Whether the workspace shell is the page on screen. The shell stays mounted
    * across views so returning to a thread never reloads it, which means a
@@ -53,6 +69,81 @@ class LayoutPanelState {
    * has to know to ignore it.
    */
   contentVisible = $state(true)
+
+  get readingColumnLeft(): number {
+    return this.readingColumn?.left ?? 0
+  }
+
+  /** How wide the reading column is, so the header can end the name where the
+   *  page it names ends. Zero until a reading surface has reported. */
+  get readingColumnWidth(): number {
+    return this.readingColumn?.width ?? 0
+  }
+
+  /**
+   * Where the pane a studio owns sits, in window pixels, or null when no studio is
+   * on screen.
+   *
+   * The studio replaces the conversation, so the header has no reading column to
+   * put the thread's name on. Its name belongs in the middle of that pane instead,
+   * and the pane is not the window: a context panel beside the studio narrows it,
+   * which is exactly what the name has to follow.
+   */
+  private studioPane = $state<{ left: number; width: number } | null>(null)
+  /** The same box kept where no effect can see it, so a reporting effect never
+   *  reads the state it writes. */
+  private studioPaneReported = false
+  private studioPaneLeft = 0
+  private studioPaneWidth = 0
+
+  get studioPaneBox(): { left: number; width: number } | null {
+    return this.studioPane
+  }
+
+  /** Claim the studio pane's box for the surface that owns it. */
+  setStudioPane(left: number, width: number): void {
+    if (this.studioPaneReported && this.studioPaneLeft === left && this.studioPaneWidth === width)
+      return
+    this.studioPaneReported = true
+    this.studioPaneLeft = left
+    this.studioPaneWidth = width
+    this.studioPane = { left, width }
+  }
+
+  /** Give the studio pane up, which is what closing the studio does. */
+  clearStudioPane(): void {
+    if (!this.studioPaneReported) return
+    this.studioPaneReported = false
+    this.studioPaneLeft = 0
+    this.studioPaneWidth = 0
+    this.studioPane = null
+  }
+
+  /**
+   * Claim the reading column for one surface.
+   *
+   * Ownership rather than a last-write-wins number: two reading surfaces can be
+   * mounted at once (a studio over the conversation it was opened from), and the
+   * hidden one's own resize reports arrive in either order. Whoever is on screen
+   * reports, and the surface that is not on screen never overwrites it.
+   */
+  setReadingColumn(owner: object, left: number, width: number): void {
+    if (this.readingOwner === owner && this.readingLeft === left && this.readingWidth === width)
+      return
+    this.readingOwner = owner
+    this.readingLeft = left
+    this.readingWidth = width
+    this.readingColumn = { owner, left, width }
+  }
+
+  /** Give the reading column up, but only if this surface still holds it. */
+  clearReadingColumn(owner: object): void {
+    if (this.readingOwner !== owner) return
+    this.readingOwner = null
+    this.readingLeft = 0
+    this.readingWidth = 0
+    this.readingColumn = null
+  }
 
   /** Docked width of the sidebar on screen, zero when none is docked. */
   get dockedWidth(): number {
@@ -72,9 +163,7 @@ class LayoutPanelState {
   report(token: number, width: number): void {
     const current = this.panels.find((panel) => panel.token === token)
     if (!current || current.width === width) return
-    this.panels = this.panels.map((panel) =>
-      panel.token === token ? { token, width } : panel
-    )
+    this.panels = this.panels.map((panel) => (panel.token === token ? { token, width } : panel))
   }
 
   release(token: number): void {

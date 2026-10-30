@@ -8,7 +8,7 @@
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { latestWorkingTraceParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { subagentTaskDetail, subagentTaskLabel } from '$lib/subagent-presentation'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
   import SubagentSessionViewHeader from './SubagentSessionViewHeader.svelte'
@@ -349,7 +349,7 @@
             Delegated by parent
           </p>
           <div class="bg-elevated px-3 py-2.5 text-xs text-foreground">
-            <MarkdownView text={tab.activity.prompt} />
+            <DeferredMarkdownView text={tab.activity.prompt} />
           </div>
         </div>
       {/if}
@@ -377,7 +377,7 @@
         <div class="ml-auto max-w-[90%]">
           <div class="bg-elevated px-3 py-2.5 text-xs text-foreground">
             {#each textParts(message) as part (part.id)}
-              <MarkdownView text={part.text} />
+              <DeferredMarkdownView text={part.text} />
             {/each}
           </div>
           <p class="mt-1 text-right text-[0.5625rem] text-dimmed">
@@ -402,13 +402,13 @@
 
       {#if sessionRun.closing}
         <div class="text-xs text-foreground">
-          <MarkdownView text={sessionRun.closing.text} />
+          <DeferredMarkdownView text={sessionRun.closing.text} />
         </div>
       {/if}
 
       {#if showCapturedOutput}
         <div class="text-xs text-foreground">
-          <MarkdownView text={finalOutput} />
+          <DeferredMarkdownView text={finalOutput} />
         </div>
       {:else if !sessionId && !loading && !loadError && !busy}
         {#if effectiveStatus === 'completed' || effectiveStatus === 'error'}

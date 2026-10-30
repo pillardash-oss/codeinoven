@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Release Notes · the bench · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./room.css" />
+  </head>
+  <body>
+    <div class="room">
+      <nav class="spine-rail" aria-label="Primary">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 96 96">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+        </span>
+        <button class="rail-btn" type="button" title="Projects" aria-label="Projects">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="0.5" /><path d="M1.75 6h12.5" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="The room" aria-label="The room" aria-current="page">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.5" /><circle cx="8" cy="8" r="6" /><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14" />
+          </svg>
+        </button>
+        <span class="rail-gap"></span>
+        <button class="rail-btn" type="button" title="Something needs you" aria-label="Something needs you">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M4 7a4 4 0 1 1 8 0c0 2.4.8 3.4 1.2 3.9H2.8C3.2 10.4 4 9.4 4 7Z" /><path d="M6.4 13a1.7 1.7 0 0 0 3.2 0" />
+          </svg>
+        </button>
+      </nav>
+
+      <div class="room-main">
+        <header class="room-head">
+          <div class="room-id">
+            <span class="disc-sm" style="width: 1.5rem; height: 1.5rem" aria-hidden="true">RN</span>
+            <h1>Release Notes</h1>
+            <span class="role">taken over from Chief · you are driving</span>
+          </div>
+          <div class="head-tools">
+            <button class="takeover" type="button" title="Hand the wheel back to Chief" aria-label="Hand the wheel back to Chief">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M2 8h11M9 4l4 4-4 4" />
+              </svg>
+              Hand back to Chief
+            </button>
+          </div>
+        </header>
+
+        <div class="bench">
+          <aside class="bench-side" aria-label="Release Notes tasks">
+            <div class="bench-owner">
+              <span class="disc" aria-hidden="true">RN</span>
+              <div>
+                <h2>Release Notes</h2>
+                <p>Writes and corrects release copy for codeinoven. Scheduled 17:00 daily, plus whatever arrives.</p>
+              </div>
+            </div>
+            <div class="bench-tasks">
+              <div class="bench-group">From Chief</div>
+              <button class="task-row" type="button" aria-current="true">
+                <span>
+                  <span class="task-title">Correct the 0.9.4 browser-tab line</span>
+                  <span class="task-from">sent by Chief · 09:12</span>
+                </span>
+                <span class="task-meta">step 2/3</span>
+              </button>
+              <button class="task-row" type="button">
+                <span>
+                  <span class="task-title">Add the support footnote</span>
+                  <span class="task-from">sent by Chief · 09:26</span>
+                </span>
+                <span class="task-meta">queued</span>
+              </button>
+              <div class="bench-group">Scheduled</div>
+              <button class="task-row" type="button">
+                <span>
+                  <span class="task-title">Draft 17:00 notes</span>
+                  <span class="task-meta">today</span>
+                </span>
+                <span class="task-meta">17:00</span>
+              </button>
+              <button class="task-row" type="button">
+                <span>
+                  <span class="task-title">Hotfix changelog</span>
+                  <span class="task-meta">yesterday</span>
+                </span>
+                <span class="task-meta">done</span>
+              </button>
+            </div>
+            <div class="bench-back">
+              <span>2 of 7 assistants have open work</span>
+              <button class="chip-btn" type="button" title="Back to the room" aria-label="Back to the room">The room</button>
+            </div>
+          </aside>
+
+          <div class="bench-main">
+            <div class="bench-head">
+              <span class="title">Correct the 0.9.4 browser-tab line</span>
+              <span class="from">claude-sonnet-4-5 · medium thinking · github, changelog skill</span>
+            </div>
+
+            <div class="stream">
+              <div class="scroller">
+                <div class="spine">
+                  <div class="provenance">
+                    <div class="provenance-label">
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                        <path d="M2 8h11M9 4l4 4-4 4" />
+                      </svg>
+                      Handed over by Chief
+                    </div>
+                    <p>
+                      “The 0.9.4 notes still claim the browser tab fix is unshipped.”
+                    </p>
+                    <dl>
+                      <dt>Asked at</dt>
+                      <dd>09:12 · in the room, not in this task</dd>
+                      <dt>Reports back</dt>
+                      <dd>A comment on the draft, then one line in the despatch</dd>
+                    </dl>
+                  </div>
+
+                  <article class="turn" data-who="chief" style="margin-top: 1.25rem">
+                    <div class="turn-who"><strong>Release Notes</strong><time>09:13</time></div>
+                    <span class="turn-node" aria-hidden="true"></span>
+                    <div class="turn-body">
+                      <p>
+                        The fix shipped in 0.9.3, so the line is wrong twice: wrong version, and
+                        unshipped. I checked the tag, the changelog entry and the merged PR before
+                        touching the copy.
+                      </p>
+                      <p>
+                        Rewritten to “Browser tabs now survive a window reload (0.9.3)”. I left the
+                        rest of the section alone, only that sentence was stale.
+                      </p>
+                    </div>
+                  </article>
+
+                  <div class="dispatch-row">
+                    <span class="dispatch-elbow" aria-hidden="true"></span>
+                    <button class="dispatch-card" type="button" data-state="done">
+                      <span class="disc-sm" aria-hidden="true">↑</span>
+                      <span class="dispatch-main">
+                        <span class="dispatch-to">Commented on the draft <span class="arrow">docs/releases/0.9.4.md</span></span>
+                        <span class="dispatch-why">line 24 · no file written, a comment on the open draft</span>
+                      </span>
+                      <span class="dispatch-state" data-kind="done">09:14</span>
+                    </button>
+                  </div>
+
+                  <article class="turn" data-who="you">
+                    <div class="turn-who"><strong>You</strong><time>09:26</time></div>
+                    <span class="turn-node" aria-hidden="true"></span>
+                    <div class="turn-body">
+                      <p>Good. Keep the old wording in a footnote so support can point at it.</p>
+                    </div>
+                  </article>
+
+                  <article class="turn" data-who="chief">
+                    <div class="turn-who"><strong>Release Notes</strong><time>09:26</time></div>
+                    <span class="turn-node" aria-hidden="true"></span>
+                    <div class="turn-body">
+                      <p>
+                        Added the footnote. Chief gets the outcome on the despatch line, not this back
+                        and forth, so the room stays readable.
+                      </p>
+                    </div>
+                  </article>
+                </div>
+              </div>
+
+              <div class="lectern-wrap">
+                <div class="lectern">
+                  <label class="sr-only" for="ask">Message Release Notes</label>
+                  <textarea id="ask" rows="2" placeholder="Reply to Release Notes directly"></textarea>
+                  <div class="lectern-foot">
+                    <button class="commission" type="button" title="Who takes this message" aria-label="Who takes this message: this task">
+                      <span class="dot" aria-hidden="true"></span>
+                      This task only
+                    </button>
+                    <span class="foot-gap"></span>
+                    <button class="chip-btn" type="button" title="Ask Chief instead" aria-label="Ask Chief instead">Ask Chief instead</button>
+                    <button class="send" type="button">Send <kbd>⌘↵</kbd></button>
+                  </div>
+                </div>
+                <div class="lectern-note">
+                  <span class="count">Answers stay in this task · Chief sees the outcome</span>
+                  <span>06:26 min in this session</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="./room.js"></script>
+    <script src="./theme.js"></script>
+  </body>
+</html>

@@ -4,10 +4,23 @@ import type {
   AchievementCoordinatorPanelProps,
   AssignmentCoordinatorPanelProps,
   DesignCoordinatorPanelProps,
-  IndependentAuditCoordinatorPanelProps
+  IndependentAuditCoordinatorPanelProps,
+  OrchestrateCoordinatorPanelProps
 } from '$shared/types'
 
-const AUTO_OPEN_STORAGE_KEY = `${APP_SLUG}.coordinator-auto-open.v1`
+/**
+ * Coordinator rows the user closed, by `project:thread`.
+ *
+ * A dismissed row never docks itself again, in this session or after a restart.
+ * The global `autoOpen` flag this replaces could not say that: closing one
+ * coordinator switched auto-open off everywhere, and opening another one switched
+ * it back on, so the panel the user had closed came back on the next thread update
+ * or the next launch.
+ */
+const DISMISSED_STORAGE_KEY = `${APP_SLUG}.coordinator-dismissed.v1`
+/** How many dismissed rows are remembered. A row the bound forgets docks itself
+ *  again, which is the safe failure for a list this small. */
+const MAX_DISMISSED_ROWS = 200
 /** How many coordinator rows keep their last published panel for instant
  *  repaint after a thread switch. A row is one coordinator and its children, so
  *  a handful covers the coordinators a user moves between in one session. */
@@ -27,6 +40,10 @@ export type CoordinatorDockPanel =
   | { component: 'assignment'; props: AssignmentCoordinatorPanelProps }
   | { component: 'achievement'; props: AchievementCoordinatorPanelProps }
   | { component: 'independent-audit'; props: IndependentAuditCoordinatorPanelProps }
+  /** The workstation board: every run this thread dispatched into any project, with
+   *  the machine, model and live status of each one. The props are the initiator's
+   *  ids only, because the board loads its own rows from the dispatch ledger. */
+  | { component: 'orchestrate'; props: OrchestrateCoordinatorPanelProps }
   /** The authored-work coordinator: a thread's design or video composition, and the
    *  way back to it after a restart. Published for a thread that opened a session,
    *  whether or not any worker exists, because the work is what the user returns
@@ -53,7 +70,8 @@ export type CoordinatorPanelComponent = CoordinatorDockPanel['component']
 export const ORCHESTRATION_COORDINATOR_COMPONENTS: readonly CoordinatorPanelComponent[] = [
   'assignment',
   'achievement',
-  'independent-audit'
+  'independent-audit',
+  'orchestrate'
 ]
 
 export interface CoordinatorDockRegistration {
@@ -87,9 +105,30 @@ class CoordinatorDockState {
    *  row's panel is what removes the hydration gap on navigation; the bound
    *  keeps a long session from retaining panels for rows nobody returns to. */
   private recalled = new Map<string, CoordinatorDockRegistration>()
-  /** Whether a coordinator docks itself when its thread opens. Cleared when the
-   *  user closes the tab, so a dismissed coordinator stays dismissed. */
-  autoOpen = $state(loadAutoOpen())
+  /** Row keys the user closed. Persisted, so a restart respects the same choice. */
+  private dismissed = $state<string[]>(loadDismissed())
+
+  /** Whether this row may dock itself: the user has not closed it for this thread. */
+  canAutoOpen(projectId: string, threadId: string): boolean {
+    return !this.dismissed.includes(coordinatorRowKey(projectId, threadId))
+  }
+
+  /** The user closed this row's coordinator, so it stays undocked until they bring
+   *  it back themselves. */
+  dismiss(projectId: string, threadId: string): void {
+    const key = coordinatorRowKey(projectId, threadId)
+    if (this.dismissed.includes(key)) return
+    this.dismissed = [...this.dismissed, key].slice(-MAX_DISMISSED_ROWS)
+    persistDismissed(this.dismissed)
+  }
+
+  /** The user opened this row's coordinator again, so it may dock itself once more. */
+  restore(projectId: string, threadId: string): void {
+    const key = coordinatorRowKey(projectId, threadId)
+    if (!this.dismissed.includes(key)) return
+    this.dismissed = this.dismissed.filter((entry) => entry !== key)
+    persistDismissed(this.dismissed)
+  }
 
   /** The coordinator for `projectId`/`threadId`, or null when that thread has none. */
   forThread(
@@ -114,7 +153,7 @@ class CoordinatorDockState {
    * coordinator follows.
    */
   inheritWork(projectId: string, threadId: string): CoordinatorDockRegistration | null {
-    if (!this.autoOpen) return null
+    if (!this.canAutoOpen(projectId, threadId)) return null
     const known = this.forThread(projectId, threadId)
     if (known?.panel.component !== 'design') return null
     // A registration recalled under this row always carries this thread's own
@@ -168,24 +207,27 @@ class CoordinatorDockState {
     if (currentIsRow) this.registration = null
     this.recalled.delete(key)
   }
+}
 
-  setAutoOpen(value: boolean): void {
-    this.autoOpen = value
-    if (typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(AUTO_OPEN_STORAGE_KEY, value ? '1' : '0')
-    } catch {
-      // The preference is cosmetic; unavailable storage must not break the app.
-    }
+function loadDismissed(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw: unknown = JSON.parse(window.localStorage.getItem(DISMISSED_STORAGE_KEY) ?? '[]')
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter((entry): entry is string => typeof entry === 'string' && entry.length < 160)
+      .slice(-MAX_DISMISSED_ROWS)
+  } catch {
+    return []
   }
 }
 
-function loadAutoOpen(): boolean {
-  if (typeof window === 'undefined') return true
+function persistDismissed(rows: readonly string[]): void {
+  if (typeof window === 'undefined') return
   try {
-    return window.localStorage.getItem(AUTO_OPEN_STORAGE_KEY) !== '0'
+    window.localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify(rows))
   } catch {
-    return true
+    // A cosmetic preference; unavailable storage must not break the app.
   }
 }
 

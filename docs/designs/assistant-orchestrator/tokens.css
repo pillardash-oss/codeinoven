@@ -1,0 +1,79 @@
+/* Mirror of the @theme and .dark token blocks in src/renderer/app.css.
+   Values are copied from the app, never invented. The two faces are the app's own
+   bundled fonts: Oven Box is the interface face, Oven Mono the wordmark. */
+@font-face {
+  font-family: 'Oven Box';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('./fonts/oven-box.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Oven Mono';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('./fonts/oven-mono.woff2') format('woff2');
+}
+
+:root {
+  --color-app: #f7f6f2;
+  --color-surface: #ffffff;
+  --color-elevated: #f0efea;
+  --color-overlay: #e8e7e2;
+  --color-raised: #edece7;
+  --color-selected: #f0efea;
+  --color-foreground: #081825;
+  --color-muted: #4a5568;
+  --color-dimmed: #8b95a5;
+  --color-primary: #081825;
+  --color-primary-hover: #0d2438;
+  --color-on-primary: #f7f6f2;
+  --color-accent: #d4af37;
+  --color-accent-hover: #c4a030;
+  --color-on-accent: #081825;
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-on-danger: #ffffff;
+  --color-warning: #d97706;
+  --color-info: #2563eb;
+  --color-success: #16a34a;
+  --color-chat-success: #0f766e;
+  --color-missed: #a16207;
+  --color-thread-pinned: #eab308;
+  --color-thread-working: var(--color-info);
+  --color-thread-working-paused: var(--color-warning);
+  --color-thread-spec: #8b5cf6;
+  --color-thread-unread: var(--color-success);
+  --color-thread-error: var(--color-danger);
+  --color-thread-done: var(--color-muted);
+  --color-border: #e2e1dc;
+  --color-border-strong: #c8c7c2;
+  --font-app: 'Oven Box', 'Oven Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --font-mono: var(--font-app);
+  --guide-accent: var(--color-accent);
+  color-scheme: light;
+}
+
+.dark {
+  --color-app: #0b0b0d;
+  --color-surface: #141417;
+  --color-elevated: #1c1c20;
+  --color-overlay: #242429;
+  --color-raised: #202025;
+  --color-selected: #2c2c33;
+  --color-foreground: #f5f4f0;
+  --color-muted: #9d9da6;
+  --color-dimmed: #5f5f68;
+  --color-primary: #f5f4f0;
+  --color-primary-hover: #e5e4df;
+  --color-on-primary: #0b0b0d;
+  --color-info: #7ba3d4;
+  --color-chat-success: #34d399;
+  --color-missed: #fcd34d;
+  --color-thread-working-paused: var(--color-warning);
+  --color-thread-spec: #a78bfa;
+  --color-border: #27272c;
+  --color-border-strong: #3b3b42;
+  color-scheme: dark;
+}

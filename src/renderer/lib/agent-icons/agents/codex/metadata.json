@@ -6,8 +6,5 @@
   "icon": "icon.svg",
   "monochrome": "mono.svg",
   "primaryColor": "#10A37F",
-  "aliases": [
-    "openai-codex",
-    "openai"
-  ]
+  "aliases": ["openai-codex", "openai"]
 }

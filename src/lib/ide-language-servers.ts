@@ -48,7 +48,8 @@ export const IDE_SERVER_PACKAGES: Readonly<Record<string, string[]>> = {
   intelephense: ['intelephense@latest'],
   'vscode-css-language-server': ['vscode-langservers-extracted@latest'],
   'vscode-html-language-server': ['vscode-langservers-extracted@latest'],
-  'vscode-json-language-server': ['vscode-langservers-extracted@latest']
+  'vscode-json-language-server': ['vscode-langservers-extracted@latest'],
+  'tailwindcss-language-server': ['@tailwindcss/language-server@latest']
 }
 
 export const DEFAULT_IDE_LANGUAGE_SERVERS: IdeLanguageServer[] = [
@@ -119,7 +120,44 @@ export const DEFAULT_IDE_LANGUAGE_SERVERS: IdeLanguageServer[] = [
   preset('json', 'JSON', 'vscode-json-language-server', ['--stdio'], {
     '.json': 'json',
     '.jsonc': 'jsonc'
-  })
+  }),
+  // Tailwind is an additional layer rather than a replacement: it documents the
+  // class names inside markup, scripts and stylesheets that another server
+  // already owns, so several servers may serve one file.
+  {
+    ...preset(
+      'tailwindcss',
+      'Tailwind CSS',
+      'tailwindcss-language-server',
+      ['--stdio'],
+      {
+        '.css': 'css',
+        '.scss': 'scss',
+        '.html': 'html',
+        '.svelte': 'svelte',
+        '.vue': 'vue',
+        '.astro': 'astro',
+        '.jsx': 'javascriptreact',
+        '.tsx': 'typescriptreact'
+      },
+      [
+        'tailwind.config.js',
+        'tailwind.config.ts',
+        'tailwind.config.cjs',
+        'tailwind.config.mjs',
+        'package.json'
+      ]
+    ),
+    settings: {
+      tailwindCSS: {
+        classAttributes: ['class', 'className', 'class:list'],
+        classFunctions: ['clsx', 'cva', 'cn', 'twMerge', 'classNames'],
+        emmetCompletions: false,
+        showPixelEquivalents: true,
+        rootFontSize: 16
+      }
+    }
+  }
 ]
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -141,7 +179,6 @@ export function validateIdeLanguageServers(input: unknown): IdeLanguageServer[] 
   )
     throw new TypeError('Provide up to 32 language servers, within 128 KiB of JSON')
   const ids = new Set<string>()
-  const extensions = new Set<string>()
   return input.map((value: unknown) => {
     if (!object(value)) throw new TypeError('Each language server must be an object')
     const id = text(value.id, 'Server ID', 80)
@@ -166,9 +203,6 @@ export function validateIdeLanguageServers(input: unknown): IdeLanguageServer[] 
       if (!/^\.[a-z0-9][a-z0-9._+-]*$/u.test(extension) || local.has(extension))
         throw new TypeError('Extensions must be unique and begin with a dot, for example .ts')
       local.add(extension)
-      if (value.enabled && extensions.has(extension))
-        throw new TypeError(`More than one enabled server handles ${extension}`)
-      if (value.enabled) extensions.add(extension)
       return { extension, languageId: text(mapping.languageId, 'LSP language ID', 80) }
     })
     const env = jsonObject(value.env ?? {}, 'Environment')

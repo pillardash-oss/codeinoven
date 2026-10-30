@@ -1093,6 +1093,25 @@ export class SidebarTabContexts {
     )
   }
 
+  /**
+   * Whether one side chat is the panel the user is reading right now: its tab is
+   * the focused tab on the on-screen thread and the sidebar is showing that
+   * panel.
+   *
+   * A response that lands while this is false is unread until the tab is
+   * focused, which is the rule the context rail's unread mark reads. Focusing
+   * the tab is what clears it (see `focusInContext`), so the mark can never
+   * outlive the read the user actually did.
+   */
+  isTemporaryChatOnScreen(projectId: string, threadId: string, temporaryChatId: string): boolean {
+    const context = this.contexts[contextKey(projectId, threadId)]
+    const project = this.projectContexts[projectId]
+    if (!context || !project?.visible) return false
+    if (project.activeKind !== 'temporary-chat') return false
+    if (!this.isOnScreenContext(context)) return false
+    return context.activeTabIds['temporary-chat'] === `temporary-chat:${temporaryChatId}`
+  }
+
   private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {
     const index = context.tabs.findIndex((existing) => existing.id === tab.id)
     if (index >= 0) {

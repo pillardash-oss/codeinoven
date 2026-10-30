@@ -6,6 +6,7 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { GATEWAY_TOOLS, gatewayToolForModel, initialGatewayTools } from '../../../lib/gateway-tools'
+import { withActionSummarySchema } from '../../../lib/tool-action-label'
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
@@ -89,6 +90,33 @@ export interface GatewayTurnContext {
   threadId: string
 }
 
+/**
+ * The page an operation works on.
+ *
+ * Shared by every browser tool so the wording of the choice exists once: the
+ * agent's own offscreen page, or the page this conversation's thread browser is on.
+ */
+const PAGE_TARGET_FIELD = {
+  type: 'string',
+  enum: ['user', 'agent'],
+  description:
+    'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+}
+
+/** The element an action addresses, by the reference a snapshot reported. */
+const REF_FIELD = {
+  type: 'string',
+  description:
+    'The ref a snapshot reported for the element, such as "r12". Acts on exactly the element that was read; use it or selector.'
+}
+
+/** The element an action addresses, by CSS selector. */
+const SELECTOR_FIELD = {
+  type: 'string',
+  description:
+    'A CSS selector, including the unique selectors a snapshot reports. Use it or ref.'
+}
+
 export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
@@ -135,16 +163,28 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the current page title, URL, visible text, and interactive elements. The page this conversation\u2019s thread browser is on is readable: it is the page the user is on, in whatever box they put it, and you may navigate and interact with it to carry out the user request. Pass page "user" to read it even when you have opened a page of your own; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown actions. Do not ask conversational permission again for assistant steps within the user request; call the operation and let the app enforce approval.',
+      'Read the page: its title, URL, visible text, scroll position, and every element you could act on. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. The page this conversation\u2019s thread browser is on is readable with page "user"; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
     inputSchema: {
       type: 'object',
       properties: {
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
+        interactiveOnly: {
+          type: 'boolean',
           description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+            'Report only elements a person could act on (default true). Pass false to also see labels, images and canvases.'
+        },
+        maxElements: {
+          type: 'number',
+          description: 'Elements to report, up to 1000. Defaults to 300.'
+        },
+        text: {
+          type: 'boolean',
+          description: 'Pass false to leave the visible page text out when you only need the elements.'
+        },
+        maxText: {
+          type: 'number',
+          description: 'Characters of visible page text to report, up to 40000. Defaults to 20000.'
+        },
+        page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
     }
@@ -152,39 +192,209 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'click',
     description:
-      'Click the first page element matching a CSS selector. On the thread browser\u2019s page (page "user") the click is reviewed before it happens.',
+      'Click an element as a pointer does: a real move, press and release through the browser\u2019s input pipeline, so hover, focus, caret and pointer handlers all run. Falls back to the element\u2019s own click only when a pointer cannot reach it, and says which happened (via "pointer" or "dom"). On the thread browser\u2019s page (page "user") the click is reviewed before it happens.',
     inputSchema: {
       type: 'object',
       properties: {
-        selector: { type: 'string' },
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+        ref: REF_FIELD,
+        selector: SELECTOR_FIELD,
+        clickCount: { type: 'number', description: '1 for a click, 2 for a double click.' },
+        modifiers: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Held modifiers: shift, control, alt, meta.'
+        },
+        page: PAGE_TARGET_FIELD
       },
-      required: ['selector'],
       additionalProperties: false
     }
   },
   {
     name: 'type',
     description:
-      'Replace an input, textarea, or editable element value and emit input/change. On the thread browser\u2019s page (page "user") the typing is reviewed before it happens.',
+      'Fill an input, textarea, or editable element, and report the value the page actually kept. This is what a framework-controlled form (React and friends) needs: it goes through the field\u2019s own value setter and emits beforeinput/input/change, so component state updates exactly as it does for a person. Replaces the value unless append is true. Pass submit true to press Enter afterwards.',
     inputSchema: {
       type: 'object',
       properties: {
-        selector: { type: 'string' },
+        ref: REF_FIELD,
+        selector: SELECTOR_FIELD,
         text: { type: 'string' },
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+        append: {
+          type: 'boolean',
+          description: 'Add to what is already in the field instead of replacing it.'
+        },
+        submit: {
+          type: 'boolean',
+          description: 'Press Enter in the field after typing, without a separate press call.'
+        },
+        page: PAGE_TARGET_FIELD
       },
-      required: ['selector', 'text'],
+      required: ['text'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'press',
+    description:
+      'Press a key, or repeat one, through the browser\u2019s input pipeline so the page sees a trusted key. Focus the target first by passing its ref or selector; without one the press lands on whatever holds focus.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: {
+          type: 'string',
+          description:
+            'The key: Enter, Tab, Escape, Space, Backspace, Delete, Home, End, PageUp, PageDown, ArrowUp/Down/Left/Right, F1 to F24, or one character.'
+        },
+        ref: REF_FIELD,
+        selector: SELECTOR_FIELD,
+        modifiers: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Held modifiers: shift, control, alt, meta.'
+        },
+        times: { type: 'number', description: 'Repeat count, up to 20. Defaults to 1.' },
+        page: PAGE_TARGET_FIELD
+      },
+      required: ['key'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'select',
+    description:
+      'Choose an option of a select element by value, by visible label, or several at once for a multiple select, and report the selection the page kept. On an unmatched value the answer lists the options, so pick from what is actually there.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: REF_FIELD,
+        selector: SELECTOR_FIELD,
+        value: { type: 'string', description: 'The option value, or its visible label.' },
+        label: { type: 'string', description: 'The option\u2019s visible label.' },
+        values: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Several option values, for a multiple select.'
+        },
+        page: PAGE_TARGET_FIELD
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'check',
+    description:
+      'Tick or untick a checkbox, radio, or role switch, and report the state the page kept.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: REF_FIELD,
+        selector: SELECTOR_FIELD,
+        checked: { type: 'boolean', description: 'false to untick; defaults to true.' },
+        page: PAGE_TARGET_FIELD
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'mouse',
+    description:
+      'Move, hover, press, release, or click the pointer at a point in the page, through the browser\u2019s input pipeline, and leave a visible cursor where it acted so a screenshot shows it. Aim at an element with ref or selector, or at explicit x and y. A drag is the separate drag operation; use wheel with deltaY to scroll at a point.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['move', 'hover', 'click', 'down', 'up', 'wheel'],
+          description: 'What the pointer does. Defaults to click.'
+        },
+        ref: REF_FIELD,
+        selector: SELECTOR_FIELD,
+        x: { type: 'number', description: 'Point x in page pixels, used when no element is named.' },
+        y: { type: 'number', description: 'Point y in page pixels, used when no element is named.' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'] },
+        clickCount: { type: 'number', description: '1 for a click, 2 for a double click.' },
+        deltaX: { type: 'number', description: 'Horizontal wheel delta, for action "wheel".' },
+        deltaY: { type: 'number', description: 'Vertical wheel delta, for action "wheel".' },
+        modifiers: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Held modifiers: shift, control, alt, meta.'
+        },
+        page: PAGE_TARGET_FIELD
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'drag',
+    description:
+      'Drag from one point to another through the browser\u2019s input pipeline, moving in steps so a slider, sortable list, canvas or drop target follows the same path a hand would. Give from and to as {ref} or {selector} or {x, y}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'object', description: 'Start: {ref}, {selector}, or {x, y}.' },
+        to: { type: 'object', description: 'End: {ref}, {selector}, or {x, y}.' },
+        modifiers: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Held modifiers: shift, control, alt, meta.'
+        },
+        page: PAGE_TARGET_FIELD
+      },
+      required: ['from', 'to'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'scroll',
+    description:
+      'Scroll the page, bring an element into view, or jump to the top or bottom, and report where the page ended up. A container that scrolls on its own is scrolled by naming it with ref or selector.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: REF_FIELD,
+        selector: SELECTOR_FIELD,
+        to: { type: 'string', enum: ['top', 'bottom'] },
+        deltaX: { type: 'number', description: 'Horizontal distance in pixels.' },
+        deltaY: { type: 'number', description: 'Vertical distance in pixels. Defaults to 600.' },
+        page: PAGE_TARGET_FIELD
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'wait',
+    description:
+      'Wait, in the page, until a condition holds or the time is up: an element appears, an element goes away, text appears, or the address changes. Reading state is easier than guessing with a fixed pause, and a timeout answers with what the page looked like rather than failing the call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'Wait for this element to be present and visible.' },
+        gone: { type: 'boolean', description: 'With selector: wait for it to disappear.' },
+        visible: { type: 'boolean', description: 'false with selector: wait for it to exist even if hidden.' },
+        text: { type: 'string', description: 'Wait for this text to appear in the page.' },
+        urlIncludes: { type: 'string', description: 'Wait for the address to contain this.' },
+        timeoutMs: { type: 'number', description: 'Up to 30000. Defaults to 5000.' },
+        page: PAGE_TARGET_FIELD
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'evaluate',
+    description:
+      'Run an expression in the page and return its value. This is the escape hatch for what the element operations do not cover: reading state a snapshot does not describe, dispatching a page\u2019s own API, or measuring layout. It reaches the page exactly as its own script would, so it is reviewed before it runs on the page the user is on.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expression: {
+          type: 'string',
+          description:
+            'JavaScript evaluated in the page. The last expression\u2019s value is returned; a promise is awaited. Example: document.title'
+        },
+        page: PAGE_TARGET_FIELD
+      },
+      required: ['expression'],
       additionalProperties: false
     }
   },
@@ -240,7 +450,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'screenshot',
     description:
-      'Capture a page at its viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. The page this conversation\u2019s thread browser is on is capturable with page "user"; the default captures your own page. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
+      'Capture the page as an image. That is how you see what a person sees: layout, disabled states, error text under a field, where the agent cursor is. Pass fullPage for a long page, or a ref/selector for one element, and the crop is rendered at the same size budget as a viewport capture. A page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -248,12 +458,16 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           type: 'boolean',
           description: 'Capture even when the page is unchanged since the previous screenshot.'
         },
-        page: {
+        fullPage: {
+          type: 'boolean',
+          description: 'Capture the whole document, not just the visible viewport.'
+        },
+        ref: REF_FIELD,
+        selector: {
           type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+          description: 'Capture only this element, by the selector a snapshot reported.'
+        },
+        page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
     }
@@ -425,6 +639,70 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
       }
     },
     {
+      name: 'groups',
+      description:
+        "Read how the user organises this project's designs on the coordinator board: the named groups, the designs each one holds, how the board draws them, and when the user last rearranged them. Read this before you talk about the arrangement, and again after the user says they moved something. A group is a record about folders, not a place to put them, so reading it never changes where a design lives.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['design', 'video'],
+            description: 'Which board to read. Defaults to design.'
+          }
+        },
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'organize-designs',
+      description:
+        "Change how the user's designs are grouped on the coordinator board. This is the only way you may group designs: it writes names and memberships, never a folder, so no design moves on disk and no rename ever happens here. Every call answers with the whole board afterwards. Actions: create (a new empty group), rename, delete (its designs return to ungrouped), assign (move designs into a group, or out of every group when group is omitted), reorder (the order the groups appear in), view (cards, which is a picture per design, or list, which is a folded list).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['create', 'rename', 'delete', 'assign', 'reorder', 'view'],
+            description: 'What to change about the arrangement.'
+          },
+          kind: {
+            type: 'string',
+            enum: ['design', 'video'],
+            description: 'Which board to change. Defaults to design.'
+          },
+          name: {
+            type: 'string',
+            maxLength: 80,
+            description: 'The group name for create, or the new name for rename.'
+          },
+          group: {
+            type: 'string',
+            description:
+              'The group to act on for rename, delete and assign, by its name or the id the last read returned. Omit it for assign to ungroup the designs.'
+          },
+          designs: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Project-relative design folders for assign, such as .cio/designs/hero. These are the folders the board lists; grouping them does not move them.'
+          },
+          order: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Group names or ids in the order they should appear, for reorder.'
+          },
+          view: {
+            type: 'string',
+            enum: ['cards', 'list'],
+            description: 'How the board should draw the designs, for view.'
+          }
+        },
+        required: ['action'],
+        additionalProperties: false
+      }
+    },
+    {
       name: 'save-media',
       description: `Save a generated image, video or sound file into the project, so the design references a file of its own instead of a link that expires. Give it the https link the generation service answered with; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
       inputSchema: {
@@ -576,7 +854,7 @@ export function buildUtilityGatewayScript(
   const tools = gatewayTools.map(gatewayToolForModel).map(({ name, description, inputSchema }) => ({
     name,
     description,
-    inputSchema
+    inputSchema: withActionSummarySchema(inputSchema)
   }))
   const routes: Record<string, string> = {}
   for (const tool of gatewayTools) routes[tool.name] = tool.route

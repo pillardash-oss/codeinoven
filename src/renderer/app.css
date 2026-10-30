@@ -343,6 +343,22 @@ body {
   outline-offset: 2px;
 }
 
+/*
+ * The video chrome never draws a focus ring.
+ *
+ * The player and the editor are driven by state they already show — a playing bar,
+ * a held frame, a pressed control — and the caret moves there by itself when a
+ * surface opens or a comment closes, so a ring around the play button, or around
+ * the editor the caret was moved into, is noise the user reads as a bug. Video
+ * chrome marks itself with `data-video-chrome` and keeps its own affordances.
+ */
+[data-video-chrome] :where(button, [tabindex], [role='slider']):focus,
+[data-video-chrome] :where(button, [tabindex], [role='slider']):focus-visible,
+[data-video-chrome]:focus,
+[data-video-chrome]:focus-visible {
+  outline: none;
+}
+
 /* Input fields, text areas, search bars and contenteditable regions never get
    an outline or focus ring — focus is communicated via border/background only.
    Plain (unlayered) rules beat Tailwind's layered ring utilities, so this holds
@@ -454,10 +470,15 @@ body {
  * whole lines before the reader decides whether to expand it. Five of those
  * lines have to be five of the lines the text is set in, so the clamp
  * multiplies these numbers instead of copying them.
+ *
+ * The leading is Tailwind's `leading-loose` step (2). It is a token rather than
+ * the utility class because `.markdown-body` is emitted unlayered and so
+ * outranks every layered utility: a `leading-loose` on the element would lose
+ * to the rule below and change nothing.
  */
 :root {
   --prose-size: 0.8125rem;
-  --prose-leading: 1.8;
+  --prose-leading: 2;
 }
 
 .markdown-body {
@@ -634,22 +655,26 @@ body {
   /* Native table column sizing: every column keeps at least one word of
      width; content wider than the container scrolls inside .md-table-wrap
      instead of squeezing sibling columns. min-width keeps narrow tables
-     filling the container like a normal block. */
+     filling the container like a normal block. A table is a grid, so it is
+     framed like one: the rules between the cells and the frame around them
+     come from the cells' own borders, collapsing into one line where they
+     meet. */
   width: 100%;
   min-width: max-content;
-  border-collapse: collapse;
   border: 1px solid var(--color-border);
+  border-collapse: collapse;
   font-size: 0.9em;
 }
 
 .markdown-body th,
 .markdown-body td {
-  /* Rules run across the table, never between cells. The app's own tables
-     (`ui/DataTable.svelte`) draw one border per row and none per column, so
-     a markdown table and a native one read as the same object instead of two
-     languages in one surface. */
+  /* A grid reads as a grid: every cell is ruled off from the cell beside it and
+     from the row above it, and the table's own border closes the frame around
+     them. The right and bottom edges are the cells' borders meeting the frame in
+     the collapse, so no edge is drawn twice. */
   border: 0;
   border-bottom: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
   padding: 0.375em 0.6em;
   text-align: left;
   /* Cells may wrap long tokens inside their own column (GitHub-style):
@@ -658,13 +683,6 @@ body {
      wider than the container. */
   overflow-wrap: anywhere;
   word-break: normal;
-}
-
-/* The table's own bottom border is the last row's rule; a second one under it
-   would double the line. */
-.markdown-body tr:last-child > th,
-.markdown-body tr:last-child > td {
-  border-bottom: 0;
 }
 
 .markdown-body th {
@@ -679,31 +697,25 @@ body {
 }
 
 /* ─── Table controls (wrap, column resize) ──────────────────────────────── */
-/* Every table carries a small control rectangle at its top left. Both toggles
-   are opt-in and in memory only, so a wide table costs nothing until the reader
-   asks for one of them. */
+/* A table carries no strip of its own: its controls ride over it and appear on
+   hover, so the table sits flush in the message. Both toggles are opt-in and in
+   memory only, so a wide table costs nothing until the reader asks for one. */
 .markdown-body .md-table-block {
   display: flex;
   max-width: 100%;
   flex-direction: column;
-  gap: 0.25rem;
 }
 
-.markdown-body .md-table-controls {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.125rem;
-  border: 1px solid var(--color-border);
-  background: var(--color-elevated);
-  padding: 0.0625rem;
-}
-
+/* One square target per control, the same 1.5rem box the artifact viewer's own
+   header controls use, so the strip on hover and the group in a full screen
+   reader's header are the same object at the same size. */
 .markdown-body .md-table-control {
   display: flex;
+  width: 1.5rem;
+  height: 1.5rem;
   align-items: center;
+  justify-content: center;
   color: var(--color-dimmed);
-  padding: 0.1875rem;
   transition:
     background-color 160ms ease,
     color 160ms ease;
@@ -722,6 +734,46 @@ body {
 /* An engaged toggle stays readable rather than shouting: the icon keeps its
    size, so switching wrap or the padlock never shifts the strip. */
 .markdown-body .md-table-control[aria-pressed='true'] {
+  color: var(--color-foreground);
+}
+
+/* ─── A reading surface's own controls ─────────────────────────────────── */
+/* A table or a Mermaid diagram opened full screen puts its tools in the modal
+   header, where they are the surface's tools and not a widget parked inside a
+   second frame: no border, no panel, no padding, just the glyphs, spaced well
+   apart and sized to the surface's own dismiss mark (`h-7 w-7`, 16px glyph). A
+   boxed group here read as a control cluster bolted onto the header and crammed
+   its icons together; these are the same marks as the collapse control beside
+   them, so the row of tools is one row. */
+.md-reader-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.md-reader-control {
+  display: flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-muted);
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.md-reader-control:hover {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.md-reader-control:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.md-reader-control[aria-pressed='true'] {
   color: var(--color-foreground);
 }
 
@@ -761,9 +813,8 @@ body {
 
 /* The drag target sits over the column's right padding, flush with the column
    edge the reader drags   and so the cell's own `overflow: hidden` (resize
-   mode) can never clip it. The strip paints its own hover line, which is what
-   the reader aims at now that columns are separated by space rather than by a
-   rule. */
+   mode) can never clip it. The strip paints its own hover line, which thickens
+   the column rule it sits on while the reader aims at it. */
 .markdown-body .md-col-resizer {
   position: absolute;
   inset-block: 0;
@@ -1140,9 +1191,10 @@ html body vite-error-overlay {
    are intercepted in the editor so composing never navigates. Footnote
    references render as superscript numbers like GitHub. */
 .rich-markdown-editor {
-  /* The composer mirrors chat prose: same comfortable reading size. */
-  font-size: 0.8125rem;
-  line-height: 1.8;
+  /* The composer mirrors chat prose: same comfortable reading size, including
+     the loose leading the transcript is set in. */
+  font-size: var(--prose-size);
+  line-height: var(--prose-leading);
   font-family: var(--font-app);
 }
 
@@ -1248,3 +1300,59 @@ html body vite-error-overlay {
  * recovers a beat later (measured in the 2026-10-09 recording). A hard pop-in
  * on mount is the cheaper trade.
  */
+
+/* ─── Working row glow ───────────────────────────────────────────────────── */
+/*
+ * A tool call that is still running says so by glowing along its whole line
+ * instead of wearing a spinner, so the trace reads as one continuous sign of
+ * life rather than a row of little spinners. A settled call carries no mark at
+ * all, and only a failure keeps its error glyph.
+ *
+ * The band travels with `transform` alone (compositor only, no repaint) and the
+ * element carries `will-change`, so a trace full of live rows costs the main
+ * thread nothing while it animates. The tint underneath is static, so the whole
+ * line reads as active even between passes of the band.
+ */
+@keyframes working-row-sweep {
+  from {
+    transform: translate3d(-120%, 0, 0);
+  }
+  to {
+    transform: translate3d(240%, 0, 0);
+  }
+}
+
+.working-row-glow {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-info) 7%, transparent);
+}
+
+.working-row-glow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-info) 30%, transparent),
+    transparent
+  );
+  animation: working-row-sweep 1.45s linear infinite;
+  will-change: transform;
+}
+
+/* Reduced motion keeps the glow but stops the travel: the line stays lit while
+   the call runs, which is the state, not the decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .working-row-glow::before {
+    animation: none;
+    width: 100%;
+    background: color-mix(in srgb, var(--color-info) 16%, transparent);
+  }
+}

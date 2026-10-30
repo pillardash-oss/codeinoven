@@ -1,14 +1,12 @@
 <script lang="ts">
-  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
-  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import CioCode from '@pdslng/cio-icon/CioCode.svelte'
   import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
   import CioFilePen from '@pdslng/cio-icon/CioFilePen.svelte'
   import CioFilePlus from '@pdslng/cio-icon/CioFilePlus.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
-  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
   import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
@@ -17,6 +15,7 @@
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { isCioToolName, isCodeModeToolName } from '$shared/agent-interactions'
+  import { ACTION_SUMMARY_INPUT_KEY, isOpaqueId } from '$shared/tool-action-label'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
@@ -111,18 +110,18 @@
 
   const elapsed = $derived(clock.seconds(start, end))
 
-  const statusMeta = $derived.by(() => {
-    switch (part.state.status) {
-      case 'running':
-        return { icon: CioSpinner, class: 'text-info animate-spin' }
-      case 'completed':
-        return { icon: CioCheckCircle, class: 'text-success' }
-      case 'error':
-        return { icon: CioCrossCircle, class: 'text-danger' }
-      default:
-        return { icon: CioClock, class: 'text-dimmed' }
-    }
-  })
+  /**
+   * A running call says so with a glow travelling along its whole line, so it
+   * wears no spinner; a settled call wears no tick either, because the glow
+   * leaving the row is the completion. Only a failure keeps a mark.
+   *
+   * A restored trace is never live, so a call the process was cut off inside
+   * stays quiet instead of glowing forever.
+   */
+  const working = $derived(
+    live && (part.state.status === 'running' || part.state.status === 'pending')
+  )
+  const failed = $derived(part.state.status === 'error')
 
   const inputPreview = $derived(formatInput(part.state.input))
   /** The tool-kind glyph: washed out with the row, brighter on hover. */
@@ -159,9 +158,35 @@
 
   /** A code-mode call orchestrates other tools by script, so it reads as a
    *  distinct kind of step in the trace instead of an unnamed tool. */
+  /**
+   * The row's headline: the first of these that actually says something.
+   *
+   * A part's title can be present and EMPTY: a harness that reports
+   * `title: <command>` sends an empty string while the command is still being
+   * written, and a nullish fallback treats that as a value and renders a blank
+   * row for the whole time the call is running. Blank values are skipped, so a
+   * running row always names what it is doing.
+   */
+  function firstSpoken(...values: Array<string | undefined>): string {
+    for (const value of values) {
+      const trimmed = value?.trim()
+      if (trimmed) return trimmed
+    }
+    return ''
+  }
+
   const codeModeLabel = $derived(
-    part.state.title ?? (toolKind === 'code' ? 'Code mode' : part.tool)
+    firstSpoken(
+      part.state.title,
+      part.actionLabel,
+      toolKind === 'code' ? 'Code mode' : undefined,
+      part.tool
+    )
   )
+
+  /** True when the row's label describes the action rather than repeating the
+   *  tool's own name, which is what the expanded card spells out. */
+  const labeled = $derived(codeModeLabel !== part.tool)
 
   /** Bound on the collapsed row's input preview. The row truncates to the
    *  width it actually has in CSS, so this only stops a pathological first
@@ -169,14 +194,29 @@
    *  every render; it is far beyond any width the row can show. */
   const PREVIEW_MAX_CHARS = 2_000
 
+  /**
+   * The call's own subject as the collapsed row shows it: the first argument's
+   * value behind a colon, with no argument name in front of it.
+   *
+   * The name is tautology next to the label that already says what the call did
+   * (`Shell : bun test`, not `Shell · command: bun test`), and for a call whose
+   * first argument repeats the action (`edits: [...]` under an edit row) it made
+   * the row say the same word twice. A value that names nothing, such as the
+   * opaque row id a `cio_util_use` call carries, is skipped for the first
+   * argument a reader can actually use.
+   */
   function formatInput(input: Record<string, unknown>): string {
-    const entries = Object.entries(input)
-    if (entries.length === 0) return ''
-    const first = entries[0]
-    const value = typeof first[1] === 'string' ? first[1] : JSON.stringify(first[1])
-    const preview =
-      value.length > PREVIEW_MAX_CHARS ? `${value.slice(0, PREVIEW_MAX_CHARS)}…` : value
-    return `${first[0]}: ${preview}`
+    for (const [name, value] of Object.entries(input)) {
+      // The label field IS the row's label, so repeating it as the subject
+      // would make the row say the same words twice.
+      if (name === ACTION_SUMMARY_INPUT_KEY) continue
+      const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
+      if (!text || (typeof value === 'string' && isOpaqueId(value))) continue
+      const preview =
+        text.length > PREVIEW_MAX_CHARS ? `${text.slice(0, PREVIEW_MAX_CHARS)}…` : text
+      return `: ${preview}`
+    }
+    return ''
   }
 
   /** Display-side threshold for giant tool strings. Mirrors the persistence
@@ -189,9 +229,14 @@
    *  conversational default so terminal-style output stays recognizable. */
   const TOOL_BLOCK_COLLAPSED_CHARS = 4_000
 
-  const inputJson = $derived(
-    Object.keys(part.state.input).length > 0 ? JSON.stringify(part.state.input, null, 2) : ''
-  )
+  const inputJson = $derived.by(() => {
+    // The label field is already the row's headline, so the expanded card shows
+    // the call's real arguments only.
+    const entries = Object.entries(part.state.input).filter(
+      ([name]) => name !== ACTION_SUMMARY_INPUT_KEY
+    )
+    return entries.length > 0 ? JSON.stringify(Object.fromEntries(entries), null, 2) : ''
+  })
   const giantOutput = $derived(
     (part.state.output?.length ?? 0) > GIANT_TOOL_STRING_CHARS ? (part.state.output ?? '') : null
   )
@@ -204,68 +249,78 @@
 <div class="min-w-0">
   <button
     type="button"
-    class="group/tool flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+    class="group/tool isolate relative flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
     aria-expanded={open}
     title={open ? 'Hide tool details' : 'Show tool details'}
     onclick={() => {
       open = !open
     }}
   >
-    {#if statusMeta.icon === CioSpinner}
-      <CioSpinner size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === CioCheckCircle}
-      <CioCheckCircle size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === CioCrossCircle}
-      <CioCrossCircle size={14} class="shrink-0 {statusMeta.class}" />
-    {:else}
-      <CioClock size={14} class="shrink-0 {statusMeta.class}" />
+    {#if working}
+      <span class="working-row-glow" aria-hidden="true"></span>
     {/if}
-    {#if toolKind === 'cio'}
-      <CioMonogram size={12} class={kindIconClass} />
-    {:else if toolKind === 'code'}
-      <CioCode size={12} class={kindIconClass} />
-    {:else if toolKind === 'read'}
-      <CioCheckCircle size={12} class={kindIconClass} />
-    {:else if toolKind === 'edit'}
-      <CioFilePen size={12} class={kindIconClass} />
-    {:else if toolKind === 'write'}
-      <CioFilePlus size={12} class={kindIconClass} />
-    {:else if toolKind === 'search'}
-      <CioSearch size={12} class={kindIconClass} />
-    {:else if toolKind === 'web'}
-      <CioBrowser size={ICON_SIZE.inline} class={kindIconClass} />
-    {:else if toolKind === 'shell'}
-      <CioTerminal size={12} class={kindIconClass} />
-    {:else}
-      <CioWrench size={12} class={kindIconClass} />
-    {/if}
-    <span class="shrink-0 font-mono font-medium">
-      {codeModeLabel}
+    <!-- The row's own content is positioned, so it always paints over the glow
+         behind it: the glow reports that work is going on, and it must never
+         cost the reader the label, the duration or the command while it does. -->
+    <span class="relative flex min-w-0 flex-1 items-center gap-1.5">
+      {#if working}
+        <span class="sr-only">Running</span>
+      {:else if failed}
+        <CioCrossCircle size={14} class="shrink-0 text-danger" />
+        <span class="sr-only">Failed</span>
+      {/if}
+      {#if toolKind === 'cio'}
+        <CioMonogram size={12} class={kindIconClass} />
+      {:else if toolKind === 'code'}
+        <CioCode size={12} class={kindIconClass} />
+      {:else if toolKind === 'read'}
+        <CioFileText size={12} class={kindIconClass} />
+      {:else if toolKind === 'edit'}
+        <CioFilePen size={12} class={kindIconClass} />
+      {:else if toolKind === 'write'}
+        <CioFilePlus size={12} class={kindIconClass} />
+      {:else if toolKind === 'search'}
+        <CioSearch size={12} class={kindIconClass} />
+      {:else if toolKind === 'web'}
+        <CioBrowser size={ICON_SIZE.inline} class={kindIconClass} />
+      {:else if toolKind === 'shell'}
+        <CioTerminal size={12} class={kindIconClass} />
+      {:else}
+        <CioWrench size={12} class={kindIconClass} />
+      {/if}
+      <span class="shrink-0 font-medium">
+        {codeModeLabel}
+      </span>
+      {#if start}
+        <span
+          class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/tool:text-muted"
+          >{formatDurationMs(elapsed * 1000)}</span
+        >
+      {/if}
+      {#if !open && inputPreview}
+        <span
+          class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed transition-colors group-hover/tool:text-muted"
+          >{inputPreview}</span
+        >
+      {:else}
+        <span class="flex-1"></span>
+      {/if}
+      <CioForward
+        size={13}
+        class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
+          ? 'rotate-90'
+          : ''}"
+      />
     </span>
-    {#if start}
-      <span
-        class="tabular-nums text-[0.625rem] text-dimmed transition-colors group-hover/tool:text-muted"
-        >{formatDurationMs(elapsed * 1000)}</span
-      >
-    {/if}
-    {#if !open && inputPreview}
-      <span
-        class="min-w-0 flex-1 truncate font-mono text-[0.6875rem] text-dimmed transition-colors group-hover/tool:text-muted"
-        >{inputPreview}</span
-      >
-    {:else}
-      <span class="flex-1"></span>
-    {/if}
-    <CioForward
-      size={13}
-      class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
-        ? 'rotate-90'
-        : ''}"
-    />
   </button>
 
   {#if open}
     <div transition:slide={foldSlide()} class="space-y-2 border-l border-border/60 py-1 pr-3 pl-3">
+      {#if labeled}
+        <p class="text-[0.625rem] text-dimmed">
+          Tool · <span class="font-mono text-muted">{part.tool}</span>
+        </p>
+      {/if}
       {#if displayDiffs.length > 0}
         <InlineToolDiff diffs={displayDiffs} />
       {:else if giantInput !== null}

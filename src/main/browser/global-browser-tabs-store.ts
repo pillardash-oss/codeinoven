@@ -20,7 +20,13 @@ import {
   parseGlobalBrowserTabsSnapshot,
   type GlobalBrowserTabsSnapshot
 } from '../../lib/browser/global-browser-tabs'
-import { ensureDir, getConfigRoot, isUnpackagedElectronLaunch, readJson, writeJson } from '../../lib/utils'
+import {
+  ensureDir,
+  getConfigRoot,
+  isUnpackagedElectronLaunch,
+  readJson,
+  writeJson
+} from '../../lib/utils'
 import { Logger } from '../system/logger'
 
 /**

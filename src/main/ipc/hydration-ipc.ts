@@ -7,6 +7,7 @@ import { ProjectManager } from '../../lib/engines/project-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { NoteRepo } from '../database/repositories/note-repo'
+import { ProjectRepo } from '../database/repositories/project-repo'
 import { GLOBAL_BROWSER_PROJECT_ID, isBrowserTabId } from '../../lib/ipc/browser'
 import { validateBoundedInteger, validateBoundedString, validateEntityId } from './ipc-validation'
 import type { Thread, ThreadMessageCursor } from '../../lib/types'
@@ -28,6 +29,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // durable logging bridge must exist before BrowserWindow navigation.
   registerRendererLogIpcHandler()
   const projectManager = new ProjectManager(database)
+  const projectRepo = new ProjectRepo(database)
   const scopeManager = new ScopeManager(database)
   // Create the hidden assistant container before the renderer's first
   // `project:list`, exactly like the inbox. Assistant View reads this project
@@ -56,10 +58,48 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   }
 
   ipcMain.handle('config:get', () => storage.getConfig())
+
+  // ── The conversation the last session was on ────────────────────────────
+  //
+  // The selection itself lives in the renderer's recovery storage, which main
+  // cannot read. Persisting a copy here lets the boot start the two reads the
+  // restored conversation needs (its row and its newest transcript page) while
+  // the splash is still up: the renderer's own request then lands on a warm
+  // page cache instead of being the database's first sight of that thread.
+  // Best effort in both directions - a missing or unreadable file only costs
+  // the warmth, never the restore.
+  const LAST_THREAD_FILE = 'state/last-thread.json'
+  ipcMain.handle('app:rememberThread', (_, rawProjectId: unknown, rawThreadId: unknown) => {
+    const reference = {
+      projectId: validateEntityId(rawProjectId, 'Project ID'),
+      threadId: validateEntityId(rawThreadId, 'Thread ID')
+    }
+    void storage.write(LAST_THREAD_FILE, reference).catch(() => undefined)
+  })
+  ipcMain.handle('app:forgetThread', () =>
+    storage.removeRaw(LAST_THREAD_FILE).catch(() => undefined)
+  )
+  void (async (): Promise<void> => {
+    const last = await storage
+      .read<{ projectId: string; threadId: string }>(LAST_THREAD_FILE)
+      .catch(() => null)
+    const projectId = validateEntityId(last?.projectId, 'Project ID')
+    const threadId = validateEntityId(last?.threadId, 'Thread ID')
+    const thread = await threadManager.getThreadViaWorker(projectId, threadId)
+    if (!thread || thread.archived) return
+    await threadManager.loadMessagePage(projectId, threadId, undefined, 40)
+  })().catch(() => undefined)
   ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
   ipcMain.handle('project:list', async () => {
     await projectsReady
-    return projectManager.listProjects()
+    // Read on the database worker: this is the first project list the renderer
+    // asks for, and a synchronous read here holds the whole main process for as
+    // long as the OS takes to serve the statement (see `docs/APP-BIBLE.md`).
+    // `queryViaWorker` already falls back to the primary connection, so a null
+    // answer means the database refused the read outright: keep the synchronous
+    // read's own failure instead of reporting an empty sidebar.
+    const projects = await projectRepo.listViaWorkerOrNull()
+    return projects ?? projectManager.listProjects()
   })
   ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
   // Same channel `registerAssistantHandlers` would register after first paint;

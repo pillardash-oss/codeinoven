@@ -1,26 +1,28 @@
 <script lang="ts">
-  import InlineFigure from './InlineFigure.svelte'
+  import AudioPlayer from '../ui/AudioPlayer.svelte'
+  import VideoPlayer from '../ui/VideoPlayer.svelte'
 
   interface Props {
     src: string
     kind: 'audio' | 'video'
     filename: string
-    onExpand: () => void
+    /**
+     * Opens the file in the app's fullscreen media surface, at the position the
+     * inline player had reached and in the state it was in, so the reader keeps
+     * their place and the recording carries on rather than restarting.
+     */
+    onExpand: (startAt?: number, playing?: boolean) => void
   }
 
   let { src, kind, filename, onExpand }: Props = $props()
 </script>
 
-<!-- Both bodies fill the column: a player has no size of its own before its media
-     loads, and a frame that hugged one would jump the moment it did. A video
-     therefore keeps a standard box and letterboxes inside it, which is how every
-     player in the app shows one. -->
-<InlineFigure {filename} {onExpand} fit="fill">
-  {#if kind === 'video'}
-    <video class="max-h-96 w-full" {src} controls preload="none" playsinline>
-      <track kind="captions" />
-    </video>
-  {:else}
-    <audio class="w-full" {src} controls preload="none"></audio>
-  {/if}
-</InlineFigure>
+<!-- Media is content, so it is drawn the way a picture is: no frame, no caption,
+     no border. Both players are the app's own, so their controls read as part of
+     the application rather than as a platform widget dropped into a message, and
+     a source that fails says so instead of leaving a dead control bar. -->
+{#if kind === 'video'}
+  <VideoPlayer {src} label={filename} onExpand={(at, playing) => onExpand(at, playing)} />
+{:else}
+  <AudioPlayer {src} label={filename} onExpand={() => onExpand()} />
+{/if}

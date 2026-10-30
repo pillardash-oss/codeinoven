@@ -6,6 +6,7 @@ import type {
   WindowOpenHandlerResponse
 } from 'electron'
 import type { NativeFloatingPanelBounds } from '../../lib/native-floating-panel'
+import { resolveBlankPreload } from './child-window-support'
 import { trustedIpcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { isCloseShortcut } from '../bootstrap/keyboard-shortcuts'
@@ -193,8 +194,10 @@ export class NativeFloatingPanelWindow {
         roundedCorners: false,
         ...this.screenBounds(panel.bounds),
         webPreferences: {
-          // Empty string explicitly replaces the parent's privileged preload.
-          preload: '',
+          // A blank preload explicitly replaces the parent's privileged one. An
+          // empty string does not do it: Electron only accepts an absolute path
+          // and logs a failure for `''` on every panel that opens.
+          preload: resolveBlankPreload(),
           sandbox: true,
           contextIsolation: true,
           nodeIntegration: false,

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteMap } from 'svelte/reactivity'
   import { onDestroy, tick } from 'svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
@@ -184,7 +184,10 @@
     scheduleBubbleUpdate()
   }
 
-  function captureSelection(): void {
+  function captureSelection(event: PointerEvent): void {
+    // Only a primary press makes a selection: the right-click's release carries
+    // none, and reading it as one closed the menu that right-click opened.
+    if (event.button !== 0) return
     pendingSelection = captureDocumentSelection(documentRoot)
   }
 
@@ -225,9 +228,10 @@
    *
    * The menu is the one a highlight opens, at the cursor instead of beside the
    * passage, so both ways of reaching a passage's actions are one control. A
-   * click on a passage that already carries a note opens that note's editor
-   * along with the menu, which is how a note is found again from the words it
-   * was written about.
+   * passage that already carries a note is offered that note's edit item, and
+   * the note editor opens only when the item is chosen or the note indicator is
+   * clicked: a right-click asks for the menu, so opening the editor with it
+   * would cover the actions the user just asked for.
    */
   function claimDocumentSelectionMenu(event: MouseEvent): boolean {
     const target = event.target
@@ -244,7 +248,6 @@
     if (!candidate) return false
     event.preventDefault()
     event.stopPropagation()
-    if (annotatedId) editingId = annotatedId
     pendingSelection = candidate
     return true
   }
@@ -292,6 +295,9 @@
     return trackLiveSelection(
       () => captureDocumentSelection(documentRoot),
       (candidate) => {
+        // A menu opened for an annotation quotes that annotation, not the
+        // document selection, so an empty selection cannot describe it.
+        if (!candidate && pendingSelection?.referenceId) return
         if (!candidate && !selectionTouchesDocument()) return
         pendingSelection = candidate
       }
@@ -459,7 +465,7 @@
     onscroll={scheduleBubbleUpdate}
   >
     <div bind:this={documentRoot} data-annotation-surface>
-      <MarkdownView text={content} class="text-sm text-foreground" />
+      <DeferredMarkdownView text={content} class="text-sm text-foreground" />
     </div>
   </div>
 </div>

@@ -1,11 +1,7 @@
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import {
-  LEAN_AGENTS,
-  LEAN_AGENT_NAMES,
-  type LeanOpenCodeAgent
-} from './opencode-agent-definitions'
+import { LEAN_AGENTS, LEAN_AGENT_NAMES, type LeanOpenCodeAgent } from './opencode-agent-definitions'
 
 /** Machine-wide opencode config the app merges lean agents into. */
 export const OPENCODE_CONFIG_DIR = join(homedir(), '.config', 'opencode')

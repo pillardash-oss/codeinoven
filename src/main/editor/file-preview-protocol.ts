@@ -7,8 +7,12 @@ import { Readable } from 'node:stream'
 import { join, sep } from 'path'
 import { realpath } from 'fs/promises'
 import { getConfigRoot } from '../../lib/utils'
+import { BootUnavailableError } from '../bootstrap/boot-gate'
 import { previewTypeForPath, type PreviewType } from '../../lib/preview-types'
+import { byteRange, previewHeaders } from '../../lib/preview-range'
 import { Logger } from '../system/logger'
+import { openWithService } from '../system/open-with-service'
+import { MediaServer } from './media-server/media-server'
 import type { ProjectFilesService } from './project-files-service'
 
 const SCHEME = 'appfile'
@@ -48,43 +52,35 @@ function notFound(): Response {
   return new Response('Not found', { status: 404 })
 }
 
-function previewHeaders(type: PreviewType, contentLength: number): Headers {
-  return new Headers({
-    'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-store',
-    'Content-Disposition': `inline; filename="preview${type.extension}"`,
-    'Content-Length': String(contentLength),
-    'Content-Security-Policy':
-      "default-src 'none'; script-src 'none'; object-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'",
-    'Content-Type': type.mime,
-    'Referrer-Policy': 'no-referrer',
-    'X-Content-Type-Options': 'nosniff'
-  })
-}
-
-function byteRange(value: string | null, size: number): { end: number; start: number } | null {
-  if (!value) return { start: 0, end: size - 1 }
-  const match = /^bytes=(\d*)-(\d*)$/u.exec(value.trim())
-  if (!match || (!match[1] && !match[2])) return null
-  const rawStart = match[1]
-  const rawEnd = match[2]
-  if (!rawStart) {
-    const suffixLength = Number(rawEnd)
-    if (!Number.isSafeInteger(suffixLength) || suffixLength < 1) return null
-    return { start: Math.max(0, size - suffixLength), end: size - 1 }
+/**
+ * A media file is handed to the loopback server instead of being streamed from
+ * here, and anything else keeps the streamed response it always had.
+ *
+ * The redirect is what takes the bytes off this process's thread: the renderer
+ * follows `Location` and from then on Chromium reads the file through the
+ * worker, so no chunk of a playing video crosses the main thread. A media server
+ * that cannot start returns null, and the file is streamed exactly as before.
+ */
+async function serveLocalFile(
+  mediaServer: MediaServer,
+  absolutePath: string,
+  type: PreviewType,
+  request: Request
+): Promise<Response> {
+  if (type.kind === 'audio' || type.kind === 'video') {
+    const location = await mediaServer.urlFor({
+      path: absolutePath,
+      extension: type.extension,
+      mime: type.mime
+    })
+    if (location) {
+      return new Response(null, {
+        status: 302,
+        headers: { 'Cache-Control': 'no-store', Location: location }
+      })
+    }
   }
-  const start = Number(rawStart)
-  const requestedEnd = rawEnd ? Number(rawEnd) : size - 1
-  if (
-    !Number.isSafeInteger(start) ||
-    !Number.isSafeInteger(requestedEnd) ||
-    start < 0 ||
-    start >= size ||
-    requestedEnd < start
-  ) {
-    return null
-  }
-  return { start, end: Math.min(requestedEnd, size - 1) }
+  return serveFile(absolutePath, type, request)
 }
 
 async function serveFile(
@@ -206,11 +202,40 @@ function decodeSegments(pathname: string): string[] {
  * requests `appfile://` previews as soon as it hydrates; installing the handler
  * any later makes those requests fail with `ERR_UNKNOWN_URL_SCHEME`).
  */
-export function installFilePreviewProtocol(
-  getProjectFiles: () => ProjectFilesService | null,
-  resolveScopedPath?: (value: unknown) => Promise<string>
-): void {
-  protocol.handle(SCHEME, async (request) => {
+/**
+ * The canonical form of a path the user opened, or null when it does not exist.
+ *
+ * The grants themselves are compared in canonical form, because that is what
+ * the OS hand-off records: `/var` and `/private/var` name the same file on
+ * macOS and only one of them is what the user actually opened.
+ */
+async function canonicalOpenedPath(path: string): Promise<string | null> {
+  try {
+    return await realpath(path)
+  } catch {
+    return null
+  }
+}
+
+function isOpenedPath(canonicalPath: string): boolean {
+  return openWithService.grantedPaths().some((opened) => opened.path === canonicalPath)
+}
+
+export interface FilePreviewProtocolDeps {
+  /**
+   * The file service, awaited when the request arrives before the boot has
+   * published it. The boot resolves it; a boot that failed rejects it.
+   */
+  projectFiles: () => Promise<ProjectFilesService>
+  /** Authorizes a standalone path, awaited for the same reason. */
+  resolveScopedPath?: (value: unknown) => Promise<string | null>
+}
+
+export function installFilePreviewProtocol(deps: FilePreviewProtocolDeps): void {
+  /** Long-lived, so a scrub through a video reuses one grant; idle-stopped. */
+  const mediaServer = new MediaServer()
+  const resolveScopedPath = deps.resolveScopedPath
+  const respond = async (request: Request): Promise<Response> => {
     try {
       const url = new URL(request.url)
 
@@ -222,10 +247,9 @@ export function installFilePreviewProtocol(
         if (!relativePath) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
-        const projectFiles = getProjectFiles()
-        if (!projectFiles) return notFound()
-        const absolutePath = await projectFiles.resolveForExternalEditor(projectId, relativePath)
-        return serveFile(absolutePath, type, request)
+        const files = await deps.projectFiles()
+        const absolutePath = await files.resolveForExternalEditor(projectId, relativePath)
+        return serveLocalFile(mediaServer, absolutePath, type, request)
       }
 
       if (url.host === 'thread') {
@@ -238,17 +262,16 @@ export function installFilePreviewProtocol(
         if (!relativePath) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
-        const projectFiles = getProjectFiles()
-        if (!projectFiles) return notFound()
-        const remote = await projectFiles.remoteFileReader?.(projectId, threadId, relativePath)
+        const files = await deps.projectFiles()
+        const remote = await files.remoteFileReader?.(projectId, threadId, relativePath)
         if (remote) return serveRemoteFile(remote, type, request)
-        const absolutePath = await projectFiles.resolveForExternalEditor(
+        const absolutePath = await files.resolveForExternalEditor(
           projectId,
           relativePath,
           undefined,
           threadId
         )
-        return serveFile(absolutePath, type, request)
+        return serveLocalFile(mediaServer, absolutePath, type, request)
       }
 
       if (url.host === 'standalone') {
@@ -258,10 +281,17 @@ export function installFilePreviewProtocol(
         const type = previewTypeForPath(name, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         // Authorization is shared with privileged IPC: only paths the user
-        // opened (or picked in a dialog) resolve to a canonical path here.
+        // opened (or picked in a dialog) resolve to a canonical path here. The
+        // hand-off that opened the file is recorded the instant the operating
+        // system delivers it, which is before any service graph exists, so the
+        // viewer's own preview is answered without waiting on the boot at all.
+        const canonical = await canonicalOpenedPath(absolutePath)
+        if (!canonical) return notFound()
+        if (isOpenedPath(canonical)) return serveLocalFile(mediaServer, canonical, type, request)
         if (!resolveScopedPath) return notFound()
-        const safePath = await resolveScopedPath(absolutePath)
-        return serveFile(safePath, type, request)
+        const safePath = await resolveScopedPath(canonical)
+        if (!safePath) return notFound()
+        return serveLocalFile(mediaServer, safePath, type, request)
       }
 
       if (url.host === 'attachment') {
@@ -292,13 +322,28 @@ export function installFilePreviewProtocol(
         const name = url.searchParams.get('name') ?? ''
         const type = previewTypeForPath(name, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
-        return serveFile(absolutePath, type, request)
+        return serveLocalFile(mediaServer, absolutePath, type, request)
       }
 
       return notFound()
     } catch (error) {
-      Logger.error('appfile protocol request failed:', error)
+      // A preview whose service never arrived because the boot failed is a
+      // degraded feature, not a fault of the request, so it is reported as a
+      // skip instead of an error.
+      if (error instanceof BootUnavailableError) {
+        Logger.dev('appfile preview skipped:', error.message)
+      } else Logger.error('appfile protocol request failed:', error)
       return notFound()
     }
+  }
+  protocol.handle(SCHEME, async (request) => {
+    const startedAt = Date.now()
+    const response = await respond(request)
+    Logger.dev('appfile request', {
+      host: new URL(request.url).host,
+      status: response.status,
+      ms: Date.now() - startedAt
+    })
+    return response
   })
 }

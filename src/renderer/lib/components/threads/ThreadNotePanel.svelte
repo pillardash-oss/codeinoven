@@ -7,7 +7,7 @@
   import FindInSurface from '$lib/components/threads/FindInSurface.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
-  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -194,7 +194,7 @@
           />
         {/key}
       {:else if hasContent}
-        <MarkdownView text={tab.draftBody} class="w-full px-3.5 py-3 text-sm leading-5" />
+        <DeferredMarkdownView text={tab.draftBody} class="w-full px-3.5 py-3 text-sm leading-5" />
       {:else}
         <p class="px-3.5 py-3 text-sm leading-5 text-dimmed">Nothing written yet.</p>
       {/if}

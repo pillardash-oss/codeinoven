@@ -250,7 +250,12 @@ export async function assignAgentToCheck(
       const run =
         check.workflowRunId !== null
           ? await gitState
-              .ensureWorkflowRunDetail(projectId, identity.owner, identity.repo, check.workflowRunId)
+              .ensureWorkflowRunDetail(
+                projectId,
+                identity.owner,
+                identity.repo,
+                check.workflowRunId
+              )
               .catch(() => null)
           : null
       const job = jobForCheck(run, check)
@@ -412,7 +417,8 @@ export async function resolvePrConflictsWithAgent(
   agentAssist.open({
     projectId,
     title: `Resolve conflicts in PR #${pr.number} with agent`,
-    summary: 'The agent resolves the conflict markers in the prepared checkout, then stops for your review.',
+    summary:
+      'The agent resolves the conflict markers in the prepared checkout, then stops for your review.',
     scopeBucketId,
     scopeLocked: true,
     prepare: async ({ project, settings }) => {
@@ -447,7 +453,8 @@ export async function resolveCurrentConflictsWithAgent(
   agentAssist.open({
     projectId,
     title: `Resolve conflicts in ${branchLabel} with agent`,
-    summary: 'The agent resolves the conflict markers in this checkout, then stops for your review.',
+    summary:
+      'The agent resolves the conflict markers in this checkout, then stops for your review.',
     scopeBucketId,
     scopeLocked: true,
     prepare: async ({ project, settings }) =>

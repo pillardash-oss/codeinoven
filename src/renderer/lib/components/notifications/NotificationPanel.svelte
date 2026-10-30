@@ -44,6 +44,7 @@
     type Thread
   } from '$shared/types'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { preloadThreadById } from '$lib/stores/thread-preload'
 
   interface Props {
     onOpenThread?: (
@@ -82,6 +83,34 @@
       }
 
   let { onOpenThread }: Props = $props()
+
+  /**
+   * Debounce for the hover warmup.
+   *
+   * A notice row is one row: the pointer crossing the list would otherwise fire
+   * a read for every card it passes, so the warmup waits as long as a thread row
+   * does. It is the same 200 ms the sidebar uses, so the two surfaces feel alike.
+   */
+  const PRELOAD_DEBOUNCE_MS = 200
+  let preloadTimer: ReturnType<typeof setTimeout> | undefined
+
+  /**
+   * Warm the thread a row opens, before the click reads it.
+   *
+   * The panel is handed ids, never rows, so this resolves the row and hands it to
+   * the same warmup the sidebar runs on hover: the transcript and, for a thread
+   * whose turn is still open, its durable trace. Clicking afterwards opens a warm
+   * conversation instead of paying that read on the click.
+   */
+  function schedulePreload(projectId: string, threadId: string | undefined): void {
+    clearTimeout(preloadTimer)
+    if (!threadId) return
+    preloadTimer = setTimeout(() => preloadThreadById(projectId, threadId), PRELOAD_DEBOUNCE_MS)
+  }
+
+  function cancelPreload(): void {
+    clearTimeout(preloadTimer)
+  }
 
   const topTabs: { key: NotificationTopTab; label: string }[] = [
     { key: 'projects', label: 'Projects' },
@@ -557,6 +586,8 @@
     aria-label={`${kindLabel(n.kind)}: ${n.title}. Click to navigate to thread`}
     title={`${n.title}${displayBody(n) ? `   ${displayBody(n)}` : ''}`}
     onclick={() => void navigateToNotification(n)}
+    onmouseenter={() => schedulePreload(n.projectId, n.threadId)}
+    onmouseleave={cancelPreload}
     onkeydown={(e: KeyboardEvent) => {
       // Ignore keys that belong to a nested control (the stack-trace
       // toggle), which would otherwise navigate away on Enter.
@@ -654,6 +685,9 @@
       ? 'opacity-60 pointer-events-none'
       : ''}"
     style="border-color: var(--color-missed)"
+    role="group"
+    onmouseenter={() => schedulePreload(ASSISTANT_SPACE_ID, run.threadId)}
+    onmouseleave={cancelPreload}
   >
     <div class="flex w-2 shrink-0 pt-1">
       <StatusBadge tone="missed" title="Missed run" />
@@ -706,6 +740,9 @@
       ? 'pointer-events-none opacity-60'
       : ''}"
     style="border-left-color: {STATUS_TONE_COLORS[backgroundRunTone(run.outcome)]}"
+    role="group"
+    onmouseenter={() => schedulePreload(ASSISTANT_SPACE_ID, run.runThreadId)}
+    onmouseleave={cancelPreload}
   >
     <button
       type="button"

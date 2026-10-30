@@ -750,6 +750,45 @@ describe('specification IPC', () => {
   })
 })
 
+describe('engineering hydration of a deleted thread', () => {
+  it('answers every Engineering read with empty state instead of rejecting', async () => {
+    const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-missing-thread-ipc-'))
+    const storage = new StorageEngine(storageRoot)
+    await storage.initialize()
+    seedSpecThread(storageRoot)
+    registerIpcHandlers(storage, database)
+    // The conversation view hydrates Engineering state on every turn boundary,
+    // and a thread deleted in this window, in a sibling one, or swept with its
+    // coordinator can still be the one it is hydrating. Rejecting there is the
+    // raw "Thread not found" error the user sees for a thread that is already
+    // gone, so every one of these reads answers empty instead.
+    database.run('DELETE FROM threads WHERE id = ?', 'thread-1')
+
+    const event = trustedEvent()
+    await expect(
+      handlers.get('spec:getActive')?.(event, 'project-1', 'thread-1')
+    ).resolves.toBeNull()
+    await expect(
+      handlers.get('prd:getWorkflow')?.(event, 'project-1', 'thread-1')
+    ).resolves.toBeNull()
+    await expect(
+      handlers.get('prd:getActive')?.(event, 'project-1', 'thread-1')
+    ).resolves.toBeNull()
+    await expect(
+      handlers.get('brainstorm:getWorkflow')?.(event, 'project-1', 'thread-1')
+    ).resolves.toBeNull()
+    await expect(
+      handlers.get('brainstorm:getActive')?.(event, 'project-1', 'thread-1')
+    ).resolves.toBeNull()
+    await expect(
+      handlers.get('audit:getActive')?.(event, 'project-1', 'thread-1')
+    ).resolves.toBeNull()
+    await expect(
+      handlers.get('assignment:getActive')?.(event, 'project-1', 'thread-1')
+    ).resolves.toBeNull()
+  })
+})
+
 describe('git IPC', () => {
   it('keeps thread.branch coherent when the app drives a checkout', async () => {
     const gitDir = await mkdtemp(join(tmpdir(), 'codeinoven-git-ipc-'))

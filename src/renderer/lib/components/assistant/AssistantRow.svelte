@@ -40,7 +40,8 @@
      * wears, so an assistant summarizes its work the same way.
      */
     stateCounts: ThreadStateCountsValue
-    /** At least one task or run waits on the user or has failed. */
+    /** At least one task or run needs the user: parked on a card, failed, or
+     *  waiting on a provider retry. */
     attention: boolean
     /** Any task carries a pending missed run. */
     missed: boolean

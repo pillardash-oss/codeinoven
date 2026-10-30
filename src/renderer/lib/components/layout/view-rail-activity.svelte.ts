@@ -116,7 +116,11 @@ function plural(noun: string, count: number): string {
 }
 
 /** Tooltip/aria text naming every active group in the family, so a hidden
- *  attention, error or retry group is still reachable from the single pill. */
+ *  attention, error or retry group is still reachable from the single pill.
+ *
+ *  Every group a family can carry is named, failures included: a pill that said
+ *  "2 working" over three threads hid the third thread's failure, which is the
+ *  one fact the rail exists to surface. */
 function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateCounts): string {
   const noun = FAMILY_NOUN[family]
   const parts: string[] = []
@@ -129,6 +133,9 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateC
         activity.attention === 1 ? 's' : ''
       } attention`
     )
+  }
+  if (activity.error > 0) {
+    parts.push(`${activity.error} ${plural(noun, activity.error)} failed`)
   }
   if (activity.retry > 0) {
     parts.push(`${activity.retry} ${plural(noun, activity.retry)} waiting to retry`)
@@ -266,8 +273,11 @@ export class ViewRailActivity {
 
 /**
  * The single activity pill a rail view shows, chosen by priority: working
- * outranks attention, which outranks a parked retry. The returned label always
- * carries the family's full breakdown. Returns null when the family is quiet.
+ * outranks attention, which outranks a failure, which outranks a parked retry.
+ * Working is what the user asked for; attention is a card only they can answer;
+ * a failure needs them until they act; a retry resolves itself when its window
+ * opens. The returned label always carries the family's full breakdown. Returns
+ * null when the family is quiet.
  *
  * The review-ready bucket a project strip draws in purple is deliberately not
  * badged here. The rail answers "what wants the user now" across every project
@@ -360,6 +370,22 @@ export function viewBadgesFor(
       playing
     }
   }
+  // A failure outranks a parked retry: a retry resolves itself when its window
+  // opens, while a failed thread asked for the user and nothing else will move
+  // it. Without this branch a family whose only news was a failure wore no pill
+  // at all, so a provider error sat on the rail looking like a quiet view.
+  if (activity.error > 0) {
+    return {
+      activity: {
+        tone: 'error',
+        count: activity.error,
+        label: familyActivityLabel(family, activity),
+        icon
+      },
+      unread: unreadBadge,
+      playing
+    }
+  }
   if (activity.retry > 0) {
     return {
       activity: {
@@ -401,6 +427,14 @@ function browserAgentBadge(activity: ThreadStateCounts): ViewBadge | null {
       icon: FAMILY_ICONS.chats
     }
   }
+  if (activity.error > 0) {
+    return {
+      tone: 'error',
+      count: activity.error,
+      label: browserAssistantLabel(activity.error, 'failed'),
+      icon: FAMILY_ICONS.chats
+    }
+  }
   if (activity.retry > 0) {
     return {
       tone: 'retry',
@@ -414,7 +448,6 @@ function browserAgentBadge(activity: ThreadStateCounts): ViewBadge | null {
   }
   return null
 }
-
 /** Tooltip/aria text for a browser tab's assistant conversations: how many of
  *  them, and what they are doing. */
 function browserAssistantLabel(count: number, verb: string): string {

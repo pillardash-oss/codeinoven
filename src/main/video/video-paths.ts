@@ -7,6 +7,7 @@ import {
   VIDEO_STUDIO_FILE,
   type VideoStudioDocument
 } from '../../lib/video/studio'
+import { refreshVideoEditAssetDurations } from './video-edit-asset-refresh'
 
 export async function videoFile(root: string, raw: unknown): Promise<string> {
   if (
@@ -151,7 +152,14 @@ export async function readVideoStudio(folder: string): Promise<VideoStudioDocume
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return validateVideoStudio({})
     throw error
   }
-  return validateVideoStudio(JSON.parse(text))
+  const raw: unknown = JSON.parse(text)
+  // A stale asset duration is metadata drift, not corruption: the media itself is
+  // asked how long it is before the document is judged, so a composition whose
+  // source was re-encoded outside the editor still opens.
+  await refreshVideoEditAssetDurations(folder, raw, new AbortController().signal).catch(
+    () => undefined
+  )
+  return validateVideoStudio(raw)
 }
 export async function writeVideoStudio(folder: string, raw: unknown): Promise<VideoStudioDocument> {
   const document = validateVideoStudio(raw)

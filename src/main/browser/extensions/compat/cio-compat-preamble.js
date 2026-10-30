@@ -2368,6 +2368,12 @@
         tabActivity.activeTabId = command.tab.id
       }
       contextMenuClicked.__cioEmit([command.info || {}, command.tab || null])
+    } else if (command.kind === 'keep-alive') {
+      // The app touches a worker that owns a native messaging port so it is not
+      // released while it holds one, which is Chromium's own rule for a native
+      // port. Recorded only so a worker that never seems to sleep can be
+      // explained from its own mailbox.
+      state.nativeKeepAliveAt = Date.now()
     } else if (
       command.kind === 'native-connect-result' ||
       command.kind === 'native-message' ||

@@ -132,13 +132,13 @@ export function rowArrangement(
   return sections.map((section) => `${section.key}#${section.rowKeys.join(',')}`).join('|')
 }
 
-/** How long a page of history takes to settle into place after a load, and how
- *  far it travels. The rate is the app's single arrival rate (160 ms of
- *  easeOutCubic); the travel is longer than the 4 px a row takes because a page of
- *  history is a bigger arrival, and because all the reader can watch of one is
- *  the band above the anchor. */
+/** How long a page of history takes to settle into place after a load. The rate
+ *  is the app's single arrival rate (160 ms of easeOutCubic). There is no travel
+ *  of its own: a page of history arrives ABOVE the reader's viewport and the
+ *  layout is held still across the whole arrival, so the only thing a page may
+ *  do is fade in   anything that moved as well would read as the transcript
+ *  jumping under them. */
 const HISTORY_ARRIVE_MS = 160
-const HISTORY_ARRIVE_TRAVEL = 8
 /** The most blocks one load ever animates. The reader's viewport already bounds
  *  the selection, so this only caps a pathological pane of one-line blocks; past
  *  it the blocks nearest the reader (the end of the list) are the ones kept. */
@@ -154,10 +154,9 @@ const HISTORY_ARRIVE_MAX = 12
  * animation promotes each of them to its own compositor layer. That layer churn
  * is what `src/renderer/app.css` removed from `.message-block` for good reason.
  * Here the blocks are in the document first, so only the ones inside the reader's
- * viewport travel: everything above it mounts without motion, which is where
- * nobody can watch it. The reader's own content never moves, and the arrived
- * blocks settle from a few pixels ABOVE their final place, the direction they
- * came from.
+ * viewport fade: everything above it mounts without motion, which is where nobody
+ * can watch it. The fade is the whole of the motion   the blocks never move, and
+ * the layout above the reader is held still across the arrival.
  *
  * `blocks` are in document order (top to bottom) and `scroller` is the element
  * that clips them. Nothing plays under reduced motion, and a block outside the
@@ -188,13 +187,10 @@ export function playHistoryArrive(
   // Every box is read before the first animation starts: one layout for the whole
   // arrival instead of one per block.
   for (const node of playing) {
-    node.animate(
-      [
-        { opacity: 0, transform: `translateY(-${HISTORY_ARRIVE_TRAVEL}px)` },
-        { opacity: 1, transform: 'none' }
-      ],
-      { duration: HISTORY_ARRIVE_MS, easing: CUBIC_OUT_CSS }
-    )
+    node.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: HISTORY_ARRIVE_MS,
+      easing: CUBIC_OUT_CSS
+    })
   }
   return playing.length
 }

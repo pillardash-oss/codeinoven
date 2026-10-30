@@ -1,13 +1,13 @@
 /**
- * OS "Open in CodeInOven" hand-off.
+ * OS "Open in CodeInOven" hand-off, and the one-instance-per-data-root rule.
  *
  * Folders and files the user opens from Finder/Explorer, drops on the Dock or
  * taskbar icon, or passes on the command line are queued by the open-with
- * service and drained by the renderer. A launch that carries paths takes the
- * single-instance lock so a second "Open in CodeInOven" reuses the window that
- * already answered one instead of stacking another app instance; an ordinary
- * launch never requests the lock, so multiple windows remain available exactly
- * as before.
+ * service and drained by the renderer. A second launch never boots beside the
+ * running instance: it takes the single-instance lock, hands its paths over as
+ * `second-instance`, and exits. The lock is keyed by the Electron userData path,
+ * so an instance with its own data root (a probe, a worktree pointed at its own
+ * root) still runs beside this one.
  */
 
 import { app } from 'electron'
@@ -27,17 +27,30 @@ export interface OpenWithState {
  */
 export function installOpenWithHandling(state: OpenWithState): void {
   const launchedPaths = parseOpenedPathArguments(process.argv)
-  const handlesOpenedPaths = launchedPaths.length > 0 && app.requestSingleInstanceLock()
-  if (handlesOpenedPaths) {
-    app.on('second-instance', (_event, argv) => {
-      void relayOpenedPaths(parseOpenedPathArguments(argv))
-    })
-  } else if (launchedPaths.length > 0) {
-    // Another process already owns the open-with lock; Electron forwards this
-    // argv to it as `second-instance`. Exit before any window or service starts.
+  // One instance per data root, always.
+  //
+  // A second boot beside a live one doubles everything the running instance is
+  // already doing: harness children, WAL writers, file watchers, sweeps. Every
+  // launch that measured 13-20 s in the durable startup log was exactly that
+  // overlap (each logged `Automatic resume deferred to another live CodeInOven
+  // instance` for the previous pid, with 2-17 orphaned harness processes left
+  // behind), while two launches on the same code with nothing else running
+  // painted in 744 ms and 822 ms.
+  const ownsInstance = app.requestSingleInstanceLock()
+  if (!ownsInstance) {
+    // Electron already forwarded this argv to the running instance as
+    // `second-instance`. Exit before any window or service starts.
     app.exit(0)
+    return
   }
-  if (handlesOpenedPaths) void openWithService.ingest(launchedPaths)
+  app.on('second-instance', (_event, argv) => {
+    // The lock is what makes a second launch reach this instance at all, so the
+    // window that is already open has to be the thing the user ends up looking
+    // at, with the paths they tried to open handed to it.
+    focusRunningWindow(state)
+    void relayOpenedPaths(parseOpenedPathArguments(argv))
+  })
+  if (launchedPaths.length > 0) void openWithService.ingest(launchedPaths)
 
   /**
    * macOS delivers "Open with" and Dock drops as an Apple Event rather than an
@@ -57,6 +70,16 @@ export function installOpenWithHandling(state: OpenWithState): void {
 async function relayOpenedPaths(rawPaths: readonly string[]): Promise<void> {
   if (rawPaths.length === 0) return
   await openWithService.ingest(rawPaths)
+}
+
+/** Bring the window that already answered a second launch back to the front. */
+function focusRunningWindow(state: OpenWithState): void {
+  if (state.quitCleanupStarted) return
+  const window = state.mainWindow && !state.mainWindow.isDestroyed() ? state.mainWindow : null
+  if (!window) return
+  if (window.isMinimized()) window.restore()
+  if (!window.isVisible()) window.show()
+  window.focus()
 }
 
 /**

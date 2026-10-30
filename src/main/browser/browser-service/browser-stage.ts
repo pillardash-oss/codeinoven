@@ -32,6 +32,7 @@
 import { BaseWindow, screen, type WebContents, type WebContentsView } from 'electron'
 import { Logger } from '../../system/logger'
 import type { BrowserViewport } from './browser-types'
+import { liveContents } from './browser-view-contents'
 
 /** How much of each parked view stays inside the stage window. Liveness only
  *  needs a non-empty intersection, so the views sit mostly outside the window
@@ -155,15 +156,39 @@ export class BrowserTabStage {
    * `restart`.
    */
   async verifyVisible(view: WebContentsView): Promise<boolean> {
+    if (this.disposed) return false
     const contents: WebContents | undefined = view.webContents
     if (!contents) return false
     const entry = this.parked.get(contents.id)
     if (!entry || contents.isDestroyed()) return false
     if (!this.ensureWindow() || !this.ensureShown()) return false
     this.placeView(entry.view, entry.viewport, this.tileIndexFor(contents.id))
+    // A page whose render frame is mid-replacement (a navigation committing, a
+    // renderer that just went away) has no frame to run a script in, and
+    // `executeJavaScript` then throws from inside Electron's own send path,
+    // which is where "Render frame was disposed before WebFrameMain could be
+    // accessed" came from: the contents was alive, its frame was not. Asking
+    // the frame first turns that race into the answer this method already
+    // gives, instead of an error on the main process' console.
+    if (!this.frameIsLive(contents)) return false
     try {
       const state: unknown = await contents.executeJavaScript('document.visibilityState')
       return state === 'visible'
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Whether a page still has a main frame a script can run in. Reading
+   * `mainFrame` on a contents whose frame was disposed throws, and a detached
+   * frame cannot answer a script at all, so neither is a failure worth
+   * reporting: both mean "nothing to ask yet".
+   */
+  private frameIsLive(contents: WebContents): boolean {
+    try {
+      const frame = contents.mainFrame
+      return frame !== undefined && !frame.detached
     } catch {
       return false
     }
@@ -188,7 +213,7 @@ export class BrowserTabStage {
     setImmediate(() => {
       if (this.disposed) return
       for (const entry of restored) {
-        if (!entry.view.webContents.isDestroyed()) this.park(entry.view, entry.viewport)
+        if (liveContents(entry.view)) this.park(entry.view, entry.viewport)
       }
     })
   }

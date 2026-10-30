@@ -21,10 +21,17 @@ import { withWorkRegistryLock } from './work-folder-registry'
  *
  * The two are separate operations with separate reach, and the caller says which
  * one it is asking for: `scope: 'work'` moves the one folder the request names and
- * writes nothing about the project, `scope: 'project'` records the project's folder
- * and moves every folder of that kind into it. The scope is the only thing that
+ * writes nothing about the project, `scope: 'project'` records where the project's
+ * NEW work is written and moves nothing at all. The scope is the only thing that
  * decides, so a change made from one design's dialog cannot reach the project, and
  * a change made from the board cannot claim to have been about one design.
+ *
+ * A save-folder change deliberately does not sweep existing work into the new
+ * folder. Where new work goes and where work already written lives are two
+ * separate facts, and only a move changes the second one: a user who points the
+ * save folder at `docs/designs` keeps the designs that are already somewhere else
+ * exactly where they are, and moving one design out of the collection leaves the
+ * collection - and every design still in it - alone.
  *
  * Everything here is validated against what is on disk before a single folder
  * moves, and a failure puts the folders that already moved back where they were.
@@ -59,11 +66,12 @@ export async function updateWorkDetails(input: {
   /**
    * Whether this scope records one save root for all of its work.
    *
-   * A project does, and the dialog's "move every design" is that setting. A
-   * conversation workspace does not: its root is the directory it runs in, and
-   * every assistant task shares one project id, so a stored root there would
-   * repoint every assistant's work at one folder. A single move is still allowed;
-   * the project-wide one is refused.
+   * A project does, and the dialog's "change save folder" is that setting: where
+   * its next design or composition is written, which is not a move. A conversation
+   * workspace does not: its root is the directory it runs in, and every assistant
+   * task shares one project id, so a stored root there would repoint every
+   * assistant's work at one folder. A single move is still allowed; the
+   * project-wide setting is refused.
    */
   projectScope?: boolean
   list: () => Promise<DesignEntry[]>
@@ -129,23 +137,28 @@ async function moveDetails(
   }
   const available = items.filter((item) => !item.missing)
   const selected = available.find((item) => item.directory === details.directory)
-  if (!selected && (details.directory !== '' || details.scope === 'work' || !root))
+  // A save-folder change needs no folder at all: it records where the next design
+  // or composition is written, and the folder the dialog happened to be opened on
+  // may well have been removed in the meantime.
+  const movesWork = details.scope === 'work'
+  if (movesWork && !selected)
     throw new Error('This work no longer exists. Refresh the board and try again.')
   // A folder that is a collection of other work is not a design or a video, and
   // moving one would take every folder inside it along. The board lists work
   // rather than containers, so this only fires on a request that names one
   // directly; refusing it here is what keeps a single move single.
-  const moving = details.scope === 'project' ? available : selected ? [selected] : []
+  const moving = selected ? [selected] : []
   if (moving.some((item) => isWorkRootFolder(projectId, item.directory))) {
     throw new Error('Choose a folder for this one design or video, not the project save folder')
   }
-  if (moving.length > 500) throw new Error('Move at most 500 folders at once')
-  const plans = moving
-    .map((item) => ({
-      from: item.directory,
-      to: `${root ?? dirname(item.directory)}/${item === selected ? (name ?? item.name) : item.name}`
-    }))
-    .filter((plan) => plan.from !== plan.to)
+  const plans = movesWork
+    ? moving
+        .map((item) => ({
+          from: item.directory,
+          to: `${root ?? dirname(item.directory)}/${name ?? item.name}`
+        }))
+        .filter((plan) => plan.from !== plan.to)
+    : []
   const canonicalProject = await realpath(projectPath)
   if (root) {
     let ancestor = resolve(projectPath, root)

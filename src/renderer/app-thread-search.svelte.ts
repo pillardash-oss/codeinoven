@@ -11,6 +11,9 @@ import { assistants } from '$lib/stores/assistants.svelte'
 import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
 import { threadPaletteRow } from '$lib/threads/thread-palette-row'
 import {
+  ASSISTANT_SPACE_ID,
+  GLOBAL_BROWSER_PROJECT_ID,
+  INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   type Assistant,
   type Thread,
@@ -28,6 +31,15 @@ const SEARCH_DEBOUNCE_MS = 160
 const MIN_QUERY_LENGTH = 2
 const MAX_RESULTS = 60
 const RESULT_LIMIT = 50
+/**
+ * How long the panel may say "Searching…" before it stops waiting on the
+ * database answer.
+ *
+ * The rows from the renderer's own scope list are already on screen by then, so
+ * this only decides when the panel stops claiming to be busy. A search whose
+ * answer lands afterwards still replaces the rows.
+ */
+const SEARCH_WATCHDOG_MS = 3000
 /** Assistant-name matches surfaced above the task rows. */
 const MAX_ASSISTANT_RESULTS = 12
 
@@ -53,8 +65,18 @@ export class ThreadSearchPaletteController {
   scopeIds = $state<string[]>([])
 
   private timer: number | null = null
+  private watchdog: number | null = null
   private request = 0
   private lastQuery = ''
+  /**
+   * Threads matched from the renderer's own scope list, painted on the keystroke.
+   *
+   * This is what the panel shows in the first frame: the title matches the app
+   * already holds in memory, needing no IPC, no database worker and no model. The
+   * database answer replaces them when it lands, and the semantic ranking replaces
+   * that in turn.
+   */
+  private previewThreads: readonly Thread[] = []
   /** Latest result set, kept so rows can be rebuilt (scope badges) without
    *  re-running the search. */
   private lastResults: readonly ThreadSearchResult[] = []
@@ -78,12 +100,14 @@ export class ThreadSearchPaletteController {
       window.clearTimeout(this.timer)
       this.timer = null
     }
+    this.clearWatchdog()
     this.request++
     this.loading = false
     this.actions = []
     this.targets.clear()
     this.scopeIds = []
     this.lastResults = []
+    this.previewThreads = []
     this.lastQuery = ''
     this.renderedRequest = -1
     this.deferredIntents.clear()
@@ -120,12 +144,20 @@ export class ThreadSearchPaletteController {
       this.actions = []
       this.targets.clear()
       this.lastResults = []
+      this.previewThreads = []
       this.renderedRequest = -1
       this.deferredIntents.clear()
       return
     }
 
-    this.loading = true
+    // Paint from memory in this frame, before the debounce and before any IPC:
+    // the workspace already holds its threads, so the panel answers the keystroke
+    // itself instead of waiting on a database worker or a model load to show a
+    // row. Everything after this only replaces what is already visible.
+    this.previewThreads = this.matchKnownThreads(normalized)
+    this.lastResults = []
+    this.renderRows()
+    this.loading = this.actions.length === 0
     this.timer = window.setTimeout(() => {
       this.timer = null
       void this.search(normalized, request)
@@ -142,7 +174,10 @@ export class ThreadSearchPaletteController {
       this.timer = null
     }
     const request = ++this.request
-    this.loading = true
+    this.previewThreads = this.matchKnownThreads(this.lastQuery.trim())
+    this.lastResults = []
+    this.renderRows()
+    this.loading = this.actions.length === 0
     void this.search(this.lastQuery.trim(), request)
   }
 
@@ -154,12 +189,71 @@ export class ThreadSearchPaletteController {
     else this.deps.openThread(target.thread)
   }
 
+  /**
+   * Stop claiming to be busy if the database answer has not landed in time.
+   *
+   * The in-memory rows are already on screen, so a slow answer (a maintenance
+   * pass ahead of this query in the worker's single-flight queue, an embedding
+   * model load, a slow disk) must cost the row hydration and nothing else. When
+   * the answer finally arrives it still replaces the rows.
+   */
+  private armWatchdog(request: number): void {
+    this.clearWatchdog()
+    this.watchdog = window.setTimeout(() => {
+      this.watchdog = null
+      if (request !== this.request || !this.paletteOpen) return
+      this.loading = false
+    }, SEARCH_WATCHDOG_MS)
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdog === null) return
+    window.clearTimeout(this.watchdog)
+    this.watchdog = null
+  }
+
+  /**
+   * The threads the renderer already knows that match `query` by title.
+   *
+   * Only the title is matched here: message content lives in the database, and
+   * this pass exists to paint in the same frame as the keystroke, not to replace
+   * the full-text answer that follows. Family and scope filtering mirror the
+   * database scoping so the first frame cannot show a row from another family.
+   */
+  private matchKnownThreads(query: string): readonly Thread[] {
+    const needle = query.toLowerCase()
+    const matches: Thread[] = []
+    for (const thread of scopeState.allScopeThreads) {
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      if (!this.inFamilyScope(thread)) continue
+      if (!thread.title.toLowerCase().includes(needle)) continue
+      matches.push(thread)
+    }
+    matches.sort((left, right) => right.lastActivity - left.lastActivity)
+    return matches.slice(0, MAX_RESULTS)
+  }
+
+  /** Whether a known thread belongs to the family and scope this screen searches. */
+  private inFamilyScope(thread: Thread): boolean {
+    if (this.family === 'chats') return thread.projectId === INBOX_PROJECT_ID
+    if (this.family === 'assistant') {
+      if (thread.projectId !== ASSISTANT_SPACE_ID) return false
+      if (this.scopeIds.length === 0) return true
+      return this.scopeIds.includes(thread.assistantId ?? '')
+    }
+    if (thread.projectId === INBOX_PROJECT_ID) return false
+    if (thread.projectId === ASSISTANT_SPACE_ID) return false
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) return false
+    return this.scopeIds.length === 0 || this.scopeIds.includes(thread.projectId)
+  }
+
   private async search(query: string, request: number): Promise<void> {
     // A superseded request's held semantic batches belong to rows that will never
     // land; only the request being searched now may keep its held batch.
     for (const key of [...this.deferredIntents.keys()]) {
       if (key !== request) this.deferredIntents.delete(key)
     }
+    this.armWatchdog(request)
     let results: ThreadSearchResult[]
     try {
       // Scoped search: fan out per selected sub-container so the manager can use
@@ -169,6 +263,7 @@ export class ThreadSearchPaletteController {
     } catch {
       results = []
     }
+    this.clearWatchdog()
     if (request !== this.request || !this.paletteOpen) return
 
     this.lastResults = results
@@ -277,7 +372,7 @@ export class ThreadSearchPaletteController {
    *  cached scope boards, so a board that lands after the search refreshes its
    *  rows without another query. */
   private renderRows(): void {
-    const { actions, targets } = this.buildRows(this.lastResults)
+    const { actions, targets } = this.buildRows(this.lastResults, this.previewThreads)
     this.targets.clear()
     for (const [id, target] of targets) this.targets.set(id, target)
     this.actions = actions
@@ -378,7 +473,10 @@ export class ThreadSearchPaletteController {
   }
 
   /** Map search results to palette rows and their open targets. */
-  private buildRows(results: readonly ThreadSearchResult[]): {
+  private buildRows(
+    results: readonly ThreadSearchResult[],
+    preview: readonly Thread[]
+  ): {
     actions: ActionDefinition[]
     targets: SvelteMap<ActionDefinition['id'], ThreadSearchTarget>
   } {
@@ -386,23 +484,31 @@ export class ThreadSearchPaletteController {
     const assistants = this.buildAssistantRows(this.lastQuery)
     const actions: ActionDefinition[] = assistants.actions
     for (const [id, target] of assistants.targets) targets.set(id, target)
-    for (const result of results) {
-      const thread = result.thread
-      if (thread.archived || isOrchestrationChildThread(thread)) continue
-      const container = this.containerFor(thread)
+    /** Append one thread row, never twice: the target map is the seen-set. */
+    const addThread = (thread: Thread, snippet?: string): void => {
+      if (thread.archived || isOrchestrationChildThread(thread)) return
       const id = actionId(`thread:${thread.projectId}:${thread.id}`)
+      if (targets.has(id)) return
       targets.set(id, { thread })
       actions.push(
         threadPaletteRow({
           id,
           thread,
-          container,
-          ...(result.kind === 'message' && result.snippet ? { snippet: result.snippet } : {}),
+          container: this.containerFor(thread),
+          ...(snippet ? { snippet } : {}),
           // Only project threads carry a scope board.
           withScope: this.family === 'projects'
         })
       )
     }
+    for (const result of results) {
+      addThread(result.thread, result.kind === 'message' ? result.snippet : undefined)
+    }
+    // The in-memory matches fill in behind the database ranking: a thread this
+    // window already holds is a real hit even when the answer that just landed
+    // ranked other threads ahead of it, so the first frame's rows are never
+    // yanked out from under the reader.
+    for (const thread of preview) addThread(thread)
     return { actions: actions.slice(0, MAX_RESULTS), targets }
   }
 }

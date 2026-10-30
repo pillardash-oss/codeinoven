@@ -6,6 +6,8 @@ export const CIO_ASK_USER_TOOL_NAME = 'cio_ask_user'
 export const CIO_TODO_WRITE_TOOL_NAME = 'cio_todo_write'
 /** Asks the user for file paths, validates them, and returns a structured file list. */
 export const CIO_REQUEST_FILES_TOOL_NAME = 'cio_request_files'
+/** Records why the run needs a protected file, before the permission card asks the user. */
+export const CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME = 'cio_sensitive_access_reason'
 /** Spawns nested sub-agent worker threads controlled by the primary agent. */
 export const CIO_SPAWN_AGENT_TOOL_NAME = 'cio_spawn_agent'
 /** Checks or waits for spawned sub-agent threads; returns metadata only. */

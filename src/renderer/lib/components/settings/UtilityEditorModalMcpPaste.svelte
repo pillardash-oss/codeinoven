@@ -53,20 +53,22 @@
       <span class="text-xs font-semibold">Paste a configuration</span>
       <span class="truncate text-[0.6875rem] text-muted">Fill these fields from JSON</span>
     </span>
-    <CioChevronDown size={14} class="shrink-0 text-muted transition-transform group-open:rotate-180" />
+    <CioChevronDown
+      size={14}
+      class="shrink-0 text-muted transition-transform group-open:rotate-180"
+    />
   </summary>
   <div class="border-t p-3">
     <p class="text-[0.6875rem] leading-relaxed text-muted">
-      Paste an <span class="font-mono">mcpServers</span> block copied from a README, another
-      harness, or a plugin's install notes. Only the server this modal edits changes.
+      Paste an <span class="font-mono">mcpServers</span> block copied from a README, another harness,
+      or a plugin's install notes. Only the server this modal edits changes.
     </p>
     <textarea
       class="mt-2 min-h-20 w-full resize-y border bg-raised px-3 py-2 font-mono text-xs outline-none focus:border-primary disabled:opacity-50"
       aria-label="Paste an MCP server configuration as JSON"
       placeholder={'{\n  "mcpServers": {\n    "server-name": {\n      "command": "/path/to/server",\n      "args": ["--flag"]\n    }\n  }\n}'}
-      disabled={disabled}
-      bind:value={pasted}
-    ></textarea>
+      {disabled}
+      bind:value={pasted}></textarea>
     {#if error}
       <p class="mt-1 text-[0.6875rem] text-danger" role="alert">{error}</p>
     {/if}

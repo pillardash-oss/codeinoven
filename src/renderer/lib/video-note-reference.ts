@@ -1,5 +1,4 @@
 import type { ResponseReferenceAnchor } from './stores/response-references.svelte'
-import type { BrowserCompositionTab } from '$shared/ipc-contract'
 import { videoCaptionAt, videoFrameAt, videoTimecode } from '$shared/video/timeline'
 import type { VideoStudioDocument } from '$shared/video/studio'
 
@@ -17,12 +16,25 @@ import type { VideoStudioDocument } from '$shared/video/studio'
 /** Ceiling on the descriptor, consistent with the design element reference. */
 const MAX_DESCRIPTOR_LENGTH = 4_000
 
+/**
+ * The rate and length a note quotes, from whichever surface is writing it.
+ *
+ * A note written beside the playing composition reads them from the browser tab
+ * that is playing it, and a note written from the editor's own timeline reads them
+ * from the edit the editor has open. Both answer with a frame number, so a note
+ * taken from the editor is as precise as one taken from the picture.
+ */
+export interface VideoNoteTiming {
+  fps: number
+  duration: number
+}
+
 /** What a note needs to name its moment well, beyond the playhead itself. */
 export interface VideoNoteContext {
   /** Project-relative composition folder the moment belongs to. */
   directory: string
   /** The composition the tab is showing, for duration and rate. */
-  composition: BrowserCompositionTab | null
+  composition: VideoNoteTiming | null
   /** The composition's saved edits, for the caption the moment falls inside. */
   document: VideoStudioDocument | null
   /** The browser tab showing the composition, when one is open. */

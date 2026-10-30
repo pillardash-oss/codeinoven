@@ -9,8 +9,8 @@
 </script>
 
 {#if current && fileCount > 0}
-  <!-- The rail's own tooltip already carries the plain-text summary; this card
-       is the richer, labelled read, so it is presentational for narration. -->
+  <!-- The rail's hover flyout is this card, so the rail carries no summary of
+       its own; this is the one place the line changes are read. -->
   <div class="min-w-44 border border-border bg-surface px-2.5 py-2 shadow-lg" aria-hidden="true">
     <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
       {heading}

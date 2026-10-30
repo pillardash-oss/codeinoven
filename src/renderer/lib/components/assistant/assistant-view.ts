@@ -425,6 +425,21 @@ export function assistantSiblingRuns<
  */
 export const TASK_RUN_PREVIEW = 3
 
+/**
+ * Whether a run has to be listed even when it falls outside the preview slice.
+ *
+ * A run is where an assistant actually executes, so the run is where a provider
+ * failure, a scheduled retry, or a card waiting on the user lands. Those are the
+ * moments the sidebar exists to report, and hiding one behind the newest three
+ * rows left the task looking settled while an older run sat waiting for an answer
+ * nobody could see.
+ */
+export function runNeedsUserAttention(run: Pick<Thread, 'status'>): boolean {
+  return (
+    run.status === 'failed' || run.status === 'working-paused' || run.status === 'awaiting_approval'
+  )
+}
+
 /** The runs a task row renders: the newest slice, or the whole list expanded. */
 export function previewRuns<T>(runs: readonly T[], expanded: boolean): T[] {
   return expanded ? [...runs] : runs.slice(0, TASK_RUN_PREVIEW)

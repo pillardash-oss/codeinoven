@@ -3,6 +3,7 @@ import { BrowserWindow, app, autoUpdater as nativeAutoUpdater } from 'electron'
 import os from 'node:os'
 import { Logger } from '../system/logger'
 import type {
+  BrowserDownload,
   CloseConfirmationProject,
   UpdateBlockerTerminal,
   UpdateBlockers,
@@ -104,6 +105,26 @@ interface PendingInstallState {
   approved: boolean
 }
 
+/**
+ * Every browser download this process is running, as the install gate sees it.
+ *
+ * Supply-only interface: the browser owns the downloads and this service owns
+ * the install decision, so the gate asks instead of holding a second copy of the
+ * transfer state.
+ */
+export interface DownloadActivitySource {
+  /** Downloads whose bytes are still arriving, across every project and box. */
+  inFlightDownloads(): BrowserDownload[]
+}
+
+/** A download holds the unattended install back only while its bytes arrive. */
+function activelyDownloading(downloads: readonly BrowserDownload[]): BrowserDownload[] {
+  // A download the user paused is not progressing: it keeps its bytes and
+  // resumes on demand, so waiting for it would hold an update indefinitely and
+  // report a stall the user never asked for.
+  return downloads.filter((download) => !download.paused && download.state === 'progressing')
+}
+
 export class UpdaterService {
   private editorIsActive: (() => boolean) | undefined
   setEditorActivitySource(source: () => boolean): void {
@@ -114,6 +135,8 @@ export class UpdaterService {
   /** How to name the working threads behind the engine's count, for the modal. */
   private workingThreadReport: (() => CloseConfirmationProject[]) | undefined
   private activitySources: SessionActivitySource[] = []
+  /** The browser's live transfers, or null before the browser graph exists. */
+  private downloadSource: DownloadActivitySource | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private _status: UpdaterStatus
   private statusListeners: Set<(status: UpdaterStatus) => void> = new Set()
@@ -398,6 +421,34 @@ export class UpdaterService {
   }
 
   /**
+   * Register the browser's downloads as a gate on the unattended install.
+   *
+   * A quit stops a transfer: Chromium deletes the file of a running download as
+   * its session goes away, so an install triggered mid-download both interrupts
+   * the user's download and pops the close-confirmation prompt at them. Waiting
+   * for the transfers to finish is what makes the automatic install silent.
+   */
+  setDownloadActivitySource(source: DownloadActivitySource | null): void {
+    this.downloadSource = source
+  }
+
+  /**
+   * Downloads the unattended install is still waiting on, oldest first.
+   * An explicit install (`installApproved`) and a tray-initiated one are direct
+   * requests: they proceed, and the shutdown pipeline keeps every running
+   * download for a later resume, exactly as a manual quit does.
+   */
+  private blockingDownloads(): BrowserDownload[] {
+    if (this.installApproved || this.forceUpdateInBackground) return []
+    try {
+      return activelyDownloading(this.downloadSource?.inFlightDownloads() ?? [])
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read browser downloads', error)
+      return []
+    }
+  }
+
+  /**
    * Describe everything standing between the app and the update it is waiting to
    * install, for the force-install modal.
    *
@@ -421,11 +472,15 @@ export class UpdaterService {
     } catch (error: unknown) {
       Logger.error('Updater: failed to describe working threads', error)
     }
+    // Read once: the count and the list must describe the same instant, or the
+    // modal's wording disagrees with the rows under it.
+    const downloads = this.blockingDownloads()
     return {
       version: this._status.availableVersion ?? '',
-      activeCount: this.activeSessionCount(),
+      activeCount: this.activeSessionCount() + downloads.length,
       projects,
-      terminals
+      terminals,
+      downloads
     }
   }
 
@@ -1042,18 +1097,22 @@ export class UpdaterService {
         await this.persistPendingInstall()
         return
       }
-      const activeCount =
+      const threadCount =
         this.activeSessionCount() +
         (this.installRecoveryPending && !this.installApproved && !this.forceUpdateInBackground
           ? 1
           : 0)
-      if (activeCount === 0) {
+      // Downloads are read after the thread count because the read is too cheap
+      // to do on a path that is about to install anyway, and never for an
+      // install the user or the tray asked for directly.
+      const downloads = threadCount === 0 ? this.blockingDownloads() : []
+      if (threadCount === 0 && downloads.length === 0) {
         this.quitAndInstallNow()
         return
       }
 
       this.updateState({ state: 'waiting' })
-      this.broadcastWaitingForThreads(activeCount)
+      this.broadcastWaitingForWork(threadCount, downloads.length)
 
       this.clearDeferredInstall()
       this.deferredInstallPoll = setInterval(() => {
@@ -1103,12 +1162,74 @@ export class UpdaterService {
     return count
   }
 
-  private broadcastWaitingForThreads(count: number): void {
+  private broadcastWaitingForWork(threads: number, downloads: number): void {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        sendToRenderer(win.webContents, 'updater:waiting-for-threads', count)
+        sendToRenderer(win.webContents, 'updater:waiting-for-work', threads, downloads)
       }
     }
+  }
+
+  /**
+   * Pause the bound on a dispatched install while the app is asking the user
+   * whether it may quit.
+   *
+   * The bound exists to catch an install the platform installer silently dropped
+   * while this process keeps running. A close-confirmation prompt on screen is
+   * the opposite situation: the app is alive on purpose, waiting for an answer,
+   * and a user who takes longer than the bound would otherwise be told the
+   * install failed   and have a failed attempt counted against that version. A
+   * confirmed quit takes the process down anyway, so nothing needs re-arming.
+   */
+  pauseInstallQuitWatchdog(): void {
+    this.clearInstallQuitWatchdog()
+  }
+
+  /**
+   * The update-driven quit was declined: the close prompt was dismissed or a
+   * save it asked for failed, so the app is staying open.
+   *
+   * Everything the dispatch wrote is undone here, and that is the whole point.
+   * The install had already recorded itself as handed over and cleared the
+   * pending marker, so leaving it that way both lost the install surface (the
+   * rail fell back to "up to date" over an update still sitting in the cache)
+   * and left a dispatch record the next launch would count as a failed attempt.
+   * The payload itself is untouched: the state returns to `downloaded`, so the
+   * user can install the build they already downloaded without fetching it
+   * again, by hand or on the next automatic cycle.
+   */
+  handleInstallDeclined(): void {
+    if (!this.installDispatched) return
+    this.installDispatched = false
+    this.clearInstallQuitWatchdog()
+    // The quit this dispatch was driving is not happening, so the park gate goes
+    // back to whatever it was before the install began.
+    this.updateQuitHooks?.end()
+    this.localTransferRetried = false
+    this.installPending = false
+    this.installApproved = false
+    this.clearDeferredInstall()
+    void this.storage.remove(INSTALL_DISPATCH_FILE).catch((error: unknown) => {
+      Logger.error('Updater: failed to clear the declined install dispatch', error)
+    })
+    // A later launch must not treat the declined install as one in progress. The
+    // pending-install marker was cleared at dispatch time, but rewriting it here
+    // keeps the record honest if that write is what failed.
+    void this.storage
+      .write(PENDING_INSTALL_FILE, { pending: false, approved: false })
+      .catch((error: unknown) => {
+        Logger.error('Updater: failed to clear the declined pending install', error)
+      })
+    Logger.info('Updater: install declined at the close prompt; the update stays downloaded')
+    if (this._status.availableVersion) {
+      this.updateState({
+        state: 'downloaded',
+        downloadProgress: 100,
+        blockedReason: undefined
+      })
+      return
+    }
+    this.updateState({ state: 'idle', blockedReason: undefined })
   }
 
   private quitAndInstallNow(): void {

@@ -206,6 +206,15 @@ export class NativeDockController {
           void invoke('browser:focusDockOverlay', this.id).catch(() => {})
       }
     })
+    // The host's document is gone, so nothing projected into it survives: a
+    // frame waiting for an answer will never get one, and a frame it had already
+    // drawn left the screen with the window. Either way this source shows its own
+    // panel now, instead of holding back a blank window until the acknowledgement
+    // deadline expires. The next frame gets a fresh document, which is what makes
+    // a recovered host draw natively again.
+    const unsubscribeFailed = subscribe('browser:overlay:failed', () => {
+      if (this.active) this.refuse('its host document could not mount', this.passive)
+    })
     const unsubscribeKey = subscribe('browser:overlay:dockKey', (input) => {
       if (!this.active || input.id !== this.id || !this.modalOptions) return
       const event = new KeyboardEvent(input.type, {
@@ -336,6 +345,7 @@ export class NativeDockController {
       observer.disconnect()
       themeObserver.disconnect()
       unsubscribeAck()
+      unsubscribeFailed()
       unsubscribeKey()
       unsubscribeEvent()
       root.removeEventListener('scroll', scrolled, true)

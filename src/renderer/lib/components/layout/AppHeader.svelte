@@ -96,10 +96,14 @@
 
   /** The narrowest panel that still contains the header's chrome, so a drag can
    *  never pull the action buttons out of the panel's column and into the
-   *  thread's. */
-  let minimumPanelWidth = $derived(
-    Math.max(0, CHROME_WIDTH + leftInset - layoutPanelState.railWidth)
-  )
+   *  thread's. Measured, not estimated: a dev build carries a build pill the
+   *  production bar does not, and an estimate that ignores it lets the chrome
+   *  overflow the column by exactly that pill's width. */
+  let minimumPanelWidth = $derived.by(() => {
+    const chrome = clusterWidth > 0 ? clusterWidth : CHROME_WIDTH
+    const floor = chrome + leftInset - layoutPanelState.railWidth
+    return Math.max(0, Math.min(420, floor))
+  })
 
   $effect(() => {
     layoutPanelState.minimumWidth = minimumPanelWidth
@@ -111,24 +115,19 @@
   let clusterWidth = $state(0)
 
   /** How far the thread's block sits from the end of the chrome so that its left
-   *  edge lands on the conversation page's own left edge. The page is the thing
-   *  being read, so it is the bounding box the title aligns to; the panel only
-   *  decides how much room the page has. */
+   *  edge lands on the reading column's own left edge. The page being read is the
+   *  bounding box the title aligns to, whether that page is the conversation or the
+   *  document a studio is showing; the panel only decides how much room it has.
+   *
+   *  The gap is live, not reserved: when a panel beside the conversation re-centres
+   *  the page column, the title travels with that column frame by frame, so the bar
+   *  and the page below it read as one surface instead of two that disagree. */
   let titleInset = $derived.by(() => {
     if (!layoutPanelState.contentVisible) return 0
-    const contentLeft = layoutPanelState.conversationLeft
+    const contentLeft = layoutPanelState.readingColumnLeft
     if (contentLeft <= 0) return 0
     const chromeEnd = leftInset + (clusterWidth > 0 ? clusterWidth : CHROME_WIDTH)
     return Math.max(0, Math.round(contentLeft - chromeEnd))
-  })
-
-  /** The page's own width, less the distance the block had to move to reach it:
-   *  the thread's name never runs wider than the text the reader is reading. */
-  let titleMaxWidth = $derived.by(() => {
-    if (!layoutPanelState.contentVisible) return 0
-    const width = layoutPanelState.conversationWidth
-    if (width <= 0) return 0
-    return Math.max(0, width - titleInset)
   })
 
   /** A checkout and a probe run the same source, so the one thing that tells
@@ -409,7 +408,7 @@
       <AppHeaderBrowserCenter />
     {/await}
   {:else}
-    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} {titleMaxWidth} />
+    <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} />
   {/if}
 
   <AppHeaderThreadModals menu={threadActionsMenu} />

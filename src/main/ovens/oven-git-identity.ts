@@ -87,7 +87,8 @@ export class OvenGitIdentityService {
         bytes: Buffer.byteLength(privateKey)
       })
     }
-    if (!publicKey) publicKey = await this.derivePublicKey(ovenId, this.identityPath(report), report)
+    if (!publicKey)
+      publicKey = await this.derivePublicKey(ovenId, this.identityPath(report), report)
     if (!publicKey) {
       issues.push(
         'The Oven could not read the public half of the dedicated key. Add the public key to GitHub manually.'
@@ -154,8 +155,7 @@ export class OvenGitIdentityService {
       if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(message))
         return {
           status: 'host-key-changed',
-          message:
-          `The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it:\n${GITHUB_HOST_KEY_FINGERPRINTS.join('\n')}`,
+          message: `The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it:\n${GITHUB_HOST_KEY_FINGERPRINTS.join('\n')}`,
           expectedHostKeyFingerprints: GITHUB_HOST_KEY_FINGERPRINTS
         }
       return {
@@ -174,8 +174,7 @@ export class OvenGitIdentityService {
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(output))
       return {
         status: 'host-key-changed',
-        message:
-          `The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it:\n${GITHUB_HOST_KEY_FINGERPRINTS.join('\n')}`,
+        message: `The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it:\n${GITHUB_HOST_KEY_FINGERPRINTS.join('\n')}`,
         expectedHostKeyFingerprints: GITHUB_HOST_KEY_FINGERPRINTS
       }
     if (/Could not resolve hostname|Connection refused|timed out|No route to host/u.test(output))
@@ -223,13 +222,15 @@ export class OvenGitIdentityService {
   ): Promise<string | undefined> {
     const command =
       report.platform === 'win32'
-      ? windowsEncodedCommand(
-          `$identity = Join-Path $env:USERPROFILE ${powershellLiteral(`.ssh\\${IDENTITY_FILE}`)}; & ssh-keygen -y -f $identity 2>$null`
-        )
-      : `ssh-keygen -y -f ${sshQuote(path)} 2>/dev/null`
+        ? windowsEncodedCommand(
+            `$identity = Join-Path $env:USERPROFILE ${powershellLiteral(`.ssh\\${IDENTITY_FILE}`)}; & ssh-keygen -y -f $identity 2>$null`
+          )
+        : `ssh-keygen -y -f ${sshQuote(path)} 2>/dev/null`
     try {
       const output = await this.ports.ssh.execute(ovenId, command, '', 20_000)
-      const line = output.split(/\r?\n/u).find((entry) => entry.startsWith('ssh-') || entry.startsWith('ecdsa-'))
+      const line = output
+        .split(/\r?\n/u)
+        .find((entry) => entry.startsWith('ssh-') || entry.startsWith('ecdsa-'))
       return line?.trim() || undefined
     } catch {
       return undefined
@@ -238,6 +239,8 @@ export class OvenGitIdentityService {
 
   /** The absolute path the Oven resolves for the dedicated identity. */
   private identityPath(report: OvenPreflightReport): string {
-    return report.platform === 'win32' ? `%USERPROFILE%\\${IDENTITY_RELATIVE.replace('/', '\\')}` : `~/${IDENTITY_RELATIVE}`
+    return report.platform === 'win32'
+      ? `%USERPROFILE%\\${IDENTITY_RELATIVE.replace('/', '\\')}`
+      : `~/${IDENTITY_RELATIVE}`
   }
 }

@@ -47,6 +47,10 @@ import {
   type GatewayToolDefinition
 } from '../../lib/gateway-tools'
 import {
+  ACTION_SUMMARY_INPUT_KEY,
+  ACTION_SUMMARY_SCHEMA_DESCRIPTION
+} from '../../lib/tool-action-label'
+import {
   ORCHESTRATION_DISPATCH_TOOL_NAME,
   ORCHESTRATION_STATUS_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
@@ -289,11 +293,29 @@ const CIO_GATEWAY_OUTPUT_SCHEMAS = ${JSON.stringify(
     )
   )}
 
-/** Register one gateway tool, with its output schema when the catalog declares one. */
+/**
+ * The action-summary field every app tool accepts.
+ *
+ * Declared on each registered tool so the model can say what a call
+ * accomplishes, which is what the working trace shows instead of the mechanics.
+ * It rides on the parameter schema rather than on a hidden channel so the
+ * declaration the model reads and the arguments it passes cannot disagree.
+ */
+const ACTION_SUMMARY_PARAMETERS = {
+  ${JSON.stringify(ACTION_SUMMARY_INPUT_KEY)}: Type.Optional(
+    Type.String({ description: ${JSON.stringify(ACTION_SUMMARY_SCHEMA_DESCRIPTION)} })
+  )
+}
+
+/** Register one gateway tool, with its output schema and action-summary field. */
 function registerCioGatewayTool(pi, definition) {
   if (!${JSON.stringify([...CORE_GATEWAY_TOOL_NAMES])}.includes(definition.name)) return
   const outputSchema = CIO_GATEWAY_OUTPUT_SCHEMAS[definition.name]
-  pi.registerTool(outputSchema === undefined ? definition : { ...definition, outputSchema })
+  const withSummary = {
+    ...definition,
+    parameters: Type.Object({ ...definition.parameters.properties, ...ACTION_SUMMARY_PARAMETERS })
+  }
+  pi.registerTool(outputSchema === undefined ? withSummary : { ...withSummary, outputSchema })
 }
 
 /**

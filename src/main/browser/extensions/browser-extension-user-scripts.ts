@@ -121,7 +121,11 @@ export async function materializeUserScriptFiles(
       if (keep.has(name)) continue
       await rm(join(dir, name), { force: true }).catch(() => undefined)
     }
-    return { request: request.request, paths: [...wanted.keys()].map((name) => `${USER_SCRIPT_DIR_NAME}/${name}`), error: null }
+    return {
+      request: request.request,
+      paths: [...wanted.keys()].map((name) => `${USER_SCRIPT_DIR_NAME}/${name}`),
+      error: null
+    }
   } catch (error) {
     return {
       request: request.request,

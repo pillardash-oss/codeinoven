@@ -87,6 +87,17 @@ export interface CloseConfirmationDeps {
    * `app:parkWindow` rather than `app:confirmClose`.
    */
   park?: boolean
+  /**
+   * The quit an update install is driving, not the user.
+   *
+   * The install already resolved the two gates this prompt would list: it only
+   * dispatches with no working sessions, and a running download is either waited
+   * for or deliberately overridden by the user. Asking again would put a second
+   * prompt in front of an install the user just approved, and dismissing it
+   * would strand both the install and the download. So the prompt degrades to the
+   * one gate main cannot see: unsaved files, which the renderer answers itself.
+   */
+  install?: boolean
 }
 
 /**
@@ -99,7 +110,7 @@ export interface CloseConfirmationDeps {
  * nothing is pending, or shows the confirmation modal otherwise.
  */
 export function requestCloseConfirmation(deps: CloseConfirmationDeps): void {
-  const { state, window, park = false } = deps
+  const { state, window, park = false, install = false } = deps
   if (state.quitCleanupStarted || state.quitConfirmed) return
   if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
     // No window to ask. A park with nothing to park is a no-op; a real quit
@@ -111,14 +122,18 @@ export function requestCloseConfirmation(deps: CloseConfirmationDeps): void {
   }
   // In background mode the working-thread half of the prompt disappears: closing
   // does not stop the runs, so there is nothing to warn about. The renderer still
-  // owns the unsaved-file gate, which it computes locally.
+  // owns the unsaved-file gate, which it computes locally. An update install is
+  // the same shape for both halves: it never dispatches over working sessions,
+  // and it owns what happens to a download.
   const working =
-    park || instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects(deps.database)
+    install || park || instanceRegistry.hasOtherLiveInstance()
+      ? []
+      : getActiveThreadProjects(deps.database)
   // Downloads follow the opposite rule. A park keeps the backend alive, so a
   // download keeps running and the section stays empty; a quit stops what it
   // holds open, whichever instance is quitting, because the manager and the
   // Chromium sessions it downloads through belong to this process.
-  const downloads = park ? [] : (state.browserDownloads?.inFlight() ?? [])
+  const downloads = install || park ? [] : (state.browserDownloads?.inFlight() ?? [])
   sendToRenderer(window.webContents, 'window:confirmClose', {
     projects: working,
     files: [],

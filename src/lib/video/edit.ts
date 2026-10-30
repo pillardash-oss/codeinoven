@@ -20,6 +20,31 @@ export interface VideoEditTrack {
   locked: boolean
   muted: boolean
   hidden: boolean
+  /**
+   * Mix level for every clip on the track, where `1` is the file's own level.
+   *
+   * A track is the unit a person mixes with: raising the speech track and pulling
+   * the music track down is one gesture each, not a slider on every clip. Above 1
+   * amplifies, which is what a quiet recording needs.
+   */
+  volume: number
+}
+
+/**
+ * Whether any clip on a track can produce sound.
+ *
+ * The speaker is offered only where there is something to hear, so a silent
+ * overlay track carries no mute button and no level, and the same overlay gains
+ * both the moment a sound effect lands on it.
+ */
+export function videoTrackHasAudio(edit: VideoEditDocument, trackId: string): boolean {
+  const tracks = edit.tracks.find((track) => track.id === trackId)
+  if (!tracks || tracks.kind === 'caption') return false
+  return edit.clips.some(
+    (clip) =>
+      clip.trackId === trackId &&
+      (edit.assets.find((asset) => asset.id === clip.assetId)?.hasAudio ?? false)
+  )
 }
 export interface VideoEditRect {
   x: number
@@ -270,7 +295,8 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
       kind: choice(t.kind, ['video', 'audio', 'caption', 'overlay']),
       locked: bool(t.locked),
       muted: bool(t.muted),
-      hidden: bool(t.hidden)
+      hidden: bool(t.hidden),
+      volume: number(t.volume, 'Track volume', 0, 2, 1)
     }
   })
   // Earlier documents stored captions and privacy masks in implicit rows.
@@ -285,7 +311,8 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
         name: kind === 'caption' ? 'Captions' : 'Overlays',
         locked: false,
         hidden: false,
-        muted: false
+        muted: false,
+        volume: 1
       })
     }
   const assetIds = new Map(assets.map((asset) => [asset.id, asset]))
@@ -314,7 +341,9 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
     if (start + clipDuration > duration + 0.05)
       throw new Error('A clip extends past the edit duration')
     if (asset.kind !== 'image' && sourceStart + clipDuration * speed > asset.duration + 0.1)
-      throw new Error('A clip extends past its source media')
+      throw new Error(
+        `${asset.name} is ${asset.duration.toFixed(2)}s long, so the clip at ${start.toFixed(2)}s cannot read ${clipDuration.toFixed(2)}s from ${sourceStart.toFixed(2)}s`
+      )
     return {
       id: id(c.id),
       assetId,
@@ -739,8 +768,46 @@ export function applyVideoEditOperations(
           ? undefined
           : number(operation.duration, 'Duration', 0.001, 3600)
       )
+      // A cut timeline places each clip at its own in-point, so an addClip that
+      // could only start at the head of the media forced callers into the file.
+      if (operation.sourceStart !== undefined)
+        clip.sourceStart = number(operation.sourceStart, 'Source in', 0, 86400, 0)
+      if (operation.speed !== undefined) clip.speed = number(operation.speed, 'Speed', 0.25, 4, 1)
       edit.duration = Math.max(edit.duration, start + clip.duration)
       edit.clips.push(clip)
+    } else if (kind === 'replaceClips') {
+      // A cut map is hundreds of segments on one track. Rebuilding them through
+      // addClip alone is thousands of calls, which is how a hand-written script
+      // ends up editing the document (and its asset metadata) instead.
+      const track = edit.tracks.find((item) => item.id === operation.trackId)
+      const asset = edit.assets.find((item) => item.id === operation.assetId)
+      if (!track || !asset || track.locked) throw new Error('Choose an asset and an unlocked track')
+      const segments = entries(operation.clips, 800).map((value) => {
+        const segment = record(value)
+        return {
+          start: snapEditTime(number(segment.start, 'Start', 0, 3599, 0), fps),
+          duration:
+            segment.duration === undefined
+              ? undefined
+              : number(segment.duration, 'Duration', 0.001, 3600),
+          sourceStart: number(segment.sourceStart, 'Source in', 0, 86400, 0),
+          speed:
+            segment.speed === undefined ? undefined : number(segment.speed, 'Speed', 0.25, 4, 1)
+        }
+      })
+      edit.clips = edit.clips.filter((clip) => clip.trackId !== track.id)
+      let end = 0
+      for (const segment of segments) {
+        const clip = newVideoEditClip(asset, track.id, segment.start, segment.duration)
+        clip.sourceStart = segment.sourceStart
+        if (segment.speed !== undefined) clip.speed = segment.speed
+        edit.clips.push(clip)
+        end = Math.max(end, clip.start + clip.duration)
+      }
+      edit.duration =
+        operation.duration === undefined
+          ? Math.max(edit.duration, end)
+          : Math.max(number(operation.duration, 'Duration', 0.001, 3600), end)
     } else if (kind === 'addTrack') {
       edit.tracks.push({
         id: crypto.randomUUID(),
@@ -748,8 +815,22 @@ export function applyVideoEditOperations(
         kind: choice(operation.trackKind, ['video', 'audio', 'caption', 'overlay']),
         locked: false,
         muted: false,
-        hidden: false
+        hidden: false,
+        volume: 1
       })
+    } else if (kind === 'setTrack') {
+      // The same knobs the track header offers: a person mixes the speech track up
+      // and the music track down, and an agent has to be able to do exactly that.
+      const track = edit.tracks.find(
+        (track) => track.id === operation.trackId || track.id === operation.id
+      )
+      if (!track) throw new Error('Choose a track to update')
+      if (operation.volume !== undefined)
+        track.volume = number(operation.volume, 'Track volume', 0, 2)
+      if (operation.muted !== undefined) track.muted = bool(operation.muted)
+      if (operation.hidden !== undefined) track.hidden = bool(operation.hidden)
+      if (operation.locked !== undefined) track.locked = bool(operation.locked)
+      if (operation.name !== undefined) track.name = text(operation.name, 'Track name')
     } else if (kind === 'addRegion') {
       const region = record(operation.region)
       edit.regions.push({

@@ -139,6 +139,8 @@ const CHANNEL_ARG_HINTS: Readonly<Record<string, string>> = {
     'projectId, options? ({ force?, refreshModelCatalogs? }). Run it when the catalog looks empty before concluding a model id is wrong.',
   'config:get': 'no arguments',
   'config:update': 'patch (AppConfigPatch)',
+  'projectFiles:ide':
+    'projectId, request ({ owner, action, path, serverId? }) and optional scopeBucketId. `action: "inventory" | "install" | "check"` take an empty path; `owner` is any unique label for the editor client.',
   'shell:openExternal': 'url'
 }
 

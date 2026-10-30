@@ -96,8 +96,9 @@ export class BrowserAssistantChatController implements ConversationController {
 
   get status(): AgentSessionStatus | null {
     const issue = this.runIssue
-    if (!issue) return null
-    return { state: 'error', issue }
+    if (issue) return { state: 'error', issue }
+    const waiting = threadMessages.waitingIssue(this.projectId, this.conversationId)
+    return waiting ? { state: 'waiting', issue: waiting } : null
   }
 
   get activeTurnStartTime(): number | undefined {
@@ -110,6 +111,37 @@ export class BrowserAssistantChatController implements ConversationController {
     // instead of dropping them.
     const sessionId = this.#threadRow()?.sessionId
     if (sessionId) threadMessages.setSessionId(this.projectId, this.conversationId, sessionId)
+    void this.#restoreStatus()
+  }
+
+  /**
+   * Rebuild the provider card a conversation reopened after a failure.
+   *
+   * The panel outlives nothing: closing it and opening it again, or restarting
+   * the app, leaves the run's live state behind, and main keeps the only durable
+   * copy (a parked retry wait, or the failure that ended the turn). Without this
+   * read a quota-parked conversation came back with no card at all and nothing
+   * saying why it stopped, while the rail still flagged it as needing attention.
+   */
+  async #restoreStatus(): Promise<void> {
+    try {
+      const status = await invoke('agent:getSessionStatus', this.projectId, this.conversationId)
+      if (!status) return
+      if (status.state === 'waiting') {
+        threadMessages.setRunIssue(this.projectId, this.conversationId, null)
+        threadMessages.setWaitingIssue(this.projectId, this.conversationId, status.issue)
+        return
+      }
+      if (status.state === 'error') {
+        threadMessages.setRunIssue(this.projectId, this.conversationId, status.issue)
+        return
+      }
+      // A live or finished conversation has no wait to show; the stream's own
+      // events own its state from here.
+      threadMessages.setWaitingIssue(this.projectId, this.conversationId, null)
+    } catch {
+      // A panel must open even when the status read fails.
+    }
   }
 
   unmount(): void {
@@ -195,6 +227,7 @@ export class BrowserAssistantChatController implements ConversationController {
 
   clearStatus(): void {
     threadMessages.setRunIssue(this.projectId, this.conversationId, null)
+    threadMessages.setWaitingIssue(this.projectId, this.conversationId, null)
     threadMessages.clearLoadError(this.projectId, this.conversationId)
   }
 

@@ -27,8 +27,8 @@
    * - `assistant`: an assistant thread that belongs to an assistant, named by the
    *   assistant it belongs to.
    * - `task`: an assistant task that belongs to no assistant, named by itself.
-   * - `browser-tab`: a browser tab's assistant conversation, named by the tab it
-   *   answers about.
+   * - `browser-agent`: a browser tab's assistant conversation, named by what it
+   *   is: the agent that answers about the page in that tab.
    *
    * Adding a surface is one member here and one branch in the markup: the
    * resolution of names, marks and the truncating stages lives in this component.
@@ -57,12 +57,11 @@
         /** Assistant accent tinting a custom task mark; the shared fallback otherwise. */
         color?: string
       }
-    | { kind: 'browser-tab'; tabId: string }
+    | { kind: 'browser-agent' }
 </script>
 
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
@@ -75,9 +74,7 @@
   } from '$lib/assistant-icons'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { assistants } from '$lib/stores/assistants.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { browserTabLabel } from '$lib/stores/global-browser-types'
-  import { faviconState } from '$lib/stores/favicons.svelte'
+  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { scopeState } from '$lib/stores/scope.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -109,16 +106,6 @@
     identity.kind === 'assistant'
       ? getAssistantIcon(identity.assistant, assistants.iconUrls.get(identity.assistant.id) ?? null)
       : null
-  )
-
-  /** The page a browser conversation answers about, read through its tab. */
-  let pageTab = $derived(
-    identity.kind === 'browser-tab' ? globalBrowser.tabById(identity.tabId) : null
-  )
-  let pageUrl = $derived(pageTab?.url ?? '')
-  let pageLabel = $derived(pageTab ? browserTabLabel(pageTab).trim() : '')
-  let pageFavicon = $derived(
-    pageTab?.favicon ?? (pageUrl !== '' ? faviconState.faviconFor(pageUrl) : null)
   )
 </script>
 
@@ -213,26 +200,19 @@
       >{taskTitle}</span
     >
   </span>
-{:else if identity.kind === 'browser-tab'}
+{:else if identity.kind === 'browser-agent'}
+  <!-- A browser tab's conversation is the browsing agent's own, and it wears the
+       mark the rail's agent conversation tab wears so the shoe and the tab read
+       as one thing. -->
+  {@const BrowseAgentIcon = CONTENT_FAMILY_ICONS.chats}
   <span
     class="composer-identity flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted"
-    title="Browser tab: {pageLabel || 'this page'}"
-    {@attach () => {
-      // The tab carries its own icon once the app has seen one; this warms the
-      // shared cache for a tab that has none yet. It asks at most once per host.
-      if (pageUrl !== '') faviconState.ensureResolved([pageUrl])
-    }}
+    title="Browse agent: it answers about the page this browser tab is on"
   >
-    {#if pageFavicon}
-      <img src={pageFavicon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
-    {:else}
-      <CioBrowser size={13} class="shrink-0 text-dimmed" />
-    {/if}
-    {#if pageLabel !== ''}
-      <span class="composer-identity-label min-w-0 truncate font-medium text-foreground"
-        >{pageLabel}</span
-      >
-    {/if}
+    <BrowseAgentIcon size={13} class="shrink-0 text-dimmed" />
+    <span class="composer-identity-label min-w-0 truncate font-medium text-foreground"
+      >Browse agent</span
+    >
   </span>
 {:else if identity.temporary}
   <!-- A temporary chat is named by the object it is, and it keeps the mark the

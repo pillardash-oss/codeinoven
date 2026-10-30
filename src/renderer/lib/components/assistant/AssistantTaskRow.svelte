@@ -145,15 +145,28 @@
 
   /** Line 2: task schedule/activity, run activity, or the setup thread's role.
    *  A row whose thread is actually producing work says so instead of reporting
-   *  a stale schedule time, and a hoisted run names the task it belongs to. */
+   *  a stale schedule time, and a hoisted run names the task it belongs to.
+   *
+   *  A thread parked on a provider retry, or one that failed, says exactly that.
+   *  Its schedule text ("Next run in 4h") described a wait that was not happening
+   *  and an activity stamp described work that was not running, so the row read
+   *  as an ordinary idle task at the one moment it needed the user. */
   const runLine = $derived.by(() => {
     const working = runWorking || isThreadLiveWorking(task)
+    const stalled =
+      task.status === 'working-paused'
+        ? 'Waiting to retry'
+        : task.status === 'failed'
+          ? 'Failed'
+          : null
     if (isRun) {
-      const line = working ? 'Running now' : runRowLine(task, relativeTimeClock.now)
+      const line = working ? 'Running now' : (stalled ?? runRowLine(task, relativeTimeClock.now))
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
-    if (knowledgeThread) return 'Assistant behavior'
-    return working ? 'Running now' : taskRunLine(task, nextRunAt, relativeTimeClock.now, !scheduled)
+    if (knowledgeThread) return stalled ?? 'Assistant behavior'
+    return working
+      ? 'Running now'
+      : (stalled ?? taskRunLine(task, nextRunAt, relativeTimeClock.now, !scheduled))
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)

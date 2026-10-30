@@ -25,6 +25,18 @@ export type IntentSearchProvider = (
 ) => Promise<IntentThreadMatch[]>
 
 /**
+ * How long one keyword read may take before an interactive search answers with
+ * what it already has.
+ *
+ * The palette paints its in-memory rows in the same frame as the keystroke, so
+ * this deadline is what stops a busy worker queue (a maintenance pass ahead of
+ * the read in its single-flight queue) from delaying the database answer
+ * indefinitely. It is deliberately well under the panel's own three-second
+ * "still searching" ceiling: the IPC hop and the row build have to fit after it.
+ */
+const INTERACTIVE_SEARCH_DEADLINE_MS = 1200
+
+/**
  * Search across thread titles and conversation content (user messages + agent
  * final output). The FTS queries run on the worker's connection (serialized)
  * with a primary-connection fallback.
@@ -219,26 +231,42 @@ export class ThreadSearchService {
   ): Promise<{ results: ThreadSearchResult[]; limit: number }> {
     const useSearchMeta = this.db.isSearchMetaReady()
     const built = buildThreadSearchSql(raw, options, useSearchMeta)
-    const title = await this.db.queryViaWorker(built.title.sql, built.title.params, built.limit)
-    if (!title.ok) {
+    // Both halves are read at once and both are bounded: a title row that is
+    // ready must never wait for the message ranking behind it in the worker
+    // queue, and neither may hold the answer past the interactive deadline.
+    const [title, message] = await Promise.all([
+      this.db.queryViaWorker(built.title.sql, built.title.params, built.limit, {
+        deadlineMs: INTERACTIVE_SEARCH_DEADLINE_MS
+      }),
+      built.fts
+        ? this.db.queryViaWorker(
+            built.fts.sql,
+            built.fts.params,
+            threadSearchMessageLimit(built.limit),
+            { deadlineMs: INTERACTIVE_SEARCH_DEADLINE_MS }
+          )
+        : Promise.resolve(null)
+    ])
+    if (!title.ok && !message?.ok) {
+      // Both halves ran out of time: answer with nothing and let the palette keep
+      // the rows it painted from memory. Neither read is abandoned   each keeps
+      // running on the worker   and the semantic push the panel is waiting for
+      // still arrives once the model answers.
+      if (title.timedOut || message?.timedOut) return { results: [], limit: built.limit }
       return { results: this.threadRepo.search(raw, options, useSearchMeta), limit: built.limit }
     }
-    if (!built.fts) {
+    if (!title.ok || (built.fts && !message?.ok)) {
+      // One half answered and the other did not. Use the answer in hand instead
+      // of throwing the reply away for a slower, complete one.
+      const titleRows = title.ok ? (title.rows ?? []) : []
+      const messageRows = message?.ok ? (message.rows ?? []) : []
       return {
-        results: mergeThreadSearchResults(title.rows, [], raw, built.limit),
+        results: mergeThreadSearchResults(titleRows, messageRows, raw, built.limit),
         limit: built.limit
       }
     }
-    const message = await this.db.queryViaWorker(
-      built.fts.sql,
-      built.fts.params,
-      threadSearchMessageLimit(built.limit)
-    )
-    if (!message.ok) {
-      return { results: this.threadRepo.search(raw, options, useSearchMeta), limit: built.limit }
-    }
     return {
-      results: mergeThreadSearchResults(title.rows, message.rows, raw, built.limit),
+      results: mergeThreadSearchResults(title.rows ?? [], message?.rows ?? [], raw, built.limit),
       limit: built.limit
     }
   }

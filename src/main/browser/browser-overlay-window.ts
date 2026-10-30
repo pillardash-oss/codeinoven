@@ -383,6 +383,27 @@ export class BrowserOverlayWindow {
     this.dockFocus.set(id, target)
   }
 
+  /**
+   * Record that the document in this window could not mount.
+   *
+   * A document is loaded once and then reused for the rest of the session, so a
+   * mount that threw leaves a renderer that receives every later frame and
+   * answers none of them: each panel projected into it waits out its
+   * acknowledgement deadline and then falls back, which reads as modals that
+   * stopped opening. The window is therefore replaced, and the app is told the
+   * truth now rather than at the end of that deadline so the panel it is holding
+   * back appears immediately. A dev document whose module graph was rebuilt
+   * underneath it is the case this recovers from: the next frame arrives at a
+   * freshly loaded document, which draws again.
+   */
+  reportDocumentFailure(reason: string): void {
+    const wasLoaded = this.popup !== null
+    Logger.error('The native overlay document could not mount:', { reason })
+    this.dispose()
+    if (wasLoaded && !this.parent.isDestroyed())
+      sendToRenderer(this.parent.webContents, 'browser:overlay:failed')
+  }
+
   applyDock(id: string, request: NativeDockRequest | null): boolean {
     const leaving = this.leavingDocks.get(id)
     if (request === null && leaving && !this.docks.has(id)) return true

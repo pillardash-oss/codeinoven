@@ -229,6 +229,17 @@ class ContextSidebarState {
     return this.tabContexts.temporaryChatsFor(projectId, threadId)
   }
 
+  /**
+   * Whether a side chat is the panel the user is reading right now.
+   *
+   * A side chat's response that lands while this is false is unread until its
+   * tab is focused, which is what the rail's unread mark and the thread row's
+   * side-chat badge both report.
+   */
+  isTemporaryChatOnScreen(projectId: string, threadId: string, temporaryChatId: string): boolean {
+    return this.tabContexts.isTemporaryChatOnScreen(projectId, threadId, temporaryChatId)
+  }
+
   get activeTabId(): string | null {
     return this.sidebarActiveTabId
   }

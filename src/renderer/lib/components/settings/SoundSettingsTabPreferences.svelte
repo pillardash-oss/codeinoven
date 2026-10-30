@@ -17,7 +17,11 @@
 </script>
 
 <section id="settings-block-sound-cleanup" class="border bg-surface p-4">
-  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Transcript cleanup</h2>
+  <h2
+    class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Transcript cleanup
+  </h2>
   <div class="space-y-4">
     <div class="flex items-center justify-between gap-4">
       <div>
@@ -156,7 +160,11 @@
 </section>
 
 <section id="settings-block-sound-memory" class="border bg-surface p-4">
-  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Model memory</h2>
+  <h2
+    class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Model memory
+  </h2>
   <div class="space-y-3">
     {#each unloadItems as item (item.key)}
       <label class="flex items-center justify-between gap-3 text-xs text-muted">
@@ -180,7 +188,11 @@
 </section>
 
 <section id="settings-block-sound-cues" class="border bg-surface p-4">
-  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Cues and playback</h2>
+  <h2
+    class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Cues and playback
+  </h2>
   <div class="grid gap-3 sm:grid-cols-2">
     <Switch
       checked={settings.cues.listeningStarted}

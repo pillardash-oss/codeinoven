@@ -82,8 +82,13 @@ export function registerUtilityIpc(
   }
 
   // No claim of this process can exist yet, so an unrestricted daemon running now
-  // was left behind by a run that a quit or a crash ended.
-  void cuaBridge.reapAbandonedDaemon().catch(() => undefined)
+  // was left behind by a run that a quit or a crash ended. Both steps run off the
+  // prompt path, and the warm-up follows the reap so the two never touch a driver
+  // process at the same time.
+  void cuaBridge
+    .reapAbandonedDaemon()
+    .then(() => cuaBridge.warmStatus())
+    .catch(() => undefined)
 
   ipcMain.handle('computerUse:getCuaStatus', () => cuaBridge.getStatus())
   ipcMain.handle('computerUse:setCuaEnabled', (_, enabled: unknown) => {

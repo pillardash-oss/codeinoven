@@ -108,7 +108,11 @@ Checkpoint the screen scaffold or the existing screen before editing. After ever
  * The same paragraph ends the ambiguity the general scratch rule leaves: that rule
  * is about notes and reports, and a design is neither.
  */
-export function designSessionBriefing(opened: 'tag' | 'activation', root: string): string {
+export function designSessionBriefing(
+  opened: 'tag' | 'activation',
+  root: string,
+  grouping = ''
+): string {
   const lead =
     opened === 'tag'
       ? 'The user opened this turn with @cio-design, so this is a design session.'
@@ -118,7 +122,7 @@ export function designSessionBriefing(opened: 'tag' | 'activation', root: string
 ${lead} The app-owned design capability is active: its playbook is in your context and its preview operation is callable now. Design is the work of this turn, not a preliminary to it.
 
 Where the design goes: \`${root}\`. Write it as \`${root}/<name>/\`, and if any of it already sits somewhere else (a scratch folder such as \`.cio/work\`, \`.cio/tmp\`, or the repository root), move it into \`${root}/<name>/\` now and continue there. The board lists the folders under \`${root}\` and nothing else, so a design left in another folder is one the user never sees. This is the folder for the rest of the session: it is the project's live record, a save-path change moves it, and it outranks any path named in an older message.
-
+${grouping === '' ? '' : `\n${grouping}\n`}
 ${DESIGN_SESSION_STEPS}`
 }
 
@@ -131,8 +135,8 @@ ${DESIGN_SESSION_STEPS}`
  * threads that read it. The folder is named for the opposite reason: it is the
  * project's live record, and a turn that reads it cannot move the work by accident.
  */
-export function designSessionContinuation(root: string): string {
+export function designSessionContinuation(root: string, grouping = ''): string {
   return `This thread is in a design session, and the design capability stays active. The design folder is \`${root}\`, and the work belongs there: move anything of this design that sits elsewhere into it, then keep working in the folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds, and the Screen Canvas shows them all at once without being written. A state that only exists after a click belongs on that canvas rather than in a sentence, so declare it in \`canvas.json\` beside the screens when the design has one (see the design session). Report what changed and what a viewer can now try.
 
-Save a baseline checkpoint before editing an existing screen, then call this capability's \`checkpoint\` with directory, entry and a short completed-step label after each major section, title, image or navbar change, before starting the next step.`
+Save a baseline checkpoint before editing an existing screen, then call this capability's \`checkpoint\` with directory, entry and a short completed-step label after each major section, title, image or navbar change, before starting the next step.${grouping === '' ? '' : `\n\n${grouping}`}`
 }

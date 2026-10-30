@@ -4,6 +4,7 @@ import type {
   PromptProjectReference
 } from '$shared/types'
 import { uuidv7 } from '$shared/id'
+import { invoke } from '$lib/ipc.svelte'
 import { parseModelKey } from '$lib/model-keys'
 import type { ModelScope } from './thread-settings.svelte'
 import { clearDraftLabelCookie, setDraftLabelCookie } from './draft-label'
@@ -37,6 +38,7 @@ import {
   type SelectedThreadReference,
   type StartAfterThreadReference
 } from './renderer-recovery'
+import { uniqueThreadContextReferences, type ThreadContextReference } from '$lib/thread-context'
 
 export type {
   ComposerDraftEntry,
@@ -136,7 +138,8 @@ export class RendererRecoveryStore {
         projectReferences: [],
         taskReferences: [],
         promptReferences: [],
-        startAfterThreads: []
+        startAfterThreads: [],
+        threadReferences: []
       }
     return (
       this.composerDrafts[recoveryDraftKey(projectId, threadId)] ?? {
@@ -145,7 +148,8 @@ export class RendererRecoveryStore {
         projectReferences: [],
         taskReferences: [],
         promptReferences: [],
-        startAfterThreads: []
+        startAfterThreads: [],
+        threadReferences: []
       }
     )
   }
@@ -219,11 +223,16 @@ export class RendererRecoveryStore {
     this.selectedProjectId = projectId
     this.selectedThread = { projectId, threadId }
     this.persist()
+    // Main keeps its own copy so the next launch can warm this thread's row and
+    // newest transcript page while the splash is still up, before the renderer
+    // exists to ask for them. Best effort: the restore never depends on it.
+    void invoke('app:rememberThread', projectId, threadId).catch(() => undefined)
   }
 
   clearSelectedThread(): void {
     this.selectedThread = null
     this.persist()
+    void invoke('app:forgetThread').catch(() => undefined)
   }
 
   draftFor(projectId: string, threadId: string): string {
@@ -395,7 +404,8 @@ export class RendererRecoveryStore {
       entry.projectReferences.length > 0 ||
       entry.taskReferences.length > 0 ||
       entry.promptReferences.length > 0 ||
-      entry.startAfterThreads.length > 0
+      entry.startAfterThreads.length > 0 ||
+      entry.threadReferences.length > 0
     )
   }
 
@@ -453,7 +463,8 @@ export class RendererRecoveryStore {
       projectReferences: [],
       taskReferences: [],
       promptReferences: [],
-      startAfterThreads: []
+      startAfterThreads: [],
+      threadReferences: []
     }
     const nextAttachments = attachments ?? current.attachments
     const nextProjectReferences = projectReferences ?? current.projectReferences
@@ -476,7 +487,8 @@ export class RendererRecoveryStore {
       nextProjectReferences.length === 0 &&
       nextTaskReferences.length === 0 &&
       nextPromptReferences.length === 0 &&
-      current.startAfterThreads.length === 0
+      current.startAfterThreads.length === 0 &&
+      current.threadReferences.length === 0
     ) {
       delete next[key]
     } else {
@@ -490,7 +502,8 @@ export class RendererRecoveryStore {
         projectReferences: nextProjectReferences,
         taskReferences: nextTaskReferences,
         promptReferences: nextPromptReferences,
-        startAfterThreads: current.startAfterThreads
+        startAfterThreads: current.startAfterThreads,
+        threadReferences: current.threadReferences
       }
     }
     this.composerDrafts = next
@@ -512,6 +525,7 @@ export class RendererRecoveryStore {
   clearDraft(projectId: string, threadId: string): void {
     this.clearStartAfterThreads(projectId, threadId)
     this.setDraft(projectId, threadId, '', [], [], [], [])
+    this.setThreadReferences(projectId, threadId, [])
   }
 
   /** Persist the source threads the next message waits for before it starts. */
@@ -549,7 +563,8 @@ export class RendererRecoveryStore {
         current.attachments.length === 0 &&
         current.projectReferences.length === 0 &&
         current.taskReferences.length === 0 &&
-        current.promptReferences.length === 0
+        current.promptReferences.length === 0 &&
+        current.threadReferences.length === 0
       ) {
         delete next[key]
       } else {
@@ -570,6 +585,66 @@ export class RendererRecoveryStore {
 
   clearStartAfterThreads(projectId: string, threadId: string): void {
     this.setStartAfterThreads(projectId, threadId, [])
+  }
+
+  /** The conversations attached to a thread's composer as context. */
+  threadReferencesFor(projectId: string, threadId: string): ThreadContextReference[] {
+    return this.entryFor(projectId, threadId).threadReferences
+  }
+
+  /**
+   * Persist the conversations attached to a composer as context.
+   *
+   * An attachment carries no words of its own: the badge names the thread and
+   * the hidden prompt names its id, so this only ever stores identities and never
+   * rewrites the draft the user is typing.
+   */
+  setThreadReferences(
+    projectId: string,
+    threadId: string,
+    references: ThreadContextReference[]
+  ): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    const unique = uniqueThreadContextReferences(
+      references.filter(
+        (reference) =>
+          isRecoveryIdentifier(reference.projectId) && isRecoveryIdentifier(reference.threadId)
+      )
+    )
+    const key = recoveryDraftKey(projectId, threadId)
+    const current = this.entryFor(projectId, threadId)
+    if (current.threadReferences.length === unique.length) {
+      const same = current.threadReferences.every(
+        (reference, index) => reference.threadId === unique[index]?.threadId
+      )
+      if (same) return
+    }
+
+    const next = { ...this.composerDrafts }
+    if (unique.length === 0) {
+      if (!(key in next)) return
+      if (
+        current.text.length === 0 &&
+        current.attachments.length === 0 &&
+        current.projectReferences.length === 0 &&
+        current.taskReferences.length === 0 &&
+        current.promptReferences.length === 0 &&
+        current.startAfterThreads.length === 0
+      ) {
+        delete next[key]
+      } else {
+        next[key] = { ...current, threadReferences: [] }
+      }
+    } else {
+      next[key] = { ...current, threadReferences: unique }
+    }
+    this.composerDrafts = next
+    this.persist()
+    publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+  }
+
+  clearThreadReferences(projectId: string, threadId: string): void {
+    this.setThreadReferences(projectId, threadId, [])
   }
 
   /** The persisted response-selection annotations attached to a thread's composer draft. */

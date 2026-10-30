@@ -154,11 +154,7 @@ async function pathExists(path: string): Promise<boolean> {
  * a plain symlink unprivileged, so directories become junctions and files fall
  * back to a hard link and then a copy.
  */
-async function linkInto(
-  target: string,
-  linkPath: string,
-  kind: 'file' | 'dir'
-): Promise<void> {
+async function linkInto(target: string, linkPath: string, kind: 'file' | 'dir'): Promise<void> {
   if (!existsSync(target) || (await pathExists(linkPath))) return
   await mkdir(dirname(linkPath), { recursive: true })
   try {
@@ -181,15 +177,16 @@ async function linkInto(
  * config are linked through from the real home, so the only thing the turn
  * overrides is its own `mcp_config.json`.
  */
-export async function linkAntigravityProfile(
-  sessionHome: string,
-  realHome: string
-): Promise<void> {
+export async function linkAntigravityProfile(sessionHome: string, realHome: string): Promise<void> {
   const gemini = join(sessionHome, '.gemini')
   await mkdir(join(gemini, 'config'), { recursive: true })
   const realGemini = join(realHome, '.gemini')
   await linkInto(join(realGemini, 'antigravity-cli'), join(gemini, 'antigravity-cli'), 'dir')
-  await linkInto(join(realGemini, 'config', 'config.json'), join(gemini, 'config', 'config.json'), 'file')
+  await linkInto(
+    join(realGemini, 'config', 'config.json'),
+    join(gemini, 'config', 'config.json'),
+    'file'
+  )
   await linkInto(join(realGemini, 'config', 'projects'), join(gemini, 'config', 'projects'), 'dir')
 }
 

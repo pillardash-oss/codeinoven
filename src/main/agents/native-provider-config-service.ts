@@ -157,6 +157,41 @@ export class NativeProviderConfigService {
     throw new Error(`${provider.harnessId} does not expose a native provider catalog`)
   }
 
+  /**
+   * Record that a native Pi model takes images, in the file the harness reads.
+   *
+   * The app's own vision record and the harness's model catalog are two different
+   * files, and only the catalog decides whether an image is sent or replaced with
+   * "model does not support images". A user who reports that a model does see
+   * images is telling us the catalog is wrong, so the report repairs the entry it
+   * was wrong about instead of being filed somewhere the harness never reads.
+   *
+   * Only the `input` modality list is written: every other field on the entry stays
+   * exactly as the user left it, and a provider or model the file does not contain
+   * is left alone rather than being invented.
+   */
+  async markModelVisionCapable(
+    harnessId: string,
+    providerId: string,
+    modelId: string
+  ): Promise<boolean> {
+    if (harnessId !== 'pi') return false
+    const config = await tryReadJsoncObject(PI_MODELS_PATH)
+    const entry = record(record(config?.['providers'])?.[providerId])
+    const models = entry?.['models']
+    if (!Array.isArray(models)) return false
+    const index = models.findIndex((candidate) => record(candidate)?.['id'] === modelId)
+    if (index < 0) return false
+    const modalities = record(models[index])?.['input']
+    if (Array.isArray(modalities) && modalities.includes('image')) return false
+    await updateJsonc(
+      PI_MODELS_PATH,
+      ['providers', providerId, 'models', index, 'input'],
+      ['text', 'image']
+    )
+    return true
+  }
+
   private async listOpenCodeProviders(): Promise<BaseUrlProvider[]> {
     const config = await tryReadJsoncObject(OPENCODE_CONFIG_PATH)
     if (!config) return []
@@ -598,6 +633,13 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
       ? { maxOutputTokens: positiveInteger(model['maxTokens']) }
       : {}),
     reasoning,
+    // Pi sends an image only when this list names it, so an entry without one is
+    // text-only in the harness no matter what the app recorded elsewhere. Reading
+    // it back is what keeps the editor, the image-descriptor fallback and the
+    // harness telling the same story.
+    ...(Array.isArray(model['input'])
+      ? { vision: model['input'].includes('image') }
+      : { vision: false }),
     // Pi's model config has no per-model variant list (unlike opencode's
     // `variants`), so a reasoning model always gets Pi's fixed thinking levels.
     ...(reasoning ? { thinkingPresets: PI_THINKING_PRESETS } : {}),
@@ -647,6 +689,9 @@ function serializePiModel(model: BaseUrlProviderModel): Record<string, unknown> 
     reasoning: model.reasoning,
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
     ...(model.maxOutputTokens ? { maxTokens: model.maxOutputTokens } : {}),
+    ...(model.vision === undefined
+      ? {}
+      : { input: model.vision === false ? ['text'] : ['text', 'image'] }),
     ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
 }

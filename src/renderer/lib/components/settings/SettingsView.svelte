@@ -37,6 +37,7 @@
   } from '$lib/stores/settings-route.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { describeWaitingWork } from '$lib/update-waiting-copy'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
   import { formatDateTime } from '$shared/date-time-format'
@@ -1660,10 +1661,7 @@
             <div class="mb-3 flex items-center gap-2 text-xs text-accent">
               <CioClock size={13} class="shrink-0" />
               <span>
-                Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
-                1
-                  ? 's'
-                  : ''} to finish before installing…
+                Waiting for {describeWaitingWork(updaterState.waitingFor)} to finish before installing…
               </span>
               <button
                 type="button"

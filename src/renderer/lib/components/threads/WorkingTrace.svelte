@@ -52,6 +52,14 @@
     initiallyFolded?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
+    /**
+     * When this trace's turn closed, when the caller knows it.
+     *
+     * A folded trace mounts no entries, so it has no span of its own to measure:
+     * a settled turn reports its duration from its own close instead of from
+     * whatever window happens to be on screen.
+     */
+    endTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
     /** True while this trace is on screen. A hidden trace   the workspace keeps
@@ -107,6 +115,7 @@
     initialUserOpened = false,
     initiallyFolded = false,
     startTime,
+    endTime,
     active = true,
     totalSteps = 0,
     olderPartsAvailable = false,
@@ -133,14 +142,23 @@
   }: Props = $props()
 
   // Intentional initial-value capture   props are only used to seed local state.
-  // A settled turn opens folded (its answer lives outside the trace), and a
-  // trace the user opened themselves stays open.
+  // Only a trace that is live right now may mount open, and only when the reader
+  // has not folded it. Everything else   a settled turn, and a turn whose
+  // completion was never recorded because the run was cut short (an app quit or
+  // restart mid-turn leaves `done` false for a turn that is no longer working)
+  //   mounts folded instead of staying expanded forever.
   // svelte-ignore state_referenced_locally
-  let isOpen = $state(initialUserOpened || (!done && !initiallyFolded && (open || initialOpen)))
+  let isOpen = $state(
+    initialUserOpened || (busy && !done && !initiallyFolded && (open || initialOpen))
+  )
   // svelte-ignore state_referenced_locally
   let userOpened = $state(initialUserOpened)
   // svelte-ignore state_referenced_locally
   let userFolded = $state(initiallyFolded)
+  /** True once this mount has carried live work. A trace that was live and is
+   *  not any more has settled, whether or not the turn reported its completion.
+   *  Plain, not reactive: only the run-state effect below reads it. */
+  let sawLiveWork = false
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
   /** The trace's root. It exists only to find the transcript scroller the trace
@@ -313,10 +331,11 @@
    *  frozen span once it settles. Null when no entry reported a timestamp. */
   const totalDurationSeconds = $derived.by((): number | null => {
     if (busy && effectiveStartTime) return elapsed
-    if (traceSpan && effectiveStartTime) {
-      return Math.max(0, (traceSpan.end - effectiveStartTime) / 1000)
+    const spanEnd = traceSpan?.end ?? endTime
+    if (spanEnd !== undefined && effectiveStartTime) {
+      return Math.max(0, (spanEnd - effectiveStartTime) / 1000)
     }
-    if (traceSpan) return (traceSpan.end - traceSpan.start) / 1000
+    if (spanEnd !== undefined && traceSpan) return (spanEnd - traceSpan.start) / 1000
     return null
   })
   // Convert file:// image URLs to blob: Object URLs so attached images render
@@ -339,18 +358,22 @@
   $effect(() => {
     // A live turn keeps its work on screen; a trace the user explicitly folded
     // stays folded while it works, so a harness busy blip never re-opens it.
-    if (busy && visibleParts.length > 0) {
-      if (!isOpen && !userFolded) {
+    if (busy) {
+      sawLiveWork = true
+      if (visibleParts.length > 0 && !isOpen && !userFolded) {
         isOpen = true
         notify()
       }
       return
     }
-    // The moment the turn settles, its answer is already outside the trace, so
+    // The moment the run settles, its answer is already outside the trace, so
     // the log folds itself by default and the reader opens it for the detail.
-    // A trace the user opened is left exactly as they left it. A turn still in
-    // progress (done === false) never folds.
-    if (done && !busy && isOpen && !userOpened) {
+    // Settled is decided by the run stopping, not only by the turn reporting its
+    // completion: an interrupted turn, and a run the app quit in the middle of,
+    // leave `done` false for work that has stopped, and that is exactly the
+    // expanded trace a settled thread must not keep showing. A trace the user
+    // opened is left exactly as they left it.
+    if ((done || sawLiveWork) && isOpen && !userOpened) {
       foldToHeader()
       isOpen = false
       notify()

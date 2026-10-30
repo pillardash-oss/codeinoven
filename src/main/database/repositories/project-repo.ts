@@ -25,6 +25,9 @@ interface ProjectRow {
   updated_at: number
 }
 
+/** Every visible project in sidebar order, shared by the synchronous and worker reads. */
+const LIST_SQL = `SELECT * FROM projects WHERE ${unarchivedEntitySql('project', 'projects')} ORDER BY sort_order ASC, updated_at DESC`
+
 function rowToProject(row: ProjectRow): Project {
   return {
     id: row.id,
@@ -117,9 +120,7 @@ export class ProjectRepo {
   }
 
   list(): Project[] {
-    const rows = this.db.all<ProjectRow>(
-      `SELECT * FROM projects WHERE ${unarchivedEntitySql('project', 'projects')} ORDER BY sort_order ASC, updated_at DESC`
-    )
+    const rows = this.db.all<ProjectRow>(LIST_SQL)
     return rows.map(rowToProject)
   }
 
@@ -131,12 +132,25 @@ export class ProjectRepo {
    * fault or a WAL wait cannot stall a frame.
    */
   async listViaWorker(): Promise<Project[]> {
-    const result = await this.db.queryViaWorker(
-      `SELECT * FROM projects WHERE ${unarchivedEntitySql('project', 'projects')} ORDER BY sort_order ASC, updated_at DESC`,
-      [],
-      0
-    )
-    if (!result.ok) return []
+    return (await this.readProjectsViaWorker()) ?? []
+  }
+
+  /**
+   * The same rows as {@link listViaWorker}, but `null` instead of an empty list
+   * when the read could not be answered at all.
+   *
+   * `queryViaWorker` already falls back to the primary connection, so a failed
+   * result means the database itself refused the statement (it is closed, or
+   * mid-init). A caller on an interaction path cannot treat that as "no
+   * projects": it falls back to {@link list} and lets the real failure surface.
+   */
+  async listViaWorkerOrNull(): Promise<Project[] | null> {
+    return this.readProjectsViaWorker()
+  }
+
+  private async readProjectsViaWorker(): Promise<Project[] | null> {
+    const result = await this.db.queryViaWorker(LIST_SQL, [], 0)
+    if (!result.ok) return null
     return (result.rows as unknown as ProjectRow[]).map(rowToProject)
   }
 

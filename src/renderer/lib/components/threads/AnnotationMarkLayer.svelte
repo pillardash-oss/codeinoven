@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import { tick } from 'svelte'
@@ -30,6 +31,7 @@
   } from '$lib/stores/response-references.svelte'
   import { referenceLabelNumber } from '$lib/reference-labels'
   import { mediaMarkChatContext, openAnnotationChat } from '$lib/annotation-chat'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { videoTimecode } from '$shared/video/timeline'
 
   /**
@@ -71,8 +73,27 @@
     armed?: boolean
     /** The surface was armed or disarmed, so the host can follow it. */
     onArmedChange?: (armed: boolean) => void
+    /**
+     * Whether the pen's own controls are drawn.
+     *
+     * Off for a frame that is being *read* rather than drawn on: the marks are shown
+     * so the reader can see what a moment carries and open any of them, and a pen,
+     * colour and finish set over that picture would say the opposite.
+     */
+    showTools?: boolean
     /** Wording for the hint shown while the picture is being drawn on. */
     hint?: string
+    /**
+     * Let the picture continue while the pen is in hand.
+     *
+     * A note is not always about one moment: a user annotating a recording wants
+     * to mark the first problem, let the picture run, and mark the next one
+     * without leaving and reopening the surface. The host owns what continuing
+     * means (a player resumes, a frozen composition hands its live view back), so
+     * the layer only reports the keymap press, and only when no comment field has
+     * the keyboard: pressing space while writing a comment has to type a space.
+     */
+    onContinue?: () => void
     /**
      * The second whose frame the picture is showing, for a video.
      *
@@ -88,6 +109,17 @@
      * about a moment, and a moment the user cannot see is not editable.
      */
     onFocusMark?: (mark: ResponseReferenceAnchor) => void
+    /**
+     * Put the keyboard back on the picture.
+     *
+     * The pen's controls are buttons beside the picture, and a focused button
+     * owns the space key: finishing a comment would leave the press that is meant
+     * to continue the video on the colour control, which opens a palette instead.
+     * Writing a comment is a detour from the picture, so its end hands the
+     * keyboard back to the host's picture rather than to the control that opened
+     * it. The host owns what the picture is (a player, a still), so it focuses it.
+     */
+    onFocusSurface?: () => void
   }
 
   let {
@@ -99,12 +131,61 @@
     onEditClosed,
     armed = false,
     onArmedChange = () => {},
+    showTools = true,
     hint = 'Draw on the picture · Esc to finish',
     activeSeconds = null,
-    onFocusMark
+    onFocusMark,
+    onContinue,
+    onFocusSurface
   }: Props = $props()
 
   const toolbarHost = hasAnnotationToolbarHost() ? getAnnotationToolbarHost() : undefined
+
+  /**
+   * Where the reader put the pen's own controls, in the picture's own pixels.
+   *
+   * The pen sits over the picture by definition, so it covers part of what the reader
+   * came to mark. The bubble beside a mark is draggable for exactly this reason, and
+   * this is the same gesture: a grip starts the drag, so a stroke on the picture can
+   * never be mistaken for a nudge of the tools.
+   */
+  let toolbarAt = $state<{ x: number; y: number } | null>(null)
+
+  function startToolbarDrag(event: PointerEvent, toolbar: HTMLElement): void {
+    const parent = toolbar.offsetParent
+    const handle = event.currentTarget
+    if (!(parent instanceof HTMLElement) || !(handle instanceof HTMLElement)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointerId = event.pointerId
+    const start = toolbar.getBoundingClientRect()
+    const box = parent.getBoundingClientRect()
+    const offsetX = event.clientX - start.left
+    const offsetY = event.clientY - start.top
+    handle.setPointerCapture(pointerId)
+    const move = (next: PointerEvent): void => {
+      if (next.pointerId !== pointerId) return
+      toolbarAt = {
+        x: Math.min(
+          Math.max(0, next.clientX - box.left - offsetX),
+          Math.max(0, box.width - start.width)
+        ),
+        y: Math.min(
+          Math.max(0, next.clientY - box.top - offsetY),
+          Math.max(0, box.height - start.height)
+        )
+      }
+    }
+    const end = (next: PointerEvent): void => {
+      if (next.pointerId !== pointerId) return
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', end)
+      handle.removeEventListener('pointercancel', end)
+    }
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', end)
+    handle.addEventListener('pointercancel', end)
+  }
   const toolbarAttachment: Attachment<HTMLDivElement> = (node) => {
     const target = toolbarHost?.target()
     if (!target) return
@@ -120,6 +201,19 @@
   let measureToken = $state(0)
   /** Whether the pen panel is open. */
   let penOpen = $state(false)
+  /**
+   * Re-anchor the open comment when the picture underneath it changes frame.
+   *
+   * A bubble hides while its own frame is away and comes back when the frame does,
+   * and the badge it hangs off is drawn in that same pass: the anchor measured
+   * before the badge was on screen holds a stale rectangle, so it is taken again
+   * once the picture has rendered the frame the comment belongs to.
+   */
+  $effect(() => {
+    void activeSeconds
+    if (!activeEditingId) return
+    void tick().then(() => (measureToken += 1))
+  })
 
   /**
    * Where the open comment box anchors: its own badge, as the indicator drew it.
@@ -235,6 +329,7 @@
   function closeEditor(): void {
     localEditingId = null
     onEditClosed()
+    onFocusSurface?.()
   }
 
   function saveComment(id: string, comment: string): void {
@@ -286,6 +381,10 @@
       draftPoints = []
     }
     onArmedChange(next)
+    // The control that switched the pen is not where the keyboard belongs: the
+    // next press is about the picture, whether that is drawing on it or letting
+    // it run.
+    onFocusSurface?.()
   }
 
   function remeasure(): void {
@@ -293,15 +392,52 @@
     measureToken += 1
   }
 
+  /** Whether the keyboard belongs to a field rather than to this surface. */
+  function typing(event: KeyboardEvent): boolean {
+    const target = event.target
+    return (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest('input,textarea,select') !== null)
+    )
+  }
+
+  /** Whether a dialog that owns the keyboard is in front of this surface. */
+  function dialogOwnsKeyboard(event: KeyboardEvent): boolean {
+    const target = event.target
+    return target instanceof HTMLElement && target.closest('[aria-modal="true"]') !== null
+  }
+
+  /**
+   * The continue key, claimed before the control that holds the focus.
+   *
+   * A space press beside an annotated picture is about the picture, but a focused
+   * button reads it as its own activation, and the pen's colour control answers a
+   * space by opening its palette. So the press is taken in the capture phase,
+   * before the focused control can act on it, and refused only where a space is
+   * genuinely a character or belongs to a dialog in front of this surface.
+   */
+  function handleContinueKeydown(event: KeyboardEvent): void {
+    if (!onContinue || editorOnScreen) return
+    if (typing(event) || dialogOwnsKeyboard(event)) return
+    if (!keymapState.matches('video-annotation-continue', event)) return
+    event.preventDefault()
+    event.stopPropagation()
+    // The pen panel is a choice about the next stroke, not about continuing: a
+    // space keeps the promise the hint makes and puts it away.
+    if (penOpen) penOpen = false
+    onContinue()
+  }
+
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Escape') return
     // The comment field owns Escape while it is open, so disarming here would
     // fight the editor for the same key. The pen dropdown owns its
     // own Escape for the same reason.
-    if (activeEditingId || penOpen) return
+    if (editorOnScreen || penOpen) return
     drawing = false
     draftPoints = []
     onArmedChange(false)
+    onFocusSurface?.()
   }
 
   /** Badge wording names a frame's moment, which a still mark has none of. */
@@ -315,6 +451,26 @@
     if (mark.markSeconds === undefined) return true
     return Math.abs(mark.markSeconds - activeSeconds) <= MARK_FRAME_TOLERANCE_SECONDS
   }
+
+  /**
+   * Whether the open comment belongs to the frame on screen.
+   *
+   * A comment is about a moment, so once the playhead has moved off that moment
+   * its bubble has nothing to point at: it is hidden until the reader comes back
+   * to the frame it was written for, and the draft it was holding is untouched
+   * while it waits.
+   */
+  const editingOnThisPicture = $derived(editingMark ? marksThisPicture(editingMark) : false)
+
+  /**
+   * Whether a comment editor is on screen and owns the keyboard.
+   *
+   * Only a bubble the reader can actually see can hold the keys: a mark whose
+   * bubble is hidden because the playhead moved off its frame, or one a host has
+   * not surfaced yet, leaves the continue and finish keys to the picture rather
+   * than swallowing a press nobody can see the reason for.
+   */
+  const editorOnScreen = $derived(Boolean(editingMark && editingOnThisPicture && editorAnchor))
 
   /**
    * The marks that belong on the picture right now, in composer order.
@@ -344,7 +500,12 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} onscrollcapture={remeasure} onresize={remeasure} />
+<svelte:window
+  onkeydowncapture={handleContinueKeydown}
+  onkeydown={handleKeydown}
+  onscrollcapture={remeasure}
+  onresize={remeasure}
+/>
 
 <svg
   class="pointer-events-none absolute inset-0 h-full w-full"
@@ -411,10 +572,26 @@
 {/if}
 
 <div
-  class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute top-1.5 right-1.5 z-40']}
+  hidden={!showTools}
+  class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute z-40']}
+  style={toolbarHost ? undefined : `left: ${toolbarAt?.x ?? 6}px; top: ${toolbarAt?.y ?? 6}px`}
   {@attach toolbarAttachment}
 >
-  {#if armed}
+  {#if !toolbarHost}
+    <button
+      type="button"
+      class="flex h-7 w-5 cursor-grab touch-none items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm active:cursor-grabbing"
+      title="Move the annotation tools off the part of the frame you are marking"
+      aria-label="Move the annotation tools"
+      onpointerdown={(event) => {
+        const toolbar = event.currentTarget.parentElement
+        if (toolbar) startToolbarDrag(event, toolbar)
+      }}
+    >
+      <CioGrip size={11} />
+    </button>
+  {/if}
+  {#if armed && hint}
     <span
       class="hidden bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white sm:inline"
       aria-live="polite"
@@ -517,7 +694,7 @@
   </button>
 </div>
 
-{#if editingMark && editorAnchor}
+{#if editingMark && editorOnScreen && editorAnchor}
   <ResponseAnnotationComment
     x={editorAnchor.x}
     y={editorAnchor.y}

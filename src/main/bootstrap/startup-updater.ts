@@ -44,6 +44,12 @@ export function startStartupUpdater(state: BootstrapState, storage: StorageEngin
         activeSessionCount: () =>
           state.featuresReady || state.startupRecovery || state.startupServicesFailed ? 0 : 1
       })
+      // The browser graph is built after paint, so the source reads it through
+      // the bootstrap state and reports nothing until it exists. This is what
+      // keeps an unattended install from quitting through a running download.
+      state.updaterService.setDownloadActivitySource({
+        inFlightDownloads: () => state.browserDownloads?.inFlight() ?? []
+      })
     }
     // Sweep before checks/downloads can acquire a cache file. Newer pending
     // updates survive startup so interrupted downloads remain resumable.

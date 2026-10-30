@@ -8,8 +8,14 @@
  *     model, falling back to the thread model. Applied only when it succeeds.
  */
 
-/** Longest title the fallback derivation produces. */
-const FALLBACK_TITLE_MAX = 48
+/**
+ * Longest title the fallback derivation stores. A title is stored as the user's
+ * own words, not as a preview of them: cutting at 48 characters and appending an
+ * ellipsis wrote the truncation into the database, so the header then showed a
+ * title that had already given up while the row still had room for it. The bar
+ * truncates visually, which is reversible; a stored cut is not.
+ */
+const FALLBACK_TITLE_MAX = 200
 
 /** Longest title accepted from a model response. */
 const GENERATED_TITLE_MAX = 150
@@ -61,7 +67,7 @@ export function deriveTitleFromText(text: string): string {
   const collapsed = firstLine.replace(/\s+/g, ' ').replace(/`/g, '').trim()
   if (!collapsed) return ''
   return collapsed.length > FALLBACK_TITLE_MAX
-    ? `${collapsed.slice(0, FALLBACK_TITLE_MAX).trimEnd()}…`
+    ? collapsed.slice(0, FALLBACK_TITLE_MAX).trimEnd()
     : collapsed
 }
 
@@ -89,7 +95,7 @@ export function sanitizeGeneratedTitle(raw: string): string | null {
   if (!collapsed) return null
   // A real title is short   anything sentence-length is likely a refusal or chatter.
   if (collapsed.length > GENERATED_TITLE_MAX * 2) return null
-  return collapsed.length > GENERATED_TITLE_MAX
-    ? `${collapsed.slice(0, GENERATED_TITLE_MAX).trimEnd()}…`
-    : collapsed
+  /* Stored whole. The header truncates with its own ellipsis when the row runs out,
+     so the stored title stays the title instead of a preview of it. */
+  return collapsed
 }

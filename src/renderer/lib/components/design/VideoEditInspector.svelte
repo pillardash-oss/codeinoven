@@ -11,6 +11,7 @@
     type VideoCaptionAppearance,
     type VideoEditClip
   } from '$shared/video/edit'
+  import { VIDEO_CAPTION_TRANSITION, type VideoCaptionTransition } from '$shared/video/studio'
   import type { VideoEditorController } from '$lib/stores/video-editor.svelte'
   let {
     editor,
@@ -23,6 +24,34 @@
   const clip = $derived(editor.selectedClip)
   const region = $derived(editor.selectedRegion)
   const asset = $derived(editor.edit?.assets.find((asset) => asset.id === clip?.assetId))
+  /**
+   * What kind of media the selected clip actually is.
+   *
+   * The inspector used to offer every clip the same fields, so a sound file asked
+   * for a width, an opacity and an incoming transition, none of which a sound file
+   * has. What a selection can carry is decided here and the rest is never drawn.
+   */
+  const mediaKind = $derived(asset?.kind ?? 'video')
+  type InspectorSection = 'clip' | 'colour' | 'sound'
+  const clipSection = { id: 'clip' as const, label: 'Clip' }
+  const colourSection = { id: 'colour' as const, label: 'Colour' }
+  const soundSection = { id: 'sound' as const, label: 'Sound' }
+  /** Sections that mean something for this media, in the order they are offered. */
+  const sections = $derived.by((): { id: InspectorSection; label: string }[] =>
+    mediaKind === 'audio'
+      ? [clipSection, soundSection]
+      : mediaKind === 'image'
+        ? [clipSection, colourSection]
+        : [clipSection, colourSection, soundSection]
+  )
+  /** The section being drawn, which falls back when the selection changes kind. */
+  const activeSection = $derived(
+    sections.some((option) => option.id === section) ? section : ('clip' as InspectorSection)
+  )
+  /** Motion that happens over time: a still has no source time and no speed. */
+  const timed = $derived(mediaKind !== 'image')
+  /** Placement and an incoming transition: picture only, never sound. */
+  const composited = $derived(mediaKind !== 'audio')
   const captionIndex = $derived(
     editor.selection?.kind === 'caption' ? editor.selection.index : null
   )
@@ -48,6 +77,25 @@
       if (captionIndex !== null && doc.captions[captionIndex])
         doc.captions[captionIndex].appearance = { ...appearance, ...patch }
       else doc.captionAppearance = { ...appearance, ...patch }
+    })
+  }
+  /** The transition the selected caption draws with, or the document's own default. */
+  const captionTransition = $derived(
+    caption?.transition ?? editor.document?.captionTransition ?? VIDEO_CAPTION_TRANSITION
+  )
+  /**
+   * Captions carry their own transitions, because a caption is words rather than a
+   * frame: it cuts in, fades in, or rises into place. Never a picture transition.
+   * With no caption selected the change becomes the default for the whole film.
+   */
+  function captionMotion(patch: Partial<VideoCaptionTransition>): void {
+    editor.mutate((doc) => {
+      const next = { ...captionTransition, ...patch }
+      if (next.kind === 'cut') next.duration = 0
+      else if (next.duration === 0) next.duration = 0.18
+      if (captionIndex !== null && doc.captions[captionIndex])
+        doc.captions[captionIndex].transition = next
+      else doc.captionTransition = next
     })
   }
   function field(id: string, change: (clip: VideoEditClip) => void): void {
@@ -214,6 +262,25 @@
         </Popover.Root>
       {/each}
     </div>
+    <div class="mt-2 grid grid-cols-2 gap-2">
+      <EnumSelect
+        options={[
+          { id: 'cut', label: 'Cut' },
+          { id: 'fade', label: 'Fade' },
+          { id: 'rise', label: 'Rise' }
+        ]}
+        value={captionTransition.kind}
+        placeholder="Caption transition"
+        ariaLabel="Caption transition"
+        title="How these words arrive and leave: a cut, a fade or a rise"
+        menuMinWidth="20rem"
+        compact
+        onChange={(kind) => captionMotion({ kind })}
+      />
+      {@render numberField('Motion (s)', captionTransition.duration, 0, 2, 0.02, (value) =>
+        captionMotion({ duration: value })
+      )}
+    </div>
     {#if captions && !caption}
       <div class="mt-2 max-h-36 overflow-y-auto border-t border-border">
         {#each (editor.document.captions ?? []).slice(0, 200) as item, index (index)}
@@ -277,12 +344,8 @@
       <span class="min-w-0 truncate text-xs font-medium" title={asset.source}>{asset.name}</span>
       <div class="w-40 shrink-0">
         <EnumSelect
-          options={[
-            { id: 'clip', label: 'Clip' },
-            { id: 'colour', label: 'Colour' },
-            { id: 'sound', label: 'Sound' }
-          ]}
-          value={section}
+          options={sections}
+          value={activeSection}
           placeholder="Inspector"
           ariaLabel="Clip inspector"
           title="Placement, colour or sound settings for this clip"
@@ -292,7 +355,7 @@
         />
       </div>
     </div>
-    {#if section === 'clip'}
+    {#if activeSection === 'clip'}
       <div class="grid grid-cols-2 gap-2">
         {@render numberField(
           'Start',
@@ -320,81 +383,87 @@
               item.fadeOut = Math.min(item.fadeOut, value)
             })
         )}
-        {@render numberField(
-          'Source in',
-          clip.sourceStart,
-          0,
-          Math.max(0, asset.duration - clip.duration * clip.speed),
-          1 / editor.fps,
-          (value) =>
-            field(clip.id, (item) => {
-              item.sourceStart = value
-            })
-        )}
-        {@render numberField('Speed', clip.speed, 0.25, 4, 0.05, (value) =>
-          field(clip.id, (item) => {
-            const sourceDuration = item.duration * item.speed
-            item.speed = value
-            item.duration = sourceDuration / value
-          })
-        )}
-        {#each ['x', 'y', 'width', 'height'] as name (name)}
-          {@const key = name as 'x' | 'y' | 'width' | 'height'}
+        {#if timed}
           {@render numberField(
-            `${name} %`,
-            Math.round(clip.rect[key] * 100),
-            key === 'x' || key === 'y' ? -100 : 1,
-            key === 'x' || key === 'y' ? 100 : 200,
-            1,
+            'Source in',
+            clip.sourceStart,
+            0,
+            Math.max(0, asset.duration - clip.duration * clip.speed),
+            1 / editor.fps,
             (value) =>
               field(clip.id, (item) => {
-                item.rect[key] = value / 100
+                item.sourceStart = value
               })
           )}
-        {/each}
-        {@render numberField('Opacity', clip.opacity, 0, 1, 0.05, (value) =>
-          field(clip.id, (item) => {
-            item.opacity = value
-          })
-        )}
-        {@render numberField(
-          'Transition (s)',
-          clip.transition.duration,
-          0,
-          Math.min(5, clip.duration),
-          0.05,
-          (value) =>
+          {@render numberField('Speed', clip.speed, 0.25, 4, 0.05, (value) =>
             field(clip.id, (item) => {
-              item.transition.duration = value
+              const sourceDuration = item.duration * item.speed
+              item.speed = value
+              item.duration = sourceDuration / value
             })
-        )}
-      </div>
-      <div class="mt-2">
-        <EnumSelect
-          options={[
-            { id: 'none', label: 'Cut' },
-            { id: 'dissolve', label: 'Dissolve' },
-            { id: 'fade', label: 'Fade' },
-            { id: 'slide', label: 'Slide' },
-            { id: 'zoom', label: 'Zoom' }
-          ]}
-          value={clip.transition.kind}
-          placeholder="Transition"
-          ariaLabel="Incoming transition"
-          title="Choose the transition into this clip"
-          menuMinWidth="20rem"
-          compact
-          onChange={(kind) =>
+          )}
+        {/if}
+        {#if composited}
+          {#each ['x', 'y', 'width', 'height'] as name (name)}
+            {@const key = name as 'x' | 'y' | 'width' | 'height'}
+            {@render numberField(
+              `${name} %`,
+              Math.round(clip.rect[key] * 100),
+              key === 'x' || key === 'y' ? -100 : 1,
+              key === 'x' || key === 'y' ? 100 : 200,
+              1,
+              (value) =>
+                field(clip.id, (item) => {
+                  item.rect[key] = value / 100
+                })
+            )}
+          {/each}
+          {@render numberField('Opacity', clip.opacity, 0, 1, 0.05, (value) =>
             field(clip.id, (item) => {
-              item.transition = {
-                kind,
-                duration:
-                  kind === 'none' ? 0 : item.transition.duration || Math.min(0.5, item.duration)
-              }
-            })}
-        />
+              item.opacity = value
+            })
+          )}
+          {@render numberField(
+            'Transition (s)',
+            clip.transition.duration,
+            0,
+            Math.min(5, clip.duration),
+            0.05,
+            (value) =>
+              field(clip.id, (item) => {
+                item.transition.duration = value
+              })
+          )}
+        {/if}
       </div>
-    {:else if section === 'colour'}
+      {#if composited}
+        <div class="mt-2">
+          <EnumSelect
+            options={[
+              { id: 'none', label: 'Cut' },
+              { id: 'dissolve', label: 'Dissolve' },
+              { id: 'fade', label: 'Fade' },
+              { id: 'slide', label: 'Slide' },
+              { id: 'zoom', label: 'Zoom' }
+            ]}
+            value={clip.transition.kind}
+            placeholder="Transition"
+            ariaLabel="Incoming transition"
+            title="Choose the transition into this clip"
+            menuMinWidth="20rem"
+            compact
+            onChange={(kind) =>
+              field(clip.id, (item) => {
+                item.transition = {
+                  kind,
+                  duration:
+                    kind === 'none' ? 0 : item.transition.duration || Math.min(0.5, item.duration)
+                }
+              })}
+          />
+        </div>
+      {/if}
+    {:else if activeSection === 'colour'}
       <div class="space-y-2">
         {#each [{ key: 'exposure', label: 'Exposure', min: -3, max: 3, step: 0.05 }, { key: 'contrast', label: 'Contrast', min: 0.25, max: 3, step: 0.05 }, { key: 'saturation', label: 'Saturation', min: 0, max: 3, step: 0.05 }, { key: 'temperature', label: 'Temperature', min: -1, max: 1, step: 0.05 }, { key: 'hue', label: 'Hue', min: -180, max: 180, step: 1 }] as control (control.key)}
           {@const key = control.key as keyof VideoEditClip['grade']}

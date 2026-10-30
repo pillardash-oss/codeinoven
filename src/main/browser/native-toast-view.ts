@@ -7,6 +7,7 @@ import {
   resolveChildWindowPreload
 } from './child-window-support'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { liveContents } from './browser-service/browser-view-contents'
 
 /** A bounded native view receives normal mouse input in the parent's key window. */
 export class NativeToastView {
@@ -33,7 +34,7 @@ export class NativeToastView {
     this.raise()
   }
   owns(contentsId: number): boolean {
-    return this.view?.webContents.id === contentsId
+    return this.view !== null && liveContents(this.view)?.id === contentsId
   }
   currentStack(): ToastOverlayRequestStack | null {
     return this.stack
@@ -65,7 +66,8 @@ export class NativeToastView {
     if (height) this.raise()
     else if (this.view && !this.host.isDestroyed()) {
       const view = this.view
-      const restore = view.webContents.isFocused() && this.host.isFocused()
+      const contents = liveContents(view)
+      const restore = contents !== undefined && contents.isFocused() && this.host.isFocused()
       this.host.contentView.removeChildView(view)
       const target = this.host === this.parent ? this.focusBeforeToast : this.host.webContents
       if (restore && target && !target.isDestroyed()) target.focus()
@@ -74,7 +76,7 @@ export class NativeToastView {
         if (this.height || this.stack?.toasts.length || this.view !== view) return
         this.view = null
         this.ready = false
-        if (!view.webContents.isDestroyed()) view.webContents.close()
+        liveContents(view)?.close()
       }, 15_000)
       this.idleTimer.unref()
     }
@@ -91,7 +93,7 @@ export class NativeToastView {
     this.ready = false
     if (!view) return
     if (!this.host.isDestroyed()) this.host.contentView.removeChildView(view)
-    if (!view.webContents.isDestroyed()) view.webContents.close()
+    liveContents(view)?.close()
   }
   private position(): void {
     if (!this.view || this.host.isDestroyed()) return
@@ -113,7 +115,7 @@ export class NativeToastView {
       this.view.setBounds(bounds)
   }
   private ensure(): WebContentsView | null {
-    if (this.view && !this.view.webContents.isDestroyed()) return this.view
+    if (this.view && liveContents(this.view)) return this.view
     if (this.parent.isDestroyed()) return null
     const view = new WebContentsView({
       webPreferences: {

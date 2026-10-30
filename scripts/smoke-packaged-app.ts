@@ -208,6 +208,10 @@ async function runIteration(
       'splash:visualReady',
       'renderer:documentLoaded',
       'window:visualReady',
+      // The reveal, not just the first frame: the splash is held for the restored
+      // conversation, so a release has to prove the user was actually let into
+      // the app rather than only that a window painted behind a splash.
+      'window:revealed',
       'renderer:hydrated',
       'features:ready',
       'workspace:ready'
@@ -223,11 +227,12 @@ async function runIteration(
     const documentLoadedMs = phaseTime(proof, 'renderer:documentLoaded', iteration)
     const featuresReadyMs = phaseTime(proof, 'features:ready', iteration)
     const visualReadyMs = phaseTime(proof, 'window:visualReady', iteration)
+    const revealedMs = phaseTime(proof, 'window:revealed', iteration)
     const workspaceReadyMs = phaseTime(proof, 'workspace:ready', iteration)
     // The first-paint budget is a release gate, not a log line: raising a bundle
     // budget to fit a heavier eager closure is exactly how a startup regression
-    // ships unnoticed, so the packaged app must still reach its first rendered
-    // frame inside the budget on the machine that built it.
+    // ships unnoticed, so the packaged app must still reveal its restored
+    // conversation inside the budget on the machine that built it.
     const violation = startupBudgetViolation(proof.startup, options.budgetMs)
     if (violation) {
       fail(
@@ -241,7 +246,7 @@ async function runIteration(
       iteration,
       documentLoadedMs,
       featuresReadyMs,
-      proofReadyMs: Math.max(documentLoadedMs, visualReadyMs, workspaceReadyMs),
+      proofReadyMs: Math.max(documentLoadedMs, visualReadyMs, revealedMs, workspaceReadyMs),
       splashVisualReadyMs,
       visualReadyMs,
       workspaceReadyMs,

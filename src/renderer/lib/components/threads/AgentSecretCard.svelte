@@ -5,7 +5,7 @@
   import { fly, slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import CardButton from '../shared/CardButton.svelte'
   import CardCloseButton from '../shared/CardCloseButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -313,11 +313,11 @@
           <!-- Card-scale markdown: the same renderer the transcript uses, sized by
              the text utility on the surface around it. -->
           <div class="text-sm text-foreground">
-            <MarkdownView text={question.prompt} class="markdown-body-card" />
+            <DeferredMarkdownView text={question.prompt} class="markdown-body-card" />
           </div>
           {#if question.description}
             <div class="text-xs text-muted">
-              <MarkdownView text={question.description} class="markdown-body-card" />
+              <DeferredMarkdownView text={question.description} class="markdown-body-card" />
             </div>
           {/if}
         </div>
