@@ -142,6 +142,10 @@ export function showBrowserTabContextMenu(
         }
       }
       menu.append(new MenuItem({ label: 'Move tab to group', submenu: movePlacement }))
+      // Moving a page beside the page on screen is the one way to read two pages at
+      // once, so the move sits with the other moves and greys out for a tab that has
+      // no page to carry.
+      append('Move tab to side panel', { action: 'moveToSidePanel' }, canMoveTabToSide(input))
     }
 
     if (input.boxes.length > 0 || input.boxId !== null) {
@@ -186,4 +190,14 @@ export function showBrowserTabContextMenu(
 function canSleepTab(input: BrowserTabContextMenuInput): boolean {
   if (input.threadScoped === true || input.hibernated || input.pinned) return false
   return input.url !== '' && !input.active
+}
+
+/**
+ * Whether this tab has a page to move beside the one on screen.
+ *
+ * A thread's browser has no rail of its own to move a page into, so the item is only
+ * offered where that rail exists, and a tab with no address has no page to carry.
+ */
+function canMoveTabToSide(input: BrowserTabContextMenuInput): boolean {
+  return input.threadScoped !== true && input.url !== ''
 }

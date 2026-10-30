@@ -21,6 +21,7 @@ import {
 import type { BrowserService } from '../browser-service'
 import { consoleFrameUrl } from './browser-service-common'
 import { installBrowserHistorySwipe } from './browser-history-swipe'
+import { applyBrowserPageBackground } from './browser-page-background'
 import { liveWindowContents } from './browser-view-contents'
 import {
   PANEL_SHORTCUT_TARGETS,
@@ -60,6 +61,7 @@ export interface PopupsHost {
   readonly popupWindows: BrowserService['popupWindows']
   readonly requestPanelShortcut: BrowserService['requestPanelShortcut']
   readonly savePage: BrowserService['savePage']
+  readonly sessionForProject: BrowserService['sessionForProject']
   readonly shortcutBindings: BrowserService['shortcutBindings']
   readonly showPageContextMenu: BrowserService['showPageContextMenu']
   readonly stage: BrowserService['stage']
@@ -499,12 +501,63 @@ export class BrowserServicePopups {
       }))
     ]
     return [
-      { label: 'Open in new tab', click: () => choose('open') },
+      // A page the user moved out of the strip goes back into it, so its menu names
+      // the move the user made rather than the window a page opened.
+      record.side
+        ? { label: 'Move to new tab', click: () => choose('open') }
+        : { label: 'Open in new tab', click: () => choose('open') },
       { label: 'Duplicate in new tab', click: () => choose('duplicate') },
       { label: 'Move to box', submenu: boxes('moveBox') },
       { label: 'Duplicate in box', submenu: boxes('duplicateBox') },
       { type: 'separator' },
       { label: 'Full screen', click: () => choose('fullscreen') }
     ]
+  }
+
+  /**
+   * Host one page beside the page on screen, for a tab the user moved out of the strip.
+   *
+   * The view is created here rather than adopted, because nothing opened it: it is a
+   * page in the jar its tab ran in, with the same preferences a tab's page gets, hosted
+   * as a side window and loaded. The page is awaited, so a tab is only given up once its
+   * page really is beside it; a page that cannot load closes its window and answers
+   * null, which is what keeps a broken address from costing the user their tab.
+   *
+   * Returns the rail window's id, or null when the browser already holds the pages it
+   * may keep beside the page or the address refuses to load.
+   */
+  async openSideWindow(owner: BrowserPageOwner, url: string): Promise<string | null> {
+    if (this.host.popupWindows.countSideWindows() >= MAX_POPUP_WINDOWS_PER_TAB) return null
+    const view = new WebContentsView({
+      webPreferences: {
+        session: this.host.sessionForProject(owner.projectId, owner.boxId),
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+        devTools: true
+      }
+    })
+    // The window carries no document yet, so nothing of the page's own surface is
+    // painted over the app until one commits.
+    applyBrowserPageBackground(view)
+    const popupId = this.host.popupWindows.hostSideWindow({
+      owner,
+      url,
+      view,
+      // No page asked for a size: the rail measures the panel and main follows that
+      // frame, exactly as it does for a popup that never said how big it wanted to be.
+      viewport: null
+    })
+    try {
+      await view.webContents.loadURL(url)
+    } catch (error: unknown) {
+      // A page that could not load is not a window: without this the rail would hold a
+      // tab that can never show anything, and the caller would have closed its tab.
+      this.host.popupWindows.close(popupId, 'its page could not be loaded')
+      Logger.error('A browser tab could not be moved to the side panel:', error)
+      return null
+    }
+    return popupId
   }
 }

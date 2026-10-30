@@ -1182,6 +1182,11 @@ export class BrowserService {
     return this.popupsUnit.popupWindowMenuItems(record)
   }
 
+  /** Host one page beside the page on screen, for a tab moved out of the strip. */
+  openSideWindow(owner: BrowserPageOwner, url: string): Promise<string | null> {
+    return this.popupsUnit.openSideWindow(owner, url)
+  }
+
   // ---------------------------------------------------------------------------
   // browser-service-extension-pages.ts
   // ---------------------------------------------------------------------------

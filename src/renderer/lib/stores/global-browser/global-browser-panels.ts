@@ -1,7 +1,14 @@
 import { SvelteSet } from 'svelte/reactivity'
-import type { BrowserExtensionSidePanel, BrowserPopupWindow } from '$shared/ipc-contract'
+import {
+  GLOBAL_BROWSER_PROJECT_ID,
+  type BrowserExtensionSidePanel,
+  type BrowserPopupWindow
+} from '$shared/ipc-contract'
+import { invoke } from '$lib/ipc.svelte'
 import { browserExtensionSidePanels } from '../browser-extension-side-panels.svelte'
 import { browserPopupWindows } from '../browser-popup-windows.svelte'
+import { reportError } from '../app-errors.svelte'
+import { isBlankBrowserAddress } from '../global-browser-types'
 import type { GlobalBrowserState } from '../global-browser.svelte'
 
 /** GlobalBrowserState panels: one concern, moved verbatim from the composition root. */
@@ -157,6 +164,41 @@ export class GlobalBrowserStatePanels {
 
   closePopupsSidebar(): void {
     if (this.host.contextSidebarTool === 'popups') this.host.contextSidebarVisible = false
+  }
+
+  /**
+   * Move one tab's page into the rail, beside the page on screen.
+   *
+   * The strip and the rail are two native surfaces, and a page is one view at one
+   * rectangle, so the page cannot be both: main hosts the address in a side window and
+   * answers its id once that page is up, and only then does the tab leave the strip.
+   * The rail comes up on the page that moved, so the move reads as the page crossing
+   * the window rather than as a page being copied.
+   *
+   * Returns the rail window's id, or null when the tab has no page to move or main
+   * refused it, in which case the tab stays exactly where it was.
+   */
+  async moveTabToSidePanel(tabId: string): Promise<string | null> {
+    const tab = this.host.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab || isBlankBrowserAddress(tab.url)) return null
+    let popupId: string | null
+    try {
+      popupId = await invoke('browser:moveTabToSidePanel', tabId, tab.url)
+    } catch (error: unknown) {
+      reportError(error, 'The tab could not be moved to the side panel.')
+      return null
+    }
+    if (popupId === null) return null
+    // Read the windows back before picking one: the report that announced this page
+    // may still be in flight, and a pick that arrives before the list would be
+    // dropped as a window the rail does not know.
+    await browserPopupWindows.load(GLOBAL_BROWSER_PROJECT_ID)
+    browserPopupWindows.select(popupId)
+    this.showPopupsSidebar()
+    // Not a reopenable close: the page is on screen in the rail, so remembering the
+    // tab would offer the user a page that never left.
+    this.host.close(tabId, { recordForReopen: false })
+    return popupId
   }
 
   /**

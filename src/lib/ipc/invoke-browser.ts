@@ -226,6 +226,16 @@ export const invokeBrowserContract = {
   /** The popup windows the browser is holding for one project. */
   'browser:getPopupWindows': {} as Contract<[projectId: string], BrowserPopupWindow[]>,
   /**
+   * Move one browser tab's page into the rail's side windows.
+   *
+   * A page is one native view, and the window composites a view at one rectangle, so
+   * a page cannot stand in the strip and beside it at once: the move is a close plus
+   * an open of the same address, hosted the way a popup window's page is. Main answers
+   * with the window's id once its page is up, and the caller closes the tab it came
+   * from; null means the move did not happen and the tab has to stay.
+   */
+  'browser:moveTabToSidePanel': {} as Contract<[tabId: string, url: string], string | null>,
+  /**
    * Open an extension's own action popup in the rail.
    *
    * Electron draws no toolbar and no action popup, so an extension's declared

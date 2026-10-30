@@ -137,6 +137,7 @@ export interface IpcSurfaceHost {
   readonly openExtensionPopup: BrowserService['openExtensionPopup']
   readonly openNewTabFor: BrowserService['openNewTabFor']
   readonly openOptionsPageFromPage: BrowserService['openOptionsPageFromPage']
+  readonly openSideWindow: BrowserService['openSideWindow']
   readonly overlay: BrowserService['overlay']
   readonly parkTab: BrowserService['parkTab']
   readonly peekTabs: BrowserService['peekTabs']
@@ -360,6 +361,20 @@ export class BrowserServiceIpcSurface {
       const url = this.host.validateTabNavigationUrl(record.projectId, boxId, contents.getURL())
       this.host.openNewTabFor({ ...popupPageOwner(record), boxId }, url)
       if (!duplicate) this.host.popupWindows.close(record.id, 'opened as a browser tab')
+    })
+    // The move into the rail, and the close of the tab it came from, are the
+    // renderer's two steps because the tab strip is its list: main hosts the page
+    // beside the one on screen and answers the window's id once that page is up, and
+    // only then does the caller give the tab up. Null means the tab stays.
+    replaceHandler('browser:moveTabToSidePanel', async (_event, rawTabId, rawUrl) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.host.tabs.get(tabId)
+      if (!tab || tab.projectId !== GLOBAL_BROWSER_PROJECT_ID) return null
+      const url = this.host.validateTabNavigationUrl(tab.projectId, tab.boxId, rawUrl)
+      return this.host.openSideWindow(
+        { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
+        url
+      )
     })
     replaceHandler('browser:showPopupWindow', (_event, rawPopupId, rawBounds) => {
       this.host.popupWindows.show(validatePopupWindowId(rawPopupId), validateBounds(rawBounds))

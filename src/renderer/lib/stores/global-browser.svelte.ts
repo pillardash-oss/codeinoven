@@ -32,7 +32,10 @@ import {
 import { type GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
 import { appConfigState } from './app-config.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
-import { BROWSER_ASSISTANT_DEFAULT_TITLE, type BrowserAssistantChat } from './browser-assistant.svelte'
+import {
+  BROWSER_ASSISTANT_DEFAULT_TITLE,
+  type BrowserAssistantChat
+} from './browser-assistant.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { browserVisibility } from './browser-visibility.svelte'
 import {
@@ -535,6 +538,10 @@ export class GlobalBrowserState {
   }
   closePopupsSidebar(): void {
     return this.units['panels'].closePopupsSidebar()
+  }
+  /** Move one tab's page into the rail, beside the page on screen. */
+  moveTabToSidePanel(tabId: string): Promise<string | null> {
+    return this.units['panels'].moveTabToSidePanel(tabId)
   }
   showExtensionSidePanelSidebar(): void {
     return this.units['panels'].showExtensionSidePanelSidebar()

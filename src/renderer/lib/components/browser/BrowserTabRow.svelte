@@ -302,6 +302,9 @@
             case 'reopenInBox':
               reopenTarget = choice.boxId
               return
+            case 'moveToSidePanel':
+              void globalBrowser.moveTabToSidePanel(tab.id)
+              return
             case 'reopenClosed':
               globalBrowser.reopenLastClosedTab()
               return
