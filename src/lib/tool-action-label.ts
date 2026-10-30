@@ -1,3 +1,4 @@
+import { isQuestionToolName, isTodoToolName } from './agent-interactions'
 import type { AgentPart } from './types'
 
 /**
@@ -15,14 +16,14 @@ import type { AgentPart } from './types'
 export const TOOL_ACTION_PATTERNS: Array<{ match: RegExp; label: string }> = [
   { match: /todo/i, label: 'updated the task list' },
   { match: /task|spawn.?agent|subagent|agent.?status/i, label: 'delegated to a sub-agent' },
-  { match: /websearch|web.?search/i, label: 'searched the web' },
+  { match: /websearch|web.?search|search.?web/i, label: 'searched the web' },
   { match: /webfetch|fetch|browse|curl/i, label: 'fetched a URL' },
   { match: /bash|shell|exec|terminal|command/i, label: 'ran a shell command' },
-  { match: /multiedit|notebook.?edit|apply.?patch|patch/i, label: 'edited a file' },
+  { match: /multiedit|notebook.?edit|apply.?patch|patch|replace.?file/i, label: 'edited a file' },
   { match: /^edit$|^edit[-_]/i, label: 'edited a file' },
-  { match: /^write$|write[-_]?file/i, label: 'wrote a file' },
+  { match: /^write$|write[-_]?file|write.?to.?file/i, label: 'wrote a file' },
   { match: /^read$|read.?file|^cat$/i, label: 'read a file' },
-  { match: /grep|glob|^find$|search/i, label: 'searched files' }
+  { match: /grep|glob|^find$|find.?by.?name|search/i, label: 'searched files' }
 ]
 
 /**
@@ -76,17 +77,28 @@ const UTILITY_INVOKE_KEY = 'cio_util_use'
  */
 const SHORT_TOOL_LABELS: Array<{ match: RegExp; label: string }> = [
   {
-    match: /^(?:bash|shell|sh|zsh|cmd|powershell|pwsh|exec|execute|terminal|command)$/u,
+    // Every harness's shell: pi's `bash`, opencode's `shell`, codex's
+    // `command_execution`, Claude Code's `Bash`, Antigravity's `run_command`,
+    // Cline's `run_commands`, and the Windows shells.
+    match:
+      /^(?:bash|shell|sh|zsh|cmd|powershell|pwsh|exec|execute|terminal|command|commandexecution|runcommand|runcommands)$/u,
     label: 'Shell'
   },
   {
     match:
-      /^(?:edit|edits|multiedit|strreplace|strreplaceeditor|applypatch|patch|filechange|fileedit|notebookedit)$/u,
+      /^(?:edit|edits|editfile|editfiles|multiedit|strreplace|strreplaceeditor|applypatch|patch|filechange|fileedit|notebookedit|editor|replacefilecontent)$/u,
     label: 'Edit'
   },
-  { match: /^(?:write|writefile|createfile|newfile|create)$/u, label: 'Write' },
-  { match: /^(?:read|readfile|cat|view|viewfile)$/u, label: 'Read' },
-  { match: /^(?:grep|glob|find|search|searchfiles|ripgrep|rg)$/u, label: 'Search' }
+  {
+    match: /^(?:write|writefile|createfile|newfile|create|writetofile)$/u,
+    label: 'Write'
+  },
+  { match: /^(?:read|readfile|readfiles|cat|view|viewfile)$/u, label: 'Read' },
+  { match: /^(?:ls|listdir|listfiles|list)$/u, label: 'List' },
+  {
+    match: /^(?:grep|glob|find|search|searchfiles|ripgrep|rg|findbyname)$/u,
+    label: 'Search'
+  }
 ]
 
 /**
@@ -301,6 +313,11 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
     return capitalizeActionPhrase(APP_TOOL_ACTIONS[appKey])
   }
   if (source.codeMode === true) return undefined
+  // Two interaction shapes keep their own words wherever they come from: a
+  // harness's question tool and a harness's task-list tool are the same act
+  // whichever name the harness gave them.
+  if (isQuestionToolName(source.tool)) return 'Asked a question'
+  if (isTodoToolName(source.tool)) return 'Updated the task list'
   const stated = modelLabel(input)
   if (stated) return capitalizeActionPhrase(stated)
   // The core primitives say everything in their own name, see SHORT_TOOL_LABELS.
