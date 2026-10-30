@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
   import { openMemoryProposal } from '$lib/stores/memory-proposal-open'
+  import { preloadThreadById } from '$lib/stores/thread-preload'
   interface Props {
     message: string
     projectId: string
@@ -28,7 +29,11 @@
   }
 </script>
 
-<div class="flex items-start gap-3 border bg-surface p-3 text-foreground shadow-xl">
+<div
+  class="flex items-start gap-3 border bg-surface p-3 text-foreground shadow-xl"
+  role="status"
+  onmouseenter={() => preloadThreadById(projectId, threadId)}
+>
   <div class="mt-0.5 shrink-0 text-primary">
     <CioMemory size={18} />
   </div>

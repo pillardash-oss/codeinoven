@@ -28,7 +28,50 @@ export class ChatEngineLifecycle {
    *  thread, orchestrator-only transcript), in which case the fold keeps the
    *  whole log as before. */
   async currentTurnStartTs(projectId: string, threadId: string): Promise<number | undefined> {
-    const page = await this.host.threadManager.loadMessagePage(projectId, threadId, undefined, 80)
+    // The boundary sits at or near the tail of the mirror: a running turn's
+    // assistant rows are only written when the turn settles, so the prompt that
+    // opened it is within a handful of the newest rows. This read is on the
+    // critical path of every trace page and repeats once a second while a run is
+    // live, in this instance or another one, and a page carries every message's
+    // parts, so the old unconditional 80-row read decoded the whole newest turn
+    // (tool output included) to recover one timestamp. Scan a small page first
+    // and widen only when the boundary is genuinely further back.
+    const near = await this.findTurnStartTs(
+      projectId,
+      threadId,
+      ChatEngineLifecycle.NEAR_BOUNDARY_ROWS
+    )
+    if (near.found) return near.ts
+    if (!near.hasOlder) return undefined
+    return (await this.findTurnStartTs(projectId, threadId, ChatEngineLifecycle.WIDE_BOUNDARY_ROWS))
+      .ts
+  }
+
+  /** Rows one boundary scan reads before widening (see `currentTurnStartTs`). */
+  private static readonly NEAR_BOUNDARY_ROWS = 12
+
+  /** Rows the widened scan reads, the previous unconditional page size. */
+  private static readonly WIDE_BOUNDARY_ROWS = 80
+
+  /**
+   * Find the newest turn-opening prompt inside one bounded page of the mirror.
+   *
+   * `found` is false when the page held only prompts the boundary skips (an
+   * activity notice, an orchestrator continuation, a steer still held); `hasOlder`
+   * then says whether history continues behind it, which is the only reason to
+   * pay for a wider read.
+   */
+  private async findTurnStartTs(
+    projectId: string,
+    threadId: string,
+    limit: number
+  ): Promise<{ found: boolean; ts: number | undefined; hasOlder: boolean }> {
+    const page = await this.host.threadManager.loadMessagePage(
+      projectId,
+      threadId,
+      undefined,
+      limit
+    )
     const messages = page.messages
     const heldSteerIds = this.host.units['messages'].heldSteerMessageIds(threadId)
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -36,9 +79,9 @@ export class ChatEngineLifecycle {
       if (!message || message.role !== 'user') continue
       if (!isTurnBoundaryPrompt(message)) continue
       if (heldSteerIds.has(message.id)) continue
-      return message.createdAt || undefined
+      return { found: true, ts: message.createdAt || undefined, hasOlder: page.hasOlder }
     }
-    return undefined
+    return { found: false, ts: undefined, hasOlder: page.hasOlder }
   }
 
   // ─── Session watchdog   catches silent agent failures ───────────────────

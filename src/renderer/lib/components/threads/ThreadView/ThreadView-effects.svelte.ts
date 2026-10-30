@@ -1180,11 +1180,34 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     // live turn does not need a reader's worth of IPC every second. It stops on the
     // quit signal too, because this read reaches the database through the message
     // mirror and the main process closes that database while the window is still up.
+    //
+    // A sibling instance's work is the one case where the poll interval is the
+    // visible lag: its run reaches this window as forwarded events, but its trace
+    // steps only exist in the shared log, so a step appeared whenever the next tick
+    // came round, up to a second after the owner had already run it. Every remote
+    // event for this thread therefore nudges the same read, coalesced, so a token
+    // stream costs a handful of reads instead of one per delta.
     $effect(() => {
       if (!this.root.switchProject.busy || !this.root.props.active || appQuitState.quitting) return
+      const { projectId, id } = this.root.handleAgentEvent.thread
+      let nudge: ReturnType<typeof setTimeout> | null = null
+      const stopRemote = subscribeGuarded(
+        'agent:remoteEvent',
+        (payload: RemoteAgentEventPayload) => {
+          if (payload.projectId !== projectId || payload.threadId !== id) return
+          if (nudge !== null) return
+          nudge = setTimeout(() => {
+            nudge = null
+            if (!this.root.props.active || appQuitState.quitting) return
+            void this.root.pollStreamParts.pollStreamParts()
+          }, this.root.state.REMOTE_TRACE_NUDGE_MS)
+        }
+      )
       const poll = setInterval(() => void this.root.pollStreamParts.pollStreamParts(), 1000)
       return () => {
         clearInterval(poll)
+        if (nudge !== null) clearTimeout(nudge)
+        stopRemote()
         this.root.pollStreamParts.streamPartsLoadGeneration += 1
       }
     })

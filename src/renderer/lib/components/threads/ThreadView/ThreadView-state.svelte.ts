@@ -214,6 +214,12 @@ export class ThreadViewState extends BoardUnit<ThreadView> {
    *  monster turn from mounting without end. */
   EAGER_STREAM_PARTS_CAP = 400
 
+  /** How long a sibling instance's forwarded event waits before it pulls the
+   *  shared trace log again. The forwarded events fire per delta, and the log is
+   *  one small read, so this coalesces a token stream into a handful of reads
+   *  while keeping a step's appearance well inside a frame budget's notice. */
+  REMOTE_TRACE_NUDGE_MS = 150
+
   // The transcript can advance to a new turn without this view ever observing
   // the boundary (a queued message, an auto-retry, an assistant, or another app
   // instance running the turn). The live poll above only runs while this view

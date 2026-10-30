@@ -6,6 +6,7 @@ import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { playHistoryArrive } from '$lib/motion'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
+import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import type { ThreadMessageCursor, ThreadSettings, TurnStreamPartsPage } from '$shared/types'
 import {
@@ -957,6 +958,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     let traceWindowRead: Promise<TurnStreamPartsPage | null> | null = null
     const readTraceWindow = (): Promise<TurnStreamPartsPage | null> =>
       (traceWindowRead ??= this.root.pollStreamParts.loadLatestTraceWindow())
+    // A thread whose turn is still open, in this instance or in a sibling that
+    // owns the run and shares the log, renders its work from the durable log
+    // alone: the mirror gains no assistant rows until the turn settles. That
+    // read therefore starts here, beside the handshake below, instead of being
+    // awaited after it. Awaiting it last put the trace behind a frame, the spec
+    // reconcile, the session status, three pending-request reads and the whole
+    // transcript load, which is the wait a live thread showed before its first
+    // step appeared. Adopting the page repaints the fold on arrival, so the work
+    // lands as soon as the log answers.
+    if (threadHoldsOpenTrace(this.root.handleAgentEvent.thread)) void readTraceWindow()
 
     if (this.root.composerScope.shouldHydrateEngineeringState()) {
       try {

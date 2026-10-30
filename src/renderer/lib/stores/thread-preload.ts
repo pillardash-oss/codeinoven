@@ -37,15 +37,18 @@ const OPEN_TURN_STATUSES: ReadonlySet<ThreadStatus> = new Set<ThreadStatus>([
 /** Reads already in flight, so a pointer pass over a row never duplicates one. */
 const traceReadsInFlight = new Set<string>()
 
+/** Row lookups already in flight for a prefetch that was given ids only. */
+const rowReadsInFlight = new Set<string>()
+
 /**
- * Whether a thread can render a working trace at all.
+ * Whether a thread's newest work exists only in the durable stream log.
  *
  * A settled thread draws its turn from the message mirror, so hydrating its
  * multi-megabyte log on a pointer pass would buy nothing. Live work, work owned
  * by another instance (the log is shared on disk), and a turn that is still
  * open in any form are the cases where the trace is the only source.
  */
-function mayHoldOpenTrace(thread: Thread): boolean {
+export function threadHoldsOpenTrace(thread: Thread): boolean {
   if (isThreadLiveWorking(thread)) return true
   if (foreignRuns.isForeign(thread.projectId, thread.id)) return true
   return OPEN_TURN_STATUSES.has(thread.status)
@@ -59,7 +62,7 @@ function mayHoldOpenTrace(thread: Thread): boolean {
  * it does today.
  */
 export function prefetchThreadTrace(thread: Thread): void {
-  if (!mayHoldOpenTrace(thread)) return
+  if (!threadHoldsOpenTrace(thread)) return
   const key = `${thread.projectId}:${thread.id}`
   if (traceReadsInFlight.has(key)) return
   const cached = threadTraceCache.peek(thread.projectId, thread.id)
@@ -85,6 +88,31 @@ export function preloadThreadConversation(thread: Thread): void {
   prefetchThreadTrace(thread)
   if (threadMessages.loaded(thread.projectId, thread.id)) return
   void threadMessages.preload(thread.projectId, thread.id)
+}
+
+/**
+ * Warm a thread a surface only knows by id (a notification, a toast).
+ *
+ * Those surfaces are handed an id pair, never a thread row, and the row is what
+ * says whether the trace is the only copy of the work. Reading it here costs one
+ * cheap row lookup and turns the click that follows into a warm open instead of
+ * a cold one, which is the whole difference between a trace that appears at once
+ * and one that grows a second or two later.
+ */
+export function preloadThreadById(projectId: string, threadId: string): void {
+  const key = `${projectId}:${threadId}`
+  if (rowReadsInFlight.has(key)) return
+  rowReadsInFlight.add(key)
+  void invoke('thread:get', projectId, threadId)
+    .then((thread) => {
+      if (thread) preloadThreadConversation(thread)
+    })
+    .catch(() => {
+      // Best effort: the click still reads what the open path needs.
+    })
+    .finally(() => {
+      rowReadsInFlight.delete(key)
+    })
 }
 
 /**
