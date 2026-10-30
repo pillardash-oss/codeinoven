@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chief · narrow window · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./console.css" />
+    <style>
+      .narrow-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        height: 2.75rem;
+        flex: none;
+        padding: 0 0.625rem;
+        border-bottom: 1px solid var(--color-border);
+      }
+
+      .narrow-bar .assistant-mark {
+        border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
+        background: color-mix(in oklab, var(--color-accent) 12%, var(--color-surface));
+        color: var(--color-foreground);
+      }
+
+      .narrow-bar-title {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.2;
+        min-width: 0;
+      }
+
+      .narrow-bar-title strong {
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .narrow-bar-title span {
+        font-size: 0.625rem;
+        color: var(--color-muted);
+      }
+
+      .narrow-bar-spacer {
+        flex: 1;
+      }
+
+      .route-line {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-surface);
+        font-size: 0.6875rem;
+        color: var(--color-muted);
+      }
+
+      .route-line strong {
+        color: var(--color-foreground);
+        font-weight: 600;
+      }
+
+      .route-line .state[data-kind='working'] {
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="window">
+      <header class="narrow-bar">
+        <span class="assistant-mark" aria-hidden="true">C</span>
+        <span class="narrow-bar-title">
+          <strong>Chief</strong>
+          <span>orchestrator</span>
+        </span>
+        <span class="narrow-bar-spacer"></span>
+        <button class="icon-btn" type="button" title="Assistants" aria-label="Assistants">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <rect x="3.25" y="4.75" width="9.5" height="8" rx="1" /><path d="M8 4.75V2.5M5.75 8.25h.01M10.25 8.25h.01M6 10.75h4" />
+          </svg>
+        </button>
+        <button class="icon-btn" type="button" title="Routing log" aria-label="Routing log">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M3 4h10M3 8h10M3 12h6" />
+          </svg>
+        </button>
+      </header>
+
+      <div class="route-line">
+        <span class="state" data-kind="working"><span class="dot"></span>1 running</span>
+        <span>Release Notes is on it</span>
+        <span>09:12</span>
+      </div>
+
+      <div class="shell" style="grid-template-columns: 1fr">
+        <main class="console">
+          <div class="scroller">
+            <div class="thread">
+              <article class="msg" data-role="user">
+                <div class="msg-author">You<time>09:12</time></div>
+                <div class="msg-body">
+                  <p>The 0.9.4 notes still claim the browser tab fix is unshipped.</p>
+                </div>
+              </article>
+              <article class="msg" data-role="agent">
+                <div class="msg-author">Chief<time>09:12</time></div>
+                <div class="msg-body">
+                  <p>Release Notes has it and is rewriting that line now. Nothing else to do here.</p>
+                </div>
+              </article>
+
+              <div class="dispatch">
+                <button class="dispatch-bar" type="button" aria-expanded="false">
+                  <span class="dispatch-arrow" aria-hidden="true">▸</span>
+                  <span class="dispatch-who">Release Notes</span>
+                  <span class="dispatch-why">Owns 0.9.4</span>
+                  <span class="dispatch-time">09:12</span>
+                </button>
+                <div class="dispatch-detail">
+                  <dl>
+                    <dt>Task</dt>
+                    <dd>Correct the unshipped browser-tab line</dd>
+                    <dt>Reports back</dt>
+                    <dd>A comment on the draft, then a line here</dd>
+                  </dl>
+                </div>
+              </div>
+
+              <div class="run">
+                <div class="msg-author">Chief</div>
+                <div class="run-card">
+                  <div class="run-head">
+                    <span class="pulse" aria-hidden="true"></span>
+                    <strong>Release Notes</strong>
+                    <span class="dim">2 of 3</span>
+                  </div>
+                  <ul class="run-steps">
+                    <li data-state="done"><span class="step-mark" aria-hidden="true">✓</span>Read the draft<time>0:14</time></li>
+                    <li data-state="done"><span class="step-mark" aria-hidden="true">✓</span>Check the tag<time>0:41</time></li>
+                    <li data-state="running"><span class="step-mark" aria-hidden="true">▸</span>Rewrite the paragraph<time>0:22</time></li>
+                  </ul>
+                  <div class="run-foot">
+                    <span>Delivers a comment</span>
+                    <span>
+                      <button class="text-btn" type="button">Open</button>
+                      <button class="text-btn" type="button">Stop</button>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer-wrap" style="padding: 0 0.875rem 0.75rem">
+            <div class="composer" style="width: 100%">
+              <label class="sr-only" for="composer-field">Message Chief</label>
+              <textarea id="composer-field" class="composer-field" rows="2" placeholder="Ask for anything"></textarea>
+              <div class="composer-shoe">
+                <button class="chip" data-auto="true" type="button" title="Who handles this message" aria-label="Routing: auto, Chief decides">
+                  Auto
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <path d="M4 6.5 8 10.5l4-4" />
+                  </svg>
+                </button>
+                <div class="shoe-spacer"></div>
+                <button class="send-btn" type="button">Send</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script src="./dispatch.js"></script>
+    <script src="./theme.js"></script>
+  </body>
+</html>

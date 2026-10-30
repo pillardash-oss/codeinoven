@@ -1,0 +1,48 @@
+{
+  "columns": 2,
+  "frames": [
+    {
+      "entry": "./01-console.html",
+      "title": "01 The console",
+      "caption": "Chief answers, dispatches twice, and shows one live run"
+    },
+    {
+      "entry": "./02-first-open.html",
+      "title": "02 First open",
+      "caption": "An empty thread: starters that name their route, then what is running"
+    },
+    {
+      "entry": "./03-route-sheet.html",
+      "title": "03 Override the route",
+      "caption": "Only for disagreeing with Auto: the sheet over the console"
+    },
+    {
+      "entry": "./04-handoff.html",
+      "title": "04 The assistant's side",
+      "caption": "The same task where it runs, saying it came from Chief"
+    },
+    {
+      "entry": "./06-returns.html",
+      "title": "06 When it comes back",
+      "caption": "One dispatch refused before it started, one failed and not retried"
+    },
+    {
+      "entry": "./05-narrow.html",
+      "title": "05 Narrow window",
+      "caption": "The roster folds away, a route line holds who is on it",
+      "width": 480
+    },
+    {
+      "entry": "./01-console.html",
+      "title": "01 The console, phone width",
+      "caption": "Same thread at 390: one column, the shoe still readable",
+      "width": 390
+    },
+    {
+      "entry": "./06-returns.html",
+      "title": "06 At phone width",
+      "caption": "The failure note keeps its cause and all three actions",
+      "width": 390
+    }
+  ]
+}

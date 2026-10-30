@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chief · pick who handles it · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./console.css" />
+  </head>
+  <body>
+    <div class="window">
+      <header class="titlebar">
+        <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="titlebar-title">
+          <strong>codeinoven</strong>
+          <span>Assistant</span>
+          <span aria-hidden="true">/</span>
+          <span>Chief</span>
+        </div>
+        <div class="titlebar-actions">
+          <button class="icon-btn" type="button" title="Search everything" aria-label="Search everything">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.25" /><path d="M10.2 10.2 13.5 13.5" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Settings" aria-label="Settings">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.25" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2 3.4 12.6" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="shell">
+        <nav class="rail" aria-label="Primary">
+          <button class="icon-btn" type="button" title="Projects" aria-label="Projects">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="0.5" /><path d="M1.75 6h12.5" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Assistant" aria-label="Assistant" aria-pressed="true">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="3.25" y="4.75" width="9.5" height="8" rx="1" /><path d="M8 4.75V2.5M5.75 8.25h.01M10.25 8.25h.01M6 10.75h4" />
+            </svg>
+          </button>
+          <div class="rail-spacer"></div>
+        </nav>
+
+        <aside class="roster" aria-label="Assistants">
+          <div class="roster-head"><h2>Assistants</h2></div>
+          <div class="roster-list">
+            <button class="roster-row" type="button" aria-current="true">
+              <span class="assistant-mark" data-self="true" aria-hidden="true">C</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Chief</span>
+                <span class="roster-row-note">Orchestrator</span>
+              </span>
+            </button>
+            <div class="roster-group">Working</div>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">PT</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">PR Triage</span>
+                <span class="roster-row-note">Reviewing #1482</span>
+              </span>
+            </button>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">RN</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Release Notes</span>
+                <span class="roster-row-note">Drafting 0.9.4</span>
+              </span>
+            </button>
+          </div>
+        </aside>
+
+        <main class="console">
+          <div class="console-head">
+            <div class="console-title">
+              <h1>Chief</h1>
+              <span>orchestrator</span>
+            </div>
+          </div>
+
+          <div class="stage">
+            <div class="scroller" inert>
+              <div class="thread">
+                <div class="day-rule">Today · Tue 4 Feb</div>
+                <article class="msg" data-role="user">
+                  <div class="msg-author">You<time>09:12</time></div>
+                  <div class="msg-body"><p>The 0.9.4 notes still claim the browser tab fix is unshipped.</p></div>
+                </article>
+                <article class="msg" data-role="agent">
+                  <div class="msg-author">Chief<time>09:12</time></div>
+                  <div class="msg-body"><p>Release Notes took it. It is rewriting that paragraph now.</p></div>
+                </article>
+              </div>
+            </div>
+            <div class="veil" aria-hidden="true"></div>
+
+            <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+              <div class="sheet-head">
+                <h2 id="sheet-title">Who handles this?</h2>
+                <span>Enter picks · Esc keeps Auto</span>
+              </div>
+
+              <div class="sheet-picked">
+                Your message
+                <strong>“Have someone check why the composer feels slow on large threads.”</strong>
+              </div>
+
+              <div class="sheet-list" role="listbox" aria-labelledby="sheet-title">
+                <button class="sheet-option" type="button" role="option" aria-selected="true">
+                  <span class="assistant-mark" data-self="true" aria-hidden="true">C</span>
+                  <span>
+                    <span class="sheet-option-name">Chief</span>
+                    <span class="sheet-option-note">Profiles the renderer itself · no assistant owns this</span>
+                  </span>
+                  <span class="reason">Best fit</span>
+                </button>
+                <button class="sheet-option" type="button" role="option" aria-selected="false">
+                  <span class="assistant-mark" aria-hidden="true">PT</span>
+                  <span>
+                    <span class="sheet-option-name">PR Triage</span>
+                    <span class="sheet-option-note">Busy with #1482 · joins the queue behind it</span>
+                  </span>
+                  <span class="reason">Queued</span>
+                </button>
+                <button class="sheet-option" type="button" role="option" aria-selected="false">
+                  <span class="assistant-mark" aria-hidden="true">RN</span>
+                  <span>
+                    <span class="sheet-option-name">Release Notes</span>
+                    <span class="sheet-option-note">Writes prose, not profiles</span>
+                  </span>
+                  <span class="reason">Weak fit</span>
+                </button>
+                <button class="sheet-option" type="button" role="option" aria-selected="false">
+                  <span class="assistant-mark" aria-hidden="true">DW</span>
+                  <span>
+                    <span class="sheet-option-name">Dependency Watch</span>
+                    <span class="sheet-option-note">Runs daily 09:00 · idle until then</span>
+                  </span>
+                  <span class="reason">Idle</span>
+                </button>
+              </div>
+
+              <div class="sheet-foot">
+                <span>Chief decides by default. Picking one skips the routing step once.</span>
+                <span class="actions">
+                  <button class="ghost-btn" type="button">Keep Auto</button>
+                  <button class="send-btn" type="button">Send to Chief <kbd>↵</kbd></button>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer">
+              <label class="sr-only" for="composer-field">Message Chief</label>
+              <textarea id="composer-field" class="composer-field" rows="2">Have someone check why the composer feels slow on large threads.</textarea>
+              <div class="composer-shoe">
+                <button class="chip" data-auto="true" type="button" title="Who handles this message" aria-label="Routing: Chief chosen for this message">
+                  Route · Chief
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <path d="M4 6.5 8 10.5l4-4" />
+                  </svg>
+                </button>
+                <div class="shoe-spacer"></div>
+                <button class="send-btn" type="button">Send <kbd>⌘↵</kbd></button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script src="./theme.js"></script>
+  </body>
+</html>

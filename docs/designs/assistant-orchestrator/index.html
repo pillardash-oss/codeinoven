@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Assistant orchestrator · design study · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./console.css" />
+    <style>
+      .study-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 2rem;
+        border-bottom: 1px solid var(--color-border);
+        padding-bottom: 1rem;
+      }
+
+      .study-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.75rem;
+        color: var(--color-muted);
+      }
+
+      .study-brand svg {
+        width: 1.25rem;
+        height: 1.25rem;
+      }
+
+      .theme-switch {
+        display: flex;
+        border: 1px solid var(--color-border-strong);
+        border-radius: 0.125rem;
+      }
+
+      .theme-switch button {
+        padding: 0.3125rem 0.625rem;
+        border: 0;
+        background: transparent;
+        font-size: 0.6875rem;
+        color: var(--color-muted);
+      }
+
+      .theme-switch button[aria-pressed='true'] {
+        background: var(--color-elevated);
+        color: var(--color-foreground);
+      }
+
+      .frame-card {
+        display: block;
+        border: 1px solid var(--color-border);
+        border-radius: 0.125rem;
+        background: var(--color-surface);
+        text-decoration: none;
+        overflow: hidden;
+      }
+
+      .frame-card:hover {
+        border-color: var(--color-border-strong);
+      }
+
+      .frame-slot {
+        position: relative;
+        height: 15rem;
+        overflow: hidden;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-app);
+      }
+
+      .frame-slot iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 1280px;
+        height: 800px;
+        border: 0;
+        transform: scale(0.36);
+        transform-origin: top left;
+        pointer-events: none;
+      }
+
+      .frame-slot[data-size='narrow'] iframe {
+        width: 390px;
+        height: 780px;
+        transform: scale(0.56);
+      }
+
+      .frame-copy {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.625rem 0.75rem 0.75rem;
+      }
+
+      .frame-copy strong {
+        font-size: 0.8125rem;
+        font-weight: 600;
+      }
+
+      .frame-copy span {
+        font-size: 0.6875rem;
+        color: var(--color-muted);
+      }
+
+      .annotation {
+        margin-top: 2.5rem;
+        border-top: 1px solid var(--color-border);
+        padding-top: 1.25rem;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1.5rem;
+      }
+
+      .annotation h2 {
+        font-size: 0.8125rem;
+        font-weight: 600;
+        margin-bottom: 0.375rem;
+      }
+
+      .annotation p {
+        font-size: 0.75rem;
+        line-height: 1.7;
+        color: var(--color-muted);
+      }
+
+      @media (max-width: 48rem) {
+        .study-rules,
+        .annotation,
+        .thumbnails {
+          grid-template-columns: 1fr;
+        }
+
+        .frame-slot iframe {
+          transform: scale(0.27);
+        }
+
+        .frame-slot[data-size='narrow'] iframe {
+          transform: scale(0.42);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="study">
+      <header class="study-head">
+        <div class="study-brand">
+          <svg viewBox="0 0 96 96" aria-hidden="true">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <span>CodeInOven / assistant orchestrator study</span>
+        </div>
+        <div class="theme-switch" role="group" aria-label="Preview theme">
+          <button type="button" data-theme-choice="light" aria-pressed="true">Light</button>
+          <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+        </div>
+      </header>
+
+      <div style="margin-top: 2rem">
+        <div class="eyebrow">Design study · not implemented</div>
+        <h1>One assistant you talk to. The rest it talks to.</h1>
+        <p class="lede">
+          Today the Assistant view opens onto a list, and every conversation starts by choosing which
+          assistant should have it. This study puts a single orchestrator in the centre with a
+          message box that never asks that question. You describe the outcome; it either hands the
+          work to the assistant that already owns it or does it itself, and says which in one line
+          you can fold away.
+        </p>
+      </div>
+
+      <ul class="study-rules">
+        <li>
+          <strong>Routing is visible, never modal</strong>
+          The decision arrives as a one-line dispatch note under the reply. It expands into the task,
+          the model and how the result comes back, and it collapses to a single line again.
+        </li>
+        <li>
+          <strong>The roster stays a roster</strong>
+          Assistants keep their rows, states and schedules on the left. The orchestrator is a row at
+          the top of the same list, not a separate mode, so chatting with one directly is one click.
+        </li>
+        <li>
+          <strong>One accent, and it means self</strong>
+          Gold marks the orchestrator only. Running work keeps the app's blue, done keeps its green.
+          No new palette, no gradient, no glass.
+        </li>
+      </ul>
+
+      <div class="thumbnails" style="grid-template-columns: 1fr">
+        <a class="frame-card" href="./01-console.html">
+          <span class="frame-slot">
+            <iframe src="./01-console.html" title="Console with a conversation and dispatch notes" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>01 · The console</strong>
+            <span>A conversation where Chief answers, dispatches twice and shows live work</span>
+          </span>
+        </a>
+      </div>
+
+      <div class="thumbnails">
+        <a class="frame-card" href="./02-first-open.html">
+          <span class="frame-slot">
+            <iframe src="./02-first-open.html" title="First open: what needs doing" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>02 · First open</strong>
+            <span>Empty thread, four starters that name their route, and what is running now</span>
+          </span>
+        </a>
+        <a class="frame-card" href="./03-route-sheet.html">
+          <span class="frame-slot">
+            <iframe src="./03-route-sheet.html" title="Routing sheet to override the choice" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>03 · Override the route</strong>
+            <span>Auto is the default; this sheet is only for when you disagree</span>
+          </span>
+        </a>
+        <a class="frame-card" href="./04-handoff.html">
+          <span class="frame-slot">
+            <iframe src="./04-handoff.html" title="An assistant task sent by Chief" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>04 · The assistant's side</strong>
+            <span>The same task seen where it runs, with where it came from</span>
+          </span>
+        </a>
+        <a class="frame-card" href="./06-returns.html">
+          <span class="frame-slot">
+            <iframe src="./06-returns.html" title="A dispatch that could not start and one that failed" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>06 · When it comes back</strong>
+            <span>One dispatch refused before it started, one that failed and is not retried</span>
+          </span>
+        </a>
+        <a class="frame-card" href="./05-narrow.html">
+          <span class="frame-slot" data-size="narrow">
+            <iframe src="./05-narrow.html" title="Narrow window with the roster collapsed" loading="lazy"></iframe>
+          </span>
+          <span class="frame-copy">
+            <strong>05 · Narrow window</strong>
+            <span>The roster folds into the title bar; the dispatch line shortens</span>
+          </span>
+        </a>
+      </div>
+
+      <section class="annotation">
+        <div>
+          <h2>Answered by Chief, alone</h2>
+          <p>
+            Questions about its own assistants (“what did Dependency Watch find?”) are read from
+            their last run and answered in place, because waking an assistant to repeat a summary is
+            work for no reason. Anything that produces or changes something becomes a task with an
+            owner, which is why the third note in screen 01 says “Answered by Chief”.
+          </p>
+        </div>
+        <div>
+          <h2>What is still a guess</h2>
+          <p>
+            Whether a dispatched task should report into Chief automatically, or only when it has
+            something you must decide. Screens 01 and 06 copy the first reading. The second would
+            keep the orchestrator thread nearly silent, and it is the one thing I would settle
+            before building.
+          </p>
+        </div>
+        <div>
+          <h2>What this does not change</h2>
+          <p>
+            Assistants keep their rows, tasks, knowledge, schedules and models exactly as they are,
+            and chatting with one directly is still one click from the roster. The study only adds
+            a row at the top of that list and a console that can address all of them, so nothing
+            already working has to be rebuilt to try it.
+          </p>
+        </div>
+      </section>
+    </main>
+    <script src="./theme.js"></script>
+  </body>
+</html>

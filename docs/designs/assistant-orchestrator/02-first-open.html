@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chief · first open · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./console.css" />
+  </head>
+  <body>
+    <div class="window">
+      <header class="titlebar">
+        <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="titlebar-title">
+          <strong>codeinoven</strong>
+          <span>Assistant</span>
+          <span aria-hidden="true">/</span>
+          <span>Chief</span>
+        </div>
+        <div class="titlebar-actions">
+          <button class="icon-btn" type="button" title="Search everything" aria-label="Search everything">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.25" /><path d="M10.2 10.2 13.5 13.5" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Settings" aria-label="Settings">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.25" /><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2 3.4 12.6" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="shell">
+        <nav class="rail" aria-label="Primary">
+          <button class="icon-btn" type="button" title="Projects" aria-label="Projects">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="0.5" /><path d="M1.75 6h12.5" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Threads" aria-label="Threads">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Assistant" aria-label="Assistant" aria-pressed="true">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="3.25" y="4.75" width="9.5" height="8" rx="1" /><path d="M8 4.75V2.5M5.75 8.25h.01M10.25 8.25h.01M6 10.75h4" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Browser" aria-label="Browser">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="8" cy="8" r="6" /><path d="M2 8h12M8 2c1.8 2 2.6 4 2.6 6s-0.8 4-2.6 6c-1.8-2-2.6-4-2.6-6S6.2 4 8 2Z" />
+            </svg>
+          </button>
+          <div class="rail-spacer"></div>
+          <button class="icon-btn" type="button" title="Notifications: two runs need you" aria-label="Notifications: two runs need you">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M4 7a4 4 0 1 1 8 0c0 2.4.8 3.4 1.2 3.9H2.8C3.2 10.4 4 9.4 4 7Z" /><path d="M6.4 13a1.7 1.7 0 0 0 3.2 0" />
+            </svg>
+          </button>
+        </nav>
+
+        <aside class="roster" aria-label="Assistants">
+          <div class="roster-head">
+            <h2>Assistants</h2>
+            <button class="icon-btn" type="button" title="New assistant" aria-label="New assistant">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M8 3v10M3 8h10" />
+              </svg>
+            </button>
+          </div>
+          <div class="roster-search">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.25" /><path d="M10.2 10.2 13.5 13.5" />
+            </svg>
+            <input type="search" placeholder="Find an assistant" aria-label="Find an assistant" />
+          </div>
+
+          <div class="roster-list">
+            <button class="roster-row" type="button" aria-current="true">
+              <span class="assistant-mark" data-self="true" aria-hidden="true">C</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Chief</span>
+                <span class="roster-row-note">Orchestrator · routes every message</span>
+              </span>
+            </button>
+
+            <div class="roster-group">Working</div>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">PT</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">PR Triage</span>
+                <span class="roster-row-note">Reviewing #1482 · 2 open tasks</span>
+              </span>
+            </button>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">RN</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Release Notes</span>
+                <span class="roster-row-note">Drafting 0.9.4 notes · runs 17:00</span>
+              </span>
+            </button>
+
+            <div class="roster-group">Idle</div>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">DW</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Dependency Watch</span>
+                <span class="roster-row-note">Runs daily 09:00 · last found 0 issues</span>
+              </span>
+            </button>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">IR</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Inbox Reply</span>
+                <span class="roster-row-note">On demand · 12 delivered</span>
+              </span>
+            </button>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">SR</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Spec Reviewer</span>
+                <span class="roster-row-note">Needs a model before it can run</span>
+              </span>
+            </button>
+          </div>
+
+          <div class="roster-foot">
+            <span>5 assistants · 2 running</span>
+            <button class="text-btn" type="button">Manage</button>
+          </div>
+        </aside>
+
+        <main class="console">
+          <div class="console-head">
+            <div class="console-title">
+              <h1>Chief</h1>
+              <span>orchestrator · dispatches, or does it itself</span>
+            </div>
+            <div class="console-actions">
+              <button class="icon-btn" type="button" title="Show the routing log" aria-label="Show the routing log">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M3 4h10M3 8h10M3 12h6" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="scroller">
+            <div class="hero">
+              <h2>What needs doing?</h2>
+              <p>
+                Tell me the outcome in your own words. I will hand it to the assistant that already
+                owns it, or do it myself when nobody does. Every message you send here comes back to
+                this one thread.
+              </p>
+
+              <div class="starters">
+                <button class="starter" type="button">
+                  <span class="starter-title">Review the PR queue</span>
+                  <span class="starter-route">PR Triage</span>
+                  <span class="starter-sub">3 PRs waiting · 1 flaky test seen twice</span>
+                </button>
+                <button class="starter" type="button">
+                  <span class="starter-title">Draft 0.9.4 release notes</span>
+                  <span class="starter-route">Release Notes</span>
+                  <span class="starter-sub">Draft exists · one claim is now stale</span>
+                </button>
+                <button class="starter" type="button">
+                  <span class="starter-title">Why is the composer slow?</span>
+                  <span class="starter-route">Chief does it</span>
+                  <span class="starter-sub">No assistant owns profiling · I can start now</span>
+                </button>
+                <button class="starter" type="button">
+                  <span class="starter-title">Check dependencies</span>
+                  <span class="starter-route">Dependency Watch</span>
+                  <span class="starter-sub">Last run 09:00 · next 09:00 tomorrow</span>
+                </button>
+              </div>
+
+              <section class="board" aria-labelledby="board-title">
+                <div class="board-head">
+                  <span id="board-title">Right now</span>
+                  <span>4 assistants · 2 running · 1 needs setup</span>
+                </div>
+                <table class="board-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Assistant</th>
+                      <th scope="col">State</th>
+                      <th scope="col" class="hide-narrow">Current work</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>PR Triage</td>
+                      <td><span class="state" data-kind="working"><span class="dot"></span>Working</span></td>
+                      <td class="hide-narrow">#1482 · 12 min</td>
+                    </tr>
+                    <tr>
+                      <td>Release Notes</td>
+                      <td><span class="state" data-kind="working"><span class="dot"></span>Working</span></td>
+                      <td class="hide-narrow">0.9.4 draft · 2 min</td>
+                    </tr>
+                    <tr>
+                      <td>Dependency Watch</td>
+                      <td><span class="state" data-kind="done"><span class="dot"></span>Done 09:00</span></td>
+                      <td class="hide-narrow">3 patch bumps, clean</td>
+                    </tr>
+                    <tr>
+                      <td>Spec Reviewer</td>
+                      <td><span class="state" data-kind="error"><span class="dot"></span>Needs a model</span></td>
+                      <td class="hide-narrow">Paused since yesterday</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </section>
+            </div>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer">
+              <label class="sr-only" for="composer-field">Message Chief</label>
+              <textarea id="composer-field" class="composer-field" rows="2" placeholder="Ask for anything · Chief picks who does it"></textarea>
+              <div class="composer-shoe">
+                <button class="chip" type="button" title="Attach context" aria-label="Attach context">
+                  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M9.5 4 6 7.5a2 2 0 0 0 2.8 2.8l4-4a3 3 0 0 0-4.2-4.2L3.4 7.3a4 4 0 0 0 5.6 5.6" />
+                  </svg>
+                  Context
+                </button>
+                <button class="chip" data-auto="true" type="button" title="Who handles this message" aria-label="Routing: auto, Chief decides">
+                  Auto · Chief decides
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <path d="M4 6.5 8 10.5l4-4" />
+                  </svg>
+                </button>
+                <div class="shoe-spacer"></div>
+                <button class="chip" type="button" title="This project" aria-label="Scope: this project">codeinoven</button>
+                <button class="send-btn" type="button">
+                  Send <kbd>⌘↵</kbd>
+                </button>
+              </div>
+            </div>
+            <div class="composer-note">
+              <span>Chief can dispatch to any of your 5 assistants, or do the work itself.</span>
+              <span>No message leaves this machine.</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script src="./theme.js"></script>
+  </body>
+</html>

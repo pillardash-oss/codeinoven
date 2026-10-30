@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chief · when a dispatch comes back · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./console.css" />
+    <style>
+      .dispatch[data-outcome='failed'] {
+        border-left: 2px solid var(--color-thread-error);
+      }
+
+      .dispatch[data-outcome='setup'] {
+        border-left: 2px solid var(--color-warning);
+      }
+
+      .dispatch-cause {
+        padding: 0 0.625rem 0.625rem 2rem;
+        font-size: 0.6875rem;
+        line-height: 1.65;
+        color: var(--color-foreground);
+      }
+
+      .dispatch-cause code {
+        font-family: var(--font-mono);
+        font-size: 0.6875rem;
+        padding: 0.0625rem 0.1875rem;
+        background: var(--color-elevated);
+      }
+
+      .dispatch-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0 0.625rem 0.625rem 2rem;
+        font-size: 0.6875rem;
+        color: var(--color-muted);
+      }
+
+      .dispatch-actions .actions {
+        display: flex;
+        gap: 0.375rem;
+        margin-left: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="window">
+      <header class="titlebar">
+        <div class="lights" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="titlebar-title">
+          <strong>codeinoven</strong>
+          <span>Assistant</span>
+          <span aria-hidden="true">/</span>
+          <span>Chief</span>
+        </div>
+        <div class="titlebar-actions">
+          <button class="icon-btn" type="button" title="Search everything" aria-label="Search everything">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.25" /><path d="M10.2 10.2 13.5 13.5" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Show the routing log" aria-label="Show the routing log">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M3 4h10M3 8h10M3 12h6" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="shell">
+        <nav class="rail" aria-label="Primary">
+          <button class="icon-btn" type="button" title="Projects" aria-label="Projects">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="0.5" /><path d="M1.75 6h12.5" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" title="Assistant" aria-label="Assistant" aria-pressed="true">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="3.25" y="4.75" width="9.5" height="8" rx="1" /><path d="M8 4.75V2.5M5.75 8.25h.01M10.25 8.25h.01M6 10.75h4" />
+            </svg>
+          </button>
+          <div class="rail-spacer"></div>
+          <button class="icon-btn" type="button" title="Notifications: one run failed" aria-label="Notifications: one run failed">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M4 7a4 4 0 1 1 8 0c0 2.4.8 3.4 1.2 3.9H2.8C3.2 10.4 4 9.4 4 7Z" /><path d="M6.4 13a1.7 1.7 0 0 0 3.2 0" />
+            </svg>
+          </button>
+        </nav>
+
+        <aside class="roster" aria-label="Assistants">
+          <div class="roster-head"><h2>Assistants</h2></div>
+          <div class="roster-list">
+            <button class="roster-row" type="button" aria-current="true">
+              <span class="assistant-mark" data-self="true" aria-hidden="true">C</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Chief</span>
+                <span class="roster-row-note">Orchestrator · 1 dispatch came back</span>
+              </span>
+            </button>
+            <div class="roster-group">Working</div>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">PT</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">PR Triage</span>
+                <span class="roster-row-note">Reviewing #1482</span>
+              </span>
+            </button>
+            <div class="roster-group">Idle</div>
+            <button class="roster-row" type="button">
+              <span class="assistant-mark" aria-hidden="true">SR</span>
+              <span class="roster-row-main">
+                <span class="roster-row-name">Spec Reviewer</span>
+                <span class="roster-row-note">Needs a model before it can run</span>
+              </span>
+            </button>
+          </div>
+          <div class="roster-foot">
+            <span>5 assistants · 1 running</span>
+            <button class="text-btn" type="button">Manage</button>
+          </div>
+        </aside>
+
+        <main class="console">
+          <div class="console-head">
+            <div class="console-title">
+              <h1>Chief</h1>
+              <span>one dispatch came back · one could not start</span>
+            </div>
+          </div>
+
+          <div class="scroller">
+            <div class="thread">
+              <div class="day-rule">Today · Tue 4 Feb</div>
+
+              <article class="msg" data-role="user">
+                <div class="msg-author">You<time>11:02</time></div>
+                <div class="msg-body">
+                  <p>Have the spec reviewed before I ship, and someone look at the release notes again.</p>
+                </div>
+              </article>
+
+              <article class="msg" data-role="agent">
+                <div class="msg-author">Chief<time>11:02</time></div>
+                <div class="msg-body">
+                  <p>
+                    Two dispatches, one of each kind. Spec Reviewer cannot start until it has a model,
+                    and Release Notes came back with an error I did not cause and could not clear.
+                  </p>
+                </div>
+              </article>
+
+              <div class="dispatch" data-outcome="setup">
+                <button class="dispatch-bar" type="button" aria-expanded="true">
+                  <span class="dispatch-arrow" aria-hidden="true">▾</span>
+                  <span class="dispatch-who">Not sent: Spec Reviewer</span>
+                  <span class="dispatch-why">Owns spec review · paused since yesterday</span>
+                  <span class="dispatch-time">11:02</span>
+                </button>
+                <div class="dispatch-detail">
+                  <dl>
+                    <dt>Blocked by</dt>
+                    <dd>No primary model picked</dd>
+                    <dt>Compared with</dt>
+                    <dd>“Spec linter” skill installed · knowledge written</dd>
+                  </dl>
+                </div>
+                <div class="dispatch-actions">
+                  <span>I did not send it. Nothing would have run.</span>
+                  <span class="actions">
+                    <button class="ghost-btn" type="button">Pick a model</button>
+                    <button class="text-btn" type="button">Do it yourself instead</button>
+                  </span>
+                </div>
+              </div>
+
+              <div class="dispatch" data-outcome="failed">
+                <button class="dispatch-bar" type="button" aria-expanded="true">
+                  <span class="dispatch-arrow" aria-hidden="true">▾</span>
+                  <span class="dispatch-who">Release Notes came back with an error</span>
+                  <span class="dispatch-why">Owns 0.9.4 notes · stopped after 1 of 3 steps</span>
+                  <span class="dispatch-time">11:09</span>
+                </button>
+                <div class="dispatch-cause">
+                  It read the draft and the tag, then failed opening the repository: the token it uses
+                  expired this morning.
+                </div>
+                <div class="dispatch-actions">
+                  <span>Its task keeps the partial result.</span>
+                  <span class="actions">
+                    <button class="ghost-btn" type="button">Retry</button>
+                    <button class="text-btn" type="button">Open the run</button>
+                    <button class="text-btn" type="button">Take it yourself</button>
+                  </span>
+                </div>
+              </div>
+
+              <article class="msg" data-role="agent">
+                <div class="msg-author">Chief<time>11:09</time></div>
+                <div class="msg-body">
+                  <p>
+                    Retrying will fail the same way until the connection is refreshed, so I would fix
+                    that first. Everything else you asked for is done.
+                  </p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer">
+              <label class="sr-only" for="composer-field">Message Chief</label>
+              <textarea id="composer-field" class="composer-field" rows="2" placeholder="Reply, or ask for something else"></textarea>
+              <div class="composer-shoe">
+                <button class="chip" data-auto="true" type="button" title="Who handles this message" aria-label="Routing: auto, Chief decides">
+                  Auto · Chief decides
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <path d="M4 6.5 8 10.5l4-4" />
+                  </svg>
+                </button>
+                <div class="shoe-spacer"></div>
+                <button class="send-btn" type="button">Send <kbd>⌘↵</kbd></button>
+              </div>
+            </div>
+            <div class="composer-note">
+              <span>Chief reports a dispatch that could not start, and one that failed, in the same line.</span>
+              <span>Nothing is retried without you.</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script src="./dispatch.js"></script>
+    <script src="./theme.js"></script>
+  </body>
+</html>
