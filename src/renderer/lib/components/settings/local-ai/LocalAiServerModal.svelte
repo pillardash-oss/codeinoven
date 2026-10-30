@@ -234,14 +234,6 @@
       <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
     {/if}
 
-    <div class="border bg-raised p-4">
-      <p class="text-sm font-semibold">A llama-server process on this machine</p>
-      <p class="mt-1 text-xs leading-relaxed text-muted">
-        One row is one model served on a port. The app starts it, streams its log, and offers the
-        loaded model to your agent through the llama-cpp provider.
-      </p>
-    </div>
-
     <fieldset class="space-y-3 border p-3">
       <legend class="px-1 text-xs font-semibold">Server</legend>
       <label class="block space-y-1 text-xs font-medium">
