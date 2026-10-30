@@ -216,12 +216,23 @@
    * the number its composer chip and the model use, so a comment pinned here and
    * a chip in the composer name the same thing.
    */
-  const comments = $derived(
+  const allComments = $derived(
     timelineComments(
       responseReferencesState.forThread(editor.projectId, editor.threadId),
       editor.directory
     )
   )
+  /**
+   * The comments the lane draws, which are the ones a lane can honestly show.
+   *
+   * A video note is a comment on a moment and has nothing else on screen, so the lane
+   * is its home and its number is what the reader clicks. A frame annotation is a mark
+   * with a stroke drawn on the picture: it belongs on the frame it was drawn on, where
+   * the reader can see it and pick between the several comments one frame can carry.
+   * Drawing a mark on the lane as well put the same note in two places and made the
+   * count above the lane larger than the marks a reader could see.
+   */
+  const comments = $derived(allComments.filter((comment) => !comment.annotation))
   const commentClusters = $derived(
     clusterTimelineMarks(
       comments,
