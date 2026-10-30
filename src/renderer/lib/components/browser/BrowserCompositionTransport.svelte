@@ -268,6 +268,9 @@
     const bar = root
     if (!(target instanceof HTMLElement) || !bar) return false
     if (bar.contains(target)) return true
+    // The whole panel the bar belongs to: its picture, its pen, its empty space.
+    const panel = target.closest('[data-composition-player]')
+    if (panel !== null && panel.contains(bar)) return true
     // The pen draws in the pane the picture plays in, which is this player's own
     // surface: a space pressed there is about the video under the pen.
     if (target.closest('[data-annotation-surface]') !== null) return true
@@ -276,7 +279,7 @@
   }
 
   function playbackKey(event: KeyboardEvent): void {
-    if (!active || !ownsPlaybackKey || event.defaultPrevented) return
+    if (!ownsPlaybackKey || event.defaultPrevented) return
     const target = event.target
     if (!pressBelongsToPlayer(target)) return
     if (overlayOwnsKeys(target)) return
@@ -296,8 +299,11 @@
   })
 
   let root: HTMLDivElement | undefined
+  // Registered while the bar exists, not while some other bookkeeping says the
+  // surface is visible: a row that decided it was hidden went deaf, which is a
+  // play/pause key that works everywhere except the sidebar panel.
   $effect(() => {
-    if (!active || !ownsPlaybackKey) return
+    if (!ownsPlaybackKey) return
     return on(window, 'keydown', playbackKey, { capture: true })
   })
 
@@ -438,8 +444,8 @@
 
   /** What the picture was doing on the last look, so a change is a change. */
   let penWasPlaying = false
-  /** Consecutive looks that agreed on a stopped picture. */
-  let penStopConfirmations = 0
+  /** Whether the picture has run since the pen last held a frame. */
+  let penRanSinceCapture = false
 
   /**
    * The pen is a mode, and play/pause moves only the picture inside it.
@@ -466,19 +472,18 @@
     penWasPlaying = now
     if (!penArmed) return
     if (now) {
-      penStopConfirmations = 0
+      penRanSinceCapture = true
       if (!frameNote) return
       frameNote = null
       annotationBounds = null
       return
     }
-    // A stop has to be agreed twice before the frame is cut again. One answer that
-    // says "stopped" can be a stale read of an older document, and acting on it
-    // while the next answer says "playing" is a canvas that appears and disappears
-    // under the pen: the fight the user sees as flicker. Two answers of the same
-    // kind is a stopped picture, not a flapping report.
-    penStopConfirmations = was ? penStopConfirmations + 1 : 0
-    if (penStopConfirmations < 2) return
+    // One run, one frame. The tools come back on the first stop after the picture has
+    // run, which is the moment the user pressed pause to draw, and a report that
+    // repeats "stopped" without a run in between never cuts a second frame and cannot
+    // blink the canvas under the pen.
+    if (!was || !penRanSinceCapture) return
+    penRanSinceCapture = false
     if (frameNote) return
     void holdFrameForPen(shown)
   })

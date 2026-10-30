@@ -714,6 +714,7 @@
 
 <div
   {@attach panelVisible && !pageState.loadError && !isBlank && manageNativeBrowserView}
+  data-composition-player={compositionPlayer || undefined}
   class="flex h-full min-h-0 flex-col bg-app"
 >
   {#if !compositionPlayer}

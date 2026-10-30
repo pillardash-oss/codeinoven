@@ -22,6 +22,9 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
+  import CioFrame from '@pdslng/cio-icon/CioFrame.svelte'
+  import CioZoomIn from '@pdslng/cio-icon/CioZoomIn.svelte'
+  import CioZoomOut from '@pdslng/cio-icon/CioZoomOut.svelte'
   import type { VideoEditorController } from '$lib/stores/video-editor.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
@@ -39,7 +42,6 @@
   import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
   import {
     clusterTimelineMarks,
-    commentsInsideClip,
     timelineComments,
     type TimelineCluster,
     type TimelineComment
@@ -236,31 +238,6 @@
         index % stride === 0 ||
         (editor.selection?.kind === 'caption' && editor.selection.index === item.index)
     )
-  })
-  /**
-   * A comment also marks the clip it falls inside, on that clip's own track row.
-   *
-   * A note carries the second it was written at and no clip id, so where it
-   * belongs on the tracks is answered by the clips themselves: the moment is on
-   * every clip playing it, which is the row the reader is looking at when they
-   * wonder what was commented there.
-   */
-  const clipCommentMarks = $derived.by(() => {
-    const marks: {
-      key: string
-      comment: TimelineComment
-      trackId: string
-      x: number
-    }[] = []
-    for (const clip of visibleClips)
-      for (const comment of commentsInsideClip(comments, clip))
-        marks.push({
-          key: `${clip.id}:${comment.reference.id}`,
-          comment,
-          trackId: clip.trackId,
-          x: (comment.seconds - clip.start) * scale
-        })
-    return marks
   })
   const tickStep = $derived(
     [1 / editor.fps, 0.1, 0.5, 1, 5, 10, 30, 60, 300, 600].find((step) => step * scale >= 65) ?? 600
@@ -842,28 +819,39 @@
       <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1 pr-2">
         {@render tools?.()}
         <div class="min-w-2 flex-1"></div>
+        <!--
+          The zoom controls are the same size as every other icon in this row:
+          the text steppers used to sit shorter and narrower than their siblings.
+          The level between them is the step the timeline is on right now.
+        -->
         <button
           type="button"
-          class="px-1.5 hover:bg-elevated"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
           title="Fit the whole timeline"
           aria-label="Fit the whole timeline"
-          onclick={() => void zoomAt(1)}>Fit</button
+          onclick={() => void zoomAt(1)}><CioFrame size={13} /></button
         >
         <button
           type="button"
-          class="px-1.5 hover:bg-elevated disabled:opacity-30"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
           title="Zoom out of the timeline"
           aria-label="Zoom out of the timeline"
           disabled={zoom <= 1}
-          onclick={() => void zoomAt(zoom / 1.5)}>−</button
+          onclick={() => void zoomAt(zoom / 1.5)}><CioZoomOut size={13} /></button
+        >
+        <span
+          class="w-11 shrink-0 text-center font-mono text-xs tabular-nums text-muted"
+          title="Timeline zoom level"
+          aria-label={`Timeline zoom ${Math.round(zoom * 100)} percent`}
+          >{Math.round(zoom * 100)}%</span
         >
         <button
           type="button"
-          class="px-1.5 hover:bg-elevated disabled:opacity-30"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
           title="Zoom into the timeline"
           aria-label="Zoom into the timeline"
           disabled={contentWidth >= 180000}
-          onclick={() => void zoomAt(zoom * 1.5)}>+</button
+          onclick={() => void zoomAt(zoom * 1.5)}><CioZoomIn size={13} /></button
         >
       </div>
     </div>
@@ -1207,23 +1195,7 @@
                 row: the lane below says a moment was commented on, and the row
                 is what says on which moment of which track.
               -->
-              {#each clipCommentMarks.filter((mark) => mark.trackId === track.id) as mark (mark.key)}
-                <button
-                  type="button"
-                  class="absolute top-0.5 z-10 flex h-4 -translate-x-1/2 items-center gap-0.5 border border-accent/60 bg-surface px-0.5 text-[0.5625rem] text-foreground tabular-nums hover:border-accent hover:bg-elevated"
-                  style:left={`${Math.max(8, mark.x)}px`}
-                  data-video-comments={mark.comment.reference.id}
-                  title={commentLabel(mark.comment)}
-                  aria-label={commentLabel(mark.comment)}
-                  onpointerdown={(event) => event.stopPropagation()}
-                  onclick={(event) => openComment(event, mark.comment)}
-                >
-                  {#if mark.comment.annotation}<CioPencil size={8} />{:else}<CioClapper
-                      size={8}
-                    />{/if}
-                  <span>{mark.comment.number}</span>
-                </button>
-              {/each}
+
               <StudioSidebarResizeHandle
                 sidebarLabel={`${track.name} track height`}
                 axis="y"
