@@ -40,6 +40,13 @@
     onDirtyChange?: (dirty: boolean) => void
     onSaved?: () => void
     onExport: () => void
+    /**
+     * Watch the composition full screen from the panel, without the editor.
+     *
+     * A viewer who only wants to watch should not have to open the editor to reach
+     * the player, so the panel offers the picture first and the workbench second.
+     */
+    onPlayFullscreen?: () => void
     mode?: 'embedded' | 'fullscreen'
     /**
      * The composition alone, watched.
@@ -64,6 +71,7 @@
     onDirtyChange,
     onSaved,
     onExport,
+    onPlayFullscreen,
     mode = 'embedded',
     playerOnly = false,
     preview,
@@ -682,12 +690,20 @@
         </div>
       </div>{:else}<button
         type="button"
-        class="titlebar-no-drag flex h-7 items-center gap-2 text-xs text-foreground hover:text-primary"
-        title="Open the full video editor"
-        aria-label="Open Editor"
-        onclick={onExpand}><CioMaximize size={13} />Open Editor</button
+        class="titlebar-no-drag flex h-7 items-center gap-2 text-xs text-foreground hover:text-primary disabled:opacity-40"
+        title="Watch this composition in full screen"
+        aria-label="View in full screen"
+        disabled={!onPlayFullscreen || !editor.edit}
+        onclick={onPlayFullscreen}><CioMaximize size={13} />View in full screen</button
       >{/if}
     <div class="min-w-0 flex-1"></div>
+    {#if mode === 'embedded'}<button
+        type="button"
+        class="titlebar-no-drag flex h-7 shrink-0 items-center gap-2 text-xs text-foreground hover:text-primary"
+        title="Open the full video editor"
+        aria-label="Open video editor"
+        onclick={onExpand}><CioClapper size={13} />Open video editor</button
+      >{/if}
     {#if !playerOnly}{@render action(
         CioUpload,
         'Export this composition as MP4',

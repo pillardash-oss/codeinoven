@@ -70,6 +70,18 @@
    * picture's own play control is what a viewer reaches for, so it takes the caret
    * and the play/pause key works from the first press.
    */
+  /**
+   * Watch the composition full screen straight from the panel.
+   *
+   * The board opens the composition's own surface with the player on it, so the user
+   * watches without visiting the workbench first. `compositionPlaybackOnly` is what
+   * makes that surface the player rather than the editor.
+   */
+  function watchFullscreen(): void {
+    board.studio.compositionPlaybackOnly = true
+    void board.gallery.openPreview(null)
+  }
+
   function claimPlayerFocus(panel: HTMLElement): boolean {
     const play = panel.querySelector<HTMLElement>('[data-video-play]')
     if (!play) return false
@@ -1070,6 +1082,7 @@
                   onDirtyChange={board.studio.setStudioDirty}
                   onSaved={board.studio.setStudioSaved}
                   onExport={board.gallery.exportVideo}
+                  onPlayFullscreen={watchFullscreen}
                   onExpand={() => void board.gallery.openPreview(null)}
                 />
               {/key}
