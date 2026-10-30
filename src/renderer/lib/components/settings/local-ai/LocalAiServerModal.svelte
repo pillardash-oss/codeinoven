@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import { panelReveal } from '$lib/components/layout/page-reveal'
   import { invoke } from '$lib/ipc.svelte'
   import {
     DEFAULT_LLAMA_CPP_HOST,
@@ -13,6 +14,7 @@
   } from '$shared/llama-cpp'
   import { uuidv7 } from '$shared/id'
   import { tick } from 'svelte'
+  import { fly } from 'svelte/transition'
   import Modal from '../../ui/Modal.svelte'
 
   interface Props {
@@ -190,52 +192,58 @@
         {/each}
       </div>
 
-      {#if source === 'local'}
-        <div class="flex gap-2">
-          <input
-            class={`${monoFieldClass} min-w-0 flex-1`}
-            bind:value={modelPath}
-            placeholder="/path/to/model.gguf"
-            aria-label="Path of the GGUF model"
-          />
-          <button
-            type="button"
-            class="flex h-9 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-            onclick={() => void pickFile()}
-          >
-            <CioFolder size={13} />
-            Choose file
-          </button>
+      {#key source}
+        <!-- Intro only: the outgoing source leaves in the same frame the
+             arriving one rises, so the fieldset never holds both blocks. -->
+        <div class="space-y-3" in:fly={panelReveal()}>
+          {#if source === 'local'}
+            <div class="flex gap-2">
+              <input
+                class={`${monoFieldClass} min-w-0 flex-1`}
+                bind:value={modelPath}
+                placeholder="/path/to/model.gguf"
+                aria-label="Path of the GGUF model"
+              />
+              <button
+                type="button"
+                class="flex h-9 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                onclick={() => void pickFile()}
+              >
+                <CioFolder size={13} />
+                Choose file
+              </button>
+            </div>
+          {:else}
+            <label class="block space-y-1 text-xs font-medium">
+              <span>Reference</span>
+              <input
+                class={monoFieldClass}
+                {@attach captureReference}
+                bind:value={modelReference}
+                placeholder="LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M"
+              />
+            </label>
+            {#if parsedReference}
+              <p class="text-[0.6875rem] leading-relaxed text-muted">
+                llama.cpp downloads <span class="font-mono"
+                  >{formatHuggingFaceModelReference(parsedReference)}</span
+                >
+                on the first start.
+              </p>
+            {:else if modelReference.trim().length > 0}
+              <p class="text-[0.6875rem] text-danger">
+                Use <span class="font-mono">owner/repo</span>,
+                <span class="font-mono">owner/repo:quant</span>, or a huggingface.co file URL.
+              </p>
+            {:else}
+              <p class="text-[0.6875rem] leading-relaxed text-muted">
+                Paste <span class="font-mono">LiquidAI/LFM2.5-2.6B-GGUF</span>, a quant
+                <span class="font-mono">owner/repo:Q5_K_M</span>, or a specific file URL.
+              </p>
+            {/if}
+          {/if}
         </div>
-      {:else}
-        <label class="block space-y-1 text-xs font-medium">
-          <span>Reference</span>
-          <input
-            class={monoFieldClass}
-            {@attach captureReference}
-            bind:value={modelReference}
-            placeholder="LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M"
-          />
-        </label>
-        {#if parsedReference}
-          <p class="text-[0.6875rem] leading-relaxed text-muted">
-            llama.cpp downloads <span class="font-mono"
-              >{formatHuggingFaceModelReference(parsedReference)}</span
-            >
-            on the first start.
-          </p>
-        {:else if modelReference.trim().length > 0}
-          <p class="text-[0.6875rem] text-danger">
-            Use <span class="font-mono">owner/repo</span>,
-            <span class="font-mono">owner/repo:quant</span>, or a huggingface.co file URL.
-          </p>
-        {:else}
-          <p class="text-[0.6875rem] leading-relaxed text-muted">
-            Paste <span class="font-mono">LiquidAI/LFM2.5-2.6B-GGUF</span>, a quant
-            <span class="font-mono">owner/repo:Q5_K_M</span>, or a specific file URL.
-          </p>
-        {/if}
-      {/if}
+      {/key}
     </fieldset>
 
     <fieldset class="space-y-3 border p-3">
