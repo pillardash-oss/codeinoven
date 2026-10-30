@@ -49,7 +49,11 @@ export interface PiRpcSessionsHost {
     command: string,
     projectPath: string
   ): void
-  materializeCoreToolsExtension(sessionId: string, bundledRuntime: boolean): Promise<string | null>
+  materializeCoreToolsExtension(
+    sessionId: string,
+    bundledRuntime: boolean,
+    sessionCwd: string
+  ): Promise<string | null>
   materializeProvidersExtension(sessionId: string): Promise<string | null>
   providerExtensionEnv(sessionId: string): Record<string, string> | undefined
   forgetCioSession(sessionId: string): void
@@ -303,7 +307,11 @@ export class PiRpcSessions {
     const cioCoreToolsExtensionPath = await this.timedStep(
       steps,
       'coreToolsExtension',
-      this.host.materializeCoreToolsExtension(sessionId, resolvedRuntime.target.kind === 'bundled')
+      this.host.materializeCoreToolsExtension(
+        sessionId,
+        resolvedRuntime.target.kind === 'bundled',
+        projectPath
+      )
     )
     if (!cioCoreToolsExtensionPath) {
       throw new Error(
@@ -348,7 +356,8 @@ export class PiRpcSessions {
     if (invocation.runtime.target.kind !== resolvedRuntime.target.kind) {
       const rematerialized = await this.host.materializeCoreToolsExtension(
         sessionId,
-        invocation.runtime.target.kind === 'bundled'
+        invocation.runtime.target.kind === 'bundled',
+        projectPath
       )
       if (!rematerialized) throw new Error('Cannot start Pi without its file-access policy')
     }

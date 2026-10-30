@@ -223,8 +223,8 @@ export class PiDriver extends PersistentCliDriver {
         this.modelCatalog.workspaceTemporaryEnvironment(projectPath),
       observeHarnessProcess: (sessionId, child, command, projectPath) =>
         this.observeHarnessProcess(sessionId, child, command, projectPath),
-      materializeCoreToolsExtension: (sessionId, bundledRuntime) =>
-        this.cioFiles.materializeCoreToolsExtension(sessionId, bundledRuntime),
+      materializeCoreToolsExtension: (sessionId, bundledRuntime, sessionCwd) =>
+        this.cioFiles.materializeCoreToolsExtension(sessionId, bundledRuntime, sessionCwd),
       materializeProvidersExtension: (sessionId) =>
         this.modelCatalog.materializeProvidersExtension(sessionId),
       providerExtensionEnv: (sessionId) => this.cioFiles.providerExtensionEnv(sessionId),

@@ -79,7 +79,8 @@ export class PiCioRuntimeFiles {
    */
   async materializeCoreToolsExtension(
     sessionId: string,
-    bundledRuntime: boolean
+    bundledRuntime: boolean,
+    sessionCwd: string
   ): Promise<string | null> {
     // Rebuild on process startup. A restarted session can switch between the
     // bundled and external executables, so a cached module cannot decide scope.
@@ -137,7 +138,10 @@ export class PiCioRuntimeFiles {
           // prompt handoff, which only the root session's hook reads. A worker
           // gets this distilled contract instead, so it can never be left with
           // none of the application rules.
-          workerContractPrompt: WORKER_AGENT_BEHAVIOR_PROMPT
+          workerContractPrompt: WORKER_AGENT_BEHAVIOR_PROMPT,
+          // The built-in-tool override rebuilds pi's own definitions, which
+          // resolve every path against the session's working directory.
+          sessionCwd
         })
       )
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)
