@@ -6,11 +6,28 @@
  * image emoji (`:shipit:`) or as an org custom emoji have no unicode form and
  * must stay literal text, exactly as they do on github.com.
  *
- * This module is intentionally standalone: it owns the gemoji data and a
- * marked inline extension, and it does not reach into the markdown pipeline.
+ * This module is intentionally standalone: it owns the marked inline extension
+ * and it does not reach into the markdown pipeline. The shortcode table itself
+ * lives in `github-emoji-data.svelte.ts`, in its own chunk, because gemoji is
+ * data the first paint must not pay for.
  */
-import { nameToEmoji } from 'gemoji'
 import type { Token, Tokens, TokensList, TokenizerAndRendererExtension } from 'marked'
+import {
+  emojiForShortcode,
+  ensureGithubEmojiData,
+  githubEmojiLoaded
+} from './github-emoji-data.svelte'
+
+/**
+ * Resolve a shortcode to its unicode character.
+ *
+ * Exact match only: GitHub's shortcodes are lowercase, and `:WAVE:` is literal
+ * text on github.com, so arbitrary casing is never normalised into a match.
+ * Returns `null` for image/custom shortcodes, and for every shortcode until the
+ * table chunk has landed (call `ensureGithubEmojiData` to fetch it, or read
+ * `githubEmojiRevision` to be re-run when it arrives).
+ */
+export { emojiForShortcode }
 
 /** Token type emitted for a shortcode that resolved to unicode. */
 export const GITHUB_EMOJI_TOKEN_TYPE = 'githubEmoji'
@@ -29,32 +46,23 @@ const SHORTCODE_PATTERN = /^:([a-z0-9_+-]+):/
 // shortcode is consumed in one chunk without surfacing dead colons.
 const SHORTCODE_CANDIDATE = /:[a-z0-9_+-]+:/
 
+/**
+ * Whether a run of text can contain a shortcode at all.
+ *
+ * Callers use this to decide whether their memoized output depends on the
+ * shortcode table: text without a candidate renders identically before and
+ * after the table lands, so it must not be keyed on the table's revision (that
+ * would re-lex a whole conversation for nothing) and must not trigger a fetch.
+ */
+export function hasGithubEmojiCandidate(text: string): boolean {
+  return SHORTCODE_CANDIDATE.test(text)
+}
+
 // GitHub refuses to expand a shortcode whose opening colon is glued to an
 // alphanumeric character or another colon: `foo:wave:baz`, `10:30:15` and
 // `::wave:` all stay literal. marked reports the preceding character only
 // through the previously emitted inline text token.
 const SHORTCODE_BLOCKED_PRECEDING = /[0-9A-Za-z:]/
-
-// gemoji ships ~350KB of data. Building the lookup Map eagerly would make
-// every renderer boot pay for a feature most messages never use, so the Map is
-// built on the first lookup   and only the first lookup   then reused.
-let shortcodeMap: Map<string, string> | null = null
-
-function shortcodeLookup(): Map<string, string> {
-  if (shortcodeMap === null) shortcodeMap = new Map(Object.entries(nameToEmoji))
-  return shortcodeMap
-}
-
-/**
- * Resolve a shortcode to its unicode character.
- *
- * Exact match only: GitHub's shortcodes are lowercase, and `:WAVE:` is literal
- * text on github.com, so arbitrary casing is never normalised into a match.
- * Returns `null` for image/custom shortcodes so callers keep them literal.
- */
-export function emojiForShortcode(name: string): string | null {
-  return shortcodeLookup().get(name) ?? null
-}
 
 /** Last character of the previously emitted inline text token, if any. */
 function lastTextChar(tokens: Token[] | TokensList): string | null {
@@ -90,6 +98,11 @@ export const githubEmojiExtension: TokenizerAndRendererExtension = {
     const match = SHORTCODE_PATTERN.exec(src)
     if (!match) return undefined
     const name = match[1]
+    // The table arrives after the first paint. A shortcode lexed while it is
+    // still missing stays literal for this pass and is re-lexed when the
+    // table's revision bumps (see `lexMarkdownCached`), so the fetch is kicked
+    // off here rather than from render code.
+    if (!githubEmojiLoaded()) void ensureGithubEmojiData()
     const emoji = emojiForShortcode(name)
     if (emoji === null) return undefined
     const preceding = lastTextChar(tokens)

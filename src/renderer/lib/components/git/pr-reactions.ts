@@ -2,6 +2,7 @@ import type { PrReactionContent, PrReactionGroup, PrReactionMap } from '$shared/
 import { GITHUB_REACTIONS, type GithubReaction } from '$shared/github-reactions'
 import { githubDisplayLogin } from '$lib/format/github-login'
 import { emojiForShortcode } from '../markdown/github-emoji'
+import { ensureGithubEmojiData, githubEmojiRevision } from '../markdown/github-emoji-data.svelte'
 import type { ConversationEntry } from './git-pull-request-detail-format'
 
 /** One reaction the picker offers, with the glyph its shortcode resolves to. */
@@ -11,16 +12,22 @@ export interface ReactionOption extends GithubReaction {
 }
 
 /**
- * The options, resolved once on the first surface that needs a glyph.
+ * The options, resolved once per shortcode-table revision.
  *
- * `emojiForShortcode` builds gemoji's ~350KB lookup on its first call, so this is
- * lazy on purpose: a conversation whose comments nobody reacts to, and whose
- * pickers nobody opens, never pays for the emoji table.
+ * The gemoji table is a chunk of its own, fetched when something needs it, so a
+ * glyph can be resolved before the table exists. Reading the table's revision
+ * here is what keeps that correct: the map is rebuilt when the table lands, so
+ * a picker that opened first shows the real glyphs instead of the shortcode
+ * names it had to fall back to.
  */
 let options: Map<PrReactionContent, ReactionOption> | null = null
+let optionsRevision = -1
 
 function optionMap(): Map<PrReactionContent, ReactionOption> {
-  if (options === null) {
+  const revision = githubEmojiRevision()
+  if (options === null || optionsRevision !== revision) {
+    void ensureGithubEmojiData()
+    optionsRevision = revision
     options = new Map(
       GITHUB_REACTIONS.map((reaction) => [
         reaction.content,

@@ -19,6 +19,7 @@ import { harnessAccountCache } from '$lib/stores/harness-accounts'
 import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
 import { warmSidebarPanels } from '$lib/sidebar-panel-preload'
 import { warmAppPanels } from '$lib/app-panel-preload'
+import { warmMarkdown } from '$lib/components/markdown/markdown-chunk'
 import { whenConversationPainted } from '$lib/conversation-painted'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { initVoiceShortcutListener } from '$lib/speech/voice-shortcut'
@@ -227,6 +228,12 @@ export class AppEffects extends BoardUnit<App> {
         // open of the notification panel from painting blank while its module is
         // fetched.
         scheduleDeferredWork('app:panels', warmAppPanels)
+        // The transcript's own text starts the markdown chunk the moment its first
+        // block mounts, but every other surface that renders markdown (a
+        // pull-request body, a spec studio, a changelog, notes) reaches it later
+        // and would pay a cold fetch on that click. Warm it once the conversation
+        // is on the glass, with the shortcode table it decorates text with.
+        scheduleDeferredWork('markdown:chunk', warmMarkdown)
       })
       // Workspace owns the initial project/thread hydration. Keeping this signal
       // there prevents App and Workspace from issuing the same startup queries.

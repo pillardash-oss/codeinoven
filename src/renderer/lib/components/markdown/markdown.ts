@@ -44,7 +44,8 @@ import {
   isDarkSchemeSource
 } from '$lib/markdown-remote-images'
 import { githubReferencesExtension, type GithubRepoContext } from '$lib/github-references'
-import { githubEmojiExtension } from './github-emoji'
+import { githubEmojiExtension, hasGithubEmojiCandidate } from './github-emoji'
+import { githubEmojiRevision } from './github-emoji-data.svelte'
 
 // A fragment URL survives DOMPurify's default URI policy while remaining
 // entirely inside the renderer. MarkdownView intercepts it before navigation.
@@ -395,11 +396,17 @@ export function lexMarkdownCached(
   // evaluation cannot hit a stale pre-resolution entry. The repository belongs in
   // the key too: the same text lexes to different links in a different repo.
   const revision = citationPathsState.revision
+  // The shortcode table is a chunk of its own and can land after a text was
+  // lexed. Only text that actually contains a shortcode can render differently
+  // once it arrives, so only that text is keyed on (and subscribes to) the
+  // table   keying every message on it would re-lex the whole conversation the
+  // moment the table landed.
+  const emoji = hasGithubEmojiCandidate(text) ? `\u0000emoji${githubEmojiRevision()}` : ''
   const scope = repository ? `${repository.owner}/${repository.repo}` : ''
   const threadScope = citationThread
     ? `${citationThread.projectId}/${citationThread.threadId}/${citationThread.scopeBucketId ?? ''}`
     : ''
-  const key = `\u0000rev${revision}\u0000${allowHtml ? '\u0000html\u0000' : ''}\u0000${scope}\u0000${threadScope}\u0000${text}`
+  const key = `\u0000rev${revision}${emoji}\u0000${allowHtml ? '\u0000html\u0000' : ''}\u0000${scope}\u0000${threadScope}\u0000${text}`
   const cached = lexCache.get(key)
   if (cached) {
     // Refresh for LRU ordering   most recently used survives eviction.
@@ -548,7 +555,10 @@ export function blockHtml(
   // for a picture-bearing block only: folding it into every image block would make
   // a theme switch recompute HTML that cannot differ.
   const variant = PICTURE_SOURCE.test(token.raw) ? `v${schemeState.isDark ? 'd' : 'l'}` : ''
-  const cacheKey = `${HTML_CACHE_VERSION}:${mode}:${scope}:${resolution}${variant}:${footnoteKey}:${token.raw}`
+  // Same reasoning as the lex key: a block whose source holds a shortcode renders
+  // differently once the shortcode table lands, and nothing else can.
+  const emoji = hasGithubEmojiCandidate(token.raw) ? `e${githubEmojiRevision()}` : ''
+  const cacheKey = `${HTML_CACHE_VERSION}:${mode}:${scope}:${resolution}${variant}:${emoji}:${footnoteKey}:${token.raw}`
   const cached = htmlCache.get(cacheKey)
   if (cached !== undefined) return cached
   const parser = parserFor(allowHtml, repository)
