@@ -46,8 +46,9 @@ export { MAIN_THREAD_DATABASE_WARNING_MS } from './database/database-slow-operat
  * - `database/database-writes.ts`   worker-backed serialized writes
  * - `database/database-search-mirror.ts`   the thread-search mirror backfill
  * - `database/database-context-cost-repair.ts`   the one-time ledger repair pass
- * - `migrations/`   the schema chain (one file per migration) and the ledger
- *   rebuilds, applied through `applyDatabaseSchema` and `runLedgerMigrations`
+ * - `migrations/`   the versioned chain (one file per schema version, with the
+ *   worker-backed rebuilds that version owns), applied through
+ *   `applyDatabaseSchema` and `runLedgerMigrations`
  * - `schema.ts`   the versioned DDL snapshot
  *
  * Callers keep the same import path and the same methods; nothing here decides
@@ -96,14 +97,17 @@ export class Database {
     const startedAt = performance.now()
 
     this.connection.open()
-    const schemaUpgraded = applyDatabaseSchema(this.connection.raw())
+    const schemaUpgrade = applyDatabaseSchema(this.connection.raw())
     this.maintenance.start()
-    // The ledger rebuilds below are legacy upgrade steps, not steady-state work.
-    // A database that already carries the current schema version skips them, so
-    // a boot never pays a compatibility pass it cannot need.
-    if (schemaUpgraded) {
-      await runLedgerMigrations(this.ledgerMigrationHost(), this.connection.raw())
-    }
+    // The ledger rebuilds below belong to the versions this boot applied, not to
+    // steady state. A database that already carries the current schema version
+    // applies no version and therefore skips them, so a boot never pays a
+    // compatibility pass it cannot need.
+    await runLedgerMigrations(
+      schemaUpgrade.ledgerMigrations,
+      this.ledgerMigrationHost(),
+      this.connection.raw()
+    )
     this.connection.raw().pragma('optimize = 0x10002')
     // Non-blocking: the mirror is brought up to date on the worker in small
     // serialized batches, so init never waits on it and the main thread stays

@@ -26,14 +26,15 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * `SCHEMA_SQL` below is a complete snapshot of the schema at this version, and a
  * database that stores an equal or higher value in `db_meta.schema_version` has
  * nothing to create and nothing to migrate: boot opens it and goes straight to
- * work. That is the whole point of the version: the ~46 legacy migration steps
- * in `migrations/schema/` (applied by `applyDatabaseSchema` in
- * `migrations/schema-upgrade.ts`) exist for databases written by older builds,
- * and a fresh install must never walk them.
+ * work. That is the whole point of the version: the migration files in
+ * `migrations/` exist for databases written by older builds, and a fresh
+ * install must never walk them.
  *
- * Bump this in the same change that adds a table, column, index or trigger, and
- * add the snapshot DDL to `SCHEMA_SQL`. A schema change without a bump reaches
- * fresh installs only and silently skips every database already on disk.
+ * Bump this in the same change that adds the table, column, index or trigger:
+ * the snapshot DDL goes in `SCHEMA_SQL`, and the step that upgrades a database
+ * already on disk goes in a new `migrations/v<version>.ts`. A schema change
+ * without a bump reaches fresh installs only and silently skips every database
+ * already on disk.
  */
 export const DATABASE_SCHEMA_VERSION = 3
 

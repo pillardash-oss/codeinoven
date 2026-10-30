@@ -1,20 +1,21 @@
 /**
- * Every schema and ledger migration this build ships, in one import path.
+ * The versioned migration chain, in one import path.
  *
- * `database.ts` reaches the schema through `applyDatabaseSchema` and
- * `runLedgerMigrations` only: no migration lives in the database class, and a
- * new one is a new file under `migrations/schema/` or `migrations/ledger/`
- * plus its entry in the ordered chain in `schema-upgrade.ts`.
+ * One file per schema version under this folder (`v002.ts`, `v003.ts`, ...),
+ * plus this runner. `database.ts` reaches the chain through
+ * `applyDatabaseSchema` and `runLedgerMigrations` only: no migration lives in
+ * the database class, and keeping a version current means bumping
+ * `DATABASE_SCHEMA_VERSION` in `schema.ts` and adding the next numbered file.
+ *
+ * Deleting history is deleting a file: once no supported database sits below a
+ * version, its file stops shipping and the oldest remaining file becomes the
+ * catch-all for anything older. That is the whole point of numbering the files
+ * by version instead of by change.
  */
-export type {
-  LedgerMigration,
-  LedgerMigrationHost,
-  LedgerStatement,
-  SchemaMigration
-} from './migration'
+export type { DatabaseMigration, LedgerMigrationHost, LedgerStatement } from './migration'
 export {
-  DATABASE_LEDGER_MIGRATIONS,
-  DATABASE_SCHEMA_MIGRATIONS,
+  DATABASE_MIGRATIONS,
   applyDatabaseSchema,
-  runLedgerMigrations
+  runLedgerMigrations,
+  type SchemaUpgradeResult
 } from './schema-upgrade'

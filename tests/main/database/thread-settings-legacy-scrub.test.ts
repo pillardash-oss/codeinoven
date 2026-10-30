@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createTestDb, destroyTestDb } from './test-helper'
 import type { Database } from '../../../src/main/database/database'
-import { threadSettingsLegacyEngineeringFlagMigration } from '../../../src/main/database/migrations/schema/0024-thread-settings-legacy-engineering-flag'
+import { versionTwoMigration } from '../../../src/main/database/migrations/v002'
 import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import { sanitizeThreadSettings } from '../../../src/lib/types'
 
@@ -72,7 +72,7 @@ describe('legacy engineeringMode flag scrub', () => {
       )
       seedThread(db, 't-malformed', '{not json')
 
-      threadSettingsLegacyEngineeringFlagMigration.apply(db.raw())
+      versionTwoMigration.apply(db.raw())
 
       expect(settingsOf(db, 't-legacy')).not.toContain('engineeringMode')
       expect(JSON.parse(settingsOf(db, 't-legacy') ?? '{}')).toMatchObject({
@@ -110,10 +110,10 @@ describe('legacy engineeringMode flag scrub', () => {
           engineeringMode: false
         })
       )
-      threadSettingsLegacyEngineeringFlagMigration.apply(db.raw())
+      versionTwoMigration.apply(db.raw())
       const once = settingsOf(db, 't-legacy')
       expect(once).not.toContain('engineeringMode')
-      threadSettingsLegacyEngineeringFlagMigration.apply(db.raw())
+      versionTwoMigration.apply(db.raw())
       expect(settingsOf(db, 't-legacy')).toEqual(once)
     } finally {
       destroyTestDb(db)
