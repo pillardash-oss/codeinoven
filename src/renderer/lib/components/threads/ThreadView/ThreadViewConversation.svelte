@@ -882,7 +882,7 @@
                     <div
                       id={`msg-${msg.id}`}
                       class="message-block min-w-0 w-full text-[0.8125rem] text-foreground"
-                      data-board.abortRun.assistant-response
+                      data-assistant-response
                       data-conversation-searchable
                       data-message-id={msg.id}
                     >
