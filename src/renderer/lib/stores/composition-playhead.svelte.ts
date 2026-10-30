@@ -151,6 +151,12 @@ class CompositionPlayhead {
     this.dropScrub()
     this.revision += 1
     const before = this.playback
+    // The bar is drawn before the page answers, because the app is the one that was
+    // asked: a play button that shows "play" until a document somewhere else confirms
+    // it is a button that looks broken whenever that document is slow or mute. The
+    // page's answer still wins when it carries one, and a reset is corrected below.
+    const expected = this.expected(before, command, value)
+    if (expected) this.apply(expected)
     try {
       const next = await invoke('browser:transport', this.tabId, command, value)
       if (next && this.rearmedUnderneath(before, next, command)) return this.playback
@@ -269,6 +275,36 @@ class CompositionPlayhead {
     this.revivals += 1
     this.revivedAt = Date.now()
     void this.command('pause')
+  }
+
+  /**
+   * The state a command is about to produce, from the state it was given.
+   *
+   * Play, pause and stop move the run flag; a seek moves the second. This is what the
+   * bar shows while the page is answering, so the controls follow the user's press
+   * rather than waiting on a document that may not answer at all.
+   */
+  private expected(
+    before: BrowserCompositionPlayback | null,
+    command: BrowserTransportCommand,
+    value: number | boolean
+  ): BrowserCompositionPlayback | null {
+    if (!before) return null
+    const playing = before.playing
+    switch (command) {
+      case 'play':
+        return playing ? null : { ...before, playing: true }
+      case 'pause':
+        return playing ? { ...before, playing: false } : null
+      case 'toggle':
+        return { ...before, playing: !playing }
+      case 'stop':
+        return playing || before.time !== 0 ? { ...before, playing: false, time: 0 } : null
+      case 'seek':
+        return typeof value === 'number' ? { ...before, time: Math.max(0, value) } : null
+      default:
+        return null
+    }
   }
 
   /**
