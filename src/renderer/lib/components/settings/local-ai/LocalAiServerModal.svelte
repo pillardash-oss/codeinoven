@@ -1,6 +1,10 @@
 <script lang="ts">
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { panelReveal } from '$lib/components/layout/page-reveal'
   import { invoke } from '$lib/ipc.svelte'
   import {
@@ -8,6 +12,8 @@
     buildLlamaServerArgs,
     describeLlamaServerCommand,
     formatHuggingFaceModelReference,
+    isLlamaCppHostValid,
+    isLlamaCppPortValid,
     llamaCppEntryProblem,
     parseHuggingFaceModelReference,
     type LlamaCppServerEntry
@@ -57,6 +63,18 @@
     initial.modelReference.trim().length > 0 ? 'huggingface' : 'local'
   )
   let error = $state('')
+
+  /**
+   * The last connection test, stamped with the address it measured. The footer
+   * can therefore keep the answer visible while it is still true and drop it the
+   * moment the host or port moves, without an effect watching the fields.
+   */
+  let testResult = $state<{ address: string; ok: boolean; message: string } | null>(null)
+  let testing = $state(false)
+  const testedAddress = $derived(`${host.trim()}:${Number(port)}`)
+  const visibleTest = $derived(
+    testResult && testResult.address === testedAddress ? testResult : null
+  )
 
   /**
    * The reference input, captured by an attachment: choosing Hugging Face is
@@ -125,6 +143,48 @@
     if (!name.trim() || name.trim() === 'Local server') {
       const segments = path.split(/[\\/]/u)
       name = segments[segments.length - 1] ?? name
+    }
+  }
+
+  /** Probe the row's own endpoint, which is what a started server answers on. */
+  async function testConnection(): Promise<void> {
+    const address = `${host.trim()}:${Number(port)}`
+    if (!isLlamaCppHostValid(host)) {
+      testResult = { address, ok: false, message: 'Enter a host such as 127.0.0.1.' }
+      return
+    }
+    if (!isLlamaCppPortValid(Number(port))) {
+      testResult = { address, ok: false, message: 'Enter a port between 1 and 65535.' }
+      return
+    }
+    testing = true
+    try {
+      const result = await invoke('llamaCpp:probe', host.trim(), Number(port))
+      if (result.ready) {
+        const models = result.models.slice(0, 3).join(', ')
+        testResult = {
+          address,
+          ok: true,
+          message:
+            result.models.length > 0
+              ? `Connected · ${models}${result.models.length > 3 ? ` and ${result.models.length - 3} more` : ''}`
+              : 'Connected, but the server reports no models.'
+        }
+      } else {
+        testResult = {
+          address,
+          ok: false,
+          message: `Nothing answered at ${address} (${result.error}). Start the server to test the loaded model.`
+        }
+      }
+    } catch (failure) {
+      testResult = {
+        address,
+        ok: false,
+        message: failure instanceof Error ? failure.message : 'The test could not run.'
+      }
+    } finally {
+      testing = false
     }
   }
 
@@ -270,6 +330,26 @@
         <span class="font-mono">0.0.0.0</span> exposes it to your network. Quoting keeps a value
         together, so <span class="font-mono">--alias "my local model"</span> stays one argument.
       </p>
+      {#if visibleTest}
+        <div
+          class="flex items-start gap-2 border px-3 py-2 {visibleTest.ok
+            ? 'border-success/30 bg-success/10'
+            : 'border-warning/30 bg-warning/10'}"
+        >
+          {#if visibleTest.ok}
+            <CioCheckCircle size={13} class="mt-0.5 shrink-0 text-success" />
+          {:else}
+            <CioAlertCircle size={13} class="mt-0.5 shrink-0 text-warning" />
+          {/if}
+          <p
+            class="text-[0.6875rem] leading-relaxed {visibleTest.ok
+              ? 'text-success'
+              : 'text-warning'}"
+          >
+            {visibleTest.message}
+          </p>
+        </div>
+      {/if}
     </fieldset>
 
     {#if command}
@@ -284,14 +364,30 @@
 
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-2">
-      <button
-        type="button"
-        data-modal-dismiss
-        class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-        onclick={onClose}
-      >
-        Cancel
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          data-modal-dismiss
+          class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          onclick={onClose}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          title="Probe {testedAddress} for a running llama-server"
+          disabled={testing}
+          onclick={() => void testConnection()}
+        >
+          {#if testing}
+            <CioSpinner size={13} class="animate-spin" />
+          {:else}
+            <CioPlug size={13} />
+          {/if}
+          Test connection
+        </button>
+      </div>
       <button
         type="submit"
         form="local-ai-server"
