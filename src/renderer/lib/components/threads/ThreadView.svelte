@@ -62,7 +62,8 @@
     promptSuggestions,
     composerPlaceholder,
     onOpenScopeView,
-    active = true
+    active = true,
+    ownsReadingColumn = false
   }: Props = $props()
   const board = createThreadView(() => ({
     thread: threadProp,
@@ -87,7 +88,8 @@
     promptSuggestions,
     composerPlaceholder,
     onOpenScopeView,
-    active
+    active,
+    ownsReadingColumn
   }))
   board.effects.setActiveActions(() => activeActions)
   board.submitBrainstormDecision.setReconcileReadySpec(() => reconcileReadySpecNow())

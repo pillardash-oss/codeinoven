@@ -107,6 +107,17 @@ export interface Props {
    *  so this   not unmount   is what tells the view the reader has left it:
    *  live polling stops and the working trace re-bounds to its newest page. */
   active?: boolean
+  /**
+   * Whether this surface owns the column the app header puts the thread's name
+   * on, and therefore reports where that column starts.
+   *
+   * Only the workspace's own conversation does. The header names the thread the
+   * reader is reading, so an embedded surface (a quick chat beside that
+   * conversation, the browser rail's chat) has no business claiming the column:
+   * its page sits somewhere else in the window, and a claim carries the name off
+   * the page it belongs to and into the panel that opened beside it.
+   */
+  ownsReadingColumn?: boolean
 }
 
 /** One file part of a message the fullscreen preview can render, and whether
@@ -198,6 +209,7 @@ export type ThreadViewSurfaceProps = {
       | 'projectIcons'
       | 'allowCenteredComposer'
       | 'active'
+      | 'ownsReadingColumn'
   ]-?: Exclude<Props[K], undefined>
 } & Omit<
   Props,
@@ -211,4 +223,5 @@ export type ThreadViewSurfaceProps = {
   | 'projectIcons'
   | 'allowCenteredComposer'
   | 'active'
+  | 'ownsReadingColumn'
 >

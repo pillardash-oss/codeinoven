@@ -129,6 +129,7 @@
           <ThreadView
             thread={selectedThread}
             {active}
+            ownsReadingColumn
             chatMode={mode === 'chats' || mode === 'assistant'}
             assistantMode={mode === 'assistant'}
             {assistantId}

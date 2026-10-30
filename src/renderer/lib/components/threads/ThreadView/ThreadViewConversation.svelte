@@ -71,8 +71,24 @@
     resolveMessageHarnessId
   } from '../thread-message-presentation'
 
+  import type { Attachment } from 'svelte/attachments'
+
   /** The board the surface built, and the few values only it can build. */
   let { board }: { board: ThreadViewBoard } = $props()
+
+  /**
+   * The column the header's thread name aligns to, when this surface is the one
+   * the header names.
+   *
+   * A no-op for an embedded surface (a quick chat, the browser rail's chat): the
+   * header keeps its name on the workspace's own conversation, so an embedded
+   * page that reported its column moved the name into the panel that opened
+   * beside it instead of leaving it on the page the user is reading.
+   */
+  const noopAttachment: Attachment<HTMLElement> = () => {}
+  const readingColumn = $derived(
+    board.props.ownsReadingColumn ? board.state.conversationColumn.attachment : noopAttachment
+  )
 </script>
 
 <div
@@ -90,7 +106,7 @@
 >
   <div
     class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
-    {@attach board.state.conversationColumn.attachment}
+    {@attach readingColumn}
   >
     {#if !board.sources.loaded && board.composerScope.visibleMessages.length === 0}
       {#if board.loadOlderMessages.loadError}
