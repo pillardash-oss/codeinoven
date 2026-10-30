@@ -37,6 +37,14 @@
     /** The frame main drew and kept, which is the picture the user draws on. */
     snapshot: CompositionFrameSnapshot
     /**
+     * Show the frame and the comments it carries, without the pen.
+     *
+     * A frame that has marks is held whenever the reader lands on it and no pen is in
+     * hand, so the marks are visible where they were drawn and each of the several
+     * comments one frame can carry can be opened from its own badge.
+     */
+    readOnly?: boolean
+    /**
      * The rectangle the live page occupies, in viewport pixels.
      *
      * The still is drawn there rather than in a box of its own: the pane the user
@@ -78,6 +86,7 @@
     marks,
     editingId = null,
     onEditClosed = () => {},
+    readOnly = false,
     onClose,
     onContinue
   }: Props = $props()
@@ -199,9 +208,11 @@
           {createMark}
           {editingId}
           {onEditClosed}
-          armed
+          armed={!readOnly}
+          showTools={!readOnly}
           activeSeconds={snapshot.seconds}
           onArmedChange={(next) => {
+            if (readOnly) return
             // The pen is this surface: putting it down is what finishes annotating,
             // and the pane goes back to the page that owns it.
             if (!next) onClose()

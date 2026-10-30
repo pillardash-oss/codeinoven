@@ -73,6 +73,14 @@
     armed?: boolean
     /** The surface was armed or disarmed, so the host can follow it. */
     onArmedChange?: (armed: boolean) => void
+    /**
+     * Whether the pen's own controls are drawn.
+     *
+     * Off for a frame that is being *read* rather than drawn on: the marks are shown
+     * so the reader can see what a moment carries and open any of them, and a pen,
+     * colour and finish set over that picture would say the opposite.
+     */
+    showTools?: boolean
     /** Wording for the hint shown while the picture is being drawn on. */
     hint?: string
     /**
@@ -123,6 +131,7 @@
     onEditClosed,
     armed = false,
     onArmedChange = () => {},
+    showTools = true,
     hint = 'Draw on the picture · Esc to finish',
     activeSeconds = null,
     onFocusMark,
@@ -563,6 +572,7 @@
 {/if}
 
 <div
+  hidden={!showTools}
   class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute z-40']}
   style={toolbarHost ? undefined : `left: ${toolbarAt?.x ?? 6}px; top: ${toolbarAt?.y ?? 6}px`}
   {@attach toolbarAttachment}

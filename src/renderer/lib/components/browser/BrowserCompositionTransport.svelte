@@ -381,7 +381,7 @@
     penArmed = true
     captureError = null
     await playhead.command('pause')
-    await holdFrameForPen(shown)
+    await holdFrame(shown)
   }
 
   /**
@@ -392,8 +392,8 @@
    * one. This is the half that captures, and it runs on every stop rather than once
    * when the pen is picked up.
    */
-  async function holdFrameForPen(seconds: number): Promise<void> {
-    if (!penArmed || capturing) return
+  async function holdFrame(seconds: number): Promise<void> {
+    if (capturing) return
     capturing = true
     captureError = null
     try {
@@ -436,6 +436,7 @@
   function closeAnnotation(resume = false): void {
     const held = frameNote !== null
     penArmed = false
+    marksHeldFor = null
     frameNote = null
     annotationBounds = null
     if (held) returnFocus()
@@ -485,7 +486,42 @@
     if (!was || !penRanSinceCapture) return
     penRanSinceCapture = false
     if (frameNote) return
-    void holdFrameForPen(shown)
+    void holdFrame(shown)
+  })
+
+  /** The marks drawn on the second the picture is stopped on. */
+  const marksHere = $derived(frameNote ? [] : marksAt(shown))
+
+  /** The second a frame was last held for so its marks could be read. */
+  let marksHeldFor: number | null = null
+
+  /**
+   * A stopped frame that carries marks shows them.
+   *
+   * A mark is a stroke on a picture, and a lane cannot draw it: what the reader wants
+   * when they land on a commented moment is the frame with its marks on it, and the
+   * several comments one frame can carry each reachable from its own badge. Holding
+   * the frame is the same still the pen draws on, minus the pen, so the tools are not
+   * drawn and every badge is a button.
+   */
+  $effect(() => {
+    if (penArmed || capturing || playing) return
+    const marks = marksHere
+    if (marks.length === 0) return
+    if (frameNote) return
+    const second = shown
+    if (marksHeldFor !== null && Math.abs(marksHeldFor - second) < 0.001) return
+    marksHeldFor = second
+    void holdFrame(second)
+  })
+
+  /** A frame held only for its marks goes back to the page once they are elsewhere. */
+  $effect(() => {
+    if (penArmed || !frameNote || playing) return
+    if (marksHere.length > 0) return
+    frameNote = null
+    annotationBounds = null
+    marksHeldFor = null
   })
 
   /** The comment the open bubble starts with, read from the note it edits. */
@@ -911,6 +947,7 @@
     -->
     <div data-annotation-surface data-video-chrome class="contents">
       <CompositionFrameAnnotator
+        readOnly={!penArmed}
         projectId={projectId ?? ''}
         threadId={threadId ?? ''}
         snapshot={frameNote.snapshot}
