@@ -462,7 +462,12 @@ function normalizeModels(
     )
     const reasoning = typeof raw.reasoning === 'boolean' ? raw.reasoning : false
     const thinkingPresets = normalizeThinkingPresets(raw.thinkingPresets)
-    const defaultThinkingLevel = normalizeThinkingLevel(raw.defaultThinkingLevel)
+    // A custom endpoint never declares a preferred effort, so reasoning models
+    // default to the lowest thinking level instead of inheriting the harness
+    // default and burning extra tokens on the first turn.
+    const defaultThinkingLevel =
+      normalizeThinkingLevel(raw.defaultThinkingLevel) ??
+      (reasoning ? CUSTOM_PROVIDER_DEFAULT_THINKING_LEVEL : undefined)
     const vision =
       raw.vision === undefined ? undefined : typeof raw.vision === 'boolean' ? raw.vision : false
     return {
@@ -515,6 +520,9 @@ function normalizeThinkingPresets(
 
 const THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const
 type ThinkingLevelValue = (typeof THINKING_LEVELS)[number]
+
+/** Effort a reasoning model on a custom endpoint starts with. */
+const CUSTOM_PROVIDER_DEFAULT_THINKING_LEVEL: ThinkingLevelValue = 'low'
 
 function normalizeThinkingLevel(
   value: BaseUrlProviderModel['defaultThinkingLevel']
