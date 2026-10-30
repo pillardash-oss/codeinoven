@@ -52,14 +52,6 @@
         spin: true
       }
     }
-    if (updateAvailable) {
-      return {
-        Icon: CioDownload,
-        label: 'Update available',
-        classes: 'border-warning/30 bg-warning/10 text-warning',
-        spin: false
-      }
-    }
     if (installed) {
       return {
         Icon: CioCheckCircle,
@@ -144,7 +136,7 @@
 
 <SettingsEntry {expanded}>
   <div
-    class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_auto_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
+    class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
   >
     <div class="flex min-w-0 items-center gap-3">
       <div
@@ -158,14 +150,6 @@
           {runtime?.version || (installed ? 'Version unknown' : 'llama-server')}
         </p>
       </div>
-    </div>
-
-    <div class="min-w-0 shrink-0">
-      {#key badge.label}
-        <SettingsStatusBadge label={badge.label} classes={badge.classes}>
-          <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
-        </SettingsStatusBadge>
-      {/key}
     </div>
 
     <div class="col-span-2 min-w-0 @5xl:col-span-1">
@@ -199,7 +183,7 @@
       </p>
       <p class="mt-0.5 truncate text-xs text-muted">
         {runtime?.installer === 'homebrew'
-          ? `Homebrew${runtime.latestVersion && updateAvailable ? ` · ${runtime.latestVersion} available` : ''}`
+          ? 'Homebrew'
           : installed
             ? 'Managed outside the app'
             : 'None detected'}
@@ -209,6 +193,16 @@
     <div
       class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
     >
+      {#if !updateAvailable}
+        <!-- An available update is carried by the controls themselves, so the
+             row never says "update" twice. -->
+        {#key badge.label}
+          <SettingsStatusBadge label={badge.label} classes={badge.classes}>
+            <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
+          </SettingsStatusBadge>
+        {/key}
+      {/if}
+
       {#if updateAvailable && canManage}
         <button
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
@@ -221,7 +215,7 @@
           {:else}
             <CioDownload size={13} />
           {/if}
-          Update
+          {runtime?.latestVersion ? `Update to ${runtime.latestVersion}` : 'Update'}
         </button>
       {:else if !installed && canManage}
         <button

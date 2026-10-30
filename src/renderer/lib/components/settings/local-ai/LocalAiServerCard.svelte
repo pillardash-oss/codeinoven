@@ -126,7 +126,7 @@
 
 <SettingsEntry {expanded}>
   <div
-    class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_auto_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
+    class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
   >
     <div class="flex min-w-0 items-center gap-3">
       <div
@@ -140,14 +140,6 @@
           {llamaCppModelLabel(entry)}
         </p>
       </div>
-    </div>
-
-    <div class="min-w-0 shrink-0">
-      {#key badge.label}
-        <SettingsStatusBadge label={badge.label} classes={badge.classes}>
-          <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
-        </SettingsStatusBadge>
-      {/key}
     </div>
 
     <div class="col-span-2 min-w-0 @5xl:col-span-1">
@@ -189,6 +181,12 @@
     <div
       class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
     >
+      {#key badge.label}
+        <SettingsStatusBadge label={badge.label} classes={badge.classes}>
+          <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
+        </SettingsStatusBadge>
+      {/key}
+
       {#if busy}
         <button
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
