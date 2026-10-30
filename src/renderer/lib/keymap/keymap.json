@@ -356,6 +356,13 @@
           "scenario": "Any rich text editor."
         },
         {
+          "id": "editor-select-all",
+          "keys": ["mod", "a"],
+          "label": "Select all",
+          "description": "Selects the whole field, including any code block, wherever the caret sits.",
+          "scenario": "Any rich text editor."
+        },
+        {
           "id": "editor-bold",
           "keys": ["mod", "b"],
           "label": "Bold",
