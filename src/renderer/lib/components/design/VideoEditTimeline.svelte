@@ -5,6 +5,7 @@
   import { createAttachmentKey } from 'svelte/attachments'
   import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import StudioSidebarResizeHandle from '$lib/components/specs/StudioSidebarResizeHandle.svelte'
+  import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCaptions from '@pdslng/cio-icon/CioCaptions.svelte'
@@ -31,7 +32,7 @@
     videoMomentChatContext
   } from '$lib/annotation-chat'
   import type { VideoEditChange } from '$shared/video/edit'
-  import { snapEditTime } from '$shared/video/edit'
+  import { snapEditTime, videoTrackHasAudio } from '$shared/video/edit'
   import { videoTimecode } from '$shared/video/timeline'
   import { visibleClipFrames, videoThumbnailClips } from '$shared/video/frame-grid'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -500,10 +501,31 @@
       void editor.dropFiles(Array.from(event.dataTransfer.files), at(event), trackId)
   }
   function toggleTrack(id: string, key: 'locked' | 'muted' | 'hidden'): void {
-    editor.mutate((_doc, edit) => {
-      const track = edit.tracks.find((track) => track.id === id)
-      if (track) track[key] = !track[key]
-    })
+    editor.setTrackFlag(id, key)
+  }
+  /**
+   * Whether this track can be heard, which is what earns it a speaker and a level.
+   *
+   * A video track whose media carries sound can, a silent overlay cannot, and an
+   * overlay gains both the moment a sound effect is dropped on it.
+   */
+  function trackIsAudible(track: VideoEditTrack): boolean {
+    const edit = editor.edit
+    return edit ? videoTrackHasAudio(edit, track.id) : false
+  }
+  /**
+   * The fader's name, which has to say which track it belongs to.
+   *
+   * Track names are free text and two tracks can share one, so the row's position
+   * is what makes the label unique for a screen reader and for a person reading
+   * the slider's own tooltip.
+   */
+  function trackLevelLabel(track: VideoEditTrack): string {
+    const order = (editor.edit?.tracks ?? []).findIndex((item) => item.id === track.id) + 1
+    return `${track.name} track ${order} level, ${Math.round(track.volume * 100)}%`
+  }
+  function setTrackLevel(id: string, volume: number): void {
+    editor.setTrackVolume(id, volume)
   }
 
   /** What a cluster of agent edits says about itself, in one sentence. */
@@ -933,9 +955,36 @@
               />
               <div class="flex items-center gap-1 text-[0.5625rem] text-dimmed">
                 <type.icon size={12} /><span>{type.label}</span>
+                {#if trackIsAudible(track)}
+                  <span class="ml-auto shrink-0 tabular-nums text-muted"
+                    >{Math.round(track.volume * 100)}%</span
+                  >
+                {/if}
               </div>
+              {#if trackIsAudible(track)}
+                <!--
+                  The track's own fader. A person mixes a track, not a clip: speech
+                  up and music down is one drag each, and the drag is one undo step.
+                -->
+                <SeekBar
+                  value={track.volume}
+                  min={0}
+                  max={2}
+                  step={0.01}
+                  label={trackLevelLabel(track)}
+                  title={trackLevelLabel(track)}
+                  class="w-full"
+                  onScrubStart={() => editor.beginGesture()}
+                  onInput={(value) => setTrackLevel(track.id, value)}
+                  onCommit={(value) => {
+                    setTrackLevel(track.id, value)
+                    editor.finishGesture()
+                  }}
+                  onScrubEnd={() => editor.finishGesture()}
+                />
+              {/if}
             </div>
-            {#each [{ key: 'locked', icon: CioLockOpen, activeIcon: CioLock, label: 'Lock', activeLabel: 'Unlock' }, { key: 'hidden', icon: CioEye, activeIcon: CioEyeOff, label: 'Hide', activeLabel: 'Show' }, { key: 'muted', icon: CioVolume, activeIcon: CioVolumeX, label: 'Mute', activeLabel: 'Unmute' }].filter((control) => control.key !== 'muted' || track.kind === 'video' || track.kind === 'audio') as control (control.key)}
+            {#each [{ key: 'locked', icon: CioLockOpen, activeIcon: CioLock, label: 'Lock', activeLabel: 'Unlock' }, { key: 'hidden', icon: CioEye, activeIcon: CioEyeOff, label: 'Hide', activeLabel: 'Show' }, { key: 'muted', icon: CioVolume, activeIcon: CioVolumeX, label: 'Mute', activeLabel: 'Unmute' }].filter((control) => control.key !== 'muted' || trackIsAudible(track)) as control (control.key)}
               {@const key = control.key as 'locked' | 'hidden' | 'muted'}
               <button
                 type="button"

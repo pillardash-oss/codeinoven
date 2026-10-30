@@ -20,6 +20,31 @@ export interface VideoEditTrack {
   locked: boolean
   muted: boolean
   hidden: boolean
+  /**
+   * Mix level for every clip on the track, where `1` is the file's own level.
+   *
+   * A track is the unit a person mixes with: raising the speech track and pulling
+   * the music track down is one gesture each, not a slider on every clip. Above 1
+   * amplifies, which is what a quiet recording needs.
+   */
+  volume: number
+}
+
+/**
+ * Whether any clip on a track can produce sound.
+ *
+ * The speaker is offered only where there is something to hear, so a silent
+ * overlay track carries no mute button and no level, and the same overlay gains
+ * both the moment a sound effect lands on it.
+ */
+export function videoTrackHasAudio(edit: VideoEditDocument, trackId: string): boolean {
+  const tracks = edit.tracks.find((track) => track.id === trackId)
+  if (!tracks || tracks.kind === 'caption') return false
+  return edit.clips.some(
+    (clip) =>
+      clip.trackId === trackId &&
+      (edit.assets.find((asset) => asset.id === clip.assetId)?.hasAudio ?? false)
+  )
 }
 export interface VideoEditRect {
   x: number
@@ -270,7 +295,8 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
       kind: choice(t.kind, ['video', 'audio', 'caption', 'overlay']),
       locked: bool(t.locked),
       muted: bool(t.muted),
-      hidden: bool(t.hidden)
+      hidden: bool(t.hidden),
+      volume: number(t.volume, 'Track volume', 0, 2, 1)
     }
   })
   // Earlier documents stored captions and privacy masks in implicit rows.
@@ -285,7 +311,8 @@ export function validateVideoEdit(value: unknown): VideoEditDocument {
         name: kind === 'caption' ? 'Captions' : 'Overlays',
         locked: false,
         hidden: false,
-        muted: false
+        muted: false,
+        volume: 1
       })
     }
   const assetIds = new Map(assets.map((asset) => [asset.id, asset]))
@@ -788,8 +815,22 @@ export function applyVideoEditOperations(
         kind: choice(operation.trackKind, ['video', 'audio', 'caption', 'overlay']),
         locked: false,
         muted: false,
-        hidden: false
+        hidden: false,
+        volume: 1
       })
+    } else if (kind === 'setTrack') {
+      // The same knobs the track header offers: a person mixes the speech track up
+      // and the music track down, and an agent has to be able to do exactly that.
+      const track = edit.tracks.find(
+        (track) => track.id === operation.trackId || track.id === operation.id
+      )
+      if (!track) throw new Error('Choose a track to update')
+      if (operation.volume !== undefined)
+        track.volume = number(operation.volume, 'Track volume', 0, 2)
+      if (operation.muted !== undefined) track.muted = bool(operation.muted)
+      if (operation.hidden !== undefined) track.hidden = bool(operation.hidden)
+      if (operation.locked !== undefined) track.locked = bool(operation.locked)
+      if (operation.name !== undefined) track.name = text(operation.name, 'Track name')
     } else if (kind === 'addRegion') {
       const region = record(operation.region)
       edit.regions.push({

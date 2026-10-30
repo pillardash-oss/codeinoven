@@ -30,14 +30,23 @@ export async function migrateVideoEdit(
     duration: manifest.duration,
     assets: [],
     tracks: [
-      { id: 'picture', name: 'Video', kind: 'video', locked: false, muted: false, hidden: false },
+      {
+        id: 'picture',
+        name: 'Video',
+        kind: 'video',
+        locked: false,
+        muted: false,
+        hidden: false,
+        volume: 1
+      },
       {
         id: 'dialogue',
         name: 'Audio',
         kind: 'audio',
         locked: false,
         muted: false,
-        hidden: false
+        hidden: false,
+        volume: 1
       },
       {
         id: 'overlays',
@@ -45,7 +54,8 @@ export async function migrateVideoEdit(
         kind: 'overlay',
         locked: false,
         muted: false,
-        hidden: false
+        hidden: false,
+        volume: 1
       },
       {
         id: 'music',
@@ -53,7 +63,8 @@ export async function migrateVideoEdit(
         kind: 'audio',
         locked: false,
         muted: false,
-        hidden: false
+        hidden: false,
+        volume: 1
       }
     ],
     clips: [],
