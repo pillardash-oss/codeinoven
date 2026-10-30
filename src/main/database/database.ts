@@ -56,6 +56,7 @@ import {
   type ProviderDeltaSyncResult
 } from './repositories/agent-message-repo'
 import { runHistoryAppend } from './repositories/history-repo'
+import { repairUnpricedUsageCosts } from './usage-cost-repair'
 import type { AgentMessage, UserMessageSummary } from '../../lib/types'
 import { buildBoundedQuery } from './bounded-query'
 
@@ -1058,6 +1059,10 @@ export class Database {
     this.migrateThreadAuthoredWorkKinds(connection)
     this.migrateDesignRevisionMetadata(connection)
     this.migrateSettledAuditThreadStatus(connection)
+    // A one-time data repair, not a launch task: it corrects the rows an older
+    // build wrote with tokens and no price, inside this upgrade, and is stamped
+    // with the schema version so no later launch ever looks at them again.
+    repairUnpricedUsageCosts(connection)
   }
 
   /**

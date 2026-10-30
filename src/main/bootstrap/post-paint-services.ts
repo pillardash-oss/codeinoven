@@ -1258,24 +1258,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
 
     try {
-      // The catalog settles in the background, so any run recorded before it
-      // loaded (or priced by a gateway that answered with a zeroed cost object)
-      // still holds no dollars. Correct those rows once the prices are in memory,
-      // in bounded batches on the maintenance worker, and let the Usage page
-      // read what was actually billed.
-      void state.chatEngine
-        ?.repriceUnpricedUsage()
-        .then((result) => {
-          if (result.updated > 0) {
-            Logger.dev('Re-priced usage rows from the model catalog', result)
-          }
-        })
-        .catch((error: unknown) => Logger.error('Usage re-pricing failed (non-fatal):', error))
-    } catch (error) {
-      Logger.error('Usage re-pricing startup failed (non-fatal):', error)
-    }
-
-    try {
       // The watcher keeps the same pass available for the moment the last
       // sibling exits, so arm it before the launch pass can fail.
       state.stopInstanceTakeOverListener = watchForInstanceTakeOver(state, database)

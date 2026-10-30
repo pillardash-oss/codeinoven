@@ -34,7 +34,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * add the snapshot DDL to `SCHEMA_SQL`. A schema change without a bump reaches
  * fresh installs only and silently skips every database already on disk.
  */
-export const DATABASE_SCHEMA_VERSION = 2
+export const DATABASE_SCHEMA_VERSION = 3
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
