@@ -3,7 +3,6 @@
   import type { Attachment } from 'svelte/attachments'
   import { tick } from 'svelte'
   import { fade } from 'svelte/transition'
-  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import { DEFAULT_APP_FONT_SIZE } from '$lib/app-typography'
   import { playFoldClip } from './card-motion'
   import { motionDuration } from '$lib/motion'
@@ -137,22 +136,16 @@ lands, when there is nothing to animate. -->
     {/if}
   </div>
   {#if showToggle}
-    <!-- The whole row is the target, not just the two words in it: the reader
-         aims at the band under the folded body, and aiming at a small piece of
-         text inside that band is work the layout can do for them. -->
+    <!-- The whole row under the fold is the target, not just the words in it. -->
     <button
       type="button"
-      class="mt-1.5 flex w-full cursor-pointer items-center gap-1 border-t border-border py-1.5 text-left text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="mt-1 block w-full cursor-pointer text-left text-xs font-medium text-muted transition-colors hover:text-foreground"
       aria-expanded={expanded}
       aria-label={collapsed ? `Show the full ${label}` : `Fold the ${label}`}
       title={collapsed ? `Show the full ${label}` : `Fold the ${label}`}
       onclick={() => void toggleBody()}
     >
-      <span>{collapsed ? 'View more' : 'View less'}</span>
-      <CioChevronDown
-        size={11}
-        class="shrink-0 transition-transform{expanded ? ' rotate-180' : ''}"
-      />
+      {collapsed ? 'View more' : 'View less'}
     </button>
   {/if}
 </div>
