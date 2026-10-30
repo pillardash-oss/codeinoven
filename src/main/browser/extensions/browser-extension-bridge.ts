@@ -32,6 +32,7 @@
 import { WebContentsView, webContents, type Session } from 'electron'
 import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
+import { BrowserLoadWaits } from '../browser-service/browser-load-wait'
 import type {
   BrowserExtensionNativeMessaging,
   NativeMessagingDelivery
@@ -60,6 +61,10 @@ const MAILBOX_POLL_INTERVAL_MS = 500
 /** A bridge page that never loads is not worth retrying, and a view that loaded
  *  is waited on only until it has. */
 const BRIDGE_LOAD_TIMEOUT_MS = 15_000
+/** How long an event delivery gives the bridge page to stop loading before the
+ *  delivery is dropped. A page that is still settling cannot run the script yet,
+ *  and holding the call open parks a listener on the page for every event. */
+const BRIDGE_SCRIPT_SETTLE_TIMEOUT_MS = 4_000
 
 /** One mailbox snapshot: everything the worker wants the app to know. */
 export interface BrowserExtensionMailbox {
@@ -557,6 +562,9 @@ export class BrowserExtensionBridge {
   private answeringCookies = false
   private answeringPages = false
   private disposed = false
+  /** The bridge page's own load waits, shared with the rest of the browser: one
+   *  listener set per page rather than one per caller (see `BrowserLoadWaits`). */
+  private readonly loadWaits = new BrowserLoadWaits()
   /** The worker life the last snapshot came from. */
   private generation = ''
   /** The last sequence number seen in that life. */
@@ -623,6 +631,45 @@ export class BrowserExtensionBridge {
       })
   }
 
+  /**
+   * One script call into the bridge page, made only once the page has settled.
+   *
+   * Electron answers `executeJavaScript` only after the page stops loading, and
+   * parks one `did-stop-loading` listener per call that has to wait. The mailbox
+   * poll runs on every beat, so a bridge page that was slow to settle collected a
+   * listener per poll call, per round, and Node reported the pile as a listener
+   * leak (eleven `did-stop-loading` listeners on one `WebContents`). A poll
+   * therefore skips a page that is still loading, because the next beat retries
+   * anyway, and an event delivery waits on the app's one shared load wait,
+   * bounded: a bridge delivery that arrives after the fact is worse than one that
+   * does not arrive, exactly as `push` already said.
+   *
+   * Answers `undefined` when the script did not run, which every caller treats
+   * the way it treats a page that returned nothing.
+   */
+  private async runInBridge(
+    contents: Electron.WebContents,
+    code: string,
+    options: { waitForSettle: boolean }
+  ): Promise<unknown | undefined> {
+    if (contents.isDestroyed()) return undefined
+    if (contents.isLoading()) {
+      if (!options.waitForSettle) return undefined
+      await this.loadWaits.wait(contents, BRIDGE_SCRIPT_SETTLE_TIMEOUT_MS)
+      if (contents.isDestroyed() || contents.isLoading()) {
+        Logger.dev('Extension bridge delivery dropped: its page had not settled', {
+          extensionId: this.deps.extensionId
+        })
+        return undefined
+      }
+    }
+    try {
+      return await contents.executeJavaScript(code, true)
+    } catch {
+      return undefined
+    }
+  }
+
   /** Send one command into the worker. Fire and forget: a worker that is asleep
    *  is started by the message itself, and a push into a dying view is dropped
    *  rather than queued, because a tab event that arrives late is worse than one
@@ -633,7 +680,7 @@ export class BrowserExtensionBridge {
     const contents: Electron.WebContents | undefined = view.webContents
     if (!contents || contents.isDestroyed()) return Promise.resolve()
     const script = `globalThis.__cioBridgeReceive && globalThis.__cioBridgeReceive(${JSON.stringify(command)})`
-    return contents.executeJavaScript(script, true).then(
+    return this.runInBridge(contents, script, { waitForSettle: true }).then(
       () => undefined,
       () => undefined
     )
@@ -646,10 +693,12 @@ export class BrowserExtensionBridge {
     if (!contents || this.disposed || contents.isDestroyed()) {
       throw new Error('The extension bridge is unavailable')
     }
-    await contents.executeJavaScript(
+    const response = await this.runInBridge(
+      contents,
       `globalThis.__cioBridgeRequest(${JSON.stringify(command)})`,
-      true
+      { waitForSettle: true }
     )
+    if (response === undefined) throw new Error('The extension bridge is not ready')
   }
 
   /**
@@ -687,7 +736,7 @@ export class BrowserExtensionBridge {
     }
     if (!serialized) return Promise.resolve()
     const script = `(() => { const receive = globalThis.__cioBridgeReceive; if (typeof receive !== 'function') return; for (const command of ${serialized}) receive(command) })()`
-    return contents.executeJavaScript(script, true).then(
+    return this.runInBridge(contents, script, { waitForSettle: true }).then(
       () => undefined,
       () => undefined
     )
@@ -701,9 +750,10 @@ export class BrowserExtensionBridge {
     if (!contents || contents.isDestroyed()) return
     this.readingFrames = true
     try {
-      const raw = await contents.executeJavaScript(
+      const raw = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeDrainFrameRequests ? globalThis.__cioBridgeDrainFrameRequests() : "[]"',
-        true
+        { waitForSettle: false }
       )
       if (typeof raw !== 'string') return
       const requests: unknown = JSON.parse(raw)
@@ -781,9 +831,10 @@ export class BrowserExtensionBridge {
     if (!contents || contents.isDestroyed()) return
     this.answeringNative = true
     try {
-      const raw = await contents.executeJavaScript(
+      const raw = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeDrainNativeRequests ? globalThis.__cioBridgeDrainNativeRequests() : "[]"',
-        true
+        { waitForSettle: false }
       )
       if (typeof raw !== 'string') return
       const requests: unknown = JSON.parse(raw)
@@ -821,9 +872,10 @@ export class BrowserExtensionBridge {
     if (!contents || contents.isDestroyed()) return
     this.answeringDownloads = true
     try {
-      const raw = await contents.executeJavaScript(
+      const raw = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeDrainDownloadRequests ? globalThis.__cioBridgeDrainDownloadRequests() : "[]"',
-        true
+        { waitForSettle: false }
       )
       if (typeof raw !== 'string') return
       const requests: unknown = JSON.parse(raw)
@@ -861,9 +913,10 @@ export class BrowserExtensionBridge {
     if (!contents || contents.isDestroyed()) return
     this.answeringCookies = true
     try {
-      const raw = await contents.executeJavaScript(
+      const raw = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeDrainCookieRequests ? globalThis.__cioBridgeDrainCookieRequests() : "[]"',
-        true
+        { waitForSettle: false }
       )
       if (typeof raw !== 'string') return
       const requests: unknown = JSON.parse(raw)
@@ -910,9 +963,10 @@ export class BrowserExtensionBridge {
     if (!contents || contents.isDestroyed()) return
     this.answeringPages = true
     try {
-      const raw = await contents.executeJavaScript(
+      const raw = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeDrainPageRequests ? globalThis.__cioBridgeDrainPageRequests() : "[]"',
-        true
+        { waitForSettle: false }
       )
       if (typeof raw !== 'string') return
       const requests: unknown = JSON.parse(raw)
@@ -950,9 +1004,10 @@ export class BrowserExtensionBridge {
     if (!contents || contents.isDestroyed()) return
     this.draining = true
     try {
-      const raw = await contents.executeJavaScript(
+      const raw = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeDrain ? globalThis.__cioBridgeDrain() : null',
-        true
+        { waitForSettle: false }
       )
       if (typeof raw !== 'string' || raw === 'null' || raw.length === 0) return
       const parsed = asRecord(JSON.parse(raw))
@@ -1027,9 +1082,10 @@ export class BrowserExtensionBridge {
     const contents: Electron.WebContents | undefined = view.webContents
     if (!contents || contents.isDestroyed()) return
     try {
-      const raw = await contents.executeJavaScript(
+      const raw = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeDrainWrites ? globalThis.__cioBridgeDrainWrites() : null',
-        true
+        { waitForSettle: false }
       )
       if (typeof raw !== 'string' || raw === 'null' || raw.length === 0) return
       const request = parseUserScriptFileRequest(JSON.parse(raw))
@@ -1042,9 +1098,10 @@ export class BrowserExtensionBridge {
           error: result.error
         })
       }
-      await contents.executeJavaScript(
+      await this.runInBridge(
+        contents,
         `globalThis.__cioBridgeWrite && globalThis.__cioBridgeWrite('__cioFileReady', ${JSON.stringify(result)})`,
-        true
+        { waitForSettle: false }
       )
     } catch (error) {
       Logger.dev('Extension user script request could not be handled:', {
@@ -1069,9 +1126,10 @@ export class BrowserExtensionBridge {
     const contents: Electron.WebContents | undefined = view.webContents
     if (!contents || contents.isDestroyed()) return
     try {
-      const outcome = await contents.executeJavaScript(
+      const outcome = await this.runInBridge(
+        contents,
         'globalThis.__cioBridgeReassert ? globalThis.__cioBridgeReassert() : "unavailable"',
-        true
+        { waitForSettle: false }
       )
       if (typeof outcome === 'string' && outcome.startsWith('restored:')) {
         Logger.dev('Extension user scripts were restored:', {
