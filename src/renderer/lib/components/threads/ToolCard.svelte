@@ -1,14 +1,12 @@
 <script lang="ts">
-  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
-  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import CioCode from '@pdslng/cio-icon/CioCode.svelte'
   import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
   import CioFilePen from '@pdslng/cio-icon/CioFilePen.svelte'
   import CioFilePlus from '@pdslng/cio-icon/CioFilePlus.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
-  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
   import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
@@ -112,18 +110,18 @@
 
   const elapsed = $derived(clock.seconds(start, end))
 
-  const statusMeta = $derived.by(() => {
-    switch (part.state.status) {
-      case 'running':
-        return { icon: CioSpinner, class: 'text-info animate-spin' }
-      case 'completed':
-        return { icon: CioCheckCircle, class: 'text-success' }
-      case 'error':
-        return { icon: CioCrossCircle, class: 'text-danger' }
-      default:
-        return { icon: CioClock, class: 'text-dimmed' }
-    }
-  })
+  /**
+   * A running call says so with a glow travelling along its whole line, so it
+   * wears no spinner; a settled call wears no tick either, because the glow
+   * leaving the row is the completion. Only a failure keeps a mark.
+   *
+   * A restored trace is never live, so a call the process was cut off inside
+   * stays quiet instead of glowing forever.
+   */
+  const working = $derived(
+    live && (part.state.status === 'running' || part.state.status === 'pending')
+  )
+  const failed = $derived(part.state.status === 'error')
 
   const inputPreview = $derived(formatInput(part.state.input))
   /** The tool-kind glyph: washed out with the row, brighter on hover. */
@@ -221,28 +219,26 @@
 <div class="min-w-0">
   <button
     type="button"
-    class="group/tool flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+    class="group/tool isolate relative flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
     aria-expanded={open}
     title={open ? 'Hide tool details' : 'Show tool details'}
     onclick={() => {
       open = !open
     }}
   >
-    {#if statusMeta.icon === CioSpinner}
-      <CioSpinner size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === CioCheckCircle}
-      <CioCheckCircle size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === CioCrossCircle}
-      <CioCrossCircle size={14} class="shrink-0 {statusMeta.class}" />
-    {:else}
-      <CioClock size={14} class="shrink-0 {statusMeta.class}" />
+    {#if working}
+      <span class="working-row-glow -z-10" aria-hidden="true"></span>
+      <span class="sr-only">Running</span>
+    {:else if failed}
+      <CioCrossCircle size={14} class="shrink-0 text-danger" />
+      <span class="sr-only">Failed</span>
     {/if}
     {#if toolKind === 'cio'}
       <CioMonogram size={12} class={kindIconClass} />
     {:else if toolKind === 'code'}
       <CioCode size={12} class={kindIconClass} />
     {:else if toolKind === 'read'}
-      <CioCheckCircle size={12} class={kindIconClass} />
+      <CioFileText size={12} class={kindIconClass} />
     {:else if toolKind === 'edit'}
       <CioFilePen size={12} class={kindIconClass} />
     {:else if toolKind === 'write'}

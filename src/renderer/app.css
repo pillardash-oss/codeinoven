@@ -1284,3 +1284,59 @@ html body vite-error-overlay {
  * recovers a beat later (measured in the 2026-10-09 recording). A hard pop-in
  * on mount is the cheaper trade.
  */
+
+/* ─── Working row glow ───────────────────────────────────────────────────── */
+/*
+ * A tool call that is still running says so by glowing along its whole line
+ * instead of wearing a spinner, so the trace reads as one continuous sign of
+ * life rather than a row of little spinners. A settled call carries no mark at
+ * all, and only a failure keeps its error glyph.
+ *
+ * The band travels with `transform` alone (compositor only, no repaint) and the
+ * element carries `will-change`, so a trace full of live rows costs the main
+ * thread nothing while it animates. The tint underneath is static, so the whole
+ * line reads as active even between passes of the band.
+ */
+@keyframes working-row-sweep {
+  from {
+    transform: translate3d(-120%, 0, 0);
+  }
+  to {
+    transform: translate3d(240%, 0, 0);
+  }
+}
+
+.working-row-glow {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-info) 7%, transparent);
+}
+
+.working-row-glow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-info) 30%, transparent),
+    transparent
+  );
+  animation: working-row-sweep 1.45s linear infinite;
+  will-change: transform;
+}
+
+/* Reduced motion keeps the glow but stops the travel: the line stays lit while
+   the call runs, which is the state, not the decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .working-row-glow::before {
+    animation: none;
+    width: 100%;
+    background: color-mix(in srgb, var(--color-info) 16%, transparent);
+  }
+}
