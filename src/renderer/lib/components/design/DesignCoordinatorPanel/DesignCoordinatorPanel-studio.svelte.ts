@@ -525,7 +525,7 @@ export class DesignBoardStudio extends BoardUnit<DesignBoard> {
   revealLabel = $derived.by(() => {
     const name =
       this.root.gallery.selectedName === '' ? this.nounTitle : this.root.gallery.selectedName
-    if (this.canRevealCreator) return `Reveal the thread that created ${name}`
+    if (this.canRevealCreator) return 'Reveal original thread'
     if (this.selectedCreatorThreadId === this.root.gallery.selectionThreadId)
       return `This thread created ${name}`
     return 'Thread unavailable'
