@@ -45,13 +45,13 @@
      */
     bounds: BrowserViewBounds
     /**
-     * The marks to draw, when the surface was opened on a moment that already has
-     * them.
+     * The marks drawn on this moment, which grow while the surface is open.
      *
-     * A capture writes a new picture at a new path, so the strokes drawn on an
-     * earlier capture of the same second do not name this URL. The caller that
-     * reopened the moment hands them over instead, and they are drawn on the
-     * picture because they are about this frame, not about that file.
+     * A capture writes a new picture at a new path, so strokes are found by the
+     * composition folder and the second rather than by the URL, and this list is
+     * read from the store on every change: a stroke the user has just drawn is
+     * written there and nowhere else, so a list captured when the surface opened
+     * would leave them drawing on a frame that never shows their marks.
      */
     marks: ResponseReferenceAnchor[]
     /**
