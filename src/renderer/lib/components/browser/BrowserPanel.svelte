@@ -183,6 +183,21 @@
   $effect(synchronizePageFrame)
 
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
+  /**
+   * Whether this row is watching a picture the reader can see.
+   *
+   * A full screen surface is on screen by definition, a pane whose page is placed is
+   * on screen, and the context sidebar is on screen whenever it is open on this tab —
+   * the visibility answer is about where the native page was placed, not about
+   * whether this row is the surface in front of the reader. A row that decided it was
+   * hidden went deaf, which is a play/pause key that does nothing in the sidebar and
+   * nowhere else.
+   */
+  let transportActive = $derived(
+    fullscreen ||
+      panelVisible ||
+      (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTabId === tabId)
+  )
   /** The extension button tucked under the toolbar's own row, which the dropdown
    *  card hangs from. */
   let extensionButton = $state<HTMLButtonElement>()
@@ -909,7 +924,7 @@
           titlebar={compositionPlayer && !playerInEditor}
           projectId={pageState.projectId}
           threadId={pageState.threadId}
-          active={fullscreen || panelVisible}
+          active={transportActive}
           ownsPlaybackKey={!playerInEditor}
           claimsFocus={fullscreen}
         />

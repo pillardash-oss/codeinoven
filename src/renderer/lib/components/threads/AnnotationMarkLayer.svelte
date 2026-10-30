@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import { tick } from 'svelte'
@@ -130,6 +131,52 @@
   }: Props = $props()
 
   const toolbarHost = hasAnnotationToolbarHost() ? getAnnotationToolbarHost() : undefined
+
+  /**
+   * Where the reader put the pen's own controls, in the picture's own pixels.
+   *
+   * The pen sits over the picture by definition, so it covers part of what the reader
+   * came to mark. The bubble beside a mark is draggable for exactly this reason, and
+   * this is the same gesture: a grip starts the drag, so a stroke on the picture can
+   * never be mistaken for a nudge of the tools.
+   */
+  let toolbarAt = $state<{ x: number; y: number } | null>(null)
+
+  function startToolbarDrag(event: PointerEvent, toolbar: HTMLElement): void {
+    const parent = toolbar.offsetParent
+    const handle = event.currentTarget
+    if (!(parent instanceof HTMLElement) || !(handle instanceof HTMLElement)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const pointerId = event.pointerId
+    const start = toolbar.getBoundingClientRect()
+    const box = parent.getBoundingClientRect()
+    const offsetX = event.clientX - start.left
+    const offsetY = event.clientY - start.top
+    handle.setPointerCapture(pointerId)
+    const move = (next: PointerEvent): void => {
+      if (next.pointerId !== pointerId) return
+      toolbarAt = {
+        x: Math.min(
+          Math.max(0, next.clientX - box.left - offsetX),
+          Math.max(0, box.width - start.width)
+        ),
+        y: Math.min(
+          Math.max(0, next.clientY - box.top - offsetY),
+          Math.max(0, box.height - start.height)
+        )
+      }
+    }
+    const end = (next: PointerEvent): void => {
+      if (next.pointerId !== pointerId) return
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', end)
+      handle.removeEventListener('pointercancel', end)
+    }
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', end)
+    handle.addEventListener('pointercancel', end)
+  }
   const toolbarAttachment: Attachment<HTMLDivElement> = (node) => {
     const target = toolbarHost?.target()
     if (!target) return
@@ -516,9 +563,24 @@
 {/if}
 
 <div
-  class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute top-1.5 right-1.5 z-40']}
+  class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute z-40']}
+  style={toolbarHost ? undefined : `left: ${toolbarAt?.x ?? 6}px; top: ${toolbarAt?.y ?? 6}px`}
   {@attach toolbarAttachment}
 >
+  {#if !toolbarHost}
+    <button
+      type="button"
+      class="flex h-7 w-5 cursor-grab touch-none items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm active:cursor-grabbing"
+      title="Move the annotation tools off the part of the frame you are marking"
+      aria-label="Move the annotation tools"
+      onpointerdown={(event) => {
+        const toolbar = event.currentTarget.parentElement
+        if (toolbar) startToolbarDrag(event, toolbar)
+      }}
+    >
+      <CioGrip size={11} />
+    </button>
+  {/if}
   {#if armed && hint}
     <span
       class="hidden bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white sm:inline"
