@@ -285,6 +285,23 @@
     )
   }
   const timelineMenu = $derived(timelineMenuRows())
+
+  /**
+   * Whether the event came from a field that is having text typed into it.
+   *
+   * A field owns its modifier shortcuts: the comment written on a frame saves with
+   * the same mod+Enter this workspace saves and exports with, and a comment must
+   * never export a movie. Numeric, range and colour inputs are excluded because
+   * their undo and redo belong to the workspace rather than to the field.
+   */
+  function typingInTextEntry(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false
+    if (target.isContentEditable) return true
+    if (target.closest('textarea,[data-floating-document]')) return true
+    const input = target.closest('input')
+    return input instanceof HTMLInputElement && !['number', 'range', 'color'].includes(input.type)
+  }
+
   function keydown(event: KeyboardEvent): void {
     if (!active || event.defaultPrevented || !(event.target instanceof Node)) return
     const fromPage = event.target === document
@@ -294,6 +311,9 @@
       !(mode === 'fullscreen' && event.target === document.body)
     )
       return
+    // The keys of a field in front of the editor are the field's, and this runs in
+    // the capture phase, before the field itself answers them.
+    if (typingInTextEntry(event.target)) return
     if (keymapState.matches('video-primary-action', event)) {
       event.preventDefault()
       event.stopPropagation()
