@@ -15,7 +15,7 @@
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { isCioToolName, isCodeModeToolName } from '$shared/agent-interactions'
-  import { isOpaqueId } from '$shared/tool-action-label'
+  import { ACTION_SUMMARY_INPUT_KEY, isOpaqueId } from '$shared/tool-action-label'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
@@ -184,7 +184,10 @@
    * argument a reader can actually use.
    */
   function formatInput(input: Record<string, unknown>): string {
-    for (const [, value] of Object.entries(input)) {
+    for (const [name, value] of Object.entries(input)) {
+      // The label field IS the row's label, so repeating it as the subject
+      // would make the row say the same words twice.
+      if (name === ACTION_SUMMARY_INPUT_KEY) continue
       const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
       if (!text || (typeof value === 'string' && isOpaqueId(value))) continue
       const preview =
@@ -204,9 +207,14 @@
    *  conversational default so terminal-style output stays recognizable. */
   const TOOL_BLOCK_COLLAPSED_CHARS = 4_000
 
-  const inputJson = $derived(
-    Object.keys(part.state.input).length > 0 ? JSON.stringify(part.state.input, null, 2) : ''
-  )
+  const inputJson = $derived.by(() => {
+    // The label field is already the row's headline, so the expanded card shows
+    // the call's real arguments only.
+    const entries = Object.entries(part.state.input).filter(
+      ([name]) => name !== ACTION_SUMMARY_INPUT_KEY
+    )
+    return entries.length > 0 ? JSON.stringify(Object.fromEntries(entries), null, 2) : ''
+  })
   const giantOutput = $derived(
     (part.state.output?.length ?? 0) > GIANT_TOOL_STRING_CHARS ? (part.state.output ?? '') : null
   )

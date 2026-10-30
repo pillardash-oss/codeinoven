@@ -33,6 +33,8 @@
  * own tools, and a registration the registry refuses is dropped, because losing
  * a label is never worth losing a tool.
  */
+import { ACTION_SUMMARY_INPUT_KEY } from '../../lib/tool-action-label'
+
 export function piBaseToolsExtension(): string {
   return `import { createBashToolDefinition } from '@earendil-works/pi-coding-agent'
 import { createEditToolDefinition } from '@earendil-works/pi-coding-agent'
@@ -48,8 +50,9 @@ import { Type } from 'typebox'
 /** The session working directory, injected when the module is materialized. */
 const CIO_SESSION_CWD = __CIO_SESSION_CWD__
 
-/** The field a model fills with the action the call performs. */
-const ACTION_SUMMARY_KEY = 'action_summary'
+/** The field a model fills with the action the call performs. Interpolated from
+ *  the renderer's resolver so the schema and the label cannot disagree. */
+const ACTION_SUMMARY_KEY = ${JSON.stringify(ACTION_SUMMARY_INPUT_KEY)}
 
 const ACTION_SUMMARY_DESCRIPTION =
   'Always fill this in: one short phrase saying what this call accomplishes, shown to the user in place of the raw tool name.'
@@ -122,13 +125,20 @@ export default function codeInOvenBaseToolsExtension(pi: ExtensionAPI): void {
         commandPrefix: settings.shellCommandPrefix,
         shellPath: settings.shellPath
       }),
-      createPowerShellToolDefinition(CIO_SESSION_CWD),
       createEditToolDefinition(CIO_SESSION_CWD),
       createWriteToolDefinition(CIO_SESSION_CWD),
       createGrepToolDefinition(CIO_SESSION_CWD),
       createFindToolDefinition(CIO_SESSION_CWD),
       createLsToolDefinition(CIO_SESSION_CWD)
     ]
+    // Windows powershell is the app's own tool, not pi's: the app registers it
+    // at extension load with native operations, UTF-8 console encoding and its
+    // own timeout handling. This hook runs later (session_start), so
+    // re-registering the stock definition here would silently undo all of it.
+    // Everywhere else the tool is inactive, so the stock definition is kept.
+    if (process.platform !== 'win32') {
+      definitions.push(createPowerShellToolDefinition(CIO_SESSION_CWD))
+    }
     for (const definition of definitions) {
       if (!definition || typeof definition.execute !== 'function') continue
       const declared = (definition.parameters?.properties ?? {}) as Record<string, unknown>
