@@ -448,6 +448,23 @@ export class VideoEditorController {
     if (seekTo !== undefined) this.seek(seekTo)
     this.queuePreview()
   }
+  /**
+   * Let go of whatever is selected.
+   *
+   * A press that lands on the timeline's empty space, a bare track row, the ruler
+   * or the editor's own background means "nothing here", so the selection goes
+   * with it: a moved clip used to stay selected long after the user had clicked
+   * away from it. Blur painting is a mode rather than a picked item, so a press
+   * elsewhere leaves it running until the user ends it themselves.
+   */
+  clearSelection(): void {
+    if (this.selection?.kind === 'brush') return
+    if (!this.selection && this.selectedIds.size === 0 && !this.selectionAnchor) return
+    this.selection = null
+    this.selectionAnchor = null
+    this.selectedIds.clear()
+    this.queuePreview()
+  }
   /** Highlight one clip, keeping, extending or replacing the current set. */
   selectClip(id: string, mode: 'replace' | 'toggle' | 'range' = 'replace'): void {
     const edit = this.edit

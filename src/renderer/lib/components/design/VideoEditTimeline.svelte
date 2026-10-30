@@ -50,8 +50,21 @@
   let {
     editor,
     tools,
+    addTrack,
     contextActions
-  }: { editor: VideoEditorController; tools?: Snippet; contextActions?: Snippet } = $props()
+  }: {
+    editor: VideoEditorController
+    tools?: Snippet
+    /**
+     * The Add track control, which lives in the gutter.
+     *
+     * A row's name belongs over the rows it names, so the control that adds a row
+     * sits there rather than in the middle of the toolbar, and the rest of the
+     * toolbar starts where the track names do.
+     */
+    addTrack?: Snippet
+    contextActions?: Snippet
+  } = $props()
   const trackTypes = {
     video: { icon: CioClapper, label: 'Video' },
     audio: { icon: CioAudioLines, label: 'Audio' },
@@ -815,7 +828,7 @@
     <div
       class="flex min-h-11 shrink-0 items-center gap-1 border-b border-border bg-surface py-1 text-[0.6875rem] text-muted"
     >
-      <span class="shrink-0 px-2" style:width={`${labelWidth + 6}px`}>Tracks</span>
+      <div class="shrink-0 px-1" style:width={`${labelWidth + 6}px`}>{@render addTrack?.()}</div>
       <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1 pr-2">
         {@render tools?.()}
         <div class="min-w-2 flex-1"></div>
@@ -897,7 +910,11 @@
         class="sticky left-0 z-20 shrink-0 self-start border-r border-border bg-surface"
         style:width={`${labelWidth}px`}
       >
-        <div class="sticky top-0 z-30 h-6 border-b border-border bg-surface"></div>
+        <div
+          class="sticky top-0 z-30 flex h-6 items-center border-b border-border bg-surface px-2 text-[0.625rem] uppercase tracking-wide text-dimmed"
+        >
+          Timeline
+        </div>
         {#each editor.edit?.tracks ?? [] as track (track.id)}
           {@const type = trackTypes[track.kind]}
           <div

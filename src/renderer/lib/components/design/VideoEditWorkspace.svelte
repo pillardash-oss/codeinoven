@@ -355,6 +355,24 @@
     return modal !== null && root !== undefined && modal.contains(root)
   }
 
+  /**
+   * A press on something that is not a timeline item, not a control and not a
+   * field means the user has moved on from what they picked.
+   *
+   * The check is written as "what keeps the selection" rather than "what clears
+   * it" so a new control never silently starts dropping a selection: clips,
+   * captions, regions, buttons, fields, the ruler and sliders all keep it.
+   */
+  const SELECTION_KEEPS =
+    '[data-video-clip],[data-video-caption],[data-video-region],button,input,select,textarea,[contenteditable="true"],[role="slider"]'
+
+  function pressOnEmpty(event: PointerEvent): void {
+    if (event.button !== 0 || !active) return
+    const target = event.target instanceof Element ? event.target : null
+    if (target?.closest(SELECTION_KEEPS)) return
+    editor.clearSelection()
+  }
+
   function keydown(event: KeyboardEvent): void {
     if (!active || event.defaultPrevented) return
     if (!ownsTarget(event.target)) return
@@ -469,27 +487,25 @@
   >
 {/snippet}
 
+{#snippet timelineAddTrack()}
+  <EnumSelect
+    options={additions}
+    value={null}
+    placeholder="Add track"
+    ariaLabel="Add track"
+    title="Add a video, audio or overlay track"
+    menuMinWidth="22rem"
+    compact
+    class="w-full"
+    onChange={add}
+  />
+{/snippet}
+
 {#snippet timelineTools()}
-  <div class="w-56 min-w-40 shrink-0">
-    <EnumSelect
-      options={additions}
-      value={null}
-      placeholder="Add track"
-      ariaLabel="Add track"
-      title="Add a video, audio or overlay track"
-      menuMinWidth="22rem"
-      compact
-      onChange={add}
-    />
-  </div>
-  <label class="flex shrink-0 items-center gap-1 px-2 text-xs text-muted"
-    ><Switch
-      title="Magnetic timeline: move following clips together and close gaps on delete"
-      aria-label="Magnetic timeline"
-      checked={editor.snapEnabled}
-      onchange={(value) => (editor.snapEnabled = value)}
-    />Snap</label
-  >
+  <!--
+    The scope answers "what does the magnetic timeline move", so it is read before
+    the switch that turns that behaviour on, and the pair sits left of the actions.
+  -->
   <div class="w-40 shrink-0">
     <EnumSelect
       options={[
@@ -506,6 +522,14 @@
       onChange={(value) => (editor.magneticScope = value)}
     />
   </div>
+  <label class="flex shrink-0 items-center gap-1 px-2 text-xs text-muted"
+    ><Switch
+      title="Magnetic timeline: move following clips together and close gaps on delete"
+      aria-label="Magnetic timeline"
+      checked={editor.snapEnabled}
+      onchange={(value) => (editor.snapEnabled = value)}
+    />Snap</label
+  >
   {@render action(
     CioPencil,
     editor.selection?.kind === 'brush' ? 'Stop painting blur' : 'Paint blur on the preview',
@@ -615,6 +639,7 @@
   }}
   class="flex h-full min-h-0 flex-col overflow-hidden bg-app"
   data-video-chrome
+  onpointerdown={pressOnEmpty}
   aria-label="Video editor"
   data-drop-region="video-editor"
 >
@@ -805,7 +830,12 @@
         class="h-1.5 w-full shrink-0 cursor-row-resize touch-none bg-transparent hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
       />
       <div class="flex min-h-32 flex-1 flex-col">
-        <VideoEditTimeline {editor} tools={timelineTools} contextActions={timelineContextActions} />
+        <VideoEditTimeline
+          {editor}
+          tools={timelineTools}
+          addTrack={timelineAddTrack}
+          contextActions={timelineContextActions}
+        />
       </div>
     {/if}
   {:else}<div class="p-3 text-xs text-muted">
