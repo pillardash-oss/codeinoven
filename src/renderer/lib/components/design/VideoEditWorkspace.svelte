@@ -691,10 +691,10 @@
       </div>{:else}<button
         type="button"
         class="titlebar-no-drag flex h-7 items-center gap-2 text-xs text-foreground hover:text-primary disabled:opacity-40"
-        title="Watch this composition in full screen"
-        aria-label="View in full screen"
+        title="Watch this composition fullscreen, without the editor"
+        aria-label="Fullscreen"
         disabled={!onPlayFullscreen || !editor.edit}
-        onclick={onPlayFullscreen}><CioMaximize size={13} />View in full screen</button
+        onclick={onPlayFullscreen}><CioMaximize size={13} />Fullscreen</button
       >{/if}
     <div class="min-w-0 flex-1"></div>
     {#if mode === 'embedded'}<button
