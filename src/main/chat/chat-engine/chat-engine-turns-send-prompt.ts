@@ -735,6 +735,9 @@ export class ChatEngineTurnsSendPrompt {
       this.host.state.mermaidRepairAttempts.delete(sessionId)
       this.host.state.incompleteTurnRecoveryAttempts.delete(sessionId)
       this.host.state.searchNudgeAttempts.delete(sessionId)
+      // A user's own prompt supersedes any capacity continuation the app owed
+      // and starts a fresh budget: the next refusal is a new situation.
+      this.host.units['capacity-continue'].clear(sessionId)
       this.host.state.todoReconcileAttempts.delete(sessionId)
       this.host.state.taskReconcileTurns.delete(sessionId)
       // A new user prompt starts a fresh delivery accounting: an artifact the

@@ -747,6 +747,20 @@ export class ChatEngineTurns {
     this.host.units['assignment-workers'].observeChildSession(driverId, event)
 
     if (event.type === 'session.status') {
+      // A harness that reports the model's capacity refusal as a terminal
+      // status has not failed the work: the same session answers when it is
+      // asked to continue. Claim it here, before the failure becomes the
+      // turn's verdict, so no error card is painted for it.
+      if (
+        event.status.state === 'error' &&
+        this.host.units['capacity-continue'].claim(
+          driverId,
+          event.sessionId,
+          event.status.issue.rawError ?? event.status.issue.message
+        )
+      ) {
+        return
+      }
       // A terminal status carrying a usage/rate-limit reset is the unified
       // will-retry wait, not an error. Some harnesses (pi's `agent_settled`)
       // report the exhausted usage window through `session.status` instead of
@@ -1077,6 +1091,18 @@ export class ChatEngineTurns {
     if (event.type === 'session.error') {
       // A deliberate user stop must never surface as a session error.
       if (!this.host.state.userAbortedSessions.has(event.sessionId)) {
+        // A "model at capacity" refusal is recovered by asking the same
+        // session to continue. Claim it before any failure handling so the
+        // thread is never parked on an error card for it.
+        if (
+          this.host.units['capacity-continue'].claim(
+            driverId,
+            event.sessionId,
+            event.error ?? event.issue?.rawError
+          )
+        ) {
+          return
+        }
         const issue: AgentProviderIssue =
           event.issue ??
           this.host.units['providers-accounts'].fallbackProviderIssue(
@@ -1137,6 +1163,12 @@ export class ChatEngineTurns {
       if (event.compaction) {
         Logger.dev('compaction message errored (session stays healthy):', event.error)
       } else if (!this.host.state.userAbortedSessions.has(event.sessionId)) {
+        // Same capacity recovery as the structured session error above: a
+        // harness that reports the refusal as an errored completion gets a
+        // continuation instead of a failed turn.
+        if (this.host.units['capacity-continue'].claim(driverId, event.sessionId, event.error)) {
+          return
+        }
         const issue: AgentProviderIssue =
           event.issue ??
           this.host.units['providers-accounts'].fallbackProviderIssue(
@@ -1162,6 +1194,11 @@ export class ChatEngineTurns {
     }
     // Everything else broadcasts directly to renderers.
     this.host.broadcast(event)
+    // A completed assistant answer proves the provider recovered, so the
+    // capacity-continue budget starts fresh for the next failure.
+    if (event.type === 'message.completed' && !event.error && !event.compaction) {
+      this.host.units['capacity-continue'].succeed(event.sessionId)
+    }
   }
 
   /** Late tool claims (see the reopen call site) attach to the just-settled

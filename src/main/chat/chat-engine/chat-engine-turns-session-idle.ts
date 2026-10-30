@@ -17,6 +17,11 @@ import {
   searchNudgePromptForProse
 } from '../not-available-detector'
 import {
+  CAPACITY_CONTINUE_MESSAGE,
+  CAPACITY_CONTINUE_PROMPT,
+  stripCapacityContinueErrors
+} from '../../../lib/capacity-continue'
+import {
   visualDeliverableRepairPrompt,
   visualDeliverableRequest
 } from '../visual-deliverable-guard'
@@ -222,6 +227,15 @@ export class ChatEngineTurnsSessionIdle {
       // failed worker. The thread's own status already says `interrupted`.
       const userAborted = this.host.state.userAbortedSessions.has(sessionId)
       if (userAborted) stripAbortedRunErrors(merged)
+      // A provider that answered "model at capacity" has not given this turn a
+      // verdict: the engine claimed that failure for a silent continuation when
+      // it arrived (see `ChatEngineCapacityContinue`), and this finalization is
+      // where that continuation is issued. Read the claim before the verdict is
+      // decided so the transcript and the status never carry an error the app
+      // already recovered from.
+      const capacityOwed = userAborted
+        ? undefined
+        : this.host.units['capacity-continue'].owed(sessionId)
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
       // A thread that has already moved to another session discarded this one:
       // an edited or deleted turn is re-sent on a replacement session, that
@@ -272,6 +286,14 @@ export class ChatEngineTurnsSessionIdle {
       if (!userAborted && erroredSession?.state === 'error' && !failure) {
         failure = erroredSession.issue?.message ?? 'Agent session failed'
       }
+      // A capacity refusal is recovered by the continuation issued below, not
+      // by failing the turn, but only while there is a live thread with settings
+      // to continue on. Without one the failure stays and reaches the user as a
+      // real error instead of vanishing with the continuation.
+      const capacityContinuation =
+        capacityOwed !== undefined && liveThread !== null && liveThread.settings !== undefined
+      if (capacityContinuation) failure = undefined
+      else if (capacityOwed !== undefined) this.host.units['capacity-continue'].clearOwed(sessionId)
       const awaitingUser = this.host.units['turns-sessions'].sessionAwaitsUserInput(sessionId)
       const engineeringContractActive =
         this.host.state.engineeringImplementationSessions.has(sessionId)
@@ -285,6 +307,7 @@ export class ChatEngineTurnsSessionIdle {
         !assistantAdmitsIncompleteSpec(contractResponse)
       if (contractCompleted) this.host.state.engineeringImplementationSessions.delete(sessionId)
       const missingFinalResponse =
+        !capacityContinuation &&
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
@@ -308,7 +331,13 @@ export class ChatEngineTurnsSessionIdle {
         failure = INCOMPLETE_TURN_MESSAGE
       }
       let mermaidFailures: MermaidValidationFailure[] = []
-      if (!failure && !awaitingUser && !suppressTerminalAnswer && terminalAssistant) {
+      if (
+        !capacityContinuation &&
+        !failure &&
+        !awaitingUser &&
+        !suppressTerminalAnswer &&
+        terminalAssistant
+      ) {
         const validation = await validateMermaidOutput(assistantText(terminalAssistant))
         mermaidFailures = validation.failures
         if (mermaidFailures.length === 0) {
@@ -334,6 +363,7 @@ export class ChatEngineTurnsSessionIdle {
           }
         }
       }
+      if (capacityContinuation) stripCapacityContinueErrors(merged)
       if (!mirrorOrphaned) {
         await this.host.threadManager.upsertMessages(
           info.projectId,
@@ -363,7 +393,7 @@ export class ChatEngineTurnsSessionIdle {
           parentTurnId ?? turnAssistant.id,
           turnAssistant,
           turnResponses.length > 0 ? turnResponses : [turnAssistant],
-          failure
+          capacityOwed ?? failure
         )
       }
       if (parentTurnId && turnAssistant) {
@@ -405,6 +435,56 @@ export class ChatEngineTurnsSessionIdle {
         void this.host.harnessManifest
           .recordInUse(info.driverId)
           .catch((error) => Logger.dev('Harness manifest in-use confirmation failed:', error))
+      }
+      // The provider refused this turn for capacity and the engine already
+      // claimed it. Issue the continuation here, after the attempt has been
+      // recorded and its turn utilities released, so the failed run is fully
+      // torn down before the same session is asked anything: a prompt sent
+      // while the transport still owns the turn is rejected or interleaved.
+      // `Continue.` is exactly what the user types by hand for this failure,
+      // and it keeps the harness on its own work instead of starting a new
+      // task. Every harness reaches this point, because the claim travels on
+      // the session, not on a driver-specific code path.
+      if (capacityContinuation && capacityOwed !== undefined && liveThread?.settings) {
+        this.host.units['capacity-continue'].clearOwed(sessionId)
+        await this.host.units['transcripts'].finishCheckpoint(
+          sessionId,
+          info,
+          'failed',
+          CAPACITY_CONTINUE_MESSAGE
+        )
+        await this.host.units['utilities'].cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
+        turnUtilitiesCleaned = true
+        if (pendingMemory) this.host.state.pendingMemoryDecisions.set(sessionId, pendingMemory)
+        try {
+          await this.host.sendPrompt(
+            info.projectId,
+            info.threadId,
+            liveThread.settings,
+            CAPACITY_CONTINUE_PROMPT,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal'
+          )
+          return
+        } catch (error) {
+          // The continuation itself could not be admitted (the session died,
+          // the provider refused the new turn). Surface the capacity failure as
+          // the turn's verdict instead of stranding the thread on a card that
+          // says it is working with nothing running.
+          Logger.error('Capacity continuation could not be admitted', {
+            projectId: info.projectId,
+            threadId: info.threadId,
+            sessionId,
+            error: rawErrorMessage(error)
+          })
+          this.host.units['capacity-continue'].clear(sessionId)
+          failure = capacityOwed
+        }
       }
       if (mermaidFailures.length > 0 && !failure && liveThread?.settings) {
         this.host.state.mermaidRepairAttempts.set(sessionId, 1)

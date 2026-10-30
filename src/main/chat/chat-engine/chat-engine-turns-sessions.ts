@@ -495,6 +495,7 @@ export class ChatEngineTurnsSessions {
     this.host.state.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.host.state.engineeringImplementationSessions.delete(sessionId)
     this.host.state.searchNudgeAttempts.delete(sessionId)
+    this.host.state.capacityContinues.delete(sessionId)
     this.host.state.visualDeliverableNudges.delete(sessionId)
     this.host.state.artifactRenderedSessions.delete(sessionId)
     this.host.state.todoReconcileAttempts.delete(sessionId)
@@ -1186,6 +1187,7 @@ export class ChatEngineTurnsSessions {
     this.host.state.mermaidRepairAttempts.delete(sessionId)
     this.host.state.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.host.state.searchNudgeAttempts.delete(sessionId)
+    this.host.state.capacityContinues.delete(sessionId)
     this.host.state.pendingSpecRevisions.delete(sessionId)
     this.host.state.pendingBrainstormTurns.delete(sessionId)
     // The turn is settling without an idle of its own, so nothing else will

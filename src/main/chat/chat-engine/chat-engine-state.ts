@@ -1,5 +1,6 @@
 import { createWorkQueue } from '../../../lib/bounded-work'
 import type { HistoryHandoffSummary } from './chat-engine-message-text'
+import type { CapacityContinueState } from './chat-engine-capacity-continue'
 import { join, resolve } from 'path'
 import type { Server } from 'http'
 import { BrainstormAlignmentNotes } from '../brainstorm-alignment-notes'
@@ -192,6 +193,14 @@ export class ChatEngineState {
 
   /** Number of hidden continuations issued after a turn ended without a final response. */
   incompleteTurnRecoveryAttempts = new Map<string, number>()
+
+  /**
+   * Automatic "Continue" recovery for a provider that answered "model at
+   * capacity", keyed by session (see `ChatEngineCapacityContinue`). The budget
+   * is consecutive: a successful answer, a user prompt, or a session teardown
+   * clears it.
+   */
+  capacityContinues = new Map<string, CapacityContinueState>()
 
   /**
    * Threads whose assistant model fallback resume is in flight, keyed

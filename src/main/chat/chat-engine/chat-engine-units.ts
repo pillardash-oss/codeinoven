@@ -31,6 +31,7 @@ import { ChatEngineAssistantAuthoring } from './chat-engine-assistant-authoring'
 import { ChatEngineThreadsDelete } from './chat-engine-threads-delete'
 import { ChatEngineTemporaryChats } from './chat-engine-temporary-chats'
 import { ChatEngineTurnsSteer } from './chat-engine-turns-steer'
+import { ChatEngineCapacityContinue } from './chat-engine-capacity-continue'
 import { ChatEngineAssignmentRun } from './chat-engine-assignment-run'
 import { ChatEngineTurnsSendPrompt } from './chat-engine-turns-send-prompt'
 import { ChatEngineBrainstorm } from './chat-engine-brainstorm'
@@ -92,6 +93,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'threads-delete': new ChatEngineThreadsDelete(engine),
     'temporary-chats': new ChatEngineTemporaryChats(engine),
     'turns-steer': new ChatEngineTurnsSteer(engine),
+    'capacity-continue': new ChatEngineCapacityContinue(engine),
     'assignment-run': new ChatEngineAssignmentRun(engine),
     'turns-send-prompt': new ChatEngineTurnsSendPrompt(engine),
     brainstorm: new ChatEngineBrainstorm(engine),
