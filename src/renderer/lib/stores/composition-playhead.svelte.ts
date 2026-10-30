@@ -191,11 +191,25 @@ class CompositionPlayhead {
     this.listeners.clear()
   }
 
+  /**
+   * Repairs made since an answer last arrived, and when the last one was made.
+   *
+   * A composition's transport lives inside the page, and a page can lose it: a
+   * reload that outlived the install, a replaced document, a runtime the page threw
+   * away. Every read then answers nothing, which is a transport row stuck at zero
+   * beside a picture drawing its own frames. Bounded, because a page that keeps
+   * refusing must not be re-armed four times a second.
+   */
+  private revivals = 0
+  private revivedAt = 0
+
   private async read(): Promise<void> {
     if (this.reading) return
     this.reading = true
     try {
-      const next = await invoke('browser:transportState', this.tabId)
+      const next = await invoke('browser:transportState', this.tabId).catch(() => null)
+      if (next) this.revivals = 0
+      else this.revive()
       // An answer to a poll that was in flight when the last reader left is not a
       // playhead anymore: the tab has stopped being watched, and a surface that
       // attaches next must not be handed the second this one saw.
@@ -238,6 +252,21 @@ class CompositionPlayhead {
     // from the second the user left and it carrying on from zero.
     await this.command('seek', remembered.time)
     if (remembered.playing && !next.playing) await this.command('play')
+  }
+
+  /**
+   * Ask the page to arm itself again, and take the answer as the playhead.
+   *
+   * A transport command is what re-arms an unarmed document in main, so one pause is
+   * both the repair and the read: it cannot start a video the user did not start, and
+   * its answer is what the bar has been missing.
+   */
+  private revive(): void {
+    if (this.revivals >= 3) return
+    if (Date.now() - this.revivedAt < 2000) return
+    this.revivals += 1
+    this.revivedAt = Date.now()
+    void this.command('pause')
   }
 
   private apply(next: BrowserCompositionPlayback | null): void {

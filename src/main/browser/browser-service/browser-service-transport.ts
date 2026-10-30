@@ -242,8 +242,12 @@ export class BrowserServiceTransport {
     if (!tab || !tab.composition) return null
     const contents = liveContents(tab.view)
     if (!contents) return null
-    const result: unknown = await contents.executeJavaScript(compositionTransportStateScript())
-    const playback = toCompositionPlayback(result)
+    const playback = await contents
+      .executeJavaScript(compositionTransportStateScript())
+      .then((result: unknown) => toCompositionPlayback(result))
+      // A document that refuses the read has no transport to read: the same repair
+      // as an empty answer, and the renderer is told nothing rather than an error.
+      .catch(() => null)
     if (playback) {
       this.rearm.delete(tabId)
       return playback
