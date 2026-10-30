@@ -264,7 +264,7 @@ export function registerShellNavigationActions(
 
   registerAppControlAction({
     id: 'settings.open',
-    description: `Open a Settings page: profile, general, browser, memory, audits, design, cio-prompts, heartbeat, harnesses, utilities, computer-use, sound, keymap, cloud-deployments, ovens or about.`,
+    description: `Open a Settings page: profile, general, browser, memory, audits, design, cio-prompts, heartbeat, harnesses, utilities, computer-use, sound, keymap, cloud-deployments, llama-cpp, ovens or about.`,
     params: [{ name: 'section', required: true, description: 'The settings section id.' }],
     run: async (params) => {
       const section = readString(params, 'section')

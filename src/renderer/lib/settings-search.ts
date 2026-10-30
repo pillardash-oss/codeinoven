@@ -284,6 +284,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioMessage
   },
   {
+    id: 'llama-cpp',
+    section: 'llama-cpp',
+    title: 'Llama.cpp',
+    description: 'Manage local GGUF model servers, their binary, and their logs.',
+    keywords: ['llama', 'gguf', 'local model', 'llama-server', 'offline', 'inference'],
+    icon: CioServer
+  },
+  {
     id: 'archives',
     section: 'archives',
     title: 'Archives',

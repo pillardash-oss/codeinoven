@@ -1116,12 +1116,24 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
+    const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
     registerBaseUrlProviderIpc(storage)
+    // A started local server becomes usable without a second manual step: the
+    // same catalog refresh the model picker's own refresh button runs, so the
+    // `llama-cpp` base-URL provider picks up the model the server loaded.
+    registerLlamaCppIpc({
+      refreshProviderModels: async (projectId) => {
+        await state.chatEngine?.refreshProviderCatalog(projectId, {
+          force: true,
+          refreshModelCatalogs: false
+        })
+      }
+    })
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,

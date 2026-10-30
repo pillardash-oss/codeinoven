@@ -1,4 +1,5 @@
 import { DEFAULT_IDE_LANGUAGE_SERVERS } from '../../lib/ide-language-servers'
+import { readLlamaCppServers } from '../../lib/llama-cpp'
 import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
 import {
   BUNDLED_PI_FILE_POLICY,
@@ -141,7 +142,8 @@ const DEFAULT_CONFIG: AppConfig = {
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
-  sound: DEFAULT_SPEECH_SETTINGS
+  sound: DEFAULT_SPEECH_SETTINGS,
+  llamaCppServers: []
 }
 
 /**
@@ -423,6 +425,9 @@ export class StorageEngine {
       ),
       // Read tolerantly: a hand-edited value outside the bounds falls back to the
       // shipped retention instead of sweeping with a cutoff nobody chose.
+      // Read tolerantly: a hand-edited row is dropped instead of failing the
+      // launch, and a stored row list never needs a migration.
+      llamaCppServers: readLlamaCppServers(config?.llamaCppServers),
       cioCleanupRetentionDays: clampNumber(
         config?.cioCleanupRetentionDays,
         MIN_CIO_CLEANUP_RETENTION_DAYS,

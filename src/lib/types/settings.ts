@@ -530,6 +530,12 @@ export interface AppConfig {
   /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
   sound: import('../speech/types').SpeechSettings
   /**
+   * Local `llama-server` rows the app owns: a model, a bind address, and the
+   * flags that go with them. Read tolerantly, since a hand-edited row is
+   * dropped instead of failing the start.
+   */
+  llamaCppServers?: import('../llama-cpp').LlamaCppServerEntry[]
+  /**
    * Age in days after which CIO Cleanup deletes content of a workspace's `.cio`
    * scratch folder. Bounded to `MIN/MAX_CIO_CLEANUP_RETENTION_DAYS`.
    */
@@ -614,6 +620,7 @@ export type AppConfigPatch = Partial<
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'
     | 'sound'
+    | 'llamaCppServers'
     | 'cioCleanupRetentionDays'
     | 'cioCleanupExcludedCategories'
   >

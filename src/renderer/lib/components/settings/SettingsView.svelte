@@ -88,6 +88,7 @@
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import VideoPackagesSettings from './VideoPackagesSettings.svelte'
   import OvensSettings from './OvensSettings.svelte'
+  import LlamaCppSettings from './LlamaCppSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
@@ -1550,6 +1551,8 @@
           onNavigateSection('harnesses')
         }}
       />
+    {:else if section === 'llama-cpp'}
+      <LlamaCppSettings {config} {settingsReady} {updateConfig} />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'archives'}

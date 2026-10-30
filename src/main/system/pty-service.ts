@@ -80,6 +80,9 @@ const ALLOWED_COMMANDS = new Set([
   'brew',
   'winget',
   'rm',
+  // Llama.cpp: the server binary itself, launched from the Llama.cpp settings
+  // page. Homebrew is already allowed above for the install and update steps.
+  'llama-server',
   'git',
   'wsl',
   'sh',
