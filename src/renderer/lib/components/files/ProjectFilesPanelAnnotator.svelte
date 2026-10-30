@@ -184,7 +184,10 @@
     scheduleBubbleUpdate()
   }
 
-  function captureSelection(): void {
+  function captureSelection(event: PointerEvent): void {
+    // Only a primary press makes a selection: the right-click's release carries
+    // none, and reading it as one closed the menu that right-click opened.
+    if (event.button !== 0) return
     pendingSelection = captureDocumentSelection(documentRoot)
   }
 
@@ -292,6 +295,9 @@
     return trackLiveSelection(
       () => captureDocumentSelection(documentRoot),
       (candidate) => {
+        // A menu opened for an annotation quotes that annotation, not the
+        // document selection, so an empty selection cannot describe it.
+        if (!candidate && pendingSelection?.referenceId) return
         if (!candidate && !selectionTouchesDocument()) return
         pendingSelection = candidate
       }

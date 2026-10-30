@@ -227,6 +227,10 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     $effect(() => {
       if (!this.root.sources.selectionMenuOpen) return
       return trackLiveSelection(captureResponseSelection, (candidate) => {
+        // A menu opened for an annotation quotes that annotation, not the
+        // document selection, so an empty selection cannot describe it and no
+        // longer takes the menu away.
+        if (!candidate && this.root.sources.responseSelection?.referenceId) return
         if (!candidate && !this.root.state.selectionTouchesResponses()) return
         this.root.sources.responseSelection = candidate
       })

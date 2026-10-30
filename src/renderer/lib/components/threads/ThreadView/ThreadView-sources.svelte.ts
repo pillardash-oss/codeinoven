@@ -127,7 +127,12 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
    *  the selection instead of once while the menu is open. */
   selectionMenuOpen = $derived(Boolean(this.responseSelection))
 
-  handleResponsePointerUp(): void {
+  handleResponsePointerUp(event: PointerEvent): void {
+    // Only a primary press makes a selection. A right-click reaches this
+    // container too, and its release carries no selection: treating that as one
+    // cleared the menu the right-click had just opened, which is why annotating
+    // an already-commented passage took several right-clicks to answer.
+    if (event.button !== 0) return
     this.responseSelection = captureResponseSelection()
   }
 
