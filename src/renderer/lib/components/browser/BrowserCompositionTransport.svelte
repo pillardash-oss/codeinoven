@@ -870,7 +870,7 @@
     <!-- The pen and its colour, mounted by the mark layer right where the pen was
          pressed. Finishing is the same control turned into a check mark, so the
          picture is the picture and nothing else. -->
-    <div class="flex shrink-0 items-center" bind:this={annotationToolbar}></div>
+    <div class="flex shrink-0 items-center empty:hidden" bind:this={annotationToolbar}></div>
   {:else}
     <button
       type="button"

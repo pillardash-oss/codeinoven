@@ -243,7 +243,37 @@ export class BrowserServiceTransport {
     const contents = liveContents(tab.view)
     if (!contents) return null
     const result: unknown = await contents.executeJavaScript(compositionTransportStateScript())
-    return toCompositionPlayback(result)
+    const playback = toCompositionPlayback(result)
+    if (playback) {
+      this.rearm.delete(tabId)
+      return playback
+    }
+    this.recoverUnarmed(tabId, tab)
+    return null
+  }
+
+  /** Attempts to arm a document that stopped answering, per tab. */
+  private readonly rearm = new Map<string, { at: number; tries: number }>()
+
+  /**
+   * Arm a composition whose transport has gone away.
+   *
+   * A tab records that its document was armed, and the page can still lose the
+   * runtime: a replaced document, a reload that outlived the install, a global the
+   * page reclaimed. Nothing would ever arm it again, so the transport row would sit
+   * at zero beside a picture drawing its own frames, and pressing play would command
+   * a transport that is not there. The record is dropped and the document armed again,
+   * no more than three times and never twice inside two seconds, so a page that keeps
+   * refusing is not re-evaluated four times a second.
+   */
+  private recoverUnarmed(tabId: string, tab: BrowserTab): void {
+    if (!tab.transport) return
+    const attempt = this.rearm.get(tabId) ?? { at: 0, tries: 0 }
+    if (attempt.tries >= 3) return
+    if (Date.now() - attempt.at < 2000) return
+    this.rearm.set(tabId, { at: Date.now(), tries: attempt.tries + 1 })
+    tab.transport = null
+    this.armCompositionQuietly(tabId, tab)
   }
 
   async sendTransport(

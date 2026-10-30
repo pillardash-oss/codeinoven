@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
@@ -885,12 +884,20 @@
     </div>
   {/if}
   {#if pageState.composition}
+    <!--
+      The playback row sits under the picture, not over it.
+
+      A player is watched, not titled: the row above a full screen video reads as a
+      window header full of controls the viewer has to find, and the control that
+      leaves the player was the last thing on the right of it. Under the picture it is
+      where a viewer already looks for a playhead, and the picture gets the height.
+    -->
     <div
       class={[
         'titlebar-no-drag flex shrink-0 items-stretch bg-surface',
+        compositionPlayer && 'order-last border-t border-b-0',
         compositionPlayer && !playerInEditor && 'h-10'
       ]}
-      style={compositionPlayer && !playerInEditor ? trafficLightInsetStyle() : undefined}
     >
       <div class="min-w-0 flex-1">
         <BrowserCompositionTransport
