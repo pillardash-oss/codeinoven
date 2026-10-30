@@ -6,6 +6,7 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { GATEWAY_TOOLS, gatewayToolForModel, initialGatewayTools } from '../../../lib/gateway-tools'
+import { withActionSummarySchema } from '../../../lib/tool-action-label'
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
@@ -853,7 +854,7 @@ export function buildUtilityGatewayScript(
   const tools = gatewayTools.map(gatewayToolForModel).map(({ name, description, inputSchema }) => ({
     name,
     description,
-    inputSchema
+    inputSchema: withActionSummarySchema(inputSchema)
   }))
   const routes: Record<string, string> = {}
   for (const tool of gatewayTools) routes[tool.name] = tool.route

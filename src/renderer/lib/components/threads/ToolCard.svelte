@@ -17,6 +17,7 @@
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { isCioToolName, isCodeModeToolName } from '$shared/agent-interactions'
+  import { isOpaqueId } from '$shared/tool-action-label'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
@@ -180,16 +181,19 @@
    * The name is tautology next to the label that already says what the call did
    * (`Shell : bun test`, not `Shell · command: bun test`), and for a call whose
    * first argument repeats the action (`edits: [...]` under an edit row) it made
-   * the row say the same word twice.
+   * the row say the same word twice. A value that names nothing, such as the
+   * opaque row id a `cio_util_use` call carries, is skipped for the first
+   * argument a reader can actually use.
    */
   function formatInput(input: Record<string, unknown>): string {
-    const entries = Object.entries(input)
-    if (entries.length === 0) return ''
-    const value = entries[0][1]
-    const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
-    if (!text) return ''
-    const preview = text.length > PREVIEW_MAX_CHARS ? `${text.slice(0, PREVIEW_MAX_CHARS)}…` : text
-    return `: ${preview}`
+    for (const [, value] of Object.entries(input)) {
+      const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
+      if (!text || (typeof value === 'string' && isOpaqueId(value))) continue
+      const preview =
+        text.length > PREVIEW_MAX_CHARS ? `${text.slice(0, PREVIEW_MAX_CHARS)}…` : text
+      return `: ${preview}`
+    }
+    return ''
   }
 
   /** Display-side threshold for giant tool strings. Mirrors the persistence

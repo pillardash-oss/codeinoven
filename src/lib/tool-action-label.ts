@@ -62,6 +62,9 @@ const APP_TOOL_ACTIONS: Record<string, string> = {
 /** Tool names that activate a utility, including the wording older skills use. */
 const UTILITY_ACTIVATE_TOOL_KEYS = new Set(['cio_util_init', 'cio_util_activate'])
 
+/** The tool name that invokes an operation on a utility. */
+const UTILITY_INVOKE_KEY = 'cio_util_use'
+
 /**
  * The core shell and file primitives, named by the one word that already is
  * their action.
@@ -87,9 +90,25 @@ const SHORT_TOOL_LABELS: Array<{ match: RegExp; label: string }> = [
 ]
 
 /**
+ * The field an agent fills with, in its own words, what the call accomplishes.
+ *
+ * The app's own tools declare it, so a model that wants the trace to read as the
+ * intent rather than the mechanics has somewhere to say so. Harness tools keep
+ * their own schemas, so the same words are also read from the free-text argument
+ * a harness exposes (`description` and friends) and the label falls back to the
+ * action itself when none of them is present.
+ */
+export const ACTION_SUMMARY_INPUT_KEY = 'action_summary'
+
+/** The instruction attached to that field wherever the app declares it. */
+export const ACTION_SUMMARY_SCHEMA_DESCRIPTION =
+  'Optional. One short phrase saying what this call accomplishes, shown to the user in place of the raw tool name.'
+
+/**
  * Input fields in which a model states, in its own words, what the call does.
- * Harnesses that expose one (Claude Code's `Bash`, Codex's shell) hand the trace
- * the friendliest label available, so it outranks every name heuristic.
+ * `action_summary` is the app's own field and outranks the harness conventions,
+ * because a model that fills it is labelling this trace, not describing the
+ * call's parameters.
  */
 const MODEL_LABEL_INPUT_KEYS = ['description', 'purpose', 'intent', 'label']
 
@@ -127,12 +146,70 @@ function appToolKey(tool: string): string | undefined {
   return toolNameSegments(tool).find((segment) => segment.startsWith('cio_'))
 }
 
-/** Human name for a utility id: `cio:browser` reads as "browser". */
+/**
+ * Add the action-summary field to a tool's JSON schema, so an agent can say what
+ * a call accomplishes instead of the trace naming the mechanics.
+ *
+ * Applied where the app publishes its own tool catalog, which is the only place
+ * the app owns the schema: a harness tool keeps the parameters its harness
+ * declares. A schema that already announces the field is returned unchanged.
+ */
+export function withActionSummarySchema(
+  inputSchema: Record<string, unknown>
+): Record<string, unknown> {
+  const properties = inputSchema['properties']
+  if (!properties || typeof properties !== 'object') return inputSchema
+  const fields = properties as Record<string, unknown>
+  if (fields[ACTION_SUMMARY_INPUT_KEY]) return inputSchema
+  return {
+    ...inputSchema,
+    properties: {
+      ...fields,
+      [ACTION_SUMMARY_INPUT_KEY]: {
+        type: 'string',
+        description: ACTION_SUMMARY_SCHEMA_DESCRIPTION
+      }
+    }
+  }
+}
+
+/** True for a value that names nothing a reader can use (an opaque row id). */
+export function isOpaqueId(value: string): boolean {
+  return /^[0-9a-f]{16,}$/iu.test(value.trim())
+}
+
+/** Turn an identifier into words: `svelte-autofixer` reads as "Svelte Autofixer". */
+function humanizeName(value: string): string {
+  return value
+    .trim()
+    .replace(/^cio:/iu, '')
+    .split(/[-_.\s]+/u)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
+/**
+ * The operation a utility call invoked, in words. This is the helpful half of a
+ * `cio_util_use` call: the utility id is often an opaque banked row id, while
+ * the operation (`svelte-autofixer`) is what actually happened.
+ */
+function utilityOperationName(input: Record<string, unknown>): string | undefined {
+  for (const key of ['operation', 'op', 'tool']) {
+    const value = input[key]
+    if (typeof value !== 'string') continue
+    const name = humanizeName(value)
+    if (name) return name
+  }
+  return undefined
+}
+
+/** Human name for a utility id: `cio:browser` reads as "Browser". */
 function utilityName(input: Record<string, unknown>): string | undefined {
   for (const key of ['utility_id', 'utilityId', 'id', 'name']) {
     const value = input[key]
-    if (typeof value !== 'string') continue
-    const name = value.trim().replace(/^cio:/iu, '').replace(/[-_]+/gu, ' ').trim()
+    if (typeof value !== 'string' || isOpaqueId(value)) continue
+    const name = humanizeName(value)
     if (name) return name
   }
   return undefined
@@ -149,6 +226,17 @@ function modelLabel(input: Record<string, unknown>): string | undefined {
     return label
   }
   return undefined
+}
+
+/** The app's own action-summary field, which a model fills only to label a call. */
+function actionSummaryLabel(input: Record<string, unknown>): string | undefined {
+  const value = input[ACTION_SUMMARY_INPUT_KEY] ?? input['actionSummary']
+  if (typeof value !== 'string') return undefined
+  const label = value.trim().replace(/\s+/gu, ' ')
+  if (!label) return undefined
+  return label.length > MODEL_LABEL_MAX_CHARACTERS
+    ? label.slice(0, MODEL_LABEL_MAX_CHARACTERS)
+    : label
 }
 
 /** Capitalize a lowercase action phrase for a row label. */
@@ -190,16 +278,30 @@ export interface ToolActionLabelSource {
  */
 export function toolActionLabel(source: ToolActionLabelSource): string | undefined {
   if (source.title?.trim()) return undefined
+  const input = source.input ?? {}
+  // The action summary is the model saying what this call is for, in the words a
+  // reader wants, so it outranks every name-shaped guess below it.
+  const summary = actionSummaryLabel(input)
+  if (summary) return capitalizeActionPhrase(summary)
   const appKey = appToolKey(source.tool)
   if (appKey && UTILITY_ACTIVATE_TOOL_KEYS.has(appKey)) {
-    const name = utilityName(source.input ?? {})
+    const name = utilityName(input)
     return name ? `Activated the ${name} utility` : 'Activated a utility'
+  }
+  if (appKey === UTILITY_INVOKE_KEY) {
+    // A utility id is often an opaque banked row id, which says nothing to a
+    // reader. Name the utility when its id is readable, and otherwise name the
+    // operation that actually ran (`Used Svelte Autofixer`).
+    const name = utilityName(input)
+    if (name) return `Used the ${name} utility`
+    const operation = utilityOperationName(input)
+    return operation ? `Used ${operation}` : 'Used a utility'
   }
   if (appKey && APP_TOOL_ACTIONS[appKey]) {
     return capitalizeActionPhrase(APP_TOOL_ACTIONS[appKey])
   }
   if (source.codeMode === true) return undefined
-  const stated = source.input ? modelLabel(source.input) : undefined
+  const stated = modelLabel(input)
   if (stated) return capitalizeActionPhrase(stated)
   // The core primitives say everything in their own name, see SHORT_TOOL_LABELS.
   const short = shortToolLabel(source.tool)
