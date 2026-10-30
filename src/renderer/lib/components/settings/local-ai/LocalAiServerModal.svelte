@@ -259,16 +259,16 @@
         </label>
       </div>
       <label class="block space-y-1 text-xs font-medium">
-        <span>Extra flags</span>
-        <input
-          class={monoFieldClass}
+        <span>Extra flags · one per line</span>
+        <textarea
+          class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
           bind:value={extraFlags}
-          placeholder="--ctx-size 8192 --threads 8"
-        />
+          placeholder="--ctx-size 8192&#10;--threads 8"></textarea>
       </label>
       <p class="text-[0.6875rem] leading-relaxed text-muted">
         A host of <span class="font-mono">127.0.0.1</span> keeps the server on this machine;
-        <span class="font-mono">0.0.0.0</span> exposes it to your network.
+        <span class="font-mono">0.0.0.0</span> exposes it to your network. Quoting keeps a value
+        together, so <span class="font-mono">--alias "my local model"</span> stays one argument.
       </p>
     </fieldset>
 
