@@ -613,16 +613,40 @@ export class Database {
    * response; caller-owned LIMIT clauses are preserved inside an outer bound.
    * Falls back to the primary connection when no worker is available or the
    * worker fails.
+   *
+   * `deadlineMs` is for the reads an interactive surface is waiting on. The
+   * worker serializes every request with its maintenance passes through one
+   * single-flight queue, so a checkpoint, an integrity check or an FTS optimize
+   * ahead of an interactive read can hold it for as long as it takes. Past the
+   * deadline the caller is told the read timed out (`timedOut`) instead of being
+   * left pending: the request keeps running on the worker, but the caller can
+   * answer with what it already has. A deadline never falls back to the primary
+   * connection, because answering "slowly" on the main thread is exactly the
+   * freeze the deadline exists to prevent.
    */
   async queryViaWorker(
     sql: string,
     params: unknown[],
     maxRows: number,
-    options: { allowPrimaryFallback?: boolean } = {}
-  ): Promise<{ ok: boolean; rows: Record<string, unknown>[]; truncated: boolean; error?: string }> {
+    options: { allowPrimaryFallback?: boolean; deadlineMs?: number } = {}
+  ): Promise<{
+    ok: boolean
+    rows: Record<string, unknown>[]
+    truncated: boolean
+    error?: string
+    timedOut?: boolean
+  }> {
     const worker = this.maintenanceWorker
     if (worker?.isRunning()) {
-      const response = await worker.query(sql, params, maxRows)
+      const response = await raceWorkerQuery(worker.query(sql, params, maxRows), options.deadlineMs)
+      if (response === null)
+        return {
+          ok: false,
+          rows: [],
+          truncated: false,
+          error: `Database worker query exceeded ${options.deadlineMs} ms`,
+          timedOut: true
+        }
       if (response.ok) {
         return { ok: true, rows: response.rows ?? [], truncated: response.truncated ?? false }
       }
@@ -2466,6 +2490,27 @@ function truncateSqlForLog(sql: string): string {
   return singleLine.length > MAX_SLOW_OP_SQL_LENGTH
     ? `${singleLine.slice(0, MAX_SLOW_OP_SQL_LENGTH)}…`
     : singleLine
+}
+
+/**
+ * Await a worker request, but never longer than `deadlineMs`.
+ *
+ * Answers `null` when the deadline passes. The pending request is still
+ * handled (its rejection is observed) because it keeps running on the worker;
+ * it simply stops being something the caller waits on.
+ */
+async function raceWorkerQuery<T>(pending: Promise<T>, deadlineMs?: number): Promise<T | null> {
+  if (deadlineMs === undefined) return await pending
+  void pending.catch(() => undefined)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, deadlineMs))
+  })
+  try {
+    return await Promise.race([pending, timedOut])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 /**
