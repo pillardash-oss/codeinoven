@@ -24,10 +24,7 @@ const BEL = 0x07
 const DEFAULT_SHAPE: CursorShape = { style: 'bar', blinking: true }
 
 type DecoderState =
-  | { kind: 'idle' }
-  | { kind: 'esc' }
-  | { kind: 'csi'; params: string }
-  | { kind: 'skip' }
+  { kind: 'idle' } | { kind: 'esc' } | { kind: 'csi'; params: string } | { kind: 'skip' }
 
 function shapeForCode(code: number): CursorShape {
   switch (code) {
@@ -68,7 +65,13 @@ export class CursorShapeDecoder {
       if (this.state.kind === 'esc') {
         if (byte === CSI) {
           this.state = { kind: 'csi', params: '' }
-        } else if (byte === 0x5d || byte === 0x50 || byte === 0x58 || byte === 0x5e || byte === 0x5f) {
+        } else if (
+          byte === 0x5d ||
+          byte === 0x50 ||
+          byte === 0x58 ||
+          byte === 0x5e ||
+          byte === 0x5f
+        ) {
           // OSC (' ] ') and DCS/APC/PM ('P', 'X', '^', '_'): skip payloads.
           this.state = { kind: 'skip' }
         } else {

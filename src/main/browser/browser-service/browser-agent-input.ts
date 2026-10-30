@@ -110,7 +110,8 @@ export function normalizeAgentModifiers(value: unknown): AgentModifier[] {
     const trimmed = entry.trim().toLowerCase()
     if (trimmed.length === 0) continue
     const modifier = MODIFIER_ALIASES[trimmed]
-    if (!modifier) throw new TypeError(`"${entry}" is not a modifier; use shift, control, alt, or meta`)
+    if (!modifier)
+      throw new TypeError(`"${entry}" is not a modifier; use shift, control, alt, or meta`)
     if (!modifiers.includes(modifier)) modifiers.push(modifier)
   }
   return modifiers
@@ -238,7 +239,11 @@ export async function sendAgentMouse(
  */
 export async function dragAgentMouse(
   contents: WebContents,
-  request: { from: { x: number; y: number }; to: { x: number; y: number }; modifiers: AgentModifier[] }
+  request: {
+    from: { x: number; y: number }
+    to: { x: number; y: number }
+    modifiers: AgentModifier[]
+  }
 ): Promise<{ steps: number }> {
   const distance = Math.hypot(request.to.x - request.from.x, request.to.y - request.from.y)
   const steps = Math.max(2, Math.min(MAX_DRAG_STEPS, Math.round(distance / 24) + 2))

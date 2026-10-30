@@ -6,7 +6,5 @@
   "icon": "icon.svg",
   "monochrome": "mono.svg",
   "primaryColor": "#D97757",
-  "aliases": [
-    "claude"
-  ]
+  "aliases": ["claude"]
 }

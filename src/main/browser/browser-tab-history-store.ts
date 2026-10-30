@@ -27,7 +27,13 @@ import {
   parseBrowserTabHistorySnapshot,
   type BrowserTabHistoryRecord
 } from '../../lib/browser/browser-tab-history'
-import { ensureDir, getConfigRoot, isUnpackagedElectronLaunch, readJson, writeJson } from '../../lib/utils'
+import {
+  ensureDir,
+  getConfigRoot,
+  isUnpackagedElectronLaunch,
+  readJson,
+  writeJson
+} from '../../lib/utils'
 import { Logger } from '../system/logger'
 
 /**
@@ -89,7 +95,9 @@ export class BrowserTabHistoryStore {
       stored = null
     }
     if (stored !== null) {
-      for (const [tabId, record] of Object.entries(parseBrowserTabHistorySnapshot(stored).records)) {
+      for (const [tabId, record] of Object.entries(
+        parseBrowserTabHistorySnapshot(stored).records
+      )) {
         this.records.set(tabId, record)
       }
     }

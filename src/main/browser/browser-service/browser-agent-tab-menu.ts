@@ -30,13 +30,9 @@ export function showBrowserAgentTabMenu(
   return new Promise((resolve) => {
     let choice: BrowserAgentTabMenuChoice | null = null
     const menu = new Menu()
-    menu.append(
-      new MenuItem({ label: input.title || 'Agent conversation', enabled: false })
-    )
+    menu.append(new MenuItem({ label: input.title || 'Agent conversation', enabled: false }))
     menu.append(new MenuItem({ type: 'separator' }))
-    menu.append(
-      new MenuItem({ label: 'Rename', click: () => (choice = { action: 'rename' }) })
-    )
+    menu.append(new MenuItem({ label: 'Rename', click: () => (choice = { action: 'rename' }) }))
     menu.append(
       new MenuItem({ label: 'Copy thread ID', click: () => (choice = { action: 'copyThreadId' }) })
     )

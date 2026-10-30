@@ -184,10 +184,11 @@ export class NativeProviderConfigService {
     if (index < 0) return false
     const modalities = record(models[index])?.['input']
     if (Array.isArray(modalities) && modalities.includes('image')) return false
-    await updateJsonc(PI_MODELS_PATH, ['providers', providerId, 'models', index, 'input'], [
-      'text',
-      'image'
-    ])
+    await updateJsonc(
+      PI_MODELS_PATH,
+      ['providers', providerId, 'models', index, 'input'],
+      ['text', 'image']
+    )
     return true
   }
 
@@ -688,7 +689,9 @@ function serializePiModel(model: BaseUrlProviderModel): Record<string, unknown> 
     reasoning: model.reasoning,
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
     ...(model.maxOutputTokens ? { maxTokens: model.maxOutputTokens } : {}),
-    ...(model.vision === undefined ? {} : { input: model.vision === false ? ['text'] : ['text', 'image'] }),
+    ...(model.vision === undefined
+      ? {}
+      : { input: model.vision === false ? ['text'] : ['text', 'image'] }),
     ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
 }

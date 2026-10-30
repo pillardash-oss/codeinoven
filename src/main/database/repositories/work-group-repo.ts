@@ -378,8 +378,7 @@ export class WorkGroupRepo {
   }
 
   private requireGroup(projectId: string, groupId: string): WorkGroup {
-    if (typeof groupId !== 'string' || groupId === '')
-      throw new TypeError('A group id is required')
+    if (typeof groupId !== 'string' || groupId === '') throw new TypeError('A group id is required')
     const row = this.db.get<WorkGroupRow>(
       'SELECT id, kind, name, position, collapsed, created_at, updated_at FROM work_groups WHERE id = ? AND project_id = ?',
       groupId,

@@ -217,7 +217,9 @@ export class BrowserPermissionMemory {
     // read straight back into the live ledgers: every queued write (the clear
     // included) lands before this read starts.
     await this.writeChain
-    const persisted = await this.persistence.read<PersistedPermissionMemory>(resolvePermissionMemoryFile())
+    const persisted = await this.persistence.read<PersistedPermissionMemory>(
+      resolvePermissionMemoryFile()
+    )
     // A clear that landed while this read was in flight is newer than the file
     // it read, so the read is dropped rather than undoing the clear.
     if (generation !== this.generation) return

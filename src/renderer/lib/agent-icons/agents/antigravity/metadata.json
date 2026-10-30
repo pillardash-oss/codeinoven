@@ -6,8 +6,5 @@
   "icon": "icon.svg",
   "monochrome": "mono.svg",
   "primaryColor": "#3389F5",
-  "aliases": [
-    "agy",
-    "google-antigravity"
-  ]
+  "aliases": ["agy", "google-antigravity"]
 }

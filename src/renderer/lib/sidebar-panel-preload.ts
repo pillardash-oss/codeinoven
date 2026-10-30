@@ -30,29 +30,33 @@ import { loadPanelModule, PANEL_KEYS } from './lazy-panel'
 
 /** Warm the Git panel's module chunk so opening it is instant. */
 export function preloadGitPanelChunk(): Promise<unknown> {
-  return loadPanelModule(PANEL_KEYS.gitStatus, () =>
-    import('$lib/components/git/GitStatusPanel.svelte')
+  return loadPanelModule(
+    PANEL_KEYS.gitStatus,
+    () => import('$lib/components/git/GitStatusPanel.svelte')
   )
 }
 
 /** Warm the project file tree's module chunk so opening it is instant. */
 export function preloadFilesPanelChunk(): Promise<unknown> {
-  return loadPanelModule(PANEL_KEYS.projectFiles, () =>
-    import('$lib/components/files/ProjectFilesPanel.svelte')
+  return loadPanelModule(
+    PANEL_KEYS.projectFiles,
+    () => import('$lib/components/files/ProjectFilesPanel.svelte')
   )
 }
 
 /** Warm the diff panel's module chunk so opening it is instant. */
 export function preloadDiffPanelChunk(): Promise<unknown> {
-  return loadPanelModule(PANEL_KEYS.diffSidebar, () =>
-    import('$lib/components/files/DiffSidebarPanel.svelte')
+  return loadPanelModule(
+    PANEL_KEYS.diffSidebar,
+    () => import('$lib/components/files/DiffSidebarPanel.svelte')
   )
 }
 
 /** Warm the terminal panel's module chunk so opening a shell is instant. */
 export function preloadTerminalPanelChunk(): Promise<unknown> {
-  return loadPanelModule(PANEL_KEYS.terminal, () =>
-    import('$lib/components/terminal/TerminalPanel.svelte')
+  return loadPanelModule(
+    PANEL_KEYS.terminal,
+    () => import('$lib/components/terminal/TerminalPanel.svelte')
   )
 }
 

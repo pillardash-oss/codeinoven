@@ -106,8 +106,11 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
       )
       return stripThinking(normalized)
     }
-    const flags: SpeechRefinementFlags =
-      context?.flags ?? { smartCleanup: true, selfCorrection: true, preserveTechnical: true }
+    const flags: SpeechRefinementFlags = context?.flags ?? {
+      smartCleanup: true,
+      selfCorrection: true,
+      preserveTechnical: true
+    }
     const messages: ChatMessage[] = [
       {
         role: 'system',
@@ -209,7 +212,10 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
     child.once('exit', () => this.unregisterChild?.(pid))
     let buffered = ''
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => finish(new Error('llama-server did not report its port.')), 30_000)
+      const timeout = setTimeout(
+        () => finish(new Error('llama-server did not report its port.')),
+        30_000
+      )
       const finish = (failure?: Error): void => {
         clearTimeout(timeout)
         if (failure) reject(failure)
@@ -225,7 +231,9 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
         finish()
       })
       child.once('error', (error) => finish(error))
-      child.once('exit', () => finish(new Error(this.stderrTail.trim() || 'llama-server exited early.')))
+      child.once('exit', () =>
+        finish(new Error(this.stderrTail.trim() || 'llama-server exited early.'))
+      )
     })
     // Wait for model load to complete before accepting requests.
     await this.waitHealthy()

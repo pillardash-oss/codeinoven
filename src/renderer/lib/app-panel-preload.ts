@@ -30,15 +30,17 @@ import { loadPanelModule, PANEL_KEYS } from './lazy-panel'
 
 /** Warm the notification panel's module chunk so its first open is instant. */
 export function preloadNotificationPanelChunk(): Promise<unknown> {
-  return loadPanelModule(PANEL_KEYS.notifications, () =>
-    import('$lib/components/notifications/NotificationPanel.svelte')
+  return loadPanelModule(
+    PANEL_KEYS.notifications,
+    () => import('$lib/components/notifications/NotificationPanel.svelte')
   )
 }
 
 /** Warm the sticky-notes panel's module chunk so its first open is instant. */
 export function preloadStickyNotesPanelChunk(): Promise<unknown> {
-  return loadPanelModule(PANEL_KEYS.stickyNotes, () =>
-    import('$lib/components/notes/StickyNotesPanel.svelte')
+  return loadPanelModule(
+    PANEL_KEYS.stickyNotes,
+    () => import('$lib/components/notes/StickyNotesPanel.svelte')
   )
 }
 

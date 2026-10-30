@@ -126,7 +126,11 @@ function requireDesigns(input: Record<string, unknown>, key: string): string[] {
     if (typeof entry !== 'string' || entry.trim() === '')
       throw new TypeError('A design folder must be a project-relative path')
     const directory = stripView(entry.trim())
-    if (directory.startsWith('/') || directory.split('/').includes('..') || /^[a-zA-Z]:/u.test(directory))
+    if (
+      directory.startsWith('/') ||
+      directory.split('/').includes('..') ||
+      /^[a-zA-Z]:/u.test(directory)
+    )
       throw new TypeError(`"${entry}" is not a project-relative folder`)
     return directory
   })
@@ -219,8 +223,7 @@ export async function executeDesignGroupOperation(
   }
   if (action === 'view') {
     const view = input['view']
-    if (view !== 'cards' && view !== 'list')
-      throw new TypeError('"view" must be "cards" or "list"')
+    if (view !== 'cards' && view !== 'list') throw new TypeError('"view" must be "cards" or "list"')
     return done(
       repository.setView(context.projectId, kind, view),
       `The board now shows designs as ${view === 'cards' ? 'pictures' : 'a folded list'}.`

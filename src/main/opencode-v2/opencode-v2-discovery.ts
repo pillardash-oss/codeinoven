@@ -376,10 +376,8 @@ function queuedDiscovery<T>(
 export function discoverOpenCodeV2Catalog(
   options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}
 ): Promise<OpenCodeV2DiscoveryResult> {
-  return queuedDiscovery(
-    'catalog',
-    options,
-    (signal) => runOpenCodeV2Catalog({ ...options, signal })
+  return queuedDiscovery('catalog', options, (signal) =>
+    runOpenCodeV2Catalog({ ...options, signal })
   )
 }
 

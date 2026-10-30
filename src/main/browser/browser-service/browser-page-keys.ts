@@ -144,9 +144,7 @@ export class BrowserPageKeys {
     if (this.documents.get(contents) !== state) return
     state.pending = true
     contents
-      .executeJavaScriptInIsolatedWorld(PAGE_KEY_WORLD_ID, [
-        { code: pageKeyRelayInstallScript() }
-      ])
+      .executeJavaScriptInIsolatedWorld(PAGE_KEY_WORLD_ID, [{ code: pageKeyRelayInstallScript() }])
       .then((installed: unknown) => {
         if (installed !== true) throw new Error('page keyboard relay refused to install')
         return contents.executeJavaScriptInIsolatedWorld(PAGE_KEY_WORLD_ID, [

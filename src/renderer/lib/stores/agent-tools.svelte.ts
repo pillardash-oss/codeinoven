@@ -55,7 +55,10 @@ class AgentToolsStore {
           thread && settings?.harnessId && settings.providerId && settings.modelId
             ? `${thread.projectId}:${settings.harnessId}:${settings.providerId}:${settings.modelId}`
             : 'default'
-        const catalog = await (thread && settings?.harnessId && settings.providerId && settings.modelId
+        const catalog = await (thread &&
+        settings?.harnessId &&
+        settings.providerId &&
+        settings.modelId
           ? invoke(
               'agent:listTools',
               thread.projectId,
