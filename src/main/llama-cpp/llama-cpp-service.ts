@@ -96,7 +96,10 @@ async function readVersion(path: string): Promise<string> {
 export async function detectLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
   const [path, brew] = await Promise.all([findLlamaServer(), findHomebrew()])
   const installer: 'homebrew' | null = brew ? 'homebrew' : null
-  const version = path ? await readVersion(path) : ''
+  const [version, update] = await Promise.all([
+    path ? readVersion(path) : Promise.resolve(''),
+    readAvailableUpdate(brew)
+  ])
   return {
     platform: process.platform,
     installed: path.length > 0,
@@ -104,7 +107,60 @@ export async function detectLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {
     version,
     installer,
     installerPath: brew,
+    updateAvailable: update.updateAvailable,
+    latestVersion: update.latestVersion,
     detail: runtimeDetail(process.platform, path, installer)
+  }
+}
+
+/**
+ * Ask the installer whether a newer llama.cpp exists.
+ *
+ * Homebrew reports an out-of-date formula with a *non-zero* exit code, so the
+ * answer is read from stdout on success and on failure alike. `HOMEBREW_NO_AUTO_UPDATE`
+ * keeps the check to the local formula cache: a settings page must never decide
+ * whether an update exists by first downloading Homebrew's whole index.
+ */
+async function readAvailableUpdate(
+  brew: string
+): Promise<{ updateAvailable: boolean; latestVersion: string }> {
+  if (!brew) return { updateAvailable: false, latestVersion: '' }
+  try {
+    const { stdout } = await run(brew, ['outdated', '--json=v2', 'llama.cpp'], {
+      timeout: 20_000,
+      env: { ...process.env, HOMEBREW_NO_AUTO_UPDATE: '1' }
+    })
+    return parseOutdated(stdout)
+  } catch (error) {
+    const stdout =
+      typeof error === 'object' && error !== null && 'stdout' in error
+        ? String((error as { stdout?: unknown }).stdout ?? '')
+        : ''
+    return parseOutdated(stdout)
+  }
+}
+
+function parseOutdated(stdout: string): { updateAvailable: boolean; latestVersion: string } {
+  if (stdout.trim().length === 0) return { updateAvailable: false, latestVersion: '' }
+  try {
+    const body: unknown = JSON.parse(stdout)
+    if (typeof body !== 'object' || body === null)
+      return { updateAvailable: false, latestVersion: '' }
+    const formulae = (body as { formulae?: unknown }).formulae
+    if (!Array.isArray(formulae) || formulae.length === 0) {
+      return { updateAvailable: false, latestVersion: '' }
+    }
+    const first = formulae[0]
+    if (typeof first !== 'object' || first === null) {
+      return { updateAvailable: false, latestVersion: '' }
+    }
+    const latest = (first as { current_version?: unknown }).current_version
+    return {
+      updateAvailable: true,
+      latestVersion: typeof latest === 'string' ? latest.slice(0, 64) : ''
+    }
+  } catch {
+    return { updateAvailable: false, latestVersion: '' }
   }
 }
 

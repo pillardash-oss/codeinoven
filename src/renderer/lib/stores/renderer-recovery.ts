@@ -32,7 +32,7 @@ export type SettingsSection =
   | 'ide-mode'
   | 'cloud-deployments'
   | 'ovens'
-  | 'llama-cpp'
+  | 'local-ai'
   | 'archives'
   | 'about'
 
@@ -61,7 +61,7 @@ export type MainView =
   | 'settings-ide-mode'
   | 'settings-cloud-deployments'
   | 'settings-ovens'
-  | 'settings-llama-cpp'
+  | 'settings-local-ai'
   | 'settings-archives'
   | 'settings-about'
 
@@ -196,7 +196,7 @@ export interface RecoveryStorage {
 
 const MAIN_VIEWS: readonly MainView[] = [
   'settings-ovens',
-  'settings-llama-cpp',
+  'settings-local-ai',
   'projects',
   'projects-scope',
   'chats',
@@ -238,7 +238,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'keymap',
   'ide-mode',
   'cloud-deployments',
-  'llama-cpp',
+  'local-ai',
   'archives',
   'about'
 ]

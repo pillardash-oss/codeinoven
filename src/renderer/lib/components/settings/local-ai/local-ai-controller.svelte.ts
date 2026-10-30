@@ -1,5 +1,5 @@
 /**
- * Live state for the Llama.cpp page: which rows the app started, what their
+ * Live state for the Local AI page's llama.cpp servers: which rows the app started, what their
  * logs say, and whether the server actually answers.
  *
  * A row is only "running" once its `/v1/models` endpoint answers, because a
@@ -17,6 +17,14 @@ import {
 } from '$shared/llama-cpp'
 
 export type LlamaCppServerStatus = 'stopped' | 'starting' | 'running' | 'failed'
+
+/** One Homebrew job the Local AI page runs in its docked terminal. */
+export interface BrewJob {
+  kind: 'install' | 'update' | 'uninstall'
+  terminalId: string
+  command: string
+  args: string[]
+}
 
 /** How many log lines a card keeps. */
 const LOG_LINE_LIMIT = 400
@@ -52,7 +60,7 @@ interface RunningHandle {
   partial: string
 }
 
-export class LlamaCppController {
+export class LocalAiController {
   status = $state<Record<string, LlamaCppServerStatus>>({})
   logs = $state<Record<string, string[]>>({})
   loadedModel = $state<Record<string, string>>({})
@@ -278,4 +286,4 @@ export class LlamaCppController {
   }
 }
 
-export const llamaCpp = new LlamaCppController()
+export const localAi = new LocalAiController()

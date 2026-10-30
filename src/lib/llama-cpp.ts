@@ -367,6 +367,10 @@ export interface LlamaCppRuntimeStatus {
   /** Package manager that can install or update llama.cpp here. */
   installer: 'homebrew' | null
   installerPath: string
+  /** True when the installer reports a newer llama.cpp than the one on disk. */
+  updateAvailable: boolean
+  /** Version the installer would move to, empty when there is nothing newer. */
+  latestVersion: string
   /** One sentence the card shows under the status. */
   detail: string
 }
