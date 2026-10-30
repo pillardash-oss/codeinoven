@@ -1553,6 +1553,7 @@ export class ThreadManager {
         applied: 0,
         skipped: 0,
         collisions: 0,
+        duplicatedPrompts: 0,
         total: 0,
         cursor: null,
         noop: false

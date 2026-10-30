@@ -663,6 +663,18 @@ export interface HarnessDriver {
   restoreNativeBinding?(projectPath: string, sessionId: string, threadId: string): Promise<boolean>
 
   /**
+   * Whether the driver's durable store still holds this session's record.
+   *
+   * A driver that keeps its sessions in app storage caches them in memory, so
+   * `loadMessages` keeps answering from the cache even after the record is gone
+   * and the failure only surfaces later, mid dispatch, as "CLI session is
+   * unavailable". This asks the store itself, which is the only way to notice a
+   * record another instance sharing this data root released. Drivers whose
+   * sessions live outside app storage omit it.
+   */
+  hasSessionRecord?(projectPath: string, sessionId: string): Promise<boolean>
+
+  /**
    * The session record this driver still holds for a thread, so the engine can
    * resume its native transcript after the thread moves back from another
    * harness. A harness switch is a branch, not a reset: the session parked by

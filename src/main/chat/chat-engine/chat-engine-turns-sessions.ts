@@ -1,4 +1,3 @@
-import { resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
@@ -140,10 +139,23 @@ export class ChatEngineTurnsSessions {
     const sessionOwnerAccount = thread.sessionId
       ? (thread.sessionAccountId ?? legacyHarnessAccountId(sessionOwner ?? driverId))
       : undefined
+    // An account id is only an identity while the registry can still resolve it.
+    // A reserve that never finalized belongs to the process that created it, so
+    // a thread stamped with one names no account at all after a restart: reading
+    // that as a second account made every single turn look like a harness
+    // switch, which parked the live session and minted a new one each time
+    // until a bound record was pruned out from under the thread. A managed
+    // account, by contrast, is listed in the registry even though its id keeps
+    // the reserve prefix   asking the prefix instead of the registry made a real
+    // account switch read as "no change", so the replaced account's session and
+    // credentials kept serving the turn after the user moved to another one.
+    const sessionOwnerAccountKnown =
+      await this.host.state.accountRegistry.isResolvableAccountId(sessionOwnerAccount)
+    const sessionAccountMoved = Boolean(
+      sessionOwnerAccount && sessionOwnerAccountKnown && sessionOwnerAccount !== accountId
+    )
     const switchedRuntime = Boolean(
-      thread.sessionId &&
-      sessionOwner &&
-      (sessionOwner !== driverId || sessionOwnerAccount !== accountId)
+      thread.sessionId && sessionOwner && (sessionOwner !== driverId || sessionAccountMoved)
     )
     const previousHarnessId = switchedRuntime ? sessionOwner : undefined
     const previousAccountId = switchedRuntime ? sessionOwnerAccount : undefined
@@ -175,6 +187,26 @@ export class ChatEngineTurnsSessions {
     let storedSessionMessages: AgentMessage[] = []
     let unavailableSessionId: string | undefined
     let nativeHistoryBound = false
+    if (sessionId) {
+      // A cached record proves nothing about the store: another instance
+      // sharing this data root can release a session while it stays cached
+      // here, and `loadMessages` keeps answering until the cache is dropped and
+      // the next dispatch dies with "CLI session is unavailable". Ask the
+      // driver's store first so the replacement below runs instead.
+      const recordPresent =
+        !driver.hasSessionRecord ||
+        (await driver.hasSessionRecord(projectPath, sessionId).catch(() => true))
+      if (!recordPresent) {
+        Logger.info('Stored harness session record is gone; creating a replacement', {
+          projectId,
+          threadId,
+          sessionId
+        })
+        this.retireSessionState(sessionId)
+        unavailableSessionId = sessionId
+        sessionId = undefined
+      }
+    }
     if (sessionId) {
       try {
         storedSessionMessages = await driver.loadMessages(projectPath, sessionId)
@@ -387,6 +419,27 @@ export class ChatEngineTurnsSessions {
     )
     const registered = this.host.sessionRegistry.get(sessionId)
     if (registered) registered.accountId = accountId
+    // Heal a binding stamped with a placeholder account. The reserve it names
+    // died with the process that created it, so keeping it would re-derive the
+    // same "different account" mismatch on every later turn.
+    if (
+      thread.sessionAccountId &&
+      !(await this.host.state.accountRegistry.isResolvableAccountId(thread.sessionAccountId))
+    ) {
+      try {
+        broadcastThreadUpdate(
+          await this.host.threadManager.setSessionId(
+            projectId,
+            threadId,
+            sessionId,
+            driverId,
+            accountId
+          )
+        )
+      } catch (error) {
+        Logger.dev('Session account binding could not be healed:', error)
+      }
+    }
     const recoveredTurnFinished = storedSessionMessages.at(-1)?.role === 'assistant'
     if (recoveredTurnFinished || (thread.status !== 'planning' && thread.status !== 'executing')) {
       const initialSpecKey = this.host.units['spec'].initialSpecKey(projectId, threadId)
