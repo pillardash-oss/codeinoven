@@ -10,7 +10,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * annotation, so the correction is pinned here rather than tested by hand in the app.
  */
 
-type Answer = { time: number; playing: boolean; duration: number; loop: boolean; error: string | null }
+type Answer = {
+  time: number
+  playing: boolean
+  duration: number
+  loop: boolean
+  error: string | null
+}
 
 const calls: { command: string; value: unknown }[] = []
 let answer: (command: string, value: unknown) => Answer | null = () => null
