@@ -561,7 +561,20 @@ export class VideoEditorController {
    */
   seek(seconds: number): void {
     this.time = Math.min(this.duration, snapEditTime(seconds, this.fps))
-    this.playhead?.seek(this.time)
+    ;(this.playhead ?? this.tabPlayhead())?.seek(this.time)
+  }
+
+  /**
+   * The tab's playhead, resolved from the tab itself when no surface attached one.
+   *
+   * The editor is mounted in more than one place for the same composition, and a
+   * surface that opens over it can be the one holding the attachment. A play/pause
+   * press is about the tab, so it finds the tab's playhead whether or not this view
+   * happens to be the one that attached it.
+   */
+  private tabPlayhead(): CompositionPlayhead | null {
+    const tabId = this.tabId
+    return tabId ? compositionPlayheadFor(tabId) : null
   }
   async paintBlur(): Promise<void> {
     if (this.playing && this.playhead) await this.playhead.command('pause')
@@ -576,7 +589,7 @@ export class VideoEditorController {
    * picture the user just started.
    */
   async togglePlayback(): Promise<void> {
-    const playhead = this.playhead
+    const playhead = this.playhead ?? this.tabPlayhead()
     if (!playhead) return
     const state = await playhead.command('toggle')
     if (state) this.adoptPlayback(state)
@@ -1036,6 +1049,28 @@ export class VideoEditorController {
       edit.duration = Math.max(edit.duration, clip.start + clip.duration)
     })
   }
+  /**
+   * The level of one track's mix, 0 to 2, as the header's slider and an agent both
+   * set it.
+   *
+   * Called on every pointer move while the slider is dragged, so the caller opens a
+   * gesture first: a mix is one decision, and it should undo as one.
+   */
+  setTrackVolume(id: string, volume: number): void {
+    const level = Math.min(2, Math.max(0, Number.isFinite(volume) ? volume : 1))
+    const change = (edit: VideoStudioDocument['edit']): void => {
+      const track = edit?.tracks.find((track) => track.id === id)
+      if (track) track.volume = level
+    }
+    if (this.gestureBefore) this.updateGesture((_doc, edit) => change(edit))
+    else this.mutate((_doc, edit) => change(edit))
+  }
+  setTrackFlag(id: string, key: 'locked' | 'muted' | 'hidden'): void {
+    this.mutate((_doc, edit) => {
+      const track = edit.tracks.find((track) => track.id === id)
+      if (track) track[key] = !track[key]
+    })
+  }
   get canExtractAudio(): boolean {
     const clip = this.selectedClip
     const asset = this.edit?.assets.find((item) => item.id === clip?.assetId)
@@ -1059,7 +1094,8 @@ export class VideoEditorController {
         kind: 'audio' as const,
         locked: false,
         muted: false,
-        hidden: false
+        hidden: false,
+        volume: 1
       }
       const index = edit.tracks.findIndex((item) => item.id === clip.trackId)
       edit.tracks.splice(index + 1, 0, track)
@@ -1112,7 +1148,8 @@ export class VideoEditorController {
                 : 'Overlays',
         locked: false,
         muted: false,
-        hidden: false
+        hidden: false,
+        volume: 1
       }
       if (kind === 'audio') edit.tracks.push(track)
       else edit.tracks.unshift(track)

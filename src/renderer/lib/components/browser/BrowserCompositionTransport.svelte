@@ -386,7 +386,7 @@
     penArmed = true
     captureError = null
     await playhead.command('pause')
-    await holdFrameForPen()
+    await holdFrameForPen(shown)
   }
 
   /**
@@ -397,12 +397,12 @@
    * one. This is the half that captures, and it runs on every stop rather than once
    * when the pen is picked up.
    */
-  async function holdFrameForPen(): Promise<void> {
-    if (!penArmed || capturing || frameNote) return
+  async function holdFrameForPen(seconds: number): Promise<void> {
+    if (!penArmed || capturing) return
     capturing = true
     captureError = null
     try {
-      const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
+      const snapshot = await invoke('browser:captureCompositionFrame', tabId, seconds)
       if (snapshot) openAnnotation({ snapshot })
       else captureError = 'This composition is no longer open. Reopen it before annotating.'
     } catch (cause: unknown) {
@@ -441,37 +441,46 @@
   function closeAnnotation(resume = false): void {
     const held = frameNote !== null
     penArmed = false
-    heldFor = null
     frameNote = null
     annotationBounds = null
     if (held) returnFocus()
     if (held && resume) void playhead.command('play')
   }
 
+  /** What the picture was doing on the last look, so a change is a change. */
+  let penWasPlaying = false
+
   /**
-   * The pen stays in hand while the picture runs.
+   * The pen is a mode, and play/pause moves only the picture inside it.
    *
-   * A still of one frame cannot be the picture the user is watching, so resuming the
-   * video puts the still away; the pen is still armed, and the next stop captures the
-   * frame they paused on.
+   * Three rules, and every one of them is about the pen never leaving by itself:
+   *
+   * 1. Arming captures the frame the user stopped on and holds it, which is what
+   *    they draw on.
+   * 2. Playing hands the pane back, because a still cannot be the video the user
+   *    asked to watch. The pen is still in hand: this is the pause in the middle of
+   *    annotating, not the end of it.
+   * 3. Pausing takes the frame it stopped on again, so the very next thing the user
+   *    does is draw. Coming back for any other reason - a scrub, a step - leaves the
+   *    pen armed and does not re-cut the frame under it.
+   *
+   * Reading the transition rather than the state is what makes the second pause work
+   * every time: two presses a tenth of a second apart land on the same frame, and a
+   * capture keyed to the second instead of the change would skip it and leave the
+   * user looking at a video with no pen on it.
    */
   $effect(() => {
-    if (!penArmed || !frameNote || !playing) return
-    frameNote = null
-    annotationBounds = null
-  })
-
-  /** The second a frame was last captured for, so one stop is one capture. */
-  let heldFor = $state<number | null>(null)
-
-  /** A stop with the pen in hand is a frame to draw on. */
-  $effect(() => {
+    const now = playing
+    const was = penWasPlaying
+    penWasPlaying = now
     if (!penArmed) return
-    if (frameNote || capturing || playing) return
-    const second = shown
-    if (heldFor !== null && Math.abs(heldFor - second) < 0.001) return
-    heldFor = second
-    void holdFrameForPen()
+    if (now) {
+      if (!frameNote) return
+      frameNote = null
+      annotationBounds = null
+      return
+    }
+    if (was && !frameNote) void holdFrameForPen(shown)
   })
 
   /** The comment the open bubble starts with, read from the note it edits. */
