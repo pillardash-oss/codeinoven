@@ -449,6 +449,8 @@
 
   /** What the picture was doing on the last look, so a change is a change. */
   let penWasPlaying = false
+  /** Consecutive looks that agreed on a stopped picture. */
+  let penStopConfirmations = 0
 
   /**
    * The pen is a mode, and play/pause moves only the picture inside it.
@@ -475,12 +477,21 @@
     penWasPlaying = now
     if (!penArmed) return
     if (now) {
+      penStopConfirmations = 0
       if (!frameNote) return
       frameNote = null
       annotationBounds = null
       return
     }
-    if (was && !frameNote) void holdFrameForPen(shown)
+    // A stop has to be agreed twice before the frame is cut again. One answer that
+    // says "stopped" can be a stale read of an older document, and acting on it
+    // while the next answer says "playing" is a canvas that appears and disappears
+    // under the pen: the fight the user sees as flicker. Two answers of the same
+    // kind is a stopped picture, not a flapping report.
+    penStopConfirmations = was ? penStopConfirmations + 1 : 0
+    if (penStopConfirmations < 2) return
+    if (frameNote) return
+    void holdFrameForPen(shown)
   })
 
   /** The comment the open bubble starts with, read from the note it edits. */
