@@ -63,6 +63,30 @@ const APP_TOOL_ACTIONS: Record<string, string> = {
 const UTILITY_ACTIVATE_TOOL_KEYS = new Set(['cio_util_init', 'cio_util_activate'])
 
 /**
+ * The core shell and file primitives, named by the one word that already is
+ * their action.
+ *
+ * A sentence beside these is tautology: the row shows the command that ran or
+ * the file that changed right next to it, so "Ran a shell command : bun test"
+ * says the same thing twice. They read as the word they are, and every call
+ * whose action is genuinely less obvious keeps a phrase that explains it.
+ */
+const SHORT_TOOL_LABELS: Array<{ match: RegExp; label: string }> = [
+  {
+    match: /^(?:bash|shell|sh|zsh|cmd|powershell|pwsh|exec|execute|terminal|command)$/u,
+    label: 'Shell'
+  },
+  {
+    match:
+      /^(?:edit|edits|multiedit|strreplace|strreplaceeditor|applypatch|patch|filechange|fileedit|notebookedit)$/u,
+    label: 'Edit'
+  },
+  { match: /^(?:write|writefile|createfile|newfile|create)$/u, label: 'Write' },
+  { match: /^(?:read|readfile|cat|view|viewfile)$/u, label: 'Read' },
+  { match: /^(?:grep|glob|find|search|searchfiles|ripgrep|rg)$/u, label: 'Search' }
+]
+
+/**
  * Input fields in which a model states, in its own words, what the call does.
  * Harnesses that expose one (Claude Code's `Bash`, Codex's shell) hand the trace
  * the friendliest label available, so it outranks every name heuristic.
@@ -78,6 +102,18 @@ function toolNameSegments(tool: string): string[] {
     .toLowerCase()
     .split(/(?:__|[./:\s])/u)
     .filter(Boolean)
+}
+
+/** The bare name of a tool, without the namespace a harness prefixed to it. */
+function bareToolName(tool: string): string {
+  const last = toolNameSegments(tool).at(-1) ?? tool.toLowerCase()
+  return last.replace(/[^a-z0-9]/gu, '')
+}
+
+/** The one-word label for a core shell or file primitive, when it has one. */
+function shortToolLabel(tool: string): string | undefined {
+  const name = bareToolName(tool)
+  return SHORT_TOOL_LABELS.find(({ match }) => match.test(name))?.label
 }
 
 /**
@@ -165,6 +201,9 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
   if (source.codeMode === true) return undefined
   const stated = source.input ? modelLabel(source.input) : undefined
   if (stated) return capitalizeActionPhrase(stated)
+  // The core primitives say everything in their own name, see SHORT_TOOL_LABELS.
+  const short = shortToolLabel(source.tool)
+  if (short) return short
   const phrase = patternActionPhrase(source.tool)
   return phrase ? capitalizeActionPhrase(phrase) : undefined
 }

@@ -173,14 +173,23 @@
    *  every render; it is far beyond any width the row can show. */
   const PREVIEW_MAX_CHARS = 2_000
 
+  /**
+   * The call's own subject as the collapsed row shows it: the first argument's
+   * value behind a colon, with no argument name in front of it.
+   *
+   * The name is tautology next to the label that already says what the call did
+   * (`Shell : bun test`, not `Shell · command: bun test`), and for a call whose
+   * first argument repeats the action (`edits: [...]` under an edit row) it made
+   * the row say the same word twice.
+   */
   function formatInput(input: Record<string, unknown>): string {
     const entries = Object.entries(input)
     if (entries.length === 0) return ''
-    const first = entries[0]
-    const value = typeof first[1] === 'string' ? first[1] : JSON.stringify(first[1])
-    const preview =
-      value.length > PREVIEW_MAX_CHARS ? `${value.slice(0, PREVIEW_MAX_CHARS)}…` : value
-    return `${first[0]}: ${preview}`
+    const value = entries[0][1]
+    const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
+    if (!text) return ''
+    const preview = text.length > PREVIEW_MAX_CHARS ? `${text.slice(0, PREVIEW_MAX_CHARS)}…` : text
+    return `: ${preview}`
   }
 
   /** Display-side threshold for giant tool strings. Mirrors the persistence

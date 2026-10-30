@@ -22,7 +22,7 @@ function toolPart(
 
 describe('bounded tool output policy', () => {
   it('passes a labeled sub-cap part through by reference', () => {
-    const part = { ...toolPart('ok'), actionLabel: 'Read a file' }
+    const part = { ...toolPart('ok'), actionLabel: 'Read' }
     expect(capPersistedPart(part)).toBe(part)
   })
 
@@ -30,7 +30,7 @@ describe('bounded tool output policy', () => {
     const labeled = capPersistedPart(toolPart('ok'))
     expect(labeled.type).toBe('tool')
     if (labeled.type !== 'tool') return
-    expect(labeled.actionLabel).toBe('Read a file')
+    expect(labeled.actionLabel).toBe('Read')
     // A part that already carries its label is never rewritten again.
     expect(capPersistedPart(labeled)).toBe(labeled)
   })
