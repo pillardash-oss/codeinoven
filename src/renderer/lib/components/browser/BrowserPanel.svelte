@@ -902,6 +902,7 @@
           threadId={pageState.threadId}
           active={fullscreen || panelVisible}
           ownsPlaybackKey={!playerInEditor}
+          claimsFocus={fullscreen}
         />
       </div>
       {#if compositionPlayer && onExpandVideo}

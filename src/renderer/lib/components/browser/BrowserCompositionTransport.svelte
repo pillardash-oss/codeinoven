@@ -75,6 +75,15 @@
      * toggle twice and land back where the user started.
      */
     ownsPlaybackKey?: boolean
+    /**
+     * Whether this bar takes the caret when it appears.
+     *
+     * A full screen player opens over a modal that would otherwise put the caret in
+     * the first text field it finds, and a play/pause key typed there is a space in a
+     * box. The bar owns the key, so the bar takes the caret: focus is on the control
+     * the key belongs to from the first press.
+     */
+    claimsFocus?: boolean
   }
 
   let {
@@ -86,7 +95,8 @@
     threadId,
     titlebar = false,
     compact = false,
-    ownsPlaybackKey = true
+    ownsPlaybackKey = true,
+    claimsFocus = false
   }: Props = $props()
 
   /**
@@ -154,6 +164,14 @@
    */
   let annotationToolbar = $state<HTMLDivElement>()
   setAnnotationToolbarHost({ target: () => annotationToolbar })
+  /**
+   * Whether the pen is in hand.
+   *
+   * An armed pen outlives the frame it was picked up on: a user marks a moment, lets
+   * the video run, stops it again and marks the next one without leaving the tool.
+   * Only the check mark, Escape or the pen control itself puts it down.
+   */
+  let penArmed = $state(false)
   /** True while a frame is being drawn and kept, so a click cannot start two. */
   let capturing = $state(false)
   /** Why the last frame capture did not produce a picture. */
@@ -261,6 +279,9 @@
     const bar = root
     if (!(target instanceof HTMLElement) || !bar) return false
     if (bar.contains(target)) return true
+    // The pen draws in the pane the picture plays in, which is this player's own
+    // surface: a space pressed there is about the video under the pen.
+    if (target.closest('[data-annotation-surface]') !== null) return true
     const modal = target.closest('[aria-modal="true"]')
     return modal !== null && modal.contains(bar)
   }
@@ -276,6 +297,14 @@
     // A held key is one press, not a toggle at the keyboard's repeat rate.
     if (!event.repeat) togglePlay()
   }
+
+  /** The caret is taken once, when the control that answers the key exists. */
+  let claimedFocus = false
+  $effect(() => {
+    if (!claimsFocus || claimedFocus || !playButton || !active) return
+    claimedFocus = true
+    playButton.focus({ preventScroll: true })
+  })
 
   let root: HTMLDivElement | undefined
   $effect(() => {
@@ -352,12 +381,27 @@
    * the composition was playing in, which is where the user was already looking.
    */
   async function annotateFrame(): Promise<void> {
-    if (!canNote || capturing || frameNote) return
+    if (!canNote || capturing || penArmed) return
     rememberFocus()
+    penArmed = true
+    captureError = null
+    await playhead.command('pause')
+    await holdFrameForPen()
+  }
+
+  /**
+   * Hold the frame the picture stopped on, so the pen has something to draw on.
+   *
+   * A pen is armed for as long as the user is annotating, which outlasts any one
+   * frame: they mark a moment, let the picture run, stop it again and mark the next
+   * one. This is the half that captures, and it runs on every stop rather than once
+   * when the pen is picked up.
+   */
+  async function holdFrameForPen(): Promise<void> {
+    if (!penArmed || capturing || frameNote) return
     capturing = true
     captureError = null
     try {
-      await playhead.command('pause')
       const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
       if (snapshot) openAnnotation({ snapshot })
       else captureError = 'This composition is no longer open. Reopen it before annotating.'
@@ -388,19 +432,47 @@
   }
 
   /**
-   * Hand the pane back to the composition page.
+   * Put the pen down and hand the pane back to the composition page.
    *
-   * Resuming is the caller's choice: finishing an annotation with Escape leaves the
-   * picture held where the user stopped, while the continue key lets it run, so the
-   * next moment can be marked without reopening anything.
+   * This is the end of annotating, and the only thing that ends it: the pen's own
+   * check mark, Escape, or the pen control itself. Letting the picture run does not
+   * end it, because a user marking several moments in one pass never leaves the pen.
    */
   function closeAnnotation(resume = false): void {
-    if (!frameNote) return
+    const held = frameNote !== null
+    penArmed = false
+    heldFor = null
     frameNote = null
     annotationBounds = null
-    returnFocus()
-    if (resume) void playhead.command('play')
+    if (held) returnFocus()
+    if (held && resume) void playhead.command('play')
   }
+
+  /**
+   * The pen stays in hand while the picture runs.
+   *
+   * A still of one frame cannot be the picture the user is watching, so resuming the
+   * video puts the still away; the pen is still armed, and the next stop captures the
+   * frame they paused on.
+   */
+  $effect(() => {
+    if (!penArmed || !frameNote || !playing) return
+    frameNote = null
+    annotationBounds = null
+  })
+
+  /** The second a frame was last captured for, so one stop is one capture. */
+  let heldFor = $state<number | null>(null)
+
+  /** A stop with the pen in hand is a frame to draw on. */
+  $effect(() => {
+    if (!penArmed) return
+    if (frameNote || capturing || playing) return
+    const second = shown
+    if (heldFor !== null && Math.abs(heldFor - second) < 0.001) return
+    heldFor = second
+    void holdFrameForPen()
+  })
 
   /** The comment the open bubble starts with, read from the note it edits. */
   const momentComment = $derived(
@@ -668,6 +740,7 @@
 
 <div
   bind:this={root}
+  data-video-chrome
   class={[
     'titlebar-no-drag flex shrink-0 items-center border-b border-border bg-surface px-2',
     compact ? 'gap-1' : 'gap-2',
@@ -792,13 +865,19 @@
   {:else}
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-      aria-label="Annotate this frame"
-      title={canNote
-        ? 'Annotate this frame: circle an area and write why'
-        : 'Annotate a frame from the video panel'}
+      class={[
+        'flex h-7 w-7 shrink-0 items-center justify-center transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
+        penArmed ? 'bg-elevated text-foreground' : 'text-dimmed'
+      ]}
+      aria-label={penArmed ? 'Finish annotating' : 'Annotate this frame'}
+      aria-pressed={penArmed}
+      title={!canNote
+        ? 'Annotate a frame from the video panel'
+        : penArmed
+          ? 'Finish annotating: the pen stays in hand while the video plays, and comes back when you stop it'
+          : 'Annotate this frame: circle an area and write why'}
       disabled={!canNote || capturing}
-      onclick={() => void annotateFrame()}
+      onclick={() => (penArmed ? closeAnnotation() : void annotateFrame())}
     >
       <CioPencil size={13} />
     </button>

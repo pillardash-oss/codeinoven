@@ -72,13 +72,8 @@
    */
   function claimPlayerFocus(panel: HTMLElement): boolean {
     const play = panel.querySelector<HTMLElement>('[data-video-play]')
-    // The picture's own control when it is already drawn, and the editor's own
-    // surface otherwise: the panel's preview arrives by import, so the play control
-    // can be a frame away, and a claim that failed would put the caret back in the
-    // asset search field the space key must not be typed into.
-    const target = play ?? panel.querySelector<HTMLElement>('[data-drop-region="video-editor"]')
-    if (!target) return false
-    target.focus({ preventScroll: true })
+    if (!play) return false
+    play.focus({ preventScroll: true })
     return true
   }
 

@@ -343,6 +343,22 @@ body {
   outline-offset: 2px;
 }
 
+/*
+ * The video chrome never draws a focus ring.
+ *
+ * The player and the editor are driven by state they already show — a playing bar,
+ * a held frame, a pressed control — and the caret moves there by itself when a
+ * surface opens or a comment closes, so a ring around the play button, or around
+ * the editor the caret was moved into, is noise the user reads as a bug. Video
+ * chrome marks itself with `data-video-chrome` and keeps its own affordances.
+ */
+[data-video-chrome] :where(button, [tabindex], [role='slider']):focus,
+[data-video-chrome] :where(button, [tabindex], [role='slider']):focus-visible,
+[data-video-chrome]:focus,
+[data-video-chrome]:focus-visible {
+  outline: none;
+}
+
 /* Input fields, text areas, search bars and contenteditable regions never get
    an outline or focus ring — focus is communicated via border/background only.
    Plain (unlayered) rules beat Tailwind's layered ring utilities, so this holds

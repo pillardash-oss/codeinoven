@@ -603,7 +603,7 @@
     }
   }}
   class="flex h-full min-h-0 flex-col overflow-hidden bg-app"
-  tabindex="-1"
+  data-video-chrome
   aria-label="Video editor"
   data-drop-region="video-editor"
 >

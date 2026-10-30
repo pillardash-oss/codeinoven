@@ -22,6 +22,16 @@ const SCRUB_COALESCE_MS = 32
  */
 const SCRUB_TIMEOUT_MS = 1000
 
+/**
+ * How long a playhead survives the surface that was watching it.
+ *
+ * The editor and the player window are two surfaces on one tab, and moving between
+ * them tears one down before the other has mounted. That gap is a moment, so the
+ * last answer is kept for a while rather than for the life of the process: a tab
+ * reopened minutes later starts wherever its page is, not where the user left it.
+ */
+const HANDOFF_WINDOW_MS = 60_000
+
 /** The two transport commands a scrub uses: hold a frame, or move to one. */
 type ScrubCommand = 'seek' | 'freeze'
 
@@ -58,6 +68,19 @@ export type PlayheadListener = (state: BrowserCompositionPlayback) => void
 class CompositionPlayhead {
   /** The page's own answer, and the only place a playhead comes from here. */
   playback = $state.raw<BrowserCompositionPlayback | null>(null)
+
+  /**
+   * The last answer the page gave, kept across a surface change.
+   *
+   * A composition is watched in more than one window: the editor holds the picture,
+   * and the player window is opened on the same tab. The page keeps its own clock
+   * while the surface changes, but a page that is re-armed comes back at zero, and a
+   * viewer who asked to watch full screen expects the film to carry on from the
+   * second they left, not to start again. This is what the next surface restores.
+   */
+  private remembered: { time: number; playing: boolean; at: number } | null = null
+  /** True on the first answer after a surface change, so the handoff runs once. */
+  private handingOver = false
 
   /** How many surfaces are on screen reading this tab. The poll runs while > 0. */
   private leases = 0
@@ -150,6 +173,7 @@ class CompositionPlayhead {
 
   private start(): void {
     if (this.timer !== undefined) return
+    this.handingOver = this.remembered !== null
     void this.read()
     this.timer = setInterval(() => void this.read(), POLL_MS)
   }
@@ -175,7 +199,7 @@ class CompositionPlayhead {
       // An answer to a poll that was in flight when the last reader left is not a
       // playhead anymore: the tab has stopped being watched, and a surface that
       // attaches next must not be handed the second this one saw.
-      if (this.timer !== undefined) this.apply(next)
+      if (this.timer !== undefined) await this.handOver(next)
     } catch {
       // A tab can be closed while a poll is in flight.
     } finally {
@@ -183,9 +207,43 @@ class CompositionPlayhead {
     }
   }
 
+  /**
+   * Take the page's first answer after a surface change, restoring the film first.
+   *
+   * A page that kept its clock is already where the user left it, and its answer is
+   * the truth. A page that was re-armed comes back at the start, which is the one
+   * case where the app knows better: the second and the run the last surface showed
+   * are handed back to it, so the picture, the seek bar and the play button agree
+   * from the first frame of the new surface.
+   */
+  private async handOver(next: BrowserCompositionPlayback | null): Promise<void> {
+    if (!this.handingOver || !next) {
+      this.handingOver = false
+      this.apply(next)
+      return
+    }
+    this.handingOver = false
+    const remembered = this.remembered
+    if (!remembered || Date.now() - remembered.at > HANDOFF_WINDOW_MS || remembered.time <= 0.25) {
+      this.apply(next)
+      return
+    }
+    if (next.time >= remembered.time - 0.25) {
+      this.apply(next)
+      return
+    }
+    this.apply({ ...next, time: remembered.time, playing: remembered.playing })
+    // The seek is awaited before the play, because a play drops any scrub still
+    // waiting for its turn: the order is the difference between the film carrying on
+    // from the second the user left and it carrying on from zero.
+    await this.command('seek', remembered.time)
+    if (remembered.playing && !next.playing) await this.command('play')
+  }
+
   private apply(next: BrowserCompositionPlayback | null): void {
     if (!next) return
     this.playback = next
+    this.remembered = { time: next.time, playing: next.playing, at: Date.now() }
     for (const listener of this.listeners) listener(next)
   }
 
