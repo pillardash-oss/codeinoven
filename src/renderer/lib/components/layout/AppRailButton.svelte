@@ -18,7 +18,11 @@
     disabled?: boolean
     /** Symbolic key tokens from the keymap registry, shown in the tooltip chip. */
     shortcut?: readonly string[]
-    /** Icon colour when the item is active. */
+    /**
+     * Icon colour. A toned item keeps its colour in every state, so a status
+     * glyph such as the amber waiting clock reads while the rail is idle; the
+     * neutral `default` tone still dims until current or hovered.
+     */
     tone?: 'default' | 'primary' | 'danger' | 'accent'
     /** Spins the icon, for in-flight states such as a download. */
     spin?: boolean
@@ -59,16 +63,18 @@
         : 0
   )
 
-  /** Idle tools stay muted; only the current destination uses its active colour. */
-  const toneClass = $derived(
-    active
-      ? tone === 'danger'
-        ? 'text-danger'
-        : tone === 'accent'
-          ? 'text-accent'
-          : 'text-primary'
-      : 'text-dimmed hover:bg-elevated hover:text-muted'
-  )
+  /**
+   * Toned items (update status, errors) keep their colour even when the item is
+   * not the current destination: the tone *is* the message, so dimming it hides
+   * the only signal the user has that something needs attention. Neutral items
+   * stay dimmed until they are current or hovered.
+   */
+  const toneClass = $derived.by((): string => {
+    if (tone === 'danger') return 'text-danger hover:bg-elevated'
+    if (tone === 'accent') return 'text-accent hover:bg-elevated'
+    if (tone === 'primary') return 'text-primary hover:bg-elevated'
+    return active ? 'text-primary' : 'text-dimmed hover:bg-elevated hover:text-muted'
+  })
 </script>
 
 <!-- One rail item: the 32px tool button shared by the view rail's views and its
