@@ -375,12 +375,13 @@ export interface ScreenCanvasState {
 /**
  * How far a save-path change reaches, stated by the caller that asked for it.
  *
- * One change is either about a single folder or about the project, and there is
- * no third combination to guess: `work` moves the one folder the change names and
- * leaves the project's folder for new work alone, `project` points the project at
- * the new folder and moves every folder of that kind into it. The two sides used
- * to be spelled as separate booleans, which let a request mean one thing on the
- * board and another in the settings page.
+ * One change is either about a single folder or about where new work is written,
+ * and there is no third combination to guess: `work` moves the one folder the
+ * change names and leaves the project's folder for new work alone, `project`
+ * records the project's folder for new work and moves nothing, because a folder
+ * that already holds a design or a composition is not the setting's to move. The
+ * two sides used to be spelled as separate booleans, which let a request mean one
+ * thing on the board and another in the settings page.
  */
 export type WorkDetailsScope = 'work' | 'project'
 
@@ -392,7 +393,9 @@ export interface UpdateWorkDetails {
   name?: string
 }
 export interface UpdateWorkDetailsResult {
+  /** The folder the board should show: the moved folder, or the one it asked about. */
   directory: string
+  /** How many folders moved. A save-folder change moves none. */
   moved: number
 }
 
@@ -530,4 +533,3 @@ export interface ScreenBoardState {
   /** When the user last changed the arrangement (ms), or 0 when they never have. */
   updatedAt: number
 }
-

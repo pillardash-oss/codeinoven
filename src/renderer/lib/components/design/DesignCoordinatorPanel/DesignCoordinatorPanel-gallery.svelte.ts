@@ -302,7 +302,7 @@ export class DesignBoardGallery extends BoardUnit<DesignBoard> {
     }
   }
 
-  async detailsUpdated(directory: string, moved: number): Promise<void> {
+  async detailsUpdated(directory: string, moved: number, savedRoot?: string): Promise<void> {
     projectWorkState.selectDirectory(
       this.root.props.projectId,
       this.kind,
@@ -314,7 +314,13 @@ export class DesignBoardGallery extends BoardUnit<DesignBoard> {
     await projectWorkState.refresh(this.root.props.projectId, this.root.props.threadId)
     await this.loadGallery()
     await this.loadCanvas()
-    toast.success(`${moved} ${this.noun}${moved === 1 ? '' : 's'} updated`)
+    // A save folder is a setting, so the answer names where the next one lands
+    // rather than reporting folders that were deliberately left where they were.
+    toast.success(
+      savedRoot
+        ? `New ${this.noun}s are saved in ${savedRoot}`
+        : `${moved} ${this.noun}${moved === 1 ? '' : 's'} updated`
+    )
   }
 
   /**

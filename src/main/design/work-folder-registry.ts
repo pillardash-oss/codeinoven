@@ -6,7 +6,7 @@ import { ASSISTANT_SPACE_ID } from '../../lib/types'
 import type { Database } from '../database/database'
 import { isInsideProject } from '../preview/served-folder'
 import { holdsWorkOfKind, listProjectWorkFolders, readWorkFolder } from './design-listing'
-import { projectWorkRootPaths } from './work-roots-state'
+import { currentWorkRoot, projectWorkRootPaths } from './work-roots-state'
 
 interface FolderRow {
   directory: string
@@ -154,6 +154,30 @@ function isWorkspaceFolder(workspacePath: string, directory: string, root: strin
   return isInsideProject(workspacePath, resolve(workspacePath, directory))
 }
 
+/**
+ * Every folder of one kind on disk, read from the app default and from where the
+ * project currently writes.
+ *
+ * Both are scanned because a project that pointed its save folder at its own tree
+ * writes new work there, and a listing that only enumerated `.cio/designs` would
+ * leave that work invisible until something previewed it. Duplicates collapse on
+ * the folder's own path, so the default answering twice costs nothing.
+ */
+async function discoverWorkFolders(
+  projectPath: string,
+  projectId: string,
+  kind: AuthoredWorkKind
+): Promise<DesignEntry[]> {
+  const roots = [...new Set([DEFAULT_WORK_ROOTS[kind], currentWorkRoot(kind, projectId)])]
+  const found = new Map<string, DesignEntry>()
+  for (const root of roots) {
+    for (const entry of await listProjectWorkFolders(projectPath, root, kind)) {
+      if (!found.has(entry.directory)) found.set(entry.directory, entry)
+    }
+  }
+  return [...found.values()]
+}
+
 /** Exact work folders, independent of the thread currently previewing them. */
 export class WorkFolderRegistry {
   constructor(private readonly database: Database) {}
@@ -176,9 +200,13 @@ export class WorkFolderRegistry {
     projectPath: string,
     kind: AuthoredWorkKind
   ): Promise<DesignEntry[]> {
+    // The folders work is written INTO, and only those. A folder the project used
+    // to write into is not a container: the designs left behind in it are ordinary
+    // work, and treating that folder as a container hid every one of them the
+    // moment the project pointed its save folder somewhere else.
     const containers = new Set([
-      ...projectWorkRootPaths(projectId, 'design'),
-      ...projectWorkRootPaths(projectId, 'video'),
+      currentWorkRoot('design', projectId),
+      currentWorkRoot('video', projectId),
       DEFAULT_WORK_ROOTS.design,
       DEFAULT_WORK_ROOTS.video,
       '.cio'
@@ -202,7 +230,7 @@ export class WorkFolderRegistry {
       0
     )
     if (!legacy.ok) throw new Error('Could not read recorded work folders')
-    const discovered = await listProjectWorkFolders(projectPath, DEFAULT_WORK_ROOTS[kind], kind)
+    const discovered = await discoverWorkFolders(projectPath, projectId, kind)
     const discoveredByPath = new Map(discovered.map((entry) => [entry.directory, entry]))
     const inserts: Array<{ sql: string; params: unknown[] }> = []
     const register = (directory: string, created: number, updated: number): void => {

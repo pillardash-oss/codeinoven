@@ -503,8 +503,9 @@ export class DesignService {
           projectId,
           projectPath: scope.path,
           details,
-          // A project's save root is one stored setting for every design in it. A
-          // conversation workspace has no such setting: its root is the workspace
+          // A project's save folder is one stored setting: where its next design or
+          // composition is written, and never where the existing ones are moved to.
+          // A conversation workspace has no such setting: its root is the workspace
           // it runs in, and every assistant task shares one project id, so writing
           // it would repoint every other assistant's designs at once.
           projectScope: !scope.appOwned,

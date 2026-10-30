@@ -63,6 +63,22 @@
   const shownFullscreenTab = $derived(board.studio.shownFullscreenTab)
 
   /**
+   * The ways to change where a design or composition lives.
+   *
+   * Moving one and choosing the save folder are separate acts here, because they
+   * are separate in what they touch: a move takes that one folder, and a save folder
+   * decides where the next one is written. A conversation workspace keeps no save
+   * folder of its own, so it is offered the move and the rename only.
+   */
+  const detailsActions = $derived([
+    { mode: 'this' as const, label: `Move this ${board.gallery.noun}` },
+    ...(usesThreadWorkspaceMount(board.props.projectId)
+      ? []
+      : [{ mode: 'all' as const, label: 'Change save folder' }]),
+    { mode: 'rename' as const, label: `Rename ${board.gallery.noun}` }
+  ])
+
+  /**
    * Where the caret lands when the composition's full screen surface opens.
    *
    * A modal focuses its first field, and a player's first field is a search box, so
@@ -998,17 +1014,11 @@
                   class="z-50 min-w-48 border border-border bg-surface p-1 shadow-xl"
                   sideOffset={4}
                 >
-                  {#each [{ mode: 'this', label: 'Change this save path' }, { mode: 'all', label: 'Change all save paths' }, { mode: 'rename', label: `Rename ${board.gallery.noun}` }] as action (action.mode)}
+                  {#each detailsActions as action (action.mode)}
                     <DropdownMenu.Item
                       class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                      onSelect={() => {
-                        if (
-                          action.mode === 'this' ||
-                          action.mode === 'all' ||
-                          action.mode === 'rename'
-                        )
-                          board.state.detailsMode = action.mode
-                      }}>{action.label}</DropdownMenu.Item
+                      onSelect={() => (board.state.detailsMode = action.mode)}
+                      >{action.label}</DropdownMenu.Item
                     >
                   {/each}
                 </DropdownMenu.SubContent>
