@@ -41,6 +41,16 @@
     onSaved?: () => void
     onExport: () => void
     mode?: 'embedded' | 'fullscreen'
+    /**
+     * The composition alone, watched.
+     *
+     * Watching full screen is not a second player: it is this editor's own preview
+     * with the work taken away. The page, its transport and the playhead stay the
+     * ones the editor already has, so the second, the play button and the picture
+     * carry over instead of a new bar starting at zero beside a video that is
+     * already running.
+     */
+    playerOnly?: boolean
     preview?: Snippet
     onMinimize?: () => void
     onExpand?: () => void
@@ -55,6 +65,7 @@
     onSaved,
     onExport,
     mode = 'embedded',
+    playerOnly = false,
     preview,
     onMinimize,
     onExpand
@@ -619,7 +630,11 @@
     ]}
     style={mode === 'fullscreen' ? trafficLightInsetStyle() : undefined}
   >
-    {#if mode === 'fullscreen'}<div class="titlebar-no-drag flex w-64 shrink-0 items-center gap-2">
+    {#if playerOnly}<span class="titlebar-no-drag shrink-0 text-xs font-medium text-foreground"
+        >Video player</span
+      >{:else if mode === 'fullscreen'}<div
+        class="titlebar-no-drag flex w-64 shrink-0 items-center gap-2"
+      >
         <!--
           The surface names itself, and the picker beside it names the section.
 
@@ -648,26 +663,27 @@
         onclick={onExpand}><CioMaximize size={13} />Open Editor</button
       >{/if}
     <div class="min-w-0 flex-1"></div>
-    {@render action(
-      CioUpload,
-      'Export this composition as MP4',
-      () => {
-        void exportMovie()
-      },
-      editor.loading || editor.saving || !editor.document
-    )}
-    <button
-      type="button"
-      class="titlebar-no-drag ml-1 flex h-7 w-7 shrink-0 items-center justify-center bg-primary text-on-primary hover:opacity-90 disabled:opacity-30"
-      title={`Save the composition (${keymapState.labelFor('video-primary-action')})`}
-      aria-label="Save the composition"
-      disabled={!editor.dirty || editor.saving}
-      onclick={() => void save()}
-    >
-      {#if editor.saving}<CioSpinner size={12} class="animate-spin" />{:else}<CioSave
-          size={12}
-        />{/if}
-    </button>
+    {#if !playerOnly}{@render action(
+        CioUpload,
+        'Export this composition as MP4',
+        () => {
+          void exportMovie()
+        },
+        editor.loading || editor.saving || !editor.document
+      )}
+      <button
+        type="button"
+        class="titlebar-no-drag ml-1 flex h-7 w-7 shrink-0 items-center justify-center bg-primary text-on-primary hover:opacity-90 disabled:opacity-30"
+        title={`Save the composition (${keymapState.labelFor('video-primary-action')})`}
+        aria-label="Save the composition"
+        hidden={playerOnly}
+        disabled={!editor.dirty || editor.saving}
+        onclick={() => void save()}
+      >
+        {#if editor.saving}<CioSpinner size={12} class="animate-spin" />{:else}<CioSave
+            size={12}
+          />{/if}
+      </button>{/if}
     {#if mode === 'fullscreen' && onMinimize}{@render action(
         CioMinimize,
         'Return to the docked video editor',
@@ -708,7 +724,11 @@
       <CioSpinner size={14} class="animate-spin" />Loading editable tracks…
     </div>
   {:else if editor.edit}
-    {#if mode === 'fullscreen'}
+    {#if playerOnly}
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col bg-app" aria-label="Video preview">
+        {@render preview?.()}
+      </div>
+    {:else if mode === 'fullscreen'}
       <div
         class="grid min-h-40 shrink-0"
         style:height={`${shownUpperHeight}px`}

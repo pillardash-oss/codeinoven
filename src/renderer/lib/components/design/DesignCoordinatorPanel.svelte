@@ -1455,36 +1455,43 @@
   >
     {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
       {#key shownFullscreenTab.id}
-        {#if board.studio.compositionPlaybackOnly}
-          <BrowserPanel
-            tab={shownFullscreenTab}
-            fullscreen
-            minimizeTitle="Return to the board.gallery.video editor"
-            onMinimize={() => (board.studio.compositionPlaybackOnly = false)}
-          />
-        {:else}
-          <VideoEditWorkspace
-            projectId={board.props.projectId}
-            threadId={board.props.threadId}
-            directory={board.gallery.selected.directory}
-            tabId={board.gallery.boardTabId}
-            active={true}
-            mode="fullscreen"
-            onMinimize={board.studio.minimizeCompositionEditor}
-            onDirtyChange={board.studio.setStudioDirty}
-            onSaved={board.studio.setStudioSaved}
-            onExport={board.gallery.exportVideo}
-          >
-            {#snippet preview()}
-              <BrowserPanel
-                tab={shownFullscreenTab}
-                fullscreen
-                playerInEditor
-                onExpandVideo={() => (board.studio.compositionPlaybackOnly = true)}
-              />
-            {/snippet}
-          </VideoEditWorkspace>
-        {/if}
+        <!--
+          Watching the composition full screen is the same editor with the work put
+          away, never a second player.
+
+          The preview keeps the page, the transport and the playhead the editor already
+          has, so the second the user stopped on, the run state and the picture carry
+          straight over. A separate player started a row of its own at zero beside a
+          video that was already playing, which is the whole of the bug this replaces.
+        -->
+        <VideoEditWorkspace
+          projectId={board.props.projectId}
+          threadId={board.props.threadId}
+          directory={board.gallery.selected.directory}
+          tabId={board.gallery.boardTabId}
+          active={true}
+          mode="fullscreen"
+          playerOnly={board.studio.compositionPlaybackOnly}
+          onMinimize={board.studio.minimizeCompositionEditor}
+          onDirtyChange={board.studio.setStudioDirty}
+          onSaved={board.studio.setStudioSaved}
+          onExport={board.gallery.exportVideo}
+        >
+          {#snippet preview()}
+            <BrowserPanel
+              tab={shownFullscreenTab}
+              fullscreen
+              playerInEditor
+              minimizeTitle="Back to the editor"
+              onMinimize={board.studio.compositionPlaybackOnly
+                ? () => (board.studio.compositionPlaybackOnly = false)
+                : undefined}
+              onExpandVideo={board.studio.compositionPlaybackOnly
+                ? undefined
+                : () => (board.studio.compositionPlaybackOnly = true)}
+            />
+          {/snippet}
+        </VideoEditWorkspace>
       {/key}
     {/await}
   </FullscreenPanelDialog>
