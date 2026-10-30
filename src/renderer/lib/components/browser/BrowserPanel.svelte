@@ -913,7 +913,11 @@
       class={[
         'titlebar-no-drag flex shrink-0 items-stretch bg-surface',
         playerInEditor && 'order-last border-t border-border',
-        compositionPlayer && !playerInEditor && 'h-10'
+        // A composition shown without the editor is a whole full screen surface,
+        // so its transport row is the window title bar and takes the canonical
+        // `h-12` band: at `h-10` the row centred its controls two pixels above the
+        // macOS traffic lights drawn over it.
+        compositionPlayer && !playerInEditor && 'h-12'
       ]}
       style={compositionPlayer && !playerInEditor ? trafficLightInsetStyle() : undefined}
     >

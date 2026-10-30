@@ -797,7 +797,9 @@
   class={[
     'titlebar-no-drag flex shrink-0 items-center border-b border-border bg-surface px-2',
     compact ? 'gap-1' : 'gap-2',
-    titlebar ? 'h-10' : 'h-9'
+    // As the window title bar this row shares the canonical `h-12` band, so the
+    // play controls line up with the traffic lights drawn over the same strip.
+    titlebar ? 'h-12' : 'h-9'
   ]}
   role="group"
   aria-label={`Playback of ${composition.directory}`}

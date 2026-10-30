@@ -655,11 +655,18 @@
     This surface's own header stays at the top, where every full screen surface in
     this app keeps the thing it is showing and the way out of it. The playback row
     under the picture is a different row, moved by the panel that draws the page.
+
+    Full screen, this header is the window title bar, so it takes the canonical
+    `h-12` band the app header, a fullscreen modal's own title and the fullscreen
+    file editor all use. That height is what puts the title, the picker and the
+    macOS traffic lights on one centre line; a bespoke `h-10` band centred the
+    title two pixels above the lights and read as a header sagging under them.
+    The editor's embedded row in the board is not the title bar and keeps `h-9`.
   -->
   <div
     class={[
       'flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2',
-      mode === 'fullscreen' ? 'titlebar-drag h-10' : 'h-9'
+      mode === 'fullscreen' ? 'titlebar-drag h-12' : 'h-9'
     ]}
     style={mode === 'fullscreen' ? trafficLightInsetStyle() : undefined}
   >
