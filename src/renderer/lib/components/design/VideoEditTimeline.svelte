@@ -223,16 +223,14 @@
     )
   )
   /**
-   * The comments the lane draws, which are the ones a lane can honestly show.
+   * Every comment on this composition, notes and marks alike, as the lane draws them.
    *
-   * A video note is a comment on a moment and has nothing else on screen, so the lane
-   * is its home and its number is what the reader clicks. A frame annotation is a mark
-   * with a stroke drawn on the picture: it belongs on the frame it was drawn on, where
-   * the reader can see it and pick between the several comments one frame can carry.
-   * Drawing a mark on the lane as well put the same note in two places and made the
-   * count above the lane larger than the marks a reader could see.
+   * The lane is the index of the conversation: a note's number opens the note, and a
+   * mark's number takes the reader to the frame it was drawn on, where the marks show
+   * themselves and each of them opens its own comment. The count above the lane is
+   * this list, so the number and the marks always agree.
    */
-  const comments = $derived(allComments.filter((comment) => !comment.annotation))
+  const comments = $derived(allComments)
   const commentClusters = $derived(
     clusterTimelineMarks(
       comments,
@@ -601,6 +599,14 @@
   /** Seek to a comment and read it, which is what clicking its marker means. */
   function openComment(event: MouseEvent, comment: TimelineComment): void {
     editor.seek(comment.seconds)
+    // A mark is a stroke on a picture, so its number is a way to the frame rather than
+    // a way into a comment: the reader lands on the frame, sees every mark drawn there
+    // and picks the one they meant. One frame can carry several, and a bubble opened
+    // from the lane would have to guess which.
+    if (comment.annotation) {
+      if (editor.playing) void editor.togglePlayback()
+      return
+    }
     const marker = event.currentTarget
     if (!(marker instanceof HTMLElement)) return
     rememberCommentFocus()

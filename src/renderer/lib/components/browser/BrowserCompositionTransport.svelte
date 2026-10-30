@@ -490,7 +490,9 @@
   })
 
   /** The marks drawn on the second the picture is stopped on. */
-  const marksHere = $derived(frameNote ? [] : marksAt(shown))
+  const marksHere = $derived(marksAt(shown))
+  /** The marks of the frame actually held, which is the picture on screen. */
+  const marksHeld = $derived(frameNote ? marksAt(frameNote.snapshot.seconds) : [])
 
   /** The second a frame was last held for so its marks could be read. */
   let marksHeldFor: number | null = null
@@ -517,8 +519,9 @@
 
   /** A frame held only for its marks goes back to the page once they are elsewhere. */
   $effect(() => {
-    if (penArmed || !frameNote || playing) return
-    if (marksHere.length > 0) return
+    const held = frameNote
+    if (penArmed || !held || playing) return
+    if (marksHeld.length > 0 && Math.abs(held.snapshot.seconds - shown) < 0.001) return
     frameNote = null
     annotationBounds = null
     marksHeldFor = null
