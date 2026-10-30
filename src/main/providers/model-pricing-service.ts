@@ -209,6 +209,15 @@ export class ModelPricingService {
     }
   }
 
+  /**
+   * Resolves once the price catalog has settled (cache read, then any stale
+   * refresh). Never rejects: a failed load leaves the registry as it was, which
+   * is exactly what a caller that prices historical rows has to tolerate.
+   */
+  async whenReady(): Promise<void> {
+    await this.ensureLoaded().catch(() => undefined)
+  }
+
   private async refreshIfStale(): Promise<void> {
     if (Date.now() - this.lastFetchedAt < TTL_MS) return
     await this.refresh()

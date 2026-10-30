@@ -287,6 +287,18 @@ function resolvePrice(
   return resolveFamilyAlias(model, provider)
 }
 
+/**
+ * True when an id names a free tier, whose real price IS zero.
+ *
+ * The distinction matters on the way back in: a zeroed cost object from a
+ * gateway that runs a paid model must never be mistaken for a free tier, and a
+ * free tier must never be priced from its paid sibling.
+ */
+export function isFreeTierModelId(modelId: string | null | undefined): boolean {
+  const id = modelId?.trim().toLowerCase()
+  return id ? isFreeTierId(id) : false
+}
+
 /** Exported for callers that must record which entry priced a run. */
 export function resolveModelPriceEntry(
   modelId: string | null | undefined,

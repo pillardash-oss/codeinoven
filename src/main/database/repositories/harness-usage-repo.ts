@@ -1,6 +1,12 @@
 import { RECONCILE_THREAD_CONTEXT_USAGE_SQL } from '../thread-context-usage-sql'
 import { Logger } from '../../system/logger'
 import { purgeRowsViaWorker, type RowsPurged } from '../worker-purge'
+import {
+  catalogCostForRun,
+  needsCatalogPrice,
+  reconcileRecordedCost,
+  type UsageCostInput
+} from '../../providers/usage-cost-reconcile'
 import type { Database } from '../database'
 import type {
   AccountActivityDay,
@@ -179,6 +185,43 @@ function accountedTokenTotal(event: UsageEvent): number | null {
   return reported.length > 0 ? reported.reduce((sum, value) => sum + value, 0) : null
 }
 
+/** Integer column value, or null when the cell is not a finite integer. */
+function rowInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null
+}
+
+/** Nullable integer column value, preserving an unreported category as null. */
+function rowToken(value: unknown): number | null {
+  return rowInt(value)
+}
+
+/**
+ * One ledger row as the inputs the cost reconciliation reads. Numeric columns
+ * are re-typed from the worker's untyped row shape here, so no caller has to
+ * narrow them again.
+ */
+function usageCostInputFromRow(row: Record<string, unknown>): UsageCostInput {
+  const costStatus = row['cost_status']
+  return {
+    modelId: typeof row['model_id'] === 'string' ? row['model_id'] : null,
+    providerId: typeof row['provider_id'] === 'string' ? row['provider_id'] : null,
+    createdAt: rowInt(row['created_at']) ?? 0,
+    costStatus:
+      costStatus === 'known' || costStatus === 'estimated' || costStatus === 'unavailable'
+        ? costStatus
+        : 'unavailable',
+    costUsd:
+      rowInt(row['cost_usd']) ?? (typeof row['cost_usd'] === 'number' ? row['cost_usd'] : null),
+    tokens: {
+      uncachedInput: rowToken(row['tokens_uncached_input']),
+      cachedInput: rowToken(row['tokens_cached_input']),
+      cacheWrite: rowToken(row['tokens_cache_write']),
+      output: rowToken(row['tokens_output']),
+      reasoning: rowToken(row['tokens_reasoning'])
+    }
+  }
+}
+
 function rowToHarnessUsage(
   row: HarnessUsageRow,
   costStatus?: Pick<HarnessUsage, 'pricedCostEvents' | 'unavailableCostEvents'>
@@ -243,8 +286,9 @@ export class HarnessUsageRepo {
   /** Persist one immutable usage attempt. Replaying its stable identity is a no-op. */
   recordEvent(event: UsageEvent): void {
     try {
-      this.insertEvent(event)
-      this.reconcileContextCost(event)
+      const reconciled = reconcileRecordedCost(event)
+      this.insertEvent(reconciled)
+      this.reconcileContextCost(reconciled)
     } catch (error) {
       Logger.dev('Failed to record usage event; dropping telemetry', {
         feature: event.feature,
@@ -266,15 +310,16 @@ export class HarnessUsageRepo {
    */
   recordReplacingEvent(event: UsageEvent): void {
     try {
+      const reconciled = reconcileRecordedCost(event)
       this.db.transaction(() => {
         this.db.run(
           'DELETE FROM usage_events WHERE parent_turn_id = ? AND feature = ?',
           event.parentTurnId,
           event.feature
         )
-        this.insertEvent(event)
+        this.insertEvent(reconciled)
       })
-      this.reconcileContextCost(event)
+      this.reconcileContextCost(reconciled)
     } catch (error) {
       Logger.dev('Failed to replace usage event; dropping telemetry', {
         feature: event.feature,
@@ -353,6 +398,7 @@ export class HarnessUsageRepo {
   }
 
   /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
+  /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
   costCoverage(threadId?: string): UsageCostCoverage {
     const row = this.db.get<{
       known_usd: number
@@ -376,6 +422,74 @@ export class HarnessUsageRepo {
       unavailableEvents: row?.unavailable_events ?? 0,
       totalEvents: row?.total_events ?? 0
     }
+  }
+
+  /**
+   * Re-price ledger rows whose cost could not stand on its own when it was written.
+   *
+   * Rows are left unpriced for two reasons that are fixable later: the price
+   * catalog had not loaded yet when the run was recorded (it is fetched in the
+   * background, so an early run precedes it), or the provider answered with a
+   * zeroed cost object for a model the catalog prices. Both leave tokens in the
+   * ledger and no dollars, which is what makes the Usage page read as free.
+   *
+   * Runs after the catalog is available, bounded per batch, entirely on the
+   * maintenance worker connection so the Electron main thread never scans or
+   * writes the ledger. A row the catalog still cannot price keeps its recorded
+   * status: the cursor advances past it, so a launch never re-derives it.
+   */
+  async repriceUnpricedEvents(
+    options: { batchSize?: number; maxBatches?: number } = {}
+  ): Promise<{ scanned: number; updated: number }> {
+    const batchSize = Math.max(1, Math.min(options.batchSize ?? 200, 500))
+    const maxBatches = Math.max(1, options.maxBatches ?? 50)
+    let scanned = 0
+    let updated = 0
+    let cursor = 0
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      const page = await this.db.queryViaWorker(
+        `SELECT rowid AS row_id, id, model_id, provider_id,
+                tokens_uncached_input, tokens_cached_input, tokens_cache_write,
+                tokens_output, tokens_reasoning, created_at,
+                cost_status, cost_usd
+         FROM usage_events
+         WHERE rowid > ?
+           AND (cost_status = 'unavailable' OR (cost_status = 'known' AND cost_usd = 0))
+         ORDER BY rowid
+         LIMIT ?`,
+        [cursor, batchSize],
+        batchSize
+      )
+      if (!page.ok || page.rows.length === 0) break
+      scanned += page.rows.length
+      const statements: Array<{ sql: string; params: unknown[] }> = []
+      for (const row of page.rows) {
+        const rowId = rowInt(row['row_id'])
+        if (rowId !== null && rowId > cursor) cursor = rowId
+        const id = typeof row['id'] === 'string' ? row['id'] : ''
+        if (!id) continue
+        const candidate = usageCostInputFromRow(row)
+        if (!needsCatalogPrice(candidate)) continue
+        const correction = catalogCostForRun(candidate)
+        if (!correction) continue
+        statements.push({
+          sql: `UPDATE usage_events
+                SET cost_usd = ?, cost_status = 'estimated', pricing_provenance_json = ?
+                WHERE id = ?`,
+          params: [correction.costUsd, JSON.stringify(correction.pricingProvenance), id]
+        })
+      }
+      if (statements.length > 0) {
+        const write = await this.db.transactionViaWorker(statements)
+        if (!write.ok) {
+          Logger.error('Usage re-pricing batch failed:', write.error)
+          break
+        }
+        updated += statements.length
+      }
+      if (page.rows.length < batchSize) break
+    }
+    return { scanned, updated }
   }
 
   /** Economically comparable metrics for completed successful user turns. */

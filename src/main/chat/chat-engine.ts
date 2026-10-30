@@ -1770,6 +1770,19 @@ export class ChatEngine {
   async recoverPendingRankingGrades(): Promise<void> {
     return this.units['rankings-grade'].recoverPendingRankingGrades()
   }
+
+  /**
+   * Re-price ledger rows whose dollars were never recorded.
+   *
+   * The price catalog is fetched in the background, so a run that finishes
+   * before it loads leaves tokens without a price, and a gateway that answers
+   * with a zeroed cost object does the same. Settles the catalog first, then
+   * corrects what it can, bounded and on the maintenance worker.
+   */
+  async repriceUnpricedUsage(): Promise<{ scanned: number; updated: number }> {
+    await this.modelPricing?.whenReady()
+    return this.state.usageRepo.repriceUnpricedEvents()
+  }
   markTurnRankingUndone(threadId: string, sourceMessageId: string | undefined): number {
     return this.units['rankings'].markTurnRankingUndone(threadId, sourceMessageId)
   }
