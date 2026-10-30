@@ -361,7 +361,7 @@
    * genuinely a character or belongs to a dialog in front of this surface.
    */
   function handleContinueKeydown(event: KeyboardEvent): void {
-    if (!onContinue || activeEditingId) return
+    if (!onContinue || editorOnScreen) return
     if (typing(event) || dialogOwnsKeyboard(event)) return
     if (!keymapState.matches('video-annotation-continue', event)) return
     event.preventDefault()
@@ -377,7 +377,7 @@
     // The comment field owns Escape while it is open, so disarming here would
     // fight the editor for the same key. The pen dropdown owns its
     // own Escape for the same reason.
-    if (activeEditingId || penOpen) return
+    if (editorOnScreen || penOpen) return
     drawing = false
     draftPoints = []
     onArmedChange(false)
@@ -405,6 +405,16 @@
    * while it waits.
    */
   const editingOnThisPicture = $derived(editingMark ? marksThisPicture(editingMark) : false)
+
+  /**
+   * Whether a comment editor is on screen and owns the keyboard.
+   *
+   * Only a bubble the reader can actually see can hold the keys: a mark whose
+   * bubble is hidden because the playhead moved off its frame, or one a host has
+   * not surfaced yet, leaves the continue and finish keys to the picture rather
+   * than swallowing a press nobody can see the reason for.
+   */
+  const editorOnScreen = $derived(Boolean(editingMark && editingOnThisPicture && editorAnchor))
 
   /**
    * The marks that belong on the picture right now, in composer order.
@@ -612,7 +622,7 @@
   </button>
 </div>
 
-{#if editingMark && editingOnThisPicture && editorAnchor}
+{#if editingMark && editorOnScreen && editorAnchor}
   <ResponseAnnotationComment
     x={editorAnchor.x}
     y={editorAnchor.y}
