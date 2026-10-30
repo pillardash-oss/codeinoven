@@ -2,7 +2,7 @@
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCaptions from '@pdslng/cio-icon/CioCaptions.svelte'
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
-  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import { Popover } from 'bits-ui'
   import { onMount, tick, type Snippet } from 'svelte'
@@ -57,7 +57,7 @@
       id: 'exports',
       label: 'Exports',
       title: 'Render the composition and follow its jobs',
-      icon: CioDownload
+      icon: CioUpload
     }
   ]
 

@@ -530,7 +530,7 @@
     !editor.selection
   )}
   {@render action(
-    CioUpload,
+    CioDownload,
     'Import media and stickers into assets',
     () => {
       void editor.importFiles()
@@ -589,7 +589,7 @@
       >{/if}
     <div class="min-w-0 flex-1"></div>
     {@render action(
-      CioDownload,
+      CioUpload,
       'Export this composition as MP4',
       () => {
         void exportMovie()

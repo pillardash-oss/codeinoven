@@ -4,7 +4,7 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
-  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
@@ -264,7 +264,7 @@
               <ContextMenu.SubTrigger
                 class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated"
               >
-                <CioDownload size={13} class="shrink-0 text-muted" />
+                <CioUpload size={13} class="shrink-0 text-muted" />
                 Export
                 <CioForward size={13} class="ml-auto text-muted" />
               </ContextMenu.SubTrigger>
@@ -832,7 +832,7 @@
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={board.gallery.selected.directory === ''}
                 >
-                  <CioDownload size={13} class="shrink-0 text-muted" />
+                  <CioUpload size={13} class="shrink-0 text-muted" />
                   Export
                   <CioForward size={13} class="ml-auto text-muted" />
                 </DropdownMenu.SubTrigger>
