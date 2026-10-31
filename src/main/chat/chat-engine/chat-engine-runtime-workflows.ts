@@ -8,6 +8,7 @@ import { OvenRegistry } from '../../ovens/oven-registry'
 import { OvenService } from '../../ovens/oven-service'
 import { OvenHarnessService } from '../../ovens/oven-harness-service'
 import { OrchestrationDispatchRepo } from '../../database/repositories/orchestration-dispatch-repo'
+import { broadcastOrchestrationDispatchChange } from '../../orchestration/orchestration-events'
 import type { AgentEvent, PromptAttachment, Thread } from '../../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID } from '../../../lib/types'
 import { workflowGroupThreads } from '../../../lib/engines/thread-manager-lineage'
@@ -220,7 +221,15 @@ export class ChatEngineRuntimeWorkflows {
         return null
       },
       createThread: (input) => this.host.units['threads-create'].createOrchestrationThread(input),
-      recordDispatch: (input) => dispatchRepo.record(input),
+      recordDispatch: async (input) => {
+        await dispatchRepo.record(input)
+        // The initiator's row wears the orchestrator mark, so the count it reads
+        // is pushed now rather than discovered on the next sidebar re-read.
+        broadcastOrchestrationDispatchChange({
+          threadId: input.initiatorThreadId,
+          count: await dispatchRepo.countForInitiator(input.initiatorThreadId)
+        })
+      },
       sendPrompt: async (input) => {
         await this.host.sendPrompt(
           input.projectId,

@@ -52,6 +52,7 @@
   import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
@@ -187,6 +188,10 @@
    *  timer for every row on the list, never one per thread, and it disarms as
    *  soon as the last row unmounts. */
   $effect(() => relativeTimeClock.hold())
+
+  /** The orchestrator mark is read once for the whole app, not once per row: a
+   *  row asking is what starts that single read, after first paint. */
+  $effect(() => orchestrationCoordinatorState.ensureInitiators())
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
 
@@ -553,6 +558,10 @@
     // marker, and the independent audit, which is locked out of that lifecycle
     // and therefore carries its own durable flags.
     if (threadUsesEngineeringTooling(thread)) live.push('engineering')
+    // The workstation mark: this thread started work in another project. It is a
+    // fact about the thread that asked, so it shows on a project thread, a chat
+    // and an assistant task alike, and it persists after the run settles.
+    if (orchestrationCoordinatorState.hasDispatched(thread.id)) live.push('orchestrator')
     return live
   })
 

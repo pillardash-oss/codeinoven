@@ -1,6 +1,6 @@
 import type { Database } from '../database'
 import { ThreadRepo } from './thread-repo'
-import type { Thread } from '../../../lib/types'
+import type { OrchestrationInitiator, Thread } from '../../../lib/types'
 
 /** One dispatch accepted by a workstation-control turn, before it is settled. */
 export interface OrchestrationDispatchInput {
@@ -67,6 +67,39 @@ export class OrchestrationDispatchRepo {
         Date.now()
       ]
     )
+  }
+
+  /**
+   * Every thread that has dispatched at least one run, with its count.
+   *
+   * This is the mark a thread row wears, so it has to cover every thread kind in
+   * one small read rather than being asked per row: the renderer reads it once
+   * at start and keeps it current from the change notice a new dispatch sends.
+   */
+  async listInitiators(): Promise<OrchestrationInitiator[]> {
+    const result = await this.db.queryViaWorker(
+      `SELECT initiator_thread_id AS thread_id, COUNT(*) AS count
+         FROM orchestration_dispatches
+        GROUP BY initiator_thread_id`,
+      [],
+      0
+    )
+    if (!result.ok) return []
+    return (result.rows as unknown as { thread_id: string; count: number }[]).map((row) => ({
+      threadId: row.thread_id,
+      count: row.count
+    }))
+  }
+
+  /** How many runs one thread has dispatched, for the notice a dispatch sends. */
+  async countForInitiator(initiatorThreadId: string): Promise<number> {
+    const result = await this.db.queryViaWorker(
+      'SELECT COUNT(*) AS count FROM orchestration_dispatches WHERE initiator_thread_id = ?',
+      [initiatorThreadId],
+      1
+    )
+    if (!result.ok || result.rows.length === 0) return 0
+    return (result.rows[0] as unknown as { count: number }).count
   }
 
   /**

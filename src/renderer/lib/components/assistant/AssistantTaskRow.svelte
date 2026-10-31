@@ -22,6 +22,7 @@
   import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
+  import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -136,6 +137,11 @@
    *  timer serves every row on the list, and the on-demand line's "8m" stays
    *  honest the way a project or thread row's stamp does. */
   $effect(() => relativeTimeClock.hold())
+
+  /** The orchestrator mark's single app-wide read starts from whichever row is
+   *  on screen first, including this one: the Assistant view lists tasks without
+   *  a thread row of its own. */
+  $effect(() => orchestrationCoordinatorState.ensureInitiators())
 
   const taskIcon = $derived(
     task.assistantIconType ? getIconSvgDataUrl(task.assistantIconType, color ?? '#8b95a5') : null
@@ -268,6 +274,10 @@
     const live: ThreadIndicator[] = []
     if (pipState.isThreadUsingComputerUse(task.id)) live.push('computer-use')
     if (threadUsesEngineeringTooling(task)) live.push('engineering')
+    // The same workstation mark a project thread or a chat wears: the task's own
+    // thread is what dispatched the runs, so an assistant task that started work
+    // elsewhere never reads as an ordinary task.
+    if (orchestrationCoordinatorState.hasDispatched(task.id)) live.push('orchestrator')
     return live
   })
   /** The authored-work sessions this thread has entered, in canonical order, so

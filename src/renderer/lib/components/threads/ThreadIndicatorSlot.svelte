@@ -6,6 +6,7 @@
   import WaveBars from '$lib/components/speech/WaveBars.svelte'
   import ComputerUseIndicator from './ComputerUseIndicator.svelte'
   import EngineeringIndicator from './EngineeringIndicator.svelte'
+  import OrchestrationIndicator from './OrchestrationIndicator.svelte'
   import type { ThreadIndicator } from './thread-indicator'
 
   interface Props {
@@ -38,6 +39,8 @@
   />
 {:else if indicator === 'engineering'}
   <EngineeringIndicator label="Engineering thread" />
+{:else if indicator === 'orchestrator'}
+  <OrchestrationIndicator label="Orchestrator: dispatched runs in other projects" />
 {:else}
   <ComputerUseIndicator label="Agent using the computer" />
 {/if}
