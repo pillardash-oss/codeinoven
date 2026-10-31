@@ -139,9 +139,10 @@
 <div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Local AI</h1>
-    <p class="mt-0.5 max-w-3xl text-sm leading-relaxed text-muted">
-      Model servers that run on this machine, so a task can work without leaving it. The app owns
-      the runtime, the processes, and their logs. llama.cpp is the first runtime; more join it here.
+    <p class="mt-0.5 text-sm leading-relaxed text-muted">
+      This page manages llama.cpp on this machine: the llama-server binary, the model servers you
+      add, and each server's log. A server loads one model, either a GGUF file on disk or a Hugging
+      Face repository, and listens on the host and port you give it.
     </p>
   </div>
 
