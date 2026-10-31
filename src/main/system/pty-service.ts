@@ -1,4 +1,5 @@
 import { pathIsAccessible } from '../../lib/utils'
+import { actionShellFamily, failFastActionScript } from './action-script-fail-fast'
 import { PtyOutputBuffer } from './pty-output-buffer'
 import { stopPtyProcesses } from './pty-process-stop'
 import type { WebContents } from 'electron'
@@ -978,7 +979,11 @@ export class PtyService {
     const createdAt = Date.now()
     const env = { ...(await buildShellEnv()), ...safeVariables }
     ensureActive()
-    const proc = pty.spawn(shell, resolveShellCommandArgs(shell, script), {
+    // An action runs its lines in sequence with no user watching keystrokes, so
+    // a failing step must end the run instead of letting the next line execute
+    // against a half-finished result.
+    const guardedScript = failFastActionScript(script, actionShellFamily(shell))
+    const proc = pty.spawn(shell, resolveShellCommandArgs(shell, guardedScript), {
       name: 'xterm-256color',
       cols,
       rows,

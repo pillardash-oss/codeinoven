@@ -528,6 +528,10 @@
         bind:value={script}
         placeholder={SCRIPT_PLACEHOLDER}></textarea></label
     >
+    <p class="text-[0.6875rem] text-muted">
+      Each line runs in order and the script stops at the first line that fails. Add
+      <code class="font-mono text-foreground">set +e</code> at the top if a step is allowed to fail.
+    </p>
     <div>
       <p class="text-xs font-semibold">Label colour</p>
       <div class="mt-2">

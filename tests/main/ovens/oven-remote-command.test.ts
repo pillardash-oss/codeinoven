@@ -163,7 +163,9 @@ describe('oven remote commands', () => {
       script: 'echo hi'
     })
     expect(command).toContain('-NonInteractive')
-    expect(decode(command)).toContain('& { echo hi }')
+    const script = decode(command)
+    expect(script).toContain('& { $ErrorActionPreference')
+    expect(script.trimEnd().endsWith('echo hi }')).toBe(true)
   })
 
   it('names the Windows service root once', () => {

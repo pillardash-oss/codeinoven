@@ -1,6 +1,7 @@
 import { OVEN_DATA_DIRECTORY } from './remote/oven-root-paths'
 import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
 import { sshQuote } from './oven-ssh'
+import { failFastActionScript } from '../system/action-script-fail-fast'
 import {
   isWindowsShell,
   powershellLiteral,
@@ -279,14 +280,21 @@ export function remoteTerminalCommand(input: RemoteTerminalInput): string {
       .map(([name, value]) => `${name}=${sshQuote(value)}`)
       .join(' ')
     const shellExpression = '"${SHELL:-/bin/sh}"'
-    const tail = input.script === undefined ? '-l' : `-lc ${sshQuote(input.script)}`
+    // The remote action runs unattended, so its first failing line has to end
+    // it: a deploy that failed must never be followed by the next step.
+    const tail =
+      input.script === undefined
+        ? '-l'
+        : `-lc ${sshQuote(failFastActionScript(input.script, 'posix'))}`
     return `${OVEN_HARNESS_PATH} cd ${target} && exec env ${assignments} ${shellExpression} ${tail}`
   }
   const lines = [
     ...environmentAssignments(input.environment),
     ...(input.root ? [`Set-Location -LiteralPath ${powershellLiteral(input.root)}`] : [])
   ]
-  lines.push(input.script === undefined ? '' : `& { ${input.script} }`)
+  lines.push(
+    input.script === undefined ? '' : `& { ${failFastActionScript(input.script, 'powershell')} }`
+  )
   return windowsEncodedCommand(lines.join('\n'), { interactive: input.script === undefined })
 }
 
