@@ -93,7 +93,7 @@ jobs:
       #
       # The command is the `audit` script, not a bare `bun audit`, so the accepted
       # advisory list has exactly one home (package.json) instead of one copy per
-      # caller. It currently accepts three:
+      # caller. It currently accepts five:
       #
       #   GHSA-ch52-4w7c-c8xp (high, CVE-2026-93748), http-cache-semantics <=4.2.0
       #   reachable only through electron-builder > dmg-builder >
@@ -139,6 +139,27 @@ jobs:
       #   package ships no runtime code in the app bundle. The other dependency
       #   this audit used to report, qs (GHSA-6pq8-jhm2-2vcw), is fixed rather
       #   than accepted: the `qs` override in package.json pins 6.16.2.
+      #
+      #   GHSA-g3hv-75wg-m249 (moderate), minimatch <11.0.1
+      #   reachable through four separate major lines: eslint >
+      #   @eslint/config-array > minimatch@10.2.6 (also @typescript-eslint/typescript-estree
+      #   and the devDependency @earendil-works/pi-coding-agent), glob@7 and
+      #   @electron/asar@3 and dir-compare@4 > minimatch@3.1.5, @electron/universal@2 >
+      #   minimatch@9.0.9, filelist@1 > minimatch@5.1.9. Upstream has published a
+      #   fix (11.0.1), but no parent in this tree accepts it: the newest
+      #   published version of every one of those packages still declares ^10.2.x,
+      #   ^9, ^5 or ^3, so `bun audit fix` reports "no published version fixes"
+      #   within range and the only remaining lever is a blanket minimatch ^11
+      #   override. That override is what the flag is avoiding, not a shortcut
+      #   around it: minimatch 3/5/9 throw when called as a function
+      #   (`require('minimatch')(path, pattern)`, see @electron/asar's
+      #   lib/asar.js and glob's common.js), so forcing 11 there breaks asar
+      #   unpacking and electron-builder packaging outright. The advisory needs a
+      #   caller-supplied glob pattern with amplified brace/globstar parts; every
+      #   pattern on these paths is a literal from this repository's own config,
+      #   and the whole chain is devDependency/build tooling that ships no runtime
+      #   code in the app bundle. Remove the flag once any of those parents widen
+      #   to ^11.
       #
       # Remove the flag from the `audit` script as soon as upstream ships a fix.
       - name: Audit dependencies
