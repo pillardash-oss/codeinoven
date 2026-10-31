@@ -24,12 +24,29 @@ import type { SettingsSection } from './stores/renderer-recovery'
 import type { HarnessesTab } from './stores/settings-ui.svelte'
 
 /**
- * A searchable destination inside Settings — either a whole section page
- * (the sidebar tabs) or a named block on one (e.g. the Git card on General).
- * This registry is the single source for the sidebar tab list and the
- * settings search spotlight.
+ * A category in the Settings sidebar. Pages are grouped by what the user came
+ * to do, so twenty destinations are never one flat list to scan.
  */
-export interface SettingsSearchEntry {
+export type SettingsGroupId = 'app' | 'agents' | 'compute' | 'data'
+
+export interface SettingsGroup {
+  id: SettingsGroupId
+  label: string
+}
+
+/**
+ * The Settings sidebar, top to bottom: this order is the order it renders.
+ * A page names its own category (see `SettingsPageEntry.group`), so a newly
+ * added page cannot be left out of the sidebar by forgetting to list it here.
+ */
+export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
+  { id: 'app', label: 'App Use' },
+  { id: 'agents', label: 'Agent setup' },
+  { id: 'compute', label: 'Compute' },
+  { id: 'data', label: 'System and data' }
+]
+
+interface SettingsSearchEntryBase {
   /** Unique entry id, used as the palette action id suffix (`settings:<id>`). */
   id: string
   /** The section page this destination lives on. */
@@ -39,11 +56,21 @@ export interface SettingsSearchEntry {
   keywords: readonly string[]
   /** Any glyph component: the canonical set draws every mark the settings pages list. */
   icon: Component
-  /**
-   * DOM id suffix of the block to reveal on the section page
-   * (rendered as `settings-block-<blockId>`). Absent = the whole page.
-   */
-  blockId?: string
+}
+
+/** A whole section page: it is a Settings sidebar tab, so it names its category. */
+export interface SettingsPageEntry extends SettingsSearchEntryBase {
+  group: SettingsGroupId
+  blockId?: undefined
+  harnessesTab?: undefined
+}
+
+/** A named block on a section page, revealed by the settings search spotlight. */
+export interface SettingsBlockEntry extends SettingsSearchEntryBase {
+  /** DOM id suffix of the block on its page, rendered as `settings-block-<blockId>`. */
+  blockId: string
+  /** The category belongs to the page, never to one block on it. */
+  group?: undefined
   /**
    * Inner tab to select before the block is revealed, for a section page that
    * splits its content into tabs. Without it a card inside a non-default tab
@@ -51,6 +78,14 @@ export interface SettingsSearchEntry {
    */
   harnessesTab?: HarnessesTab
 }
+
+/**
+ * A searchable destination inside Settings - either a whole section page
+ * (the sidebar tabs) or a named block on one (e.g. the Git card on General).
+ * This registry is the single source for the sidebar tab list and the
+ * settings search spotlight.
+ */
+export type SettingsSearchEntry = SettingsPageEntry | SettingsBlockEntry
 
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
@@ -66,6 +101,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'general',
     section: 'general',
+    group: 'app',
     title: 'General',
     description: 'Appearance, notifications, git, threads, and power defaults.',
     keywords: ['settings', 'preferences'],
@@ -74,6 +110,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'ovens',
     section: 'ovens',
+    group: 'compute',
     title: 'Ovens',
     description: 'SSH connections, credentials, remote service setup, and harness discovery.',
     keywords: ['ssh', 'remote', 'container', 'server', 'keys'],
@@ -82,14 +119,32 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'browser',
     section: 'browser',
+    group: 'app',
     title: 'Browser',
     description: 'Link routing, the search engine, tab hibernation, and prototype previews.',
     keywords: ['search', 'address bar', 'duckduckgo', 'google', 'links', 'tabs', 'cdn'],
     icon: CioBrowser
   },
   {
+    id: 'harnesses',
+    section: 'harnesses',
+    group: 'agents',
+    title: 'Harnesses',
+    description: 'Agent harness connections and model providers.',
+    keywords: [
+      'providers',
+      'models',
+      'api keys',
+      'auxiliary agents',
+      'background model',
+      'cheap model'
+    ],
+    icon: CioPlug
+  },
+  {
     id: 'memory',
     section: 'memory',
+    group: 'agents',
     title: 'Memory',
     description: 'What the agent remembers across threads and projects.',
     keywords: ['remember', 'context'],
@@ -98,6 +153,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'audits',
     section: 'audits',
+    group: 'agents',
     title: 'Agents',
     description: 'Agent names, audits, and per-agent behavior.',
     keywords: ['workers', 'audit'],
@@ -133,6 +189,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'design',
     section: 'design',
+    group: 'agents',
     title: 'Design and video',
     description:
       'Where design and video work is saved, who does each kind of it, and the optional video pack.',
@@ -158,33 +215,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'cio-prompts',
     section: 'cio-prompts',
+    group: 'agents',
     title: 'CIO Prompts',
     description: 'Prompts CodeInOven injects into agent sessions.',
     keywords: ['prompts', 'instructions'],
     icon: CioMessage
-  },
-  {
-    id: 'heartbeat',
-    section: 'heartbeat',
-    title: 'Heartbeat',
-    description: 'Timed pings that keep a model’s usage window warm.',
-    keywords: ['ping', 'pong', 'usage window', 'reset', 'schedule'],
-    icon: CioHeartPulse
-  },
-  {
-    id: 'harnesses',
-    section: 'harnesses',
-    title: 'Harnesses',
-    description: 'Agent harness connections and model providers.',
-    keywords: [
-      'providers',
-      'models',
-      'api keys',
-      'auxiliary agents',
-      'background model',
-      'cheap model'
-    ],
-    icon: CioPlug
   },
   {
     id: 'harnesses-typesafe',
@@ -199,6 +234,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'utilities',
     section: 'utilities',
+    group: 'agents',
     title: 'Utilities',
     description: 'Installed utilities and the skills marketplace.',
     keywords: ['skills', 'marketplace', 'plugins'],
@@ -207,6 +243,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'computer-use',
     section: 'computer-use',
+    group: 'app',
     title: 'Computer use',
     description: 'Bridge settings for computer-control agents.',
     keywords: ['cua', 'bridge', 'automation', 'update'],
@@ -215,6 +252,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'sound',
     section: 'sound',
+    group: 'app',
     title: 'Sound',
     description: 'Local speech models, dictation, cleanup, history, and spoken responses.',
     keywords: ['microphone', 'voice', 'asr', 'tts', 'recording', 'models', 'import', 'cleanup'],
@@ -223,6 +261,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'search',
     section: 'search',
+    group: 'app',
     title: 'Search',
     description:
       'Intent search: embed a local EmbeddingGemma model, index your threads, and find them by meaning.',
@@ -244,6 +283,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'keymap',
     section: 'keymap',
+    group: 'app',
     title: 'Keymap',
     description: 'Keyboard shortcuts for every app action.',
     keywords: ['shortcuts', 'hotkeys', 'keyboard'],
@@ -252,6 +292,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'ide-mode',
     section: 'ide-mode',
+    group: 'app',
     title: 'IDE Mode',
     description: 'Configure language servers for project tree editing.',
     keywords: [
@@ -268,32 +309,45 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioCode
   },
   {
-    id: 'cloud-deployments',
-    section: 'cloud-deployments',
-    title: 'Cloud Deployments',
-    description: 'Cloud environments and deployments.',
-    keywords: ['cloud', 'environments'],
-    icon: CioCloud
-  },
-  {
-    id: 'profile',
-    section: 'profile',
-    title: 'Usage',
-    description: 'Local usage, cost, and model rankings.',
-    keywords: ['quota', 'usage', 'spend', 'activity'],
-    icon: CioMessage
-  },
-  {
     id: 'local-ai',
     section: 'local-ai',
+    group: 'compute',
     title: 'Local AI',
     description: 'Model servers running on this machine, their runtimes, and their logs.',
     keywords: ['llama', 'llama.cpp', 'gguf', 'local model', 'llama-server', 'offline', 'inference'],
     icon: CioServer
   },
   {
+    id: 'cloud-deployments',
+    section: 'cloud-deployments',
+    group: 'compute',
+    title: 'Cloud Deployments',
+    description: 'Cloud environments and deployments.',
+    keywords: ['cloud', 'environments'],
+    icon: CioCloud
+  },
+  {
+    id: 'heartbeat',
+    section: 'heartbeat',
+    group: 'compute',
+    title: 'Heartbeat',
+    description: 'Timed pings that keep a model’s usage window warm.',
+    keywords: ['ping', 'pong', 'usage window', 'reset', 'schedule'],
+    icon: CioHeartPulse
+  },
+  {
+    id: 'profile',
+    section: 'profile',
+    group: 'data',
+    title: 'Usage',
+    description: 'Local usage, cost, and model rankings.',
+    keywords: ['quota', 'usage', 'spend', 'activity'],
+    icon: CioMessage
+  },
+  {
     id: 'archives',
     section: 'archives',
+    group: 'data',
     title: 'Archives',
     description: 'Archived projects, threads, chats, and assistants.',
     keywords: ['archive', 'restore', 'unarchive'],
@@ -302,6 +356,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'about',
     section: 'about',
+    group: 'data',
     title: 'About',
     description: 'Build information, storage, diagnostics, and updates.',
     keywords: ['version', 'build'],
@@ -560,3 +615,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioShieldCheck
   }
 ]
+
+/** The Settings sidebar tabs. A page's own `group` decides where it renders. */
+export const SETTINGS_PAGE_ENTRIES: readonly SettingsPageEntry[] = SETTINGS_SEARCH_ENTRIES.filter(
+  (entry): entry is SettingsPageEntry => !entry.blockId
+)
