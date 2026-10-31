@@ -5,7 +5,10 @@ import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../../src/lib/types'
-import { withActionSummarySchema } from '../../../src/lib/tool-action-label'
+import {
+  withActionSummaryAdvice,
+  withActionSummarySchema
+} from '../../../src/lib/tool-action-label'
 import { GATEWAY_TOOLS, gatewayToolForModel } from '../../../src/lib/gateway-tools'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import {
@@ -252,7 +255,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     const dynamicTools = GATEWAY_TOOLS.map(gatewayToolForModel).map(
       ({ name, description, inputSchema }) => ({
         name,
-        description,
+        description: withActionSummaryAdvice(description),
         inputSchema: withActionSummarySchema(inputSchema)
       })
     )

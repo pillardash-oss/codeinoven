@@ -47,6 +47,7 @@ import {
   type GatewayToolDefinition
 } from '../../lib/gateway-tools'
 import {
+  ACTION_SUMMARY_ADVICE,
   ACTION_SUMMARY_INPUT_KEY,
   ACTION_SUMMARY_SCHEMA_DESCRIPTION
 } from '../../lib/tool-action-label'
@@ -307,12 +308,19 @@ const ACTION_SUMMARY_PARAMETERS = {
   )
 }
 
+/** The same request, on the tool's own description (see the shared module). */
+const ACTION_SUMMARY_ADVICE = ${JSON.stringify(ACTION_SUMMARY_ADVICE)}
+
 /** Register one gateway tool, with its output schema and action-summary field. */
 function registerCioGatewayTool(pi, definition) {
   if (!${JSON.stringify([...CORE_GATEWAY_TOOL_NAMES])}.includes(definition.name)) return
   const outputSchema = CIO_GATEWAY_OUTPUT_SCHEMAS[definition.name]
   const withSummary = {
     ...definition,
+    description:
+      typeof definition.description === 'string'
+        ? definition.description + ACTION_SUMMARY_ADVICE
+        : definition.description,
     parameters: Type.Object({ ...definition.parameters.properties, ...ACTION_SUMMARY_PARAMETERS })
   }
   pi.registerTool(outputSchema === undefined ? withSummary : { ...withSummary, outputSchema })

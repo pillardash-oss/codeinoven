@@ -12,6 +12,7 @@ import { WorkspaceFocusSubagent } from './Workspace-focus-subagent.svelte'
 import { WorkspaceContextPanelRows } from './Workspace-context-panel-rows.svelte'
 import { WorkspaceJumpToHistoryMessage } from './Workspace-jump-to-history-message.svelte'
 import { WorkspaceContextPanelColumns } from './Workspace-context-panel-columns.svelte'
+import { WorkspaceNewThreadProjectPicker } from './Workspace-new-thread-project-picker.svelte'
 import { WorkspaceState } from './Workspace-state.svelte'
 import { WorkspaceEffects } from './Workspace-effects.svelte'
 import type { WorkspaceSurfaceProps } from './Workspace-types'
@@ -38,6 +39,7 @@ export class Workspace extends BoardState<WorkspaceSurfaceProps> {
   readonly contextPanelRows = new WorkspaceContextPanelRows(this)
   readonly jumpToHistoryMessage = new WorkspaceJumpToHistoryMessage(this)
   readonly contextPanelColumns = new WorkspaceContextPanelColumns(this)
+  readonly newThreadPicker = new WorkspaceNewThreadProjectPicker(this)
   readonly state = new WorkspaceState(this)
   readonly effects = new WorkspaceEffects(this)
   constructor(readProps: () => WorkspaceSurfaceProps) {

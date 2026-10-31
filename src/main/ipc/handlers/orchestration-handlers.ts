@@ -17,4 +17,10 @@ export function registerOrchestrationHandlers(ctx: IpcHandlerContext): void {
       validateEntityId(threadId, 'Thread ID')
     )
   })
+
+  // The mark every thread row reads once at start. No arguments: the answer is
+  // the whole set, small by construction because dispatching is a deliberate act.
+  ipcMain.handle('orchestration:initiators', async () => {
+    return ctx.orchestrationDispatchRepo.listInitiators()
+  })
 }

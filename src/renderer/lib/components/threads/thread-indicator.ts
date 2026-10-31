@@ -21,6 +21,12 @@ import { isOrchestrationChildThread, type Thread } from '$shared/types'
  * action (recording, speaking, transcription, computer use, browser sound)   the
  * transient action is the more urgent fact, and the Engineering mark returns
  * the moment the slot is free.
+ *
+ * `orchestrator` is the durable workstation mark: this thread started work in
+ * another project with `cio_orchestrate_dispatch`. It is a fact about the thread
+ * that asked, not about the run, so it appears on every thread kind   a project
+ * thread, a chat, an assistant task   and yields the slot to live actions for the
+ * same reason the Engineering mark does.
  */
 export type ThreadIndicator =
   | 'recording'
@@ -34,6 +40,7 @@ export type ThreadIndicator =
   | 'browser-camera'
   | 'browser-screen'
   | 'engineering'
+  | 'orchestrator'
 
 export interface ThreadIndicatorCandidate {
   indicator: ThreadIndicator

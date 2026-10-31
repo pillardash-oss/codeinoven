@@ -47,6 +47,7 @@ import ThreadSearchControl from '../../shared/ThreadSearchControl.svelte'
 import SidebarSearchControl from '../SidebarSearchControl.svelte'
 import { threadHasVisibleWork } from '../workspace-thread-helpers'
 import type { Workspace } from './Workspace-board.svelte'
+import { canHostProjectThread } from './Workspace-new-thread-project-picker.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
@@ -113,6 +114,11 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
             project,
             workspaceState.pendingScopeBucketId ?? undefined
           )
+        } else {
+          // Nothing open says which project the thread belongs to (a launch that
+          // restored neither a thread nor a project): ask, rather than dropping
+          // the request the user just made.
+          this.root.newThreadPicker.request()
         }
         workspaceState.pendingScopeBucketId = null
       }
@@ -866,7 +872,11 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
       // trip to the browser; without it the slot stayed empty on return.
       if (!this.root.props.active && !this.root.props.scopeViewActive) return
       // Held in a local so the callbacks below keep the narrowing this check gives.
-      const project = this.root.openThreadFromSwitcher.activeProject
+      const activeProject = this.root.openThreadFromSwitcher.activeProject
+      // A hidden conversation container (the inbox a chat left selected) is not a
+      // project a thread view can mint into: the new-thread action treats it as
+      // no project at all and asks which one instead.
+      const project = canHostProjectThread(activeProject) ? activeProject : null
       if (workspaceState.specStudioOpen) {
         viewActions.set('none', [])
         return
@@ -929,18 +939,20 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
               size: 'md'
             }
           },
-          ...(project
-            ? [
-                {
-                  id: 'new-thread',
-                  icon: CioPlus,
-                  ariaLabel: `New thread in ${project.name}`,
-                  title: `New thread in ${project.name}`,
-                  shortcut: keymapState.keysFor('nav-new-thread'),
-                  run: () => void this.root.createThreadInProject.createThreadInProject(project)
-                } satisfies ViewActionItem
-              ]
-            : []),
+          {
+            id: 'new-thread',
+            icon: CioPlus,
+            ariaLabel: project ? `New thread in ${project.name}` : 'New thread',
+            // The action never hides: with no project open it asks which project
+            // the thread belongs to, using the same picker the chat hand-off
+            // uses, and the chosen project mints the empty thread.
+            title: project ? `New thread in ${project.name}` : 'New thread in a project',
+            shortcut: keymapState.keysFor('nav-new-thread'),
+            run: () =>
+              project
+                ? void this.root.createThreadInProject.createThreadInProject(project)
+                : this.root.newThreadPicker.request()
+          },
           {
             id: 'filter',
             component: ThreadProjectFilterMenu as unknown as ViewActionItem['component']

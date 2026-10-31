@@ -19,7 +19,11 @@
   import { flashElement } from '$lib/reveal-flash'
   import { formatBytes } from '$lib/format/bytes'
   import type { SettingsSearchEntry } from '$lib/settings-search'
-  import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
+  import {
+    SETTINGS_GROUPS,
+    SETTINGS_PAGE_ENTRIES,
+    SETTINGS_SEARCH_ENTRIES
+  } from '$lib/settings-search'
   import {
     CONTRAST_LEVEL_OPTIONS,
     FONT_FAMILY_OPTIONS,
@@ -88,6 +92,7 @@
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import VideoPackagesSettings from './VideoPackagesSettings.svelte'
   import OvensSettings from './OvensSettings.svelte'
+  import LocalAiSettings from './LocalAiSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
@@ -249,15 +254,32 @@
 
   // Sidebar tabs come from the settings search registry   the same source the
   // spotlight searches, so a page can never be navigable but not searchable.
-  const tabs: Array<{
+  interface SettingsSidebarTab {
     id: SettingsSection
     label: string
     icon: Component
-  }> = SETTINGS_SEARCH_ENTRIES.filter((entry) => !entry.blockId).map((entry) => ({
+  }
+
+  const tabs: SettingsSidebarTab[] = SETTINGS_PAGE_ENTRIES.map((entry) => ({
     id: entry.section,
     label: entry.title,
     icon: entry.icon
   }))
+
+  // A page names its own category, so these groups are read straight out of the
+  // registry: four short lists to scan instead of twenty rows at once. A group
+  // whose pages all moved elsewhere simply stops rendering.
+  const tabGroups = SETTINGS_GROUPS.map((group) => ({
+    id: group.id,
+    label: group.label,
+    tabs: SETTINGS_PAGE_ENTRIES.filter((entry) => entry.group === group.id).map(
+      (entry): SettingsSidebarTab => ({
+        id: entry.section,
+        label: entry.title,
+        icon: entry.icon
+      })
+    )
+  })).filter((group) => group.tabs.length > 0)
 
   // The header mirrors the section on screen   cleared when Settings closes.
   $effect(() => {
@@ -607,21 +629,30 @@
 <div class="flex h-full">
   <!-- Settings navigation   the shared sidebar, pinned so it can never be hidden here -->
   <CollapsibleSidebar title="Settings" pinned hideHeader>
-    <nav class="space-y-1" aria-label="Settings sections">
-      {#each tabs as tab (tab.id)}
-        {@const Icon = tab.icon}
-        {@const isActive = section === tab.id}
-        <button
-          class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
-            ? 'bg-elevated text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          aria-current={isActive ? 'page' : undefined}
-          title="{tab.label} settings"
-          onclick={() => navigateSection(tab.id)}
-        >
-          <Icon size={14} class={isActive ? 'text-foreground' : 'text-dimmed'} />
-          {tab.label}
-        </button>
+    <nav class="space-y-4" aria-label="Settings sections">
+      {#each tabGroups as group (group.id)}
+        <div role="group" aria-label={group.label}>
+          <p class="px-2 pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+            {group.label}
+          </p>
+          <div class="space-y-0.5">
+            {#each group.tabs as tab (tab.id)}
+              {@const Icon = tab.icon}
+              {@const isActive = section === tab.id}
+              <button
+                class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
+                  ? 'bg-elevated text-foreground'
+                  : 'text-muted hover:bg-elevated hover:text-foreground'}"
+                aria-current={isActive ? 'page' : undefined}
+                title="{tab.label} settings"
+                onclick={() => navigateSection(tab.id)}
+              >
+                <Icon size={14} class={isActive ? 'text-foreground' : 'text-dimmed'} />
+                {tab.label}
+              </button>
+            {/each}
+          </div>
+        </div>
       {/each}
     </nav>
 
@@ -1550,6 +1581,8 @@
           onNavigateSection('harnesses')
         }}
       />
+    {:else if section === 'local-ai'}
+      <LocalAiSettings {config} {settingsReady} {updateConfig} />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'archives'}

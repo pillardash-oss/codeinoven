@@ -552,5 +552,13 @@ export const IPC_EVENT_CONTRACT = {
    */
   'cioCleanup:stateChanged': [] as unknown as [
     state: import('../types/cio-cleanup').CioCleanupState
+  ],
+  /**
+   * A thread's dispatched-run count moved: it just started work in another
+   * project. Every thread row of that thread reads this so its orchestrator mark
+   * appears without the sidebar re-reading anything.
+   */
+  'orchestration:changed': [] as unknown as [
+    change: import('../types/orchestration').OrchestrationDispatchChange
   ]
 }

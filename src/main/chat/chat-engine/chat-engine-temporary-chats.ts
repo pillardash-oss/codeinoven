@@ -28,7 +28,7 @@ import type {
   Thread,
   ThreadSettings
 } from '../../../lib/types'
-import { MAX_PROMPT_ATTACHMENTS } from '../../../lib/types'
+import { ASSISTANT_SPACE_ID, MAX_PROMPT_ATTACHMENTS } from '../../../lib/types'
 import { modelKey } from '../../../lib/model-keys'
 import { deriveTitleFromText } from '../title-generator'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
@@ -703,6 +703,26 @@ export class ChatEngineTemporaryChats {
       : ''
     const threadTitle = safeTitle || fallbackTitle || 'Continued chat'
 
+    /**
+     * A side chat continued out of an assistant task stays inside its assistant,
+     * exactly as a fork of that task does (`thread-manager-fork.ts`). Ownership
+     * is all that travels: the continued conversation is a task-level thread, so
+     * it is never the knowledge thread and never a run, and the task's own icon
+     * and schedule override come along so the copy still reads as the same task.
+     * Without the id the promoted row lands as an assistant-less thread sitting
+     * outside the assistant it was continued from.
+     */
+    const assistantOwnership =
+      projectId === ASSISTANT_SPACE_ID && parent?.assistantId !== undefined
+        ? {
+            assistantId: parent.assistantId,
+            assistantIconType: parent.assistantIconType,
+            assistantIcon: parent.assistantIcon,
+            scheduleOverride: parent.scheduleOverride ?? null,
+            scheduled: parent.scheduled
+          }
+        : {}
+
     const thread = await this.host.threadManager.createThread({
       projectId,
       providerId: parent?.providerId ?? DEFAULT_HARNESS,
@@ -710,7 +730,8 @@ export class ChatEngineTemporaryChats {
       titleSource: safeTitle ? 'manual' : 'auto',
       settings: safeSettings,
       featureSlug: parent?.featureSlug,
-      workingDirectory: temporary.projectPath
+      workingDirectory: temporary.projectPath,
+      ...assistantOwnership
     })
 
     if (conversation.length > 0) {

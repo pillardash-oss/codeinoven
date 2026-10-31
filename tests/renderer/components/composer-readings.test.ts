@@ -38,8 +38,16 @@ const panel = (label: string) =>
 const BATTERY = 'Context and provider usage'
 const RATE = 'Generation speed details'
 
+/**
+ * One animation frame, then the microtask queue: bits-ui keeps a closing panel
+ * mounted for a frame before it unmounts it, so a settle that only drains timers
+ * leaves the previous reading attached and gives the swap assertions a false
+ * failure. jsdom fires the frame, and its elements have no `getAnimations`,
+ * so one frame is all the exit path waits for here.
+ */
 async function settle(): Promise<void> {
   flushSync()
+  await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
   await new Promise((resolve) => setTimeout(resolve, 0))
   flushSync()
 }

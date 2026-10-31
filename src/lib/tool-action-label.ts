@@ -117,6 +117,24 @@ export const ACTION_SUMMARY_SCHEMA_DESCRIPTION =
   'Optional. One short phrase saying what this call accomplishes, shown to the user in place of the raw tool name.'
 
 /**
+ * The same request on the tool's own description, for app tools.
+ *
+ * A model reads a tool's description while it decides to call it, which is
+ * earlier than it reads the parameter schema, so this is where the request has
+ * the best chance of shaping the call. It is only ever appended to a tool whose
+ * schema declares the field, never to a harness tool: a strict harness schema
+ * would reject the argument instead of ignoring it.
+ */
+export const ACTION_SUMMARY_ADVICE =
+  ' Always pass action_summary: a short phrase telling the user what this call accomplishes for them.'
+
+/** A tool description carrying the action-summary request. */
+export function withActionSummaryAdvice(description: string): string {
+  if (description.includes(ACTION_SUMMARY_ADVICE.trim())) return description
+  return `${description}${ACTION_SUMMARY_ADVICE}`
+}
+
+/**
  * Input fields in which a model states, in its own words, what the call does.
  * `action_summary` is the app's own field and outranks the harness conventions,
  * because a model that fills it is labelling this trace, not describing the

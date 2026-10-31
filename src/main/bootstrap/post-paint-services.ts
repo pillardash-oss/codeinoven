@@ -1116,12 +1116,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
+    const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
     registerBaseUrlProviderIpc(storage)
+    // Local servers never touch the provider registry: a custom base-URL
+    // provider is the user's to create, and starting or stopping a server here
+    // must leave it exactly as it was.
+    registerLlamaCppIpc()
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,

@@ -45,6 +45,7 @@ import {
   isModelProfileId,
   isUsableModelProfile
 } from '../../../lib/model-profiles'
+import { validateLlamaCppServers } from '../../../lib/llama-cpp'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import {
   MAX_BROWSER_HIBERNATION_MINUTES,
@@ -233,7 +234,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'inAppNotificationSound',
   'sound',
   'cioCleanupRetentionDays',
-  'cioCleanupExcludedCategories'
+  'cioCleanupExcludedCategories',
+  'llamaCppServers'
 ])
 
 const AGENT_DEFAULT_FIELDS = new Set([
@@ -952,6 +954,12 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       MIN_CIO_CLEANUP_RETENTION_DAYS,
       MAX_CIO_CLEANUP_RETENTION_DAYS
     )
+  }
+
+  if ('llamaCppServers' in value) {
+    // A row that cannot launch anything is refused here rather than saved and
+    // failing later: the renderer already blocks it, and this is the boundary.
+    patch.llamaCppServers = validateLlamaCppServers(value.llamaCppServers)
   }
 
   if ('cioCleanupExcludedCategories' in value) {

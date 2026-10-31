@@ -25,10 +25,10 @@
      *  thread list, which is already named by the folder above it. */
     hideProjectName?: boolean
     onOpen: (t: Thread) => void
-    onRename: (t: Thread, newName: string) => Promise<void>
-    onTogglePin: (t: Thread) => void
-    onDelete: (t: Thread) => Promise<void>
-    onFork: (t: Thread) => void
+    onRename?: (t: Thread, newName: string) => Promise<void>
+    onTogglePin?: (t: Thread) => void
+    onDelete?: (t: Thread) => Promise<void>
+    onFork?: (t: Thread) => void
     onMovePinnedThread?: (id: string, targetId: string, position: 'before' | 'after') => void
     /**
      * Row renderer for a pinned thread. Defaults to the standard compact
@@ -80,10 +80,10 @@
     detailed = false,
     hideProjectName = false,
     onOpen,
-    onRename,
-    onTogglePin,
-    onDelete,
-    onFork,
+    onRename = async () => {},
+    onTogglePin = () => {},
+    onDelete = async () => {},
+    onFork = () => {},
     onMovePinnedThread,
     row,
     folded: controlledFolded,
