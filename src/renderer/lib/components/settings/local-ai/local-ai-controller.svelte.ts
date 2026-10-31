@@ -12,6 +12,7 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   buildLlamaServerArgs,
   llamaCppPtyId,
+  type LlamaCppBrewJobKind,
   type LlamaCppProbeResult,
   type LlamaCppServerEntry
 } from '$shared/llama-cpp'
@@ -20,10 +21,12 @@ export type LlamaCppServerStatus = 'stopped' | 'starting' | 'running' | 'failed'
 
 /** One Homebrew job the Local AI page runs in its docked terminal. */
 export interface BrewJob {
-  kind: 'install' | 'update' | 'uninstall'
+  kind: LlamaCppBrewJobKind
   terminalId: string
   command: string
   args: string[]
+  /** Homebrew settings the job needs, so it never waits for a keypress. */
+  environment: Record<string, string>
 }
 
 /** How many log lines a card keeps. */

@@ -15,7 +15,12 @@
   import ConfirmDialog from '../../ui/ConfirmDialog.svelte'
   import LocalAiBrewPanel from './LocalAiBrewPanel.svelte'
   import type { BrewJob } from './local-ai-controller.svelte'
-  import type { LlamaCppRuntimeStatus } from '$shared/llama-cpp'
+  import {
+    LLAMA_CPP_BREW_ENVIRONMENT,
+    llamaCppBrewArgs,
+    type LlamaCppBrewJobKind,
+    type LlamaCppRuntimeStatus
+  } from '$shared/llama-cpp'
 
   interface Props {
     runtime: LlamaCppRuntimeStatus | null
@@ -65,7 +70,7 @@
     }
   })
 
-  function runJob(kind: BrewJob['kind'], args: string[]): void {
+  function runJob(kind: LlamaCppBrewJobKind): void {
     if (!runtime?.installerPath) return
     jobExitCode = null
     jobCancelled = false
@@ -75,7 +80,8 @@
       kind,
       terminalId: `local-ai-brew-${kind}-${Date.now()}`,
       command: runtime.installerPath,
-      args
+      args: llamaCppBrewArgs(kind),
+      environment: { ...LLAMA_CPP_BREW_ENVIRONMENT }
     }
   }
 
@@ -165,7 +171,7 @@
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
           title="Update llama.cpp to {runtime?.latestVersion || 'the latest build'}"
           disabled={detecting}
-          onclick={() => runJob('update', ['upgrade', 'llama.cpp'])}
+          onclick={() => runJob('update')}
         >
           {#if detecting}
             <CioSpinner size={13} class="animate-spin" />
@@ -179,7 +185,7 @@
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
           title="Install llama.cpp with Homebrew in an embedded terminal"
           disabled={detecting}
-          onclick={() => runJob('install', ['install', 'llama.cpp'])}
+          onclick={() => runJob('install')}
         >
           {#if detecting}
             <CioSpinner size={13} class="animate-spin" />
@@ -267,7 +273,7 @@
   onCancel={() => (pendingUninstall = false)}
   onConfirm={() => {
     pendingUninstall = false
-    runJob('uninstall', ['uninstall', 'llama.cpp'])
+    runJob('uninstall')
   }}
 >
   <p class="text-sm leading-relaxed text-muted">

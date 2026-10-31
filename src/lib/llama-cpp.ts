@@ -385,6 +385,41 @@ export interface LlamaCppProbeResult {
 }
 
 /**
+ * The Homebrew work the Llama.cpp page runs in its docked terminal: install it,
+ * move it to the newest build, or remove it.
+ */
+export type LlamaCppBrewJobKind = 'install' | 'update' | 'uninstall'
+
+/**
+ * Environment every Homebrew job here runs with.
+ *
+ * Homebrew asks `Do you want to proceed with the <action>? [y/n]` whenever a
+ * terminal is attached and the plan reaches past the named formula, which an
+ * `upgrade llama.cpp` always does because the formula pulls libomp, ggml and
+ * openssl along with it. Nothing types into that prompt, so the job would sit
+ * there until the idle watchdog killed it. `HOMEBREW_NO_ASK` turns the ask off.
+ *
+ * It is set through the environment rather than as a `--no-ask` flag on purpose:
+ * older Homebrew releases predate the flag and would reject the command, while
+ * they ignore a variable they do not know.
+ */
+export const LLAMA_CPP_BREW_ENVIRONMENT: Readonly<Record<string, string>> = {
+  HOMEBREW_NO_ASK: '1'
+}
+
+/** The Homebrew arguments that carry out one job, always non-interactive. */
+export function llamaCppBrewArgs(kind: LlamaCppBrewJobKind): string[] {
+  switch (kind) {
+    case 'install':
+      return ['install', 'llama.cpp']
+    case 'update':
+      return ['upgrade', 'llama.cpp']
+    case 'uninstall':
+      return ['uninstall', 'llama.cpp']
+  }
+}
+
+/**
  * Read a saved row list without failing the launch: a value that is not a list
  * arrives as no rows, and a row that cannot launch is dropped, matching how the
  * other tolerant config lists are read.

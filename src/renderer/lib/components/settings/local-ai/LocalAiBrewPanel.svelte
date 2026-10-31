@@ -176,17 +176,16 @@
       {/if}
     </div>
     <div class="h-48 overflow-hidden">
+      <!-- A bottle download prints nothing while a quiet phase runs, so the
+           watchdog only guards against a genuinely stuck job. -->
       <ProviderLoginTerminal
         terminalId={job.terminalId}
         cancelled={jobCancelled}
         startingLabel={`Starting ${verb(job.kind)}…`}
         command={job.command}
         args={job.args}
-        idleTimeoutMs={job.kind === 'install'
-          ? 300_000
-          : job.kind === 'update'
-            ? 60_000
-            : undefined}
+        environment={job.environment}
+        idleTimeoutMs={job.kind === 'uninstall' ? undefined : 300_000}
         onExit={(exitCode) => onExit(exitCode)}
       />
     </div>

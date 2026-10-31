@@ -90,9 +90,13 @@ const ALLOWED_COMMANDS = new Set([
   'powershell'
 ])
 
-const ACCOUNT_ENVIRONMENT_KEYS = new Set([
+/** Environment a renderer may hand a command, never arbitrary values: account
+ *  directories follow the account a session runs as, and the Llama.cpp page
+ *  needs Homebrew to run a job without waiting for a keypress (`HOMEBREW_NO_ASK`). */
+const COMMAND_ENVIRONMENT_KEYS = new Set([
   'PI_CODING_AGENT_DIR',
   'OPENCODE_CONFIG_DIR',
+  'HOMEBREW_NO_ASK',
   'XDG_CONFIG_HOME',
   'XDG_DATA_HOME',
   'XDG_STATE_HOME',
@@ -112,7 +116,7 @@ function safeCommandEnvironment(environment?: Record<string, string>): Record<st
   return Object.fromEntries(
     Object.entries(environment).filter(
       ([key, value]) =>
-        ACCOUNT_ENVIRONMENT_KEYS.has(key) &&
+        COMMAND_ENVIRONMENT_KEYS.has(key) &&
         typeof value === 'string' &&
         value.length > 0 &&
         value.length <= 4_096 &&
