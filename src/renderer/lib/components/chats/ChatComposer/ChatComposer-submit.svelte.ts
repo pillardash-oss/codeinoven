@@ -27,6 +27,7 @@ import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
 import { sessionTagKind } from '$shared/session-tags'
 import { expertSessionFor, shouldOfferExpertCard } from '$shared/experts'
 import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../../speech/editor-target'
+import { notifyVoiceDraftLanded } from '../../../speech/voice-send'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import type { RichInlineBadge } from '../../shared/rich-markdown'
 import type {
@@ -208,6 +209,12 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
         }
 
         this.root.props.onValueChange(next)
+        // The store is only the mirror this composer writes; the editor renders
+        // the composer's own buffer, which never saw this landing. The thread
+        // view owns the keyed composer, so it is the one told to rebuild it from
+        // the draft; without that the words would wait for the next visit.
+        const { projectId, threadId } = this.root.props
+        if (projectId && threadId) notifyVoiceDraftLanded(projectId, threadId)
         return {
           ok: true,
           value: next,
