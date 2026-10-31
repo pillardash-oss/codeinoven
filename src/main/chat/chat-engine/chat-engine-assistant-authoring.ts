@@ -34,8 +34,12 @@ import {
   assistantKnowledgeComplete
 } from '../../../lib/types'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
-import { writeAssistantReport } from '../assistant-report-service'
-import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
+import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
+import {
+  assistantReportAnnouncement,
+  assistantReportIsTerminal,
+  isAssistantReportThread
+} from '../../../lib/assistant-reports'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { assistantText, formatInterviewDecisions } from './chat-engine-message-text'
@@ -318,7 +322,25 @@ export class ChatEngineAssistantAuthoring {
     if (!turnAssistant) return
     const report = (declared.markdown ?? assistantText(turnAssistant)).trim()
     if (report.length === 0) return
-    void this.writeAssistantReportFor(thread, declared.title, report, status)
+    void this.publishAssistantReport(thread, declared.title, report, status)
+  }
+
+  /**
+   * File a declared report and announce it in the thread it came from.
+   *
+   * The run is told never to name the path or claim a report was saved, because
+   * the app owns both, so the app is what tells the reader the report exists: a
+   * filed report nobody hears about is a file the user has to go looking for.
+   */
+  async publishAssistantReport(
+    thread: Thread,
+    title: string,
+    report: string,
+    status: ThreadStatus
+  ): Promise<void> {
+    const written = await this.writeAssistantReportFor(thread, title, report, status)
+    if (!written) return
+    await this.announceAssistantReport(thread, title, written)
   }
 
   async writeAssistantReportFor(
@@ -326,7 +348,7 @@ export class ChatEngineAssistantAuthoring {
     title: string,
     report: string,
     status: ThreadStatus
-  ): Promise<void> {
+  ): Promise<AssistantReportFile | null> {
     try {
       const assistant = thread.assistantId
         ? this.host.state.assistantRepo.get(thread.assistantId)
@@ -341,7 +363,7 @@ export class ChatEngineAssistantAuthoring {
         )
         if (task) taskTitle = task.title
       }
-      await writeAssistantReport(this.host.storage, {
+      return await writeAssistantReport(this.host.storage, {
         thread,
         title,
         taskTitle,
@@ -353,6 +375,52 @@ export class ChatEngineAssistantAuthoring {
       })
     } catch (error) {
       Logger.error('Assistant report could not be written to disk', {
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+      return null
+    }
+  }
+
+  /**
+   * Publish the filed report into the thread it came from, as one app-owned row
+   * under the run's own answer.
+   *
+   * The row is an inline artifact, the same app-published channel an artifact the
+   * agent asked to render travels on: it is not part of the turn, so it never
+   * becomes the turn's closing statement and never displaces the answer the run
+   * actually delivered. Its cited path resolves against the assistant's workspace
+   * mount, so the row is the link.
+   */
+  async announceAssistantReport(
+    thread: Thread,
+    title: string,
+    written: AssistantReportFile
+  ): Promise<void> {
+    try {
+      const at = Date.now()
+      const id = `cio-assistant-report-${thread.id}-${at}`
+      const announcement: AgentMessage = {
+        id,
+        role: 'assistant',
+        inlineArtifact: true,
+        origin: 'orchestrator',
+        visibility: 'conversation',
+        parts: [
+          {
+            type: 'text',
+            id: `${id}-text`,
+            messageID: id,
+            text: assistantReportAnnouncement(title, written.citation)
+          }
+        ],
+        createdAt: at,
+        completedAt: at
+      }
+      await this.host.threadManager.upsertMessages(thread.projectId, thread.id, [announcement])
+      broadcastThreadUpdate(thread)
+    } catch (error) {
+      Logger.error('Assistant report could not be announced in its thread', {
         threadId: thread.id,
         error: rawErrorMessage(error)
       })
