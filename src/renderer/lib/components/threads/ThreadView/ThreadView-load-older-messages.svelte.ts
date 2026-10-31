@@ -943,12 +943,19 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   /** Restore app-owned session state without contacting native harness transport. */
   async connectSession(): Promise<void> {
+    // The turn cards are drawn only for a checkpoint in this list, so it must be
+    // read on every open, controller-driven or not. Reading it only on the
+    // handshake path below is why a conversation opened through a controller (a
+    // project chat, an assistant surface) showed the Changes rail its diffs and
+    // still drew no file-changes card under any turn: nothing ever asked for the
+    // list, and no turn was running to announce a checkpoint update.
+    void this.root.abortRun.refreshCheckpoints()
     // Controller-driven conversations own their own session handshake.
     if (this.root.props.controller) return
 
     const { projectId, id } = this.root.handleAgentEvent.thread
+
     // Independent extras   each lands as it resolves, none block the paint.
-    void this.root.abortRun.refreshCheckpoints()
     void this.root.switchProject.loadProjectContext()
     // The durable fold is not what makes a thread readable. The mirror already
     // carries the user's message and the answer, and a completed thread's trace
