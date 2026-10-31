@@ -73,12 +73,7 @@
    * can therefore keep the answer visible while it is still true and drop it the
    * moment the host or port moves, without an effect watching the fields.
    */
-  let testResult = $state<{
-    address: string
-    ok: boolean
-    label: string
-    message: string
-  } | null>(null)
+  let testResult = $state<{ address: string; ok: boolean; message: string } | null>(null)
   let testing = $state(false)
   const testedAddress = $derived(`${host.trim()}:${Number(port)}`)
   const visibleTest = $derived(
@@ -159,21 +154,11 @@
   async function testConnection(): Promise<void> {
     const address = `${host.trim()}:${Number(port)}`
     if (!isLlamaCppHostValid(host)) {
-      testResult = {
-        address,
-        ok: false,
-        label: 'Not run',
-        message: 'Enter a host such as 127.0.0.1.'
-      }
+      testResult = { address, ok: false, message: 'Enter a host such as 127.0.0.1.' }
       return
     }
     if (!isLlamaCppPortValid(Number(port))) {
-      testResult = {
-        address,
-        ok: false,
-        label: 'Not run',
-        message: 'Enter a port between 1 and 65535.'
-      }
+      testResult = { address, ok: false, message: 'Enter a port between 1 and 65535.' }
       return
     }
     testing = true
@@ -184,11 +169,10 @@
         testResult = {
           address,
           ok: true,
-          label: 'Connected',
           message:
             result.models.length > 0
-              ? `Connected · ${models}${result.models.length > 3 ? ` and ${result.models.length - 3} more` : ''}`
-              : 'Connected, but the server reports no models.'
+              ? `llama-server is already running on ${address} and serving ${models}${result.models.length > 3 ? ` and ${result.models.length - 3} more` : ''}.`
+              : `llama-server is already running on ${address}.`
         }
       } else {
         // Nothing answers yet, so prove the row itself: launch it exactly as
@@ -201,7 +185,6 @@
       testResult = {
         address,
         ok: false,
-        label: 'Failed',
         message: failure instanceof Error ? failure.message : 'The test could not run.'
       }
       testing = false
@@ -248,11 +231,11 @@
     let settled = false
     testTerminalId = terminalId
 
-    const finish = (ok: boolean, label: string, message: string): void => {
+    const finish = (ok: boolean, message: string): void => {
       if (settled) return
       settled = true
       stopTestRun(terminalId)
-      testResult = { address, ok, label, message }
+      testResult = { address, ok, message }
       testing = false
     }
 
@@ -263,19 +246,11 @@
         tail.push(line)
         if (tail.length > 60) tail.shift()
         if (LOAD_MARKERS.some((marker) => marker.test(line))) {
-          finish(
-            true,
-            'Loads',
-            `llama-server started and began loading ${llamaCppModelLabel(draft)}; the test stopped it.`
-          )
+          finish(true, `llama-server started and began loading ${llamaCppModelLabel(draft)}.`)
           return
         }
         if (DOWNLOAD_MARKER.test(line)) {
-          finish(
-            true,
-            'Downloads',
-            'llama-server started and is fetching the model from Hugging Face; the test stopped it.'
-          )
+          finish(true, 'llama-server started and is fetching the model from Hugging Face.')
           return
         }
       }
@@ -289,11 +264,11 @@
       }),
       subscribe(`pty:exit:${terminalId}`, (code) => {
         const exitCode = typeof code === 'number' ? code : 0
-        finish(false, 'Failed', `llama-server exited with code ${exitCode}: ${tailText()}`)
+        finish(false, `llama-server exited with code ${exitCode}: ${tailText()}`)
       })
     )
     testTimer = setTimeout(() => {
-      finish(false, 'Failed', `llama-server never reached the model load in 20s: ${tailText()}`)
+      finish(false, `llama-server never reached the model load in 20s: ${tailText()}`)
     }, 20_000)
 
     try {
@@ -306,11 +281,7 @@
         30
       )
     } catch (error) {
-      finish(
-        false,
-        'Failed',
-        error instanceof Error ? error.message : 'llama-server could not be started.'
-      )
+      finish(false, error instanceof Error ? error.message : 'llama-server could not be started.')
     }
   }
 
@@ -516,10 +487,10 @@
           >
             {#if visibleTest.ok}
               <CioCheckCircle size={11} />
-              {visibleTest.label}
+              Connection successful
             {:else}
               <CioAlertCircle size={11} />
-              {visibleTest.label}
+              Connection failed
             {/if}
           </span>
         {/if}

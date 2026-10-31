@@ -8,7 +8,6 @@
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import SettingsDisclosure from '../../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../../shared/SettingsEntry.svelte'
   import SettingsStatusBadge from '../../shared/SettingsStatusBadge.svelte'
   import type { MenuItem } from '../../shared/ThreadDropdown.svelte'
@@ -17,7 +16,6 @@
   import LocalAiBrewPanel from './LocalAiBrewPanel.svelte'
   import type { BrewJob } from './local-ai-controller.svelte'
   import type { LlamaCppRuntimeStatus } from '$shared/llama-cpp'
-  import { slide } from 'svelte/transition'
 
   interface Props {
     runtime: LlamaCppRuntimeStatus | null
@@ -35,7 +33,6 @@
   let jobExitCode = $state<number | null>(null)
   let jobCancelled = $state(false)
   let jobStopping = $state(false)
-  let expanded = $state(false)
   let copied = $state(false)
   let pendingUninstall = $state(false)
 
@@ -134,7 +131,7 @@
   })
 </script>
 
-<SettingsEntry {expanded}>
+<SettingsEntry>
   <!-- The name and the controls it acts on share one line at every width; only
        the machine details below reflow. -->
   <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -194,12 +191,6 @@
       {/if}
 
       <ThreadDropdown items={menuItems} title="llama.cpp actions" ariaLabel="llama.cpp actions" />
-
-      <SettingsDisclosure
-        {expanded}
-        title={`${expanded ? 'Hide' : 'Show'} llama.cpp details`}
-        onclick={() => (expanded = !expanded)}
-      />
     </div>
   </div>
 
@@ -243,24 +234,12 @@
     </div>
   </div>
 
-  {#if expanded}
-    <div class="mt-3 space-y-2.5 border-t border-border pt-3" transition:slide={{ duration: 150 }}>
-      <p class="text-xs leading-relaxed text-muted">
-        {detectError || runtime?.detail || 'Checking how llama.cpp is available on this machine.'}
-      </p>
-      {#if runtime?.installerPath}
-        <p class="text-xs leading-relaxed text-dimmed">
-          Install, update, and uninstall run <span class="font-mono">{runtime.installerPath}</span>
-          in an embedded terminal, so their output is the real thing.
-        </p>
-      {:else if !installed}
-        <p class="text-xs leading-relaxed text-dimmed">
-          Automatic install runs through Homebrew on macOS only. Install llama.cpp from
-          <span class="font-mono">ggml-org/llama.cpp</span> releases, make
-          <span class="font-mono">llama-server</span> available on PATH, then check again.
-        </p>
-      {/if}
-    </div>
+  {#if runtime && !installed && !canManage}
+    <p class="mt-3 border-t border-border pt-3 text-xs leading-relaxed text-dimmed">
+      Automatic install runs through Homebrew on macOS only. Install llama.cpp from
+      <span class="font-mono">ggml-org/llama.cpp</span> releases, make
+      <span class="font-mono">llama-server</span> available on PATH, then check again.
+    </p>
   {/if}
 </SettingsEntry>
 
