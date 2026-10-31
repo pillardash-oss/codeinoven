@@ -19,6 +19,13 @@
     onProjectCreated: (project: Project) => void | Promise<void>
     /** True while the continue action is in flight. */
     busy?: boolean
+    /** Heading of this picker. The same selector also answers a new thread's
+     *  "which project?", so the heading follows the request. */
+    title?: string
+    /** The one-line explanation of what picking a project does. */
+    description?: string
+    /** The confirming button, named after the action it performs. */
+    confirmLabel?: string
   }
 
   let {
@@ -28,11 +35,18 @@
     onClose,
     onContinue,
     onProjectCreated,
-    busy = false
+    busy = false,
+    title = 'Continue chat in a project',
+    description = 'Continue this chat as a thread inside a project. The conversation carries over and you keep prompting from there.',
+    confirmLabel = 'Continue in project'
   }: Props = $props()
 
   let query = $state('')
   let selectedId = $state<string | null>(null)
+
+  /** The picked project, resolved against the live list: an id left over from an
+   *  earlier open whose project is gone selects nothing and cannot be confirmed. */
+  const selected = $derived(projects.find((project) => project.id === selectedId) ?? null)
 
   const filtered = $derived(
     projects.filter((project) => {
@@ -47,10 +61,8 @@
   )
 
   function confirm(): void {
-    if (busy) return
-    const project = projects.find((candidate) => candidate.id === selectedId)
-    if (!project) return
-    void onContinue(project)
+    if (busy || !selected) return
+    void onContinue(selected)
   }
 
   function handleCreated(project: Project): void {
@@ -60,11 +72,10 @@
   }
 </script>
 
-<Modal {open} title="Continue chat in a project" {onClose}>
+<Modal {open} {title} {onClose}>
   <div class="flex flex-col gap-4">
     <p class="text-sm leading-relaxed text-muted">
-      Continue this chat as a thread inside a project. The conversation carries over and you keep
-      prompting from there.
+      {description}
     </p>
 
     <div class="relative">
@@ -89,7 +100,7 @@
                 project.id
                   ? 'bg-overlay'
                   : ''}"
-                title="Continue in {project.name}"
+                title="Choose {project.name}"
                 aria-pressed={selectedId === project.id}
                 disabled={busy}
                 onclick={() => (selectedId = project.id)}
@@ -115,7 +126,7 @@
           <CioFolder size={20} class="text-dimmed" />
           <p class="text-sm text-muted">No {query.trim() ? 'matching' : ''} projects</p>
           <p class="text-xs text-dimmed">
-            Add a local folder or an Oven project below to continue.
+            Add a local folder or an Oven project below to choose from.
           </p>
         </div>
       {/if}
@@ -123,7 +134,7 @@
 
     <div class="flex items-center justify-between border-t border-border pt-3">
       <span class="text-xs text-dimmed">New project</span>
-      <ProjectCreateControl onProjectCreated={handleCreated} title="Add a project to continue in" />
+      <ProjectCreateControl onProjectCreated={handleCreated} title="Add a project" />
     </div>
   </div>
 
@@ -139,11 +150,11 @@
     <button
       type="button"
       class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-      title="Continue this chat in the selected project"
-      disabled={!selectedId || busy}
+      title={confirmLabel}
+      disabled={!selected || busy}
       onclick={confirm}
     >
-      Continue in project
+      {confirmLabel}
     </button>
   {/snippet}
 </Modal>

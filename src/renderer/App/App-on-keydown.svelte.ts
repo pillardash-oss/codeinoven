@@ -188,6 +188,14 @@ export class AppOnKeydown extends BoardUnit<App> {
       workspaceState.requestCreateThread()
       return
     }
+    // The Threads view mints project threads, so a new thread there still needs a
+    // project: ask which one with the project picker instead of starting the
+    // add-project flow, matching the view's own new-thread button. The Projects
+    // view is where projects themselves are added, so it keeps that flow.
+    if (this.activeView === 'threads') {
+      workspaceState.requestCreateThread()
+      return
+    }
     workspaceState.requestAddProject()
   }
 

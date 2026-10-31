@@ -45,6 +45,7 @@
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import { fullscreenFileChatHost } from '$lib/fullscreen-file-chat-portal'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
+  import ContinueInProjectModal from '../threads/ContinueInProjectModal.svelte'
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
   import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
@@ -803,6 +804,22 @@
     <WorkspaceBrowserDownloadsModal browser={board.switcherPanelTabs.browser} />
   {/await}
 {/if}
+
+<!-- A new thread with no project open has no project to belong to yet, so the
+     header's new-thread action (and Cmd/Ctrl+N) asks with the same project
+     selector the chat hand-off uses. The chosen project mints the empty thread. -->
+<ContinueInProjectModal
+  open={board.newThreadPicker.open}
+  title="New thread in a project"
+  description="Choose the project this thread belongs to. It opens empty, ready for your first message."
+  confirmLabel="Create thread"
+  projects={board.newThreadPicker.projects}
+  projectIcons={board.newThreadPicker.projectIcons}
+  busy={board.newThreadPicker.busy}
+  onClose={board.newThreadPicker.close}
+  onContinue={(project) => void board.newThreadPicker.pick(project)}
+  onProjectCreated={(project) => void board.newThreadPicker.projectCreated(project)}
+/>
 
 <WorkspaceRemoveProjectModals dialogs={board.createThreadInProject.projectDialogs} />
 
