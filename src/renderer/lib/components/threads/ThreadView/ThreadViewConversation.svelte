@@ -710,6 +710,7 @@
                 {@const traceIsLive =
                   board.unmirroredTraceStartTime.threadWorking &&
                   isCurrentAssistantTurn &&
+                  !turnDone &&
                   !board.unmirroredTraceStartTime.brainstormReportRefreshing}
                 {@const traceIsRestored =
                   board.buildSpecActionPrompt.restoredBusy &&
