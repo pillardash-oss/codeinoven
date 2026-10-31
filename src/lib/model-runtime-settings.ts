@@ -68,6 +68,19 @@ export function modelContextWindowOptions(
 }
 
 /**
+ * Whether the model states more than one window, so there is a window to pick.
+ *
+ * A single window is the model's own metric, not a choice: menus load real
+ * limits from model metadata, so almost every model reports one, and offering
+ * that lone value as a control is a menu with nothing to decide.
+ */
+export function modelOffersContextWindowChoice(
+  model: Pick<ProviderModel, 'contextWindow' | 'contextWindows'> | undefined
+): boolean {
+  return modelContextWindowOptions(model).length > 1
+}
+
+/**
  * A stored window survives only while the model still offers it. Anything else
  * belongs to a model (or an account) the user has already left.
  */
@@ -105,7 +118,7 @@ export function hasModelRuntimeSettings(
     model?.fastSupported === true ||
     (modelPropertiesAreAccountScoped(harnessId, providerId) &&
       model?.ultrafastSupported === true) ||
-    modelContextWindowOptions(model).length > 0
+    modelOffersContextWindowChoice(model)
   )
 }
 
