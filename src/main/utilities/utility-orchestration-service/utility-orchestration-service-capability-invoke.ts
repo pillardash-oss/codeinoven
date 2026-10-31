@@ -12,6 +12,7 @@ import type {
 } from '../../../lib/types'
 import {
   APP_ARTIFACT_UTILITY_ID,
+  APP_CITE_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
@@ -20,6 +21,7 @@ import {
   APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from '../utility-registry-service'
+import { CITE_ENTRY_LIMIT, CITE_OPERATIONS, CITE_PATH_LIMIT } from '../../../lib/cited-work'
 import { CUA_PLAYBOOK } from '../cio-cua-prompt'
 import { mcpCatalogPayload } from '../mcp-tool-catalog'
 import {
@@ -460,6 +462,12 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
     if (resolved.utility.id === ASSISTANT_REPORT_UTILITY_ID) {
       return { tools: ASSISTANT_REPORT_OPERATIONS }
     }
+    if (resolved.utility.id === APP_CITE_UTILITY_ID) {
+      return {
+        instructions: (resolved.utility.config as { instructions: string }).instructions,
+        tools: CITE_OPERATIONS
+      }
+    }
     if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
       return {
         instructions: (resolved.utility.config as { instructions: string }).instructions,
@@ -721,6 +729,20 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
           ? undefined
           : requiredString(body, 'markdown', ASSISTANT_REPORT_BODY_LIMIT)
       result = await saveReport(title, markdown)
+    } else if (resolved.utility.id === APP_CITE_UTILITY_ID) {
+      if (operation !== 'cite_report') {
+        throw new Error('The cited-work capability exposes cite_report only')
+      }
+      const cite = state.request.citeWork
+      if (!cite) throw new Error('Cited work can only be recorded on a live turn')
+      const requested = operationInput['paths']
+      if (!Array.isArray(requested) || requested.length === 0) {
+        throw new Error('paths must list at least one workspace-relative path')
+      }
+      const paths = requested
+        .slice(0, CITE_ENTRY_LIMIT)
+        .map((path) => requiredString(path, 'paths', CITE_PATH_LIMIT))
+      result = await cite(paths)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.host.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')

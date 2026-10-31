@@ -3,7 +3,12 @@ import { performance } from 'node:perf_hooks'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../system/logger'
-import type { AgentMessage, HistoryRole, UserMessageSummary } from '../../lib/types'
+import type {
+  AgentMessage,
+  HistoryRole,
+  TurnCheckpointSummary,
+  UserMessageSummary
+} from '../../lib/types'
 import type {
   DatabaseWorkerFactory,
   WorkerBackupResult,
@@ -342,6 +347,25 @@ export class Database {
     maxRows: number
   ): Promise<{ ok: boolean; messages: UserMessageSummary[]; truncated: boolean; error?: string }> {
     return this.queries.queryUserMessagesViaWorker(sql, params, maxRows)
+  }
+
+  /**
+   * Bounded read of turn checkpoints decoded and summarized on the worker's
+   * connection. Callers fall back to the primary connection themselves when the
+   * worker is unavailable, because that fallback has to read and repair the rows
+   * in this process.
+   */
+  async queryCheckpointSummariesViaWorker(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<{
+    ok: boolean
+    summaries: TurnCheckpointSummary[]
+    failed: string[]
+    error?: string
+  }> {
+    return this.queries.queryCheckpointSummariesViaWorker(sql, params, maxRows)
   }
 
   /** Single write statement on the worker's connection; primary fallback. */

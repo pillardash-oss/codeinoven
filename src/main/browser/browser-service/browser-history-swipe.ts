@@ -13,7 +13,14 @@ const documents = new WeakMap<WebContents, SwipeDocument>()
 const SWIPE_WORLD_ID = 1001
 const NAVIGATION_COOLDOWN_MS = 800
 
-/** Runs wholly in the page renderer's isolated world, with no app API exposed. */
+/**
+ * Runs wholly in the page renderer's isolated world, with no app API exposed.
+ *
+ * Only a trackpad swipe walks history. A mouse wheel, and above all the tilt
+ * wheel on a Logitech M720, is told apart from that swipe by its per-event
+ * shape: detent-sized jumps that wait out a detent's gap are a wheel turning,
+ * and their horizontal travel stays the page's own panning.
+ */
 function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
   const host = window as Window & {
     __cioHistorySwipe?: (until: number) => Promise<HistoryDirection>
@@ -24,12 +31,23 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
   const idleMs = 280
   const maximumDurationMs = 1400
   const horizontalRatio = 3
+  /** One detent of a mouse wheel, reported as a single jump of this size or more. */
+  const wheelDetentPixels = 28
+  /** How far apart two detents of the same wheel turn can arrive. */
+  const wheelDetentGapMs = 32
+  /** Detents in one gesture that make the gesture a wheel, not a swipe. */
+  const wheelDetentsBeforeWheel = 2
+  /** Frames a real swipe spends covering the distance a wheel covers in a few. */
+  const minimumSwipeEvents = 4
   let resolveSwipe: ((direction: HistoryDirection) => void) | null = null
   let notBefore = cooldownUntil
   let lastAt = 0
   let startedAt = 0
   let horizontal = 0
   let vertical = 0
+  let wheelEvents = 0
+  let wheelDetents = 0
+  let lastMagnitude = 0
   let blocked = false
   let completed = false
 
@@ -38,6 +56,9 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
     startedAt = 0
     horizontal = 0
     vertical = 0
+    wheelEvents = 0
+    wheelDetents = 0
+    lastMagnitude = 0
     blocked = false
     completed = false
   }
@@ -85,12 +106,27 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
       // after this observer. A prevented wheel belongs to the page.
       queueMicrotask(() => {
         const now = Date.now()
+        const gap = lastAt === 0 ? Number.POSITIVE_INFINITY : now - lastAt
         if (now - lastAt > idleMs) reset()
         const first = lastAt === 0
         lastAt = now
         if (first) {
           startedAt = now
           blocked = pageOwnsGesture(path, event.deltaX)
+        }
+        wheelEvents += 1
+        // A wheel, including the tilt wheel of a Logitech M720, reports either one
+        // large jump per detent or a steady repeat of the same step, and its
+        // detents cannot repeat faster than the wheel is physically turned. A
+        // trackpad instead reports varied steps of a few pixels, packed far
+        // closer together than that. A step of either wheel shape that also waits
+        // out a detent's gap is therefore a wheel, whose horizontal travel belongs
+        // to the page's own panning rather than to history.
+        const magnitude = Math.abs(event.deltaX)
+        const detentStep = magnitude >= 1 && magnitude === lastMagnitude
+        lastMagnitude = magnitude
+        if (gap >= wheelDetentGapMs && (magnitude >= wheelDetentPixels || detentStep)) {
+          wheelDetents += 1
         }
         if (
           event.defaultPrevented ||
@@ -106,6 +142,13 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
           blocked = true
         }
         if (blocked || completed || now < notBefore || now - startedAt > maximumDurationMs) return
+        // The gesture is a wheel turning, already recognised by two detents. It
+        // keeps that identity until the wheel goes idle, so a long tilt can never
+        // accumulate its way into a history navigation.
+        if (wheelDetents >= wheelDetentsBeforeWheel) {
+          blocked = true
+          return
+        }
         // Reversing a swipe cancels it; distance is never accumulated across
         // two opposing motions. Small trackpad jitter is ignored.
         if (Math.abs(event.deltaX) > 1 && horizontal * event.deltaX < 0) {
@@ -120,6 +163,13 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
         }
         if (Math.abs(horizontal) < threshold || Math.abs(horizontal) < vertical * horizontalRatio)
           return
+        // A wheel covers this distance in a few jumps while a swipe spends a dozen
+        // or more frames on it, so a threshold reached by a handful of events is
+        // the last guard against a smooth-scrolling wheel counting as a swipe.
+        if (wheelEvents < minimumSwipeEvents) {
+          blocked = true
+          return
+        }
         if (!resolveSwipe) return
         completed = true
         const resolve = resolveSwipe

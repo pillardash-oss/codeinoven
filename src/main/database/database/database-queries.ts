@@ -1,6 +1,6 @@
 import { Logger } from '../../system/logger'
 import type { DatabaseWorker } from '../database-worker'
-import type { AgentMessage, UserMessageSummary } from '../../../lib/types'
+import type { AgentMessage, TurnCheckpointSummary, UserMessageSummary } from '../../../lib/types'
 import {
   mapMessageRows,
   mapUserMessageRows,
@@ -161,6 +161,36 @@ export class DatabaseQueries {
     const local = runLocalBoundedQuery(this.host, sql, params, maxRows)
     if (!local.ok) return { ok: false, messages: [], truncated: false, error: local.error }
     return { ok: true, messages: mapUserMessageRows(local.rows), truncated: local.truncated }
+  }
+
+  /**
+   * Turn checkpoints decoded, repaired and summarized on the worker's
+   * connection, so neither the snapshot JSON parse nor the diff recomputed for
+   * a turn that stored none runs on the main process.
+   *
+   * Deliberately no primary-connection fallback: that fallback would be the very
+   * main-process work this exists to avoid. Callers that can do the work locally
+   * ask for it themselves (see `CheckpointManager.listSummaries`).
+   */
+  async queryCheckpointSummariesViaWorker(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<{
+    ok: boolean
+    summaries: TurnCheckpointSummary[]
+    failed: string[]
+    error?: string
+  }> {
+    const worker = this.host.getWorker()
+    if (!worker?.isRunning()) {
+      return { ok: false, summaries: [], failed: [], error: 'no maintenance worker' }
+    }
+    const response = await worker.queryCheckpointSummaries(sql, params, maxRows)
+    if (!response.ok) {
+      return { ok: false, summaries: [], failed: [], error: response.error ?? 'query failed' }
+    }
+    return { ok: true, summaries: response.summaries ?? [], failed: response.failed ?? [] }
   }
 
   /**

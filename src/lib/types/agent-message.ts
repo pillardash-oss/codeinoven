@@ -250,6 +250,19 @@ export type AgentPart =
       messageID: string
       presentation: UserMessagePresentation
     }
+  | {
+      type: 'cited'
+      id: string
+      messageID: string
+      /** The name the card leads with: the entry's own name, or a report's title. */
+      name: string
+      /** Workspace-relative path the card opens. */
+      path: string
+      /** A folder opens in the file tree; a file opens in the file viewer. */
+      kind: 'file' | 'directory'
+      /** Last modification time of the entry on disk. */
+      modifiedAt: number
+    }
 
 /** A generated image that can be previewed from a conversation or its context sidebar. */
 export interface AgentArtifact {

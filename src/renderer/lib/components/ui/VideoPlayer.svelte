@@ -3,6 +3,8 @@
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioPause from '@pdslng/cio-icon/CioPause.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioSkipBack from '@pdslng/cio-icon/CioSkipBack.svelte'
+  import CioSkipForward from '@pdslng/cio-icon/CioSkipForward.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type { Snippet } from 'svelte'
@@ -25,6 +27,40 @@
   const measuredRatios = new SvelteMap<string, number>()
   /** What an unmeasured video reserves: the shape nearly every recording has. */
   const FALLBACK_RATIO = 16 / 9
+
+  /** The part of a painted-frame report this player reads. */
+  interface PaintedFrame {
+    /** The media time of the frame just presented, in seconds. */
+    mediaTime: number
+  }
+
+  /** One square, icon-only control on the transport row. */
+  const CONTROL_BUTTON =
+    'flex size-7 shrink-0 items-center justify-center text-white/85 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-default disabled:text-white/35 disabled:hover:bg-transparent'
+
+  /** The frame rates a recording is almost certainly one of. */
+  const FRAME_RATES = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60]
+
+  /**
+   * The frame interval a measured one is within a percent of, or the measurement.
+   *
+   * The gap between two painted frames is what a callback measures, and it
+   * jitters by a millisecond or two. Snapping it to the rate it is that close to
+   * keeps stepping on the recording's own grid instead of drifting off it.
+   */
+  function snapFrameRate(measured: number): number {
+    let best = measured
+    let error = measured * 0.02
+    for (const fps of FRAME_RATES) {
+      const interval = 1 / fps
+      const distance = Math.abs(interval - measured)
+      if (distance < error) {
+        error = distance
+        best = interval
+      }
+    }
+    return best
+  }
 
   /**
    * The app's video player.
@@ -131,9 +167,30 @@
   let failed = $state(false)
   let scrubbing = $state(false)
   let scrubValue = $state(0)
+  /**
+   * How long one frame of this recording lasts, in seconds.
+   *
+   * Media metadata carries no frame rate, so it starts at the rate nearly every
+   * recording uses and is corrected from the frames the element reports painting
+   * while it plays. It is the grid both a single step and the track's arrow keys
+   * land on.
+   */
+  let frameDuration = $state(1 / 30)
+  /** The newest frame the element reported painting, in seconds. */
+  let paintedAt = -1
 
   /** The box the picture reserves, so metadata can land without moving it. */
   const ratio = $derived(measuredRatio ?? measuredRatios.get(src) ?? FALLBACK_RATIO)
+
+  /** `m:ss.cc`: hundredths, so moving one frame is visible in the readout. */
+  function timecode(seconds: number): string {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
+    const hundredths = Math.round(seconds * 100)
+    const hours = Math.floor(hundredths / 360_000)
+    const minutes = Math.floor((hundredths % 360_000) / 6000)
+    const tail = ((hundredths % 6000) / 100).toFixed(2).padStart(5, '0')
+    return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${tail}` : `${minutes}:${tail}`
+  }
 
   /** `m:ss`, or `h:mm:ss` once a recording runs past an hour. */
   function clock(seconds: number): string {
@@ -173,12 +230,123 @@
     muted = element.muted
   }
 
-  function seekTo(value: number): void {
+  /** The newest position a scrub has asked for, while a seek is still resolving. */
+  let previewTarget: number | null = null
+  let seekInFlight = false
+  let seekTimer: ReturnType<typeof setTimeout> | undefined
+
+  /**
+   * Move the picture while the thumb is still down.
+   *
+   * A range input reports every position the pointer crosses, and assigning each
+   * of them to `currentTime` while the previous one is still resolving makes the
+   * decoder drop its work and start again: measured in the app's browser against
+   * a 30fps recording, a drag across two seconds presented three frames that way,
+   * so the picture sat still and jumped only when the pointer was released. One
+   * seek at a time, each one taking the newest position reached, presented 31
+   * frames for that same gesture, which is what makes a still frame reachable
+   * without ever pressing play.
+   */
+  function previewSeek(value: number): void {
+    scrubValue = value
+    if (duration === 0) return
+    previewTarget = value
+    pumpPreview()
+  }
+
+  function pumpPreview(): void {
+    if (seekInFlight || previewTarget === null) return
     const element = video
     if (!element) return
+    const next = previewTarget
+    previewTarget = null
+    startSeek()
+    element.currentTime = next
+  }
+
+  /**
+   * Mark a seek as running, and release it if the element never reports it.
+   *
+   * A read that stalls never fires `seeked`, and a flag stuck on would end the
+   * scrub there, so the bound is what keeps the newest position still applied.
+   */
+  function startSeek(): void {
+    seekInFlight = true
+    clearTimeout(seekTimer)
+    seekTimer = setTimeout(() => {
+      seekInFlight = false
+      pumpPreview()
+    }, 1_000)
+  }
+
+  /** The element finished the seek it was given: ask it for the next position. */
+  function settleSeek(): void {
+    seekInFlight = false
+    clearTimeout(seekTimer)
+    pumpPreview()
+  }
+
+  function seekTo(value: number): void {
+    previewTarget = null
+    const element = video
+    if (!element) return
+    startSeek()
     element.currentTime = value
     currentTime = value
   }
+
+  /**
+   * Land on the frame beside the one on screen, still.
+   *
+   * Stepping stops the recording first, because the point of the gesture is to
+   * study a still. The element reports the newest frame it painted, and a forward
+   * step that would land inside that same frame is pushed a hair past it: seeking
+   * from a still that the decoder has already presented is otherwise the press
+   * that appears to do nothing.
+   */
+  function stepFrame(direction: 1 | -1): void {
+    const element = video
+    if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return
+    if (!element.paused) {
+      element.pause()
+      playing = false
+    }
+    started = true
+    const step = frameDuration
+    let next = element.currentTime + direction * step
+    if (direction > 0 && paintedAt >= 0 && next <= paintedAt + step / 2) next = paintedAt + step
+    const last = Math.max(0, element.duration - step / 2)
+    seekTo(Math.min(last, Math.max(0, next)))
+  }
+
+  // The element reports every frame it paints, which is the only place a
+  // recording's frame rate can be read: a step that lands on exactly one frame,
+  // and a track whose arrow keys move that same frame, both need it.
+  $effect(() => {
+    const element = video
+    if (!element) return
+    let handle = 0
+    let stopped = false
+    let previous = -1
+    const observe = (_now: number, metadata: PaintedFrame): void => {
+      if (stopped) return
+      paintedAt = metadata.mediaTime
+      if (previous >= 0 && !element.paused) {
+        const gap = metadata.mediaTime - previous
+        if (gap > 0.008 && gap < 0.06) {
+          const measured = snapFrameRate(gap)
+          if (Math.abs(measured - frameDuration) > 1e-4) frameDuration = measured
+        }
+      }
+      previous = metadata.mediaTime
+      handle = element.requestVideoFrameCallback(observe)
+    }
+    handle = element.requestVideoFrameCallback(observe)
+    return () => {
+      stopped = true
+      if (handle !== 0) element.cancelVideoFrameCallback(handle)
+    }
+  })
 
   function retry(): void {
     failed = false
@@ -251,6 +419,12 @@
         currentTime = event.currentTarget.currentTime
         onTime?.(currentTime)
       }}
+      onseeked={(event) => {
+        settleSeek()
+        if (scrubbing) return
+        currentTime = event.currentTarget.currentTime
+        onTime?.(currentTime)
+      }}
       onplay={() => {
         playing = true
         started = true
@@ -261,6 +435,8 @@
         currentTime = duration
       }}
       onerror={(event) => {
+        seekInFlight = false
+        clearTimeout(seekTimer)
         failed = true
         playing = false
         const element = event.currentTarget
@@ -386,7 +562,7 @@
     >
       <button
         type="button"
-        class="flex size-7 shrink-0 items-center justify-center text-white/85 transition-colors hover:bg-white/10 hover:text-white"
+        class={CONTROL_BUTTON}
         aria-label={playing ? `Pause ${label}` : `Play ${label}`}
         title={playing ? `Pause ${label}` : `Play ${label}`}
         onclick={() => void togglePlay()}
@@ -398,8 +574,33 @@
         {/if}
       </button>
 
+      <!-- One frame at a time, in both directions: the recording can be studied
+           still, without playing it, which is what a scrub track alone does not
+           give. -->
+      <button
+        type="button"
+        class={CONTROL_BUTTON}
+        disabled={duration === 0}
+        aria-label="Previous frame of {label}"
+        title="Previous frame of {label}"
+        onclick={() => stepFrame(-1)}
+      >
+        <CioSkipBack size={13} aria-hidden="true" />
+      </button>
+
+      <button
+        type="button"
+        class={CONTROL_BUTTON}
+        disabled={duration === 0}
+        aria-label="Next frame of {label}"
+        title="Next frame of {label}"
+        onclick={() => stepFrame(1)}
+      >
+        <CioSkipForward size={13} aria-hidden="true" />
+      </button>
+
       <span class="shrink-0 font-mono text-[0.6875rem] tabular-nums text-white/85">
-        {clock(scrubbing ? scrubValue : currentTime)}
+        {timecode(scrubbing ? scrubValue : currentTime)}
       </span>
 
       <SeekBar
@@ -407,7 +608,7 @@
         value={scrubbing ? scrubValue : currentTime}
         min={0}
         max={Math.max(duration, 0.1)}
-        step={0.1}
+        step={frameDuration}
         label="Seek {label}"
         disabled={duration === 0}
         onScrubStart={(value) => {
@@ -417,8 +618,13 @@
         onScrubEnd={() => {
           scrubbing = false
         }}
-        onInput={(value) => (scrubValue = value)}
-        onCommit={() => seekTo(scrubValue)}
+        onInput={previewSeek}
+        onCommit={() => {
+          // The release is the one signal a missed pointerup cannot swallow:
+          // settling here is what returns the readout to the element's own clock.
+          scrubbing = false
+          seekTo(scrubValue)
+        }}
       />
 
       <span class="shrink-0 font-mono text-[0.6875rem] tabular-nums text-white/70">
@@ -427,7 +633,7 @@
 
       <button
         type="button"
-        class="flex size-7 shrink-0 items-center justify-center text-white/85 transition-colors hover:bg-white/10 hover:text-white"
+        class={CONTROL_BUTTON}
         aria-label={muted ? `Unmute ${label}` : `Mute ${label}`}
         title={muted ? `Unmute ${label}` : `Mute ${label}`}
         aria-pressed={muted}
@@ -443,7 +649,7 @@
       {#if onExpand}
         <button
           type="button"
-          class="flex size-7 shrink-0 items-center justify-center text-white/85 transition-colors hover:bg-white/10 hover:text-white"
+          class={CONTROL_BUTTON}
           aria-label="Open {label} full screen"
           title="Open {label} full screen"
           onclick={handOver}

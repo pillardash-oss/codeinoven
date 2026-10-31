@@ -34,6 +34,7 @@ import {
 } from './repositories/agent-message-repo'
 import { mapMessageRows, mapUserMessageRows } from './repositories/agent-message-repo'
 import { runHistoryAppend, type HistoryAppendArgs } from './repositories/history-repo'
+import { summarizeCheckpointRows } from '../storage/checkpoint/checkpoint-summary'
 import { buildTranscriptMarkdown } from '../../lib/transcript'
 import { buildBoundedQuery } from './bounded-query'
 
@@ -573,6 +574,31 @@ function queryUserMessages(
   }
 }
 
+/**
+ * Bounded read of turn checkpoints, decoded and summarized here.
+ *
+ * A checkpoint row embeds two whole-project snapshots, so parsing a thread's
+ * history costs megabytes of JSON plus the diff recomputed for every turn that
+ * stored none. Both happen on this thread and only the finished summaries cross
+ * the port, which keeps the cost off the process that answers IPC.
+ */
+function queryCheckpointSummaries(
+  request: Extract<DatabaseWorkerRequest, { kind: 'checkpoint-summaries' }>
+): DatabaseWorkerResult {
+  try {
+    const { rows } = boundedRows(request.sql, request.params, request.maxRows)
+    const { summaries, failed } = summarizeCheckpointRows(rows)
+    return {
+      kind: 'checkpoint-summaries',
+      ok: true,
+      summaries,
+      ...(failed.length > 0 ? { failed } : {})
+    }
+  } catch (error) {
+    return { kind: 'checkpoint-summaries', ok: false, error: String(error) }
+  }
+}
+
 function execute(
   request: Extract<DatabaseWorkerRequest, { kind: 'execute' }>
 ): DatabaseWorkerResult {
@@ -685,6 +711,8 @@ function handle(
       return queryMessages(request)
     case 'query-user-messages':
       return queryUserMessages(request)
+    case 'checkpoint-summaries':
+      return queryCheckpointSummaries(request)
     case 'execute':
       return execute(request)
     case 'transaction':

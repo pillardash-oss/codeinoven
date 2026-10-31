@@ -6,6 +6,10 @@ import { APP_SLUG } from '../../lib/brand'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
 import { toPosixPath } from '../../lib/paths'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
+import {
+  CHECKPOINT_ROOT_MISMATCH,
+  diffCheckpointFiles
+} from '../storage/checkpoint/checkpoint-summary'
 
 const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
   '.git',
@@ -366,20 +370,16 @@ export class ChangeTrackingService {
   }
 
   calculateChanges(before: ProjectCheckpoint, after: ProjectCheckpoint): CheckpointChange[] {
-    if (before.projectRoot !== after.projectRoot) {
-      throw new CheckpointSafetyError('Cannot compare checkpoints from different project roots')
-    }
-    const paths = new Set([...Object.keys(before.files), ...Object.keys(after.files)])
-    return [...paths].sort().flatMap((path): CheckpointChange[] => {
-      const beforeFile = before.files[path]
-      const afterFile = after.files[path]
-      if (!beforeFile && afterFile) return [{ path, kind: 'created', after: afterFile }]
-      if (beforeFile && !afterFile) return [{ path, kind: 'deleted', before: beforeFile }]
-      if (beforeFile && afterFile && beforeFile.hash !== afterFile.hash) {
-        return [{ path, kind: 'modified', before: beforeFile, after: afterFile }]
+    try {
+      return diffCheckpointFiles(before, after)
+    } catch (error) {
+      // The diff is shared with the database worker, which cannot depend on this
+      // module's error types, so the safety error is re-raised here.
+      if (error instanceof Error && error.message === CHECKPOINT_ROOT_MISMATCH) {
+        throw new CheckpointSafetyError(error.message)
       }
-      return []
-    })
+      throw error
+    }
   }
 
   async readBlob(hash: string): Promise<Uint8Array | null> {

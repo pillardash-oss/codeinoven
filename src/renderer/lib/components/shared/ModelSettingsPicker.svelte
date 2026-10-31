@@ -7,7 +7,10 @@
   import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
-  import { offeredContextWindow } from '$shared/model-runtime-settings'
+  import {
+    modelOffersContextWindowChoice,
+    offeredContextWindow
+  } from '$shared/model-runtime-settings'
   import type { InferenceMode } from '$shared/types'
 
   interface Props {
@@ -60,6 +63,16 @@
   let displayedContextWindow = $derived(
     offeredContextWindow({ contextWindow: defaultContextWindow, contextWindows }, contextWindow) ??
       defaultContextWindow
+  )
+  /**
+   * The windows worth listing. A model that states one window has nothing to
+   * choose, so it gets no Context window section: the metadata that fills those
+   * limits covers nearly every model, and one lone option is not a control.
+   */
+  let contextChoices = $derived(
+    modelOffersContextWindowChoice({ contextWindow: defaultContextWindow, contextWindows })
+      ? contextWindows
+      : []
   )
   let summary = $derived(
     `${currentSpeed.label}${displayedContextWindow ? ` · ${contextLabel(displayedContextWindow)}${contextWindow === undefined ? ' (default)' : ''}` : ''}`
@@ -131,10 +144,10 @@
           </button>
         </DropdownMenu.Item>
       {/each}
-      {#if contextWindows.length > 0}
+      {#if contextChoices.length > 0}
         <DropdownMenu.Separator class="my-1 h-px bg-border" />
         <div class="px-2 py-1.5 text-[0.625rem] font-medium text-muted">Context window</div>
-        {#each contextWindows as tokens (tokens)}
+        {#each contextChoices as tokens (tokens)}
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
             title={`Use ${contextLabel(tokens)} context window`}

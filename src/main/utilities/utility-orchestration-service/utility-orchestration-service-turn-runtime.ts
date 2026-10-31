@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'crypto'
 import {
   APP_ARTIFACT_UTILITY_ID,
+  APP_CITE_UTILITY_ID,
   APP_ADB_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
@@ -313,6 +314,11 @@ export class UtilityOrchestrationServiceTurnRuntime {
             `Before probing an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the device playbook. Follow project Android guidance first; use this playbook for gaps. Re-list lost docs with ${UTILITY_DOCS_TOOL_NAME}.`
           ]
         : []),
+      ...(eligible.some(({ utility }) => utility.id === APP_CITE_UTILITY_ID)
+        ? [
+            `When this turn produces something the user will open again outside your answer (a report, a document, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. The app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well.`
+          ]
+        : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)
         ? [
             `For requested inline artifacts, activate ${APP_ARTIFACT_UTILITY_ID} before producing output: it renders images, audio, HTML and SVG, and it delivers a video the video capability exported. It never makes a video itself, so a video request goes to ${APP_VIDEO_UTILITY_ID} first and is rendered here afterwards. Ordinary design or video work uses its task-specific capability.`
@@ -320,7 +326,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. The page this conversation's thread browser is on is readable in whatever box the user put it: pass page "user" when they refer to the page they are looking at, and page "agent" for a page you opened. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. The page this conversation's thread browser is on is readable in whatever box the user put it: pass page "user" when they refer to the page they are looking at (it stays on the tab it resolved for you), page "strip" for whatever that browser shows right now, and page "agent" for a page you opened. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
           ]
         : []),
       ...(hasDesignCapability

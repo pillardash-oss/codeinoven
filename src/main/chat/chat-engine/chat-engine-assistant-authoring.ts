@@ -34,7 +34,7 @@ import {
   assistantKnowledgeComplete
 } from '../../../lib/types'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
-import { writeAssistantReport } from '../assistant-report-service'
+import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
@@ -293,7 +293,7 @@ export class ChatEngineAssistantAuthoring {
   }
 
   /**
-   * Publish one settled assistant run's report as a durable Markdown file under
+   * File one settled assistant run's report as a durable Markdown file under
    * `reports/` in the assistant's own workspace.
    *
    * Only a run that declared a report through the report capability reaches the
@@ -301,24 +301,28 @@ export class ChatEngineAssistantAuthoring {
    * a check-in or a chat reply leaves no file and is never dressed up as a report.
    *
    * A thread is capped and evicted, so a report that only ever lived in the run
-   * transcript disappears with it. Fire-and-forget and swallowed on error: the
-   * durable copy is best-effort bookkeeping and must never block or fail the
-   * turn's finalization.
+   * transcript disappears with it. Swallowed on error: the durable copy is
+   * best-effort bookkeeping and must never block or fail the turn's finalization.
+   *
+   * The filed file is returned rather than announced here. Announcing belongs to
+   * the citations unit, which publishes one row for everything the turn left
+   * behind, and the report joins it because its path is app-owned.
    */
-  captureAssistantReport(
+  async captureAssistantReport(
     thread: Thread,
     turnAssistant: AgentMessage | undefined,
     status: ThreadStatus
-  ): void {
+  ): Promise<{ title: string; citation: string } | null> {
     const declared = this.host.state.declaredAssistantReports.get(thread.id)
     this.host.state.declaredAssistantReports.delete(thread.id)
-    if (!declared) return
-    if (!isAssistantReportThread(thread)) return
-    if (!assistantReportIsTerminal(status)) return
-    if (!turnAssistant) return
+    if (!declared) return null
+    if (!isAssistantReportThread(thread)) return null
+    if (!assistantReportIsTerminal(status)) return null
+    if (!turnAssistant) return null
     const report = (declared.markdown ?? assistantText(turnAssistant)).trim()
-    if (report.length === 0) return
-    void this.writeAssistantReportFor(thread, declared.title, report, status)
+    if (report.length === 0) return null
+    const written = await this.writeAssistantReportFor(thread, declared.title, report, status)
+    return written ? { title: declared.title, citation: written.citation } : null
   }
 
   async writeAssistantReportFor(
@@ -326,7 +330,7 @@ export class ChatEngineAssistantAuthoring {
     title: string,
     report: string,
     status: ThreadStatus
-  ): Promise<void> {
+  ): Promise<AssistantReportFile | null> {
     try {
       const assistant = thread.assistantId
         ? this.host.state.assistantRepo.get(thread.assistantId)
@@ -341,7 +345,7 @@ export class ChatEngineAssistantAuthoring {
         )
         if (task) taskTitle = task.title
       }
-      await writeAssistantReport(this.host.storage, {
+      return await writeAssistantReport(this.host.storage, {
         thread,
         title,
         taskTitle,
@@ -356,6 +360,7 @@ export class ChatEngineAssistantAuthoring {
         threadId: thread.id,
         error: rawErrorMessage(error)
       })
+      return null
     }
   }
 

@@ -22,6 +22,7 @@ import type { BrowserService } from '../browser-service'
  */
 export interface ConversationPagesHost {
   readonly agentTabIds: BrowserService['agentTabIds']
+  readonly agentUserPageTabIds: BrowserService['agentUserPageTabIds']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
   readonly ensureTab: BrowserService['ensureTab']
   readonly load: BrowserService['load']
@@ -67,6 +68,13 @@ export class BrowserServiceConversationPages {
    * page is the default when the agent owns none, and `"user"` asks for it
    * explicitly, so an agent that opened a page of its own can still reach the one
    * that holds the user's session.
+   *
+   * A project's threads share one strip, so the tab the thread browser is on is
+   * not stable: the user switching tabs or a sibling thread showing a preview
+   * moves it. `"user"` therefore answers the tab this agent resolved the first
+   * time and keeps answering it while it lives (see `agentUserPageTabIds`), which
+   * is what stops another conversation's page from becoming this one's target;
+   * `"strip"` is the explicit way to move onto whatever the strip shows now.
    */
   utilityTarget(input: {
     scope: string
@@ -78,22 +86,67 @@ export class BrowserServiceConversationPages {
     const owned = ownedTabId ? this.host.tabs.get(ownedTabId) : undefined
     const ownedTarget =
       owned && ownedTabId ? { tabId: ownedTabId, tab: owned, attached: false } : null
+    if (input.page === 'agent') return ownedTarget
+    if (input.page === 'strip') {
+      const stripPage = this.pinConversationPage(input.scope, input.contextKey, ownedTabId)
+      return stripPage ? { ...stripPage, attached: stripPage.tabId !== ownedTabId } : null
+    }
     if (input.page === 'user') {
-      const userPage = this.conversationPageTab(input.scope)
+      const userPage =
+        this.pinnedConversationPage(input.contextKey) ??
+        this.pinConversationPage(input.scope, input.contextKey, ownedTabId)
       if (!userPage) return null
       // A page the agent opened may itself be the tab the thread browser is on, and
       // then it is still the agent's own page: nothing changes about who may edit
       // it.
       return { ...userPage, attached: userPage.tabId !== ownedTabId }
     }
-    if (input.page === 'agent') return ownedTarget
     if (ownedTarget) return ownedTarget
-    const conversationPage = this.conversationPageTab(input.scope)
+    const conversationPage =
+      this.pinnedConversationPage(input.contextKey) ??
+      this.pinConversationPage(input.scope, input.contextKey, ownedTabId)
     if (conversationPage) return { ...conversationPage, attached: true }
     const pageTabId = this.host.assistantPageTabIds.get(input.threadId)
     if (!pageTabId) return null
     const page = this.host.tabs.get(pageTabId)
     return page ? { tabId: pageTabId, tab: page, attached: true } : null
+  }
+
+  /**
+   * The thread browser page this agent already resolved, while that tab is live.
+   *
+   * A tab the user closed is not an error and not a stale answer: the pin is
+   * dropped here, so the next call resolves the strip's page afresh exactly as the
+   * first one did.
+   */
+  private pinnedConversationPage(contextKey: string): { tabId: string; tab: BrowserTab } | null {
+    const tabId = this.host.agentUserPageTabIds.get(contextKey)
+    if (!tabId) return null
+    const tab = this.host.tabs.get(tabId)
+    if (tab) return { tabId, tab }
+    this.host.agentUserPageTabIds.delete(contextKey)
+    return null
+  }
+
+  /**
+   * Resolve the page the thread browser is on now and pin it to this agent.
+   *
+   * A page the agent opened itself is not pinned: it is already reachable as the
+   * agent's own page, and pinning it would keep naming a tab the next `open`
+   * replaces.
+   */
+  private pinConversationPage(
+    scope: string,
+    contextKey: string,
+    ownedTabId: string | undefined
+  ): { tabId: string; tab: BrowserTab } | null {
+    const page = this.conversationPageTab(scope)
+    if (!page) {
+      this.host.agentUserPageTabIds.delete(contextKey)
+      return null
+    }
+    if (page.tabId !== ownedTabId) this.host.agentUserPageTabIds.set(contextKey, page.tabId)
+    return page
   }
 
   /**
@@ -154,7 +207,8 @@ export class BrowserServiceConversationPages {
    */
   threadBrowserHint(
     scope: string,
-    answeredTabId: string | null
+    answeredTabId: string | null,
+    contextKey: string
   ): {
     threadBrowser?: {
       tabId: string
@@ -163,20 +217,47 @@ export class BrowserServiceConversationPages {
       boxId: string | null
       detail: string
     }
+    /** The tab `page "user"` answers, present when the answer came from another. */
+    userPage?: { tabId: string; url: string; title: string }
   } {
     const page = this.liveConversationPage(scope)
-    if (!page || page.tabId === answeredTabId) return {}
+    const pinned = this.pinnedConversationPage(contextKey)
+    const answered = answeredTabId
+    const hint: {
+      threadBrowser?: {
+        tabId: string
+        url: string
+        title: string
+        boxId: string | null
+        detail: string
+      }
+      userPage?: { tabId: string; url: string; title: string }
+    } = {}
+    if (pinned && pinned.tabId !== answered) hint.userPage = this.describePage(pinned)
+    if (page && page.tabId !== answered) {
+      const strip = this.describePage(page)
+      hint.threadBrowser = {
+        ...strip,
+        boxId: page.tab.boxId,
+        detail:
+          'This conversation\u2019s thread browser is showing this page now, and it moves whenever the user or another conversation opens something in it. Pass page "strip" to read or act on it, or page "agent" for a page you opened.'
+      }
+    }
+    return hint
+  }
+
+  /** What one live tab is showing, as the agent is told about it. */
+  private describePage(page: { tabId: string; tab: BrowserTab }): {
+    tabId: string
+    url: string
+    title: string
+  } {
     const contents = page.tab.view.webContents
     const url = contents.isDestroyed() ? '' : contents.getURL()
     return {
-      threadBrowser: {
-        tabId: page.tabId,
-        url,
-        title: contents.isDestroyed() ? url : contents.getTitle(),
-        boxId: page.tab.boxId,
-        detail:
-          'This conversation\u2019s thread browser is on this page. Pass page "user" to read or act on it, or page "agent" for a page you opened.'
-      }
+      tabId: page.tabId,
+      url,
+      title: contents.isDestroyed() ? url : contents.getTitle()
     }
   }
 

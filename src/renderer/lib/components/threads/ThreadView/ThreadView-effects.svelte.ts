@@ -5,7 +5,7 @@ import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
 import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
 import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
 import { onDestroy, onMount, tick } from 'svelte'
-import { onVoiceComposerReset } from '../../../speech/voice-send'
+import { onVoiceComposerReset, onVoiceDraftLanded } from '../../../speech/voice-send'
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { appQuitState } from '$lib/stores/app-quit.svelte'
 import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
@@ -910,6 +910,20 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.steerQueuedMessage.scheduleIdleAttention()
       })
 
+      // A dictation that nothing on screen could take landed in this thread's
+      // stored draft. The composer renders its own buffer, which never saw the
+      // transcript, so it is rebuilt from the draft here. Without this the words
+      // sat in the mirror, marked the thread as a draft, and only appeared once
+      // the user left the thread and came back to it.
+      const unsubscribeVoiceDraft = onVoiceDraftLanded((draftedProjectId, draftedThreadId) => {
+        if (
+          draftedProjectId !== this.root.handleAgentEvent.thread.projectId ||
+          draftedThreadId !== this.root.handleAgentEvent.thread.id
+        )
+          return
+        this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+      })
+
       // Slash menu inputs: harness commands and the skills visible to the
       // thread's harness. Previously commands only loaded after a harness
       // switch, leaving a freshly mounted thread's slash menu empty. Both only
@@ -1097,6 +1111,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.state.unsubscribeRemoteEvents?.()
         this.root.state.unsubscribeLifecycleInheritance?.()
         unsubscribeVoiceSend()
+        unsubscribeVoiceDraft()
         window.removeEventListener('resize', onResize)
         window.removeEventListener('focus', onWindowFocus)
         clearTimeout(this.root.composerScope.copyResetTimer)

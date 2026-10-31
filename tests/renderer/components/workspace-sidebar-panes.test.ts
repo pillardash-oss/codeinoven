@@ -177,9 +177,17 @@ function renderSidebar(mode: 'projects' | 'chats' | 'threads') {
   return { target, component }
 }
 
-const rowsById = (target: HTMLElement) =>
+/**
+ * Thread rows inside one pane, keyed by thread id.
+ *
+ * Scoped to a pane, not to the whole sidebar: every view's list stays mounted,
+ * and a project folder that is folded still shows the active thread's row, so
+ * the same thread id can be in the DOM in two panes at once. Tests about the
+ * timeline ask for the timeline's rows, not whatever the projects tree holds.
+ */
+const rowsById = (container: Element | null | undefined) =>
   new Map(
-    [...target.querySelectorAll<HTMLElement>('[data-thread-row]')].map((row) => [
+    [...(container?.querySelectorAll<HTMLElement>('[data-thread-row]') ?? [])].map((row) => [
       row.dataset.threadRow ?? '',
       row
     ])
@@ -213,7 +221,7 @@ describe('workspace sidebar panes', () => {
     expect(threadsPane?.hasAttribute('hidden')).toBe(false)
     expect(projectsPane?.hasAttribute('hidden')).toBe(true)
 
-    const timelineRows = rowsById(target)
+    const timelineRows = rowsById(threadsPane)
     expect([...timelineRows.keys()].sort()).toEqual(['alpha-1', 'alpha-2', 'beta-1'])
 
     // Flip to Projects and back, twice, through the same path the shell uses.
@@ -222,7 +230,7 @@ describe('workspace sidebar panes', () => {
       flushSync()
     }
 
-    const afterFlip = rowsById(target)
+    const afterFlip = rowsById(threadsPane)
     for (const [id, row] of timelineRows) {
       expect(afterFlip.get(id), `row ${id} survived the round trip`).toBe(row)
     }
@@ -241,30 +249,32 @@ describe('workspace sidebar panes', () => {
     const threadsPane = target.querySelector('[data-sidebar-pane="threads"]')
     expect(threadsPane).not.toBeNull()
     expect(threadsPane?.hasAttribute('hidden')).toBe(true)
-    // Never shown, so the shell has not paid for its rows yet.
-    expect(rowsById(target).size).toBe(0)
+    // Never shown, so the shell has not paid for its rows yet. (The projects
+    // pane beside it is on screen and draws its folded folders, which is why
+    // this asks the timeline's own pane.)
+    expect(rowsById(threadsPane).size).toBe(0)
 
     // The pane mounts its list in the shell's first idle window instead. Poll
     // rather than assume a frame count: the scheduler waits for two frames and
     // then an idle slot, and jsdom serves both from timers.
     const deadline = Date.now() + 1000
-    while (rowsById(target).size === 0 && Date.now() < deadline) {
+    while (rowsById(threadsPane).size === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
-    const preloaded = rowsById(target)
+    const preloaded = rowsById(threadsPane)
     expect([...preloaded.keys()].sort()).toEqual(['alpha-1', 'alpha-2', 'beta-1'])
 
     component.setMode('threads')
     flushSync()
     expect(threadsPane?.hasAttribute('hidden')).toBe(false)
     for (const [id, row] of preloaded) {
-      expect(rowsById(target).get(id), `row ${id} survived the first switch`).toBe(row)
+      expect(rowsById(threadsPane).get(id), `row ${id} survived the first switch`).toBe(row)
     }
 
     component.setMode('projects')
     flushSync()
     for (const [id, row] of preloaded) {
-      expect(rowsById(target).get(id), `row ${id} stays mounted`).toBe(row)
+      expect(rowsById(threadsPane).get(id), `row ${id} stays mounted`).toBe(row)
     }
 
     void unmount(component)
