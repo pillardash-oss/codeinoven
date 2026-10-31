@@ -1165,11 +1165,11 @@ export class ChatEngineTurnsSessionIdle {
       ) {
         this.host.state.assistantRunSettled(finishedThread.id, finalStatus)
       }
-      // A settled assistant task turn also leaves a durable Markdown report in
-      // the assistant's workspace, so the report outlives the evicted thread. The
-      // in-app report and its notification are unchanged.
-      if (finishedThread && isAssistantThread(finishedThread)) {
-        this.host.units['assistant-authoring'].captureAssistantReport(
+      // A settled turn publishes one card per thing it left behind: the paths it
+      // cited while it worked, plus the report the app filed for an assistant run.
+      // Neither is inferred from the answer, so an ordinary reply leaves no card.
+      if (finishedThread) {
+        void this.host.units['citations'].publishCitedWork(
           finishedThread,
           terminalAssistant,
           finalStatus

@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'crypto'
 import {
   APP_ARTIFACT_UTILITY_ID,
+  APP_CITE_UTILITY_ID,
   APP_ADB_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
@@ -311,6 +312,11 @@ export class UtilityOrchestrationServiceTurnRuntime {
       ...(hasAdbCapability
         ? [
             `Before probing an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the device playbook. Follow project Android guidance first; use this playbook for gaps. Re-list lost docs with ${UTILITY_DOCS_TOOL_NAME}.`
+          ]
+        : []),
+      ...(eligible.some(({ utility }) => utility.id === APP_CITE_UTILITY_ID)
+        ? [
+            `When this turn produces something the user will open again outside your answer (a report, a document, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. The app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)

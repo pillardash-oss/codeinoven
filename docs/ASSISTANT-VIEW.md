@@ -1306,20 +1306,31 @@ time plus a short thread suffix so two runs that settle in the same second do no
 collide. The in-app answer and its notification are unchanged: the file is the
 copy that outlives the thread.
 
-**The app announces the file.** A run is told never to name the path or claim a
-report was saved, so a filed report used to be invisible unless the reader
-happened to browse the workspace panel. `writeAssistantReport` therefore returns
-the written path plus the citation the thread opens through, and
-`announceAssistantReport` publishes one app-owned row under the run's answer. The
-row is an `inlineArtifact` message, the same app-published channel an artifact
-the agent asked to render travels on, so it is not part of the turn, never
-becomes the turn's closing statement, and never displaces the answer the run
-delivered. It carries a typed `report` part (title, workspace-relative
-`reports/<file>.md` path, filing time), and `AssistantReportRow.svelte` draws it
-as the app's report card: the report glyph, its name, when it was filed on the
-12-hour clock, and a right-anchored **Open report** action that reveals the file
-through the same citation reveal a clicked path uses. The time is the filing
-moment, never the schedule's cadence.
+**The turn announces the work, the app draws it.** Nothing about a turn's output
+is inferred from its answer any more. A run that filed a report, built a folder of
+scripts or wrote documents cites them through the app-owned `cio:cite-report`
+capability (`src/lib/cited-work.ts`, operation `cite_report`, workspace-relative
+`paths`): the agent knows what it produced, so it is the one that says so, and the
+app is the one that draws it. The capability is seeded into the app utility
+registry for every harness (`src/main/utilities/utility-registry-service.ts`), so
+any agent can activate and call it, not only assistants.
+
+`ChatEngineCitations` (`src/main/chat/chat-engine/chat-engine-citations.ts`) holds
+the cited paths for the live turn and, when the turn settles, resolves them with
+`resolveCitedEntries` (`src/main/chat/cited-entries-service.ts`): a path that no
+longer exists, escapes the workspace or is a symlink is dropped, so no card opens
+nothing. It then publishes one app-owned row under the answer. The row is an
+`inlineArtifact` message, the same app-published channel an artifact the agent
+asked to render travels on, so it is not part of the turn, never becomes the
+turn's closing statement, and never displaces the answer. Each entry is a typed
+`cited` part (name, path, file or folder, last modification time) and
+`CitedEntryCard.svelte` draws it: the file or folder glyph, its name, `Modified`
+on the 12-hour clock, and a right-anchored **Open file** or **Open folder** action
+that reveals the entry through the same citation reveal a clicked path uses.
+
+The filed report joins that row automatically, and only it: its path is app-owned
+(the app picks the file name and writes it after the turn ends), so the run cannot
+cite it and the file would otherwise be one more thing the reader has to find.
 
 ### Priority
 

@@ -57,6 +57,7 @@ import { ChatEngineThreadsCreate } from './chat-engine-threads-create'
 import { ChatEngineTurnsSessionIdle } from './chat-engine-turns-session-idle'
 import { ChatEngineRankings } from './chat-engine-rankings'
 import { ChatEngineRankingsQueue } from './chat-engine-rankings-queue'
+import { ChatEngineCitations } from './chat-engine-citations'
 
 /** The concern units a ChatEngine delegates to, built once in its constructor. */
 export function buildChatEngineUnits(engine: ChatEngine) {
@@ -90,6 +91,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'messages-write': new ChatEngineMessagesWrite(engine),
     assignment: new ChatEngineAssignment(engine),
     'assistant-authoring': new ChatEngineAssistantAuthoring(engine),
+    citations: new ChatEngineCitations(engine),
     'threads-delete': new ChatEngineThreadsDelete(engine),
     'temporary-chats': new ChatEngineTemporaryChats(engine),
     'turns-steer': new ChatEngineTurnsSteer(engine),

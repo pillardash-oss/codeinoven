@@ -31,7 +31,7 @@
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import InlineMediaFigure from '../InlineMediaFigure.svelte'
   import InlineImageFigure from '../InlineImageFigure.svelte'
-  import AssistantReportRow from '../AssistantReportRow.svelte'
+  import CitedEntryCard from '../CitedEntryCard.svelte'
   import RunChangesCard from '../RunChangesCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import DeferredMarkdownView from '../../markdown/DeferredMarkdownView.svelte'
@@ -339,11 +339,14 @@
                   filename={part.filename ?? 'Media'}
                   onExpand={() => board.editVideoNote.openMessageViewer(msg, part)}
                 />
-              {:else if part.type === 'report'}
-                <AssistantReportRow
-                  title={part.title}
-                  path={part.path}
-                  at={part.at}
+              {:else if part.type === 'cited'}
+                <CitedEntryCard
+                  entry={{
+                    name: part.name,
+                    path: part.path,
+                    kind: part.kind,
+                    modifiedAt: part.modifiedAt
+                  }}
                   projectId={board.handleAgentEvent.thread.projectId}
                 />
               {/if}

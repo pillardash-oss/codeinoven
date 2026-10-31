@@ -251,15 +251,17 @@ export type AgentPart =
       presentation: UserMessagePresentation
     }
   | {
-      type: 'report'
+      type: 'cited'
       id: string
       messageID: string
-      /** The name the run chose for the report it filed. */
-      title: string
-      /** Workspace-relative path of the filed Markdown file, the row's target. */
+      /** The name the card leads with: the entry's own name, or a report's title. */
+      name: string
+      /** Workspace-relative path the card opens. */
       path: string
-      /** When the report was filed. */
-      at: number
+      /** A folder opens in the file tree; a file opens in the file viewer. */
+      kind: 'file' | 'directory'
+      /** Last modification time of the entry on disk. */
+      modifiedAt: number
     }
 
 /** A generated image that can be previewed from a conversation or its context sidebar. */

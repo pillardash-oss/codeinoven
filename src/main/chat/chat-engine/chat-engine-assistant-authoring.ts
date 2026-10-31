@@ -35,11 +35,7 @@ import {
 } from '../../../lib/types'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
-import {
-  ASSISTANT_REPORT_TITLE_LIMIT,
-  assistantReportIsTerminal,
-  isAssistantReportThread
-} from '../../../lib/assistant-reports'
+import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { assistantText, formatInterviewDecisions } from './chat-engine-message-text'
@@ -297,7 +293,7 @@ export class ChatEngineAssistantAuthoring {
   }
 
   /**
-   * Publish one settled assistant run's report as a durable Markdown file under
+   * File one settled assistant run's report as a durable Markdown file under
    * `reports/` in the assistant's own workspace.
    *
    * Only a run that declared a report through the report capability reaches the
@@ -305,42 +301,28 @@ export class ChatEngineAssistantAuthoring {
    * a check-in or a chat reply leaves no file and is never dressed up as a report.
    *
    * A thread is capped and evicted, so a report that only ever lived in the run
-   * transcript disappears with it. Fire-and-forget and swallowed on error: the
-   * durable copy is best-effort bookkeeping and must never block or fail the
-   * turn's finalization.
+   * transcript disappears with it. Swallowed on error: the durable copy is
+   * best-effort bookkeeping and must never block or fail the turn's finalization.
+   *
+   * The filed file is returned rather than announced here. Announcing belongs to
+   * the citations unit, which publishes one row for everything the turn left
+   * behind, and the report joins it because its path is app-owned.
    */
-  captureAssistantReport(
+  async captureAssistantReport(
     thread: Thread,
     turnAssistant: AgentMessage | undefined,
     status: ThreadStatus
-  ): void {
+  ): Promise<{ title: string; citation: string } | null> {
     const declared = this.host.state.declaredAssistantReports.get(thread.id)
     this.host.state.declaredAssistantReports.delete(thread.id)
-    if (!declared) return
-    if (!isAssistantReportThread(thread)) return
-    if (!assistantReportIsTerminal(status)) return
-    if (!turnAssistant) return
+    if (!declared) return null
+    if (!isAssistantReportThread(thread)) return null
+    if (!assistantReportIsTerminal(status)) return null
+    if (!turnAssistant) return null
     const report = (declared.markdown ?? assistantText(turnAssistant)).trim()
-    if (report.length === 0) return
-    void this.publishAssistantReport(thread, declared.title, report, status)
-  }
-
-  /**
-   * File a declared report and announce it in the thread it came from.
-   *
-   * The run is told never to name the path or claim a report was saved, because
-   * the app owns both, so the app is what tells the reader the report exists: a
-   * filed report nobody hears about is a file the user has to go looking for.
-   */
-  async publishAssistantReport(
-    thread: Thread,
-    title: string,
-    report: string,
-    status: ThreadStatus
-  ): Promise<void> {
-    const written = await this.writeAssistantReportFor(thread, title, report, status)
-    if (!written) return
-    await this.announceAssistantReport(thread, title, written)
+    if (report.length === 0) return null
+    const written = await this.writeAssistantReportFor(thread, declared.title, report, status)
+    return written ? { title: declared.title, citation: written.citation } : null
   }
 
   async writeAssistantReportFor(
@@ -379,54 +361,6 @@ export class ChatEngineAssistantAuthoring {
         error: rawErrorMessage(error)
       })
       return null
-    }
-  }
-
-  /**
-   * Publish the filed report into the thread it came from, as one app-owned row
-   * under the run's own answer.
-   *
-   * The row is an inline artifact, the same app-published channel an artifact the
-   * agent asked to render travels on: it is not part of the turn, so it never
-   * becomes the turn's closing statement and never displaces the answer the run
-   * actually delivered. It carries the report itself (its name, the path the row
-   * opens, and when it was filed) as a typed part, so the renderer draws a report
-   * row instead of parsing a path out of prose.
-   */
-  async announceAssistantReport(
-    thread: Thread,
-    title: string,
-    written: AssistantReportFile
-  ): Promise<void> {
-    try {
-      const at = Date.now()
-      const id = `cio-assistant-report-${thread.id}-${at}`
-      const announcement: AgentMessage = {
-        id,
-        role: 'assistant',
-        inlineArtifact: true,
-        origin: 'orchestrator',
-        visibility: 'conversation',
-        parts: [
-          {
-            type: 'report',
-            id: `${id}-report`,
-            messageID: id,
-            title: title.trim().slice(0, ASSISTANT_REPORT_TITLE_LIMIT) || 'Report',
-            path: written.citation,
-            at
-          }
-        ],
-        createdAt: at,
-        completedAt: at
-      }
-      await this.host.threadManager.upsertMessages(thread.projectId, thread.id, [announcement])
-      broadcastThreadUpdate(thread)
-    } catch (error) {
-      Logger.error('Assistant report could not be announced in its thread', {
-        threadId: thread.id,
-        error: rawErrorMessage(error)
-      })
     }
   }
 

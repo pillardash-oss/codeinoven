@@ -57,6 +57,16 @@ export const APP_VIDEO_UTILITY_ID = 'cio:video'
 export const APP_ARTIFACT_UTILITY_ID = 'cio:artifact'
 
 /**
+ * App-owned citation capability.
+ *
+ * A turn knows what it produced; the app does not. This capability is how a turn
+ * tells the app, so the conversation shows a card the reader can open for each
+ * report, document or folder it left behind, instead of the app guessing from the
+ * settled answer.
+ */
+export const APP_CITE_UTILITY_ID = 'cio:cite-report'
+
+/**
  * App-owned knowledge a user may switch off.
  *
  * `cio:adb` is advice: an agent applies that playbook with its own shell, so a

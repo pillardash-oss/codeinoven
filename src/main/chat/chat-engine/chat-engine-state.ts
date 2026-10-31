@@ -529,6 +529,17 @@ export class ChatEngineState {
    */
   declaredAssistantReports = new Map<string, { title: string; markdown?: string }>()
 
+  /**
+   * The workspace-relative paths each live turn cited through the app-owned
+   * `cio:cite-report` capability.
+   *
+   * A turn knows what it produced, so the cards the reader opens come from here
+   * and never from an inference over the settled answer. The entry is consumed by
+   * the settle, and a new turn clears it first, so work cited by a turn that never
+   * settled cannot surface under a later one.
+   */
+  declaredCitations = new Map<string, string[]>()
+
   /** Coalesces live-activity repairs of a task's persisted working status. */
   workingStatusReconciliations = new Map<string, Promise<void>>()
 
