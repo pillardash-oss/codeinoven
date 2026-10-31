@@ -90,10 +90,16 @@ sign the MSIX with the Apple Developer ID certificate, which Windows rejects
 script strips every `CSC_*` and `WIN_CSC_*` variable from the electron-builder
 child environment, so an MSIX cannot be signed no matter what the caller exports.
 
-The MSIX is deliberately **not** attached to the GitHub release and **not**
-mirrored to `dl.codeinoven.com`. It is a Store submission rather than a
-user-facing download, so it stays out of `SHA256SUMS.txt` and out of the download
-mirror's verification path.
+The MSIX is attached to the GitHub release so the Partner Center upload is one
+click, and it is deliberately **not** mirrored to `dl.codeinoven.com`. It is a
+Store submission rather than a user-facing download, so it stays out of
+`SHA256SUMS.txt` and out of the download mirror's verification path, which
+ignores any asset `scripts/release-artifacts.ts` does not list as an installer.
+
+It is attached by the publish call itself (`.github/actions/publish-release`,
+`extra-assets` input) and never in a step after it: the repository enforces
+immutable releases, so GitHub refuses every asset upload once the release is
+published.
 
 ## Version numbering
 

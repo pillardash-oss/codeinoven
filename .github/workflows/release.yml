@@ -180,29 +180,17 @@ jobs:
           tag: ${{ steps.tag.outputs.tag }}
           version: ${{ steps.tag.outputs.version }}
           channel: stable
+          # The Store package stays out of the mirrored asset set (it is a
+          # submission, not a download; see packaging/msix/README.md) and out of
+          # SHA256SUMS.txt, but it is attached to the release page so the Partner
+          # Center upload is one click. It has to ride along in this publish call:
+          # the repository enforces immutable releases, so GitHub rejects every
+          # asset upload after the release is published (a separate attach step
+          # failed with "HTTP 422: Cannot upload assets to an immutable release").
+          extra-assets: artifacts/*.msix
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOWNLOAD_MIRROR_S3_ENDPOINT: ${{ vars.DOWNLOAD_MIRROR_S3_ENDPOINT }}
-
-      # The Store package stays out of the mirrored asset set (it is a submission,
-      # not a download; see packaging/msix/README.md), but it is attached to the
-      # release page so the Partner Center upload is one click. It runs after the
-      # publish action on purpose: the mirror is dispatched from inside that
-      # action and must not see an asset its checksum manifest does not cover.
-      - name: Attach the Microsoft Store package
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          shopt -s nullglob
-          files=(artifacts/*.msix)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No MSIX built for this release; nothing to attach."
-            exit 0
-          fi
-          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
-          echo "Attached ${files[*]} to $RELEASE_TAG"
 
   # The Store channel is updated here rather than by a human. It runs after the
   # GitHub release exists so the Store never carries a build before the release
