@@ -7,19 +7,10 @@
  */
 import { BrowserWindow, dialog } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { validateEntityId } from '../ipc/ipc-validation'
 import { isLlamaCppHostValid, isLlamaCppPortValid } from '../../lib/llama-cpp'
 import { detectLlamaCppRuntime, probeLlamaCppServer } from './llama-cpp-service'
 
-export interface LlamaCppIpcDeps {
-  /**
-   * Re-discover the custom base-URL provider models for a project, so a server
-   * the user just started appears in the model picker without a second step.
-   */
-  refreshProviderModels: (projectId: string) => Promise<void>
-}
-
-export function registerLlamaCppIpc(deps: LlamaCppIpcDeps): void {
+export function registerLlamaCppIpc(): void {
   ipcMain.handle('llamaCpp:detect', () => detectLlamaCppRuntime())
 
   ipcMain.handle('llamaCpp:probe', async (_, rawHost: unknown, rawPort: unknown) => {
@@ -52,11 +43,5 @@ export function registerLlamaCppIpc(deps: LlamaCppIpcDeps): void {
       : await dialog.showOpenDialog(options)
     if (result.canceled) return null
     return result.filePaths[0] ?? null
-  })
-
-  ipcMain.handle('llamaCpp:refreshProviderModels', async (_, rawProjectId: unknown) => {
-    const projectId = validateEntityId(rawProjectId, 'Project ID')
-    await deps.refreshProviderModels(projectId)
-    return true
   })
 }

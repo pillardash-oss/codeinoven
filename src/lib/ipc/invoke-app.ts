@@ -54,8 +54,6 @@ export const invokeAppContract = {
   'llamaCpp:probe': {} as Contract<[host: string, port: number], LlamaCppProbeResult>,
   /** Pick a local `.gguf` file; the row references it where it lives. */
   'llamaCpp:pickModel': {} as Contract<[], string | null>,
-  /** Re-discover the base-URL provider models after a server became ready. */
-  'llamaCpp:refreshProviderModels': {} as Contract<[projectId: string], boolean>,
   'dialog:pickFolder': {} as Contract<[], string | null>,
   'dialog:pickCloneDestination': {} as Contract<[], string | null>,
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,

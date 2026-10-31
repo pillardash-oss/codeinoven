@@ -1,7 +1,9 @@
 <script lang="ts">
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
   import {
     llamaCppEntryProblem,
     nextFreeLlamaCppPort,
@@ -106,33 +108,19 @@
   }
 
   /**
-   * A start that actually answers makes the model available to the agent side:
-   * the `llama-cpp` base-URL provider's discovered models are refreshed from the
-   * endpoint itself, so no model list is written here and no second step is left.
+   * A local server never writes to the provider registry. The user creates their
+   * own custom base-URL provider, and this button is the handoff: it opens the
+   * app's provider editor so the server's address can be copied into it.
    */
-  async function refreshProvider(entry: LlamaCppServerEntry, modelId: string): Promise<void> {
-    const projectId = rendererRecovery.selectedProjectId
-    if (!projectId) return
-    try {
-      await invoke('llamaCpp:refreshProviderModels', projectId)
-      toast.success('Model picker refreshed', { description: modelId || entry.name })
-    } catch {
-      // The server is running either way; the picker's own refresh still works.
-      toast.message('Server ready', {
-        description: 'Open the model picker and refresh to load the new model.'
-      })
-    }
+  function createCustomProvider(): void {
+    baseUrlProviderFlow.open({ provider: null, defaultHarnessId: DEFAULT_HARNESS })
   }
 
   onMount(() => {
     void detect()
-    localAi.onReady = (entry, modelId) => void refreshProvider(entry, modelId)
     // A renderer reload leaves the main process's servers running; reattach to
     // the ones that answer instead of showing them as stopped.
     for (const entry of entries) void localAi.attach(entry)
-    return () => {
-      localAi.onReady = null
-    }
   })
 </script>
 
@@ -163,15 +151,26 @@
         Each row is one <code>llama-server</code> process. Expanding a row shows its live log.
       </p>
     </div>
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-1.5 bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-      onclick={openCreate}
-      disabled={!settingsReady || entries.length >= 32}
-    >
-      <CioPlus size={13} />
-      Add server
-    </button>
+    <div class="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+        title="Open the custom base-URL provider editor and copy your server's address into it"
+        onclick={createCustomProvider}
+      >
+        <CioPlug size={13} />
+        Create Custom Provider
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        onclick={openCreate}
+        disabled={!settingsReady || entries.length >= 32}
+      >
+        <CioPlus size={13} />
+        Add server
+      </button>
+    </div>
   </div>
 
   {#if entries.length === 0}

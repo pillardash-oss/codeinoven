@@ -1123,17 +1123,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       state.chatEngine!.removeHarnessAccount(accountId)
     )
     registerBaseUrlProviderIpc(storage)
-    // A started local server becomes usable without a second manual step: the
-    // same catalog refresh the model picker's own refresh button runs, so the
-    // `llama-cpp` base-URL provider picks up the model the server loaded.
-    registerLlamaCppIpc({
-      refreshProviderModels: async (projectId) => {
-        await state.chatEngine?.refreshProviderCatalog(projectId, {
-          force: true,
-          refreshModelCatalogs: false
-        })
-      }
-    })
+    // Local servers never touch the provider registry: a custom base-URL
+    // provider is the user's to create, and starting or stopping a server here
+    // must leave it exactly as it was.
+    registerLlamaCppIpc()
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,

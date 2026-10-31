@@ -65,9 +65,6 @@ export class LocalAiController {
   logs = $state<Record<string, string[]>>({})
   loadedModel = $state<Record<string, string>>({})
   notice = $state<Record<string, string>>({})
-  /** Called once per successful start, so the model picker can pick the model up. */
-  onReady: ((entry: LlamaCppServerEntry, modelId: string) => void) | null = null
-
   private handles = new SvelteMap<string, RunningHandle>()
 
   statusOf(entryId: string): LlamaCppServerStatus {
@@ -263,7 +260,6 @@ export class LocalAiController {
       this.setStatus(entry.id, 'running')
       this.setLoadedModel(entry.id, result.models[0] ?? '')
       this.notice = { ...this.notice, [entry.id]: '' }
-      this.onReady?.(entry, result.models[0] ?? '')
       return
     }
     this.scheduleProbe(entry)
