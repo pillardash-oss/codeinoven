@@ -135,6 +135,21 @@ export async function runAgentAssist(
       detail: delivery === 'draft' ? 'Opening the prompt' : 'Starting the agent',
       threadId: prepared.threadId
     })
+    if (delivery === 'draft') {
+      // The brief has to be in the draft store before the thread opens. A
+      // composer captures its restored draft exactly once, when it mounts, so a
+      // draft written after the open waited in the store while the user looked
+      // at an empty composer, and only appeared after leaving the thread and
+      // coming back. Writing it first is what makes the prompt arrive with the
+      // thread instead of a visit later.
+      rendererRecovery.setDraft(
+        request.projectId,
+        prepared.threadId,
+        prepared.text,
+        prepared.attachments ?? [],
+        []
+      )
+    }
     await openAssistThread(request.projectId, prepared.threadId, () => {
       const current = workspaceState.selectedThread
       if (!current) return origin === null
@@ -160,14 +175,6 @@ export async function runAgentAssist(
         reportStartFailure(request.projectId, prepared.threadId, selection, error)
         throw error
       }
-    } else {
-      rendererRecovery.setDraft(
-        request.projectId,
-        prepared.threadId,
-        prepared.text,
-        prepared.attachments ?? [],
-        []
-      )
     }
     return prepared.threadId
   }
