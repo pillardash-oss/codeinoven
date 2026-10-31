@@ -1309,15 +1309,17 @@ copy that outlives the thread.
 **The app announces the file.** A run is told never to name the path or claim a
 report was saved, so a filed report used to be invisible unless the reader
 happened to browse the workspace panel. `writeAssistantReport` therefore returns
-the written path plus the citation the thread links through, and
-`announceAssistantReport` publishes one app-owned row under the run's answer with
-`assistantReportAnnouncement` (`src/lib/assistant-reports.ts`): the report's
-name and its cited path. The row is an `inlineArtifact` message, the same
-app-published channel an artifact the agent asked to render travels on, so it is
-not part of the turn, never becomes the turn's closing statement, and never
-displaces the answer the run delivered. The citation is relative to the
-assistant workspace mount (`reports/<file>.md`), so it resolves to a link that
-opens the file.
+the written path plus the citation the thread opens through, and
+`announceAssistantReport` publishes one app-owned row under the run's answer. The
+row is an `inlineArtifact` message, the same app-published channel an artifact
+the agent asked to render travels on, so it is not part of the turn, never
+becomes the turn's closing statement, and never displaces the answer the run
+delivered. It carries a typed `report` part (title, workspace-relative
+`reports/<file>.md` path, filing time), and `AssistantReportRow.svelte` draws it
+as the app's report card: the report glyph, its name, when it was filed on the
+12-hour clock, and a right-anchored **Open report** action that reveals the file
+through the same citation reveal a clicked path uses. The time is the filing
+moment, never the schedule's cadence.
 
 ### Priority
 

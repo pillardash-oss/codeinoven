@@ -250,6 +250,17 @@ export type AgentPart =
       messageID: string
       presentation: UserMessagePresentation
     }
+  | {
+      type: 'report'
+      id: string
+      messageID: string
+      /** The name the run chose for the report it filed. */
+      title: string
+      /** Workspace-relative path of the filed Markdown file, the row's target. */
+      path: string
+      /** When the report was filed. */
+      at: number
+    }
 
 /** A generated image that can be previewed from a conversation or its context sidebar. */
 export interface AgentArtifact {

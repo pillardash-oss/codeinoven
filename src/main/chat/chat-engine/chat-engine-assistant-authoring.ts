@@ -36,7 +36,7 @@ import {
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
 import {
-  assistantReportAnnouncement,
+  ASSISTANT_REPORT_TITLE_LIMIT,
   assistantReportIsTerminal,
   isAssistantReportThread
 } from '../../../lib/assistant-reports'
@@ -389,8 +389,9 @@ export class ChatEngineAssistantAuthoring {
    * The row is an inline artifact, the same app-published channel an artifact the
    * agent asked to render travels on: it is not part of the turn, so it never
    * becomes the turn's closing statement and never displaces the answer the run
-   * actually delivered. Its cited path resolves against the assistant's workspace
-   * mount, so the row is the link.
+   * actually delivered. It carries the report itself (its name, the path the row
+   * opens, and when it was filed) as a typed part, so the renderer draws a report
+   * row instead of parsing a path out of prose.
    */
   async announceAssistantReport(
     thread: Thread,
@@ -408,10 +409,12 @@ export class ChatEngineAssistantAuthoring {
         visibility: 'conversation',
         parts: [
           {
-            type: 'text',
-            id: `${id}-text`,
+            type: 'report',
+            id: `${id}-report`,
             messageID: id,
-            text: assistantReportAnnouncement(title, written.citation)
+            title: title.trim().slice(0, ASSISTANT_REPORT_TITLE_LIMIT) || 'Report',
+            path: written.citation,
+            at
           }
         ],
         createdAt: at,

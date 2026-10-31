@@ -156,26 +156,12 @@ export function assistantReportFileName(at: number, threadId: string): string {
  * The path a filed report is cited by inside its own thread.
  *
  * An assistant thread mounts `assistant-cwd/<assistantId>` as its workspace, so
- * the report is cited relative to that mount. The renderer resolves a cited path
- * against the mount it is rendered in, so this string is what turns the
- * announcement into a link that opens the file, and it never leaks the storage
+ * the report is cited relative to that mount. The renderer resolves it against
+ * the mount the row is drawn in, so opening the report never leaks the storage
  * layout to the reader.
  */
 export function assistantReportCitation(fileName: string): string {
   return `${ASSISTANT_REPORTS_DIRECTORY}/${fileName}`
-}
-
-/**
- * The one line the app publishes under a run to announce its filed report.
- *
- * The run is told never to name the path or claim a report was saved, because
- * the app owns both, so the app is what announces the file. Without this line a
- * filed report is invisible unless the reader happens to browse the workspace
- * panel, which is how a run's report went unread.
- */
-export function assistantReportAnnouncement(title: string, citation: string): string {
-  const name = title.trim().slice(0, ASSISTANT_REPORT_TITLE_LIMIT) || 'Report'
-  return `Report filed: **${name}**\n\n\`${citation}\` stays in this assistant's workspace, so it outlives this run's thread.`
 }
 
 export interface AssistantReportDocumentInput {

@@ -31,6 +31,7 @@
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import InlineMediaFigure from '../InlineMediaFigure.svelte'
   import InlineImageFigure from '../InlineImageFigure.svelte'
+  import AssistantReportRow from '../AssistantReportRow.svelte'
   import RunChangesCard from '../RunChangesCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import DeferredMarkdownView from '../../markdown/DeferredMarkdownView.svelte'
@@ -337,6 +338,13 @@
                   kind="audio"
                   filename={part.filename ?? 'Media'}
                   onExpand={() => board.editVideoNote.openMessageViewer(msg, part)}
+                />
+              {:else if part.type === 'report'}
+                <AssistantReportRow
+                  title={part.title}
+                  path={part.path}
+                  at={part.at}
+                  projectId={board.handleAgentEvent.thread.projectId}
                 />
               {/if}
             {/each}
