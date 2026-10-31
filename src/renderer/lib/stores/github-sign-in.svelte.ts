@@ -111,6 +111,10 @@ class GitHubSignInState {
       case 'starting':
         return 'Starting'
       case 'waiting':
+        // A poll that could not reach GitHub is still waiting on the same code,
+        // so the chip says reconnecting rather than repeating "waiting" while
+        // the panel explains why.
+        if (this.message) return 'Reconnecting to GitHub'
         return this.copied ? 'Code copied, waiting' : 'Waiting for authorization'
       case 'authorized':
         return 'Signed in'
@@ -333,6 +337,15 @@ class GitHubSignInState {
       if (attempt !== this.attempt || !this.open) return
       if (result.status === 'pending') {
         // Still pending: ask again at the interval GitHub asked for.
+        this.message = ''
+        this.pollTimer = setTimeout(() => void this.poll(), device.interval * 1000)
+        return
+      }
+      if (result.status === 'retrying') {
+        // The poll never reached GitHub, so the code is still perfectly good.
+        // The reason stays on screen while the flow keeps waiting on the same
+        // code, instead of ending a sign-in the user is half-way through.
+        this.message = result.message
         this.pollTimer = setTimeout(() => void this.poll(), device.interval * 1000)
         return
       }

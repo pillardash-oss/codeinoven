@@ -52,8 +52,14 @@ const target = document.getElementById('browser-overlay')
 if (target) {
   const mode = new URLSearchParams(window.location.search).get('surface')
   document.documentElement.toggleAttribute('data-native-toasts', mode === 'toasts')
-  const failed = (error: unknown): void =>
+  const failed = (error: unknown): void => {
     logRendererError('The native overlay could not load', error)
+    // Tell the host its document is dead. Without this the window keeps sitting
+    // there accepting frames nobody draws, and every panel projected into it
+    // waits out its acknowledgement deadline before falling back.
+    const reason = error instanceof Error ? error.message : String(error)
+    void invoke('browser:overlayDocumentFailed', reason).catch(() => {})
+  }
   /**
    * One `import()` per surface, each in its own statement on purpose.
    *

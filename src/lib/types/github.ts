@@ -1104,6 +1104,12 @@ export type GitHubPollResult =
   | { status: 'pending' }
   | { status: 'authorized' }
   | { status: 'expired' }
+  /**
+   * The poll never reached GitHub, which says nothing about the code the user is
+   * typing. The attempt stays alive, so this carries the reason to show beside
+   * the countdown instead of ending the sign-in.
+   */
+  | { status: 'retrying'; message: string }
   | { status: 'error'; message: string }
 
 /**

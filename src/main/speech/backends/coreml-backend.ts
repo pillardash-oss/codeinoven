@@ -200,9 +200,7 @@ export class CoreMlSpeechBackend implements SpeechBackend {
       const reason = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`
       const detail = stderr.trim()
       this.rejectAll(
-        new Error(
-          `Core ML speech worker exited with ${reason}.${detail ? ` ${detail}` : ''}`
-        )
+        new Error(`Core ML speech worker exited with ${reason}.${detail ? ` ${detail}` : ''}`)
       )
     })
     this.process = child

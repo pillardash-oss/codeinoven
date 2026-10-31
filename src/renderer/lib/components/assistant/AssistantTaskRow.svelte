@@ -22,6 +22,7 @@
   import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
+  import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -137,6 +138,11 @@
    *  honest the way a project or thread row's stamp does. */
   $effect(() => relativeTimeClock.hold())
 
+  /** The orchestrator mark's single app-wide read starts from whichever row is
+   *  on screen first, including this one: the Assistant view lists tasks without
+   *  a thread row of its own. */
+  $effect(() => orchestrationCoordinatorState.ensureInitiators())
+
   const taskIcon = $derived(
     task.assistantIconType ? getIconSvgDataUrl(task.assistantIconType, color ?? '#8b95a5') : null
   )
@@ -145,15 +151,28 @@
 
   /** Line 2: task schedule/activity, run activity, or the setup thread's role.
    *  A row whose thread is actually producing work says so instead of reporting
-   *  a stale schedule time, and a hoisted run names the task it belongs to. */
+   *  a stale schedule time, and a hoisted run names the task it belongs to.
+   *
+   *  A thread parked on a provider retry, or one that failed, says exactly that.
+   *  Its schedule text ("Next run in 4h") described a wait that was not happening
+   *  and an activity stamp described work that was not running, so the row read
+   *  as an ordinary idle task at the one moment it needed the user. */
   const runLine = $derived.by(() => {
     const working = runWorking || isThreadLiveWorking(task)
+    const stalled =
+      task.status === 'working-paused'
+        ? 'Waiting to retry'
+        : task.status === 'failed'
+          ? 'Failed'
+          : null
     if (isRun) {
-      const line = working ? 'Running now' : runRowLine(task, relativeTimeClock.now)
+      const line = working ? 'Running now' : (stalled ?? runRowLine(task, relativeTimeClock.now))
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
-    if (knowledgeThread) return 'Assistant behavior'
-    return working ? 'Running now' : taskRunLine(task, nextRunAt, relativeTimeClock.now, !scheduled)
+    if (knowledgeThread) return stalled ?? 'Assistant behavior'
+    return working
+      ? 'Running now'
+      : (stalled ?? taskRunLine(task, nextRunAt, relativeTimeClock.now, !scheduled))
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
@@ -255,6 +274,10 @@
     const live: ThreadIndicator[] = []
     if (pipState.isThreadUsingComputerUse(task.id)) live.push('computer-use')
     if (threadUsesEngineeringTooling(task)) live.push('engineering')
+    // The same workstation mark a project thread or a chat wears: the task's own
+    // thread is what dispatched the runs, so an assistant task that started work
+    // elsewhere never reads as an ordinary task.
+    if (orchestrationCoordinatorState.hasDispatched(task.id)) live.push('orchestrator')
     return live
   })
   /** The authored-work sessions this thread has entered, in canonical order, so

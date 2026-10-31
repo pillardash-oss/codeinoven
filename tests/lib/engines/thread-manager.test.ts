@@ -369,6 +369,32 @@ describe('ThreadManager', () => {
     expect(persisted.find((m) => m.id === 'delta-2')?.parts).toEqual(b.parts)
   })
 
+  it('treats deleting a thread that is already gone as a finished deletion', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Deleted twice'
+    })
+
+    await manager.deleteThread('project1', thread.id)
+    // A second delete (a retry, a cascade that already swept this thread, or two
+    // windows acting on the same row) must not report the deletion as a failed
+    // cleanup: the row it was asked to remove is gone.
+    await expect(manager.deleteThread('project1', thread.id)).resolves.toBeUndefined()
+    // Ownership is still enforced: an existing thread of another project can
+    // never be deleted through this project's id.
+    await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Owned elsewhere'
+    })
+    const other = await manager.listThreads('project1')
+    await expect(manager.deleteThread('missing-project', other[0].id)).rejects.toThrow(
+      'Thread not found in project missing-project'
+    )
+  })
+
   it('closes pending ranking snapshots before deletion on every delete path', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-26T12:00:00.000Z'))

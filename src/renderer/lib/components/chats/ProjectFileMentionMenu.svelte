@@ -8,6 +8,7 @@
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
   import Switch from '../ui/Switch.svelte'
+  import ComposerTagBadge from './ComposerTagBadge.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
 
@@ -119,51 +120,51 @@
           onmousedown={(event: MouseEvent) => event.preventDefault()}
           onclick={() => onSelect(mention)}
         >
-          {#if mention.type === 'utility'}
-            {#if mention.entry.id === 'cio-design'}
-              <CioPalette size={13} class="shrink-0 text-primary" />
-            {:else if mention.entry.id === 'cio-video'}
-              <CioClapper size={13} class="shrink-0 text-primary" />
-            {:else}
-              <CioWrench size={13} class="shrink-0 text-primary" />
-            {/if}
-          {:else if mention.type === 'task'}
-            <CioListTodo size={13} class="shrink-0 text-info" />
-          {:else if mention.type === 'assistant'}
-            <!-- The assistant's own icon: a tag is identified by the assistant it
-                 belongs to, never by a generic work mark. -->
-            <span class="flex h-[13px] w-[13px] shrink-0 items-center justify-center">
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-              {@html mention.entry.iconHtml}
-            </span>
-          {:else if mention.entry.kind === 'directory'}
-            <FolderTypeIcon name={mention.entry.name} size={13} />
+          {#if mention.type === 'assistant'}
+            <!-- A tag reads as its mark and its name wherever it is drawn, so the
+                 row and every other tag surface share one component. -->
+            <ComposerTagBadge
+              markHtml={mention.entry.iconHtml}
+              label={mention.entry.name}
+              detail={mention.entry.detail}
+            />
           {:else}
-            <FileTypeIcon path={mention.entry.path} />
-          {/if}
-          <span class="min-w-0 flex-1">
             {#if mention.type === 'utility'}
-              <span class="block truncate">{mention.entry.token}</span>
-              <span class="block truncate text-[0.625rem] text-dimmed">
-                {mention.entry.kindLabel}
-              </span>
+              {#if mention.entry.id === 'cio-design'}
+                <CioPalette size={13} class="shrink-0 text-primary" />
+              {:else if mention.entry.id === 'cio-video'}
+                <CioClapper size={13} class="shrink-0 text-primary" />
+              {:else}
+                <CioWrench size={13} class="shrink-0 text-primary" />
+              {/if}
             {:else if mention.type === 'task'}
-              <span class="block truncate">{mention.entry.title}</span>
-              <span class="block truncate text-[0.625rem] capitalize text-dimmed">
-                Task · {mention.entry.status} · {taskWorker(mention.entry)}
-              </span>
-            {:else if mention.type === 'assistant'}
-              <span class="block truncate">{mention.entry.name}</span>
-              <span class="block truncate text-[0.625rem] text-dimmed">{mention.entry.detail}</span>
+              <CioListTodo size={13} class="shrink-0 text-info" />
+            {:else if mention.entry.kind === 'directory'}
+              <FolderTypeIcon name={mention.entry.name} size={13} />
             {:else}
-              <span class="block truncate">{mention.entry.name}</span>
-              <span class="block truncate text-[0.625rem] text-dimmed">
-                {parentPath(mention.entry)}
-              </span>
+              <FileTypeIcon path={mention.entry.path} />
             {/if}
-          </span>
-          {#if mention.type === 'project' && mention.entry.kind === 'directory'}
-            <CioForward size={12} class="shrink-0 text-dimmed" />
+            <span class="min-w-0 flex-1">
+              {#if mention.type === 'utility'}
+                <span class="block truncate">{mention.entry.token}</span>
+                <span class="block truncate text-[0.625rem] text-dimmed">
+                  {mention.entry.kindLabel}
+                </span>
+              {:else if mention.type === 'task'}
+                <span class="block truncate">{mention.entry.title}</span>
+                <span class="block truncate text-[0.625rem] capitalize text-dimmed">
+                  Task · {mention.entry.status} · {taskWorker(mention.entry)}
+                </span>
+              {:else}
+                <span class="block truncate">{mention.entry.name}</span>
+                <span class="block truncate text-[0.625rem] text-dimmed">
+                  {parentPath(mention.entry)}
+                </span>
+              {/if}
+            </span>
+            {#if mention.type === 'project' && mention.entry.kind === 'directory'}
+              <CioForward size={12} class="shrink-0 text-dimmed" />
+            {/if}
           {/if}
         </button>
       {/each}

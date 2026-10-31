@@ -11,10 +11,7 @@ import { designCopyPayload, type DesignCopyPayload } from '$lib/design-copy-path
  * the pieces it needs   the active project, the thread's own Oven, the project's
  * Oven, and whether the thread is rooted at the project or in a worktree.
  */
-export function designCopyFor(
-  directory: string,
-  entry?: string | null
-): DesignCopyPayload | null {
+export function designCopyFor(directory: string, entry?: string | null): DesignCopyPayload | null {
   const project = workspaceState.activeProject
   if (!project || project.source !== 'local' || !project.path) return null
   const thread = workspaceState.selectedThread

@@ -1,4 +1,5 @@
 import { DEFAULT_IDE_LANGUAGE_SERVERS } from '../../lib/ide-language-servers'
+import { readLlamaCppServers } from '../../lib/llama-cpp'
 import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
 import {
   BUNDLED_PI_FILE_POLICY,
@@ -141,7 +142,8 @@ const DEFAULT_CONFIG: AppConfig = {
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
-  sound: DEFAULT_SPEECH_SETTINGS
+  sound: DEFAULT_SPEECH_SETTINGS,
+  llamaCppServers: []
 }
 
 /**
@@ -150,6 +152,40 @@ const DEFAULT_CONFIG: AppConfig = {
  */
 const HEARTBEATS_FILE = 'heartbeat/heartbeats.json'
 const VISION_MODELS_FILE = 'vision-models.json'
+
+/**
+ * Where one-time storage migrations record that they already ran.
+ *
+ * Two layers need a "did this happen yet" answer: the SQLite schema chain reads
+ * `db_meta.schema_version` in `src/main/database/migrations/schema-upgrade.ts`,
+ * and this
+ * filesystem layer needs the same answer before a database connection exists,
+ * because `initialize()` runs concurrently with `database.init()` in
+ * `src/main/index.ts` and the storage engine holds no database handle. The file
+ * therefore mirrors `db_meta`: a flat map of string keys to string values.
+ */
+const STORAGE_MIGRATIONS_FILE = 'state/storage-migrations.json'
+
+/** Marker value meaning "finished", the same vocabulary `db_meta` uses. */
+const MIGRATION_COMPLETE = 'complete'
+
+/**
+ * Marker key: the second generation of the config-root layout, where flat-root
+ * state and the old project/chat memory artifacts moved into their feature
+ * directories (`window-state/`, `scheduler/`, `memory/`). The key names the
+ * layout generation, so a later pass that moves more files gets its own key
+ * instead of silently inheriting this one.
+ */
+const LEGACY_LAYOUT_MIGRATION_KEY = 'legacy_layout_v2'
+
+/**
+ * Marker key: `behavior.md` was folded into the agent behavior prompt.
+ *
+ * Separate from the layout key on purpose: a root can have finished one
+ * relocation and not the other, and rolling them into one key would let a
+ * completed walk hide an unfinished prompt migration.
+ */
+const LEGACY_BEHAVIOR_MIGRATION_KEY = 'legacy_behavior_prompt_v1'
 
 /** Result of an incremental, byte-offset tail read of an append-only log. */
 export interface RawFileTail {
@@ -211,22 +247,30 @@ export class StorageEngine {
   /** Initialize the directory structure */
   async initialize(): Promise<void> {
     await this.timedStep('storage:directories', async () => {
+      // Only the root has to land before its children; the children themselves
+      // have no order between them, so awaiting them one at a time bought
+      // nothing but a serial round trip through the threadpool per directory.
+      // They are created together now, and a directory that cannot be created
+      // still rejects out of `initialize` with the same error as before.
       await ensureDir(this.root)
-      await ensureDir(this.resolve('projects'))
-      await ensureDir(this.resolve('projects-gh'))
-      await ensureDir(this.resolve('workflows'))
-      await ensureDir(this.resolve('blobs'))
-      await ensureDir(this.resolve('logs'))
-      await ensureDir(this.resolve(CHATS_CWD_DIR))
-      await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
-      await ensureDir(this.resolve('window-state'))
-      await ensureDir(this.resolve('scheduler'))
-      await ensureDir(this.resolve('memory'))
+      await Promise.all(
+        [
+          'projects',
+          'projects-gh',
+          'workflows',
+          'blobs',
+          'logs',
+          CHATS_CWD_DIR,
+          ASSISTANT_CWD_DIR,
+          'window-state',
+          'scheduler',
+          'memory'
+        ].map((directory) => ensureDir(this.resolve(directory)))
+      )
     })
 
     await this.timedStep('storage:migrations', async () => {
-      await this.migrateLegacyBehaviorPrompt()
-      await this.migrateLegacyLayout()
+      await this.runConfigRootMigrations()
     })
 
     await this.timedStep('storage:config', async () => {
@@ -381,6 +425,9 @@ export class StorageEngine {
       ),
       // Read tolerantly: a hand-edited value outside the bounds falls back to the
       // shipped retention instead of sweeping with a cutoff nobody chose.
+      // Read tolerantly: a hand-edited row is dropped instead of failing the
+      // launch, and a stored row list never needs a migration.
+      llamaCppServers: readLlamaCppServers(config?.llamaCppServers),
       cioCleanupRetentionDays: clampNumber(
         config?.cioCleanupRetentionDays,
         MIN_CIO_CLEANUP_RETENTION_DAYS,
@@ -488,12 +535,91 @@ export class StorageEngine {
   }
 
   /**
+   * Run the config-root relocations that only matter for a root last written by
+   * a build older than the v0.5.28 layout move.
+   *
+   * Two relocations live behind this: `behavior.md` became the agent behavior
+   * prompt, and the flat-root `memory.md`, `window-state.json` and
+   * `retry-scheduler.json` files moved into their feature directories. Both are
+   * finished work, and running them on every boot cost 165 ms at the median and
+   * 824 ms at worst - a walk over every project and thread directory doing read
+   * pairs that can only come back empty.
+   *
+   * They are not deleted outright: a data root last written before v0.5.28 can
+   * still hold the old layout, and skipping it would leave that user's memory and
+   * window state on disk but invisible to the app. One marker file records that
+   * this root is done, so every boot after the first pays a single small read,
+   * and a boot that cannot read the marker runs the migrations again rather than
+   * risk skipping one. A migration is recorded only after it returns, so a walk
+   * that throws retries on the next boot.
+   */
+  private async runConfigRootMigrations(): Promise<void> {
+    const markers = await this.readStorageMigrations()
+    const pending: { key: string; run: () => Promise<void> }[] = []
+    if (markers[LEGACY_BEHAVIOR_MIGRATION_KEY] !== MIGRATION_COMPLETE) {
+      pending.push({
+        key: LEGACY_BEHAVIOR_MIGRATION_KEY,
+        run: () => this.migrateLegacyBehaviorPrompt()
+      })
+    }
+    if (markers[LEGACY_LAYOUT_MIGRATION_KEY] !== MIGRATION_COMPLETE) {
+      pending.push({ key: LEGACY_LAYOUT_MIGRATION_KEY, run: () => this.migrateLegacyLayout() })
+    }
+    for (const migration of pending) {
+      await migration.run()
+      await this.markStorageMigrationComplete(migration.key)
+    }
+  }
+
+  /**
+   * The recorded storage migration markers, or an empty map when there are none.
+   *
+   * A missing, unreadable or malformed file reads as "nothing proven done", so
+   * the caller runs its migration again: every migration behind this marker is
+   * idempotent, and re-running one is always cheaper than skipping one that
+   * never ran. Nothing here may block a boot.
+   */
+  private async readStorageMigrations(): Promise<Record<string, string>> {
+    try {
+      const raw = await this.readRaw(STORAGE_MIGRATIONS_FILE)
+      if (raw === null) return {}
+      const parsed: unknown = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+      const markers: Record<string, string> = {}
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof value === 'string') markers[key] = value
+      }
+      return markers
+    } catch (error) {
+      Logger.dev('Storage migration markers unreadable:', error)
+      return {}
+    }
+  }
+
+  /**
+   * Record a one-time storage migration as finished. Best effort: a write that
+   * fails only means the next boot runs the idempotent migration again.
+   */
+  private async markStorageMigrationComplete(key: string): Promise<void> {
+    try {
+      const markers = await this.readStorageMigrations()
+      await this.writeRaw(
+        STORAGE_MIGRATIONS_FILE,
+        JSON.stringify({ ...markers, [key]: MIGRATION_COMPLETE }, null, 2)
+      )
+    } catch (error) {
+      Logger.dev('Could not record storage migration marker:', error)
+    }
+  }
+
+  /**
    * One-time relocation of config-root state into its feature directory.
    * Window state, scheduler records, and every memory artifact are moved from
    * the flat root (and the old project/chat locations) into their dedicated
    * directories so the config root stays clean and future files land in the
    * right place. Only moves a source when the destination is empty, and always
-   * removes the source afterward to complete the cleanup.
+   * removes the source afterward to complete the cleanup. Runs once per config
+   * root through `runConfigRootMigrations`.
    */
   private async migrateLegacyLayout(): Promise<void> {
     await this.migrateLegacyAssistantDirectory()

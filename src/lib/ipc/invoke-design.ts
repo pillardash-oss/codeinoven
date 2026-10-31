@@ -10,8 +10,13 @@ import type {
   DesignScreenShot,
   DesignThumbnail,
   ProjectWorkState,
+  ScreenBoardOrder,
+  ScreenBoardState,
   ScreenCanvasState,
-  ThreadDesignState
+  ThreadDesignState,
+  WorkGroupMove,
+  WorkGroupState,
+  WorkGroupView
 } from './design'
 import type { WorkRoots } from '../design/work-roots'
 import type { Contract } from './contract-helpers'
@@ -275,5 +280,89 @@ export const invokeDesignContract = {
    * directory, and the container id alone cannot say which one. A project answers
    * without it.
    */
-  'design:projectWork': {} as Contract<[projectId: string, threadId?: string], ProjectWorkState>
+  'design:projectWork': {} as Contract<[projectId: string, threadId?: string], ProjectWorkState>,
+  /**
+   * How a project's board is organised: its groups, which design sits in which,
+   * and how the board draws them.
+   *
+   * Grouping is a record about the designs, never a move: the folders stay where
+   * the agent wrote them, so the board can be rearranged freely and the work is
+   * untouched. Every mutation below answers with the whole state, so one drop is
+   * one round trip rather than a write and a re-read.
+   */
+  'design:workGroups': {} as Contract<[projectId: string, kind: AuthoredWorkKind], WorkGroupState>,
+  'design:workGroupsCreate': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, name: string],
+    WorkGroupState
+  >,
+  'design:workGroupsRename': {} as Contract<
+    [projectId: string, groupId: string, name: string],
+    WorkGroupState
+  >,
+  /** Deleting a group returns its designs to the ungrouped list; no folder moves. */
+  'design:workGroupsRemove': {} as Contract<[projectId: string, groupId: string], WorkGroupState>,
+  /** Folding a group is persisted with it, so the board reopens as it was left. */
+  'design:workGroupsCollapse': {} as Contract<
+    [projectId: string, groupId: string, collapsed: boolean],
+    WorkGroupState
+  >,
+  'design:workGroupsReorder': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, groupIds: string[]],
+    WorkGroupState
+  >,
+  /**
+   * Drop one or more designs into a group, out of a group, or to a new place in
+   * the group they are already in. One call per drop, so the board and the agent
+   * agree about what a single user gesture did.
+   */
+  'design:workGroupsMove': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, moves: WorkGroupMove[]],
+    WorkGroupState
+  >,
+  'design:workGroupsView': {} as Contract<
+    [projectId: string, kind: AuthoredWorkKind, view: WorkGroupView],
+    WorkGroupState
+  >,
+  /**
+   * How one design's screens are organised: its groups, the order the user
+   * arranged, and the cards/list reading the whole app shares.
+   *
+   * A design is a folder of screens, and the board's own grouping is about those
+   * screens rather than about the designs of a project. Nothing here moves a file,
+   * so grouping is free to change and deleting a group returns its screens to the
+   * plain list.
+   */
+  'design:screenBoard': {} as Contract<[projectId: string, directory: string], ScreenBoardState>,
+  /** The app-wide reading of a design's screens: pictures, or rows. */
+  'design:screenBoardView': {} as Contract<[view: WorkGroupView], WorkGroupView>,
+  'design:screenBoardSort': {} as Contract<
+    [projectId: string, directory: string, order: ScreenBoardOrder],
+    ScreenBoardState
+  >,
+  'design:screenBoardCreateGroup': {} as Contract<
+    [projectId: string, directory: string, name: string],
+    ScreenBoardState
+  >,
+  'design:screenBoardRenameGroup': {} as Contract<
+    [projectId: string, directory: string, groupId: string, name: string],
+    ScreenBoardState
+  >,
+  /** Deleting a group returns its screens to the ungrouped list; no file moves. */
+  'design:screenBoardRemoveGroup': {} as Contract<
+    [projectId: string, directory: string, groupId: string],
+    ScreenBoardState
+  >,
+  'design:screenBoardReorderGroups': {} as Contract<
+    [projectId: string, directory: string, groupIds: string[]],
+    ScreenBoardState
+  >,
+  'design:screenBoardCollapseGroup': {} as Contract<
+    [projectId: string, directory: string, groupId: string, collapsed: boolean],
+    ScreenBoardState
+  >,
+  /** Place screens, in the order given, in one group: a drop or a reorder. */
+  'design:screenBoardPlace': {} as Contract<
+    [projectId: string, directory: string, groupId: string | null, entries: string[]],
+    ScreenBoardState
+  >
 }

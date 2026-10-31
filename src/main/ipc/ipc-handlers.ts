@@ -1,5 +1,5 @@
 import { registerArchiveHandlers } from './handlers/archive-handlers'
-import { resolveOvenThreadRoot } from '../ovens/oven-thread-root'
+import { createOvenMediaRoute } from '../ovens/oven-media-route'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { isShippedBuild } from '../bootstrap/app-resources'
@@ -50,6 +50,7 @@ import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
+import { OrchestrationDispatchRepo } from '../database/repositories/orchestration-dispatch-repo'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
@@ -83,6 +84,7 @@ import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
 import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
+import { registerOrchestrationHandlers } from './handlers/orchestration-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
@@ -247,31 +249,15 @@ export function registerIpcHandlers(
    *
    * The `appfile://` protocol serves remote previews through the same file
    * service as local ones; this hook is what turns a remote path into bytes,
-   * bound to the thread whose checkout the URL names.
+   * bound to the thread whose checkout the URL names. The route is resolved
+   * once per thread rather than once per range request, because a single video
+   * arrives as several of them.
    */
-  projectFilesService.remoteFileReader = async (projectId, threadId, path) => {
-    const thread = await threadManager.getThread(projectId, threadId)
-    if (!thread?.settings?.ovenId || thread.settings.ovenId === 'local') return null
-    const target = await resolveOvenThreadRoot(ovenService, thread, projectManager)
-    const metadata = await ovenService.workspace(target.ovenId, {
-      operation: 'stat',
-      root: target.root,
-      path
-    })
-    if (metadata.file?.kind !== 'file') throw new Error('The remote preview is not a file.')
-    return {
-      size: metadata.file.size,
-      read: async (offset) => {
-        const chunk = await ovenService.workspace(target.ovenId, {
-          operation: 'read',
-          root: target.root,
-          path,
-          offset
-        })
-        return new Uint8Array(Buffer.from(chunk.data ?? '', 'base64'))
-      }
-    }
-  }
+  projectFilesService.remoteFileReader = createOvenMediaRoute({
+    oven: ovenService,
+    threads: threadManager,
+    projects: projectManager
+  }).reader
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)
@@ -287,6 +273,7 @@ export function registerIpcHandlers(
   // purge can clear the queue together with the aggregates it feeds.
   const rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
   const noteRepo = new NoteRepo(database)
+  const orchestrationDispatchRepo = new OrchestrationDispatchRepo(database)
 
   /**
    * Optimistic renderer creates return before their database row is written.
@@ -505,6 +492,7 @@ export function registerIpcHandlers(
     modelRankingRepo,
     rankingSnapshotRepo,
     noteRepo,
+    orchestrationDispatchRepo,
     assistantManager,
     assistantScheduler: options.assistantScheduler,
     autoAnswerStore: options.autoAnswerStore,
@@ -542,4 +530,5 @@ export function registerIpcHandlers(
   registerUpdaterHandlers(ctx)
   registerAssistantHandlers(ctx)
   registerCioCleanupHandlers(ctx)
+  registerOrchestrationHandlers(ctx)
 }

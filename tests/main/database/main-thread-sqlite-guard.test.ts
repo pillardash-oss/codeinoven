@@ -47,9 +47,10 @@ interface SyncReadAllowance {
 
 const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   {
-    file: 'src/main/database/database.ts',
+    file: 'src/main/database/database/database-sql-fallbacks.ts',
     maxSites: 1,
-    reason: 'the synchronous API itself and its own worker fallback'
+    reason:
+      'the primary-connection fallback a worker-backed bounded read takes when no worker exists'
   },
   {
     file: 'src/main/database/repositories/agent-message-repo.ts',
@@ -107,6 +108,12 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     reason: REPOSITORY_READ
   },
   { file: 'src/main/database/repositories/thread-repo.ts', maxSites: 10, reason: REPOSITORY_READ },
+  {
+    file: 'src/main/database/repositories/work-group-repo.ts',
+    maxSites: 8,
+    reason:
+      'the authored-work board reads on synchronous action paths: group and member lists, the board view stamp, the next position, the duplicate-name probe, the group existence probe, and the renumber scan. Each one is the read half of a single board action that writes in the same call, so it cannot leave the call without racing its own write'
+  },
   { file: 'src/lib/engines/assignment-engine.ts', maxSites: 2, reason: ENGINE_READ },
   { file: 'src/lib/engines/audit-engine.ts', maxSites: 4, reason: ENGINE_READ },
   { file: 'src/lib/engines/brainstorm-engine.ts', maxSites: 2, reason: ENGINE_READ },

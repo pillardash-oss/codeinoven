@@ -11,7 +11,7 @@
   import { cardFrameClass } from '../shared/card-frame'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { PermissionRequest } from '$shared/types'
@@ -36,7 +36,14 @@
   const alternativeSpeechTargetId = $derived(`permission-alternative-${request.id}`)
 
   let metadataEntries = $derived(
-    Object.entries(request.metadata).filter(([key]) => key !== 'matchedPatterns')
+    Object.entries(request.metadata).filter(
+      ([key]) => key !== 'matchedPatterns' && key !== 'justification'
+    )
+  )
+  // The agent states why it needs a protected file before this card appears, so
+  // the decision carries its argument instead of a bare path.
+  let justification = $derived(
+    typeof request.metadata['justification'] === 'string' ? request.metadata['justification'] : ''
   )
   // The gate reports which block-list entries caught the call, so the card
   // answers why a path is protected instead of only naming it.
@@ -149,10 +156,21 @@
           <p class="text-sm font-semibold text-foreground">{request.permission}</p>
           {#if request.policy}
             <div class="mt-1 text-xs leading-relaxed text-muted">
-              <MarkdownView text={request.policy.reason} class="markdown-body-card" />
+              <DeferredMarkdownView text={request.policy.reason} class="markdown-body-card" />
             </div>
           {/if}
         </div>
+
+        {#if justification}
+          <div>
+            <p class="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed">
+              Why the agent needs it
+            </p>
+            <p class="bg-elevated px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
+              {justification}
+            </p>
+          </div>
+        {/if}
 
         {#if request.patterns.length > 0}
           <div>

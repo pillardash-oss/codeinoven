@@ -11,6 +11,7 @@ import {
   resolveChildWindowPreload
 } from './child-window-support'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { liveContents } from './browser-service/browser-view-contents'
 
 /** A bounded view receives native hover and clicks in the application's key window. */
 export class NativeStripView {
@@ -44,7 +45,7 @@ export class NativeStripView {
     parent.once('closed', () => this.dispose())
   }
   owns(id: number): boolean {
-    return this.view?.webContents.id === id
+    return this.view !== null && liveContents(this.view)?.id === id
   }
   currentStrip(): BrowserStripOverlayRequest | null {
     return this.request
@@ -124,7 +125,9 @@ export class NativeStripView {
       this.hideTimer = setTimeout(() => {
         if (this.request || this.dock || !this.view || this.parent.isDestroyed()) return
         const view = this.view
-        const restoreFocus = view.webContents.isFocused() && this.parent.isFocused()
+        const contents = liveContents(view)
+        const restoreFocus =
+          contents !== undefined && contents.isFocused() && this.parent.isFocused()
         this.parent.contentView.removeChildView(view)
         this.stopPointerWatch()
         if (restoreFocus) this.parent.webContents.focus()
@@ -189,7 +192,7 @@ export class NativeStripView {
     this.deliveredImages.clear()
     if (!view) return
     if (!this.parent.isDestroyed()) this.parent.contentView.removeChildView(view)
-    if (!view.webContents.isDestroyed()) view.webContents.close()
+    liveContents(view)?.close()
   }
   private position(): void {
     if (!this.view || (!this.request && !this.dock) || this.parent.isDestroyed()) return
@@ -207,7 +210,7 @@ export class NativeStripView {
     })
   }
   private ensure(): WebContentsView | null {
-    if (this.view && !this.view.webContents.isDestroyed()) return this.view
+    if (this.view && liveContents(this.view)) return this.view
     if (this.parent.isDestroyed()) return null
     const view = new WebContentsView({
       webPreferences: {

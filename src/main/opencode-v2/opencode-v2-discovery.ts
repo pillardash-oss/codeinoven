@@ -12,7 +12,7 @@ import type {
   OpenCodeV2ServerIdentity,
   ProviderCatalog
 } from '../../lib/types'
-import { OpenCodeV2Client } from './opencode-v2-client'
+import { OpenCodeV2Client, OpenCodeV2RequestError } from './opencode-v2-client'
 import { startOpenCodeV2Server, type OpenCodeV2ServerHandle } from './opencode-v2-server'
 import { mapOpenCodeV2Catalogs } from '../drivers/opencode-v2/v2-catalog'
 
@@ -147,7 +147,13 @@ export async function readOpenCodeV2Catalog(
   signal?: AbortSignal
 ): Promise<
   | { ok: true; catalog: OpenCodeV2Catalog }
-  | { ok: false; reason: 'unreachable' | 'unsupported-version'; detail: string }
+  | {
+      ok: false
+      reason: 'unreachable' | 'unsupported-version'
+      detail: string
+      /** The failure is the location still activating, so a retry can succeed. */
+      retryable?: boolean
+    }
 > {
   try {
     const client = new OpenCodeV2Client(handle)
@@ -179,7 +185,8 @@ export async function readOpenCodeV2Catalog(
     return {
       ok: false,
       reason: 'unreachable',
-      detail: error instanceof Error ? error.message : String(error)
+      detail: error instanceof Error ? error.message : String(error),
+      ...(isActivationPendingError(error) ? { retryable: true } : {})
     }
   }
 }
@@ -200,6 +207,43 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
+ * Whether a failed read only says the location is still activating.
+ *
+ * V2 answers the first location-scoped request of a fresh server with a
+ * retryable `Location plugins did not finish activating` refusal while its
+ * plugins boot. That is a first-boot state, never a broken install, so it must
+ * be polled through instead of throwing the whole read away   and never logged
+ * as a failure with a stack trace.
+ */
+export function isActivationPendingError(error: unknown): boolean {
+  if (!(error instanceof OpenCodeV2RequestError)) return false
+  if (error.status === 409 || error.status === 429 || error.status === 503) return true
+  return /did not finish activating|still activating|not ready yet/iu.test(error.message)
+}
+
+/**
+ * Log one compact line per distinct probe failure.
+ *
+ * A probe that cannot read a catalog repeats on every caller, and a full stack
+ * for each attempt flooded the dev log. The message alone is the actionable
+ * part, so it is logged once and then suppressed until the repeat is old enough
+ * to be news again.
+ */
+const probeFailures = new Map<string, number>()
+const PROBE_FAILURE_LOG_INTERVAL_MS = 10 * 60_000
+
+function logProbeFailure(label: string, error: unknown): void {
+  const status = error instanceof OpenCodeV2RequestError ? ` (${error.status})` : ''
+  const message = error instanceof Error ? error.message : String(error)
+  const line = `${label}${status}: ${message}`
+  const now = Date.now()
+  const last = probeFailures.get(line)
+  if (last !== undefined && now - last < PROBE_FAILURE_LOG_INTERVAL_MS) return
+  probeFailures.set(line, now)
+  Logger.dev(line)
+}
+
+/**
  * Read a catalog, polling through the server's first-boot window.
  *
  * The catalog is considered settled as soon as it exposes any provider or
@@ -214,12 +258,11 @@ async function readSettledCatalog(
 > {
   const deadline = Date.now() + CATALOG_SETTLE_TIMEOUT_MS
   let result = await readOpenCodeV2Catalog(handle, signal)
-  while (
-    result.ok &&
-    result.catalog.providers.length === 0 &&
-    result.catalog.models.length === 0 &&
-    Date.now() < deadline
-  ) {
+  while (Date.now() < deadline) {
+    const settled =
+      result.ok && (result.catalog.providers.length > 0 || result.catalog.models.length > 0)
+    const activating = !result.ok && result.retryable === true
+    if (!settled && !activating) break
     await delay(CATALOG_POLL_INTERVAL_MS)
     result = await readOpenCodeV2Catalog(handle, signal)
   }
@@ -251,7 +294,7 @@ async function runOpenCodeV2Catalog(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     const missing = /ENOENT|not found/u.test(detail)
-    Logger.dev('OpenCode V2 discovery server failed to start:', detail)
+    logProbeFailure('OpenCode V2 discovery server failed to start', error)
     return { ok: false, reason: missing ? 'not-installed' : 'unreachable', detail }
   }
 
@@ -274,7 +317,7 @@ async function runOpenCodeV2ProviderCatalogs(options: {
   try {
     handle = await startOpenCodeV2Server(options)
   } catch (error) {
-    Logger.dev('OpenCode V2 provider probe could not start:', error)
+    logProbeFailure('OpenCode V2 provider probe could not start', error)
     return []
   }
   try {
@@ -283,18 +326,30 @@ async function runOpenCodeV2ProviderCatalogs(options: {
     const deadline = Date.now() + CATALOG_SETTLE_TIMEOUT_MS
     for (;;) {
       options.signal?.throwIfAborted()
-      const [models, providers] = await Promise.all([
-        client.json(`/api/model?${query}`, { timeoutMs: 30_000, signal: options.signal }),
-        client
-          .json(`/api/provider?${query}`, { timeoutMs: 30_000, signal: options.signal })
-          .catch(() => null)
-      ])
-      const catalogs = mapOpenCodeV2Catalogs(models, providers)
-      if (catalogs.length > 0 || Date.now() >= deadline) return catalogs
+      try {
+        const [models, providers] = await Promise.all([
+          client.json(`/api/model?${query}`, { timeoutMs: 30_000, signal: options.signal }),
+          client
+            .json(`/api/provider?${query}`, { timeoutMs: 30_000, signal: options.signal })
+            .catch(() => null)
+        ])
+        const catalogs = mapOpenCodeV2Catalogs(models, providers)
+        if (catalogs.length > 0) {
+          // A read that produced a catalog ends the failure streak, so a later
+          // regression is logged again instead of being suppressed as a repeat.
+          probeFailures.clear()
+          return catalogs
+        }
+        if (Date.now() >= deadline) return catalogs
+      } catch (error) {
+        // The first location-scoped read of a fresh server is refused while its
+        // plugins activate. Read again instead of discarding the whole probe.
+        if (!isActivationPendingError(error) || Date.now() >= deadline) throw error
+      }
       await delay(CATALOG_POLL_INTERVAL_MS)
     }
   } catch (error) {
-    Logger.dev('OpenCode V2 provider probe failed:', error)
+    logProbeFailure('OpenCode V2 provider probe failed', error)
     return []
   } finally {
     await handle.close()
@@ -306,10 +361,35 @@ async function runOpenCodeV2ProviderCatalogs(options: {
 const discoveryQueue = createWorkQueue(1)
 const discoveryRequests = new Map<string, Promise<unknown>>()
 
+/**
+ * How long a completed discovery may be reused before it runs again.
+ *
+ * A discovery is not a query: it spawns a private `opencode serve` and tears it
+ * down, so the cost is the process boot and its plugin activation, not the read.
+ * The provider/model catalog only changes when a provider is installed or a
+ * catalog updates, while callers ask for it on every turn and every poll. Without
+ * a cache that turned into hundreds of server spawns a day (238-409 in the
+ * durable log) competing with the app's own startup work.
+ */
+const PROVIDER_CATALOG_TTL_MS = 5 * 60_000
+const discoveryResults = new Map<string, { at: number; value: unknown }>()
+
+function cachedDiscovery<T>(key: string, ttlMs: number): T | null {
+  if (ttlMs <= 0) return null
+  const cached = discoveryResults.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.at >= ttlMs) {
+    discoveryResults.delete(key)
+    return null
+  }
+  return cached.value as T
+}
+
 function queuedDiscovery<T>(
   kind: string,
   options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv },
-  run: (signal: AbortSignal) => Promise<T>
+  run: (signal: AbortSignal) => Promise<T>,
+  ttlMs = 0
 ): Promise<T> {
   const fingerprint = createHash('sha256')
     .update(
@@ -324,6 +404,8 @@ function queuedDiscovery<T>(
     options.cwd ?? homedir(),
     fingerprint
   ])
+  const cached = cachedDiscovery<T>(key, ttlMs)
+  if (cached !== null) return Promise.resolve(cached)
   const pending = discoveryRequests.get(key)
   if (pending) return pending as Promise<T>
   const request = discoveryQueue(async () => {
@@ -334,7 +416,14 @@ function queuedDiscovery<T>(
     } finally {
       clearTimeout(timer)
     }
-  }).finally(() => discoveryRequests.delete(key))
+  })
+    .then((value) => {
+      // Only completed reads are remembered: a failed spawn is a real signal and
+      // must be retried by the next caller rather than served from a cache.
+      if (ttlMs > 0) discoveryResults.set(key, { at: Date.now(), value })
+      return value
+    })
+    .finally(() => discoveryRequests.delete(key))
   discoveryRequests.set(key, request)
   return request
 }
@@ -352,7 +441,18 @@ export function discoverOpenCodeV2ProviderCatalogs(options: {
   cwd: string
   env?: NodeJS.ProcessEnv
 }): Promise<ProviderCatalog[]> {
-  return queuedDiscovery('providers', options, (signal) =>
-    runOpenCodeV2ProviderCatalogs({ ...options, signal })
+  return queuedDiscovery(
+    'providers',
+    options,
+    (signal) => runOpenCodeV2ProviderCatalogs({ ...options, signal }),
+    PROVIDER_CATALOG_TTL_MS
   )
+}
+
+/**
+ * Drop every cached discovery so the next read reflects a change this process
+ * just made (an install, a provider edit, a version switch).
+ */
+export function invalidateOpenCodeV2DiscoveryCache(): void {
+  discoveryResults.clear()
 }

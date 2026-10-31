@@ -16,6 +16,7 @@
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { describeWaitingWork } from '$lib/update-waiting-copy'
 
   import type { Component } from 'svelte'
   import AppRailButton from './AppRailButton.svelte'
@@ -99,9 +100,9 @@
           // Enabled, not disabled: waiting is not a dead end. The click opens
           // the modal that names the work and offers the force install, which is
           // the only escape when a session is stuck reporting itself as working.
-          label: `Update waiting for ${updaterState.waitingForThreads} active thread${
-            updaterState.waitingForThreads === 1 ? '' : 's'
-          } to finish. Review and force install`,
+          label: `Update waiting for ${describeWaitingWork(
+            updaterState.waitingFor
+          )}. Review and force install`,
           tone: 'accent',
           disabled: false,
           spin: false

@@ -114,4 +114,32 @@ describe('PrdEngine', () => {
     const { engine } = await setup()
     expect(() => engine.ensureWorkflow('other-project', 'thread-1')).toThrow(PrdEngineError)
   })
+
+  it('reads a deleted thread as empty state and still rejects writes', async () => {
+    const { engine, db } = await setup()
+    engine.ensureWorkflow('project-1', 'thread-1')
+    engine.chooseEntry('project-1', 'thread-1', 'start_prd')
+    const draft = await engine.createDraft('project-1', 'thread-1', content(), {
+      source: 'agent',
+      actor: 'Product'
+    })
+    // Deleting the thread cascades its PRD workflow and versions away. A view
+    // that is still hydrating Engineering state must read that as nothing
+    // instead of raising "Thread not found" at a thread it can only render
+    // broken.
+    db.run('DELETE FROM threads WHERE id = ?', 'thread-1')
+    expect(engine.getWorkflowState('project-1', 'thread-1')).toBeNull()
+    expect(engine.getActive('project-1', 'thread-1')).toBeNull()
+    expect(engine.getVersion('project-1', 'thread-1', draft.id, draft.version)).toBeNull()
+    expect(engine.listVersions('project-1', 'thread-1', draft.id)).toEqual([])
+    // Writes stay strict: PRD state for a thread that is not there is a bug,
+    // and it names the missing thread instead of blaming the workflow stage.
+    expect(() => engine.ensureWorkflow('project-1', 'thread-1')).toThrow(PrdEngineError)
+    await expect(
+      engine.createVersion('project-1', 'thread-1', draft.id, content(), {
+        source: 'agent',
+        actor: 'Product'
+      })
+    ).rejects.toThrow('Thread not found')
+  })
 })

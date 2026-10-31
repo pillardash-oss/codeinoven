@@ -57,6 +57,10 @@ import type {
   BrowserExtensionMenuInput
 } from '../browser/browser-extension-menu'
 import type {
+  BrowserExtensionBarMenuChoice,
+  BrowserExtensionBarMenuInput
+} from '../browser/browser-extension-bar-menu'
+import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
   BrowserStripOverlayInteraction,
@@ -76,6 +80,13 @@ export const invokeBrowserContract = {
     boolean
   >,
   'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
+  /**
+   * The overlay document could not mount, so nothing it is handed can ever be
+   * drawn. The host answers it by replacing the window and telling the app, so a
+   * panel waiting on a dead document falls back to the app window at once
+   * instead of waiting out its acknowledgement deadline.
+   */
+  'browser:overlayDocumentFailed': {} as Contract<[reason: string], void>,
   'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
   'browser:commitDockOverlay': {} as Contract<[request: NativeDockCommit], boolean>,
   'browser:focusDockOverlay': {} as Contract<[id: string], boolean>,
@@ -214,6 +225,16 @@ export const invokeBrowserContract = {
   'browser:closePopupWindow': {} as Contract<[popupId: string], void>,
   /** The popup windows the browser is holding for one project. */
   'browser:getPopupWindows': {} as Contract<[projectId: string], BrowserPopupWindow[]>,
+  /**
+   * Move one browser tab's page into the rail's side windows.
+   *
+   * A page is one native view, and the window composites a view at one rectangle, so
+   * a page cannot stand in the strip and beside it at once: the move is a close plus
+   * an open of the same address, hosted the way a popup window's page is. Main answers
+   * with the window's id once its page is up, and the caller closes the tab it came
+   * from; null means the move did not happen and the tab has to stay.
+   */
+  'browser:moveTabToSidePanel': {} as Contract<[tabId: string, url: string], string | null>,
   /**
    * Open an extension's own action popup in the rail.
    *
@@ -618,6 +639,21 @@ export const invokeBrowserContract = {
   'browser:extensionMenu': {} as Contract<
     [input: BrowserExtensionMenuInput, x: number, y: number],
     BrowserExtensionMenuChoice | null
+  >,
+  /**
+   * Open the thread browser's native extension-bar menu.
+   *
+   * The extension button in the browser panel's toolbar opens it: the extensions
+   * that run in the tab's jar, the Web Store offer the page on screen makes, and
+   * (on a right-click) the two ways to install. A native menu because the page
+   * below is a `WebContentsView` composited above the renderer, so a document
+   * dropdown under the toolbar would be drawn behind it.
+   *
+   * The reply is null when the menu was dismissed without a choice.
+   */
+  'browser:extensionBarMenu': {} as Contract<
+    [input: BrowserExtensionBarMenuInput, x: number, y: number],
+    BrowserExtensionBarMenuChoice | null
   >,
   /** Open one extension's options/setup page in a new global browser tab. */
   'browser:openExtensionPage': {} as Contract<

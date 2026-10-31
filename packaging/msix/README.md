@@ -82,6 +82,14 @@ Neither path signs anything: the Store re-signs the package with a Microsoft
 certificate during certification, so the Authenticode certificate the NSIS
 installer needs is irrelevant here (see `.cio/work/windows-signing/SIGNING-RUNBOOK.md`).
 
+That is enforced by `scripts/msix.ts`, not by the workflows. The release path
+shares one shell with the installer build, so it exports `CSC_LINK` and
+`CSC_KEY_PASSWORD`; electron-builder reads them for the appx target too and would
+sign the MSIX with the Apple Developer ID certificate, which Windows rejects
+(`SignTool Error: The specified algorithm cannot be used or is invalid`). The
+script strips every `CSC_*` and `WIN_CSC_*` variable from the electron-builder
+child environment, so an MSIX cannot be signed no matter what the caller exports.
+
 The MSIX is deliberately **not** attached to the GitHub release and **not**
 mirrored to `dl.codeinoven.com`. It is a Store submission rather than a
 user-facing download, so it stays out of `SHA256SUMS.txt` and out of the download

@@ -1,12 +1,15 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import type { UpdaterStatus } from '$shared/ipc-contract'
+import type { UpdaterStatus, UpdaterWaitingWork } from '$shared/ipc-contract'
+
+const NO_WAITING_WORK: UpdaterWaitingWork = { threads: 0, downloads: 0 }
 
 class UpdaterState {
   status = $state<UpdaterStatus>({
     canAutoUpdate: false,
     state: 'idle'
   })
-  waitingForThreads = $state(0)
+  /** What a pending install is waiting on, pushed on every deferred decision. */
+  waitingFor = $state<UpdaterWaitingWork>(NO_WAITING_WORK)
 
   private cleanups: Array<() => void> = []
 
@@ -18,8 +21,8 @@ class UpdaterState {
     })
     this.cleanups.push(unsubStatus)
 
-    const unsubWaiting = subscribe('updater:waiting-for-threads', (count) => {
-      this.waitingForThreads = count
+    const unsubWaiting = subscribe('updater:waiting-for-work', (threads, downloads) => {
+      this.waitingFor = { threads, downloads }
     })
     this.cleanups.push(unsubWaiting)
   }

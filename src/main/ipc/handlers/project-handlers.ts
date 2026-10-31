@@ -14,6 +14,7 @@ import { broadcastAutoAnswersChanged } from '../../scheduler/assistant-events'
 import { sendToRenderer } from '../renderer-delivery'
 import { ScopeToolService } from '../../workspaces/scope-tool-service'
 import { removeProjectBrowserProfiles } from '../../browser/browser-service/browser-profile-store'
+import { forgetProjectJarOnDisk } from '../../browser/extensions/browser-extension-registry'
 import type { ScopeToolServiceOptions } from '../../workspaces/scope-tool-service'
 import { AssignmentWorkerScopeService } from '../../workspaces/assignment-worker-scope-service'
 import {
@@ -675,7 +676,15 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       // window yet) still removes the profiles; that is all there is to do.
       const browser = options.browser?.() ?? null
       if (browser) await browser.forgetProject(projectId)
-      else await removeProjectBrowserProfiles(projectId)
+      else {
+        await removeProjectBrowserProfiles(projectId)
+        // Its extensions are installed for that project's own browser jar, so they
+        // go with it. A live browser would have done this itself; with none to ask,
+        // the registry file is what the next launch loads, so it is corrected here.
+        await forgetProjectJarOnDisk(storage, projectId).catch((error: unknown) => {
+          Logger.dev('A deleted project left its extensions behind:', error)
+        })
+      }
       // Delete every thread through the same path as `thread:delete` (session
       // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
       // project deletion can never fall behind that logic or leave orphans.
@@ -773,7 +782,16 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   app.on('before-quit', () => ide.stop())
   ipcMain.handle(
     'projectFiles:ide',
-    async (_, projectId: unknown, input: unknown, scopeBucketId?: unknown, threadId?: unknown) => {
+    async (
+      event: IpcMainInvokeEvent,
+      projectId: unknown,
+      input: unknown,
+      scopeBucketId?: unknown,
+      threadId?: unknown
+    ) => {
+      // Progress only ever travels away from the worker, so the window that
+      // asked is the one the service remembers for it.
+      ide.attachRenderer(event.sender)
       if (!input || typeof input !== 'object') throw new TypeError('Invalid IDE request')
       const value = input as Record<string, unknown>
       const actions = [

@@ -1,6 +1,6 @@
 <script lang="ts">
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
 </script>
@@ -20,7 +20,7 @@
           class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
         />
       </div>
-      <MarkdownView text={response.content} class="text-xs leading-relaxed" />
+      <DeferredMarkdownView text={response.content} class="text-xs leading-relaxed" />
     </article>
   {:else}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 px-3 py-10 text-center">

@@ -70,6 +70,17 @@
         Waiting for you to authorize…
       {/if}
     </p>
+
+    <!--
+      A poll that never reached GitHub leaves the code perfectly good, so the
+      attempt keeps waiting and the reason for the silence is stated here instead
+      of being turned into a failed sign-in.
+    -->
+    {#if githubSignIn.message}
+      <p role="status" class="text-center text-[0.625rem] leading-relaxed text-warning">
+        {githubSignIn.message}
+      </p>
+    {/if}
   </div>
 {:else if githubSignIn.phase === 'authorized'}
   <div class="flex flex-col items-center justify-center py-8 text-center">

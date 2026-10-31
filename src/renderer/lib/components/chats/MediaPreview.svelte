@@ -7,6 +7,8 @@
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
+  import AudioPlayer from '../ui/AudioPlayer.svelte'
+  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
@@ -21,6 +23,20 @@
     onClose: () => void
     /** Repair hook for a media element that failed to load (blob not ready yet). */
     onLoadError?: (element: HTMLMediaElement) => void
+    /**
+     * Where a video should start, in seconds.
+     *
+     * An inline player hands over the frame it had reached, so opening the video
+     * big resumes the recording instead of restarting it.
+     */
+    startAt?: number
+    /**
+     * Whether the media was running when the lightbox took it over.
+     *
+     * A recording the user was watching continues in the viewer instead of
+     * stopping on the frame they clicked from.
+     */
+    autoPlay?: boolean
     /**
      * Original `file://` url of the media being shown, when the caller has one.
      * `src` is usually a blob url, which has no path on disk, so the reveal
@@ -50,8 +66,19 @@
     annotate?: Snippet
   }
 
-  let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal, annotate }: Props =
-    $props()
+  let {
+    src,
+    filename,
+    mime,
+    onClose,
+    onLoadError,
+    revealUrl,
+    pager,
+    onReveal,
+    annotate,
+    startAt,
+    autoPlay = false
+  }: Props = $props()
 
   let annotationToolbar = $state<HTMLDivElement>()
   setAnnotationToolbarHost({ target: () => annotationToolbar })
@@ -73,10 +100,6 @@
     // manager), so the lightbox closes itself: staying open hides the result
     // and reads as a button that did nothing.
     onClose()
-  }
-
-  function mediaError(event: Event): void {
-    onLoadError?.(event.currentTarget as HTMLMediaElement)
   }
 
   const panZoom = new PanZoom()
@@ -183,29 +206,29 @@
   >
     <div
       role="presentation"
-      class="relative flex h-full min-h-0 w-full flex-col items-center"
+      class="relative flex h-full min-h-0 w-full flex-col items-center justify-center"
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
       {#if annotate}
         {@render annotate()}
       {:else if kind === 'video'}
-        <video
+        <!-- The app's own player, filling this surface. It offers no fullscreen
+             action here: this surface already is the fullscreen view. -->
+        <VideoPlayer
           {src}
-          controls
-          preload="metadata"
-          class="min-h-0 w-full flex-1 object-contain"
-          onerror={mediaError}
-        >
-          <track kind="captions" />
-        </video>
+          label={filename}
+          {startAt}
+          {autoPlay}
+          fit="fill"
+          onError={(element) => onLoadError?.(element)}
+        />
       {:else if kind === 'audio'}
-        <audio
+        <AudioPlayer
           {src}
-          controls
-          preload="metadata"
-          class="w-full max-w-xl shadow-2xl"
-          onerror={mediaError}
-        ></audio>
+          label={filename}
+          class="w-full max-w-xl"
+          onError={(element) => onLoadError?.(element)}
+        />
       {:else}
         <div
           {@attach imageViewportAttachment}

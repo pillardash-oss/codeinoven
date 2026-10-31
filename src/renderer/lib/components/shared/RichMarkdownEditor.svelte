@@ -213,6 +213,22 @@
     return true
   }
 
+  /** Selects every character in this editor, wrapper and all, no matter which
+   *  nested editing host the caret currently sits in. */
+  function selectEditorContents(): void {
+    if (!editor) return
+    const length = nodeLength(editor)
+    const range = document.createRange()
+    range.selectNodeContents(editor)
+    editor.focus()
+    const selection = window.getSelection()
+    if (!selection) return
+    selection.removeAllRanges()
+    selection.addRange(range)
+    lastSelectionBookmark = { anchor: 0, focus: length }
+    publishCaretText()
+  }
+
   function isRuleSuppressed(block: HTMLElement | null, kind: MarkdownRuleKind): boolean {
     const hold = revertedRuleHold
     if (!block || !hold) return false
@@ -543,6 +559,18 @@
     if (keymapState.matches('editor-undo', event)) {
       event.preventDefault()
       history.undo()
+      return
+    }
+    // Select All means this field, wherever the caret sits. A code block's
+    // inner `<code>` is its own editing host inside a `contenteditable="false"`
+    // wrapper, so the browser resolves Select All against that host: taken from
+    // inside a block it never leaves the block, so the rest of the note stays
+    // unselected and Delete cannot clear it. Selecting the whole editor here
+    // keeps Select All meaning the note, and a whole-document delete is what
+    // `handleBeforeInput` already knows how to clear.
+    if (keymapState.matches('editor-select-all', event)) {
+      event.preventDefault()
+      selectEditorContents()
       return
     }
 

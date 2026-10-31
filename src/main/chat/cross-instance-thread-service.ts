@@ -122,9 +122,9 @@ export class CrossInstanceThreadService {
     }
     if (event.rows.length === 0 && event.drafts.length === 0) return
     try {
-      const threads = await this.readThreads(
-        [...new Set([...event.rows, ...event.drafts].map((change) => change.threadId))]
-      )
+      const threads = await this.readThreads([
+        ...new Set([...event.rows, ...event.drafts].map((change) => change.threadId))
+      ])
       const byId = new Map(threads.map((thread) => [thread.id, thread]))
       for (const change of event.rows) {
         const thread = byId.get(change.threadId)

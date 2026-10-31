@@ -832,7 +832,7 @@ up in the card as prose, and is edited in the panel like every other section. Th
 model carries a name and a user-written `description` (what the assistant is for,
 shown on the row's hover card) and nothing else about who it is; a personality
 stored by an older build is folded into the knowledge at startup
-(`migrateAssistantIdentityColumns`, `src/main/database/database.ts`).
+(`applyAssistantIdentityColumns`, `src/main/database/migrations/v002.ts`).
 
 - An assistant shows an amber **Incomplete** icon (`AlertTriangle`,
   `--color-warning`) whenever it cannot run yet, with the exact gap on hover.

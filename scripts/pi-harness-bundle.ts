@@ -2,7 +2,12 @@ import { existsSync } from 'node:fs'
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { build as bundleWithEsbuild } from 'esbuild'
 import { toPosixPath } from '../src/lib/paths'
+import {
+  PI_HARNESS_PI_AI_REGISTRY_FILE,
+  PI_HARNESS_VENDOR_DIRECTORY
+} from '../src/lib/pi-harness-vendor'
 
 /**
  * Build logic behind `bun run harness:build-pi`: copies the pinned pi CLI's
@@ -115,8 +120,8 @@ const KEPT_DIST_DIRECTORIES: ReadonlySet<string> = new Set([
  *  - `vendor/jiti/dist/{jiti.cjs,babel.cjs}` are required by
  *    `vendor/jiti/lib/jiti.cjs`, which is what the bundle requires to compile
  *    the app-owned `.ts` extensions.
- *  - `pi-ai` is imported in-process by the main process
- *    (see `src/main/providers/pi-ai-registry.ts`).
+ *  - `vendor/pi-ai-registry.mjs` is the self-contained provider registry the main
+ *    process imports (see `src/main/providers/pi-ai-registry.ts`).
  */
 export const PI_HARNESS_REQUIRED_RUNTIME_FILES: readonly string[] = [
   'package.json',
@@ -126,8 +131,7 @@ export const PI_HARNESS_REQUIRED_RUNTIME_FILES: readonly string[] = [
   ...PI_HARNESS_KEPT_DIST_FILES,
   'vendor/jiti/dist/jiti.cjs',
   'vendor/jiti/dist/babel.cjs',
-  'vendor/pi-ai/dist/index.js',
-  'vendor/pi-ai/dist/providers/all.js',
+  `${PI_HARNESS_VENDOR_DIRECTORY}/${PI_HARNESS_PI_AI_REGISTRY_FILE}`,
   'vendor/@silvia-odwyer/photon-node/photon_rs.js',
   'vendor/@silvia-odwyer/photon-node/photon_rs_bg.wasm',
   'vendor/quickjs-wasi/quickjs.wasm',
@@ -426,6 +430,41 @@ function assertVendoredTargetsExist(vendorRoot: string): void {
 }
 
 /**
+ * Bundle pi-ai's provider registry into one self-contained ES module.
+ *
+ * Copying its `dist` was never enough, and the failure was the quiet kind: the
+ * registry reaches `@earendil-works/pi-telemetry`, `typebox`, `openai`,
+ * `@google/genai`, `@anthropic-ai/sdk` and `partial-json` by package name, and a
+ * packaged app has no `node_modules` walk above `vendor/` for any of them. The
+ * load threw on the first one (`pi-telemetry`), `[pi-ai]` logged it, and every
+ * provider feature fell back to a last-known inventory, so the app ran without a
+ * live model catalog and without in-app sign-in. All of those packages are plain
+ * ESM whose only externals are Node builtins, so esbuild inlines the whole
+ * closure here and the packaged app imports one file that resolves nothing.
+ *
+ * Minified on purpose: ~2.4MB against ~4.8MB expanded, and nothing reads this
+ * but the ESM loader. Source maps are omitted for the same reason; the only
+ * diagnostics that escape it are error messages, which esbuild does not rename.
+ */
+async function bundlePiAiRegistry(piAiPackageDirectory: string, outfile: string): Promise<void> {
+  await mkdir(dirname(outfile), { recursive: true })
+  await bundleWithEsbuild({
+    entryPoints: [join(piAiPackageDirectory, 'dist/providers/all.js')],
+    outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    // The main process runs inside Electron's Node, which is at least this new
+    // for every release this app supports (see `engines`).
+    target: 'node22',
+    packages: 'bundle',
+    minify: true,
+    legalComments: 'none',
+    logLevel: 'silent'
+  })
+}
+
+/**
  * Materializes the bundled Pi runtime at `directory`, rewriting every vendored
  * bare import to a relative path into the vendored copies. Throws (never warns)
  * when the result could not resolve in the packaged app.
@@ -471,16 +510,19 @@ export async function buildBundledPiHarness(directory: string): Promise<BundledP
     recursive: true,
     filter: excludeBuildTimeBin
   })
-  // pi-ai's dist is self-contained relative imports; vendored so main-process
-  // features (in-app OAuth sign-in) can load its flow implementations in the
-  // packaged app, where pi-ai is not part of CodeInOven's own node_modules.
+  // pi-ai's provider registry is what main-process features load (the model and
+  // provider catalog, in-app OAuth sign-in), and pi-ai is not part of
+  // CodeInOven's own node_modules in a packaged app. Its `dist` cannot simply be
+  // copied: see `bundlePiAiRegistry` for the bare specifiers that left it
+  // unloadable and for why the closure is bundled instead.
   const piAiPackageDirectory = installedPackageDirectory('@earendil-works/pi-ai', [
     piPackageDirectory,
     projectRoot
   ])
-  await cp(join(piAiPackageDirectory, 'dist'), join(directory, 'vendor/pi-ai/dist'), {
-    recursive: true
-  })
+  await bundlePiAiRegistry(
+    piAiPackageDirectory,
+    join(directory, PI_HARNESS_VENDOR_DIRECTORY, PI_HARNESS_PI_AI_REGISTRY_FILE)
+  )
   // photon is pi's image codec: `processImage` converts an attachment to a
   // supported format and downsizes it below the provider's inline image limit,
   // and pi `import()`s it lazily so the ~1.8MB wasm only loads when an image is

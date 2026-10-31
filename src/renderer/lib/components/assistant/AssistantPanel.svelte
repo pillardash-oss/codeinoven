@@ -12,7 +12,7 @@
   import AssistantIcon, {
     type AssistantIconMark
   } from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
@@ -1057,7 +1057,7 @@
         confirm the recap.
       </p>
       <div class="text-[0.6875rem] text-muted">
-        <MarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
+        <DeferredMarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
       </div>
     </div>
   {/if}
@@ -1359,7 +1359,7 @@
                       </div>
                     {:else if !folded}
                       <div class="border-t border-border px-2.5 py-2">
-                        <MarkdownView text={section.body} class="text-[0.75rem]" />
+                        <DeferredMarkdownView text={section.body} class="text-[0.75rem]" />
                       </div>
                     {:else if sectionSummary(section)}
                       <!-- A folded section keeps one line of its own prose, so folding

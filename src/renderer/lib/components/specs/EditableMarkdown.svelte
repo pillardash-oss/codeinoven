@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
 
   interface Props {
     text: string
@@ -95,7 +95,7 @@
   ></div>
 {:else if readOnly}
   <div class={className} role="document" aria-label={ariaLabel}>
-    <MarkdownView text={text || fallback} {onAnnotateMermaid} />
+    <DeferredMarkdownView text={text || fallback} {onAnnotateMermaid} />
   </div>
 {:else}
   <div
@@ -112,6 +112,6 @@
       }
     }}
   >
-    <MarkdownView text={text || fallback} {onAnnotateMermaid} />
+    <DeferredMarkdownView text={text || fallback} {onAnnotateMermaid} />
   </div>
 {/if}

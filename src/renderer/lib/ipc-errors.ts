@@ -4,16 +4,25 @@ import type { GitRemoteIssue } from '$shared/types'
  * Renderer-side normalization of an IPC rejection for display.
  *
  * A rejected `ipcRenderer.invoke` arrives wrapped
- * (`Error invoking remote method 'channel': Error: <message>`), so the wrapper
- * has to be stripped before the message can be shown to the user. The main
- * process already writes human-readable, user-safe messages for the channels
- * that surface them.
+ * (`Error invoking remote method 'channel': <Name>Error: <message>`), so the
+ * wrapper has to be stripped before the message can be shown to the user. The
+ * main process already writes human-readable, user-safe messages for the
+ * channels that surface them.
+ *
+ * The inner name is not always `Error`: a transport failure reaches the renderer
+ * as `TypeError: fetch failed` and a validation one as `RangeError: …`, so the
+ * prefix is matched by shape. Leaving it in put the whole
+ * `Error invoking remote method 'github:startDeviceFlow': TypeError: …` sentence
+ * in front of the user, which named the app's own plumbing instead of the
+ * problem.
  */
 export function ipcErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback
-  return error.message
-    .replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-    .replace(/^Error:\s*/u, '')
+  const message = error.message
+    .replace(/^Error invoking remote method '[^']+':\s*/u, '')
+    .replace(/^[A-Za-z]*Error:\s*/u, '')
+    .trim()
+  return message.length > 0 ? message : fallback
 }
 
 /**

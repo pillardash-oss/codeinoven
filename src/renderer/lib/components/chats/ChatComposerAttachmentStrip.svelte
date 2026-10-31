@@ -8,6 +8,7 @@
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import AttachmentPill from './AttachmentPill.svelte'
+  import ThreadContextPill from './ThreadContextPill.svelte'
   import ComposerRelocationMenu from './ComposerRelocationMenu.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
@@ -19,12 +20,15 @@
     type ComposerRelocationRequest
   } from './composer-relocation'
   import type { StartAfterSelection } from './chat-composer-attachments'
+  import type { ThreadContextReference } from '$lib/thread-context'
   import type { PromptAttachment, PromptReference } from '$shared/types'
 
   interface Props {
     attachments: PromptAttachment[]
     references: readonly PromptReference[]
     startAfterThreads: StartAfterSelection[]
+    /** Conversations attached to this message as context. */
+    threadReferences: readonly ThreadContextReference[]
     /** Chat view only: surfaces the chat-only File System mode chip. */
     showChatModes: boolean
     /** Chat view only: whether File System mode is currently on. */
@@ -41,6 +45,7 @@
     onClearStartAfterThreads: () => void
     onOpenStartAfterThread?: (threadId: string) => void | Promise<void>
     onRemoveStartAfterThread: (threadId: string) => void
+    onRemoveThreadContext: (threadId: string) => void
     selectionPopoverOpen: boolean
     onOpenSelectionPopover: () => void
     onScheduleSelectionPopoverClose: () => void
@@ -62,6 +67,7 @@
     attachments,
     references,
     startAfterThreads,
+    threadReferences,
     showChatModes,
     fileSystemMode,
     previewUrls,
@@ -75,6 +81,7 @@
     onClearStartAfterThreads,
     onOpenStartAfterThread,
     onRemoveStartAfterThread,
+    onRemoveThreadContext,
     selectionPopoverOpen,
     onOpenSelectionPopover,
     onScheduleSelectionPopoverClose,
@@ -117,7 +124,7 @@
 </script>
 
 <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
-{#if attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showChatModes && fileSystemMode)}
+{#if attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || threadReferences.length > 0 || (showChatModes && fileSystemMode)}
   <div class="flex flex-col gap-1.5 px-3 pt-2.5">
     <div class="flex flex-wrap items-center gap-1.5">
       {#if showChatModes && fileSystemMode}
@@ -224,6 +231,16 @@
         </div>
       {/if}
     </div>
+    {#if threadReferences.length > 0}
+      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Context threads">
+        {#each threadReferences as reference (reference.threadId)}
+          <ThreadContextPill
+            {reference}
+            onRemove={() => onRemoveThreadContext(reference.threadId)}
+          />
+        {/each}
+      </div>
+    {/if}
     {#if references.length > 0}
       <div
         role="group"

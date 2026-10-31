@@ -10,7 +10,7 @@ import { browserHistory } from './browser-history.svelte'
 import { recentVisits } from './recent-visits.svelte'
 import { threadBrowserTabs } from './thread-browser-tabs.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
-import { MAX_REOPENED_BROWSER_TABS } from './global-browser-types'
+import { MAX_REOPENED_BROWSER_TABS, browserTabLoadingTitle } from './global-browser-types'
 import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-status'
 import { browserAudio } from './browser-audio.svelte'
 
@@ -447,7 +447,11 @@ export class SidebarBrowserTabs {
     if (!tab) return
     let changed = false
     if (tab.url !== url) {
+      const loadingTitle = browserTabLoadingTitle(tab, url)
       tab.url = url
+      // The row names the address the tab was told to load rather than sitting
+      // on "New Tab" until the page reports a title of its own.
+      if (loadingTitle !== null) tab.title = loadingTitle
       // The icon is the icon of an address, so a tab that moved is not the tab
       // the stored icon was read from: it goes with the address it came from, and
       // the row picks up the new one from the page or from the address itself

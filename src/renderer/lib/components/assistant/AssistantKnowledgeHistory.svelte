@@ -3,7 +3,7 @@
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -212,7 +212,7 @@
                   <p class="text-[0.6875rem] text-dimmed">Reading…</p>
                 {:else if expandedText?.id === revision.id}
                   <div class="max-h-72 overflow-y-auto text-xs leading-relaxed text-muted">
-                    <MarkdownView text={expandedText.knowledge} />
+                    <DeferredMarkdownView text={expandedText.knowledge} />
                   </div>
                 {:else}
                   <p class="text-[0.6875rem] text-dimmed">This version could not be read.</p>

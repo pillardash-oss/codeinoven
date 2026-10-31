@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chief · the despatch · CodeInOven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./room.css" />
+  </head>
+  <body>
+    <div class="room">
+      <nav class="spine-rail" aria-label="Primary">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 96 96">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+        </span>
+        <button class="rail-btn" type="button" title="Projects" aria-label="Projects">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="0.5" /><path d="M1.75 6h12.5" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="Threads" aria-label="Threads">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M2.5 3.5h11M2.5 8h11M2.5 12.5h7" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="The room" aria-label="The room" aria-current="page">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.5" /><circle cx="8" cy="8" r="6" /><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14" />
+          </svg>
+        </button>
+        <button class="rail-btn" type="button" title="Browser" aria-label="Browser">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <circle cx="8" cy="8" r="6" /><path d="M2 8h12" />
+          </svg>
+        </button>
+        <span class="rail-gap"></span>
+        <button class="rail-btn" type="button" title="Something needs you" aria-label="Something needs you">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M4 7a4 4 0 1 1 8 0c0 2.4.8 3.4 1.2 3.9H2.8C3.2 10.4 4 9.4 4 7Z" /><path d="M6.4 13a1.7 1.7 0 0 0 3.2 0" />
+          </svg>
+        </button>
+      </nav>
+
+      <div class="room-main">
+        <header class="room-head">
+          <div class="room-id">
+            <span class="mark" aria-hidden="true">
+              <svg viewBox="0 0 96 96">
+                <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+                <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" />
+                <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+                <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+              </svg>
+            </span>
+            <h1>Chief</h1>
+            <span class="role">despatch · session 14 · 3 assistants involved</span>
+          </div>
+          <div class="head-tools">
+            <div class="modes" role="group" aria-label="Assistant view">
+              <button type="button" data-mode="01-house.html" aria-pressed="false">Room</button>
+              <button type="button" data-mode="02-despatch.html" aria-pressed="true">Despatch</button>
+              <button type="button" data-mode="05-log.html" aria-pressed="false">Log</button>
+            </div>
+            <button class="rail-btn" type="button" title="Start a clean session" aria-label="Start a clean session">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <path d="M8 3v10M3 8h10" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="stream">
+          <div class="scroller">
+            <div class="spine">
+              <div class="spine-break">Today</div>
+
+              <article class="turn" data-who="you">
+                <div class="turn-who"><strong>You</strong><time>09:12</time></div>
+                <span class="turn-node" aria-hidden="true"></span>
+                <div class="turn-body">
+                  <p>
+                    Two things. The 0.9.4 release notes still say the browser tab fix is unshipped,
+                    and someone should look at the flaky composer test in the PR queue.
+                  </p>
+                </div>
+              </article>
+
+              <article class="turn" data-who="chief">
+                <div class="turn-who"><strong>Chief</strong><time>09:12</time></div>
+                <span class="turn-node" aria-hidden="true"></span>
+                <div class="turn-body">
+                  <p>
+                    Split in two. The notes are Release Notes' job and the test goes to PR Triage,
+                    which already has the CI history for it. You only need to answer here.
+                  </p>
+                </div>
+              </article>
+
+              <div class="dispatch-row">
+                <span class="dispatch-elbow" aria-hidden="true"></span>
+                <button class="dispatch-card" type="button" data-state="working">
+                  <span class="disc-sm" aria-hidden="true">RN</span>
+                  <span class="dispatch-main">
+                    <span class="dispatch-to">Release Notes <span class="arrow">took the notes</span></span>
+                    <span class="dispatch-why">
+                      Owns the 0.9.4 draft · last touched it 3 days ago · claude-sonnet-4-5
+                    </span>
+                  </span>
+                  <span class="dispatch-state" data-kind="working">
+                    <span class="dot" aria-hidden="true" style="background: currentColor; width: 0.3125rem; height: 0.3125rem; border-radius: 999px"></span>
+                    Step 2 of 3
+                  </span>
+                  <span class="dispatch-steps" aria-hidden="true">
+                    <span class="step-pip" data-state="done"></span>
+                    <span class="step-pip" data-state="done"></span>
+                    <span class="step-pip" data-state="running"></span>
+                  </span>
+                </button>
+              </div>
+
+              <div class="dispatch-row">
+                <span class="dispatch-elbow" aria-hidden="true"></span>
+                <button class="dispatch-card" type="button" data-state="idle">
+                  <span class="disc-sm" aria-hidden="true">PT</span>
+                  <span class="dispatch-main">
+                    <span class="dispatch-to">PR Triage <span class="arrow">queued the test</span></span>
+                    <span class="dispatch-why">
+                      Busy with #1482 · starts the flaky-test pass when that finishes
+                    </span>
+                  </span>
+                  <span class="dispatch-state">In queue</span>
+                </button>
+              </div>
+
+              <article class="turn" data-who="you">
+                <div class="turn-who"><strong>You</strong><time>09:20</time></div>
+                <span class="turn-node" aria-hidden="true"></span>
+                <div class="turn-body">
+                  <p>Also: what did Dependency Watch find this morning?</p>
+                </div>
+              </article>
+
+              <article class="turn" data-who="chief">
+                <div class="turn-who"><strong>Chief</strong><time>09:20</time></div>
+                <span class="turn-node" aria-hidden="true"></span>
+                <div class="turn-body">
+                  <p>
+                    Three patch bumps, all clean, and nothing was paged. I read its 09:00 run instead
+                    of waking it, because waking an assistant to repeat a summary is work for no
+                    reason. It did hit one thing you should know about: it could not refresh its
+                    repository token, so it skipped the changelog check entirely.
+                  </p>
+                </div>
+              </article>
+
+              <div class="dispatch-row">
+                <span class="dispatch-elbow" aria-hidden="true"></span>
+                <button class="dispatch-card" type="button" data-state="error">
+                  <span class="disc-sm" aria-hidden="true">DW</span>
+                  <span class="dispatch-main">
+                    <span class="dispatch-to">Dependency Watch <span class="arrow">needs you, not a retry</span></span>
+                    <span class="dispatch-why">
+                      Its token expired at 09:00 · retrying fails the same way until it is refreshed
+                    </span>
+                  </span>
+                  <span class="dispatch-state" data-kind="error">Blocked</span>
+                </button>
+              </div>
+
+              <article class="turn" data-who="chief">
+                <div class="turn-who"><strong>Chief</strong><time>09:21</time></div>
+                <span class="turn-node" aria-hidden="true"></span>
+                <div class="turn-body">
+                  <p>
+                    I answered that one myself, so it is marked that way: there was nothing to
+                    dispatch, only something to read.
+                  </p>
+                </div>
+              </article>
+
+              <div class="spine-break">Yesterday · 6 turns, 2 dispatches</div>
+
+              <article class="turn" data-who="you">
+                <div class="turn-who"><strong>You</strong><time>17:40</time></div>
+                <span class="turn-node" aria-hidden="true"></span>
+                <div class="turn-body">
+                  <p>Draft the changelog for the hotfix, keep it short.</p>
+                </div>
+              </article>
+
+              <div class="dispatch-row">
+                <span class="dispatch-elbow" aria-hidden="true"></span>
+                <button class="dispatch-card" type="button" data-state="done">
+                  <span class="disc-sm" aria-hidden="true">RN</span>
+                  <span class="dispatch-main">
+                    <span class="dispatch-to">Release Notes <span class="arrow">finished</span></span>
+                    <span class="dispatch-why">
+                      Wrote 4 lines, commented on docs/releases/0.9.3.md · 2 min
+                    </span>
+                  </span>
+                  <span class="dispatch-state" data-kind="done">Done 17:42</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="lectern-wrap">
+            <div class="lectern">
+              <label class="sr-only" for="ask">Ask Chief</label>
+              <textarea id="ask" rows="2" placeholder="Reply here, or ask for something else"></textarea>
+              <div class="lectern-foot">
+                <button class="commission" type="button" title="Who takes this message" aria-label="Who takes this message: Chief decides">
+                  <span class="dot" aria-hidden="true"></span>
+                  Chief decides
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <path d="M4 6.5 8 10.5l4-4" />
+                  </svg>
+                </button>
+                <button class="chip-btn" type="button" title="Attach a file or thread" aria-label="Attach a file or thread">Attach</button>
+                <span class="foot-gap"></span>
+                <button class="send" type="button">Send <kbd>⌘↵</kbd></button>
+              </div>
+            </div>
+            <div class="lectern-note">
+              <span class="count"><span data-word-count>Nothing yet</span> · every dispatch stays on this line</span>
+              <span>Chief never messages an assistant behind your back</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="./room.js"></script>
+    <script src="./theme.js"></script>
+  </body>
+</html>

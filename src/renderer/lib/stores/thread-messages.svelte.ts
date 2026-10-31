@@ -156,6 +156,11 @@ class ThreadMessagesStore {
     return this.cache.hasOlder(projectId, threadId)
   }
 
+  /** True while a large initial load is still being revealed in batches. */
+  revealing(projectId: string, threadId: string): boolean {
+    return this.cache.revealing(projectId, threadId)
+  }
+
   async waitForLoad(projectId: string, threadId: string): Promise<void> {
     await this.#loadPromises.get(threadKey(projectId, threadId))
   }
@@ -172,6 +177,15 @@ class ThreadMessagesStore {
 
   setRunIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
     this.cache.setRunIssue(projectId, threadId, issue)
+  }
+
+  /** The provider wait this conversation is parked on, if any. */
+  waitingIssue(projectId: string, threadId: string): AgentProviderIssue | null {
+    return this.cache.waitingIssue(projectId, threadId)
+  }
+
+  setWaitingIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
+    this.cache.setWaitingIssue(projectId, threadId, issue)
   }
 
   /** Whether this user message is held by the engine before harness delivery
@@ -284,27 +298,45 @@ class ThreadMessagesStore {
     entry.error = ''
     this.cache.notify(projectId, threadId)
 
+    // A restored thread's first read lands while the main process is still
+    // finishing its boot work, so a transient failure (the mirror pool briefly
+    // saturated, an IPC reply racing teardown) must not leave the conversation
+    // empty for the rest of the session. One bounded retry absorbs it; a real
+    // failure is still reported so the view can offer a retry instead of an
+    // endless "Loading conversation...".
     try {
-      let serverMessages: AgentMessage[]
-      if (recentLimit === undefined) {
-        serverMessages = await invoke('agent:loadMessages', projectId, threadId)
-        entry.hasOlder = false
-      } else {
-        // Bounded loads are used by thread switching and hover preloads. They
-        // must remain mirror-only: a new thread, or a thread whose latest
-        // mirror page contains only a user message, is a valid bounded result.
-        // Falling back here to agent:loadMessages turns a cheap navigation into
-        // an unbounded provider transcript read and can freeze the renderer on
-        // long sessions. Callers that explicitly need the provider transcript
-        // must use load() without a limit.
-        const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
-        serverMessages = aligned.messages
-        entry.hasOlder = aligned.hasOlder
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          let serverMessages: AgentMessage[]
+          if (recentLimit === undefined) {
+            serverMessages = await invoke('agent:loadMessages', projectId, threadId)
+            entry.hasOlder = false
+          } else {
+            // Bounded loads are used by thread switching and hover preloads. They
+            // must remain mirror-only: a new thread, or a thread whose latest
+            // mirror page contains only a user message, is a valid bounded result.
+            // Falling back here to agent:loadMessages turns a cheap navigation into
+            // an unbounded provider transcript read and can freeze the renderer on
+            // long sessions. Callers that explicitly need the provider transcript
+            // must use load() without a limit.
+            const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
+            serverMessages = aligned.messages
+            entry.hasOlder = aligned.hasOlder
+          }
+          this.reconcile(projectId, threadId, serverMessages)
+          entry.loaded = true
+          entry.error = ''
+          return
+        } catch (err) {
+          entry.error = err instanceof Error ? err.message : 'Could not load messages.'
+          this.cache.notify(projectId, threadId)
+          if (attempt > 0) return
+          await new Promise((resolve) => setTimeout(resolve, 200))
+          // A newer load replaced this one (or the thread was dropped); its own
+          // outcome owns the entry now.
+          if (this.cache.entry(projectId, threadId) !== entry) return
+        }
       }
-      this.reconcile(projectId, threadId, serverMessages)
-      entry.loaded = true
-    } catch (err) {
-      entry.error = err instanceof Error ? err.message : 'Could not load messages.'
     } finally {
       entry.loading = false
       this.cache.notify(projectId, threadId)

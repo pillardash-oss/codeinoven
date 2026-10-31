@@ -1,4 +1,5 @@
 import type { VideoEditorGesture } from '../video/edit'
+import type { IdeProgress } from '../editor-ide'
 import type {
   NativeDockAck,
   NativeDockCommit,
@@ -74,6 +75,24 @@ export const IPC_EVENT_CONTRACT = {
     projectId: string,
     moves: Array<{ from: string; to: string }>
   ],
+  /**
+   * A project's design or video grouping changed, from this window or another.
+   *
+   * The record is shared, so every surface drawing it has to be told rather than
+   * trusting what it read when it painted, and the stamp is what a reader compares
+   * against the answer it already holds.
+   */
+  'design:workGroupsChanged': [] as unknown as [
+    projectId: string,
+    kind: import('./design').AuthoredWorkKind,
+    updatedAt: number
+  ],
+  /** One design's screens were arranged, folded or regrouped somewhere. */
+  'design:screenBoardChanged': [] as unknown as [
+    projectId: string,
+    directory: string,
+    updatedAt: number
+  ],
   /** One app call for the renderer to perform on the agent's behalf. The
    *  renderer answers on the `appControl:respond` invoke with the request id. */
   'appControl:request': [] as unknown as [request: AppControlRequest],
@@ -82,6 +101,8 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
   'browser:overlay:dockCommit': [] as unknown as [request: NativeDockCommit],
   'browser:overlay:dockKey': [] as unknown as [input: NativeDockKey],
+  /** The shared overlay document died, so nothing projected into it can draw. */
+  'browser:overlay:failed': [] as [],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
@@ -263,7 +284,17 @@ export const IPC_EVENT_CONTRACT = {
   /** Emitted when the user presses the mouse's forward side button. */
   'window:historyForward': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
-  'updater:waiting-for-threads': [] as unknown as [activeCount: number],
+  /**
+   * What a pending update install is still waiting on: working sessions and live
+   * terminal processes first, then browser downloads whose bytes are still
+   * arriving. Pushed on every deferred decision, so a rail button, an open
+   * Settings card and the blockers modal all read the same answer.
+   *
+   * Two numbers rather than one payload object on purpose: the event contract is
+   * one large union, and an object payload here pushes TypeScript's
+   * representation of it past its complexity limit in the preload bridge.
+   */
+  'updater:waiting-for-work': [] as unknown as [threads: number, downloads: number],
   /**
    * State of the app-owned TypeSafe (Jev) capability, pushed after any change
    * to the key or after a connection check, so an open Settings card never
@@ -286,6 +317,15 @@ export const IPC_EVENT_CONTRACT = {
    * the counters, so a pass never triggers a second read of the queue.
    */
   'account:rankingGradeProgress': [] as unknown as [progress: LocalRankingGradeProgress | null],
+  /**
+   * A language server's own work-done progress for IDE Mode.
+   *
+   * Servers report project loading as a notification, never as the answer to a
+   * request, so this is the only channel that can carry it: the IDE panel shows
+   * the percentage when the server sends one and its message otherwise, and the
+   * entry clears when the server ends the work item.
+   */
+  'projectFiles:ideProgress': [] as unknown as [progress: IdeProgress],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
   /**
@@ -512,5 +552,13 @@ export const IPC_EVENT_CONTRACT = {
    */
   'cioCleanup:stateChanged': [] as unknown as [
     state: import('../types/cio-cleanup').CioCleanupState
+  ],
+  /**
+   * A thread's dispatched-run count moved: it just started work in another
+   * project. Every thread row of that thread reads this so its orchestrator mark
+   * appears without the sidebar re-reading anything.
+   */
+  'orchestration:changed': [] as unknown as [
+    change: import('../types/orchestration').OrchestrationDispatchChange
   ]
 }

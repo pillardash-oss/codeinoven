@@ -241,8 +241,12 @@ export function createVideoEditRenderer(hooks: VideoEditRendererHooks) {
       clip.fadeIn ? clamp(local / clip.fadeIn) : 1,
       clip.fadeOut ? clamp((clip.duration - local) / clip.fadeOut) : 1
     )
+    // The track carries the mix: a clip keeps its own trim level, and the track's
+    // fader scales everything on it, which is how speech is raised and music pulled
+    // down without touching a single clip.
+    const trackGain = studio?.edit?.tracks.find((track) => track.id === clip.trackId)?.volume ?? 1
     graph.gain.gain.setTargetAtTime(
-      clip.volume * envelope * (1 + settings.compression),
+      clip.volume * trackGain * envelope * (1 + settings.compression),
       context.currentTime,
       0.015
     )

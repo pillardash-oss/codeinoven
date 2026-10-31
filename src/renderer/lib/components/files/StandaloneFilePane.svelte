@@ -31,7 +31,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
@@ -356,7 +356,7 @@
   </div>
 {:else if activeView === 'preview' && markdown && session}
   <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-    <MarkdownView text={session.draft} class="text-sm text-foreground" />
+    <DeferredMarkdownView text={session.draft} class="text-sm text-foreground" />
   </div>
 {:else if activeView === 'preview' && htmlPreview && htmlSrcdoc}
   <div class="min-h-0 flex-1 bg-surface">

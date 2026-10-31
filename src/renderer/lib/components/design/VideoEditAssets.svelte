@@ -3,7 +3,7 @@
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioImage from '@pdslng/cio-icon/CioImage.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
-  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import type { VideoEditorController } from '$lib/stores/video-editor.svelte'
   import { videoTimecode } from '$shared/video/timeline'
   let { editor, expanded = false }: { editor: VideoEditorController; expanded?: boolean } = $props()
@@ -41,7 +41,7 @@
       aria-label="Import media into assets"
       disabled={editor.importing || editor.saving}
       onclick={() => void editor.importFiles()}
-      ><CioUpload size={12} />{editor.importing ? 'Importing…' : 'Import'}</button
+      ><CioDownload size={12} />{editor.importing ? 'Importing…' : 'Import'}</button
     >
   </div>
   <div class={['min-h-0 space-y-px overflow-y-auto', expanded ? 'flex-1' : 'max-h-36']}>

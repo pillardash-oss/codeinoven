@@ -1,0 +1,51 @@
+{
+  "columns": 2,
+  "frames": [
+    {
+      "entry": "./01-house.html",
+      "title": "01 The room",
+      "caption": "Where you land: the house on its 24-hour face, the ledger, the lectern"
+    },
+    {
+      "entry": "./02-despatch.html",
+      "title": "02 The despatch",
+      "caption": "One session down one line: replies on the rule, hand-offs on elbows"
+    },
+    {
+      "entry": "./03-bench.html",
+      "title": "03 The bench",
+      "caption": "Take an assistant over, with the provenance of what Chief sent it"
+    },
+    {
+      "entry": "./05-log.html",
+      "title": "05 The log",
+      "caption": "Every message you sent and where it ended up, correctable"
+    },
+    {
+      "entry": "./04-phone.html",
+      "title": "04 The room, docked",
+      "caption": "390 wide: the ring keeps its shape, the ledger speaks first",
+      "width": 390
+    },
+    {
+      "entry": "./01-house.html",
+      "title": "01 The room, docked",
+      "caption": "The same room at 390 with the full house present",
+      "width": 390
+    },
+    {
+      "entry": "./02-despatch.html",
+      "title": "02 The despatch, docked",
+      "caption": "The gutter folds above each turn, the elbows shorten",
+      "width": 390
+    },
+    {
+      "title": "An assistant you have never run",
+      "note": "The room with a brand new assistant: its seat is empty until it is given knowledge, and the ring shows it as not-yet-staffed rather than idle."
+    },
+    {
+      "title": "Two conversations at once",
+      "note": "The room while a despatch session is open beside it: the house in a side pane, the spine in the main pane, one shared clock."
+    }
+  ]
+}

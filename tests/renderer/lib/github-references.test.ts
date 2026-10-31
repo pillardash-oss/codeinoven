@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { Marked } from 'marked'
 import {
   githubAbuseReportUrl,
@@ -10,6 +10,7 @@ import {
   githubUserUrl
 } from '$lib/github-references'
 import { emojiForShortcode, githubEmojiExtension } from '$lib/components/markdown/github-emoji'
+import { ensureGithubEmojiData } from '$lib/components/markdown/github-emoji-data.svelte'
 
 const CONTEXT = { owner: 'acme', repo: 'app' }
 
@@ -91,6 +92,12 @@ describe('githubReferencesExtension', () => {
 })
 
 describe('github-emoji', () => {
+  // The shortcode table is its own chunk now (gemoji is ~350KB of data the first
+  // paint must not carry), so the extension resolves nothing until it lands.
+  beforeAll(async () => {
+    await ensureGithubEmojiData()
+  })
+
   it('resolves lowercase shortcodes exactly', () => {
     expect(emojiForShortcode('wave')).toBe('👋')
     expect(emojiForShortcode('+1')).toBe('👍')

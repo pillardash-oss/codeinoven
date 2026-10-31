@@ -40,6 +40,19 @@ export function completedTurnWindow(
 ): TurnStreamCompletedTurn {
   const trace = turn.parts.filter((part) => !isTodoTracePart(part))
   const totalSteps = trace.reduce((count, part) => count + (part.type === 'text' ? 0 : 1), 0)
+  if (query.summaryOnly === true) {
+    // Totals without rows: the transcript's folded header needs the count and
+    // the span of a settled turn, and nothing else until the reader opens it.
+    return {
+      startTs: turn.startTs,
+      endTs: turn.endTs,
+      parts: [],
+      total: trace.length,
+      totalSteps,
+      start: trace.length,
+      hasOlder: trace.length > 0
+    }
+  }
   const limit = Math.min(
     Math.max(Math.trunc(query.limit ?? COMPLETED_TURN_PAGE_SIZE), 1),
     MAX_PAGE_SIZE

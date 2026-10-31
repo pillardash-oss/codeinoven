@@ -143,6 +143,14 @@ Keep one product in one folder. A website and its dashboard split across two fol
 
 The board reads a screen as an \`.html\` file in the design's folder or one folder below it, so \`dashboard.html\` and \`pages/pricing.html\` are both screens and a page two levels down is not one it shows. A file whose name starts with \`_\` is read as a partial (\`_nav.html\`), and a folder or file whose name starts with \`.\` is skipped, so keep fragments, scratch pages and notes under those names and they stay out of the way.
 
+## Groups on the board
+
+The user decides how their designs are grouped, and the group is the board's own record rather than a folder. It never moves anything: every design stays in \`<root>/<name>/\`, and a group only decides which heading the board draws it under and whether that heading is folded. That is why grouping is safe to do whenever the user asks for it, and why it is never a reason to rename or move a folder.
+
+Read the arrangement with \`groups\` before you speak about it, and change it with \`organize-designs\` when the user asks you to group, ungroup, rename, reorder or fold their designs. Name the group the user names; when they do not name one, propose one that reads as their own work rather than as a filing system. A design you write arrives ungrouped on the board, which is a normal place for it: grouping it is the user's call unless they asked for it.
+
+The board draws the designs either as pictures of them or as a folded list, and \`view\` switches between the two when the user asks for one. Neither reading changes the work, and the one the user picked is remembered.
+
 ## The Screen Canvas
 
 The canvas is the app's page, not yours. The board opens it at its own reserved path on the design's own origin and the app builds it from the folder every time it is asked for, so it frames every screen you write without a line of markup from you and it can never fall behind the design. Do not write a \`canvas.html\`: a file by that name is not read as a screen, and the app ignores it.

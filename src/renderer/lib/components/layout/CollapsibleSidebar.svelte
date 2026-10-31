@@ -33,6 +33,17 @@
      * floating states.
      */
     chrome?: Snippet
+    /**
+     * Whether the panel is mounted but not on screen.
+     *
+     * A surface that takes the whole pane (a studio) hides the sidebar rather than
+     * unmounting it: its lists are the same few hundred row components the shell
+     * would have to build again on the way back, which is what made opening and
+     * closing a studio take around a second. A hidden panel occupies no layout and
+     * reports no width, so the header behaves exactly as it does with no sidebar
+     * docked.
+     */
+    hidden?: boolean
     /** Accessible name for the sidebar element. */
     label?: string
     /** `data-region` value, which is how probes and tests find this sidebar. */
@@ -125,7 +136,8 @@
     panel,
     holdOpen,
     trackOcclusion = true,
-    bodyClass = undefined
+    bodyClass = undefined,
+    hidden = false
   }: Props = $props()
 
   let resizing = $state(false)
@@ -146,7 +158,7 @@
   let panelRegistration: number | null = null
 
   $effect(() => {
-    const width = docked ? dockedWidth : 0
+    const width = docked && !hidden ? dockedWidth : 0
     if (panelRegistration === null) {
       panelRegistration = layoutPanelState.register(width)
       return
@@ -194,7 +206,7 @@
   <!-- Docked sidebar: occupies layout, resizable -->
   <aside
     {@attach panel}
-    class="relative flex h-full shrink-0 flex-col bg-surface"
+    class="relative flex h-full shrink-0 flex-col bg-surface {hidden ? 'hidden' : ''}"
     data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
     data-region={region}
     aria-label={label}
@@ -259,8 +271,10 @@
       bind:resizing
     />
   </aside>
-{:else}
-  <!-- Edge hover zone -->
+{:else if !hidden}
+  <!-- Edge hover zone. A hidden panel offers neither the edge nor the overlay:
+       the surface that took the pane (a studio) must not be able to raise the
+       sidebar over itself. -->
   <div
     class="fixed top-12 bottom-0 left-0 z-40 w-2"
     aria-hidden="true"

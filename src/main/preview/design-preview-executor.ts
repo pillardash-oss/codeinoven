@@ -12,6 +12,7 @@ import { runDesignReview } from '../design/design-review-service'
 import { executeDesignMotion } from '../design/design-motion-service'
 import { extractDesignReference } from '../design/design-reference-service'
 import { DesignRepo } from '../database/repositories/design-repo'
+import { executeDesignGroupOperation } from '../design/design-group-service'
 
 /**
  * What the design capability needs from the app.
@@ -40,6 +41,14 @@ export interface DesignPreviewExecutorOptions {
     entry: string | null
     kind: AuthoredWorkKind
   }) => void
+  /**
+   * Tell every window that the board's arrangement moved.
+   *
+   * The user's own drops are announced by the design service; an agent that
+   * grouped designs through this capability writes the same rows, so it owes the
+   * open boards the same announcement rather than leaving them stale.
+   */
+  announceWorkGroups: (projectId: string, kind: AuthoredWorkKind, updatedAt: number) => void
 }
 
 /**
@@ -74,6 +83,17 @@ export function createDesignPreviewExecutor(
     }
     if (operation === 'checkpoint')
       return options.checkpoint(context.projectId, context.threadId, input)
+    // The board's groups are the user's arrangement of the designs, and the agent
+    // reaches them through the same capability as the designs themselves: reading
+    // them, and moving designs between them without touching a folder.
+    if (operation === 'groups' || operation === 'organize-designs')
+      return executeDesignGroupOperation(
+        options.database,
+        context,
+        operation,
+        input,
+        options.announceWorkGroups
+      )
     if (operation !== 'preview') {
       throw new Error(
         `The design preview executor handles preview and checkpoint, and no operation named "${operation}".`

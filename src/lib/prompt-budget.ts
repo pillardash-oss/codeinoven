@@ -34,6 +34,40 @@ export const COMPACT_LINE_SHARE = 0.825
  */
 export const RECAP_MAX_LINE_SHARE = 0.6
 
+/**
+ * Maximum share of the checkpoint line the verbatim tail of a context handoff
+ * may take.
+ *
+ * A rebuilt session (fork, account/harness switch, edited or deleted history)
+ * no longer receives its whole prior conversation. It receives the newest part
+ * verbatim, because that is the work in progress, plus the thread id so the
+ * agent can query the rest of the mirror on demand. The tail therefore stays a
+ * small slice of the window: the conversation ahead of it is reachable through
+ * the read-only diagnostics tools, which cost the agent a tool call instead of
+ * every turn's tokens.
+ */
+export const HANDOFF_TAIL_LINE_SHARE = 0.08
+
+/**
+ * Absolute ceiling for the handoff's verbatim tail.
+ *
+ * Proportional budgets alone would hand a 1M-window model an 80k-token replay,
+ * which is the very cost this handoff exists to remove, so the tail is also
+ * capped outright. A long coding turn does not need more than this to know what
+ * it was last doing.
+ */
+export const HANDOFF_TAIL_MAX_TOKENS = 12_000
+
+/**
+ * How many earlier user requests the handoff index lists, newest first.
+ *
+ * The index is the map of the conversation: it names what was asked and when,
+ * which is what tells the agent which query to run. Listing every request of a
+ * 400-message thread would cost more than it saves, so the oldest beyond this
+ * count are reachable by search only.
+ */
+export const HANDOFF_INDEX_MAX_REQUESTS = 40
+
 /** Tokens at which the app checkpoints a session for the given usable input. */
 export function compactionLineTokens(availableInputTokens: number): number {
   return Math.floor(Math.max(0, availableInputTokens) * COMPACT_LINE_SHARE)
@@ -45,6 +79,18 @@ export function compactionLineTokens(availableInputTokens: number): number {
  */
 export function recapTokenBudget(availableInputTokens: number): number {
   return Math.floor(compactionLineTokens(availableInputTokens) * RECAP_MAX_LINE_SHARE)
+}
+
+/**
+ * Most tokens a rebuilt session's verbatim tail may occupy:
+ * `HANDOFF_TAIL_LINE_SHARE` of the checkpoint line, never more than
+ * `HANDOFF_TAIL_MAX_TOKENS`.
+ */
+export function handoffTailTokenBudget(availableInputTokens: number): number {
+  return Math.min(
+    HANDOFF_TAIL_MAX_TOKENS,
+    Math.floor(compactionLineTokens(availableInputTokens) * HANDOFF_TAIL_LINE_SHARE)
+  )
 }
 
 /** Fallback context window when the selected model reports none. */

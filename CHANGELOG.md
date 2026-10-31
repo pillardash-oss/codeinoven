@@ -5,13 +5,57 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ## Unreleased
 
+### Added
+
+- **The LSP info panel shows what a language server is doing, including its own
+  percentage.** Servers report project loading as protocol work-done progress
+  (`window/workDoneProgress/create` then `$/progress`), and the IDE worker used
+  to answer the first with `null` and drop the second, so a server that was
+  indexing a large project looked identical to one that had nothing to say. The
+  worker now declares `window.workDoneProgress` on `initialize`, forwards every
+  work item over a new `projectFiles:ideProgress` push channel
+  (`main/editor/ide-worker.ts`, `main/editor/ide-service.ts`), and the panel
+  draws a titled bar with the server's percentage and message, plus the number
+  beside the LSP info button. No percentage is invented: the throwaway warm-up
+  request the app sends when a document syncs appears as the server's
+  "Preparing project" work item, indeterminate, because svelte-language-server
+  and tailwindcss-language-server report nothing numeric while they load and only
+  servers that do (TypeScript, Pyright and friends) fill the bar.
+
 ### Fixed
+
+- **Hover documentation works again in IDE Mode, from the first hover.** A
+  language server loads its project lazily, on the first request that needs it,
+  and that first hover measured 11.8 s for svelte-language-server on this
+  repository (20-70 ms for every hover after it). The worker cancelled any
+  language-server request after a flat 12 s, so the first hover was killed
+  mid-load; because it was never cached as failed, each later hover paid the
+  same load while the IDE service's own 20 s watchdog (main/editor/
+  ide-service.ts) expired first and reported `Editor intelligence timed out`
+  with nothing to act on. Requests that load a project (hover, definition,
+  references) now get 30 s while a plain request keeps its 12 s bound, the
+  service watchdog outlives the worker's own bound instead of undercutting it,
+  and every failure names the server that could not answer. Each document also
+  pays that cold start in the background as soon as it syncs, and a file's
+  matching servers now start in parallel instead of one after another.
+
+- **Closing an editor no longer waits behind a language server that is still
+  loading, and two hovers no longer wait for each other.** Every request for one
+  editor shared a single promise chain, so a `close` (the tab unmounted or IDE
+  mode switched off) sat behind a hover that was loading a project and died on
+  that request's 20 s watchdog, and a second hover only started once the first
+  had spent its whole load, which is how `hover timed out` still appeared with a
+  warm server. Only document lifecycle (sync and capabilities) is ordered now,
+  because a request must never reach a server before its `didOpen`; a close
+  discards the queue outright and bumps a generation so work already in flight
+  cannot re-register documents for an editor that is gone
+  (main/editor/ide-worker.ts).
 
 - **A design's comment pins come back on their own, without an edit from the
   composer.** The pins a design page draws are published by the renderer's
   inspection session, and it only publishes for a tab whose design it has
   mirrored. It learned that by reading each open tab once, at the seam that
-  starts the browser, which runs *before* the sidebar restores its persisted
+  starts the browser, which runs _before_ the sidebar restores its persisted
   tabs (`stores/browser-runtime.ts`): the read found no tabs, and main announces
   a tab's design only when it changes, so nothing ever taught the session about
   the tabs already on screen. Refreshing the design page did not help either,

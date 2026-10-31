@@ -24,6 +24,18 @@ export function legacyHarnessAccountId(harnessId: string): string {
   return `${harnessId}.default`
 }
 
+/**
+ * Whether an id is shaped like a reserved container.
+ *
+ * The reserve prefix is not a statement about finalization: `finalizePending`
+ * keeps the `pending-<uuid>` id as the account's permanent identity, so this
+ * only says the id came from a reserve. Whether the account still exists is a
+ * registry question   see `isResolvableAccountId`.
+ */
+export function isReservedAccountId(accountId: string | undefined): boolean {
+  return accountId?.startsWith('pending-') === true
+}
+
 function additionalLegacyAccountId(
   harnessId: string,
   providerId: string,
@@ -163,20 +175,44 @@ export class HarnessAccountRegistry {
     const accounts = await this.list(harnessId)
     const selected = accounts.find((account) => account.id === accountId)
     if (selected) return selected
+    // Only an id the registry cannot find names no account. A reserve that died
+    // with the process that created it is one of those, and reading it as an
+    // explicit selection would fail every later read that still carries it, so
+    // it falls through to the harness default like an absent selection.
+    const requested = isReservedAccountId(accountId) ? undefined : accountId
     // Custom providers have a virtual legacy account even when this harness
     // also has managed accounts. Its explicit id owns the legacy driver:
     // substituting the managed default dispatches through a different driver
     // from the one runtime events and finalization look up by this id.
-    if (accountId === legacyHarnessAccountId(harnessId)) {
+    if (requested === legacyHarnessAccountId(harnessId)) {
       return this.virtualLegacyAccount(harnessId)
     }
     if (accounts.length === 1) return accounts[0]
-    if (!accountId) {
+    if (!requested) {
       return accounts.length > 0
         ? defaultAccountFor(accounts)
         : this.virtualLegacyAccount(harnessId)
     }
     throw new Error('The selected account no longer exists.')
+  }
+
+  /**
+   * Whether `accountId` still names an account this registry can answer with.
+   *
+   * A managed account keeps the `pending-<uuid>` id of the reserve it was
+   * created from, so the prefix alone says nothing about whether the account
+   * exists: only the stored row does. A reserve that never finalized died with
+   * the process that created it and is exactly what this reports as gone, so a
+   * thread stamped with one rotates onto a live account instead of being read
+   * as a switch to a second account on every single turn.
+   */
+  async isResolvableAccountId(accountId: string | undefined): Promise<boolean> {
+    if (!accountId) return false
+    if (this.pending.has(accountId)) return true
+    // A harness-level `.default` id is the virtual legacy account every harness
+    // answers with, whether or not the registry carries a row for it.
+    if (accountId.endsWith('.default')) return true
+    return (await this.list()).some((account) => account.id === accountId)
   }
 
   /** Resolve an account only from credentials belonging to the selected provider. */
@@ -190,6 +226,12 @@ export class HarnessAccountRegistry {
       (account) => account.providerId === providerId
     )
     if (providerAccounts.length === 1) return providerAccounts[0]
+    // The account the user picked is a real one whenever the registry lists it,
+    // including every managed account, whose id keeps the `pending-` reserve
+    // prefix it was created with. Stripping that prefix before this lookup is
+    // what silently dispatched every switched thread on the harness default
+    // account instead of the one the user chose (a limit that belonged to the
+    // retired account then kept arriving from the new one).
     const selected = providerAccounts.find((account) => account.id === accountId)
     if (selected) return selected
     if (providerAccounts.length > 0) return defaultAccountFor(providerAccounts)

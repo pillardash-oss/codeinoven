@@ -113,10 +113,16 @@
   function onKeydown(event: KeyboardEvent): void {
     if (keymapState.matches('chat-annotation-close', event)) {
       event.preventDefault()
+      event.stopPropagation()
       onClose()
+      return
     }
     if (keymapState.matches('chat-annotation-comment', event)) {
       event.preventDefault()
+      // The comment is committed here and nowhere else. The same combo is a send,
+      // a save and an export in the surfaces this bubble is drawn over, and the
+      // field owns it first.
+      event.stopPropagation()
       submit()
     }
   }

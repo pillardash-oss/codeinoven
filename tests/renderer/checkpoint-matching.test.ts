@@ -145,15 +145,9 @@ describe('checkpoint card placement', () => {
 
   it('keeps one card per turn across mid-turn question answers', () => {
     const promptId = 'prompt-1'
-    // The turn stops on a question, so the user message after it answers that
-    // question and continues the turn instead of opening a new one.
-    const asked = msg('assistant', 110)
-    asked.parts = [
-      { type: 'question', id: 'q-1', messageID: asked.id, question: { prompt: 'Which file?' } }
-    ]
     const messages = [
       msg('user', 100, promptId),
-      asked,
+      msg('assistant', 110),
       msg('user', 115, 'question-answer-1'),
       msg('assistant', 120),
       msg('assistant', 130)
@@ -195,6 +189,22 @@ describe('checkpoint card placement', () => {
     expect(index.checkpoint[2]?.id).toBe('cp-1')
     expect(index.checkpoint[5]?.id).toBe('cp-2')
     expect(cardIndices(messages, checkpoints)).toEqual([2, 5])
+  })
+
+  // Regression: a long thread loads only a window of its messages, so the prompt
+  // that opened the turn is not in the transcript and the card falls back to the
+  // timestamp window. The harness flushed the final assistant 5.8s after the
+  // checkpoint settled (real values below), so the window cut the turn short and
+  // the card vanished although the checkpoint held eleven files.
+  it('keeps the card when a windowed transcript hides the prompt and the final assistant lands late', () => {
+    const messages = [
+      msg('assistant', 1793228215900),
+      msg('assistant', 1793229000000),
+      msg('assistant', 1793229257430),
+      msg('assistant', 1793229264500)
+    ]
+    const cp = checkpoint('cp-1', 1793228092680, 1793229258699, { changes: 11 })
+    expect(cardIndices(messages, [cp])).toEqual([3])
   })
 
   it('ignores active checkpoints', () => {

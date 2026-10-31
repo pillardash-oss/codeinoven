@@ -52,6 +52,7 @@
   import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
@@ -69,6 +70,7 @@
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
+  import { THREAD_DRAG_TYPE } from '$lib/components/chats/chat-composer-drop-source'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
   import type { Thread } from '$shared/types'
@@ -187,6 +189,10 @@
    *  soon as the last row unmounts. */
   $effect(() => relativeTimeClock.hold())
 
+  /** The orchestrator mark is read once for the whole app, not once per row: a
+   *  row asking is what starts that single read, after first paint. */
+  $effect(() => orchestrationCoordinatorState.ensureInitiators())
+
   let dropIndicator = $state<'before' | 'after' | null>(null)
 
   function setDragImage(e: DragEvent, label: string): void {
@@ -201,7 +207,20 @@
 
   function handleDragStart(e: DragEvent): void {
     e.dataTransfer!.setData('text/plain', thread.id)
-    e.dataTransfer!.effectAllowed = 'move'
+    // The row is also a conversation the composer can be handed as context: the
+    // payload is the thread's identity and the title its badge reads, so a drop
+    // on the conversation attaches it without a second lookup.
+    e.dataTransfer!.setData(
+      THREAD_DRAG_TYPE,
+      JSON.stringify({
+        projectId: thread.projectId,
+        threadId: thread.id,
+        title: thread.title
+      })
+    )
+    // Both a reorder inside the list and a context attachment on the
+    // conversation accept this drag.
+    e.dataTransfer!.effectAllowed = 'copyMove'
     setDragImage(e, thread.title)
   }
 
@@ -539,6 +558,10 @@
     // marker, and the independent audit, which is locked out of that lifecycle
     // and therefore carries its own durable flags.
     if (threadUsesEngineeringTooling(thread)) live.push('engineering')
+    // The workstation mark: this thread started work in another project. It is a
+    // fact about the thread that asked, so it shows on a project thread, a chat
+    // and an assistant task alike, and it persists after the run settles.
+    if (orchestrationCoordinatorState.hasDispatched(thread.id)) live.push('orchestrator')
     return live
   })
 

@@ -14,8 +14,10 @@ import {
 import { DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES } from '../../src/lib/types/cio-cleanup'
 import {
   UpdaterService,
+  type DownloadActivitySource,
   type SessionActivitySource
 } from '../../src/main/notifications/updater-service'
+import type { BrowserDownload } from '../../src/lib/ipc/browser'
 import {
   baseVersion,
   isRunningNewestBuild,
@@ -155,6 +157,9 @@ function makeStorage(overrides: Partial<StorageEngine> = {}): StorageHarness {
     write: vi.fn(async (path: string, data: unknown) => {
       files.set(path, data)
     }),
+    remove: vi.fn(async (path: string) => {
+      files.delete(path)
+    }),
     ...overrides
   } as unknown as StorageHarness
   storage.files = files
@@ -187,6 +192,42 @@ afterEach(() => {
 async function emitDownloaded(version = '9.9.9'): Promise<void> {
   autoUpdater.emit('update-downloaded', { version })
   await flush()
+}
+
+function makeDownload(overrides: Partial<BrowserDownload> = {}): BrowserDownload {
+  return {
+    id: 'download-1',
+    tabId: 'browser:one',
+    projectId: 'project-1',
+    fileName: 'archive.zip',
+    url: 'https://example.test/archive.zip',
+    mimeType: 'application/zip',
+    receivedBytes: 1_000,
+    totalBytes: 10_000,
+    speedBytes: 512,
+    progress: 10,
+    state: 'progressing',
+    paused: false,
+    savePath: '/tmp/archive.zip',
+    error: '',
+    resumable: true,
+    startedAt: 1,
+    ...overrides
+  }
+}
+
+/** A download source whose list a test can move, like the browser's own. */
+function makeDownloadSource(downloads: BrowserDownload[]): {
+  source: DownloadActivitySource
+  set: (next: BrowserDownload[]) => void
+} {
+  let current = downloads
+  return {
+    source: { inFlightDownloads: () => current },
+    set: (next) => {
+      current = next
+    }
+  }
 }
 
 describe('UpdaterService session-safe install', () => {
@@ -410,6 +451,119 @@ describe('UpdaterService session-safe install', () => {
       pending: true,
       approved: false
     })
+  })
+
+  it('waits for a running browser download instead of quitting through it', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+    const downloads = makeDownloadSource([makeDownload()])
+    service.setDownloadActivitySource(downloads.source)
+
+    await emitDownloaded()
+
+    // Quitting would stop the transfer and put the close prompt in front of the
+    // user, so the automatic install waits it out instead.
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+    expect(service.status.state).toBe('waiting')
+
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+
+    downloads.set([])
+    await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(service.status.state).toBe('idle')
+  })
+
+  it('does not wait for a download the user paused', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+    service.setDownloadActivitySource(makeDownloadSource([makeDownload({ paused: true })]).source)
+
+    await emitDownloaded()
+
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+  })
+
+  it('installs anyway when the user asks for it while a download runs', async () => {
+    const config = defaultConfig()
+    config.autoInstallUpdates = false
+    const storage = makeStorage({ getConfig: vi.fn(async () => config) })
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+    service.setDownloadActivitySource(makeDownloadSource([makeDownload()]).source)
+
+    await emitDownloaded()
+    expect(service.status.state).toBe('downloaded')
+
+    service.quitAndInstall()
+    await flush()
+
+    // A direct request overrides the gate; the quit pauses the download and the
+    // shutdown pipeline keeps its bytes for the next launch.
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+  })
+
+  it('lists the running downloads it is waiting on for the force-install modal', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+    service.setDownloadActivitySource(
+      makeDownloadSource([makeDownload(), makeDownload({ id: 'download-2', paused: true })]).source
+    )
+
+    await emitDownloaded()
+
+    const blockers = service.blockers()
+    expect(blockers.downloads.map((download) => download.id)).toEqual(['download-1'])
+    expect(blockers.activeCount).toBe(1)
+    expect(blockers.version).toBe('9.9.9')
+  })
+
+  it('goes back to downloaded when the quit prompt is declined', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    await emitDownloaded()
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(service.status.state).toBe('idle')
+
+    service.handleInstallDeclined()
+    await flush()
+
+    // The update is still on disk and the rail offers it again, so nothing has
+    // to be downloaded a second time.
+    expect(service.status.state).toBe('downloaded')
+    expect(service.status.availableVersion).toBe('9.9.9')
+    expect(storage.files.get('updater/install-dispatch.json')).toBeUndefined()
+    expect(storage.files.get('updater/install-pending.json')).toEqual({
+      pending: false,
+      approved: false
+    })
+
+    // The declined dispatch is not retried on its own, and its abandoned
+    // watchdog must not turn into a failed install report either.
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(service.status.state).toBe('downloaded')
+  })
+
+  it('ignores a decline when no install was dispatched', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 1))
+
+    await emitDownloaded()
+    expect(service.status.state).toBe('waiting')
+
+    service.handleInstallDeclined()
+    await flush()
+
+    // A closed window is not a declined install: the gate is still waiting.
+    expect(service.status.state).toBe('waiting')
   })
 })
 

@@ -19,12 +19,18 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import MultiSelectPicker from '$lib/components/shared/MultiSelectPicker.svelte'
   import type { MultiSelectOption } from '$lib/components/shared/multi-select-option'
   import Switch from '$lib/components/ui/Switch.svelte'
   import TaskManagerNode from './TaskManagerNode.svelte'
+  import TaskManagerSortMenu from './TaskManagerSortMenu.svelte'
+  import {
+    compareSortRows,
+    DEFAULT_TASK_SORT,
+    type SortableRow,
+    type TaskSort
+  } from './task-manager-sort'
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -49,22 +55,6 @@
     open: boolean
     onClose: () => void
   }
-
-  type TaskSortMode = 'memory' | 'cpu' | 'name'
-
-  const SORT_MODE_LABELS: Record<TaskSortMode, string> = {
-    memory: 'RAM',
-    cpu: 'CPU',
-    name: 'Name'
-  }
-
-  const SORT_MODE_DESCRIPTIONS: Record<TaskSortMode, string> = {
-    memory: 'Sort by RAM usage, highest first',
-    cpu: 'Sort by CPU usage, highest first',
-    name: 'Sort by name, alphabetically'
-  }
-
-  const SORT_MODES: readonly TaskSortMode[] = ['memory', 'cpu', 'name']
 
   /** Identity of one foldable owner node: a project, or a thread inside one. */
   interface OwnerIdentity {
@@ -100,8 +90,8 @@
   /** True only while a background 5s poll is in flight. */
   let polling = $state(false)
   let error = $state('')
-  /** Sort mode for the list; memory (highest first) is the default. */
-  let sortMode = $state<TaskSortMode>('memory')
+  /** The list's ordering; memory, heaviest first, is the default. */
+  let sort = $state<TaskSort>(DEFAULT_TASK_SORT)
   /** Project filter for project-owned processes; null shows everything. */
   let filterProjectId = $state<string | null>(null)
   /** True while the toolbar holds the search field instead of the stats row. */
@@ -156,14 +146,27 @@
     }))
   )
 
-  /** The sort picker's rows: the three modes with their explanatory hint. */
-  const sortFilterOptions = $derived(
-    SORT_MODES.map((mode) => ({
-      id: mode,
-      label: SORT_MODE_LABELS[mode],
-      hint: SORT_MODE_DESCRIPTIONS[mode]
-    }))
-  )
+  /** The name a row is ordered by: the command for a process, the label for a
+   *  service, and the owner's name for a tree node. */
+  function processSortRow(process: TaskManagerProcess): SortableRow {
+    return {
+      label: processName(process.command),
+      projectLabel: process.projectName ?? APP_NAME,
+      memoryBytes: process.memoryBytes ?? 0,
+      cpuPercent: process.cpuPercent ?? 0,
+      sortId: String(process.pid)
+    }
+  }
+
+  function serviceSortRow(service: TaskManagerService): SortableRow {
+    return {
+      label: service.name,
+      projectLabel: service.projectName ?? APP_NAME,
+      memoryBytes: service.memoryBytes ?? 0,
+      cpuPercent: service.cpuPercent ?? 0,
+      sortId: service.id
+    }
+  }
 
   /**
    * App-scoped processes (ASR, LAMA server, …) have no owning project, so a
@@ -173,7 +176,9 @@
     const filtered = filterProjectId
       ? processes.filter((process) => !process.projectId || process.projectId === filterProjectId)
       : processes
-    return filtered.toSorted(compareFor(sortMode))
+    return filtered.toSorted((left, right) =>
+      compareSortRows(processSortRow(left), processSortRow(right), sort)
+    )
   })
 
   /**
@@ -186,7 +191,7 @@
       ? services.filter((service) => !service.projectId || service.projectId === filterProjectId)
       : services
     return filtered.toSorted((left, right) =>
-      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+      compareSortRows(serviceSortRow(left), serviceSortRow(right), sort)
     )
   })
 
@@ -381,12 +386,20 @@
 
   const appOwnedTotals = $derived(aggregateResources(appScopedProcesses, appOwnedServices))
 
-  function compareGroups(a: OwnerGroup, b: OwnerGroup): number {
-    if (sortMode === 'name') {
-      return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+  function groupSortRow(group: OwnerGroup): SortableRow {
+    return {
+      label: group.label,
+      projectLabel: group.projectName ?? APP_NAME,
+      memoryBytes: group.memoryBytes,
+      cpuPercent: group.cpuPercent,
+      sortId: group.id
     }
-    if (sortMode === 'cpu') return b.cpuPercent - a.cpuPercent
-    return b.memoryBytes - a.memoryBytes
+  }
+
+  /** Owner nodes follow the same ordering as the rows they hold, so a list
+   *  sorted by RAM leads with the owner using the most of it. */
+  function compareGroups(a: OwnerGroup, b: OwnerGroup): number {
+    return compareSortRows(groupSortRow(a), groupSortRow(b), sort)
   }
 
   function isCollapsed(key: string): boolean {
@@ -451,21 +464,6 @@
     server: 'Server',
     mcp: 'MCP',
     worker: 'Worker'
-  }
-
-  function compareFor(
-    mode: TaskSortMode
-  ): (a: TaskManagerProcess, b: TaskManagerProcess) => number {
-    if (mode === 'cpu') {
-      return (a, b) => (b.cpuPercent ?? 0) - (a.cpuPercent ?? 0)
-    }
-    if (mode === 'name') {
-      return (a, b) =>
-        processName(a.command).localeCompare(processName(b.command), undefined, {
-          sensitivity: 'base'
-        })
-    }
-    return (a, b) => (b.memoryBytes ?? 0) - (a.memoryBytes ?? 0)
   }
 
   function toggleSelected(process: TaskManagerProcess): void {
@@ -1369,17 +1367,8 @@
               <CioClose size={12} />
             </button>
           {/if}
-          <EnumSelect
-            inline
-            options={sortFilterOptions}
-            value={sortMode}
-            onChange={(mode) => (sortMode = mode)}
-            placeholder="Sort"
-            ariaLabel="Choose sort mode"
-            title="Choose sort mode"
-            class="shrink-0"
-          />
         {/if}
+        <TaskManagerSortMenu {sort} onSortChange={(next) => (sort = next)} />
         <button
           type="button"
           class="flex h-7 w-7 shrink-0 items-center justify-center border border-border transition-colors {searchOpen

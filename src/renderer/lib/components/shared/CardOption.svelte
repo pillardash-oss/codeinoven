@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import CardTag from './CardTag.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
 
   interface Props {
     /** Option label, the line the user picks by. */
@@ -136,7 +136,7 @@ and the selected state carried by the frame rather than by a fill. -->
     {/if}
     {#if description}
       <div class={descriptionClass} role="presentation" onclick={chooseFromExplanation}>
-        <MarkdownView text={description} class="markdown-body-card" />
+        <DeferredMarkdownView text={description} class="markdown-body-card" />
       </div>
     {/if}
   </div>

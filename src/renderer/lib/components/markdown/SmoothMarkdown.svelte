@@ -1,5 +1,5 @@
 <script lang="ts">
-  import MarkdownView from './MarkdownView.svelte'
+  import DeferredMarkdownView from './DeferredMarkdownView.svelte'
 
   interface Props {
     /** Markdown source   may be an incomplete, still-streaming message. */
@@ -68,4 +68,4 @@
   }
 </script>
 
-<MarkdownView text={smoothedText} class={className} {onCiteFile} />
+<DeferredMarkdownView text={smoothedText} class={className} {onCiteFile} />

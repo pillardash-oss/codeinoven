@@ -1,7 +1,7 @@
 import { execFile } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
 import { lstat, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { APP_SLUG } from '../../lib/brand'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
 import { toPosixPath } from '../../lib/paths'
@@ -98,6 +98,31 @@ interface CachedCheckpointFile {
   file: CheckpointFile
 }
 
+/** What one candidate path turned out to be, before the limits are applied. */
+type ObservedFile =
+  | { kind: 'absent' }
+  | { kind: 'oversize'; relativePath: string }
+  | {
+      kind: 'captured'
+      relativePath: string
+      size: number
+      signature: string
+      file: CheckpointFile
+      /** False when the content could not be stored; the hash is still recorded. */
+      stored: boolean
+    }
+
+/**
+ * Files one snapshot examines at a time.
+ *
+ * The walk used to `await` a single file at a time, so a 3 000-file repository
+ * paid 3 000 sequential `lstat`/`realpath`/`readFile` round trips through the
+ * main process's four-thread libuv pool and held the turn's prompt for
+ * seconds before the model was even asked. Bounded waves keep the pool busy
+ * without pointing an unbounded number of descriptors at the disk.
+ */
+const SNAPSHOT_CONCURRENCY = 32
+
 /**
  * A stat-only view of the project used to attribute mutations to the window in
  * which a tool ran. It stores no content, so it is cheap enough to take around
@@ -162,70 +187,47 @@ export class ChangeTrackingService {
     const skippedFiles: string[] = []
     const unavailableFiles: string[] = []
     const nextCache = new Map<string, CachedCheckpointFile>()
+    const resolvedDirectories = new Map<string, string>()
     let fileCount = 0
     let totalBytes = 0
 
-    const captureFile = async (absolutePath: string): Promise<void> => {
-      let metadata
-      try {
-        metadata = await lstat(absolutePath)
-      } catch (error) {
-        if (isMissing(error)) return
-        throw error
-      }
-      if (!metadata.isFile()) return
-      const resolvedFile = await realpath(absolutePath)
-      this.assertWithinRoot(projectRoot, resolvedFile)
-      const relativePath = this.relativePath(projectRoot, resolvedFile)
-      const size = metadata.size
+    const observed = await mapBounded(
+      await this.listCandidateFiles(projectRoot, gitPaths),
+      SNAPSHOT_CONCURRENCY,
+      (absolutePath) => this.observeFile(projectRoot, absolutePath, resolvedDirectories)
+    )
 
-      // A single oversized file must never disable rollback for the whole
-      // project: skip its content (never read/hash/store it) and keep
-      // snapshotting everything else. The skipped path is recorded so the
-      // limitation stays visible instead of failing the entire snapshot.
-      if (size > this.limits.maxFileBytes) {
-        skippedFiles.push(relativePath)
-        return
+    // The limits are applied in candidate order, after the reads, so which file
+    // trips a limit and how the skipped list is ordered never depends on the
+    // order the disk answered in.
+    for (const entry of observed) {
+      if (entry.kind === 'absent') continue
+      if (entry.kind === 'oversize') {
+        // A single oversized file must never disable rollback for the whole
+        // project: skip its content (never read/hash/store it) and keep
+        // snapshotting everything else. The skipped path is recorded so the
+        // limitation stays visible instead of failing the entire snapshot.
+        skippedFiles.push(entry.relativePath)
+        continue
       }
       if (fileCount >= this.limits.maxFiles) {
         throw new CheckpointLimitError(
           `Checkpoint file limit exceeded: maximum ${this.limits.maxFiles} files`
         )
       }
-      totalBytes += size
+      totalBytes += entry.size
       if (totalBytes > this.limits.maxTotalBytes) {
         throw new CheckpointLimitError(
           `Checkpoint total size limit exceeded: ${totalBytes} bytes (maximum ${this.limits.maxTotalBytes})`
         )
       }
-
-      const signature = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`
-      const cached = this.snapshotCache.get(relativePath)
-      if (cached?.signature === signature) {
-        files[relativePath] = cached.file
-        nextCache.set(relativePath, cached)
-        fileCount += 1
-        return
-      }
-
-      const content = await readFile(resolvedFile)
-      const hash = createHash('sha256').update(content).digest('hex')
-      try {
-        await this.blobs.put(hash, content)
-      } catch {
-        // Path attribution must survive a full/unavailable checkpoint store.
-        // The hash still identifies the observed state, while completion
-        // records a visible warning that diff/rollback content is incomplete.
-        unavailableFiles.push(relativePath)
-      }
-      const file = { path: relativePath, hash, size, binary: isBinary(content) }
-      files[relativePath] = file
-      nextCache.set(relativePath, { signature, file })
+      // Path attribution must survive a full/unavailable checkpoint store. The
+      // hash still identifies the observed state, while completion records a
+      // visible warning that diff/rollback content is incomplete.
+      if (!entry.stored) unavailableFiles.push(entry.relativePath)
+      files[entry.relativePath] = entry.file
+      nextCache.set(entry.relativePath, { signature: entry.signature, file: entry.file })
       fileCount += 1
-    }
-
-    for (const path of await this.listCandidateFiles(projectRoot, gitPaths)) {
-      await captureFile(path)
     }
     this.snapshotCache = nextCache
     return {
@@ -236,6 +238,67 @@ export class ChangeTrackingService {
       ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
       ...(unavailableFiles.length > 0 ? { unavailableFiles } : {}),
       ...(git ? { git } : {})
+    }
+  }
+
+  /**
+   * Read one candidate path, reusing the cached hash when its stat signature is
+   * unchanged so a warm snapshot never touches the file's content again.
+   *
+   * The containment check resolves the containing directory, not the file: a
+   * final symlink is already refused by the non-following stat above, so the one
+   * way a candidate can point outside the project is a symlinked parent   and
+   * that is per directory, not per file. Memoizing it per snapshot keeps the
+   * safety check without paying a `realpath` for every file in the repository.
+   */
+  private async observeFile(
+    projectRoot: string,
+    absolutePath: string,
+    resolvedDirectories: Map<string, string>
+  ): Promise<ObservedFile> {
+    let metadata
+    try {
+      metadata = await lstat(absolutePath)
+    } catch (error) {
+      if (isMissing(error)) return { kind: 'absent' }
+      throw error
+    }
+    if (!metadata.isFile()) return { kind: 'absent' }
+    const parent = dirname(absolutePath)
+    let resolvedParent = resolvedDirectories.get(parent)
+    if (resolvedParent === undefined) {
+      resolvedParent = await realpath(parent)
+      this.assertWithinRoot(projectRoot, resolvedParent)
+      resolvedDirectories.set(parent, resolvedParent)
+    }
+    const relativePath = this.relativePath(
+      projectRoot,
+      join(resolvedParent, basename(absolutePath))
+    )
+    const size = metadata.size
+    if (size > this.limits.maxFileBytes) return { kind: 'oversize', relativePath }
+
+    const signature = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`
+    const cached = this.snapshotCache.get(relativePath)
+    if (cached?.signature === signature) {
+      return { kind: 'captured', relativePath, size, signature, file: cached.file, stored: true }
+    }
+
+    const content = await readFile(absolutePath)
+    const hash = createHash('sha256').update(content).digest('hex')
+    let stored = true
+    try {
+      await this.blobs.put(hash, content)
+    } catch {
+      stored = false
+    }
+    return {
+      kind: 'captured',
+      relativePath,
+      size,
+      signature,
+      file: { path: relativePath, hash, size, binary: isBinary(content) },
+      stored
     }
   }
 
@@ -523,6 +586,28 @@ export function isBinary(content: Uint8Array): boolean {
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+/** Run one async operation per item with bounded concurrency, keeping the
+ *  results in input order so callers stay deterministic. */
+async function mapBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length)
+  let nextIndex = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = nextIndex
+      nextIndex += 1
+      const item = items[index]
+      if (item === undefined) return
+      results[index] = await run(item)
+    }
+  })
+  await Promise.all(workers)
+  return results
 }
 
 function runGit(args: string[]): Promise<string> {

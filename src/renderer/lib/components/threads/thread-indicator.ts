@@ -1,4 +1,4 @@
-import type { Thread } from '$shared/types'
+import { isOrchestrationChildThread, type Thread } from '$shared/types'
 
 /**
  * The single indicator slot a thread row can show. Speech, browser sound and
@@ -21,6 +21,12 @@ import type { Thread } from '$shared/types'
  * action (recording, speaking, transcription, computer use, browser sound)   the
  * transient action is the more urgent fact, and the Engineering mark returns
  * the moment the slot is free.
+ *
+ * `orchestrator` is the durable workstation mark: this thread started work in
+ * another project with `cio_orchestrate_dispatch`. It is a fact about the thread
+ * that asked, not about the run, so it appears on every thread kind   a project
+ * thread, a chat, an assistant task   and yields the slot to live actions for the
+ * same reason the Engineering mark does.
  */
 export type ThreadIndicator =
   | 'recording'
@@ -34,6 +40,7 @@ export type ThreadIndicator =
   | 'browser-camera'
   | 'browser-screen'
   | 'engineering'
+  | 'orchestrator'
 
 export interface ThreadIndicatorCandidate {
   indicator: ThreadIndicator
@@ -80,5 +87,45 @@ export function threadUsesEngineeringTooling(
     thread.engineering === true ||
     thread.independentAudit === true ||
     thread.independentAuditInitialized === true
+  )
+}
+
+/**
+ * Whether the conversation view must load this thread's Engineering state
+ * (lifecycle, Spec, Brainstorm, PRD, Assignment, audit).
+ *
+ * Engineering state exists only where the tooling was engaged, plus the
+ * orchestration children that carry a coordinator's work and never set the
+ * marker themselves. The old rule was "not a chat thread", which made every
+ * ordinary conversation ask six thread-scoped engines on mount and on every turn
+ * boundary for state that cannot exist there: IPC on the conversation's critical
+ * path, and a background read racing a deleted thread. Chat threads (Chats, the
+ * Assistant space, browser assistant chats) own no Engineering state at all.
+ *
+ * The audit fields are here on purpose. The independent (spec-less) audit never
+ * sets the Engineering marker, so its own durable pair is what keeps it
+ * hydrated, and a row that still carries an audit gate or a durable auditor
+ * thread is never treated as an ordinary conversation even if a marker is
+ * missing from an older database.
+ */
+export function threadHydratesEngineeringState(
+  thread: Pick<
+    Thread,
+    | 'engineering'
+    | 'independentAudit'
+    | 'independentAuditInitialized'
+    | 'coordinatorThreadId'
+    | 'assignmentId'
+    | 'assignmentRole'
+    | 'achievementRole'
+    | 'auditState'
+    | 'auditorThreadId'
+  >
+): boolean {
+  return (
+    threadUsesEngineeringTooling(thread) ||
+    isOrchestrationChildThread(thread) ||
+    thread.auditState !== undefined ||
+    thread.auditorThreadId !== undefined
   )
 }

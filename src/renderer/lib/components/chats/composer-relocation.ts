@@ -249,7 +249,8 @@ function carryInto(
     projectReferences: entry?.projectReferences ?? [],
     taskReferences: entry?.taskReferences ?? [],
     promptReferences: entry?.promptReferences ?? [],
-    startAfterThreads: entry?.startAfterThreads ?? []
+    startAfterThreads: entry?.startAfterThreads ?? [],
+    threadReferences: entry?.threadReferences ?? []
   }
 
   if (input.item.kind === 'attachment') {
@@ -307,7 +308,8 @@ function sourceDraft(input: ComposerRelocationInput): ComposerDraftEntry {
     projectReferences: rendererRecovery.projectReferencesFor(projectId, sourceThreadId),
     taskReferences: rendererRecovery.taskReferencesFor(projectId, sourceThreadId),
     promptReferences: rendererRecovery.draftPromptReferences(projectId, sourceThreadId),
-    startAfterThreads: rendererRecovery.startAfterThreadsFor(projectId, sourceThreadId)
+    startAfterThreads: rendererRecovery.startAfterThreadsFor(projectId, sourceThreadId),
+    threadReferences: rendererRecovery.threadReferencesFor(projectId, sourceThreadId)
   }
 }
 

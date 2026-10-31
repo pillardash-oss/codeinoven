@@ -33,7 +33,8 @@
   import {
     parseModelClipboard,
     parseProviderClipboard,
-    serializeModelClipboard
+    serializeModelClipboard,
+    type BaseUrlProviderModelClipboardData
   } from '$shared/provider-clipboard'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import type {
@@ -71,7 +72,6 @@
     contextWindow: string
     maxOutputTokens: string
     reasoning: boolean
-    defaultThinkingLevel: ThinkingLevel | ''
     vision: boolean
   }
 
@@ -103,15 +103,13 @@
     { value: '@ai-sdk/anthropic', label: 'Anthropic (/v1/messages)' }
   ] as const
 
-  const THINKING_LEVELS: ThinkingLevel[] = [
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-    'ultra'
-  ]
+  /**
+   * Reasoning models from a custom base URL start at the lowest thinking level.
+   * There is no per-model picker any more: a provider endpoint never tells us
+   * which effort its models prefer, and starting low keeps the first turn fast
+   * while the user can still raise it per conversation.
+   */
+  const CUSTOM_PROVIDER_DEFAULT_THINKING_LEVEL: ThinkingLevel = 'low'
 
   /** The main-process provider service persists at most 128 models per provider. */
   const MAX_DISCOVERED_MODELS_TO_SAVE = 128
@@ -454,7 +452,6 @@
           contextWindow: model.contextWindow?.toString() ?? '',
           maxOutputTokens: model.maxOutputTokens?.toString() ?? '',
           reasoning: model.reasoning,
-          defaultThinkingLevel: model.defaultThinkingLevel ?? '',
           vision: model.vision ?? true
         })),
         enabled: provider.enabled
@@ -470,7 +467,6 @@
       contextWindow: '',
       maxOutputTokens: '',
       reasoning: false,
-      defaultThinkingLevel: '',
       vision: true
     }
   }
@@ -521,7 +517,6 @@
         contextWindow: '',
         maxOutputTokens: '',
         reasoning: false,
-        defaultThinkingLevel: '',
         vision: true
       }
     ]
@@ -565,9 +560,7 @@
         ...(model.maxOutputTokens.trim()
           ? { maxOutputTokens: Number.parseInt(model.maxOutputTokens, 10) }
           : {}),
-        ...(model.defaultThinkingLevel
-          ? { defaultThinkingLevel: model.defaultThinkingLevel as ThinkingLevel }
-          : {})
+        ...(model.reasoning ? { defaultThinkingLevel: CUSTOM_PROVIDER_DEFAULT_THINKING_LEVEL } : {})
       }
     })
   }
@@ -653,10 +646,25 @@
     }
   }
 
+  /** Clipboard payload for a draft model: the thinking default is derived from
+   *  the reasoning support, so a copied model round-trips at the same level. */
+  function toClipboardModel(model: ModelDraft): BaseUrlProviderModelClipboardData {
+    return {
+      id: model.id,
+      name: model.name,
+      contextWindow: model.contextWindow,
+      maxOutputTokens: model.maxOutputTokens,
+      reasoning: model.reasoning,
+      defaultThinkingLevel: model.reasoning ? CUSTOM_PROVIDER_DEFAULT_THINKING_LEVEL : '',
+      vision: model.vision
+    }
+  }
+
   function copyModelDraft(model: ModelDraft): void {
-    void copyText(serializeModelClipboard(model), `Copied “${model.name || model.id}”.`).catch(
-      (copyError) => reportError(copyError, 'Clipboard copy failed.')
-    )
+    void copyText(
+      serializeModelClipboard(toClipboardModel(model)),
+      `Copied “${model.name || model.id}”.`
+    ).catch((copyError) => reportError(copyError, 'Clipboard copy failed.'))
   }
 
   async function pasteModelFromClipboard(): Promise<void> {
@@ -685,7 +693,7 @@
         usagePath: draft.usagePath,
         usageFormat: draft.usageFormat,
         modelsPath: draft.modelsPath,
-        models: draft.models,
+        models: draft.models.map(toClipboardModel),
         enabled: draft.enabled
       }
       await invoke('baseUrlProviders:copyProviderToClipboard', request)
@@ -726,7 +734,6 @@
     contextWindow: string
     maxOutputTokens: string
     reasoning: boolean
-    defaultThinkingLevel: ThinkingLevel | ''
     vision: boolean
   }): ModelDraft {
     return {
@@ -735,7 +742,6 @@
       contextWindow: model.contextWindow,
       maxOutputTokens: model.maxOutputTokens,
       reasoning: model.reasoning,
-      defaultThinkingLevel: model.defaultThinkingLevel,
       vision: model.vision
     }
   }
@@ -1217,18 +1223,11 @@
             <Switch bind:checked={model.reasoning}>
               <span class="text-[0.6875rem] font-medium">Supports reasoning</span>
             </Switch>
-            <label class="flex items-center gap-1.5 text-[0.6875rem] font-medium">
-              <span>Default thinking</span>
-              <select
-                class="h-7 border bg-elevated px-1.5 text-[0.6875rem] outline-none focus:border-primary"
-                bind:value={model.defaultThinkingLevel}
-              >
-                <option value="">None</option>
-                {#each THINKING_LEVELS as level (level)}
-                  <option value={level}>{level}</option>
-                {/each}
-              </select>
-            </label>
+            {#if model.reasoning}
+              <span class="text-[0.6875rem] text-dimmed">
+                Starts at {CUSTOM_PROVIDER_DEFAULT_THINKING_LEVEL} thinking
+              </span>
+            {/if}
           </div>
         </div>
       {/each}

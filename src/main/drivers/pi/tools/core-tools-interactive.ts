@@ -11,6 +11,7 @@
 import {
   CIO_ASK_USER_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
+  CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME,
   CIO_TODO_WRITE_TOOL_NAME
 } from '../../../../lib/core-tools'
 
@@ -233,6 +234,45 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
         note: files.every((file) => !file.exists)
           ? 'None of the given paths exist; ask the user to double-check them.'
           : 'Read the existing files before continuing.'
+      })
+    }
+  })
+
+  pi.registerTool({
+    name: '${CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME}',
+    label: 'Explain protected file access',
+    description:
+      'State why this run needs a file from the sensitive-file block list. Call it only after a tool call was blocked for a protected file: the app shows this reason in the approval card the user answers.',
+    promptSnippet: 'Explain why the run needs a protected file before the user is asked',
+    promptGuidelines: [
+      'Use ${CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME} only when a tool call was blocked for a protected file, and pass the exact paths the block named.',
+      'Write one or two sentences the user can judge: what the file gives the run and why the work fails without it. Never claim a secret value is needed when only a name or a key list is.'
+    ],
+    parameters: Type.Object({
+      paths: Type.Array(Type.String({ description: 'A blocked path, exactly as the block named it.' }), {
+        description: 'The protected paths the block named.',
+        minItems: 1,
+        maxItems: 16
+      }),
+      reason: Type.String({
+        description: 'Why this run needs those files, in one or two sentences.',
+        maxLength: 600
+      })
+    }),
+    async execute(_toolCallId, params) {
+      const result = recordSensitiveAccessReason(params.paths, params.reason)
+      if (result.recorded.length === 0) {
+        return textResult({
+          recorded: false,
+          message:
+            'No blocked path matched. Retry the tool call first, then explain the paths the block named.',
+          ignored: result.ignored
+        })
+      }
+      return textResult({
+        recorded: true,
+        paths: result.recorded,
+        message: 'Reason recorded. Retry the blocked call now; the approval card shows this reason.'
       })
     }
   })

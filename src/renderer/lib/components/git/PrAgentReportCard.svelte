@@ -10,7 +10,7 @@
   import { formatCompactAge } from '$shared/date-time-format'
   import { openInBrowser } from '$lib/open-in-browser'
   import { revealCitationFile } from '$lib/reveal-file'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import type { PrAgentReport } from '$shared/types'
 
   /**
@@ -180,7 +180,7 @@
   {#if hasBody}
     <div class="px-2.5 py-2">
       <div class:agent-report-folded={!expanded} {@attach measureFold}>
-        <MarkdownView text={report.content} />
+        <DeferredMarkdownView text={report.content} />
       </div>
     </div>
     <footer

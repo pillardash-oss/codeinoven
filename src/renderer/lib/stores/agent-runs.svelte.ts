@@ -306,6 +306,25 @@ class AgentRunsStore {
   }
 
   /**
+   * Forget the trace state a visit left behind.
+   *
+   * Opening a trace is a gesture inside one visit, not a preference: a settled
+   * thread must never come back with an old turn's trace expanded, so every
+   * mount of a thread view starts from the fold the turn itself asks for. A
+   * still-running turn re-opens on its own (see `setBusy`, and the busy effect
+   * inside the trace), so nothing live is lost by clearing this.
+   */
+  resetTraceView(projectId: string, threadId: string): void {
+    const entry = this.runs.get(threadKey(projectId, threadId))
+    if (!entry) return
+    if (!entry.traceOpen && !entry.traceUserOpened && !entry.traceUserFolded) return
+    entry.traceOpen = false
+    entry.traceUserOpened = false
+    entry.traceUserFolded = false
+    this.#notify()
+  }
+
+  /**
    * A session parked on a provider wait (a reset window, or a connection the
    * device lost) is not working: no work is being produced, and its harness
    * session reports `waiting` until it is admitted again. End the live run so

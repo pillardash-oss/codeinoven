@@ -235,8 +235,10 @@ export class SpeechService {
     // path, which is exactly what makes macOS show its microphone prompt, so it
     // is gated on a decision that already exists: a user who has recorded before
     // starts instantly, while a fresh install is left untouched until the first
-    // recording asks for access.
-    if (microphoneAccessGranted()) {
+    // recording asks for access. It is skipped entirely while a sibling instance
+    // is recording, because opening the input device from a second process can
+    // make the device renegotiate under that live capture.
+    if (microphoneAccessGranted() && !(await this.storage.anotherInstanceIsRecording())) {
       void this.nativeCapture.warm().catch((error) => {
         Logger.dev('Native speech capture warmup failed (non-fatal):', error)
       })

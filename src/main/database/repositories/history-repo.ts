@@ -163,12 +163,23 @@ export function insertHistoryStatement(
   return {
     sql: `INSERT INTO history_entries(id, thread_id, role, content, metadata, "sequence", timestamp)
        VALUES(?,?,?,?,?,?,?)`,
-    params: [id, threadId, role, content, metadata ? JSON.stringify(metadata) : null, sequence, timestamp]
+    params: [
+      id,
+      threadId,
+      role,
+      content,
+      metadata ? JSON.stringify(metadata) : null,
+      sequence,
+      timestamp
+    ]
   }
 }
 
 /** DELETE statement for a truncation from a sequence onward. */
-export function truncateHistoryStatement(threadId: string, sequence: number): { sql: string; params: unknown[] } {
+export function truncateHistoryStatement(
+  threadId: string,
+  sequence: number
+): { sql: string; params: unknown[] } {
   return {
     sql: 'DELETE FROM history_entries WHERE thread_id = ? AND "sequence" >= ?',
     params: [threadId, sequence]
@@ -202,7 +213,10 @@ export function buildHistoryLoadPageSql(
 }
 
 /** Bounded recent-history load (descending sequence) for an explicit count. */
-export function buildHistoryRecentSql(threadId: string, count: number): { sql: string; params: unknown[]; maxRows: number } {
+export function buildHistoryRecentSql(
+  threadId: string,
+  count: number
+): { sql: string; params: unknown[]; maxRows: number } {
   return {
     sql: `SELECT * FROM history_entries WHERE thread_id = ? ORDER BY "sequence" DESC`,
     params: [threadId],

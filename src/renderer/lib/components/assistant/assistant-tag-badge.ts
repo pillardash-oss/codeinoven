@@ -48,5 +48,8 @@ export function assistantTagIconHtml(
   }
   // An assistant with an accent colour keeps it, exactly like its sidebar row.
   if (!assistant.color) return DEFAULT_MARK_SVG
-  return DEFAULT_MARK_SVG.replaceAll('currentColor', escapeAttribute(assistantAccentColor(assistant)))
+  return DEFAULT_MARK_SVG.replaceAll(
+    'currentColor',
+    escapeAttribute(assistantAccentColor(assistant))
+  )
 }

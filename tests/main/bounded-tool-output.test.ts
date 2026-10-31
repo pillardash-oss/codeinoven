@@ -6,7 +6,10 @@ import {
 } from '../../src/main/chat/bounded-tool-output'
 import type { AgentPart } from '../../src/lib/types'
 
-function toolPart(output: string, metadata?: Record<string, unknown>): AgentPart {
+function toolPart(
+  output: string,
+  metadata?: Record<string, unknown>
+): Extract<AgentPart, { type: 'tool' }> {
   return {
     type: 'tool',
     id: 't1',
@@ -18,9 +21,18 @@ function toolPart(output: string, metadata?: Record<string, unknown>): AgentPart
 }
 
 describe('bounded tool output policy', () => {
-  it('passes sub-cap outputs through by reference', () => {
-    const part = toolPart('ok')
+  it('passes a labeled sub-cap part through by reference', () => {
+    const part = { ...toolPart('ok'), actionLabel: 'Read' }
     expect(capPersistedPart(part)).toBe(part)
+  })
+
+  it('stamps the friendly action label onto the part it persists', () => {
+    const labeled = capPersistedPart(toolPart('ok'))
+    expect(labeled.type).toBe('tool')
+    if (labeled.type !== 'tool') return
+    expect(labeled.actionLabel).toBe('Read')
+    // A part that already carries its label is never rewritten again.
+    expect(capPersistedPart(labeled)).toBe(labeled)
   })
 
   it('caps an oversized tool output to head + tail + byte count', () => {

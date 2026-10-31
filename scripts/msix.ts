@@ -27,6 +27,22 @@
  *   bun scripts/msix.ts --out dist --arch x64
  *   bun scripts/msix.ts --prepackaged dist/win-unpacked   package an app dir CI already built
  *   bun scripts/msix.ts --verify-only dist/codeinoven-1.5.65-x64.msix   inspect an existing package
+ *
+ * The package is built unsigned on purpose, and that has to hold even when the
+ * caller exports signing credentials for the installer it built first. The
+ * release Windows leg builds the NSIS installer from the same shell, so it
+ * carries `CSC_LINK` / `CSC_KEY_PASSWORD` in the environment; electron-builder
+ * picks those up for the appx target too (`getCscLink("WIN_CSC_LINK")` falls back
+ * to `CSC_LINK`), and the first stable release that shipped an MSIX failed on
+ * exactly that: signtool refused the Apple Developer ID certificate for an
+ * AppX signature with "The specified algorithm cannot be used or is invalid".
+ * The Store re-signs the package anyway, so a local certificate is neither
+ * needed nor wanted. `buildEnvironment` therefore removes every signing
+ * credential from the child environment.
+ *
+ * `-c.forceCodeSigning=false` alone is not enough: it only makes a *missing*
+ * certificate acceptable, it does not stop electron-builder from using one it
+ * finds.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -66,6 +82,26 @@ type AppxIdentity = {
 }
 
 type Check = { ok: true } | { ok: false; reason: string }
+
+/**
+ * Every environment variable electron-builder reads a code-signing certificate
+ * from (see `platformPackager.getCscLink` / `getCscPassword` and
+ * `windowsSignToolManager`).
+ *
+ * The platform-specific names are listed too: `WIN_CSC_LINK` and
+ * `WIN_CSC_KEY_PASSWORD` take precedence over the generic ones, so scrubbing
+ * `CSC_*` alone would leave a Windows certificate usable and sign the package
+ * with it. `CSC_IDENTITY_AUTO_DISCOVERY=false` is the switch that stops macOS
+ * builds from discovering an identity in the keychain.
+ */
+const SIGNING_ENVIRONMENT: readonly string[] = [
+  'CSC_LINK',
+  'CSC_KEY_PASSWORD',
+  'CSC_NAME',
+  'CSC_IDENTITY_AUTO_DISCOVERY',
+  'WIN_CSC_LINK',
+  'WIN_CSC_KEY_PASSWORD'
+]
 
 function write(line: string): void {
   process.stdout.write(`${line}\n`)
@@ -267,6 +303,21 @@ function parseFlags(argv: string[]): Map<string, string> {
     }
   }
   return flags
+}
+
+/**
+ * The environment the electron-builder child runs with: this process's
+ * environment minus every signing credential, so an MSIX can never be signed
+ * with whatever certificate the surrounding build exported.
+ */
+function buildEnvironment(): Record<string, string | undefined> {
+  const environment: Record<string, string | undefined> = { ...process.env }
+  for (const name of SIGNING_ENVIRONMENT) delete environment[name]
+  // electron-builder treats this as "no identity on this machine", which is what
+  // a Store package wants; it is set rather than deleted so a variable inherited
+  // as `true` cannot re-enable discovery.
+  environment.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+  return environment
 }
 
 function requireAssets(): void {
@@ -589,7 +640,8 @@ async function main(): Promise<void> {
       '--publish',
       'never',
       // The Store signs the package; a local certificate is neither required nor
-      // wanted, and forcing one would fail the build.
+      // wanted, and forcing one would fail the build. The certificate itself is
+      // kept out of reach by `buildEnvironment`.
       '-c.forceCodeSigning=false',
       '-c.directories.output=' + outDir,
       // The Store's version rules are not the app's version rules while the app
@@ -603,7 +655,7 @@ async function main(): Promise<void> {
       // not built a second time; only the appx target runs.
       ...(prepackaged === undefined ? [] : ['--prepackaged', prepackaged])
     ],
-    { stdio: 'inherit' }
+    { stdio: 'inherit', env: buildEnvironment() }
   )
   if (result.status !== 0) {
     fail(`electron-builder exited with status ${result.status ?? 'unknown'}`)

@@ -8,7 +8,8 @@
   import { invoke } from '$lib/ipc.svelte'
   import { osFileManagerLabel, revealExportedPathInOsFileManager } from '$lib/os-file-manager'
   import { speechController } from '../../speech/speech-controller.svelte'
-  import { registerHistoryAudio, setCurrentHistoryAudio } from '../../speech/global-audio'
+  import { registerHistoryAudio } from '../../speech/global-audio'
+  import AudioPlayer from '../ui/AudioPlayer.svelte'
 
   interface Props {
     attemptId: string
@@ -18,13 +19,12 @@
   let { attemptId, label = 'Recording' }: Props = $props()
 
   let url = $state<string | null>(null)
-  let downloadName = $state('')
   let audioEl = $state<HTMLAudioElement | null>(null)
   let preparing = $state(false)
   let saving = $state(false)
   let error = $state<string | null>(null)
-  let isPlaying = $state(false)
-  let unregister: (() => void) | null = null
+  /** Releases the listeners this row put on the player's element. */
+  let detach: (() => void) | null = null
 
   function describe(cause: unknown): string {
     return cause instanceof Error ? cause.message : String(cause)
@@ -44,14 +44,7 @@
     try {
       const result = await invoke('speech:readAudio', attemptId)
       if (!result.ok) throw new Error(result.error.message)
-      const next = URL.createObjectURL(
-        new Blob([result.value.bytes], { type: result.value.mimeType })
-      )
-      url = next
-      downloadName = `recording-${attemptId}${result.value.extension}`
-      // Chromium names a download after its URL, and a blob URL is a bare UUID,
-      // so the media controls' own Download item is told what this file is.
-      void invoke('download:nameLocalBlob', next, downloadName).catch(() => undefined)
+      url = URL.createObjectURL(new Blob([result.value.bytes], { type: result.value.mimeType }))
       return true
     } catch (cause) {
       error = describe(cause)
@@ -63,24 +56,40 @@
 
   async function handlePlay(): Promise<void> {
     if (!(await prepare())) return
-    // The src is applied by the same flush that set `url`.
+    // The player mounts on the flush that sets `url`, and reports its element then.
     await tick()
-    if (!audioEl) return
+    const element = audioEl
+    if (!element) return
     await speechController.cancelPlayback()
-    setCurrentHistoryAudio(audioEl)
     try {
-      await audioEl.play()
+      await element.play()
     } catch (cause) {
       error = describe(cause)
     }
   }
 
-  function handleMediaError(): void {
-    const failure = audioEl?.error
-    isPlaying = false
-    error = failure?.message
-      ? `The recording could not be played: ${failure.message}`
-      : 'The recording could not be played.'
+  /**
+   * Take the player's element.
+   *
+   * A recording is one more audio surface in the app, so it enters the same
+   * single-playback rule as every other one: starting it stops whatever history
+   * recording was playing, and it cancels speech playback, which would otherwise
+   * talk over the recording. The app's own player draws the controls, so the
+   * coordination listens to the element instead of rendering a second player.
+   */
+  function attach(element: HTMLAudioElement): void {
+    if (audioEl === element) return
+    detach?.()
+    audioEl = element
+    const started = (): void => {
+      void speechController.cancelPlayback()
+    }
+    const unregister = registerHistoryAudio(element)
+    element.addEventListener('play', started)
+    detach = () => {
+      element.removeEventListener('play', started)
+      unregister()
+    }
   }
 
   /**
@@ -122,62 +131,21 @@
     if (!revealed) toast.error('The saved recording is no longer where it was written.')
   }
 
-  function handlePlaybackStarted(): void {
-    isPlaying = true
-    if (audioEl) setCurrentHistoryAudio(audioEl)
-    void speechController.cancelPlayback()
-  }
-
-  function handlePause(): void {
-    isPlaying = false
-  }
-
-  function handleEnded(): void {
-    isPlaying = false
-  }
-
-  $effect(() => {
-    if (!audioEl) return
-    unregister?.()
-    unregister = registerHistoryAudio(audioEl)
-    return () => {
-      unregister?.()
-      unregister = null
-    }
-  })
-
   onDestroy(() => {
-    unregister?.()
-    if (url) {
-      void invoke('download:nameLocalBlob', url, null).catch(() => undefined)
-      URL.revokeObjectURL(url)
-    }
+    detach?.()
+    detach = null
+    if (url) URL.revokeObjectURL(url)
     if (audioEl && !audioEl.paused) audioEl.pause()
   })
 </script>
 
-<div class="border bg-elevated p-2">
-  <!-- One stable element: play() always targets the element carrying the src. -->
-  <audio
-    bind:this={audioEl}
-    src={url ?? undefined}
-    controls={url !== null}
-    preload={url === null ? 'none' : 'metadata'}
-    hidden={url === null}
-    class="h-8 w-full"
-    aria-label="{label} audio player"
-    onplay={handlePlaybackStarted}
-    onpause={handlePause}
-    onended={handleEnded}
-    onerror={handleMediaError}
-  ></audio>
-
+<div class="space-y-2">
   {#if url === null}
-    <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center gap-2">
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
-        title="Load and play recording with seek and download"
+        class="inline-flex items-center gap-1.5 border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground disabled:opacity-50"
+        title="Load and play this recording"
         aria-label="Play recording {attemptId}"
         disabled={preparing}
         onclick={() => void handlePlay()}
@@ -190,16 +158,14 @@
           Play
         {/if}
       </button>
-      <span class="text-[0.625rem] text-dimmed">Loaded once · seek and download on player</span>
+      <span class="text-[0.6875rem] text-dimmed">Loaded when you play it</span>
     </div>
   {:else}
-    <div class="mt-1.5 flex items-center justify-between gap-2">
-      <span class="text-[0.625rem] text-dimmed"
-        >{isPlaying ? 'Playing' : 'Paused'} · seek and volume on player</span
-      >
+    <AudioPlayer src={url} {label} onElement={attach} />
+    <div class="flex items-center justify-end gap-2">
       <button
         type="button"
-        class="inline-flex items-center gap-1 border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground disabled:opacity-50"
+        class="inline-flex items-center gap-1 border border-border bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted hover:text-foreground disabled:opacity-50"
         title="Save this recording to a file"
         aria-label="Save recording {attemptId} to a file"
         disabled={saving}
@@ -215,6 +181,6 @@
   {/if}
 
   {#if error}
-    <p class="mt-1.5 text-[0.6875rem] text-danger" role="alert">{error}</p>
+    <p class="text-[0.6875rem] text-danger" role="alert">{error}</p>
   {/if}
 </div>

@@ -15,7 +15,7 @@
     SpecContextReference,
     SpecDecisionComment
   } from '$shared/types'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import type { SpecStudioContextPickerController } from './spec-studio-context-picker.svelte'
   import { formatDate } from './spec-studio-formatting'
 
@@ -303,7 +303,7 @@
               <span>{formatDate(comment.createdAt)}</span>
             </div>
             <div class="text-xs text-foreground">
-              <MarkdownView text={comment.body} />
+              <DeferredMarkdownView text={comment.body} />
             </div>
           </div>
         {/each}

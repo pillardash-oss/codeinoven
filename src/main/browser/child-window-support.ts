@@ -29,6 +29,20 @@ export function resolveChildWindowPreload(): string {
   return join(dir, 'index.js')
 }
 
+/**
+ * Resolve the blank preload a window built with no bridge points at.
+ *
+ * `webPreferences.preload` cannot be cleared with an empty string: Electron
+ * requires an absolute path and logs `preload script must have absolute path`
+ * for it. A window opened from the app inherits the app's privileged preload
+ * unless its own options name a script, so "no preload" is this file
+ * (`src/preload/blank.ts`), resolved the same way the real one is.
+ */
+export function resolveBlankPreload(): string {
+  const candidate = join(getMainBundleDirectory(import.meta.url), '../preload/blank.cjs')
+  return existsSync(candidate) ? candidate : ''
+}
+
 /** First-paint theme hint for a child window; the document refines it from the
  *  live app state as soon as it is running. */
 export function resolveAppTheme(): 'light' | 'dark' {

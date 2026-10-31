@@ -61,7 +61,11 @@
 </script>
 
 <div id="settings-block-about-community" class="mt-4 border bg-surface p-4">
-  <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Community</h3>
+  <h3
+    class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Community
+  </h3>
   <p class="text-xs leading-relaxed text-dimmed">
     Report a bug, send feedback, or contribute on GitHub.
   </p>

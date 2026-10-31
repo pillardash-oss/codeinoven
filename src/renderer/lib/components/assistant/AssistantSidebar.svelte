@@ -34,7 +34,8 @@
     assistantSubjectName,
     assistantThreadCount,
     previewRuns,
-    assistantSiblingRuns
+    assistantSiblingRuns,
+    runNeedsUserAttention
   } from './assistant-view'
 
   interface Props {
@@ -185,15 +186,19 @@
   })
 
   /**
-   * Assistants with a thread parked on the user (awaiting approval) or failed,
-   * across tasks and runs. The rail already counts these as attention, but the
-   * assistant row only wore unread/missed, so a waiting run was invisible until
-   * its row was opened.
+   * Assistants with a thread that needs the user: parked on a card (awaiting
+   * approval), failed, or waiting on a provider retry. The rail already counts
+   * these, and the assistant row's strip counts them too, but the loud mark beside
+   * the name is what makes the row impossible to skim past, and a thread waiting
+   * to retry was the one case it stayed silent on. A retry can wait hours, so the
+   * user has to be able to see that an assistant is not working but stalled.
    */
   const attentionAssistantIds = $derived.by(() => {
     const ids = new SvelteSet<string>()
     const isAttention = (thread: Thread): boolean =>
-      thread.status === 'awaiting_approval' || thread.status === 'failed'
+      thread.status === 'awaiting_approval' ||
+      thread.status === 'failed' ||
+      thread.status === 'working-paused'
     for (const task of tasks) {
       if (task.assistantId && isAttention(task)) ids.add(task.assistantId)
     }
@@ -530,7 +535,7 @@
       role="group"
       aria-label={ariaLabel}
     >
-      {#each [...new SvelteSet( [...runs.filter((run) => threadMediaActivity(run.id).length > 0), ...previewRuns(runs, expandedRuns.has(key))] )] as run (run.id)}
+      {#each [...new SvelteSet( [...runs.filter((run) => threadMediaActivity(run.id).length > 0 || runNeedsUserAttention(run)), ...previewRuns(runs, expandedRuns.has(key))] )] as run (run.id)}
         {@const runForeignThread = foreignRuns.isForeign(run.projectId, run.id) ? run : null}
         <SidebarListRow
           rowKey={run.id}

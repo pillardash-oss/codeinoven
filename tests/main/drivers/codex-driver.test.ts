@@ -5,6 +5,10 @@ import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../../src/lib/types'
+import {
+  withActionSummaryAdvice,
+  withActionSummarySchema
+} from '../../../src/lib/tool-action-label'
 import { GATEWAY_TOOLS, gatewayToolForModel } from '../../../src/lib/gateway-tools'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import {
@@ -246,11 +250,13 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockImplementation(async () => Response.json({ notFound: false, utilities: [] }))
+    // Every published catalog tool carries the trace's action-summary field,
+    // so the expectation is built through the same helper the driver uses.
     const dynamicTools = GATEWAY_TOOLS.map(gatewayToolForModel).map(
       ({ name, description, inputSchema }) => ({
         name,
-        description,
-        inputSchema
+        description: withActionSummaryAdvice(description),
+        inputSchema: withActionSummarySchema(inputSchema)
       })
     )
     await driver.publishUtilityGatewayEndpoint('/project', sessionId, {

@@ -20,6 +20,24 @@ import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
 /** Quoted feature list for the usage ledger's CHECK constraint. */
 const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${feature}'`).join(',')
 
+/**
+ * The version of the schema this build writes.
+ *
+ * `SCHEMA_SQL` below is a complete snapshot of the schema at this version, and a
+ * database that stores an equal or higher value in `db_meta.schema_version` has
+ * nothing to create and nothing to migrate: boot opens it and goes straight to
+ * work. That is the whole point of the version: the migration files in
+ * `migrations/` exist for databases written by older builds, and a fresh
+ * install must never walk them.
+ *
+ * Bump this in the same change that adds the table, column, index or trigger:
+ * the snapshot DDL goes in `SCHEMA_SQL`, and the step that upgrades a database
+ * already on disk goes in a new `migrations/v<version>.ts`. A schema change
+ * without a bump reaches fresh installs only and silently skips every database
+ * already on disk.
+ */
+export const DATABASE_SCHEMA_VERSION = 4
+
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS db_meta (
@@ -27,7 +45,7 @@ CREATE TABLE IF NOT EXISTS db_meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO db_meta(key, value) VALUES('schema_version', '1');
+INSERT OR REPLACE INTO db_meta(key, value) VALUES('schema_version', '${DATABASE_SCHEMA_VERSION}');
 
 -- ─── Settings (app config) ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS settings (
@@ -830,7 +848,35 @@ CREATE TABLE IF NOT EXISTS cio_cleanup_exclusions (
   path            TEXT NOT NULL,
   created_at      INTEGER NOT NULL,
   PRIMARY KEY (project_id, scope_bucket_id, thread_id, path)
-);`
+);
+
+-- ─── Orchestration dispatches ──────────────────────────────────────────────
+-- One row per thread a workstation-control turn started with
+-- cio_orchestrate_dispatch, keyed by the child thread it created and pointing
+-- back at the thread that asked for it. The initiator's board reads these rows
+-- to list every run it dispatched, across projects, including after a restart:
+-- the in-memory dispatch book that steers an outcome back into the initiator is
+-- gone with the app, and the row is what keeps the list from emptying on boot.
+-- Live status is never copied here: the board reads it from the child thread's
+-- own row, which is the single source of truth for how the run is doing.
+CREATE TABLE IF NOT EXISTS orchestration_dispatches (
+  child_project_id     TEXT NOT NULL,
+  child_thread_id      TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  initiator_project_id TEXT NOT NULL,
+  initiator_thread_id  TEXT NOT NULL,
+  title                TEXT NOT NULL,
+  oven_id              TEXT NOT NULL,
+  oven_name            TEXT NOT NULL,
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT NOT NULL,
+  model_id             TEXT NOT NULL,
+  thinking_level       TEXT,
+  created_at           INTEGER NOT NULL,
+  PRIMARY KEY (child_project_id, child_thread_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orchestration_dispatches_initiator
+  ON orchestration_dispatches(initiator_project_id, initiator_thread_id);`
 
 export const USAGE_EVENTS_COLUMNS_SQL = `
   id                    TEXT PRIMARY KEY NOT NULL,
@@ -1023,6 +1069,22 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sticky_notes_updated ON sticky_notes(updated_at DESC);`
+
+/**
+ * Indexes that no legacy migration may assume, because the column they cover was
+ * itself added by a migration.
+ *
+ * `DATABASE_SCHEMA_SQL` is executed by the *upgrade* path too, before the column
+ * migrations have run, so an index on a migrated column would abort an old
+ * database's upgrade. The legacy chain creates each of these itself after adding
+ * its column; a fresh install has every column from the snapshot, so it applies
+ * this block once, right after the snapshot.
+ */
+export const DATABASE_SCHEMA_SNAPSHOT_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_sticky_notes_sort ON sticky_notes(sort_order);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_project
+  ON usage_events(project_id, created_at, id);`
 
 /**
  * Assistants: the top-level grouping for assistant tasks. An assistant owns the
@@ -1273,6 +1335,59 @@ export const DATABASE_SCHEMA_SQL = [
     PRIMARY KEY(project_id, directory)
   );
   CREATE INDEX IF NOT EXISTS idx_authored_work_folders_kind ON authored_work_folders(project_id, kind);`,
+  /**
+   * A project's named groups of authored work: the board's organisation, never a
+   * place on disk. The folders stay where they are, so a group can be renamed or
+   * deleted without touching a file, and moving a design into one is a record
+   * rather than a move.
+   *
+   * `collapsed` is stored with the group because folding a group is the user's
+   * arrangement too: a board that reopened with every group expanded would undo
+   * the tidying the user did on a long project.
+   */
+  `CREATE TABLE IF NOT EXISTS work_groups (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    collapsed INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_groups_scope ON work_groups(project_id, kind, position);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_work_groups_name ON work_groups(project_id, kind, name COLLATE NOCASE);`,
+  /**
+   * Which group one design belongs to.
+   *
+   * The key is the folder, exactly as the board spells it, so the membership
+   * follows the design rather than a copy of it. A folder with no row here is
+   * ungrouped, which is why a project that never used groups has nothing written
+   * for any of its designs.
+   */
+  `CREATE TABLE IF NOT EXISTS work_group_members (
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    directory TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, kind, directory)
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_group_members_group ON work_group_members(group_id, position);`,
+  /**
+   * How one project's board draws its work: pictures of the designs, or the list.
+   *
+   * Read with the groups so a reopened board comes back the way the user left it,
+   * rather than resetting to whichever view the app happens to prefer.
+   */
+  `CREATE TABLE IF NOT EXISTS work_group_boards (
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    view TEXT NOT NULL DEFAULT 'cards' CHECK(view IN ('cards','list')),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, kind)
+  );`,
   `CREATE TABLE IF NOT EXISTS design_reviews (
     id TEXT PRIMARY KEY NOT NULL,
     project_id TEXT NOT NULL,

@@ -253,5 +253,3 @@ async function revealResolvedPath(projectId: string, relativePath: string): Prom
 const VALIDATION_TTL_MS = 10_000
 /** Upper bound on cached validation results before the whole cache is dropped. */
 const VALIDATION_CACHE_LIMIT = 300
-
-

@@ -8,6 +8,6 @@ import type { PromptAttachment } from '$shared/types'
  * message flows straight into the agent without re-typing.
  */
 export const chatDraft: { message: string; attachments: PromptAttachment[] } = {
-  message: "",
+  message: '',
   attachments: []
-};
+}

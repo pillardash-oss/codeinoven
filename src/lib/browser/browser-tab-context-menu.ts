@@ -39,5 +39,6 @@ export type BrowserTabContextMenuChoice =
   | { action: 'removeFromGroup' }
   | { action: 'moveToGroup'; groupId: string }
   | { action: 'reopenInBox'; boxId: string | null }
+  | { action: 'moveToSidePanel' }
   | { action: 'reopenClosed' }
   | { action: 'close' }

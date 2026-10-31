@@ -10,10 +10,15 @@ import type { VideoJobContext } from './video-jobs'
 export function audibleVideoEditClips(edit: VideoEditDocument): VideoEditClip[] {
   const tracks = new Map(edit.tracks.map((track) => [track.id, track]))
   const assets = new Map(edit.assets.map((asset) => [asset.id, asset]))
-  return edit.clips.filter(
-    (clip) =>
-      clip.volume > 0 && !tracks.get(clip.trackId)?.muted && assets.get(clip.assetId)?.hasAudio
-  )
+  return edit.clips.filter((clip) => {
+    const track = tracks.get(clip.trackId)
+    return (
+      clip.volume > 0 &&
+      !track?.muted &&
+      (track?.volume ?? 1) > 0 &&
+      (assets.get(clip.assetId)?.hasAudio ?? false)
+    )
+  })
 }
 
 /** Small time windows bound both decoder count and delay-line memory. */
@@ -133,8 +138,11 @@ export async function renderVideoEditAudio(
           const fadeOut = clip.fadeOut
             ? `min(1,max(0,(${clip.duration - local}-t)/${clip.fadeOut}))`
             : '1'
+          // The track fader scales every clip on it, so raising speech or pulling
+          // music down is one number rather than a pass over each segment.
+          const trackGain = edit.tracks.find((track) => track.id === clip.trackId)?.volume ?? 1
           chain.push(
-            `volume='${clip.volume}*${fadeIn}*${fadeOut}':eval=frame`,
+            `volume='${clip.volume * trackGain}*${fadeIn}*${fadeOut}':eval=frame`,
             `adelay=${Math.round((from - begin) * 1000)}:all=1`
           )
           filters.push(`[${input}:a]${chain.join(',')}[a${input}]`)

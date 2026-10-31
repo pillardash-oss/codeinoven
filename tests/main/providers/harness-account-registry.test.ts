@@ -83,3 +83,56 @@ describe('reconcileLegacy mirrors the harness-active credential', () => {
     expect(rows[0].isDefault).toBeUndefined()
   })
 })
+
+describe('resolveForProvider honours a managed account by its reserve id', () => {
+  /**
+   * A managed account keeps the `pending-<uuid>` id of the reserve it was
+   * created from, so the id prefix says nothing about whether the account
+   * still exists. Reading it as a dead placeholder made the resolver fall back
+   * to the provider default, which dispatched every switched thread on the
+   * account the user had just moved away from   a limit that belonged to the
+   * retired account then kept arriving from the new one.
+   */
+  let selectedId = ''
+  let retiredId = ''
+
+  beforeAll(async () => {
+    const first = await registry.prepare('pi', 'opencode-go')
+    const second = await registry.prepare('pi', 'opencode-go')
+    await registry.finalizePending(first.id, 'opencode-go', 'OpenCode Go', 'Go One')
+    await registry.finalizePending(second.id, 'opencode-go', 'OpenCode Go', 'Go Two')
+    selectedId = second.id
+    retiredId = first.id
+    await registry.setDefault(first.id)
+  })
+
+  it('answers with the selected account instead of the default', async () => {
+    const resolved = await registry.resolveForProvider('pi', 'opencode-go', selectedId)
+
+    expect(resolved.id).toBe(selectedId)
+    expect(resolved.isDefault).toBeUndefined()
+  })
+
+  it('still answers with the default when no selection is named', async () => {
+    const resolved = await registry.resolveForProvider('pi', 'opencode-go', undefined)
+
+    expect(resolved.id).toBe(retiredId)
+  })
+
+  it('treats a reserve that never finalized as no selection', async () => {
+    const dead = await registry.prepare('pi', 'opencode-go')
+    const resolved = await registry.resolveForProvider('pi', 'opencode-go', dead.id)
+
+    expect(resolved.id).toBe(retiredId)
+  })
+
+  it('knows a listed managed account is resolvable, and a dead reserve is not', async () => {
+    const dead = await registry.prepare('pi', 'opencode-go')
+
+    expect(await registry.isResolvableAccountId(selectedId)).toBe(true)
+    expect(await registry.isResolvableAccountId(dead.id)).toBe(true)
+    await registry.cancelPending(dead.id)
+    expect(await registry.isResolvableAccountId(dead.id)).toBe(false)
+    expect(await registry.isResolvableAccountId('pi.default')).toBe(true)
+  })
+})

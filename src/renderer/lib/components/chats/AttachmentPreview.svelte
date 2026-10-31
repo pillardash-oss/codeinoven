@@ -7,8 +7,10 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
+  import AudioPlayer from '../ui/AudioPlayer.svelte'
+  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
@@ -350,7 +352,7 @@
     >
       <div
         role="presentation"
-        class="relative flex h-full min-h-0 w-full flex-col items-center"
+        class="relative flex h-full min-h-0 w-full flex-col items-center justify-center"
         onclick={(e: MouseEvent) => e.stopPropagation()}
       >
         {#if kind === 'image' && src}
@@ -378,11 +380,11 @@
             />
           </div>
         {:else if kind === 'video' && src}
-          <video {src} controls preload="metadata" class="min-h-0 w-full flex-1 object-contain">
-            <track kind="captions" />
-          </video>
+          <!-- The app's own player: this surface is the fullscreen view, so it
+               offers no fullscreen action of its own. -->
+          <VideoPlayer {src} label={filename} fit="fill" />
         {:else if kind === 'audio' && src}
-          <audio {src} controls preload="metadata" class="w-full max-w-xl"></audio>
+          <AudioPlayer {src} label={filename} class="w-full max-w-xl" />
         {:else if kind === 'pdf' && src}
           <iframe {src} class="min-h-0 w-full flex-1 border-0" title={`Preview ${filename}`}
           ></iframe>
@@ -403,7 +405,7 @@
           </div>
         {:else if kind === 'markdown' && text !== undefined}
           <div class="flex min-h-0 w-full flex-1 flex-col overflow-auto bg-surface p-4 shadow-2xl">
-            <MarkdownView {text} class="text-sm text-foreground" />
+            <DeferredMarkdownView {text} class="text-sm text-foreground" />
           </div>
         {:else if kind === 'text' && text !== undefined}
           <pre

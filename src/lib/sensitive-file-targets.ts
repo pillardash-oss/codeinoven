@@ -312,7 +312,36 @@ export function sensitiveFileTargets(
             '--max-depth',
             '--max-columns',
             '-j',
-            '--threads'
+            '--threads',
+            // `find` and `ls` predicates describe what to look for, not a file
+            // this command opens: `find . -name x -path "*pix*"` reads no
+            // secret, and its globs are not operands.
+            '-name',
+            '-iname',
+            '-lname',
+            '-ilname',
+            '-path',
+            '-ipath',
+            '-wholename',
+            '-iwholename',
+            '-regex',
+            '-iregex',
+            '-newer',
+            '-newermt',
+            '-newerat',
+            '-mtime',
+            '-mmin',
+            '-atime',
+            '-amin',
+            '-ctime',
+            '-cmin',
+            '-size',
+            '-perm',
+            '-user',
+            '-group',
+            '-fstype',
+            '-mindepth',
+            '-printf'
           ].includes(token)
         )
           skipOptionValue = true

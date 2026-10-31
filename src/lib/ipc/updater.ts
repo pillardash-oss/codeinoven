@@ -2,6 +2,7 @@
  * Compile-time contract for every renderer-invokable main-process operation.
  * Runtime handlers still validate untrusted values at the IPC boundary.
  */
+import type { BrowserDownload } from './browser'
 import type { CloseConfirmationProject } from './notifications'
 
 export interface UpdaterStatus {
@@ -65,4 +66,28 @@ export interface UpdateBlockers {
   projects: CloseConfirmationProject[]
   /** Live terminal sessions, oldest first. */
   terminals: UpdateBlockerTerminal[]
+  /**
+   * Browser downloads in flight, oldest first.
+   *
+   * The unattended install waits for these instead of quitting through a
+   * download, because a quit stops the transfer. They are still listed in the
+   * force-install modal: an install the user asks for pauses every one of them
+   * and keeps the bytes already received, so the next launch continues where
+   * they stopped.
+   */
+  downloads: BrowserDownload[]
+}
+
+/**
+ * What a pending install is still waiting on, pushed on every deferred decision.
+ *
+ * Both halves are reported separately: the rail and Settings name what is
+ * actually holding the install back, and "waiting for a download" reads very
+ * differently from "waiting for a working thread".
+ */
+export interface UpdaterWaitingWork {
+  /** Working sessions and live terminal processes. */
+  threads: number
+  /** Browser downloads whose bytes are still arriving. */
+  downloads: number
 }

@@ -36,7 +36,7 @@ export function isAtLatest(extents: ScrollExtents): boolean {
   )
 }
 
-/** Whether a content resize may move the viewport. A detached reader  
+/** Whether a content resize may move the viewport. A detached reader
  *  someone who scrolled up to read history   is never fought: their viewport
  *  stays exactly where they put it while new content arrives. */
 export function mayReanchorToLatest(detached: boolean): boolean {

@@ -30,6 +30,7 @@
  */
 
 import { piCoreToolsExtension } from './pi-core-tools-extension'
+import { piBaseToolsExtension } from './pi-base-tools-extension'
 import { piCompactionExtension } from './pi-compaction-extension'
 import { piCodemodeExtension } from './pi-codemode-extension'
 import { piStatusExtension } from './pi-status-extension'
@@ -88,6 +89,9 @@ export interface CioCoreToolsExtensionOptions {
    *  files the snapshot points at, to rebuild a checkpoint when the transcript
    *  cannot be summarized. */
   compactionContextPath: string
+  /** The session's working directory. The built-in-tool override rebuilds pi's
+   *  own tool definitions, which resolve every path against it. */
+  sessionCwd: string
   /** Distilled project-and-app behavior contract injected into every spawned
    *  worker's prompt. A worker is a nested session with its own resource
    *  loader, so the extension's `before_agent_start` hook never runs for it and
@@ -181,6 +185,10 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
     {
+      factory: '__cioBaseToolsExtension',
+      source: piBaseToolsExtension()
+    },
+    {
       // The gateway calls carry every MCP server this app exposes, so the
       // session needs a script surface whether or not any server exists.
       factory: '__cioCodemodeExtension',
@@ -216,6 +224,7 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   // introduced and this invocation fixed).
   __cioStatusExtension()(pi)
   __cioUsageExtension()(pi)
+__CIO_INTERACTIVE_TOOLS__  __cioBaseToolsExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioGatewayExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioCodemodeExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioCoreToolsExtension()(pi)
@@ -245,6 +254,9 @@ __CIO_STRIP_BUILTINS__  })
         '__CIO_SUBAGENT_WATCH_PATH__',
         JSON.stringify(options.subagentWatchPath).slice(1, -1)
       )
+      // Inserted as a complete JSON string literal (its own quotes included),
+      // so a path with a quote in it cannot break the generated source.
+      .replace('__CIO_SESSION_CWD__', () => JSON.stringify(options.sessionCwd))
       // Inserted as a complete JSON string literal (its own quotes included),
       // so no character in the contract can terminate the generated source.
       .replace('__CIO_WORKER_CONTRACT_LITERAL__', () =>

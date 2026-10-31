@@ -5,6 +5,7 @@ import { installRendererErrorCapture } from './lib/system/renderer-logger'
 import { installNotificationSound } from './lib/notification-sound'
 import { scheduleDeferredWork } from './lib/deferred-work'
 import { preloadSpotlightChunk } from './lib/page-preload'
+import { preloadRestoredThreadConversation } from './lib/stores/thread-preload'
 import { warmOverlayHostOnFirstGesture } from './lib/overlay-host-warm'
 
 // Capture renderer JS errors (uncaught exceptions, unhandled rejections, and
@@ -23,6 +24,14 @@ installRendererErrorCapture()
  */
 const unsubscribeFromNotificationSound = installNotificationSound()
 window.addEventListener('beforeunload', unsubscribeFromNotificationSound, { once: true })
+
+// The thread this launch restores is the first thing the user looks at, and its
+// transcript is one IPC read the main process can answer immediately. Start it
+// here, before the app mounts: the read then overlaps the whole hydration pass
+// (project and thread lists, sidebar, chrome) instead of beginning only once the
+// workspace has resolved the saved row and opened it, which is what left the
+// conversation blank for the first moments of a launch.
+preloadRestoredThreadConversation()
 
 const app = mount(App, {
   target: document.getElementById('app')!

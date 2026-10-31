@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createTestDb, destroyTestDb } from './test-helper'
 import type { Database } from '../../../src/main/database/database'
+import { versionTwoMigration } from '../../../src/main/database/migrations/v002'
 import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import { sanitizeThreadSettings } from '../../../src/lib/types'
 
-function seedThread(
-  db: Database,
-  threadId: string,
-  settingsJson: string
-): void {
+function seedThread(db: Database, threadId: string, settingsJson: string): void {
   db.run(
     `INSERT OR IGNORE INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
      VALUES('p', 'Project', '/p', 'local', 'openai', 'default', 70, 'manual', 1, 1)`
@@ -75,7 +72,7 @@ describe('legacy engineeringMode flag scrub', () => {
       )
       seedThread(db, 't-malformed', '{not json')
 
-      db.migrateThreadSettingsLegacyEngineeringFlag()
+      versionTwoMigration.apply(db.raw())
 
       expect(settingsOf(db, 't-legacy')).not.toContain('engineeringMode')
       expect(JSON.parse(settingsOf(db, 't-legacy') ?? '{}')).toMatchObject({
@@ -113,10 +110,10 @@ describe('legacy engineeringMode flag scrub', () => {
           engineeringMode: false
         })
       )
-      db.migrateThreadSettingsLegacyEngineeringFlag()
+      versionTwoMigration.apply(db.raw())
       const once = settingsOf(db, 't-legacy')
       expect(once).not.toContain('engineeringMode')
-      db.migrateThreadSettingsLegacyEngineeringFlag()
+      versionTwoMigration.apply(db.raw())
       expect(settingsOf(db, 't-legacy')).toEqual(once)
     } finally {
       destroyTestDb(db)

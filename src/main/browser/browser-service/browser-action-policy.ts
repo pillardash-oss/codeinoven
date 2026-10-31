@@ -53,8 +53,44 @@ export function reviewBrowserAction(
     risk,
     reason
   })
-  if (operation === 'viewport' || operation === 'reload') {
-    return allow('Assistant browser presentation or reload action.')
+  if (operation === 'viewport' || operation === 'reload' || operation === 'scroll') {
+    return allow('Assistant browser presentation, reload, or scroll action.')
+  }
+  if (operation === 'mouse') {
+    const action = typeof input.action === 'string' ? input.action : ''
+    // Moving or hovering commits nothing: it is how a menu is opened and how a
+    // page's hover state is read, and it can be undone by moving away.
+    if (action === 'move' || action === 'hover' || action === 'wheel') {
+      return allow('Pointer movement without a press.')
+    }
+    if (!target) return ask('The control under the pointer could not be inspected.')
+    return reviewBrowserAction('click', input, target)
+  }
+  if (operation === 'drag') {
+    // A drag commits only through the control it ends on (a slider, a sortable
+    // list, a canvas), so it is the same question a click on that control asks.
+    if (!target) return ask('The control a drag would end on could not be inspected.')
+    return reviewBrowserAction('click', input, target)
+  }
+  if (operation === 'press') {
+    const key = typeof input.key === 'string' ? input.key.trim().toLowerCase() : ''
+    const navigation =
+      /^(?:tab|escape|esc|up|down|left|right|arrowup|arrowdown|arrowleft|arrowright|pageup|pagedown|home|end)$/u.test(
+        key
+      )
+    // A caret or navigation key commits nothing on its own: the field it acts in
+    // was already reviewed when it was focused.
+    if (navigation) return allow('A caret or navigation key with no commit of its own.')
+    const searchTarget =
+      target !== null &&
+      (target.type === 'search' ||
+        target.role === 'searchbox' ||
+        /^(?:q|query|search|search_query)$/iu.test(target.name))
+    if (key === 'enter' && searchTarget) return allow('Submit a search query.')
+    return ask(`Pressing "${key || 'this key'}" may submit a form or change data.`, 'high')
+  }
+  if (operation === 'evaluate') {
+    return ask('Running an expression in the page can do anything the page can do.', 'high')
   }
   if (operation === 'navigate') {
     return typeof input.url === 'string' && browsingUrl(input.url)
@@ -79,6 +115,11 @@ export function reviewBrowserAction(
       searchField
       ? allow('Enter a search query without submitting a consequential form.')
       : ask('Editing this field may autosave or transmit data.')
+  }
+  if (operation === 'select' || operation === 'check') {
+    return sensitive.test(`${description} ${target.type}`) || consequential.test(description)
+      ? ask('Changing this control may change saved data.', 'high')
+      : allow('Choose an option in an ordinary form control.')
   }
   if (operation === 'click') {
     if (target.tag === 'a' && !target.download && browsingUrl(target.href))

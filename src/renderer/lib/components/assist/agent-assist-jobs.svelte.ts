@@ -203,7 +203,11 @@ class AgentAssistJobs {
           : part.state.status === 'error' || part.state.status === 'aborted'
             ? 'failed'
             : 'active'
-      const step = { id: part.callID, label: (part.state.title || part.tool).slice(0, 180), state }
+      const step = {
+        id: part.callID,
+        label: (part.state.title || part.actionLabel || part.tool).slice(0, 180),
+        state
+      }
       const tools = job.tools.filter((tool) => tool.id !== step.id)
       this.patch(job.id, {
         stage: 'agent',

@@ -37,6 +37,7 @@ import { WebContentsView, type WebContents } from 'electron'
 import type { BrowserPopupWindow, BrowserViewBounds } from '../../../lib/ipc-contract'
 import { fetchIconAsDataUrl } from '../../editor/favicon-service'
 import { Logger } from '../../system/logger'
+import { measureExtensionPopupSize } from '../extensions/browser-extension-popup-size'
 import { applyBrowserPageBackground } from './browser-page-background'
 import type { BrowserPageOwner, BrowserViewport } from './browser-types'
 
@@ -50,6 +51,16 @@ export interface BrowserPopupWindowRecord {
   /** The box the owning tab lives in. A popup keeps its opener's jar, so this is
    *  carried rather than re-derived from the context. */
   boxId: string | null
+  /**
+   * Whether this is a window the user moved out of the tab strip rather than one a
+   * page opened.
+   *
+   * A moved page has no opener, so it is not the tab's to end: it outlives the tab it
+   * came from (see `closeForTab`), and its menu offers the move back into the strip.
+   * Everything else about it   its page, its jar, how the rail places it, how it is
+   * closed   is a popup's, which is why it is hosted as one.
+   */
+  side: boolean
   /**
    * The extension whose own popup this is, or null when a page opened it with
    * `window.open`.
@@ -77,6 +88,17 @@ export interface BrowserPopupWindowRecord {
   /** The size the page asked for when it opened, used while it has never been
    *  displayed and so has no frame of its own yet. */
   requestedViewport: BrowserViewport
+  /**
+   * The frame an extension's own popup wants, measured from its document once it
+   * has laid out, or null while it has not been measured.
+   *
+   * A page's `window.open` states its size and `requestedViewport` carries it; an
+   * extension's action popup states nothing, because in a browser the toolbar
+   * measures its content. This is that measurement, so a chrome with no rail to
+   * fill (the thread browser's dropdown) can draw the popup at the size its author
+   * designed for instead of guessing one.
+   */
+  preferredViewport: BrowserViewport | null
 }
 
 /** Everything the registry needs from the service that owns the window. */
@@ -170,6 +192,12 @@ export class BrowserPopupWindows {
     contents: WebContents,
     context: { owner: BrowserPageOwner; url: string; viewport: BrowserViewport | null }
   ): WebContents {
+    // A page is hosted once. Handing the same `WebContents` to `track` twice adds
+    // a second listener for every event it follows, and Electron reports the pile
+    // up as a listener leak once enough popups ride one page. Chromium can report
+    // one popup's contents more than once (a document that opens another window
+    // in place), so the page is the identity here, not the call.
+    if (this.recordForContents(contents.id)) return contents
     const record: BrowserPopupWindowRecord = {
       id: `popup:${crypto.randomUUID()}`,
       tabId: context.owner.tabId,
@@ -177,6 +205,7 @@ export class BrowserPopupWindows {
       threadId: context.owner.threadId,
       boxId: context.owner.boxId,
       extensionId: null,
+      side: false,
       view: this.viewFor(contents),
       url: context.url,
       title: contents.getTitle(),
@@ -187,7 +216,8 @@ export class BrowserPopupWindows {
       displayedBounds: null,
       requestedViewport: isUsableViewport(context.viewport)
         ? context.viewport
-        : { width: 480, height: 720 }
+        : { width: 480, height: 720 },
+      preferredViewport: null
     }
     this.popups.set(record.id, record)
     this.track(record)
@@ -219,6 +249,8 @@ export class BrowserPopupWindows {
     view: WebContentsView
     viewport: BrowserViewport | null
   }): string {
+    const already = this.recordForContents(context.view.webContents.id)
+    if (already) return already.id
     const record: BrowserPopupWindowRecord = {
       id: `popup:${crypto.randomUUID()}`,
       tabId: context.owner.tabId,
@@ -226,6 +258,7 @@ export class BrowserPopupWindows {
       threadId: context.owner.threadId,
       boxId: context.owner.boxId,
       extensionId: context.extensionId,
+      side: false,
       view: context.view,
       url: context.url,
       title: '',
@@ -236,19 +269,72 @@ export class BrowserPopupWindows {
       displayedBounds: null,
       requestedViewport: isUsableViewport(context.viewport)
         ? context.viewport
-        : { width: 480, height: 720 }
+        : { width: 480, height: 720 },
+      preferredViewport: null
     }
     // The extension's own document, so it gets its own surface the same way a
     // page does, and its title and favicon arrive through the usual tracking.
     applyBrowserPageBackground(record.view)
     this.popups.set(record.id, record)
     this.track(record)
+    this.measurePreferredViewport(record)
     this.viewHost.wire(record)
     this.viewHost.unmount(record.view, record.requestedViewport)
     Logger.dev('Browser extension popup opened', {
       popupId: record.id,
       tabId: record.tabId,
       extensionId: context.extensionId
+    })
+    this.viewHost.changed()
+    return record.id
+  }
+
+  /**
+   * Host a page the user moved from the strip into the rail.
+   *
+   * No page opened this one, so there is no `WebContents` to adopt: the caller
+   * creates a view in the jar the tab ran in and this takes it on the same terms as
+   * an extension's popup   parked offscreen until the rail places it, tracked while
+   * it runs, and removed when its page ends. It is marked `side`, which is what keeps
+   * it alive when the tab it came from closes.
+   */
+  hostSideWindow(context: {
+    owner: BrowserPageOwner
+    url: string
+    view: WebContentsView
+    viewport: BrowserViewport | null
+  }): string {
+    const already = this.recordForContents(context.view.webContents.id)
+    if (already) return already.id
+    const record: BrowserPopupWindowRecord = {
+      id: `popup:${crypto.randomUUID()}`,
+      tabId: context.owner.tabId,
+      projectId: context.owner.projectId,
+      threadId: context.owner.threadId,
+      boxId: context.owner.boxId,
+      extensionId: null,
+      side: true,
+      view: context.view,
+      url: context.url,
+      title: '',
+      favicon: null,
+      loading: true,
+      activationSequence: 0,
+      hidden: false,
+      displayedBounds: null,
+      requestedViewport: isUsableViewport(context.viewport)
+        ? context.viewport
+        : { width: 480, height: 720 },
+      preferredViewport: null
+    }
+    this.popups.set(record.id, record)
+    this.track(record)
+    this.viewHost.wire(record)
+    this.viewHost.unmount(record.view, record.requestedViewport)
+    Logger.dev('Browser tab moved to the side panel', {
+      popupId: record.id,
+      tabId: record.tabId,
+      url: record.url
     })
     this.viewHost.changed()
     return record.id
@@ -269,7 +355,8 @@ export class BrowserPopupWindows {
         favicon: record.favicon,
         loading: record.loading,
         activationSequence: record.activationSequence,
-        extensionId: record.extensionId
+        extensionId: record.extensionId,
+        preferredViewport: record.preferredViewport
       })
     }
     return popups
@@ -486,6 +573,15 @@ export class BrowserPopupWindows {
     this.forget(id)
   }
 
+  /** How many pages the user has moved into the rail, for the cap on moving one. */
+  countSideWindows(): number {
+    let count = 0
+    for (const record of this.popups.values()) {
+      if (record.side) count += 1
+    }
+    return count
+  }
+
   /** Hide retained extension popups and close page popups when a tab goes away. */
   closeForTab(tabId: string, reason: string): void {
     for (const record of [...this.popups.values()]) {
@@ -494,6 +590,9 @@ export class BrowserPopupWindows {
         this.dismiss(record.id)
         continue
       }
+      // A page the user moved into the rail is not the tab's to end: the tab is
+      // leaving the strip precisely because its page now lives beside it.
+      if (record.side) continue
       this.close(record.id, reason)
     }
   }
@@ -594,6 +693,46 @@ export class BrowserPopupWindows {
     if (this.displayedId === id) this.displayedId = null
     this.viewHost.discard(record.view)
     this.viewHost.changed()
+  }
+
+  /**
+   * Learn how large an extension's own popup wants to be, and publish it.
+   *
+   * The document is measured when it finishes loading and once more shortly after,
+   * because an extension that draws its layout from script (an unlocked vault, a
+   * list it filled in after start) settles a frame or two later than the load
+   * event. A measurement that matches the published one changes nothing, so a page
+   * that reports the same size twice costs one comparison and no re-render.
+   */
+  private measurePreferredViewport(record: BrowserPopupWindowRecord): void {
+    const measure = (): void => {
+      const page = pageOf(record)
+      if (!page || page.isDestroyed() || !this.popups.has(record.id)) return
+      void measureExtensionPopupSize(page)
+        .then((size) => {
+          if (!size) return
+          if (!this.popups.has(record.id) || pageOf(record) !== page) return
+          const current = record.preferredViewport
+          if (current && current.width === size.width && current.height === size.height) return
+          record.preferredViewport = size
+          this.viewHost.changed()
+        })
+        .catch((error: unknown) => {
+          Logger.dev('An extension popup size could not be measured:', error)
+        })
+    }
+    const contents = record.view.webContents
+    contents.on('did-finish-load', measure)
+    contents.on('did-stop-loading', () => {
+      measure()
+      // The late layout an extension does after its own start is what makes a
+      // second look worth taking; the timer is dropped with the page.
+      const timer = setTimeout(() => {
+        if (pageOf(record) !== contents || contents.isDestroyed()) return
+        measure()
+      }, 300)
+      timer.unref()
+    })
   }
 
   /**

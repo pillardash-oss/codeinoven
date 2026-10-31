@@ -13,6 +13,7 @@
 
 import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
+import { appfileProjectFilesGate, scopedPathResolverGate, settleAppfileGates } from './boot-gate'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { appResourcesRoot, isShippedBuild } from './app-resources'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
@@ -89,13 +90,29 @@ async function attachBrowserService(
   const { state, storage, database, designService } = context
   const chatEngine = state.chatEngine
   if (!chatEngine) return
+  // The previous window's tabs are about to lose their views, so their stacks
+  // are committed first. This await is what makes the write survive: `dispose()`
+  // closes the views and nothing would be left to read a stack from afterwards.
+  //
+  // The old service is detached and then torn down defensively. A teardown that
+  // throws (a page that already destroyed its own view, a view whose contents are
+  // gone) used to abort this attach entirely, leaving the dead window's service
+  // installed: every later preview, browser call and design open then reached a
+  // destroyed window and the app answered `Object has been destroyed`. Nothing
+  // about an old window may stand between the user and a working new one.
   if (state.browserService) {
-    // The previous window's tabs are about to lose their views, so their stacks
-    // are committed first. This await is what makes the write survive: `dispose()`
-    // closes the views and nothing would be left to read a stack from afterwards.
-    await state.browserService.flushTabHistory()
-    state.browserService.dispose()
+    const previous = state.browserService
     state.browserService = null
+    try {
+      await previous.flushTabHistory()
+    } catch (error) {
+      Logger.error('Browser tab history could not be committed before reattach:', error)
+    }
+    try {
+      previous.dispose()
+    } catch (error) {
+      Logger.error('The previous window\u2019s browser could not be torn down:', error)
+    }
   }
   // The download manager is deliberately *not* created per window. Downloads
   // belong to their project's session and keep running while no window shows
@@ -110,6 +127,13 @@ async function attachBrowserService(
   await state.browserDownloads.hydrate()
   const service = new BrowserService(window, database, storage, state.browserDownloads)
   state.browserService = service
+  // Whoever destroys the window, the service stops being this app's browser for
+  // it. The park path detaches first and this then finds nothing to do; a window
+  // that goes away on any other route would otherwise leave a service behind, and
+  // the next click that reached it would be answered with a destroyed object.
+  window.once('closed', () => {
+    if (state.browserService === service) state.browserService = null
+  })
   // Remembered permission decisions load before the service accepts browser
   // IPC, so a site is never re-prompted for a permission the user already
   // granted in this or an earlier run.
@@ -269,6 +293,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createThreadWorkspaceRoots(storage, database)
   )
   state.appfileProjectFiles = projectFilesService
+  // The preview protocol was installed before the window loaded and awaits this
+  // publish, so a preview requested during the boot is served instead of lost.
+  appfileProjectFilesGate.publish(projectFilesService)
   // CIO Cleanup resolves the same roots the app boots a session in, and reports
   // into the app-root dock exactly like the other background jobs do.
   state.cioCleanup = new CioCleanupService({
@@ -673,6 +700,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     for (const window of BrowserWindow.getAllWindows())
       sendToRenderer(window.webContents, 'design:historyChanged', projectId, directory)
   }
+  const announceWorkGroups = (
+    projectId: string,
+    kind: 'design' | 'video',
+    updatedAt: number
+  ): void => {
+    for (const window of BrowserWindow.getAllWindows())
+      sendToRenderer(window.webContents, 'design:workGroupsChanged', projectId, kind, updatedAt)
+  }
   const designService = new DesignService({
     database,
     onHistoryChanged: announceHistoryChanged,
@@ -680,6 +715,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       for (const window of BrowserWindow.getAllWindows())
         sendToRenderer(window.webContents, 'design:relocated', projectId, moves)
     },
+    // The grouping is a shared record rather than one window's preference, so the
+    // board in every window hears about a drop, a rename or a fold as it happens.
+    onWorkGroupsChanged: announceWorkGroups,
     // The agent can open a design or video session by previewing into a work
     // root with no tag, so the row's authored-work markers have to reach the
     // renderer the same way the tag path's write does, in real time.
@@ -691,6 +729,51 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.designService = designService
   designService.registerIpc()
   void designService.reconcileHistory()
+  // How one design's screens are grouped and ordered, plus the cards/list reading
+  // every design board shares. Kept beside the design service because it is about
+  // the same folders, and announced so two windows never disagree about the
+  // arrangement the user made.
+  const { ScreenBoardService } = await import('../design/screen-board-service')
+  const screenBoards = new ScreenBoardService({
+    storage,
+    onChanged: (projectId, directory, updatedAt) => {
+      for (const window of BrowserWindow.getAllWindows())
+        sendToRenderer(
+          window.webContents,
+          'design:screenBoardChanged',
+          projectId,
+          directory,
+          updatedAt
+        )
+    }
+  })
+  ipcMain.handle('design:screenBoard', (_event, projectId, directory) =>
+    screenBoards.state(projectId, directory)
+  )
+  ipcMain.handle('design:screenBoardView', (_event, view) => screenBoards.setView(view))
+  ipcMain.handle('design:screenBoardSort', (_event, projectId, directory, order) =>
+    screenBoards.setOrder(projectId, directory, order)
+  )
+  ipcMain.handle('design:screenBoardCreateGroup', (_event, projectId, directory, name) =>
+    screenBoards.createGroup(projectId, directory, name)
+  )
+  ipcMain.handle('design:screenBoardRenameGroup', (_event, projectId, directory, groupId, name) =>
+    screenBoards.renameGroup(projectId, directory, groupId, name)
+  )
+  ipcMain.handle('design:screenBoardRemoveGroup', (_event, projectId, directory, groupId) =>
+    screenBoards.removeGroup(projectId, directory, groupId)
+  )
+  ipcMain.handle('design:screenBoardReorderGroups', (_event, projectId, directory, groupIds) =>
+    screenBoards.reorderGroups(projectId, directory, groupIds)
+  )
+  ipcMain.handle(
+    'design:screenBoardCollapseGroup',
+    (_event, projectId, directory, groupId, collapsed) =>
+      screenBoards.setCollapsed(projectId, directory, groupId, collapsed)
+  )
+  ipcMain.handle('design:screenBoardPlace', (_event, projectId, directory, groupId, entries) =>
+    screenBoards.place(projectId, directory, groupId, entries)
+  )
   // What each thread decided about the experts its design or video session may
   // delegate to. One service answers it, because the playbook that names the
   // experts and the `delegate` operation that would run one have to agree: a
@@ -723,7 +806,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       checkpoint: (projectId, threadId, input) =>
         designService.checkpoint(projectId, threadId, input, 'design'),
       browser: () => state.browserService,
-      record: (input) => designService.recordPreview(input)
+      record: (input) => designService.recordPreview(input),
+      announceWorkGroups
     })
   )
   // Generation services answer with a link and those links expire, so the design
@@ -856,7 +940,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     speechService: state.speechService ?? undefined,
     utilityFootprint,
     onScopedPathResolver: (resolve) => {
+      // Published here so the `appfile://` preview protocol authorizes a path
+      // exactly the way privileged IPC does, against the same grants, and the
+      // gate releases any preview that was waiting on it.
       state.appfileScopedPathResolver = resolve
+      scopedPathResolverGate.publish(resolve)
     }
   })
   state.chatEngine.register()
@@ -1028,12 +1116,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
+    const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
     registerBaseUrlProviderIpc(storage)
+    // Local servers never touch the provider registry: a custom base-URL
+    // provider is the user's to create, and starting or stopping a server here
+    // must leave it exactly as it was.
+    registerLlamaCppIpc()
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,
@@ -1057,6 +1150,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     if (state.quitCleanupStarted) throw new Error('Feature startup was cancelled during shutdown')
     state.featuresReady = true
+    // Anything the boot did not publish will never be published, so a preview
+    // waiting for it is answered now instead of waiting for nothing.
+    settleAppfileGates()
     startupTelemetry.mark('features:ready')
     // The lean-agent merge is maintenance, not first interaction: it shells out
     // for the installed version and rewrites the machine-wide opencode config, so

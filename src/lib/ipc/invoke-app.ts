@@ -13,6 +13,7 @@ import type { NativeFloatingPanelBounds } from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
+import type { LlamaCppProbeResult, LlamaCppRuntimeStatus } from '../llama-cpp'
 
 /** One file the user explicitly chooses to save from the renderer. */
 export interface SaveFileInput {
@@ -47,6 +48,12 @@ export const invokeAppContract = {
     [role: AgentRole, selection: AgentModelSelection],
     AppConfig
   >,
+  /** The `llama-server` the app can launch here, its version and its installer. */
+  'llamaCpp:detect': {} as Contract<[], LlamaCppRuntimeStatus>,
+  /** Ask a started server for its loaded model ids, which is what readiness means. */
+  'llamaCpp:probe': {} as Contract<[host: string, port: number], LlamaCppProbeResult>,
+  /** Pick a local `.gguf` file; the row references it where it lives. */
+  'llamaCpp:pickModel': {} as Contract<[], string | null>,
   'dialog:pickFolder': {} as Contract<[], string | null>,
   'dialog:pickCloneDestination': {} as Contract<[], string | null>,
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,
@@ -197,6 +204,19 @@ export const invokeAppContract = {
    * phases. Carries no payload.
    */
   'app:rendererReady': {} as Contract<[], void>,
+  /**
+   * Signalled once the first screen is on the glass: the restored conversation
+   * has painted, or the empty state has been decided. The splash is held for
+   * exactly this, so it carries no payload and is a no-op after the first call.
+   */
+  'app:conversationReady': {} as Contract<[readyMessages: number], void>,
+  /**
+   * The thread the renderer is showing, persisted so the next launch can warm
+   * its row and newest transcript page while the splash is still up.
+   */
+  'app:rememberThread': {} as Contract<[projectId: string, threadId: string], void>,
+  /** Drop the persisted selection (deliberate close, deletion, or no thread). */
+  'app:forgetThread': {} as Contract<[], void>,
   /**
    * Renderer forwards its own captured errors (uncaught exceptions, unhandled
    * rejections, console errors) to the main-process durable Logger. Fire and

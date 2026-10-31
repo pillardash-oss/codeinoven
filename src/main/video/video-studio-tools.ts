@@ -36,7 +36,7 @@ export function videoStudioTools(): McpTool[] {
   const tools: McpTool[] = [
     tool(
       'editor',
-      'Open/read a source-preserving editable timeline, import local media into assets/, or apply up to 64 incremental commands at the saved revision. Read first. action:read enables legacy cut-map conversion with Undo history. action:apply requires revision and operations. Commands: addTrack{name,trackKind:video|audio|caption|overlay}, addClip{assetId,trackId,start,duration?}, split{id,at}, trim{id,edge:start|end,at}, move{id,start,trackId?}, remove{id,ripple?}, patchClip{id,patch}, addRegion{region:{start,duration,x,y,width,height,kind:blur|pixelate|cover,amount,color}}, removeRegion{id}, review{id?}. Clips carry sourceStart, speed, volume, opacity, normalized rect/crop, grade{exposure,contrast,saturation,temperature,hue}, audio{highpass,lowpass,deess,compression,pan}, fadeIn/fadeOut, transition{kind:none|dissolve|fade|slide|zoom,duration}. Original assets are never deleted. Unreviewed agent saves are marked by changed time range. action:import accepts composition-relative sources and returns assets; use addClip to place them.',
+      'Open/read a source-preserving editable timeline, import local media into assets/, or apply up to 64 incremental commands at the saved revision. Read first. action:read enables legacy cut-map conversion with Undo history. action:apply requires revision and operations. Commands: addTrack{name,trackKind:video|audio|caption|overlay}, addClip{assetId,trackId,start,duration?,sourceStart?,speed?}, replaceClips{trackId,assetId,clips:[{start,duration,sourceStart,speed?}],duration?} to rebuild one track from up to 800 segments in a single call, split{id,at}, trim{id,edge:start|end,at}, move{id,start,trackId?}, remove{id,ripple?}, patchClip{id,patch} where patch carries clip fields (start, duration, sourceStart, speed, volume, opacity, rect, crop, grade, audio, fadeIn/fadeOut, transition), setTrack{trackId,volume?,muted?,hidden?,locked?,name?} for a track fader (volume 0-2, where 1 is the original own level) and its flags, addRegion{region:{start,duration,x,y,width,height,kind:blur|pixelate|cover,amount,color}}, removeRegion{id}, review{id?}. Tracks carry volume (the mix fader for everything on them) beside name, kind, locked, muted and hidden. Clips carry sourceStart, speed, volume, opacity, normalized rect/crop, grade{exposure,contrast,saturation,temperature,hue}, audio{highpass,lowpass,deess,compression,pan}, fadeIn/fadeOut, transition{kind:none|dissolve|fade|slide|zoom,duration}. Original assets are never deleted. Unreviewed agent saves are marked by changed time range. action:import accepts composition-relative sources and returns assets; use addClip or replaceClips to place them. studio.json, composition.json and the composition page are app-owned: never write them with a script. An asset records the media identity and length the app measured from the file, so never retype them; a timeline built from a cut map goes through replaceClips, and the returned document is the truth to re-read afterwards.',
       {
         directory,
         action: { type: 'string', enum: ['read', 'apply', 'import'] },
@@ -53,6 +53,7 @@ export function videoStudioTools(): McpTool[] {
                 enum: [
                   'addTrack',
                   'addClip',
+                  'replaceClips',
                   'split',
                   'trim',
                   'move',
@@ -117,7 +118,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'export',
-      'Use only when the user explicitly requests an export or downloadable video file. The default deliverable is an editable composition and live preview; do not export automatically after creation, edits or critique. Export index.html and composition.json to MP4 with mixed audio, through a dedicated hidden renderer. Supports up to 4K pixel count. The renderer encodes H.264 for the canvas the composition names with CIOVideo.useCanvas, at the manifest size; a composition without that canvas falls back to capturing the window frame by frame. Await media seeks in cioRenderFrame.' +
+      'Export a composition to a playable MP4. The default deliverable is an editable composition and live preview, so do not export automatically after creation, edits or critique. Export when the user asks for an export or downloadable file, and when the user asked for something to watch, such as a walkthrough or recap of finished work: that request is the export request, so export once and then render the MP4 inline with the artifact capability instead of handing back a project to edit. Export index.html and composition.json to MP4 with mixed audio, through a dedicated hidden renderer. Supports up to 4K pixel count. The renderer encodes H.264 for the canvas the composition names with CIOVideo.useCanvas, at the manifest size; a composition without that canvas falls back to capturing the window frame by frame. Await media seeks in cioRenderFrame.' +
         jobNote,
       { directory },
       ['directory']
@@ -151,7 +152,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'studio',
-      'Read or atomically update studio.json. Read first and send its revision with document to avoid overwriting concurrent user edits. Preserve existing edit and appearance fields. Fields: version:1, controls:[{key,label,kind:text|number|color|switch,value,min?,max?}], captions:[{text,start,end,words?:[{text,start,end}],appearance?}], captionStyle:none|plain|highlight|karaoke, captionAppearance?, audioTracks:[{source,start,trim,duration,gain}], edit?:source-preserving tracks/assets/clips/regions/changes. Times are seconds. Appearance includes normalized x/y/width, relative size, app font id, weight, color/background/backgroundOpacity. The shared runtime renders preview and export. Saves create history checkpoints.',
+      'Read or atomically update studio.json. Read first and send its revision with document to avoid overwriting concurrent user edits. Preserve existing edit and appearance fields. Fields: version:1, controls:[{key,label,kind:text|number|color|switch,value,min?,max?}], captions:[{text,start,end,words?:[{text,start,end}],appearance?,transition?}], captionStyle:none|plain|highlight|karaoke, captionTransition? (the default every caption uses), captionAppearance?, audioTracks:[{source,start,trim,duration,gain}], edit?:source-preserving tracks/assets/clips/regions/changes. Times are seconds. Appearance includes normalized x/y/width, relative size, app font id, weight, color/background/backgroundOpacity. A caption transition is {kind:cut|fade|rise,duration} - captions have their own arrivals, never a picture transition; a clip transition stays on picture clips only. The shared runtime renders preview and export. Saves create history checkpoints.',
       { directory, document: { type: 'object' }, revision: { type: 'string' } },
       ['directory']
     ),

@@ -30,7 +30,7 @@
 import type { ThreadTransferResult } from '../../lib/types'
 import { trustedIpcMain } from '../ipc/trusted-ipc-main'
 import { InstanceHandoffBus, instanceHandoffBus } from '../system/instance-handoff-bus'
-import type { HandoffRequest } from '../system/instance-handoff-bus'
+import type { HandoffReleaseDetails, HandoffRequest } from '../system/instance-handoff-bus'
 import { instanceRegistry } from '../system/instance-registry'
 import type { ThreadTransferLock } from '../system/thread-transfer-lock'
 import { Logger } from '../system/logger'
@@ -199,7 +199,16 @@ export class ThreadTransferService {
             reason: ack.reason ?? 'The instance running this thread did not hand it over.'
           }
         }
-        return await this.chatEngine.adoptTransferredThread(projectId, target.rootThreadId)
+        // What the departure handed over rides the verdict. A peer that has
+        // nothing to hand over (or an older peer that sends no details) keeps
+        // the plain adopt call, so the hand-off stays compatible both ways.
+        return ack.details
+          ? await this.chatEngine.adoptTransferredThread(
+              projectId,
+              target.rootThreadId,
+              ack.details
+            )
+          : await this.chatEngine.adoptTransferredThread(projectId, target.rootThreadId)
       } finally {
         if (this.locks && lock) {
           await this.locks.release(projectId, target.rootThreadId, 'adopt', lock)
@@ -337,7 +346,21 @@ export class ThreadTransferService {
         request.projectId,
         request.threadId
       )
-      await this.bus.respond(request, result.released ? 'accepted' : 'refused', result.reason)
+      // What the release stopped travels with the verdict: the adopting instance
+      // cannot read it from the shared rows once those workers are settled.
+      const details: HandoffReleaseDetails | undefined =
+        result.workers || result.pawnThreadIds
+          ? {
+              ...(result.workers ? { workers: result.workers } : {}),
+              ...(result.pawnThreadIds ? { pawnThreadIds: result.pawnThreadIds } : {})
+            }
+          : undefined
+      await this.bus.respond(
+        request,
+        result.released ? 'accepted' : 'refused',
+        result.reason,
+        details
+      )
     } catch (error) {
       Logger.error('Cross-instance thread release failed:', error)
       await this.bus.respond(

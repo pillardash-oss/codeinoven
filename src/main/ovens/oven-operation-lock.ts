@@ -23,7 +23,9 @@ function gateFor(key: string): HarnessGate {
 export function beginOvenHarnessRun(ovenId: string, command: string): () => void {
   const gate = gateFor(keyFor(ovenId, command))
   if (gate.mutationRequests > 0)
-    throw new Error('This harness is being updated on the Oven. Try starting the run again shortly.')
+    throw new Error(
+      'This harness is being updated on the Oven. Try starting the run again shortly.'
+    )
   gate.pendingStarts++
   let released = false
   return () => {
@@ -47,7 +49,10 @@ export async function withOvenHarnessMutation<T>(
   const queued = new Promise<void>((resolve) => {
     releaseQueue = resolve
   })
-  mutationQueues.set(key, previous.catch(() => undefined).then(() => queued))
+  mutationQueues.set(
+    key,
+    previous.catch(() => undefined).then(() => queued)
+  )
   await previous.catch(() => undefined)
 
   try {

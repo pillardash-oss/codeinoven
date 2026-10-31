@@ -1,7 +1,7 @@
 <script lang="ts">
   import CioFileQuestion from '@pdslng/cio-icon/CioFileQuestion.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import type { FilePreviewFlags } from './project-files-panel-preview'
@@ -35,7 +35,7 @@
 
 {#if flags.markdown}
   <div class="min-h-0 flex-1 overflow-auto px-4 py-3">
-    <MarkdownView text={visibleContent} class="text-sm text-foreground" />
+    <DeferredMarkdownView text={visibleContent} class="text-sm text-foreground" />
   </div>
 {:else if flags.html}
   <div class="min-h-0 flex-1 bg-surface">

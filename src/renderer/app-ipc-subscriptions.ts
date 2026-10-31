@@ -10,6 +10,7 @@ import {
   showToastWarning
 } from '$lib/stores/app-errors.svelte'
 import { clearDraftLabelCookie } from '$lib/stores/draft-label'
+import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
@@ -119,15 +120,27 @@ function showAgentNotification(
     !isWorkspaceCovered() &&
     workspaceState.selectedThread?.id === payload.threadId &&
     workspaceState.selectedThread?.projectId === payload.projectId
+  // A side chat is read only while its own panel is the one on screen: the
+  // thread being on screen is not enough, because the sidebar may be showing
+  // another tab, be closed, or hold the chat behind a panel the user walked
+  // away from. Anything short of that leaves the response unread.
+  const readingTemporaryChat =
+    !isWorkspaceCovered() &&
+    payload.temporaryChatId !== undefined &&
+    contextSidebarState.isTemporaryChatOnScreen(
+      payload.projectId,
+      payload.threadId,
+      payload.temporaryChatId
+    )
   if (
-    !onSelectedThread &&
+    !readingTemporaryChat &&
     payload.source === 'temporary-chat' &&
     payload.kind === 'chat-completed' &&
     payload.temporaryChatId
   ) {
-    // The side chat finished while the user is away from its thread: flag
-    // the parent thread's row so the response is discoverable from the
-    // thread list. Cleared when the side-chat panel is focused.
+    // The side chat finished while the user was not reading it: flag it so the
+    // response is discoverable from the thread list and the context rail's own
+    // icon. Cleared when the side-chat panel is focused.
     temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
   }
   if (onSelectedThread) {

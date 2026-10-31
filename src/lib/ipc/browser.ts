@@ -82,6 +82,18 @@ export interface BrowserPopupWindow {
    * the extension's own icon rather than a page title its page may never set.
    */
   extensionId: string | null
+  /**
+   * The size an extension's own popup asked for by laying its document out, in
+   * density-independent pixels, or null while it has not reported one.
+   *
+   * A browser sizes an action popup to its content and the extension decides that
+   * content's size, so nothing but a measurement can know it. The global browser
+   * fills its rail with the popup and ignores this; the thread browser's dropdown
+   * has no rail to fill, so it takes exactly this frame and the popup lands where
+   * its own author drew it. Null for a page's `window.open`, which states its size
+   * as the viewport it requested instead.
+   */
+  preferredViewport: { width: number; height: number } | null
 }
 
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */

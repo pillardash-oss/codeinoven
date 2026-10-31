@@ -9,6 +9,7 @@ import type {
 import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 import { uuidv7 } from '$shared/id'
 import { MAX_MARK_POINTS, type MarkPoint } from '$lib/annotation-marks'
+import { uniqueThreadContextReferences, type ThreadContextReference } from '$lib/thread-context'
 
 export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
@@ -31,6 +32,7 @@ export type SettingsSection =
   | 'ide-mode'
   | 'cloud-deployments'
   | 'ovens'
+  | 'local-ai'
   | 'archives'
   | 'about'
 
@@ -59,6 +61,7 @@ export type MainView =
   | 'settings-ide-mode'
   | 'settings-cloud-deployments'
   | 'settings-ovens'
+  | 'settings-local-ai'
   | 'settings-archives'
   | 'settings-about'
 
@@ -82,6 +85,9 @@ export interface ComposerDraftEntry {
   promptReferences: QueuedResponseReference[]
   /** Source threads the next message waits for before it starts. */
   startAfterThreads: StartAfterThreadReference[]
+  /** Conversations attached to the composer as context, which the agent is told
+   *  it may look up. */
+  threadReferences: ThreadContextReference[]
 }
 
 /**
@@ -190,6 +196,7 @@ export interface RecoveryStorage {
 
 const MAIN_VIEWS: readonly MainView[] = [
   'settings-ovens',
+  'settings-local-ai',
   'projects',
   'projects-scope',
   'chats',
@@ -231,6 +238,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'keymap',
   'ide-mode',
   'cloud-deployments',
+  'local-ai',
   'archives',
   'about'
 ]
@@ -495,6 +503,27 @@ function parseStartAfterThreads(value: unknown): StartAfterThreadReference[] {
   return references
 }
 
+function parseThreadContextReference(value: unknown): ThreadContextReference | null {
+  if (!isRecord(value)) return null
+  if (!isRecoveryIdentifier(value.projectId) || !isRecoveryIdentifier(value.threadId)) return null
+  return {
+    projectId: value.projectId,
+    threadId: value.threadId,
+    title: typeof value.title === 'string' && value.title.length > 0 ? value.title : 'Thread'
+  }
+}
+
+/** Parse attached conversations, dropping repeats of one thread. */
+export function parseThreadContextReferences(value: unknown): ThreadContextReference[] {
+  if (!Array.isArray(value)) return []
+  const references: ThreadContextReference[] = []
+  for (const item of value) {
+    const reference = parseThreadContextReference(item)
+    if (reference) references.push(reference)
+  }
+  return uniqueThreadContextReferences(references)
+}
+
 function parseFavoriteModels(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((s): s is string => typeof s === 'string' && s.length > 0)
@@ -523,13 +552,15 @@ export function parseComposerDraftEntry(value: unknown): ComposerDraftEntry | nu
     ? value.promptReferences.filter(isQueuedResponseReference)
     : []
   const startAfterThreads = parseStartAfterThreads(value.startAfterThreads)
+  const threadReferences = parseThreadContextReferences(value.threadReferences)
   return {
     text,
     attachments,
     projectReferences,
     taskReferences,
     promptReferences,
-    startAfterThreads
+    startAfterThreads,
+    threadReferences
   }
 }
 

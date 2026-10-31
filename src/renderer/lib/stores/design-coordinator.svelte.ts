@@ -90,6 +90,8 @@ class DesignCoordinatorState {
    * it. Activity refreshes also preserve the kind the user explicitly chose.
    */
   openBoard(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
+    // Opening the board is the user's own choice, so this row may dock itself again.
+    coordinatorDockState.restore(projectId, threadId)
     const key = threadKey(projectId, threadId)
     this.projectBoards.set(key, kind)
     const label = COORDINATOR_LABEL_BY_KIND[kind]
@@ -221,7 +223,7 @@ class DesignCoordinatorState {
       // so returning to the thread renders its coordinator immediately.
       if (
         this.activeKey === key &&
-        coordinatorDockState.autoOpen &&
+        coordinatorDockState.canAutoOpen(projectId, threadId) &&
         !contextSidebarState.hasCoordinator(projectId, threadId)
       ) {
         contextSidebarState.openCoordinator(projectId, threadId, label)

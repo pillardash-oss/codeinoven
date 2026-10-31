@@ -1,6 +1,8 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
-import { assistantTagIconHtml } from '../assistant/assistant-tag-badge'
+import { claimInlineEscape } from '$lib/stores/page-surface.svelte'
+import { threadComposerTag } from './composer-tag'
+import { taggedThreads } from '$lib/stores/tagged-threads.svelte'
 import {
   cioSearchVisibility,
   isEntryHiddenByVisibility
@@ -9,6 +11,7 @@ import { scopeState } from '$lib/stores/scope.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
   composerMentionQuery,
+  composerAssistantTagToken,
   COMPOSER_BUILT_IN_TAGS,
   type ComposerAssistantTag,
   type ComposerMentionEntry
@@ -54,19 +57,57 @@ function assistantTagMatches(tag: ComposerAssistantTag, query: string): boolean 
 export function createComposerMentionSearch(options: ComposerMentionSearchOptions) {
   let entries = $state.raw<ComposerMentionEntry[]>([])
   let query = $state('')
-  let open = $state(false)
+  let openState = $state(false)
   let index = $state(0)
   let requestId = 0
   let searchTimer: ReturnType<typeof setTimeout> | undefined
+  let escapeClaim: (() => void) | null = null
+
+  /**
+   * Thread tags found in another project, by their token.
+   *
+   * A tag picked from the cross-project search is not in the composer's own tag
+   * list, and a token is only an id: without the tag it came from, the draft
+   * would draw `@thread:<id>` and lose the title and the project icon the user
+   * picked. Every thread the search has shown is kept, so any of those tokens
+   * still reads as its thread.
+   */
+  const knownThreadTags = new SvelteMap<string, ComposerAssistantTag>()
+
+  /** Whether a typed query may span spaces: only thread search makes it useful. */
+  function spacesAllowed(): boolean {
+    return cioSearchVisibility.includeThreads
+  }
+
+  /**
+   * Publish the menu's open state.
+   *
+   * While it is open the menu owns Escape: the key closes the suggestions
+   * instead of reaching the recording or the running turn behind them, so this
+   * is the one place that flips the flag.
+   */
+  function setOpen(value: boolean): void {
+    if (value === openState) return
+    openState = value
+    if (value) {
+      escapeClaim ??= claimInlineEscape('composer-mentions')
+      return
+    }
+    escapeClaim?.()
+    escapeClaim = null
+  }
 
   async function update(nextValue: string): Promise<void> {
-    const nextQuery = composerMentionQuery(nextValue)
+    const nextQuery = composerMentionQuery(nextValue, { allowSpaces: spacesAllowed() })
     if (nextQuery === null) {
       requestId += 1
-      open = false
+      setOpen(false)
       return
     }
     const currentRequestId = ++requestId
+    // A space in the query is a thread title, never a file path: only thread
+    // search spans them, and only while that switch is on.
+    const spacedQuery = nextQuery.includes(' ')
     try {
       const normalizedQuery = nextQuery.trim().toLocaleLowerCase()
       const utilityEntries: ComposerMentionEntry[] = COMPOSER_BUILT_IN_TAGS.filter(
@@ -96,11 +137,17 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
         type: 'assistant' as const,
         entry
       }))
-      // Local tags must remain usable while the filesystem index warms or fails.
+      const localEntries = [...utilityEntries, ...assistantEntries, ...taskEntries]
+      // A query that spans spaces says a thread title is being typed, and a
+      // title that matched nothing local may still match a thread or a file, so
+      // the empty local list waits for the search below instead of flashing a
+      // menu the search is about to fill.
       query = nextQuery
-      entries = [...utilityEntries, ...assistantEntries, ...taskEntries].slice(0, 40)
-      index = 0
-      open = true
+      if (!spacedQuery || localEntries.length > 0) {
+        entries = localEntries.slice(0, 40)
+        index = 0
+        setOpen(true)
+      }
       const fileTagProjectId = options.getFileTagProjectId()
       const filesPromise = fileTagProjectId
         ? invoke(
@@ -124,20 +171,17 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
       const knownThreadIds = new SvelteSet(
         assistantTags.filter((tag) => tag.kind === 'thread').map((tag) => tag.id)
       )
+      // The chip a sent message draws needs the title of the thread its token
+      // names, and this search is the only place that saw it.
+      taggedThreads.remember(threadResults.map(({ thread }) => thread))
       const threadEntries: ComposerMentionEntry[] = threadResults
         .filter(({ thread }) => !knownThreadIds.has(thread.id))
-        .map(({ thread }) => ({
-          type: 'assistant',
-          entry: {
-            kind: 'thread',
-            id: thread.id,
-            name: thread.title.trim() || 'Untitled thread',
-            detail: `Thread · ${scopeState.projects.find((project) => project.id === thread.projectId)?.name ?? thread.projectId}`,
-            iconHtml: assistantTagIconHtml({}),
-            color: 'var(--color-primary)',
-            keywords: []
-          }
-        }))
+        .map(({ thread }) => {
+          const project = scopeState.projects.find((entry) => entry.id === thread.projectId)
+          const tag = threadComposerTag(thread, project)
+          knownThreadTags.set(composerAssistantTagToken(tag), tag)
+          return { type: 'assistant', entry: tag }
+        })
       const nextEntries: ComposerMentionEntry[] = [
         ...utilityEntries,
         ...assistantEntries,
@@ -147,9 +191,16 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
       ]
       if (currentRequestId !== requestId) return
       query = nextQuery
+      if (spacedQuery && nextEntries.length === 0) {
+        // The space carried the query past its tag and onto prose: nothing here
+        // names a tag any more, so the menu closes instead of covering the
+        // conversation while the sentence is finished.
+        setOpen(false)
+        return
+      }
       entries = nextEntries.slice(0, 40)
       index = 0
-      open = true
+      setOpen(true)
     } catch {
       // Keep the local suggestions already published above on file lookup failure.
     }
@@ -157,9 +208,9 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
 
   function schedule(textBeforeCaret: string): void {
     clearTimeout(searchTimer)
-    if (composerMentionQuery(textBeforeCaret) === null) {
+    if (composerMentionQuery(textBeforeCaret, { allowSpaces: spacesAllowed() }) === null) {
       requestId += 1
-      open = false
+      setOpen(false)
       return
     }
     requestId += 1
@@ -261,6 +312,9 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
   function dispose(): void {
     clearTimeout(searchTimer)
     requestId += 1
+    escapeClaim?.()
+    escapeClaim = null
+    openState = false
   }
 
   return {
@@ -271,14 +325,22 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
       return query
     },
     get open() {
-      return open
+      return openState
     },
     set open(value: boolean) {
       if (!value) {
         clearTimeout(searchTimer)
         requestId += 1
       }
-      open = value
+      setOpen(value)
+    },
+    /**
+     * Thread tags this search found in any project, by the token a draft
+     * carries. The composer draws a badge for each of these the draft still
+     * names, so a picked thread keeps its title and its project icon.
+     */
+    get knownThreadTags() {
+      return [...knownThreadTags.values()]
     },
     get index() {
       return index

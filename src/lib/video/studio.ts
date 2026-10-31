@@ -22,7 +22,21 @@ export interface VideoCaption {
   end: number
   words?: { text: string; start: number; end: number }[]
   appearance?: VideoCaptionAppearance
+  /**
+   * How the words arrive and leave, which is not a picture transition.
+   *
+   * A caption has no frame to slide, so it carries its own two: it cuts in and out,
+   * fades, or rises into place. Absent means the document default.
+   */
+  transition?: VideoCaptionTransition
 }
+/** The three ways a caption can arrive; it leaves the same way. */
+export interface VideoCaptionTransition {
+  kind: 'cut' | 'fade' | 'rise'
+  duration: number
+}
+/** A caption with no transition of its own still needs one to draw. */
+export const VIDEO_CAPTION_TRANSITION: VideoCaptionTransition = { kind: 'cut', duration: 0 }
 export interface VideoAudioTrack {
   source: string
   start: number
@@ -43,6 +57,8 @@ export interface VideoStudioDocument {
    */
   captionStyle: 'plain' | 'highlight' | 'karaoke' | 'none'
   audioTracks: VideoAudioTrack[]
+  /** The transition every caption uses until it is given one of its own. */
+  captionTransition?: VideoCaptionTransition
   edit?: VideoEditDocument
   captionAppearance?: VideoCaptionAppearance
 }
@@ -130,6 +146,8 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
       caption.trackId = videoText(entry.trackId, 'Caption track ID', 96)
     if (entry.appearance !== undefined)
       caption.appearance = validateCaptionAppearance(entry.appearance)
+    if (entry.transition !== undefined)
+      caption.transition = validateCaptionTransition(entry.transition)
     if (entry.words !== undefined) {
       if (!Array.isArray(entry.words) || entry.words.length > 200)
         throw new Error('Too many caption words')
@@ -170,9 +188,24 @@ export function validateVideoStudio(raw: unknown): VideoStudioDocument {
     captionStyle: style,
     audioTracks,
     ...(edit ? { edit } : {}),
+    ...(value.captionTransition === undefined
+      ? {}
+      : { captionTransition: validateCaptionTransition(value.captionTransition) }),
     ...(value.captionAppearance === undefined
       ? {}
       : { captionAppearance: validateCaptionAppearance(value.captionAppearance) })
+  }
+}
+
+/** A caption transition is a duration and one of three arrivals, never a picture move. */
+export function validateCaptionTransition(value: unknown): VideoCaptionTransition {
+  const r = videoRecord(value)
+  const kind = r.kind ?? 'fade'
+  if (kind !== 'cut' && kind !== 'fade' && kind !== 'rise')
+    throw new Error('Caption transition must be cut, fade or rise')
+  return {
+    kind,
+    duration: kind === 'cut' ? 0 : videoNumber(r.duration, 'caption transition seconds', 0, 2)
   }
 }
 

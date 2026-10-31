@@ -73,17 +73,41 @@ material way, and the difference is deliberate.
   - Its turns notify like any other thread's: a finished turn, a parked question and a
     failure each raise the usual card, even though the answer itself is delivered beside
     the page it is about.
-- **The page a tab is on is attached to its assistant conversation for reading.** The
+- **The page a tab is on is attached to its assistant conversation.** The
   app records the pair when the rail resolves the conversation
   (`browser:bindAssistantPage`), and main points the agent's browser capability
   (`cio:browser`) at the user's tab whenever that conversation owns no page of its own:
   `snapshot`, `screenshot` and `console` read the page the user is looking at and report
-  `page: "user"`. Navigation, clicks, typing, reload, and viewport changes still need a
-  page the agent opened itself. Uploading a file is the one narrow exception: the main
-  process brokers a file-input action without exposing CDP to the harness. Auto Review
-  always asks the user to choose the files in a native file chooser; Full Access accepts
-  explicit absolute paths. Upload only fills the file input and never submits the page's
-  form.
+  `page: "user"`. Reads are free; every mutation on that page passes through the
+  action-aware Auto Review card, which is what lets an agent operate the page the user
+  is on. Uploading a file is the narrow case with its own broker: the main process fills
+  a file input without exposing CDP to the harness, Auto Review always asks the user to
+  choose the files in a native file chooser, and Full Access may name explicit paths.
+  Upload only fills the file input and never submits the page's form.
+- **The agent drives the page as a person would, through the browser's input pipeline.**
+  `click`, `mouse` and `drag` resolve an element (or a point) and send real move, press
+  and release events with `webContents.sendInputEvent`, so the page's hover, focus,
+  caret and pointer handlers run and the event arrives trusted; the element's own
+  `click()` is only the fallback for something a pointer cannot reach, and the result
+  says which one happened (`via: "pointer"` or `via: "dom"`). `press` sends a real
+  key, `select`, `check` and `type` drive a control and report the state the page kept,
+  `scroll`, `drag` and `mouse` move through the page, and `wait` blocks in the page
+  until a condition holds instead of guessing at a pause. `evaluate` is the escape
+  hatch, and it is reviewed like any other mutation on the user's page. The page-side
+  half of all of this lives in `browser-service/browser-agent-page.ts`, the input
+  pipeline in `browser-service/browser-agent-input.ts`.
+  - A `snapshot` reports what an agent needs to act: a `ref` carried on the element
+    itself, the unique CSS selector a person would write, the live `value`, `checked`,
+    `disabled` and `readOnly` state, a select's options, and the element's box. Typing
+    goes through the field's own value setter and emits `beforeinput`/`input`/`change`,
+    because assigning `element.value` updates a framework's value tracker and makes the
+    following `input` event look unchanged, which is how a refined form ends up empty
+    while a naive tool reports success. Each write reports the value the page kept.
+  - A synthetic cursor, marked `data-cio-agent` so no snapshot mistakes it for page
+    content, is drawn at the point each action touched, so a screenshot shows where the
+    agent worked. Screenshots also capture the whole document (`fullPage`) or one
+    element through the debugger's `Page.captureScreenshot`, falling back to the
+    viewport when the debugger cannot answer.
 - **A conversation's thread browser page is reachable by its agent, in whatever box it
   runs.** The thread browser is the browser a conversation shares with its agent, so
   the workspace reports the tab it is in use on (`browser:bindThreadBrowserPage`),
