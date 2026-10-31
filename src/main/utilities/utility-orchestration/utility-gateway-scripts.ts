@@ -6,7 +6,7 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { GATEWAY_TOOLS, gatewayToolForModel, initialGatewayTools } from '../../../lib/gateway-tools'
-import { withActionSummarySchema } from '../../../lib/tool-action-label'
+import { withActionSummaryAdvice, withActionSummarySchema } from '../../../lib/tool-action-label'
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
@@ -113,8 +113,7 @@ const REF_FIELD = {
 /** The element an action addresses, by CSS selector. */
 const SELECTOR_FIELD = {
   type: 'string',
-  description:
-    'A CSS selector, including the unique selectors a snapshot reports. Use it or ref.'
+  description: 'A CSS selector, including the unique selectors a snapshot reports. Use it or ref.'
 }
 
 export const BROWSER_UTILITY_TOOLS: McpTool[] = [
@@ -178,7 +177,8 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
         },
         text: {
           type: 'boolean',
-          description: 'Pass false to leave the visible page text out when you only need the elements.'
+          description:
+            'Pass false to leave the visible page text out when you only need the elements.'
         },
         maxText: {
           type: 'number',
@@ -309,8 +309,14 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
         },
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
-        x: { type: 'number', description: 'Point x in page pixels, used when no element is named.' },
-        y: { type: 'number', description: 'Point y in page pixels, used when no element is named.' },
+        x: {
+          type: 'number',
+          description: 'Point x in page pixels, used when no element is named.'
+        },
+        y: {
+          type: 'number',
+          description: 'Point y in page pixels, used when no element is named.'
+        },
         button: { type: 'string', enum: ['left', 'right', 'middle'] },
         clickCount: { type: 'number', description: '1 for a click, 2 for a double click.' },
         deltaX: { type: 'number', description: 'Horizontal wheel delta, for action "wheel".' },
@@ -369,9 +375,15 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        selector: { type: 'string', description: 'Wait for this element to be present and visible.' },
+        selector: {
+          type: 'string',
+          description: 'Wait for this element to be present and visible.'
+        },
         gone: { type: 'boolean', description: 'With selector: wait for it to disappear.' },
-        visible: { type: 'boolean', description: 'false with selector: wait for it to exist even if hidden.' },
+        visible: {
+          type: 'boolean',
+          description: 'false with selector: wait for it to exist even if hidden.'
+        },
         text: { type: 'string', description: 'Wait for this text to appear in the page.' },
         urlIncludes: { type: 'string', description: 'Wait for the address to contain this.' },
         timeoutMs: { type: 'number', description: 'Up to 30000. Defaults to 5000.' },
@@ -853,7 +865,7 @@ export function buildUtilityGatewayScript(
 ): string {
   const tools = gatewayTools.map(gatewayToolForModel).map(({ name, description, inputSchema }) => ({
     name,
-    description,
+    description: withActionSummaryAdvice(description),
     inputSchema: withActionSummarySchema(inputSchema)
   }))
   const routes: Record<string, string> = {}

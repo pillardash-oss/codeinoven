@@ -3,7 +3,7 @@ import { resolveFastModelId } from '../../../lib/fast-inference'
 import { COMPACT_LINE_SHARE } from '../../../lib/prompt-budget'
 import { Logger } from '../../system/logger'
 import { GATEWAY_TOOLS, gatewayToolForModel } from '../../../lib/gateway-tools'
-import { withActionSummarySchema } from '../../../lib/tool-action-label'
+import { withActionSummaryAdvice, withActionSummarySchema } from '../../../lib/tool-action-label'
 import { formatHistoryRecap } from '../../chat/chat-engine/chat-engine-message-text'
 import type { SendPromptOptions, SteerPromptOptions } from '../driver.interface'
 import { type PersistentCliSession } from '../persistent-cli-driver'
@@ -109,7 +109,7 @@ export class CodexDriverPrompting {
                   .map(gatewayToolForModel)
                   .map(({ name, description, inputSchema }) => ({
                     name,
-                    description,
+                    description: withActionSummaryAdvice(description),
                     // Every harness that publishes this catalog declares the
                     // trace's action-summary field, so a codex agent can label
                     // its calls exactly like a pi agent does.
