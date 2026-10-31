@@ -165,7 +165,7 @@ export class BrowserServiceAgentUtility {
         attention: reveal ? 'focus' : 'background',
         relaxed,
         page: this.host.stateFor(tabId, tab),
-        ...this.host.threadBrowserHint(scope, tabId)
+        ...this.host.threadBrowserHint(scope, tabId, contextKey)
       }
     }
 
@@ -176,10 +176,10 @@ export class BrowserServiceAgentUtility {
       // a browser conversation's bound page that is not in memory right now, is
       // told exactly that instead of being told to open a page it already has.
       throw new Error(
-        page === 'user'
+        page === 'user' || page === 'strip'
           ? 'The thread browser has no page for this conversation right now, so there is nothing to read. Open a page of your own with "open" if you need one.'
           : page === 'agent'
-            ? 'You have no page of your own open in this conversation. Open one with "open", or pass page "user" to reach the thread browser\u2019s page.'
+            ? 'You have no page of your own open in this conversation. Open one with "open", or pass page "user" to reach the page the thread browser resolved for you.'
             : this.host.assistantPageTabIds.has(threadId)
               ? 'The page the user is on is not loaded right now, so it cannot be read. Open a page of your own with "open" if you need one.'
               : 'Open a browser page before using this operation'
@@ -214,7 +214,7 @@ export class BrowserServiceAgentUtility {
           ...this.host.utilityTabContext(tabId, tab),
           page: attached ? 'user' : 'agent',
           cancelled: true,
-          ...this.host.threadBrowserHint(scope, tabId)
+          ...this.host.threadBrowserHint(scope, tabId, contextKey)
         }
       }
       reviewedTarget = reviewed.target
@@ -235,7 +235,7 @@ export class BrowserServiceAgentUtility {
       // Which page the answer came from, so the agent can tell a page it opened
       // apart from the page the user is reading.
       page: attached ? ('user' as const) : ('agent' as const),
-      ...this.host.threadBrowserHint(scope, tabId)
+      ...this.host.threadBrowserHint(scope, tabId, contextKey)
     }
     if (operation === 'viewport') {
       const viewport = validateViewportRequest(

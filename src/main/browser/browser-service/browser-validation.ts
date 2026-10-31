@@ -617,11 +617,16 @@ export function browserContextKey(projectId: string, threadId: string): string {
 /**
  * Which page one browser utility call works on.
  *
- * `user` is the page this conversation's thread browser is in use on, the one the
- * user is reading; `agent` is a page the agent opened itself. Absent means the
- * agent's own page when it has one, and the thread browser's page otherwise.
+ * `user` is the page this conversation's thread browser is in use on, as the
+ * agent first resolved it: a project's threads share one strip, so the page the
+ * strip happens to show moves whenever the user or a sibling thread opens
+ * something, and a call must not follow that movement away from a page it was
+ * already working on. `strip` asks for the page the strip is showing right now,
+ * which is also how an agent moves its `user` page deliberately. `agent` is a
+ * page the agent opened itself. Absent means the agent's own page when it has
+ * one, and its `user` page otherwise.
  */
-export type BrowserUtilityPage = 'user' | 'agent'
+export type BrowserUtilityPage = 'user' | 'strip' | 'agent'
 
 /**
  * Validate the page one browser utility call asked for.
@@ -631,8 +636,8 @@ export type BrowserUtilityPage = 'user' | 'agent'
  */
 export function validateUtilityPage(value: unknown): BrowserUtilityPage | null {
   if (value === undefined || value === null) return null
-  if (value === 'user' || value === 'agent') return value
-  throw new TypeError('Browser page must be "user" or "agent"')
+  if (value === 'user' || value === 'strip' || value === 'agent') return value
+  throw new TypeError('Browser page must be "user", "strip" or "agent"')
 }
 
 /**
