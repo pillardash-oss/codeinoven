@@ -49,6 +49,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
+import { BrowserAgentCursorAppearance } from '../browser/browser-service/browser-agent-cursor-appearance'
 import { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { DesignService } from '../design/design-service'
 import { SearchService } from '../search/search-service'
@@ -125,7 +126,16 @@ async function attachBrowserService(
     })
   }
   await state.browserDownloads.hydrate()
-  const service = new BrowserService(window, database, storage, state.browserDownloads)
+  const service = new BrowserService(
+    window,
+    database,
+    storage,
+    state.browserDownloads,
+    new BrowserAgentCursorAppearance({
+      getConfig: () => storage.getConfig(),
+      onConfigWrite: (listener) => storage.onWrite('config.json', listener)
+    })
+  )
   state.browserService = service
   // Whoever destroys the window, the service stops being this app's browser for
   // it. The park path detaches first and this then finds nothing to do; a window

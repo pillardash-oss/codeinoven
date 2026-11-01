@@ -117,6 +117,8 @@ import { BrowserServiceIpcSurface } from './browser-service/browser-service-ipc-
 import { BrowserServiceAgentUtility } from './browser-service/browser-service-agent-utility'
 import { BrowserServiceAgentFiles } from './browser-service/browser-service-agent-files'
 import { BrowserServiceAgentScript } from './browser-service/browser-service-agent-script'
+import type { BrowserAgentCursorAppearance } from './browser-service/browser-agent-cursor-appearance'
+import type { AgentCursorAppearance } from '../../lib/browser/agent-cursor'
 import { BrowserServiceSurfaces } from './browser-service/browser-service-surfaces'
 import { BrowserServiceCompositionFrames } from './browser-service/browser-service-composition-frames'
 import { BrowserServiceTransport } from './browser-service/browser-service-transport'
@@ -554,7 +556,8 @@ export class BrowserService {
     public readonly window: BrowserWindow,
     public readonly db: Database,
     permissionPersistence: PermissionMemoryPersistence,
-    public readonly downloads: BrowserDownloadManager
+    public readonly downloads: BrowserDownloadManager,
+    private readonly cursorAppearance: BrowserAgentCursorAppearance
   ) {
     this.tabHistoryUnit = new BrowserServiceTabHistory(this)
     this.lifecycleUnit = new BrowserServiceLifecycle(this)
@@ -562,7 +565,7 @@ export class BrowserService {
     this.ipcSurfaceUnit = new BrowserServiceIpcSurface(this)
     this.agentUtilityUnit = new BrowserServiceAgentUtility(this)
     this.agentFilesUnit = new BrowserServiceAgentFiles(this)
-    this.agentScriptUnit = new BrowserServiceAgentScript()
+    this.agentScriptUnit = new BrowserServiceAgentScript(this)
     this.surfacesUnit = new BrowserServiceSurfaces(this)
     this.compositionFramesUnit = new BrowserServiceCompositionFrames(this)
     this.transportUnit = new BrowserServiceTransport(this)
@@ -893,6 +896,12 @@ export class BrowserService {
     input: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     return this.agentScriptUnit.clickAgentTarget(tab, selector, input)
+  }
+
+  /** How the agent's own cursor is drawn right now: the app's palette and scale,
+   *  not the page's. */
+  agentCursorAppearance(): Promise<AgentCursorAppearance> {
+    return this.cursorAppearance.current()
   }
 
   async paintAgentCursor(

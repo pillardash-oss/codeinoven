@@ -464,6 +464,7 @@ export class StorageEngine {
       ...persistedConfig
     } = config
     await writeJson(this.resolve('config.json'), persistedConfig)
+    this.notifyWrite('config.json')
     // The small policy file is authoritative for both Settings and Pi. Commit
     // it last: a failed config save must never turn off a protection the UI
     // still displays as enabled. A failed policy save leaves its old rules.
@@ -795,6 +796,15 @@ export class StorageEngine {
     const fullPath = this.resolve(relativePath)
     await ensureDir(join(fullPath, '..'))
     await writeJson(fullPath, data)
+    this.notifyWrite(relativePath)
+  }
+
+  /** Tell the listeners of one file that it was just written.
+   *
+   *  A caller that writes through a path other than `write` (the config save, which
+   *  composes its own record) reports the write here, so a listener like the agent
+   *  cursor's appearance still hears about an Appearance change. */
+  private notifyWrite(relativePath: string): void {
     for (const listener of this.writeListeners.get(relativePath) ?? []) {
       try {
         listener()
