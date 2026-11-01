@@ -52,6 +52,8 @@ export const invokeAppContract = {
   'llamaCpp:detect': {} as Contract<[], LlamaCppRuntimeStatus>,
   /** Ask a started server for its loaded model ids, which is what readiness means. */
   'llamaCpp:probe': {} as Contract<[host: string, port: number], LlamaCppProbeResult>,
+  /** End the llama-server holding a port when no PTY of the app owns it. */
+  'llamaCpp:stopServer': {} as Contract<[port: number], boolean>,
   /** Pick a local `.gguf` file; the row references it where it lives. */
   'llamaCpp:pickModel': {} as Contract<[], string | null>,
   'dialog:pickFolder': {} as Contract<[], string | null>,

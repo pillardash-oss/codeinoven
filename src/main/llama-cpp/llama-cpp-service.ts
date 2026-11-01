@@ -188,6 +188,79 @@ function runtimeDetail(
 
 const PROBE_TIMEOUT_MS = 2_500
 
+/** Where `lsof` lives, for the stop path below. */
+const LSOF_PATHS = ['/usr/sbin/lsof', '/usr/bin/lsof']
+
+async function firstExecutable(candidates: string[]): Promise<string> {
+  for (const candidate of candidates) {
+    if (await isExecutable(candidate)) return candidate
+  }
+  return ''
+}
+
+/** PIDs listening on `port`, empty when nothing does (`lsof` exits non-zero). */
+async function listeningPids(port: number): Promise<number[]> {
+  const lsof = await firstExecutable(LSOF_PATHS)
+  if (!lsof) return []
+  try {
+    const { stdout } = await run(lsof, ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+      timeout: 5_000
+    })
+    return stdout
+      .split('\n')
+      .map((line) => Number.parseInt(line.trim(), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0)
+  } catch {
+    return []
+  }
+}
+
+/** Whether a PID is the server this page manages, never something else on the port. */
+async function isLlamaServerProcess(pid: number): Promise<boolean> {
+  try {
+    const { stdout } = await run('/bin/ps', ['-o', 'command=', '-p', String(pid)], {
+      timeout: 5_000
+    })
+    return /llama-server/u.test(stdout)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * End a server that holds a port without a PTY behind it.
+ *
+ * A llama-server can outlive the app instance that launched it, and the row it
+ * belongs to then shows a process the card can neither stop nor start over: a
+ * second start only fails with `couldn't bind HTTP server socket`. The stop
+ * asks whoever listens on the port to end, but only when the command line is
+ * this app's server.
+ */
+export async function stopLlamaCppServer(port: number): Promise<boolean> {
+  let stopped = false
+  for (const pid of await listeningPids(port)) {
+    if (!(await isLlamaServerProcess(pid))) continue
+    try {
+      process.kill(pid, 'SIGTERM')
+      stopped = true
+    } catch {
+      continue
+    }
+    for (let attempt = 0; attempt < 15; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      if (!(await listeningPids(port)).includes(pid)) break
+      if (attempt === 14) {
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // The process is already gone; the port simply reported late.
+        }
+      }
+    }
+  }
+  return stopped
+}
+
 /**
  * Ask a running server for its model list. This is the only thing that flips a
  * card to "running": a process that is alive but still loading a model is not
