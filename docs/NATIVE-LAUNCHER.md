@@ -28,6 +28,13 @@ it at startup (`src/main/system/native-splash-handoff.ts`), and it exits once th
 app connects to the handoff socket it reported on file descriptor 1. It appears
 nowhere else: not in the Applications folder, the Dock, or a privacy prompt.
 
+The connection is made on the app's own first splash frame, never on a boot
+timer: the placeholder exists to cover the gap until that frame is on screen, so
+releasing it earlier blinks a window that had nothing to cover and let the
+window server's undrawn surface show through. A splash that never paints still
+releases it, because the visual barrier settles on its timeout or on the splash
+window closing.
+
 `mac-sign.js` keeps two code identities, both for compatibility rather than
 appearance:
 

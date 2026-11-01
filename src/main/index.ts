@@ -1006,6 +1006,16 @@ void app
         // The frame can arrive after the deadline. Record it when it does: the
         // phase reports what painted, not what the boot was willing to wait for.
         if (outcome === 'ready') startupTelemetry.mark('splash:visualReady')
+        // The dependency-free placeholder exists to cover the gap until this
+        // app's own splash is on screen, so the frame that replaces it is the
+        // frame that releases it. Releasing on the boot barrier instead dropped
+        // it the instant the helper reported readiness (the helper initialises
+        // AppKit well after the 250 ms barrier expires), which blinked the
+        // placeholder on screen for a few milliseconds and exposed whatever the
+        // window server held for it mid-composite. The teardown stays bounded
+        // inside `waitForSplashVisual`: a splash that never paints, or a window
+        // closed by the reveal, settles this promise too.
+        signalNativeSplashReady()
       })
       splashOutcome = await trackStartupStep('splash:barrier', () =>
         withSplashDeadline(splashVisualReady)
@@ -1013,12 +1023,12 @@ void app
       if (splashOutcome === 'ready') {
         startupTelemetry.mark('splash:visualReady')
       }
+    } else {
+      // A headless launch paints no splash, so nothing needs covering: release
+      // the supervisor's placeholder immediately. A visible launch releases it
+      // from the splash's own frame above, never before.
+      signalNativeSplashReady()
     }
-    // A launcher must never remain topmost forever if the Chromium splash
-    // fails. The normal path releases it after the first rendered frame; the
-    // bounded failure path releases it after the splash barrier resolves. A
-    // headless launch has no splash to release.
-    signalNativeSplashReady()
 
     // Only after the splash is visibly rendered, wire the durable log sink
     // before any fallible startup work. The error
