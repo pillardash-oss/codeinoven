@@ -23,12 +23,18 @@ describe('actionShellFamily', () => {
   })
 })
 
+// The two spawn-based cases below run the guarded script through `/bin/sh`. A
+// Windows runner has no POSIX shell at that path, so `spawnSync` fails to launch
+// it and reports `status: null` instead of the shell's exit status (Quality
+// #919). The string-level cases still cover the serialisation on every platform.
+const noPosixShell = process.platform === 'win32'
+
 describe('failFastActionScript', () => {
   it('leaves an empty script alone', () => {
     expect(failFastActionScript('   \n', 'posix')).toBe('   \n')
   })
 
-  it('stops a POSIX script at the first failing line', () => {
+  it.skipIf(noPosixShell)('stops a POSIX script at the first failing line', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cio-action-'))
     const marker = join(dir, 'ran')
     const script = `false\ntouch ${marker}`
@@ -42,7 +48,7 @@ describe('failFastActionScript', () => {
     }
   })
 
-  it('runs every POSIX line when the failure is tolerated explicitly', () => {
+  it.skipIf(noPosixShell)('runs every POSIX line when the failure is tolerated explicitly', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cio-action-'))
     const marker = join(dir, 'ran')
     try {
