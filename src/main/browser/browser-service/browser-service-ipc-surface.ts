@@ -74,7 +74,9 @@ import {
 } from './browser-validation'
 import {
   EXTENSION_PAGE_COMMAND_CHANNEL,
-  EXTENSION_PAGE_TABS_CHANNEL
+  EXTENSION_PAGE_OPEN_TAB_CHANNEL,
+  EXTENSION_PAGE_TABS_CHANNEL,
+  type BrowserExtensionPageTabRequest
 } from '../extensions/browser-extension-page-tabs'
 import { validateBrowserFindRequest, validateBrowserFindStopAction } from './browser-find'
 import { liveContents, liveWindowContents } from './browser-view-contents'
@@ -137,6 +139,7 @@ export interface IpcSurfaceHost {
   readonly openExtensionPopup: BrowserService['openExtensionPopup']
   readonly openNewTabFor: BrowserService['openNewTabFor']
   readonly openOptionsPageFromPage: BrowserService['openOptionsPageFromPage']
+  readonly openTabFromExtensionPage: BrowserService['openTabFromExtensionPage']
   readonly openSideWindow: BrowserService['openSideWindow']
   readonly overlay: BrowserService['overlay']
   readonly parkTab: BrowserService['parkTab']
@@ -193,6 +196,26 @@ export function replaceHandler(
   ipcMain.handle(channel, listener)
 }
 
+/** The longest address an extension page may ask the app to open. */
+const MAX_EXTENSION_PAGE_TAB_URL = 4096
+
+/**
+ * One tab an extension page asked the app to open, as main will act on it.
+ *
+ * Every field is page-supplied and therefore untrusted. The address is bounded
+ * here and validated again against the tab's own jar before it loads, and the
+ * `active` flag is narrowed to a boolean so a caller cannot hand the tab layer
+ * something it does not expect.
+ */
+function toExtensionPageTabRequest(raw: unknown): BrowserExtensionPageTabRequest | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const url = Reflect.get(raw, 'url')
+  if (typeof url !== 'string' || url.length === 0) return null
+  if (url.length > MAX_EXTENSION_PAGE_TAB_URL) return null
+  const active = Reflect.get(raw, 'active')
+  return { url, active: active !== false }
+}
+
 export class BrowserServiceIpcSurface {
   constructor(private readonly host: IpcSurfaceHost) {}
 
@@ -223,6 +246,21 @@ export class BrowserServiceIpcSurface {
       if (command !== 'open-options') return
       this.host.openOptionsPageFromPage(event.sender.id)
     })
+    // The same door, answered instead of only heard: `chrome.tabs.create` is the
+    // page asking the app for a tab, and the reply is the id of the one it opened.
+    // Only a document the app hosts for an extension can ask, and it can only ask
+    // for a page: the address is validated again with the tab's own jar before
+    // anything loads, exactly as a link click is.
+    replaceHandler(
+      EXTENSION_PAGE_OPEN_TAB_CHANNEL,
+      (event: Electron.IpcMainInvokeEvent, rawRequest: unknown): number | null => {
+        const frame = event.senderFrame
+        if (!frame || !frame.url.startsWith('chrome-extension://')) return null
+        const request = toExtensionPageTabRequest(rawRequest)
+        if (!request) return null
+        return this.host.openTabFromExtensionPage(event.sender.id, request)
+      }
+    )
     // Started here so the file exists long before the first extension popup or
     // panel is created; every path that can wait for it does.
     void this.host.ensureExtensionPageTabsPreload()

@@ -1227,6 +1227,13 @@ export class BrowserService {
     this.extensionPagesUnit.openOptionsPageFromPage(contentsId)
   }
 
+  openTabFromExtensionPage(
+    contentsId: number,
+    request: { url: string; active: boolean }
+  ): number | null {
+    return this.extensionPagesUnit.openTabFromExtensionPage(contentsId, request)
+  }
+
   private openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
     this.extensionPagesUnit.openExtensionWindowFromWorker(request)
   }

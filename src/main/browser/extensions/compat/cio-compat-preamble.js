@@ -2163,6 +2163,53 @@
 
   for (const root of roots) wrapWindowsApi(root && root.windows)
 
+  /**
+   * `chrome.tabs.create`, which this runtime cannot honour from a worker either.
+   *
+   * A page an extension opens is the same rule as a window on the web: there is no
+   * second window here, because a browser window is the app's own, so the address
+   * becomes a tab of the browser the extension is acting in. A password manager's
+   * "launch" from a notification or an overlay is exactly this call, and the stub
+   * below answered it with nothing, so the click opened no page at all.
+   *
+   * Only an absolute `http(s)` address is routed; anything else   a page of the
+   * extension's own, which is a window rather than a tab   keeps the runtime's own
+   * answer. A request that cannot be routed falls through to it as well.
+   */
+  const wrapTabsApi = (api) => {
+    if (!api || typeof api !== 'object') return
+    const create = typeof api.create === 'function' ? api.create : noop
+    if (create.__cioOpenTabWrapped) return
+    const wrapped = function () {
+      const args = Array.prototype.slice.call(arguments)
+      const data = args[0] && typeof args[0] === 'object' ? args[0] : {}
+      const requested = Array.isArray(data.url) ? data.url[0] : data.url
+      const url = webWindowUrl(requested)
+      if (!url) return create.apply(this, args)
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+      return routeRequestWhenTabKnown('open-tab', url).then(
+        (routed) => {
+          if (!routed) return create.apply(this, args)
+          // The tab is the app's to create, so the caller is answered without an
+          // id it could not be given: what it asked for was that the page opens.
+          return answerWith(callback, undefined)
+        },
+        (error) => {
+          state.errors.push('tabs-create-route: ' + String(error))
+          return create.apply(this, args)
+        }
+      )
+    }
+    wrapped.__cioOpenTabWrapped = true
+    try {
+      Object.defineProperty(api, 'create', { value: wrapped, configurable: true, writable: true })
+    } catch (error) {
+      state.errors.push('tabs-create-wrap: ' + String(error))
+    }
+  }
+
+  for (const root of roots) wrapTabsApi(root && root.tabs)
+
   const handleBridgeCommand = (command) => {
     if (!command || typeof command !== 'object') return
     state.bridgeCommands = (state.bridgeCommands || 0) + 1

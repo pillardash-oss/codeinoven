@@ -81,6 +81,27 @@ export const EXTENSION_PAGE_COMMAND_CHANNEL = 'cio:extension-page-command'
 export type BrowserExtensionPageCommand = 'open-options'
 
 /**
+ * The channel an extension page asks the app to open a tab on.
+ *
+ * `chrome.tabs.create` is the one call a page cannot answer for itself: the tab
+ * strip is the app's, and this runtime has no second window to put a page in. The
+ * page asks, the preload forwards, and main answers with the id of the tab it
+ * opened   that tab's `WebContents` id, which is the id this runtime's own tab API
+ * answers with, so the caller can find the tab it opened again.
+ *
+ * Two-way, unlike the command channel above: the answer is what the page's
+ * `chrome.tabs.create` callback receives, and a caller that watches the tab it
+ * opened (Bitwarden's SSO token capture does) needs a real id.
+ */
+export const EXTENSION_PAGE_OPEN_TAB_CHANNEL = 'cio:extension-page-open-tab'
+
+/** What main is told about one tab a page asked to open, after validation. */
+export interface BrowserExtensionPageTabRequest {
+  url: string
+  active: boolean
+}
+
+/**
  * The preload an extension page is created with, which is what makes the wrappers
  * above land in time.
  *
@@ -123,11 +144,39 @@ if (location.protocol === 'chrome-extension:') {
   window.addEventListener('message', (event) => {
     const data = event ? event.data : null
     if (!data || typeof data !== 'object') return
-    if (data.__cioPageCommand !== 'open-options') return
+    if (data.__cioPageCommand === 'open-options') {
+      try {
+        ipcRenderer.send(${JSON.stringify(EXTENSION_PAGE_COMMAND_CHANNEL)}, 'open-options')
+      } catch (error) {
+        // A page that has lost its preload has nothing left to forward through.
+      }
+      return
+    }
+    if (data.__cioPageCommand !== 'open-tab') return
+    // The answer travels back the same way the ask came: the page's own world can
+    // hear this channel and nothing else in this document can reach main.
+    const reply = (tabId) => {
+      try {
+        window.postMessage(
+          { __cioPageOpenedTab: { requestId: data.requestId, tabId: tabId } },
+          '*'
+        )
+      } catch (error) {
+        // A window that cannot be posted to has no listener waiting on it.
+      }
+    }
     try {
-      ipcRenderer.send(${JSON.stringify(EXTENSION_PAGE_COMMAND_CHANNEL)}, 'open-options')
+      ipcRenderer
+        .invoke(${JSON.stringify(EXTENSION_PAGE_OPEN_TAB_CHANNEL)}, {
+          url: typeof data.url === 'string' ? data.url : '',
+          active: data.active !== false
+        })
+        .then(
+          (tabId) => reply(typeof tabId === 'number' ? tabId : null),
+          () => reply(null)
+        )
     } catch (error) {
-      // A page that has lost its preload has nothing left to forward through.
+      reply(null)
     }
   })
 }
