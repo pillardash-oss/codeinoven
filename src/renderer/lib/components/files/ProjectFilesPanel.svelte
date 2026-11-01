@@ -310,6 +310,34 @@
    * used to look broken the moment the document was not the raw file.
    */
   let editorFindAvailable = $derived(activeTab?.view === 'source')
+  /**
+   * Whether the dropdown can offer the two project-wide searches.
+   *
+   * They are the IDE Mode searches, so they only exist where the code editor
+   * that runs them is mounted: a working-tree source view with IDE Mode on.
+   * A preview, a diff, a deleted file or an Oven copy has no editor behind it,
+   * and the menu says so instead of offering a command that does nothing.
+   */
+  let projectSearchDisabled = $derived(
+    !projectState.ideModeEnabled ||
+      ovenFile ||
+      deletedAtCheckpoint ||
+      activeSession === null ||
+      activeTab?.view !== 'source' ||
+      activeTab?.origin !== 'working'
+  )
+  /** The reader mounts two editors, so the toolbar's command reaches whichever
+   *  one is on screen. */
+  let sidebarTextEditor = $state<ProjectTextEditor>()
+  let fullscreenTextEditor = $state<ProjectTextEditor>()
+  function searchProjectText(): void {
+    const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
+    editor?.searchProjectText()
+  }
+  function findProjectFile(): void {
+    const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
+    editor?.findProjectFile()
+  }
   let documentFindAvailable = $derived.by(() => {
     if (!activeTab) return false
     if (activeTab.view === 'annotate') return showAnnotateToggle && activeThreadId !== null
@@ -1151,6 +1179,9 @@
           replaceDisabled={!editorFindAvailable}
           onSearch={() => openReaderFind(false)}
           onSearchReplace={() => openReaderFind(true)}
+          {projectSearchDisabled}
+          onProjectTextSearch={searchProjectText}
+          onProjectFileFind={findProjectFile}
           onSetView={changeView}
           onInfo={() => void showActiveFileInfo()}
           infoDisabled={deletedAtCheckpoint}
@@ -1343,6 +1374,7 @@
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
+            bind:this={sidebarTextEditor}
             ideStatusPortal={sidebarIdeStatusPortal}
             {projectName}
             {projectId}
@@ -1601,6 +1633,9 @@
           replaceDisabled={!editorFindAvailable}
           onSearch={() => openReaderFind(false)}
           onSearchReplace={() => openReaderFind(true)}
+          {projectSearchDisabled}
+          onProjectTextSearch={searchProjectText}
+          onProjectFileFind={findProjectFile}
           onSetView={changeView}
           onInfo={() => void showActiveFileInfo()}
           infoDisabled={deletedAtCheckpoint}
@@ -1728,6 +1763,7 @@
           {:else}
             {#key activeTab.id}
               <ProjectTextEditor
+                bind:this={fullscreenTextEditor}
                 {projectName}
                 ideStatusPortal={fullscreenIdeStatusPortal}
                 {projectId}

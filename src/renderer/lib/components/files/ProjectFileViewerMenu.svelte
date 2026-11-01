@@ -5,12 +5,14 @@
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   import CioListOrdered from '@pdslng/cio-icon/CioListOrdered.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioRedo from '@pdslng/cio-icon/CioRedo.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioReplace from '@pdslng/cio-icon/CioReplace.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
@@ -50,6 +52,11 @@
     replaceDisabled?: boolean
     onSearch: () => void
     onSearchReplace: () => void
+    /** Project-wide text search and file lookup both run through IDE Mode, so
+     *  they are offered here but unavailable until it is on for this project. */
+    projectSearchDisabled: boolean
+    onProjectTextSearch: () => void
+    onProjectFileFind: () => void
     onUndo: () => void
     onRedo: () => void
     onReload: () => void
@@ -79,6 +86,9 @@
     replaceDisabled = false,
     onSearch,
     onSearchReplace,
+    projectSearchDisabled,
+    onProjectTextSearch,
+    onProjectFileFind,
     onInfo,
     infoDisabled = false,
     onUndo,
@@ -203,6 +213,35 @@
       >
         <CioReplace size={13} class="text-muted" />
         Search and replace
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      <DropdownMenu.Item
+        class={itemClass}
+        disabled={projectSearchDisabled}
+        title={projectSearchDisabled
+          ? 'Open the source view with IDE Mode on to search the whole project'
+          : 'Find this text in every file of the project'}
+        onSelect={onProjectTextSearch}
+      >
+        <CioSearch size={13} class="text-muted" />
+        <span class="flex-1">Search project text</span>
+        {#if keymapState.labelFor('ide-grep')}
+          <span class="text-[0.625rem] text-dimmed">{keymapState.labelFor('ide-grep')}</span>
+        {/if}
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class={itemClass}
+        disabled={projectSearchDisabled}
+        title={projectSearchDisabled
+          ? 'Open the source view with IDE Mode on to find project files'
+          : 'Find a file anywhere in the project by name or path'}
+        onSelect={onProjectFileFind}
+      >
+        <CioFiles size={13} class="text-muted" />
+        <span class="flex-1">Find file in project</span>
+        {#if keymapState.labelFor('ide-files')}
+          <span class="text-[0.625rem] text-dimmed">{keymapState.labelFor('ide-files')}</span>
+        {/if}
       </DropdownMenu.Item>
       <DropdownMenu.Separator class="my-1 h-px bg-border" />
       <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
