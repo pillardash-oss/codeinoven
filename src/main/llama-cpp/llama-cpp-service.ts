@@ -12,7 +12,11 @@ import { access, constants } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
-import type { LlamaCppProbeResult, LlamaCppRuntimeStatus } from '../../lib/llama-cpp'
+import {
+  llamaCppAddressableModelId,
+  type LlamaCppProbeResult,
+  type LlamaCppRuntimeStatus
+} from '../../lib/llama-cpp'
 
 const run = promisify(execFile)
 
@@ -217,7 +221,11 @@ function readModelIds(body: unknown): string[] {
   for (const item of data) {
     if (typeof item !== 'object' || item === null) continue
     const id = (item as { id?: unknown }).id
-    if (typeof id === 'string' && id.length > 0 && id.length <= 512) ids.push(id)
+    if (typeof id !== 'string' || id.length === 0 || id.length > 512) continue
+    // llama.cpp names its model after the `-m` path it was started with; the
+    // card shows the file name, so the probe reports the same id everywhere.
+    const addressable = llamaCppAddressableModelId(id)
+    if (!ids.includes(addressable)) ids.push(addressable)
   }
   return ids
 }
