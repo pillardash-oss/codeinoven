@@ -9,6 +9,7 @@ import {
 import { agentCount, normalizeAgentModifiers, sendAgentMouse } from './browser-agent-input'
 import { Logger } from '../../system/logger'
 import { type BrowserTab } from './browser-types'
+import type { BrowserService } from '../browser-service'
 import { MAX_TRANSPORT_ERROR_LENGTH } from './browser-validation'
 import { asObject } from './browser-service-common'
 
@@ -20,7 +21,19 @@ import { asObject } from './browser-service-common'
  * of the boundary rather than trusted from the other side.
  */
 
+/**
+ * What the page-script unit reads off the browser service.
+ *
+ * The agent's cursor is the app's own mark, so its appearance belongs to the service
+ * that knows the theme and the UI scale, not to the script that draws it.
+ */
+export interface AgentScriptHost {
+  readonly agentCursorAppearance: BrowserService['agentCursorAppearance']
+}
+
 export class BrowserServiceAgentScript {
+  constructor(private readonly host: AgentScriptHost) {}
+
   /**
    * Run one page-side expression, with a readable failure.
    *
@@ -180,7 +193,13 @@ export class BrowserServiceAgentScript {
     if (contents.isDestroyed()) return
     try {
       await contents.executeJavaScript(
-        agentCursorScript({ x: Math.round(point.x), y: Math.round(point.y), press, hide: false })
+        agentCursorScript({
+          x: Math.round(point.x),
+          y: Math.round(point.y),
+          press,
+          hide: false,
+          appearance: await this.host.agentCursorAppearance()
+        })
       )
     } catch (error) {
       Logger.dev('The agent cursor overlay could not be drawn:', error)

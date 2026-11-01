@@ -27,6 +27,8 @@
  *    working and no snapshot mistakes it for page content.
  */
 
+import { type AgentCursorAppearance } from '../../../lib/browser/agent-cursor'
+
 /** The attribute a snapshot reference lives on. Page-side, survives until reload. */
 export const AGENT_REF_ATTRIBUTE = 'data-cio-ref'
 /**
@@ -488,10 +490,13 @@ export function agentCursorScript(request: {
   y: number
   press: boolean
   hide: boolean
+  appearance: AgentCursorAppearance
 }): string {
   return `(() => {
     const MARK_ATTR = ${JSON.stringify(AGENT_OWNED_ATTRIBUTE)};
     const CURSOR_ID = '__cio-agent-cursor';
+    const APPEARANCE = ${JSON.stringify(request.appearance)};
+    const appearanceKey = JSON.stringify(APPEARANCE);
     const existing = document.getElementById(CURSOR_ID);
     if (${request.hide ? 'true' : 'false'}) {
       if (existing) existing.remove();
@@ -499,30 +504,61 @@ export function agentCursorScript(request: {
       return { cursor: false };
     }
     let record = globalThis.__cioAgentCursor;
-    if (!record || !existing || existing.getAttribute(MARK_ATTR) !== 'cursor') {
+    // A pointer drawn before the theme, contrast level or UI scale changed carries
+    // the old colours or size, so it is redrawn rather than moved.
+    if (
+      !record ||
+      !existing ||
+      existing.getAttribute(MARK_ATTR) !== 'cursor' ||
+      record.appearanceKey !== appearanceKey
+    ) {
+      if (existing) existing.remove();
+      const { fill, stroke, accent, scale } = APPEARANCE;
       const host = document.createElement('div');
       host.id = CURSOR_ID;
       host.setAttribute(MARK_ATTR, 'cursor');
       host.setAttribute('aria-hidden', 'true');
-      host.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;transition:left 90ms linear,top 90ms linear;';
+      host.style.cssText =
+        'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;transition:left 90ms linear,top 90ms linear;';
+      // The pointer is a light body in a dark outline, so it separates from a page of
+      // either colour: the outline is what a light page shows, the body is what a dark
+      // one shows. The drop shadows sit behind the whole shape, which is what keeps a
+      // mid-tone page from swallowing it.
       const pointer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      pointer.setAttribute('width', '18');
-      pointer.setAttribute('height', '24');
+      pointer.setAttribute('width', String(18 * scale));
+      pointer.setAttribute('height', String(24 * scale));
       pointer.setAttribute('viewBox', '0 0 18 24');
-      pointer.style.cssText = 'position:absolute;left:-1px;top:-1px;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5));';
-      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', 'M1 1 L1 19.2 L5.6 14.9 L8.6 21.6 L11.6 20.2 L8.6 13.7 L14.6 13.1 Z');
-      path.setAttribute('fill', '#ffffff');
-      path.setAttribute('stroke', '#111111');
-      path.setAttribute('stroke-width', '1.3');
-      path.setAttribute('stroke-linejoin', 'round');
-      pointer.appendChild(path);
+      const tip = 1 * scale;
+      pointer.style.cssText =
+        'position:absolute;overflow:visible;left:' + (-tip) + 'px;top:' + (-tip) + 'px;' +
+        'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.55)) drop-shadow(0 0 1px rgba(0,0,0,0.45));';
+      const shape = 'M1 1 L1 19.2 L5.6 14.9 L8.6 21.6 L11.6 20.2 L8.6 13.7 L14.6 13.1 Z';
+      const halo = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      halo.setAttribute('d', shape);
+      halo.setAttribute('fill', stroke);
+      halo.setAttribute('stroke', stroke);
+      halo.setAttribute('stroke-width', '2.6');
+      halo.setAttribute('stroke-linejoin', 'round');
+      const body = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      body.setAttribute('d', shape);
+      body.setAttribute('fill', fill);
+      body.setAttribute('stroke', stroke);
+      body.setAttribute('stroke-width', '1.2');
+      body.setAttribute('stroke-linejoin', 'round');
+      pointer.appendChild(halo);
+      pointer.appendChild(body);
+      const ringSize = Math.round(28 * scale);
       const ring = document.createElement('div');
-      ring.style.cssText = 'position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:9999px;border:2px solid #0a84ff;opacity:0;';
+      // The ring carries the accent, with a dark edge of its own so it survives a page
+      // of that same gold and does not read as page content.
+      ring.style.cssText =
+        'position:absolute;border-radius:9999px;opacity:0;box-sizing:border-box;' +
+        'left:' + (-ringSize / 2) + 'px;top:' + (-ringSize / 2) + 'px;width:' + ringSize + 'px;height:' + ringSize + 'px;' +
+        'border:2px solid ' + accent + ';box-shadow:0 0 0 1.5px rgba(8,24,37,0.65);';
       host.appendChild(ring);
       host.appendChild(pointer);
       (document.body || document.documentElement).appendChild(host);
-      record = { host, ring };
+      record = { host, ring, pointer, appearanceKey };
       globalThis.__cioAgentCursor = record;
     }
     record.host.style.left = ${JSON.stringify(request.x)} + 'px';

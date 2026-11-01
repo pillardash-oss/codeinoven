@@ -2,7 +2,6 @@
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
   import BrowserDownloadProgress from '$lib/components/browser/BrowserDownloadProgress.svelte'
@@ -23,19 +22,14 @@
 
   let { payload, onDismiss }: Props = $props()
 
-  const VISIBLE_TERMINALS = 6
   const VISIBLE_DOWNLOADS = 4
 
   let hasThreads = $derived((payload?.projects.length ?? 0) > 0)
-  let terminals = $derived(payload?.terminals ?? [])
-  let visibleTerminals = $derived(terminals.slice(0, VISIBLE_TERMINALS))
-  let remainingTerminalCount = $derived(Math.max(0, terminals.length - VISIBLE_TERMINALS))
-  let hasTerminals = $derived(terminals.length > 0)
   let downloads = $derived(payload?.downloads ?? [])
   let visibleDownloads = $derived(downloads.slice(0, VISIBLE_DOWNLOADS))
   let remainingDownloadCount = $derived(Math.max(0, downloads.length - VISIBLE_DOWNLOADS))
   let hasDownloads = $derived(downloads.length > 0)
-  let hasListings = $derived(hasThreads || hasTerminals || hasDownloads)
+  let hasListings = $derived(hasThreads || hasDownloads)
   let forcing = $derived(updateBlockers.forcing)
   let failure = $derived(updateBlockers.failure)
 
@@ -43,15 +37,13 @@
    * What stopping this costs, in the order the sections above list it.
    *
    * Unlike the close gate, nothing here pauses instead of stopping: a thread
-   * interrupted mid-turn comes back as a failed turn to retry, and a shell is
-   * closed for good. A download is the exception the close gate already draws:
-   * its bytes are kept and the next launch continues it, so it is named as a
-   * pause rather than left unexplained.
+   * interrupted mid-turn comes back as a failed turn to retry. A download is the
+   * exception the close gate already draws: its bytes are kept and the next
+   * launch continues it, so it is named as a pause rather than left unexplained.
    */
   let costs = $derived.by(() => {
     const parts: string[] = []
     if (hasThreads) parts.push('working threads stop mid-turn')
-    if (hasTerminals) parts.push('running terminals close')
     if (hasDownloads) parts.push('running downloads pause and continue next time')
     if (parts.length === 0) return ''
     const listed =
@@ -69,16 +61,16 @@
    * The one case where the lists and the gate disagree is worth saying out loud.
    *
    * The count comes from live session state and the lists from thread rows and
-   * pty handles, so they can differ while a status settles. A non-zero count with
-   * nothing listed means the app is waiting on a session it cannot name, which is
-   * exactly what the force install is for and would otherwise read as a modal
-   * about nothing.
+   * download transfers, so they can differ while a status settles. A non-zero
+   * count with nothing listed means the app is waiting on a session it cannot
+   * name, which is exactly what the force install is for and would otherwise
+   * read as a modal about nothing.
    */
   let unnamedSentence = $derived(
     !hasListings && (payload?.activeCount ?? 0) > 0
       ? `The update is waiting on ${payload?.activeCount} session${
           payload?.activeCount === 1 ? '' : 's'
-        } with no thread or terminal to show.`
+        } with no thread or download to show.`
       : ''
   )
 
@@ -102,26 +94,6 @@
 
       {#if hasThreads}
         <WorkingThreadList projects={payload.projects} />
-      {/if}
-
-      {#if hasTerminals}
-        <div class="space-y-2">
-          <p class="text-sm text-muted">These terminals are still running:</p>
-          <ul class="space-y-1.5">
-            {#each visibleTerminals as terminal (terminal.sessionId)}
-              <li class="flex items-center gap-2 text-xs text-muted">
-                <CioTerminal size={13} class="shrink-0 text-dimmed" />
-                <span class="shrink-0 font-medium text-foreground">{terminal.shell}</span>
-                <span class="min-w-0 truncate font-mono text-dimmed" title={terminal.cwd}>
-                  {terminal.cwd}
-                </span>
-              </li>
-            {/each}
-            {#if remainingTerminalCount > 0}
-              <li class="pl-5 text-xs text-dimmed">+{remainingTerminalCount} more</li>
-            {/if}
-          </ul>
-        </div>
       {/if}
 
       {#if hasDownloads}
