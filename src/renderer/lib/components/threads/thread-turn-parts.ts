@@ -142,6 +142,12 @@ export interface TranscriptIndex {
   steerCard: (number | null)[]
   /** Whether the turn that opens at this index has completed. */
   turnCompleted: boolean[]
+  /**
+   * Whether the tail card had to be rescued because no resolution rule could
+   * place the newest finished turn's card. True is a bug report, not a state
+   * the reader should ever meet, and the renderer logs it when it happens.
+   */
+  tailCardRescued: boolean
 }
 
 /**
@@ -183,6 +189,7 @@ function resolveCheckpointOwners(
   owners: (TurnCheckpointSummary | null)[]
   card: boolean[]
   steer: (number | null)[]
+  rescued: boolean
 } {
   const owners: (TurnCheckpointSummary | null)[] = new Array(messages.length).fill(null)
   const card: boolean[] = new Array(messages.length).fill(false)
@@ -283,7 +290,71 @@ function resolveCheckpointOwners(
     index = cardIndex
   }
 
-  return { messageIndexById: indexByMessageId, owners, card, steer }
+  const rescued = placeTailCardForUncardedTurn(messages, checkpoints, owners, card)
+
+  return { messageIndexById: indexByMessageId, owners, card, steer, rescued }
+}
+
+/**
+ * The last guard between a finished turn that changed files and a reader who
+ * sees no card for it.
+ *
+ * Every rule above places a card only where a turn provably ends: the anchored
+ * rule needs the prompt that opened the turn in the loaded window, and the
+ * timestamp fallback needs the assistant rows to fall inside the checkpoint's
+ * start and completion clocks. A window that begins mid-turn, a mirror whose
+ * clock runs slightly behind the checkpoint, or a shipped summary that lost its
+ * source message id can leave the newest finished turn owning no card at all,
+ * and the reader is shown a turn that committed files as if it had touched
+ * nothing.
+ *
+ * So the newest finished checkpoint that recorded changes and placed no card
+ * anywhere draws at the transcript's final turn end, provided its own window
+ * covers that turn. A turn with a card of its own is never displaced: this only
+ * runs when the resolution above produced nothing for the turn the reader just
+ * watched finish.
+ */
+function placeTailCardForUncardedTurn(
+  messages: readonly AgentMessage[],
+  checkpoints: readonly TurnCheckpointSummary[],
+  owners: (TurnCheckpointSummary | null)[],
+  card: boolean[]
+): boolean {
+  const tail = lastTurnEndIndex(messages)
+  if (tail < 0) return false
+  let newest: TurnCheckpointSummary | null = null
+  for (const checkpoint of checkpoints) {
+    if (!isCompleted(checkpoint) || checkpoint.changes.length === 0) continue
+    if (!newest || checkpoint.createdAt > newest.createdAt) newest = checkpoint
+  }
+  if (!newest) return false
+  // Its card may already be on screen somewhere; only a turn nobody carded is
+  // this guard's business.
+  for (let index = 0; index < card.length; index++) {
+    if (card[index] && owners[index]?.id === newest.id) return false
+  }
+  // The checkpoint must be the one that produced that answer: it started before
+  // the answer was written and settled no earlier than the answer closed. A
+  // retried turn begins after its prompt and still owns it, which is why this
+  // reads the answer rather than the prompt.
+  const answer = messages[tail]
+  if (!answer || answer.createdAt === undefined) return false
+  if (newest.createdAt >= answer.createdAt) return false
+  if (newest.completedAt === undefined || answer.completedAt === undefined) return false
+  if (newest.completedAt < answer.completedAt) return false
+  owners[tail] = newest
+  card[tail] = true
+  return true
+}
+
+/** Index of the newest message that closes a turn, or -1 when there is none. */
+function lastTurnEndIndex(messages: readonly AgentMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'assistant' || message.inlineArtifact) continue
+    return isTurnEndIndex(messages, index) ? index : -1
+  }
+  return -1
 }
 
 /**
@@ -415,7 +486,10 @@ export function buildTranscriptIndex(
     }
   }
 
-  const { messageIndexById, owners, card, steer } = resolveCheckpointOwners(messages, checkpoints)
+  const { messageIndexById, owners, card, steer, rescued } = resolveCheckpointOwners(
+    messages,
+    checkpoints
+  )
   for (let index = 0; index < count; index++) {
     const opens = isTurnStartIndex(messages, index)
     const closes = isTurnEndIndex(messages, index)
@@ -441,7 +515,8 @@ export function buildTranscriptIndex(
     checkpoint,
     checkpointCard,
     steerCard,
-    turnCompleted
+    turnCompleted,
+    tailCardRescued: rescued
   }
 }
 

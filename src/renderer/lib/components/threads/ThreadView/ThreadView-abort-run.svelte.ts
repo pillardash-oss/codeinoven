@@ -234,6 +234,20 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         nextCheckpoints,
         request
       )
+      // A rescued tail card means no rule could place the newest finished
+      // turn's card and the safety net drew it instead. It is a bug report, so
+      // it says which turn and what the renderer was holding.
+      if (this.root.pollStreamParts.transcriptIndex.tailCardRescued) {
+        logRendererDev(
+          `Turn cards: drew the newest finished turn's card at the transcript tail ${JSON.stringify(
+            {
+              threadId: id,
+              checkpoints: this.checkpoints.length,
+              messages: this.root.buildSpecActionPrompt.structureMessages.length
+            }
+          )}`
+        )
+      }
     } catch (error) {
       // A silently dropped read blanks every turn card in the thread for the
       // whole session (the list is the only source a card is drawn from), so a

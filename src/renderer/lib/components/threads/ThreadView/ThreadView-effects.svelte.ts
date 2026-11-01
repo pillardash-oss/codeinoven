@@ -693,21 +693,20 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       const content = el?.firstElementChild
       if (!el || !(content instanceof Element)) return
       const observer = new ResizeObserver(() => {
-        if (
-          !this.root.loadOlderMessages.scrollEl ||
-          !mayReanchorToLatest(this.root.loadOlderMessages.userScrolledAway)
-        )
+        const scroller = this.root.loadOlderMessages.scrollEl
+        if (!scroller) return
+        if (!mayReanchorToLatest(this.root.loadOlderMessages.userScrolledAway)) {
+          // The reader owns the viewport here. Hold the block they are reading
+          // where it was, so work that mounts, folds, reveals or measures above
+          // them (a trace body, a first-paint batch, a history page, a picture
+          // finding its height) can never slide the transcript under them.
+          this.root.loadOlderMessages.holdReaderPlace()
           return
+        }
         // Re-anchor only when the viewport actually drifted from the bottom
         // a no-op write here would fire a pointless scroll event per resize.
-        if (
-          this.root.loadOlderMessages.scrollEl.scrollHeight -
-            this.root.loadOlderMessages.scrollEl.scrollTop -
-            this.root.loadOlderMessages.scrollEl.clientHeight >
-          1
-        ) {
-          this.root.loadOlderMessages.scrollEl.scrollTop =
-            this.root.loadOlderMessages.scrollEl.scrollHeight
+        if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 1) {
+          scroller.scrollTop = scroller.scrollHeight
         }
       })
       observer.observe(content)

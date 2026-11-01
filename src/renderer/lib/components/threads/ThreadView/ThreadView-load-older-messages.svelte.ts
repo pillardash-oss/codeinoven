@@ -325,6 +325,56 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // Nothing loads from here: the history row's own visibility observer (see
     // `watchHistoryHead`) is what triggers the conversation-level fetch, and
     // only once that row is genuinely on screen.
+    this.captureReaderAnchor()
+  }
+
+  /**
+   * What the reader is looking at, and where it sits in their viewport.
+   *
+   * The transcript has several writers (the tail follower, the history seam, the
+   * first-paint reveal, a trace folding or opening above the reader, media that
+   * finds its height late), and every one of them changes the layout under a
+   * reader who is not at the bottom. Holding the block at the top of the
+   * viewport is what keeps their place across all of them: it is the reader's
+   * viewport, and none of those writers is allowed to move it.
+   */
+  private readerAnchor: { node: HTMLElement; offset: number } | null = null
+
+  /** Remember the block at the top of the reader's viewport. Called on every
+   *  scroll, so the offset always describes the frame before a change lands. */
+  captureReaderAnchor(): void {
+    const el = this.scrollEl
+    if (!el || !this.userScrolledAway) {
+      this.readerAnchor = null
+      return
+    }
+    const frame = el.getBoundingClientRect()
+    let anchor: HTMLElement | null = null
+    for (const block of el.querySelectorAll<HTMLElement>('.message-block')) {
+      if (block.getBoundingClientRect().bottom > frame.top + 1) {
+        anchor = block
+        break
+      }
+    }
+    this.readerAnchor = anchor
+      ? { node: anchor, offset: anchor.getBoundingClientRect().top - frame.top }
+      : null
+  }
+
+  /** Put the reader's block back where it was after a layout change above it.
+   *  A no-op while the history seam is already holding the same place. */
+  holdReaderPlace(): void {
+    const el = this.scrollEl
+    const anchor = this.readerAnchor
+    if (!el || !anchor || !anchor.node.isConnected) return
+    if (!this.userScrolledAway || this.loadingOlderMessages || this.viewportSettling) return
+    const frame = el.getBoundingClientRect()
+    const drift = anchor.node.getBoundingClientRect().top - frame.top - anchor.offset
+    if (Math.abs(drift) < 0.5) return
+    el.scrollTop += drift
+    // Read back: the browser clamps, and the next scroll event measures the
+    // reader against what the scroller actually holds.
+    this.viewportWriteTop = el.scrollTop
   }
 
   loadingOlderMessages = $state(false)
