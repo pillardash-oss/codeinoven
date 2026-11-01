@@ -1068,16 +1068,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.harnessInstallService = new HarnessInstallService(state.providerConnection)
     state.notificationService = new NotificationService(storage, database, context.onThreadClicked)
 
-    // Optional IPC   registered only after the services exist.
-    if (state.updaterService) {
-      state.updaterService.addActivitySource({
-        activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0,
-        describeOtherSessions: () => state.ptyService?.describeSessions() ?? [],
-        terminateActiveWork: async () => {
-          state.ptyService?.closeAllSessions()
-        }
-      })
-    }
+    // A live terminal no longer gates the update install: only working threads
+    // and running browser downloads may hold it back, so a shell the user left
+    // open never postpones an update. The shutdown pipeline still destroys the
+    // pty sessions on quit.
+    //
     // A pid the task manager ends can be a terminal's own shell. The PTY
     // service announces that stop so the renderer does not respawn it as a
     // crash, which is the difference between a kill that holds and a shell that

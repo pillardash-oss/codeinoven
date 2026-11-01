@@ -276,28 +276,6 @@ describe('UpdaterService session-safe install', () => {
     }
   })
 
-  it('treats a live terminal session as active work', async () => {
-    const storage = makeStorage()
-    const service = new UpdaterService(storage)
-    service.setChatEngine(makeChatEngine(() => 0))
-    const terminals = { value: 1 }
-    service.addActivitySource({ activeSessionCount: () => terminals.value })
-
-    await emitDownloaded()
-
-    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
-    expect(service.status.state).toBe('waiting')
-
-    await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
-    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
-
-    // Closing the terminal lets the deferred install proceed exactly once.
-    terminals.value = 0
-    await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
-    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
-    expect(service.status.state).toBe('idle')
-  })
-
   it('treats a live activity source as active work', async () => {
     const storage = makeStorage()
     const service = new UpdaterService(storage)

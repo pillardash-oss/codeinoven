@@ -5,7 +5,6 @@ import { Logger } from '../system/logger'
 import type {
   BrowserDownload,
   CloseConfirmationProject,
-  UpdateBlockerTerminal,
   UpdateBlockers,
   UpdaterChangelog,
   UpdaterStatus
@@ -81,16 +80,9 @@ export interface SessionActivitySource {
    * Optional authoritative sweep run before an install decision: settle the work
    * this source believes is running but cannot corroborate, and return how much
    * it settled. A source whose count is a direct observation of live resources
-   * (a terminal session) has nothing to reconcile and omits this.
+   * has nothing to reconcile and omits this.
    */
   reconcileUnverifiedWork?(): Promise<number>
-  /**
-   * Everything behind this source's count that is not a working thread, such as a
-   * live terminal session. Listed in the same force-install modal as the threads,
-   * because a restart takes both down and the user is being asked to approve
-   * exactly that.
-   */
-  describeOtherSessions?(): UpdateBlockerTerminal[]
   /**
    * Stop everything this source counts. Reached only from the force-install
    * override the user explicitly confirms, so it may interrupt live work. Must be
@@ -415,7 +407,10 @@ export class UpdaterService {
   }
 
   /**
-   * Register an extra activity source (for example live terminal sessions). */
+   * Register an extra activity source that may hold an unattended install back
+   * (for example feature startup still settling). Terminals deliberately have no
+   * source here: only threads and downloads prevent an update.
+   */
   addActivitySource(source: SessionActivitySource): void {
     this.activitySources.push(source)
   }
@@ -458,14 +453,6 @@ export class UpdaterService {
    * sent separately rather than recomputed from the lists.
    */
   blockers(): UpdateBlockers {
-    const terminals: UpdateBlockerTerminal[] = []
-    for (const source of this.activitySources) {
-      try {
-        terminals.push(...(source.describeOtherSessions?.() ?? []))
-      } catch (error: unknown) {
-        Logger.error('Updater: failed to describe blocking activity', error)
-      }
-    }
     let projects: CloseConfirmationProject[] = []
     try {
       projects = this.workingThreadReport?.() ?? []
@@ -479,7 +466,6 @@ export class UpdaterService {
       version: this._status.availableVersion ?? '',
       activeCount: this.activeSessionCount() + downloads.length,
       projects,
-      terminals,
       downloads
     }
   }
@@ -1150,9 +1136,10 @@ export class UpdaterService {
     // "Restart to update".
     //
     // The extra sources count on top of the engine's answer rather than being
-    // replaced by it. A live terminal is real work a restart would destroy, and
-    // the engine's working-session badge cannot see one; returning the badge
-    // alone silently dropped every terminal from this gate.
+    // replaced by it. They cover work the engine's working-session badge cannot
+    // see, such as feature startup still settling. A live terminal is
+    // deliberately not one of them: only threads and downloads prevent an
+    // update, so an open shell never holds the install back.
     let count = this.chatEngine?.workingSessionCount
       ? this.chatEngine.workingSessionCount()
       : (this.chatEngine?.activeSessionCount() ?? 0)
