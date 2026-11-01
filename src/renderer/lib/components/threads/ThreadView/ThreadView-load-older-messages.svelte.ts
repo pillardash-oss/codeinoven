@@ -350,12 +350,18 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     }
     const frame = el.getBoundingClientRect()
     let anchor: HTMLElement | null = null
+    let lastAbove: HTMLElement | null = null
     for (const block of el.querySelectorAll<HTMLElement>('.message-block')) {
       if (block.getBoundingClientRect().bottom > frame.top + 1) {
         anchor = block
         break
       }
+      lastAbove = block
     }
+    // Nothing straddles the top (the reader is inside a gap, a card or a long
+    // trace): the nearest block above still moves by exactly the height any
+    // layout change above them adds, so it anchors the same viewport.
+    anchor ??= lastAbove
     this.readerAnchor = anchor
       ? { node: anchor, offset: anchor.getBoundingClientRect().top - frame.top }
       : null
