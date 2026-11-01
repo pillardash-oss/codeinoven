@@ -968,23 +968,27 @@ class SpeechController {
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(insertionSnapshot, transcript)
       let applied: SpeechEditorApplyResult = inserted
-      if (!applied.ok && active.target.fallbackApply) {
-        // Every failed insertion still has a home: the target's store-level
-        // fallback appends the transcript to the value it mirrors. That covers a
-        // destroyed editor, a field the user kept typing in while the model was
-        // transcribing, and a box an armed level-2 steer has already emptied,
-        // which is exactly the case an armed transcript has to survive.
-        applied = active.target.fallbackApply(insertionSnapshot, transcript)
-      }
-      if (!applied.ok) {
+      let landedInStoredDraft = false
+      if (!applied.ok && applied.reason !== 'destroyed') {
         // The field is still on screen but no longer holds what the recording
-        // was measured against (an editor that re-rendered or normalised its
-        // content while the model worked). Inserting against its value as it is
-        // now is what the user asked for when they pressed the mic, and it is
-        // the only reading that works for an editor whose serialized form is not
-        // byte-stable.
+        // was measured against: the user kept typing while the model worked, or
+        // the editor re-rendered and normalised its content. Inserting against
+        // its value as it is now is what the user asked for when they pressed
+        // the mic, so it happens before anything is written to the store the
+        // field mirrors: a store write while the editor is live put the words
+        // where only the next visit could show them, leaving the composer the
+        // user was looking at empty.
         const fresh = active.target.capture()
         if (fresh) applied = active.target.apply(fresh, transcript)
+      }
+      if (!applied.ok && active.target.fallbackApply) {
+        // Nothing on screen could take it, so every failed insertion still has a
+        // home: the target's store-level fallback appends the transcript to the
+        // value it mirrors. That covers a destroyed editor, and a box an armed
+        // level-2 steer has already emptied, which is exactly the case an armed
+        // transcript has to survive.
+        applied = active.target.fallbackApply(insertionSnapshot, transcript)
+        landedInStoredDraft = applied.ok
       }
       if (!applied.ok) {
         // Nothing on screen can take it. Hold the transcript for its field
@@ -1011,8 +1015,11 @@ class SpeechController {
       // composer drives its own send path whenever the transcript reached the
       // live editor; otherwise the mirrored draft is delivered headlessly,
       // which is what makes this work from another thread entirely.
+      // Only an insertion the mounted editor accepted counts as landed live: a
+      // transcript that survived in the stored draft instead still has to be
+      // handed over headlessly, from the mirror that now holds it.
       const intent = this.voiceSends.find((entry) => entry.attemptId === active.attemptId)
-      if (intent) await this.deliverArmedVoiceSend(intent, inserted.ok)
+      if (intent) await this.deliverArmedVoiceSend(intent, applied.ok && !landedInStoredDraft)
     } catch (cause) {
       await invoke('speech:markAttemptFailure', active.attemptId, errorMessage(cause)).catch(
         () => undefined

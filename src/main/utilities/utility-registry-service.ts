@@ -42,6 +42,11 @@ import {
   ARTIFACT_CAPABILITY_NAME,
   ARTIFACT_CAPABILITY_SUMMARY
 } from '../../lib/artifact-skill'
+import {
+  CITE_CAPABILITY_DOCS,
+  CITE_CAPABILITY_NAME,
+  CITE_CAPABILITY_SUMMARY
+} from '../../lib/cited-work'
 import type { StorageEngine } from '../storage/storage-engine'
 import { parseMcpOAuthConfig } from './mcp-oauth/mcp-oauth-config'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
@@ -51,6 +56,7 @@ import { parseMcpOAuthConfig } from './mcp-oauth/mcp-oauth-config'
 import {
   APP_ARTIFACT_UTILITY_ID,
   APP_ADB_UTILITY_ID,
+  APP_CITE_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
@@ -61,6 +67,7 @@ import {
 export {
   APP_ARTIFACT_UTILITY_ID,
   APP_ADB_UTILITY_ID,
+  APP_CITE_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
@@ -324,6 +331,21 @@ export class UtilityRegistryService {
         updatedAt: now
       }
     ]
+    defaults.push({
+      id: APP_CITE_UTILITY_ID,
+      kind: 'skill',
+      name: CITE_CAPABILITY_NAME,
+      description: CITE_CAPABILITY_SUMMARY,
+      enabled: true,
+      activation: 'on_demand',
+      scope: { level: 'global' },
+      config: { instructions: CITE_CAPABILITY_DOCS },
+      credentials: [],
+      harnessBindings: [{ harnessId: ALL_HARNESSES_BINDING_ID, strategy: 'skill' as const }],
+      appOwned: true,
+      createdAt: now,
+      updatedAt: now
+    })
     defaults.push({
       id: APP_ARTIFACT_UTILITY_ID,
       kind: 'skill',

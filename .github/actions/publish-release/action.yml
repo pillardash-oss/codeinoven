@@ -17,6 +17,15 @@ inputs:
       `nightly` publishes a prerelease and keeps the stable release as latest.
       `stable` publishes a full release and moves latest onto it.
     required: true
+  extra-assets:
+    description: >-
+      Whitespace-separated shell globs of artifacts to attach in the same
+      publish call as the installers, for files that are not part of
+      `release-artifacts.ts paths` (the Microsoft Store package). Must be
+      attached here: on a repository that enforces immutable releases, GitHub
+      rejects every asset upload once the release is published.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -60,6 +69,7 @@ runs:
         RELEASE_TAG: ${{ inputs.tag }}
         RELEASE_VERSION: ${{ inputs.version }}
         RELEASE_CHANNEL: ${{ inputs.channel }}
+        RELEASE_EXTRA_ASSETS: ${{ inputs.extra-assets }}
       run: |
         if [ "$RELEASE_CHANNEL" = "nightly" ]; then
           title="CodeInOven $RELEASE_VERSION nightly"
@@ -84,23 +94,80 @@ runs:
           files+=("$f")
         done < <(bun scripts/release-artifacts.ts paths --dir artifacts)
 
+        # Extra assets travel in the same publish call on purpose: GitHub refuses
+        # every asset upload once a release is published on a repository that
+        # enforces immutable releases (the "Attach the Microsoft Store package"
+        # step that used to follow this action failed with
+        # "HTTP 422: Cannot upload assets to an immutable release").
+        if [ -n "$RELEASE_EXTRA_ASSETS" ]; then
+          shopt -s nullglob
+          for pattern in $RELEASE_EXTRA_ASSETS; do
+            for extra in $pattern; do
+              files+=("$extra")
+            done
+          done
+          shopt -u nullglob
+        fi
+
         publish_attempt=0
         publish_exit=1
         while [ "$publish_attempt" -lt 3 ]; do
           publish_attempt=$((publish_attempt + 1))
+          immutable_blocked=false
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # A release that already exists may already be published, and a
+            # published release cannot gain assets at all, so only the assets it
+            # is missing are uploaded: `--clobber` would fail every rerun.
+            present=()
+            while IFS= read -r asset; do
+              present+=("$asset")
+            done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+            missing=()
+            for file in "${files[@]}"; do
+              name="${file##*/}"
+              found=false
+              for asset in "${present[@]}"; do
+                if [ "$asset" = "$name" ]; then
+                  found=true
+                  break
+                fi
+              done
+              if [ "$found" = false ]; then
+                missing+=("$file")
+              fi
+            done
+            branch_exit=0
+            if [ ${#missing[@]} -gt 0 ]; then
+              if ! upload_output="$(gh release upload "$RELEASE_TAG" "${missing[@]}" 2>&1)"; then
+                printf '%s\n' "$upload_output"
+                branch_exit=1
+                if printf '%s' "$upload_output" | grep -q 'immutable release'; then
+                  # Not a transient failure: a retry would be refused identically.
+                  immutable_blocked=true
+                  echo "::error::Release $RELEASE_TAG is published and immutable, so GitHub refuses to add ${missing[*]} to it. Re-run the release workflow from a commit whose publish call carries every asset, or delete the release and its tag and publish again."
+                fi
+              else
+                printf '%s\n' "$upload_output"
+              fi
+            fi
             # Chained so a failed upload cannot be masked by a succeeding edit:
             # `publish_exit` reflects only the last command in the branch.
-            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber \
-              && gh release edit "$RELEASE_TAG" --title "$title" --notes-file release-notes.md "${edit_flags[@]}"
+            if [ "$branch_exit" -eq 0 ]; then
+              gh release edit "$RELEASE_TAG" --title "$title" --notes-file release-notes.md "${edit_flags[@]}"
+              branch_exit=$?
+            fi
+            publish_exit=$branch_exit
+            if [ "$immutable_blocked" = true ]; then
+              break
+            fi
           else
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$GITHUB_SHA" \
               --title "$title" \
               --notes-file release-notes.md \
               "${create_flags[@]}"
+            publish_exit=$?
           fi
-          publish_exit=$?
           if [ "$publish_exit" -eq 0 ]; then
             break
           fi

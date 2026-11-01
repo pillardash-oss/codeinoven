@@ -226,8 +226,15 @@ function renderSidebar(): {
   return { target, sidebar, component }
 }
 
+/**
+ * The timeline's own rows.
+ *
+ * Scoped to the threads pane: every view's list stays mounted, and a projects
+ * tree with a folded folder still draws the active thread there, so an
+ * unscoped query sees the same thread id in two panes at once.
+ */
 const timelineRowIds = (target: HTMLElement): string[] =>
-  [...target.querySelectorAll<HTMLElement>('[data-thread-row]')].map(
+  [...target.querySelectorAll<HTMLElement>('[data-sidebar-pane="threads"] [data-thread-row]')].map(
     (row) => row.dataset.threadRow ?? ''
   )
 

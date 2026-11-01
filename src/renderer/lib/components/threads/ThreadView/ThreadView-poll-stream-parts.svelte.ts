@@ -184,6 +184,12 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     )
     if (!closing) return false
     if (closing.phase === 'final_answer') return true
+    // A turn whose answer is already recorded as delivered keeps it on screen.
+    // An automatic retry of a completed turn turns the busy flag back on for a
+    // few seconds at a time, and hiding the answer for that swapped the
+    // transcript between the answer and the live trace on every attempt, which
+    // is the scroll that jumped up and down on its own.
+    if (this.root.loadOlderMessages.messages[endIndex]?.completedAt) return true
     if (!this.conversationBusy || !isLastTurnEnd) return true
     return turnEndsOnQuestion(
       this.root.loadOlderMessages.messages,

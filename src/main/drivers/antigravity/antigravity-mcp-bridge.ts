@@ -8,6 +8,7 @@ import {
   UTILITY_SEARCH_TOOL_NAME
 } from '../../../lib/gateway-tools'
 import { Logger } from '../../system/logger'
+import { linkMacosLoginKeychain } from './antigravity-keychain'
 
 /**
  * Antigravity CLI's MCP bridge.
@@ -173,13 +174,16 @@ async function linkInto(target: string, linkPath: string, kind: 'file' | 'dir'):
 }
 
 /**
- * Build the turn's HOME: the CLI profile and the non-MCP parts of the global
- * config are linked through from the real home, so the only thing the turn
- * overrides is its own `mcp_config.json`.
+ * Build the turn's HOME: the CLI profile, the macOS login keychain and the
+ * non-MCP parts of the global config are linked through from the real home, so
+ * the only thing the turn overrides is its own `mcp_config.json`. The keychain
+ * is not optional: without it the CLI finds no credential store under the
+ * redirected HOME and macOS answers that miss with a keychain-reset alert.
  */
 export async function linkAntigravityProfile(sessionHome: string, realHome: string): Promise<void> {
   const gemini = join(sessionHome, '.gemini')
   await mkdir(join(gemini, 'config'), { recursive: true })
+  await linkMacosLoginKeychain(sessionHome, realHome)
   const realGemini = join(realHome, '.gemini')
   await linkInto(join(realGemini, 'antigravity-cli'), join(gemini, 'antigravity-cli'), 'dir')
   await linkInto(

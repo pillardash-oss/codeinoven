@@ -31,6 +31,7 @@
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import InlineMediaFigure from '../InlineMediaFigure.svelte'
   import InlineImageFigure from '../InlineImageFigure.svelte'
+  import CitedEntryCard from '../CitedEntryCard.svelte'
   import RunChangesCard from '../RunChangesCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import DeferredMarkdownView from '../../markdown/DeferredMarkdownView.svelte'
@@ -337,6 +338,16 @@
                   kind="audio"
                   filename={part.filename ?? 'Media'}
                   onExpand={() => board.editVideoNote.openMessageViewer(msg, part)}
+                />
+              {:else if part.type === 'cited'}
+                <CitedEntryCard
+                  entry={{
+                    name: part.name,
+                    path: part.path,
+                    kind: part.kind,
+                    modifiedAt: part.modifiedAt
+                  }}
+                  projectId={board.handleAgentEvent.thread.projectId}
                 />
               {/if}
             {/each}
@@ -699,6 +710,7 @@
                 {@const traceIsLive =
                   board.unmirroredTraceStartTime.threadWorking &&
                   isCurrentAssistantTurn &&
+                  !turnDone &&
                   !board.unmirroredTraceStartTime.brainstormReportRefreshing}
                 {@const traceIsRestored =
                   board.buildSpecActionPrompt.restoredBusy &&

@@ -68,6 +68,7 @@
     groupThreadsByStatus,
     threadHasVisibleWork
   } from './workspace-thread-helpers'
+  import { foldedSectionRows } from '$lib/thread-section-rows'
   import { countThreadStatesByProject, emptyThreadStateCounts } from '$lib/thread-state-counts'
   import { toast } from 'svelte-sonner'
   import { moveThreadInList, resolveTimelineDrop } from './sidebar-thread-drop'
@@ -336,8 +337,13 @@
       .map((group) => ({
         key: `group:${group.label}`,
         group,
-        // A folded group keeps its heading and drops its rows.
-        threads: threadGroupingState.isFolded(group.label) ? [] : group.threads
+        // A folded group keeps its heading and drops its rows   except the thread
+        // the user is on: the group holding the active thread stays temporarily
+        // open by that one row, so folding can never take the thread being worked
+        // in off screen. Unfolding reveals the rest of the group.
+        threads: threadGroupingState.isFolded(group.label)
+          ? foldedSectionRows(group.threads, activeThreadId)
+          : group.threads
       }))
   })
 
@@ -1200,6 +1206,12 @@
                 {@const expanded =
                   sidebar.expandedFolders.has(project.id) ||
                   sidebar.projectSearchOpen.has(project.id)}
+                <!-- A folded folder still reveals the one thread the user is on, so
+                     folding a project can never take the active thread off screen.
+                     Unfolding brings the rest of the folder back. -->
+                {@const revealedThreads = expanded
+                  ? []
+                  : foldedSectionRows(folderThreads, activeThreadId)}
                 {@const stateCounts =
                   projectStateCounts.get(project.id) ?? emptyThreadStateCounts()}
                 <DropdownMenu.Root
@@ -1272,18 +1284,16 @@
                         </span>
                       {/snippet}
                     </FolderRow>
-                    {#if expanded}
+                    {#if expanded || revealedThreads.length > 0}
                       {@const searchQ = sidebar.projectSearchQueries.get(project.id) ?? ''}
                       {@const isSearching = Boolean(searchQ.trim())}
                       {@const searchResults = sidebar.projectSearchResults.get(project.id) ?? []}
                       {@const filteredThreads = isSearching
                         ? []
                         : filterThreadsByQuery(folderThreads, '')}
-                      {@const visibleFolderThreads = sidebar.visibleThreads(
-                        project.id,
-                        filteredThreads,
-                        activeThreadId
-                      )}
+                      {@const visibleFolderThreads = expanded
+                        ? sidebar.visibleThreads(project.id, filteredThreads, activeThreadId)
+                        : revealedThreads}
                       {@const projectDisplayThreads = [
                         ...visibleFolderThreads.filter((thread) => thread.bookmarked),
                         ...visibleFolderThreads.filter((thread) => !thread.bookmarked)
@@ -1359,7 +1369,7 @@
                               />
                             {/each}
                           </div>
-                          {#if hiddenFolderCount > 0}
+                          {#if expanded && hiddenFolderCount > 0}
                             <button
                               class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                               onclick={() =>
@@ -1367,7 +1377,7 @@
                             >
                               Show {hiddenFolderCount} more
                             </button>
-                          {:else if sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
+                          {:else if expanded && sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
                             <button
                               class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                               disabled={projectPageLoading === project.id}
@@ -1378,7 +1388,7 @@
                                 : 'Load older threads'}
                             </button>
                           {/if}
-                          {#if sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
+                          {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
                             <button
                               class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                               onclick={() => sidebar.showLessThreads(project.id)}
@@ -1478,6 +1488,12 @@
             )}
             {@const expanded =
               sidebar.expandedFolders.has(project.id) || sidebar.projectSearchOpen.has(project.id)}
+            <!-- A folded folder still reveals the one thread the user is on, so
+                 folding a project can never take the active thread off screen.
+                 Unfolding brings the rest of the folder back. -->
+            {@const revealedThreads = expanded
+              ? []
+              : foldedSectionRows(folderThreads, activeThreadId)}
             {@const stateCounts = projectStateCounts.get(project.id) ?? emptyThreadStateCounts()}
             <DropdownMenu.Root
               open={openProjectMenuId === project.id}
@@ -1549,18 +1565,16 @@
                 </FolderRow>
 
                 <!-- Threads under folder -->
-                {#if expanded}
+                {#if expanded || revealedThreads.length > 0}
                   {@const searchQ = sidebar.projectSearchQueries.get(project.id) ?? ''}
                   {@const isSearching = Boolean(searchQ.trim())}
                   {@const searchResults = sidebar.projectSearchResults.get(project.id) ?? []}
                   {@const filteredThreads = isSearching
                     ? []
                     : filterThreadsByQuery(folderThreads, '')}
-                  {@const visibleFolderThreads = sidebar.visibleThreads(
-                    project.id,
-                    filteredThreads,
-                    activeThreadId
-                  )}
+                  {@const visibleFolderThreads = expanded
+                    ? sidebar.visibleThreads(project.id, filteredThreads, activeThreadId)
+                    : revealedThreads}
                   {@const projectDisplayThreads = [
                     ...visibleFolderThreads.filter((thread) => thread.bookmarked),
                     ...visibleFolderThreads.filter((thread) => !thread.bookmarked)
@@ -1636,7 +1650,7 @@
                           />
                         {/each}
                       </div>
-                      {#if hiddenFolderCount > 0}
+                      {#if expanded && hiddenFolderCount > 0}
                         <button
                           class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                           onclick={() =>
@@ -1644,7 +1658,7 @@
                         >
                           Show {hiddenFolderCount} more
                         </button>
-                      {:else if sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
+                      {:else if expanded && sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
                         <button
                           class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                           disabled={projectPageLoading === project.id}
@@ -1653,7 +1667,7 @@
                           {projectPageLoading === project.id ? 'Loading…' : 'Load older threads'}
                         </button>
                       {/if}
-                      {#if sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
+                      {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
                         <button
                           class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                           onclick={() => sidebar.showLessThreads(project.id)}

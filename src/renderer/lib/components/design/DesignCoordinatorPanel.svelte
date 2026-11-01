@@ -231,7 +231,7 @@
       ? `Copy the path of this ${board.gallery.noun}`
       : `Copy ${board.gallery.noun} screen: ${screen.name}`}
     <ContextMenu.Root bind:open={board.menus.menus.card}>
-      <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
+      <ContextMenu.Trigger class={full ? 'col-span-full' : ''}>
         <div
           class="flex flex-col overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen
             ? 'border-accent/60'
@@ -1168,7 +1168,11 @@
                 {/each}
               </div>
             {:else}
-              <div class="screen-cards" aria-label={board.studio.screensLabel}>
+              <div
+                class="screen-cards"
+                data-cols={board.gallery.video ? 1 : 2}
+                aria-label={board.studio.screensLabel}
+              >
                 {#if !board.gallery.video}
                   {@render entryCard({
                     icon: CioDisplay,
@@ -1199,7 +1203,11 @@
                       {/if}
                     </div>
                     {#if !section.group?.collapsed}
-                      <div class="screen-cards col-span-full" transition:slide={{ duration: 140 }}>
+                      <div
+                        class="screen-cards col-span-full"
+                        data-cols={Math.min(section.screens.length, 3)}
+                        transition:slide={{ duration: 140 }}
+                      >
                         {#each section.screens as screen (screen.entry)}
                           {@render screenCardItem(screen, section.group?.id ?? null)}
                         {/each}
@@ -1522,24 +1530,31 @@
 
 <style>
   /*
-   * Two screens across until the panel has room for a third.
+   * The cards follow the work, never a strict column count.
    *
-   * The board is a panel that the user widens and narrows, so its column count is
-   * a question about the room it has, not about the window: the scope below is the
-   * width a card may share, and three columns arrive once the panel has been
-   * widened past the width it opens at, not merely because it has a few pixels
-   * more than two cards need.
+   * Each grid is told how many cards it holds (its `data-cols`), so a pair shares the
+   * panel between them and grows as the panel grows instead of sitting at a width
+   * borrowed from a row of three. A grid of three or more gains its third column only
+   * once the panel has the room for it, so widening the panel enlarges the cards
+   * before it packs in another one, and narrowing it never squeezes three thumbnails
+   * into a row meant for two.
    */
   .screen-board-scope {
     container-type: inline-size;
   }
   .screen-cards {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.375rem;
   }
+  .screen-cards[data-cols='2'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .screen-cards[data-cols='3'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   @container (min-width: 34rem) {
-    .screen-cards {
+    .screen-cards[data-cols='3'] {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }

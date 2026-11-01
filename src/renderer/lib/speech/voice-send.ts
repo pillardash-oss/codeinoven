@@ -67,6 +67,45 @@ function notifyComposerReset(projectId: string, threadId: string): void {
   }
 }
 
+type ComposerDraftLandedListener = (projectId: string, threadId: string) => void
+
+const composerDraftLandedListeners = new Set<ComposerDraftLandedListener>()
+
+/**
+ * Register a mounted conversation view so a dictation that could only be landed
+ * in the thread's stored draft can rebuild its composer from that draft.
+ *
+ * The transcript reaches the mirror, which is what makes the thread read as a
+ * draft and what a later visit shows, but a composer that was on screen while it
+ * landed keeps rendering its own buffer and stays empty. This is the signal that
+ * tells that composer to re-read the draft it already holds.
+ */
+export function onVoiceDraftLanded(listener: ComposerDraftLandedListener): () => void {
+  composerDraftLandedListeners.add(listener)
+  return () => {
+    composerDraftLandedListeners.delete(listener)
+  }
+}
+
+/**
+ * Tell a thread's view that a transcript landed in its stored draft.
+ *
+ * Called only by a target that had to mirror the transcript because no editor on
+ * screen could take it, so the words exist in the mirror alone and the composer
+ * for that thread is still empty. Re-reading the draft is exactly what visiting
+ * the thread again does, so this makes that visit happen instead of leaving the
+ * user to find it.
+ */
+export function notifyVoiceDraftLanded(projectId: string, threadId: string): void {
+  for (const listener of composerDraftLandedListeners) {
+    try {
+      listener(projectId, threadId)
+    } catch (cause) {
+      logRendererError('A composer draft landed listener failed after a voice transcript.', cause)
+    }
+  }
+}
+
 /**
  * The thread a dictation scope writes into, or null for global overlays and
  * scopes that never own a composer.

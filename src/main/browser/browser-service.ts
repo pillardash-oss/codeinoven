@@ -176,6 +176,20 @@ export class BrowserService {
    * thread browser to another tab or another box.
    */
   public readonly threadBrowserPages = new Map<string, BrowserThreadBrowserPage>()
+  /**
+   * The thread browser page each agent resolved, by context key (project and
+   * thread).
+   *
+   * A project's threads share one strip and one binding, so "the page the thread
+   * browser is on" moves whenever the user switches tabs or a sibling thread
+   * shows a preview. An agent that had resolved that page keeps it here instead
+   * of being silently redirected to whatever took the strip's place: `page
+   * "user"` answers the pinned tab until it is gone, and `page "strip"` asks for
+   * the strip's current page and re-pins. The pin is a tab reference rather than
+   * the strip's own binding, so a page this process has no view for yet is still
+   * mounted through the ordinary binding path.
+   */
+  public readonly agentUserPageTabIds = new Map<string, string>()
   public readonly configuredSessions = new Set<string>()
   /** Where the browser page's identity preload was written, or null if it could not be. */
   public browserIdentityPreloadPath: string | null = null
@@ -1628,7 +1642,8 @@ export class BrowserService {
 
   threadBrowserHint(
     scope: string,
-    answeredTabId: string | null
+    answeredTabId: string | null,
+    contextKey: string
   ): {
     threadBrowser?: {
       tabId: string
@@ -1637,8 +1652,9 @@ export class BrowserService {
       boxId: string | null
       detail: string
     }
+    userPage?: { tabId: string; url: string; title: string }
   } {
-    return this.conversationPagesUnit.threadBrowserHint(scope, answeredTabId)
+    return this.conversationPagesUnit.threadBrowserHint(scope, answeredTabId, contextKey)
   }
 
   conversationScope(projectId: string, threadId: string): string {

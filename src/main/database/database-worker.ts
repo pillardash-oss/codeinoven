@@ -20,7 +20,7 @@ import createDatabaseWorkerThread from './database-worker-thread.ts?nodeWorker'
 import type { Worker, WorkerOptions } from 'worker_threads'
 import { dirname, join } from 'path'
 import { Logger } from '../system/logger'
-import type { AgentMessage, UserMessageSummary } from '../../lib/types'
+import type { AgentMessage, TurnCheckpointSummary, UserMessageSummary } from '../../lib/types'
 import type { ProviderDeltaSyncResult } from './repositories/agent-message-repo'
 
 /** Spawns the worker thread. Production uses the electron-vite `?nodeWorker` factory. */
@@ -66,6 +66,7 @@ export type DatabaseWorkerRequest =
       includeTransport: boolean
     }
   | { kind: 'query-user-messages'; sql: string; params: unknown[]; maxRows: number }
+  | { kind: 'checkpoint-summaries'; sql: string; params: unknown[]; maxRows: number }
   | { kind: 'execute'; sql: string; params: unknown[] }
   | { kind: 'transaction'; statements: Array<{ sql: string; params: unknown[] }> }
   | {
@@ -197,6 +198,13 @@ export type DatabaseWorkerResult =
       ok: boolean
       messages?: UserMessageSummary[]
       truncated?: boolean
+      error?: string
+    }
+  | {
+      kind: 'checkpoint-summaries'
+      ok: boolean
+      summaries?: TurnCheckpointSummary[]
+      failed?: string[]
       error?: string
     }
   | { kind: 'execute'; ok: boolean; error?: string }
@@ -421,6 +429,20 @@ export class DatabaseWorker {
     maxRows: number
   ): Promise<ResultForRequest<'query-user-messages'>> {
     return this.request({ kind: 'query-user-messages', sql, params, maxRows })
+  }
+
+  /**
+   * Bounded read of turn checkpoints decoded, repaired and summarized on the
+   * worker thread. Those rows carry whole-project snapshots, so parsing them and
+   * recomputing a missing diff is the expensive half of reading them, and it must
+   * not run on the process that answers IPC.
+   */
+  async queryCheckpointSummaries(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<ResultForRequest<'checkpoint-summaries'>> {
+    return this.request({ kind: 'checkpoint-summaries', sql, params, maxRows })
   }
 
   /** Single write statement on the worker's connection (serialized). */

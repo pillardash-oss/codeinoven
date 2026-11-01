@@ -94,13 +94,14 @@ export interface GatewayTurnContext {
  * The page an operation works on.
  *
  * Shared by every browser tool so the wording of the choice exists once: the
- * agent's own offscreen page, or the page this conversation's thread browser is on.
+ * agent's own offscreen page, the page this conversation's thread browser resolved
+ * for the agent, or the page that browser is showing right now.
  */
 const PAGE_TARGET_FIELD = {
   type: 'string',
-  enum: ['user', 'agent'],
+  enum: ['user', 'strip', 'agent'],
   description:
-    'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
+    'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser resolved for you (it stays yours while the tab lives, even when the user or another conversation moves the browser elsewhere), "strip" for whatever that browser is showing right now. Defaults to your own page when you have one, and to page "user" otherwise.'
 }
 
 /** The element an action addresses, by the reference a snapshot reported. */
@@ -149,12 +150,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
         },
         width: { type: 'number' },
         height: { type: 'number' },
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+        page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
     }
@@ -162,7 +158,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the page: its title, URL, visible text, scroll position, and every element you could act on. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. The page this conversation\u2019s thread browser is on is readable with page "user"; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
+      'Read the page: its title, URL, visible text, scroll position, and every element you could act on. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. The page this conversation\u2019s thread browser resolved for you is readable with page "user", and page "strip" reads whatever that browser shows now; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -192,7 +188,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'click',
     description:
-      'Click an element as a pointer does: a real move, press and release through the browser\u2019s input pipeline, so hover, focus, caret and pointer handlers all run. Falls back to the element\u2019s own click only when a pointer cannot reach it, and says which happened (via "pointer" or "dom"). On the thread browser\u2019s page (page "user") the click is reviewed before it happens.',
+      'Click an element as a pointer does: a real move, press and release through the browser\u2019s input pipeline, so hover, focus, caret and pointer handlers all run. Falls back to the element\u2019s own click only when a pointer cannot reach it, and says which happened (via "pointer" or "dom"). On the thread browser\u2019s page (page "user" or "strip") the click is reviewed before it happens.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -430,12 +426,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           description:
             'Absolute local file paths, used only in Full Access. Auto Review always asks the user to choose files in the native file chooser.'
         },
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+        page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
     }
@@ -443,17 +434,12 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'navigate',
     description:
-      'Navigate the current in-app browser tab to an http(s) URL. Navigating the thread browser\u2019s page (page "user") is reviewed first: it moves the page the user is reading, not the tab they have in front of them.',
+      'Navigate the current in-app browser tab to an http(s) URL. Navigating the thread browser\u2019s page (page "user" or "strip") is reviewed first: it moves the page the user is reading, not the tab they have in front of them.',
     inputSchema: {
       type: 'object',
       properties: {
         url: { type: 'string' },
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+        page: PAGE_TARGET_FIELD
       },
       required: ['url'],
       additionalProperties: false
@@ -490,12 +476,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+        page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
     }
@@ -503,16 +484,11 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'console',
     description:
-      'Read console messages and browser runtime errors from the page being worked on. The thread browser\u2019s own page is readable with page "user", which is the page the user is looking at.',
+      'Read console messages and browser runtime errors from the page being worked on. The thread browser\u2019s own page is readable with page "user"; page "strip" reads whatever that browser shows now.',
     inputSchema: {
       type: 'object',
       properties: {
-        page: {
-          type: 'string',
-          enum: ['user', 'agent'],
-          description:
-            'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser is on. Defaults to your own page when you have one, and to the thread browser\u2019s page otherwise.'
-        }
+        page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
     }

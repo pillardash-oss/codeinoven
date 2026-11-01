@@ -6,6 +6,7 @@
   import type { Thread } from '$shared/types'
   import { pinnedFold, type PinnedSectionKey } from '$lib/stores/pinned-fold.svelte'
   import { foldSlide } from '$lib/components/shared/card-motion'
+  import { foldedSectionRows } from '$lib/thread-section-rows'
 
   interface Props {
     /** Which persisted fold-state section this block belongs to. */
@@ -97,6 +98,16 @@
 
   const folded = $derived(controlledFolded ?? pinnedFold.isFolded(sectionKey))
 
+  /**
+   * The rows this block draws.
+   *
+   * Folded, it used to draw none, and the thread the user was working in
+   * disappeared with the rest of them. A folded section therefore stays
+   * temporarily open by exactly the one row the user is on; unfolding brings the
+   * others back.
+   */
+  const visibleThreads = $derived(folded ? foldedSectionRows(threads, activeThreadId) : threads)
+
   /** The header of a keyed group list (the threads view's status groups) sits in
    *  the same two columns a row does: the fold control takes the mark column, so
    *  the group's glyph and label land on the axis the row titles start at.
@@ -162,7 +173,7 @@
       <span class="text-[0.625rem] text-dimmed/70">{threads.length}</span>
     </button>
 
-    {#if !headerOnly && !folded}
+    {#if !headerOnly && visibleThreads.length > 0}
       <!-- The fold plays the same motion as every other fold in the app
            (`foldSlide`), so a pinned section closing or opening moves rather
            than blinks. A status group's rows already get this: the sidebar drops
@@ -170,7 +181,7 @@
            animates. This one owns its rows, so it carries the transition
            itself. -->
       <div transition:slide={foldSlide()} class="space-y-px" role="list">
-        {#each threads as thread (thread.id)}
+        {#each visibleThreads as thread (thread.id)}
           {#if row}
             {@render row(thread)}
           {:else}
