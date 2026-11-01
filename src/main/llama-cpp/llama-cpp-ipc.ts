@@ -8,10 +8,17 @@
 import { BrowserWindow, dialog } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { isLlamaCppHostValid, isLlamaCppPortValid } from '../../lib/llama-cpp'
-import { detectLlamaCppRuntime, probeLlamaCppServer } from './llama-cpp-service'
+import { detectLlamaCppRuntime, probeLlamaCppServer, stopLlamaCppServer } from './llama-cpp-service'
 
 export function registerLlamaCppIpc(): void {
   ipcMain.handle('llamaCpp:detect', () => detectLlamaCppRuntime())
+
+  /** Ends the process that holds a row's port when no PTY of ours owns it. */
+  ipcMain.handle('llamaCpp:stopServer', async (_, rawPort: unknown) => {
+    const port = typeof rawPort === 'number' ? rawPort : Number.NaN
+    if (!isLlamaCppPortValid(port)) return false
+    return stopLlamaCppServer(port)
+  })
 
   ipcMain.handle('llamaCpp:probe', async (_, rawHost: unknown, rawPort: unknown) => {
     if (typeof rawHost !== 'string' || !isLlamaCppHostValid(rawHost)) {
