@@ -7,10 +7,30 @@
  */
 import { BrowserWindow, dialog } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { isLlamaCppHostValid, isLlamaCppPortValid } from '../../lib/llama-cpp'
+import { sendToRenderer } from '../ipc/renderer-delivery'
+import {
+  isLlamaCppHostValid,
+  isLlamaCppPortValid,
+  llamaCppPtyId,
+  type LlamaCppLogStream
+} from '../../lib/llama-cpp'
 import { detectLlamaCppRuntime, probeLlamaCppServer, stopLlamaCppServer } from './llama-cpp-service'
+import { followLlamaCppLog, llamaCppLogPath, tailLlamaCppLog } from './llama-cpp-log'
 
-export function registerLlamaCppIpc(): void {
+/**
+ * The Local AI page talks to the server binary through these channels.
+ *
+ * `hasPtySession` is how a row knows whether its output still arrives over the
+ * PTY it was started with: after the app restarts the process lives on without
+ * one, and the row reads the server's own log file instead.
+ */
+export function registerLlamaCppIpc(
+  options: {
+    hasPtySession?: (terminalId: string) => boolean
+  } = {}
+): void {
+  const followers = new Map<string, () => void>()
+
   ipcMain.handle('llamaCpp:detect', () => detectLlamaCppRuntime())
 
   /** Ends the process that holds a row's port when no PTY of ours owns it. */
@@ -19,6 +39,46 @@ export function registerLlamaCppIpc(): void {
     if (!isLlamaCppPortValid(port)) return false
     return stopLlamaCppServer(port)
   })
+
+  ipcMain.handle('llamaCpp:logPath', (_, rawId: unknown) => llamaCppLogPath(requireEntryId(rawId)))
+
+  ipcMain.handle('llamaCpp:logTail', (_, rawId: unknown) => tailLlamaCppLog(requireEntryId(rawId)))
+
+  /** Subscribe or unsubscribe a row's log stream, seeding what the file holds. */
+  ipcMain.handle(
+    'llamaCpp:logStream',
+    async (event, rawId: unknown, rawFollow: unknown): Promise<LlamaCppLogStream> => {
+      const entryId = requireEntryId(rawId)
+      const follow = rawFollow === true
+      const lines = await tailLlamaCppLog(entryId)
+      const existing = followers.get(entryId)
+      if (existing) {
+        existing()
+        followers.delete(entryId)
+      }
+      if (!follow) return { source: 'file', lines }
+      const sessionAlive = options.hasPtySession?.(llamaCppPtyId(entryId)) ?? false
+      if (sessionAlive) {
+        // The PTY is still streaming this row's output, so a second source would
+        // print every line twice.
+        return { source: 'pty', lines: [] }
+      }
+      const target = event.sender
+      // The card already listens on the PTY data channel for this row, so a
+      // followed log file arrives exactly like the terminal output it replaces.
+      const channel = `pty:data:${llamaCppPtyId(entryId)}`
+      let stop = (): void => undefined
+      const follower = await followLlamaCppLog(entryId, (chunk) => {
+        if (!sendToRenderer(target, channel, chunk)) stop()
+      })
+      stop = (): void => {
+        follower.stop()
+        if (followers.get(entryId) === stop) followers.delete(entryId)
+      }
+      followers.set(entryId, stop)
+      return { source: 'file', lines }
+    }
+  )
 
   ipcMain.handle('llamaCpp:probe', async (_, rawHost: unknown, rawPort: unknown) => {
     if (typeof rawHost !== 'string' || !isLlamaCppHostValid(rawHost)) {
@@ -51,4 +111,12 @@ export function registerLlamaCppIpc(): void {
     if (result.canceled) return null
     return result.filePaths[0] ?? null
   })
+}
+
+/** The row id names a log file, so it is validated here, not at the log path. */
+function requireEntryId(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 80) {
+    throw new Error('Unknown llama.cpp server id')
+  }
+  return value.trim()
 }

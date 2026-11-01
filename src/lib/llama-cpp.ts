@@ -226,8 +226,12 @@ export function llamaCppAddressableModelId(id: string): string {
 /**
  * The argv `llama-server` is launched with. The model selector comes first so
  * the generated command reads the same as the one the user would type.
+ *
+ * `logFile` is where the app asks the server to write its log as well, so a
+ * server that outlives the app still has a log to read afterwards. It is left
+ * out of the copyable command: that path belongs to the app, not the user.
  */
-export function buildLlamaServerArgs(entry: LlamaCppServerEntry): string[] {
+export function buildLlamaServerArgs(entry: LlamaCppServerEntry, logFile?: string): string[] {
   const source = llamaCppModelSource(entry)
   if (!source) return []
   const args = source.kind === 'local' ? ['-m', source.path] : huggingFaceArgs(source.reference)
@@ -237,6 +241,9 @@ export function buildLlamaServerArgs(entry: LlamaCppServerEntry): string[] {
   // the served id addressable when they gave none.
   if (!flags.some((flag) => flag === '-a' || flag.startsWith('--alias'))) {
     args.push('--alias', llamaCppModelAlias(entry))
+  }
+  if (logFile && !flags.some((flag) => flag.startsWith('--log-file'))) {
+    args.push('--log-file', logFile)
   }
   args.push(...flags)
   return args
@@ -414,6 +421,19 @@ export interface LlamaCppRuntimeStatus {
   latestVersion: string
   /** One sentence the card shows under the status. */
   detail: string
+}
+
+/**
+ * Where a row's log comes from, and what the file already holds.
+ *
+ * `pty` means the process is still attached to the terminal that started it, so
+ * its output arrives over the PTY channels. `file` means the row reads the
+ * server's own `--log-file` instead, which is all that is left once the app
+ * instance that launched it is gone.
+ */
+export interface LlamaCppLogStream {
+  source: 'pty' | 'file'
+  lines: string[]
 }
 
 /** The readiness answer for a started server. */

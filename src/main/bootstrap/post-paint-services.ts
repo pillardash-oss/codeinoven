@@ -1131,7 +1131,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // Local servers never touch the provider registry: a custom base-URL
     // provider is the user's to create, and starting or stopping a server here
     // must leave it exactly as it was.
-    registerLlamaCppIpc()
+    registerLlamaCppIpc({
+      hasPtySession: (terminalId) => state.ptyService?.hasSession(terminalId) ?? false
+    })
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,
