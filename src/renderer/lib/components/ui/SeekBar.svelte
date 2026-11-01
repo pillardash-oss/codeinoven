@@ -83,6 +83,7 @@
   {title}
   onpointerdown={() => onScrubStart?.(value)}
   onpointerup={() => onScrubEnd?.()}
+  onpointercancel={() => onScrubEnd?.()}
   oninput={(event) => onInput(Number(event.currentTarget.value))}
   onchange={(event) => onCommit?.(Number(event.currentTarget.value))}
 />

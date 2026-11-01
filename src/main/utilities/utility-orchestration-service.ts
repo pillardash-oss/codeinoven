@@ -115,6 +115,17 @@ export interface UtilityTurnRequest {
     title: string,
     markdown?: string
   ) => Promise<{ status: 'queued'; title: string }>
+  /**
+   * Present on a live turn of any kind: the callback holds the workspace-relative
+   * paths the turn cited as its own work, so the chat engine can publish one card
+   * per entry when the turn settles.
+   */
+  citeWork?: (
+    paths: string[]
+  ) => Promise<{
+    cited: Array<{ name: string; path: string; kind: 'file' | 'directory' }>
+    missing: string[]
+  }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
   /**

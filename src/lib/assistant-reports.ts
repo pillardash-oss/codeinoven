@@ -152,6 +152,18 @@ export function assistantReportFileName(at: number, threadId: string): string {
   return `${stamp}-${clock}-${threadId.slice(0, 6)}.md`
 }
 
+/**
+ * The path a filed report is cited by inside its own thread.
+ *
+ * An assistant thread mounts `assistant-cwd/<assistantId>` as its workspace, so
+ * the report is cited relative to that mount. The renderer resolves it against
+ * the mount the row is drawn in, so opening the report never leaks the storage
+ * layout to the reader.
+ */
+export function assistantReportCitation(fileName: string): string {
+  return `${ASSISTANT_REPORTS_DIRECTORY}/${fileName}`
+}
+
 export interface AssistantReportDocumentInput {
   /** The title the run chose for its own report. */
   title: string

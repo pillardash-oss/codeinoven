@@ -6,7 +6,6 @@ import { APP_NAME } from '../../lib/brand'
 import { generateId } from '../../lib/utils'
 import type {
   FileChangeSource,
-  TurnCheckpointChangeSummary,
   TurnCheckpointFileDiff,
   TurnCheckpointStatus,
   TurnCheckpointStopReason,
@@ -43,6 +42,7 @@ import {
   repairTruncatedLineStats,
   type CheckpointMaintenanceHost
 } from './checkpoint/checkpoint-maintenance'
+import { repairCheckpointChanges, toTurnCheckpointSummary } from './checkpoint/checkpoint-summary'
 import {
   TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
   transcriptWriteEvidence,
@@ -57,6 +57,9 @@ export { MAX_CHECKPOINT_FAILURE_LENGTH }
  * user asked for.
  */
 const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
+
+/** Row bound for one thread's checkpoint list (the read used to cap at 10 000). */
+const CHECKPOINT_LIST_MAX_ROWS = 10_000
 
 export interface TurnCheckpoint {
   id: string
@@ -881,7 +884,7 @@ export class CheckpointManager {
       10_000
     )
     return rows.map((row) =>
-      this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
+      repairCheckpointChanges(JSON.parse(String(row['data'])) as TurnCheckpoint)
     )
   }
 
@@ -949,7 +952,33 @@ export class CheckpointManager {
   }
 
   async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
-    return (await this.list(projectId, threadId)).map((checkpoint) => this.toSummary(checkpoint))
+    assertId(projectId)
+    assertId(threadId)
+    // The rows embed two whole-project snapshots each, so decoding them and
+    // recomputing the diff of a turn that stored none is the expensive half of
+    // this read. The maintenance worker does that and hands back only the
+    // summaries; the local path below is for a database without a worker
+    // (in-memory tests) or one that just failed.
+    const viaWorker = await this.db
+      .queryCheckpointSummariesViaWorker(
+        'SELECT data FROM turn_checkpoints WHERE project_id = ? AND thread_id = ? ORDER BY created_at DESC',
+        [projectId, threadId],
+        CHECKPOINT_LIST_MAX_ROWS
+      )
+      .catch(() => null)
+    if (viaWorker?.ok) {
+      if (viaWorker.failed.length > 0) {
+        Logger.error('Turn checkpoints that could not be decoded were left out of the list', {
+          projectId,
+          threadId,
+          turnIds: viaWorker.failed
+        })
+      }
+      return viaWorker.summaries
+    }
+    return (await this.list(projectId, threadId)).map((checkpoint) =>
+      toTurnCheckpointSummary(checkpoint)
+    )
   }
 
   /**
@@ -1021,65 +1050,20 @@ export class CheckpointManager {
   async latestSummary(projectId: string, threadId: string): Promise<TurnCheckpointSummary | null> {
     assertId(projectId)
     assertId(threadId)
-    const rows = await this.queryRows(
-      `SELECT data FROM turn_checkpoints
+    const latestSql = `SELECT data FROM turn_checkpoints
        WHERE project_id = ? AND thread_id = ?
          AND json_extract(data, '$.status') != 'active'
-       ORDER BY created_at DESC LIMIT 1`,
-      [projectId, threadId],
-      1
-    )
+       ORDER BY created_at DESC LIMIT 1`
+    const viaWorker = await this.db
+      .queryCheckpointSummariesViaWorker(latestSql, [projectId, threadId], 1)
+      .catch(() => null)
+    if (viaWorker?.ok) return viaWorker.summaries[0] ?? null
+    const rows = await this.queryRows(latestSql, [projectId, threadId], 1)
     const row = rows[0]
     if (!row) return null
-    const checkpoint = this.recoverUnfilteredChanges(
-      projectId,
-      JSON.parse(String(row['data'])) as TurnCheckpoint
+    return toTurnCheckpointSummary(
+      repairCheckpointChanges(JSON.parse(String(row['data'])) as TurnCheckpoint)
     )
-    return this.toSummary(checkpoint)
-  }
-
-  private toSummary(checkpoint: TurnCheckpoint): TurnCheckpointSummary {
-    return {
-      id: checkpoint.id,
-      projectId: checkpoint.projectId,
-      threadId: checkpoint.threadId,
-      ...(checkpoint.sourceMessageId ? { sourceMessageId: checkpoint.sourceMessageId } : {}),
-      ...(checkpoint.breakdown ? { breakdown: checkpoint.breakdown } : {}),
-      label: checkpoint.label,
-      status: checkpoint.status,
-      changes: checkpoint.changes.map((change): TurnCheckpointChangeSummary => ({
-        path: change.path,
-        sources: checkpoint.changeSourceRefs?.[change.path]?.flatMap((reference) => {
-          const source = checkpoint.toolSources?.[reference.toolPartId]
-          return source
-            ? [{ ...source, verification: reference.verification, window: reference.window }]
-            : []
-        }),
-        beforeHash: change.before?.hash,
-        afterHash: change.after?.hash,
-        kind: change.kind,
-        binary: change.after?.binary ?? change.before?.binary ?? false,
-        ...(change.before ? { beforeSize: change.before.size } : {}),
-        ...(change.after ? { afterSize: change.after.size } : {}),
-        ...(checkpoint.lineStats?.[change.path]?.additions !== undefined
-          ? { additions: checkpoint.lineStats[change.path].additions }
-          : {}),
-        ...(checkpoint.lineStats?.[change.path]?.deletions !== undefined
-          ? { deletions: checkpoint.lineStats[change.path].deletions }
-          : {}),
-        ...(checkpoint.lineStats?.[change.path]?.truncated ? { lineCountsTruncated: true } : {})
-      })),
-      ...(checkpoint.stopReason ? { stopReason: checkpoint.stopReason } : {}),
-      createdAt: checkpoint.createdAt,
-      completedAt: checkpoint.completedAt,
-      rolledBackAt: checkpoint.rolledBackAt,
-      rolledBackPaths: checkpoint.rolledBackPaths,
-      failure: checkpoint.failure,
-      ...(checkpoint.after?.skippedFiles && checkpoint.after.skippedFiles.length > 0
-        ? { skippedFiles: checkpoint.after.skippedFiles }
-        : {}),
-      gitHead: checkpoint.before.git?.head
-    }
   }
 
   async getFileDiff(
@@ -1125,9 +1109,7 @@ export class CheckpointManager {
       2
     )
     const row = rows[0]
-    return row
-      ? this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
-      : null
+    return row ? repairCheckpointChanges(JSON.parse(String(row['data'])) as TurnCheckpoint) : null
   }
 
   /** The thread's most recently completed checkpoint, if any. Internal
@@ -1146,9 +1128,7 @@ export class CheckpointManager {
       1
     )
     const row = rows[0]
-    return row
-      ? this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
-      : null
+    return row ? repairCheckpointChanges(JSON.parse(String(row['data'])) as TurnCheckpoint) : null
   }
 
   /** The thread's in-flight checkpoint, if a turn is currently running. */
@@ -1210,27 +1190,6 @@ export class CheckpointManager {
       binary: false,
       ...window
     }
-  }
-
-  /**
-   * Older checkpoints can have complete before/after snapshots but no recorded
-   * path filter. Rebuild their diff on read so persisted turns remain visible
-   * and rollback-capable after the checkpoint format evolved.
-   */
-  private recoverUnfilteredChanges(projectId: string, checkpoint: TurnCheckpoint): TurnCheckpoint {
-    // Read-time heal for legacy poison: checkpoints written before the failure
-    // bound could carry an entire agent transcript as `failure`. Overlong
-    // failure text is never a legitimate explanation   strip it so it can
-    // never splash into the run-changes card, regardless of when it was saved.
-    const healed =
-      checkpoint.failure !== undefined && checkpoint.failure.length > MAX_CHECKPOINT_FAILURE_LENGTH
-        ? { ...checkpoint, failure: undefined }
-        : checkpoint
-    if (healed.changes.length > 0 || !healed.after || healed.changeFilterApplied === true) {
-      return healed
-    }
-    const changes = this.tracker(projectId).calculateChanges(healed.before, healed.after)
-    return changes.length > 0 ? { ...healed, changes } : healed
   }
 
   async rollback(projectId: string, threadId: string, turnId: string): Promise<TurnCheckpoint> {

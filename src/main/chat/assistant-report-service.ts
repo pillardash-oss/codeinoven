@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import {
   ASSISTANT_REPORTS_DIRECTORY,
+  assistantReportCitation,
   assistantReportFileName,
   assistantReportIsTerminal,
   buildAssistantReportDocument,
@@ -30,6 +31,16 @@ export interface AssistantReportInput {
 }
 
 /**
+ * One filed report on disk: where the file landed, and how its thread cites it.
+ */
+export interface AssistantReportFile {
+  /** Storage-relative path of the written file. */
+  path: string
+  /** Path relative to the thread's own workspace mount, for the announcement. */
+  citation: string
+}
+
+/**
  * Write one run's declared report to a durable Markdown file under `reports/` in
  * the assistant's own workspace.
  *
@@ -37,14 +48,15 @@ export interface AssistantReportInput {
  * from an ordinary answer, so an ordinary answer leaves no file behind. Written
  * from the main process rather than handed to the agent as a file-writing step,
  * so the path, the file name and the header stay app-owned and the file always
- * lands where the Workspace files panel mounts it. Returns the storage-relative
- * path that was written, or null when this turn leaves nothing (a Getting started
- * turn, a non-terminal settle, or an empty report).
+ * lands where the Workspace files panel mounts it. Returns the written path plus
+ * the citation the thread's announcement links through, or null when this turn
+ * leaves nothing (a Getting started turn, a non-terminal settle, or an empty
+ * report).
  */
 export async function writeAssistantReport(
   storage: StorageEngine,
   input: AssistantReportInput
-): Promise<string | null> {
+): Promise<AssistantReportFile | null> {
   if (!isAssistantReportThread(input.thread)) return null
   if (!assistantReportIsTerminal(input.status)) return null
 
@@ -52,11 +64,8 @@ export async function writeAssistantReport(
   if (report.length === 0) return null
 
   const directory = assistantThreadWorkspaceDirectory(input.thread.id, input.thread.assistantId)
-  const relativePath = join(
-    directory,
-    ASSISTANT_REPORTS_DIRECTORY,
-    assistantReportFileName(input.at, input.thread.id)
-  )
+  const fileName = assistantReportFileName(input.at, input.thread.id)
+  const relativePath = join(directory, ASSISTANT_REPORTS_DIRECTORY, fileName)
   const document = buildAssistantReportDocument({
     title: input.title,
     taskTitle: input.taskTitle,
@@ -69,5 +78,5 @@ export async function writeAssistantReport(
   // writeRaw ensures the reports/ directory exists and writes atomically
   // (`.tmp` then rename), so a half-written report is never left on disk.
   await storage.writeRaw(relativePath, document)
-  return relativePath
+  return { path: relativePath, citation: assistantReportCitation(fileName) }
 }

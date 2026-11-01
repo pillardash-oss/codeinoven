@@ -31,20 +31,6 @@ export interface UpdaterChangelog {
 }
 
 /**
- * A live terminal session an install would take down with the app. Read from the
- * main process, which owns the pty handles: the renderer's own session list only
- * exists once the terminal chunk has loaded, and a gate that trusted it could
- * report an idle install while a shell was still running.
- */
-export interface UpdateBlockerTerminal {
-  sessionId: string
-  /** The shell that owns the session, e.g. `zsh`, so a row can name it. */
-  shell: string
-  /** The directory the shell was opened in. */
-  cwd: string
-}
-
-/**
  * Everything standing between the app and the update it is waiting to install,
  * as the force-install modal needs to show it.
  *
@@ -64,8 +50,6 @@ export interface UpdateBlockers {
   activeCount: number
   /** Working threads, grouped by project and most active first. */
   projects: CloseConfirmationProject[]
-  /** Live terminal sessions, oldest first. */
-  terminals: UpdateBlockerTerminal[]
   /**
    * Browser downloads in flight, oldest first.
    *
@@ -86,7 +70,7 @@ export interface UpdateBlockers {
  * differently from "waiting for a working thread".
  */
 export interface UpdaterWaitingWork {
-  /** Working sessions and live terminal processes. */
+  /** Working sessions. */
   threads: number
   /** Browser downloads whose bytes are still arriving. */
   downloads: number

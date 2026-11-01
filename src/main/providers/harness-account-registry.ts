@@ -8,6 +8,7 @@ import type {
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import { escapeRegExp, isGeneratedAccountLabelFor } from '../../lib/account-label'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
+import { linkMacosLoginKeychain } from '../drivers/antigravity/antigravity-keychain'
 import type { StorageEngine } from '../storage/storage-engine'
 
 const REGISTRY_PATH = 'provider-accounts/accounts.json'
@@ -49,18 +50,22 @@ function additionalLegacyAccountId(
 /** Global, atomically persisted library of provider credentials and their labels. */
 export class HarnessAccountRegistry {
   private readonly pending = new Map<string, PendingHarnessAccount>()
+  /** Containers whose keychain link this process has already made or verified. */
+  private readonly repairedContainerHomes = new Set<string>()
 
   constructor(private readonly storage: StorageEngine) {}
 
   async list(harnessId?: string): Promise<HarnessAccount[]> {
     const stored = await this.read()
-    return stored.accounts
+    const accounts = stored.accounts
       .filter(
         (account) =>
           !isCodeInOvenCustomProviderId(account.providerId) &&
           (harnessId === undefined || account.harnessId === harnessId)
       )
       .sort((left, right) => left.createdAt - right.createdAt)
+    await this.repairContainerHomes(accounts)
+    return accounts
   }
 
   /** Mirror credentials from a harness's original home into provider-level account rows. */
@@ -266,7 +271,7 @@ export class HarnessAccountRegistry {
       harnessId,
       providerId
     }
-    await this.storage.ensureDirectory(`${CONTAINER_ROOT}/${pending.id}`)
+    await this.ensureContainerHome(harnessId, pending.id)
     this.pending.set(pending.id, pending)
     return pending
   }
@@ -346,9 +351,39 @@ export class HarnessAccountRegistry {
         updatedAt: now
       }
       registry.accounts = [...registry.accounts, account]
-      await this.storage.ensureDirectory(`${CONTAINER_ROOT}/${account.id}`)
+      await this.ensureContainerHome(account.harnessId, account.id)
       return account
     })
+  }
+
+  /**
+   * Create an account's isolated home and give it everything a redirected HOME
+   * needs beyond the directory itself. Antigravity's CLI reads its credential
+   * from the macOS login keychain, which it locates through `$HOME`, so its
+   * container gets the real keychains directory linked in   otherwise the CLI
+   * finds no keychain and macOS offers to reset (delete) the user's one.
+   */
+  private async ensureContainerHome(harnessId: string, accountId: string): Promise<void> {
+    await this.storage.ensureDirectory(`${CONTAINER_ROOT}/${accountId}`)
+    if (harnessId !== 'antigravity') return
+    this.repairedContainerHomes.add(accountId)
+    await linkMacosLoginKeychain(this.storage.resolve(`${CONTAINER_ROOT}/${accountId}`))
+  }
+
+  /**
+   * Finish the home of an antigravity container created before its container
+   * carried the login-keychain link. Repair runs once per account per process,
+   * so a container made by an older build stops offering a keychain reset at the
+   * first turn it takes rather than needing to be re-created by hand.
+   */
+  private async repairContainerHomes(accounts: readonly HarnessAccount[]): Promise<void> {
+    if (process.platform !== 'darwin') return
+    for (const account of accounts) {
+      if (account.harnessId !== 'antigravity' || account.containerKind !== 'managed') continue
+      if (this.repairedContainerHomes.has(account.id)) continue
+      this.repairedContainerHomes.add(account.id)
+      await linkMacosLoginKeychain(this.storage.resolve(`${CONTAINER_ROOT}/${account.id}`))
+    }
   }
 
   async rename(accountId: string, label: string): Promise<HarnessAccount> {

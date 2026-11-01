@@ -253,8 +253,9 @@ export class ChatEngineUtilities {
     dispatchTimer?: TurnStepTimer
   ): Promise<string> {
     // A new turn begins, so a report declared by an earlier turn that never settled
-    // must not be filed under this one.
+    // must not be filed under this one, and neither may the work it cited.
     this.host.state.declaredAssistantReports.delete(threadId)
+    this.host.units['citations'].clearCitedPaths(threadId)
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
     // has to be able to rebuild its context from them.
@@ -385,6 +386,8 @@ export class ChatEngineUtilities {
                   )
               }
             : {}),
+          citeWork: (paths: string[]) =>
+            this.host.units['citations'].citeWork(projectId, threadId, paths),
           budgetContext,
           ...(dispatchTimer ? { telemetry: dispatchTimer } : {}),
           attributeReinjectedResult: (attribution) =>
@@ -737,6 +740,8 @@ export class ChatEngineUtilities {
                 )
             }
           : {}),
+        citeWork: (paths: string[]) =>
+          this.host.units['citations'].citeWork(projectId, threadId, paths),
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)

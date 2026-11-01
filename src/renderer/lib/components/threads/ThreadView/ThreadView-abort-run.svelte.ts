@@ -27,6 +27,7 @@ import {
   type PendingContinuationRequest
 } from '$shared/pending-request'
 import { LatestRequestGuard } from '$lib/refresh-guard'
+import { logRendererDev } from '$lib/system/renderer-logger'
 import { resolvedSubagentPart } from '../thread-turn-parts'
 import { HISTORY_WINDOW_SIZE } from '../thread-history'
 import type { ThreadView } from './ThreadView-board.svelte'
@@ -227,8 +228,23 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
       const nextCheckpoints = await invoke('checkpoint:list', projectId, id)
       if (!this.root.loadOlderMessages.alive || !this.checkpointRefreshGuard.isCurrent(request))
         return
-      this.checkpoints = nextCheckpoints
-    } catch {
+      this.checkpoints = await this.withNewestTurnCheckpoint(
+        projectId,
+        id,
+        nextCheckpoints,
+        request
+      )
+    } catch (error) {
+      // A silently dropped read blanks every turn card in the thread for the
+      // whole session (the list is the only source a card is drawn from), so a
+      // failure has to leave a trace instead of looking like a thread that
+      // never changed a file.
+      logRendererDev(
+        `Turn cards: checkpoint list read failed ${JSON.stringify({
+          threadId: id,
+          error: error instanceof Error ? error.message : String(error)
+        })}`
+      )
       // The post-paint IPC graph registers after the first paint, and a launch
       // that restores a thread opens it before that, so the very first checkpoint
       // read can land on a channel that does not exist yet. Dropping it left every
@@ -242,10 +258,46 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         const retried = await invoke('checkpoint:list', projectId, id)
         if (!this.root.loadOlderMessages.alive || !this.checkpointRefreshGuard.isCurrent(request))
           return
-        this.checkpoints = retried
-      } catch {
+        this.checkpoints = await this.withNewestTurnCheckpoint(projectId, id, retried, request)
+      } catch (retryError) {
         // Still supplementary: session recovery remains available without it.
+        logRendererDev(
+          `Turn cards: checkpoint list retry failed ${JSON.stringify({
+            threadId: id,
+            error: retryError instanceof Error ? retryError.message : String(retryError)
+          })}`
+        )
       }
+    }
+  }
+
+  /**
+   * The list read above is the only source a turn card is drawn from, and it
+   * happens once per open. When that read lands before the newest turn's
+   * checkpoint is visible to it (a write racing the open, a sibling process
+   * settling the turn, a read that was dropped as superseded), the thread keeps
+   * an empty or short list and every card stays missing for the session even
+   * though the Changes rail reads the same rows fine. One extra single-row read
+   * of the newest finished turn reconciles that cheaply: it is the card the
+   * reader is owed, and an id already present is never added twice.
+   */
+  private async withNewestTurnCheckpoint(
+    projectId: string,
+    threadId: string,
+    list: TurnCheckpointSummary[],
+    request: number
+  ): Promise<TurnCheckpointSummary[]> {
+    try {
+      const newest = await invoke('checkpoint:latestSummary', projectId, threadId)
+      if (!newest || list.some((entry) => entry.id === newest.id)) return list
+      if (!this.root.loadOlderMessages.alive || !this.checkpointRefreshGuard.isCurrent(request)) {
+        return list
+      }
+      return [...list, newest]
+    } catch {
+      // Supplementary: the list itself is already authoritative for every card
+      // it already holds.
+      return list
     }
   }
 

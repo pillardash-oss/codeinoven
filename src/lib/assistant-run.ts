@@ -1,5 +1,6 @@
 import { ASSISTANT_BRIEF_REPLY_INSTRUCTION } from './assistant-voice'
 import { ASSISTANT_REPORT_UTILITY_ID } from './assistant-reports'
+import { APP_CITE_UTILITY_ID } from './utility-ids'
 import { CIO_ASK_USER_TOOL_NAME } from './core-tools'
 import { formatDateTime } from './date-time-format'
 import {
@@ -182,7 +183,8 @@ function reportingLines(assistant: Pick<Assistant, 'delivery' | 'priority'>): st
  */
 function reportLines(): string[] {
   return [
-    `File a report only when this turn produced one. A report is a document the user will read again on its own: a digest, findings, an analysis, or a finished draft. When that is what you produced, activate ${ASSISTANT_REPORT_UTILITY_ID} and invoke save_report with a short title, and with the full body only when the document is more than the answer you are about to write. The app files it in the assistant's workspace, so never name a path or say a report was saved.`,
+    `File a report only when this turn produced one. A report is a document the user will read again on its own: a digest, findings, an analysis, or a finished draft. When that is what you produced, activate ${ASSISTANT_REPORT_UTILITY_ID} and invoke save_report with a short title, and with the full body only when the document is more than the answer you are about to write. The app files it in the assistant's workspace and shows a card for it when the turn settles, so never name a path or say a report was saved.`,
+    `Cite anything else you produced that the user will open again (a folder of scripts, a document, a set of files): activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message, and the conversation shows one card per cited entry. Say what you made in plain words and let the cards carry where it lives.`,
     `Everything else leaves no report. A question, a check-in, a status line, an acknowledgement, or a chat reply is an answer, not a report: call nothing, and never present an ordinary reply as a report.`
   ]
 }

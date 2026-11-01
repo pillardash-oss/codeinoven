@@ -14,6 +14,7 @@ import {
   agentSnapshotScript,
   agentTypeScript
 } from '../../../src/main/browser/browser-service/browser-agent-page'
+import { agentCursorAppearance } from '../../../src/lib/browser/agent-cursor'
 import {
   agentCount,
   agentKeyCode,
@@ -55,7 +56,9 @@ function run<T>(source: string): T {
   return new Function(`return (${source})`)() as T
 }
 
-function snapshot(overrides: Partial<Parameters<typeof agentSnapshotScript>[0]> = {}): SnapshotReport {
+function snapshot(
+  overrides: Partial<Parameters<typeof agentSnapshotScript>[0]> = {}
+): SnapshotReport {
   return run<SnapshotReport>(
     agentSnapshotScript({ interactiveOnly: true, maxElements: 300, maxText: 20000, ...overrides })
   )
@@ -157,7 +160,9 @@ describe('agent typing', () => {
     field.value = 'typed by a naive tool'
     expect(state).toBe('')
 
-    const report = run<TypeReport>(agentTypeScript({ selector: '#title', text: 'Engineer', append: false }))
+    const report = run<TypeReport>(
+      agentTypeScript({ selector: '#title', text: 'Engineer', append: false })
+    )
 
     expect(report.typed).toBe(true)
     expect(report.applied).toBe(true)
@@ -175,14 +180,18 @@ describe('agent typing', () => {
 
   it('reports a read-only field instead of pretending to type into it', () => {
     elementWith('<input id="locked" type="text" readonly>')
-    const report = run<TypeReport>(agentTypeScript({ selector: '#locked', text: 'x', append: false }))
+    const report = run<TypeReport>(
+      agentTypeScript({ selector: '#locked', text: 'x', append: false })
+    )
     expect(report.typed).toBe(false)
     expect(report.reason).toBe('the field is read-only')
   })
 
   it('fills an editable element that is not an input', () => {
     const editable = elementWith('<div id="editor" contenteditable="true"></div>')
-    const report = run<TypeReport>(agentTypeScript({ selector: '#editor', text: 'Hello', append: false }))
+    const report = run<TypeReport>(
+      agentTypeScript({ selector: '#editor', text: 'Hello', append: false })
+    )
     expect(report.typed).toBe(true)
     expect(editable.textContent).toBe('Hello')
   })
@@ -190,7 +199,9 @@ describe('agent typing', () => {
 
 describe('agent controls', () => {
   it('chooses a select option by its visible label and reports it', () => {
-    elementWith('<select id="level"><option value="junior">Junior</option><option value="senior">Senior</option></select>')
+    elementWith(
+      '<select id="level"><option value="junior">Junior</option><option value="senior">Senior</option></select>'
+    )
     const report = run<{ selected: boolean; value: string }>(
       agentSelectScript({ selector: '#level', label: 'Senior' })
     )
@@ -261,7 +272,9 @@ describe('agent controls', () => {
     expect(covered.found).toBe(true)
     expect(covered.coveredBy?.selector).toBe('#cover')
     document.elementFromPoint = () => document.getElementById('start')
-    const reachable = run<{ found: boolean; coveredBy?: unknown }>(agentElementPointScript('#start'))
+    const reachable = run<{ found: boolean; coveredBy?: unknown }>(
+      agentElementPointScript('#start')
+    )
     expect(reachable.coveredBy).toBeNull()
   })
 
@@ -275,11 +288,20 @@ describe('agent controls', () => {
   })
 })
 
+/** The shipped appearance: ivory body, obsidian outline, auric ring, no scaling. */
+const cursorAppearance = agentCursorAppearance({
+  dark: false,
+  contrast: 'normal',
+  appFontSize: 15
+})
+
 describe('agent cursor', () => {
   it('draws one marked node and moves it instead of stacking copies', () => {
     document.body.innerHTML = '<button>Go</button>'
-    run(agentCursorScript({ x: 10, y: 20, press: true, hide: false }))
-    run(agentCursorScript({ x: 30, y: 40, press: false, hide: false }))
+    run(agentCursorScript({ x: 10, y: 20, press: true, hide: false, appearance: cursorAppearance }))
+    run(
+      agentCursorScript({ x: 30, y: 40, press: false, hide: false, appearance: cursorAppearance })
+    )
     const cursors = document.querySelectorAll(`[${AGENT_OWNED_ATTRIBUTE}="cursor"]`)
     expect(cursors.length).toBe(1)
     const host = cursors[0]
@@ -288,7 +310,7 @@ describe('agent cursor', () => {
   })
 
   it('removes it when asked', () => {
-    run(agentCursorScript({ x: 1, y: 1, press: false, hide: true }))
+    run(agentCursorScript({ x: 1, y: 1, press: false, hide: true, appearance: cursorAppearance }))
     expect(document.querySelectorAll(`[${AGENT_OWNED_ATTRIBUTE}="cursor"]`).length).toBe(0)
   })
 })

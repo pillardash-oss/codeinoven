@@ -104,7 +104,10 @@ static int run_helper(int endpoint_pipe) {
   signal(SIGTERM, stop_helper);
   signal(SIGINT, stop_helper);
   NSApplication *application = NSApplication.sharedApplication;
+  // The policy comes first so launch never registers a Dock icon, and the launch
+  // itself completes before anything is ordered on screen.
   [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  [application finishLaunching];
 
   const NSRect frame = NSMakeRect(0.0, 0.0, 420.0, 320.0);
   placeholder_window = [[NSWindow alloc]
@@ -133,18 +136,24 @@ static int run_helper(int endpoint_pipe) {
                                              NSMinY(screenFrame) +
                                                  (NSHeight(screenFrame) - NSHeight(frame)) / 2.0)];
   }
-  [placeholder_window orderFrontRegardless];
-  [placeholder_window displayIfNeeded];
+  // The socket exists before the window does, so a failure leaves nothing on
+  // screen and the app can connect the instant the placeholder is visible.
+  NSString *endpoint = nil;
+  if (!create_handoff_socket(&endpoint)) return 70;
 
+  // Draw the finished lockup into the window's backing store BEFORE the window
+  // is ordered on screen. Ordered front first, the window server composites the
+  // new window before any of our drawing has landed, and what it composites is a
+  // blank white surface: the one flash this placeholder must never cause. Shown
+  // second, the very first composite the user sees is the artwork.
   NSData *iconData = [NSData dataWithBytesNoCopy:(void *)CODEINOVEN_ICON_PNG
                                           length:CODEINOVEN_ICON_PNG_SIZE
                                     freeWhenDone:NO];
   view.icon = [[NSImage alloc] initWithData:iconData];
   [view setNeedsDisplay:YES];
-  [placeholder_window displayIfNeeded];
+  [placeholder_window display];
+  [placeholder_window orderFrontRegardless];
 
-  NSString *endpoint = nil;
-  if (!create_handoff_socket(&endpoint)) return 70;
   const char *endpointBytes = endpoint.fileSystemRepresentation;
   const size_t endpointSize = strlen(endpointBytes) + 1;
   if (write(endpoint_pipe, endpointBytes, endpointSize) != (ssize_t)endpointSize) return 71;

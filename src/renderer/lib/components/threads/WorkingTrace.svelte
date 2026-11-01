@@ -159,6 +159,18 @@
    *  not any more has settled, whether or not the turn reported its completion.
    *  Plain, not reactive: only the run-state effect below reads it. */
   let sawLiveWork = false
+  /** Newest activity this trace was already showing (or had already folded) the
+   *  last time it decided whether to open.
+   *
+   *  A turn the app is still holding can be resumed by an automatic retry: the
+   *  run goes busy again with the PREVIOUS attempt's steps still mounted. Opening
+   *  the body for that inserts a screenful of work above the reader and pushes
+   *  the transcript they were reading down, and the fold that follows pushes it
+   *  straight back, which is the jumping scroll a retrying thread shows. Only
+   *  genuinely new work past this mark may open the trace by itself. `-1` means
+   *  it has not been captured yet. Plain not reactive: the run-state effect owns
+   *  it. */
+  let openedAtActivity = -1
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
   /** The trace's root. It exists only to find the transcript scroller the trace
@@ -356,11 +368,15 @@
   }
 
   $effect(() => {
+    // The newest activity mounted right now. A retry keeps the old parts, so
+    // this value stands still until the attempt really produces work.
+    const activity = traceSpan?.end ?? traceSpan?.start ?? 0
+    if (openedAtActivity < 0) openedAtActivity = isOpen ? 0 : activity
     // A live turn keeps its work on screen; a trace the user explicitly folded
     // stays folded while it works, so a harness busy blip never re-opens it.
     if (busy) {
       sawLiveWork = true
-      if (visibleParts.length > 0 && !isOpen && !userFolded) {
+      if (visibleParts.length > 0 && !isOpen && !userFolded && activity > openedAtActivity) {
         isOpen = true
         notify()
       }
@@ -376,6 +392,7 @@
     if ((done || sawLiveWork) && isOpen && !userOpened) {
       foldToHeader()
       isOpen = false
+      openedAtActivity = activity
       notify()
     }
   })

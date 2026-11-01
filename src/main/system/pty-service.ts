@@ -1,4 +1,5 @@
 import { pathIsAccessible } from '../../lib/utils'
+import { actionShellFamily, failFastActionScript } from './action-script-fail-fast'
 import { PtyOutputBuffer } from './pty-output-buffer'
 import { stopPtyProcesses } from './pty-process-stop'
 import type { WebContents } from 'electron'
@@ -9,7 +10,6 @@ import { basename, isAbsolute, join, relative, resolve } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
 import { prepareWindowsGitRuntime } from '../drivers/windows-git-runtime'
-import type { UpdateBlockerTerminal } from '../../lib/ipc-contract'
 import { Logger } from './logger'
 import { dailyLogRelativePath, PTY_EVENTS_LOG_FILE } from './log-paths'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -978,7 +978,11 @@ export class PtyService {
     const createdAt = Date.now()
     const env = { ...(await buildShellEnv()), ...safeVariables }
     ensureActive()
-    const proc = pty.spawn(shell, resolveShellCommandArgs(shell, script), {
+    // An action runs its lines in sequence with no user watching keystrokes, so
+    // a failing step must end the run instead of letting the next line execute
+    // against a half-finished result.
+    const guardedScript = failFastActionScript(script, actionShellFamily(shell))
+    const proc = pty.spawn(shell, resolveShellCommandArgs(shell, guardedScript), {
       name: 'xterm-256color',
       cols,
       rows,
@@ -1098,29 +1102,6 @@ export class PtyService {
     }
   }
 
-  /** Number of live terminal sessions   any of which a forced restart would kill. */
-  activeSessionCount(): number {
-    return this.sessions.size
-  }
-
-  /**
-   * The live sessions, as the force-install modal lists them. Oldest first, so
-   * the row a user recognises as "the one I left running" is at the top.
-   *
-   * The shell is reduced to its own name because the stored value is an absolute
-   * path, and a row reading `/opt/homebrew/bin/fish` says less than `fish` does
-   * next to the directory it was opened in.
-   */
-  describeSessions(): UpdateBlockerTerminal[] {
-    return [...this.sessions.values()]
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((session) => ({
-        sessionId: session.id,
-        shell: basename(session.shell),
-        cwd: session.cwd
-      }))
-  }
-
   /**
    * Tell the renderer that these sessions are being ended on purpose, so it does
    * not restart the shells it would otherwise treat as crashed.
@@ -1159,27 +1140,5 @@ export class PtyService {
     if (ids.length === 0) return false
     this.announceStoppedSessions(ids)
     return true
-  }
-
-  /**
-   * Kill every live shell and forget the sessions, leaving the renderer binding
-   * and the idle watchdog alone.
-   *
-   * Deliberately distinct from {@link destroyAll}, which is the shutdown path and
-   * also drops the transport: this one is a UI action that stops work, so it must
-   * not have side effects beyond the shells the user was shown. Each shell is
-   * killed exactly as a normal close kills it, so it still gets the chance to
-   * exit cleanly on the hangup instead of being orphaned.
-   *
-   * Announced first, because a killed shell the renderer reads as a crash is
-   * respawned within milliseconds and the stop the caller asked for would never
-   * take effect.
-   */
-  closeAllSessions(): void {
-    const ids = [...new Set([...this.sessions.keys(), ...this.pendingStarts.keys()])]
-    this.announceStoppedSessions(ids)
-    for (const id of ids) {
-      void this.destroy(id)
-    }
   }
 }

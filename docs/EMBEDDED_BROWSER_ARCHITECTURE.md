@@ -122,6 +122,17 @@ material way, and the difference is deliberate.
   reachable after they switch it. A bound page this process holds no view for yet (a
   tab restored from a previous launch, or one the hibernation sweep released) is
   mounted offscreen and put back on its address when an agent reaches for it.
+  - **The page an agent resolved stays its page.** A project's threads share one
+    strip, so the page that binding names moves whenever the user switches tabs or a
+    sibling thread shows a preview in the same browser, and a model that had been
+    working on a signed-in page was silently redirected to whatever took its place.
+    `page: "user"` therefore answers the tab that agent first resolved (held per
+    project and thread in `agentUserPageTabIds`) for as long as that tab lives, and
+    re-resolves the strip's page once it is closed. `page: "strip"` is the explicit
+    way to move onto whatever the strip shows now. Every answer still names the page
+    the strip is on when that differs, so the page the user is looking at never
+    becomes invisible, and the user keeps full control: they move, navigate and close
+    the tab as before, and the agent follows the tab rather than a tab list position.
 - **Extensions are installed from the global browser, but a box's set follows the
   box.** An extension record names the global browser's own jar (the empty jar id)
   and its boxes, and a box's set is loaded while any context uses that box

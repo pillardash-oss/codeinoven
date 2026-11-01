@@ -49,6 +49,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
+import { BrowserAgentCursorAppearance } from '../browser/browser-service/browser-agent-cursor-appearance'
 import { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { DesignService } from '../design/design-service'
 import { SearchService } from '../search/search-service'
@@ -125,7 +126,16 @@ async function attachBrowserService(
     })
   }
   await state.browserDownloads.hydrate()
-  const service = new BrowserService(window, database, storage, state.browserDownloads)
+  const service = new BrowserService(
+    window,
+    database,
+    storage,
+    state.browserDownloads,
+    new BrowserAgentCursorAppearance({
+      getConfig: () => storage.getConfig(),
+      onConfigWrite: (listener) => storage.onWrite('config.json', listener)
+    })
+  )
   state.browserService = service
   // Whoever destroys the window, the service stops being this app's browser for
   // it. The park path detaches first and this then finds nothing to do; a window
@@ -1058,16 +1068,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.harnessInstallService = new HarnessInstallService(state.providerConnection)
     state.notificationService = new NotificationService(storage, database, context.onThreadClicked)
 
-    // Optional IPC   registered only after the services exist.
-    if (state.updaterService) {
-      state.updaterService.addActivitySource({
-        activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0,
-        describeOtherSessions: () => state.ptyService?.describeSessions() ?? [],
-        terminateActiveWork: async () => {
-          state.ptyService?.closeAllSessions()
-        }
-      })
-    }
+    // A live terminal no longer gates the update install: only working threads
+    // and running browser downloads may hold it back, so a shell the user left
+    // open never postpones an update. The shutdown pipeline still destroys the
+    // pty sessions on quit.
+    //
     // A pid the task manager ends can be a terminal's own shell. The PTY
     // service announces that stop so the renderer does not respawn it as a
     // crash, which is the difference between a kill that holds and a shell that
