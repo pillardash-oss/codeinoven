@@ -182,19 +182,6 @@ export class SidebarBrowserTabs {
   }
 
   /**
-   * Whether the browser surface a visit belongs to still has a tab.
-   *
-   * The browsing history keeps one list per surface and a thread browser's list
-   * dies with the browser, so it asks this of the list that owns the surface. A
-   * surface is a conversation (see the host's `threadScopeId`), which is exactly
-   * what the strip groups its tabs by, so this is the same identity the history
-   * files its lists under.
-   */
-  isScopeLive(scope: string): boolean {
-    return this.tabs.some((tab) => this.host.threadScopeId(tab.projectId, tab.threadId) === scope)
-  }
-
-  /**
    * The browser tab to focus when the browser workspace is revealed: the
    * remembered active tab when it still belongs to the active project,
    * otherwise the project's last open tab. Restarts, project switches and
@@ -747,6 +734,7 @@ export class SidebarBrowserTabs {
       browserAudio.forget(tabId)
       this.tabFavicons.forget(tabId)
       threadBrowserTabs.forget(tabId)
+      browserHistory.forgetTab(tabId)
     }
   }
 
@@ -757,11 +745,6 @@ export class SidebarBrowserTabs {
    */
   private persist(): void {
     if (!this.started) return
-    // The tab list is the only thing that can end a browser surface, so this is
-    // where the history of a surface that just lost its last tab is discarded. A
-    // close that leaves the surface with a tab left changes nothing, and a state
-    // report arriving after a close is caught by the history store's own check.
-    browserHistory.pruneThreadScopes()
     if (this.saveTimer !== null) return
     this.saveTimer = window.setTimeout(() => this.flushPersist(), TAB_SAVE_COALESCE_MS)
   }

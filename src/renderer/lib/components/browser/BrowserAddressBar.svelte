@@ -65,8 +65,9 @@
    *
    * The drawer offers pages from this browser's unboxed scope, or from its selected
    * box when it uses a shared profile. Box history follows the box across the
-   * global and thread browsers; unboxed conversation history lasts for the session
-   * and disappears with the last tab.
+   * global and thread browsers; unboxed conversation history lasts for the session,
+   * so it is still offered after the thread browser is closed and reopened, and it
+   * goes when the app quits.
    *
    * The drawer is a floating DOM overlay over the page, and the page is a native
    * view composed above every DOM surface, so the drawer publishes its own
