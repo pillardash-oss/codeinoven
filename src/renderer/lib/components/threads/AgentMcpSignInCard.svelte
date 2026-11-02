@@ -232,23 +232,26 @@
 
   <CardFoot>
     {#snippet left()}
-      <CardButton
-        label="Not now"
-        title="Continue without this server and skip the sign-in"
-        variant="ghost"
-        disabled={working}
-        onclick={() => void decline()}
-      />
-    {/snippet}
-    {#snippet right()}
       {#if working}
+        <!-- Stopping the flow is the falsy action, so it sits where every card's
+             falsy action sits. Declining while the browser is open is the same
+             decision one step later, so it is not offered beside it. -->
         <CardButton
           label="Cancel"
-          title="Stop waiting for the browser"
+          title="Stop waiting for the browser and keep this server unauthorized"
           variant="secondary"
           onclick={() => void cancelSignIn()}
         />
+      {:else}
+        <CardButton
+          label="Not now"
+          title="Continue without this server and skip the sign-in"
+          variant="ghost"
+          onclick={() => void decline()}
+        />
       {/if}
+    {/snippet}
+    {#snippet right()}
       <CardButton
         label={working ? 'Waiting for browser…' : 'Sign in'}
         title="Open the authorization page and sign this server in"
