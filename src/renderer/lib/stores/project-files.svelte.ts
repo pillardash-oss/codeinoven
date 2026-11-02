@@ -12,11 +12,13 @@ import { usesThreadWorkspaceMount } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke, invokeAtOvenRoot } from '$lib/ipc.svelte'
 import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
+import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
   isDocumentPreviewMime,
   isImageMime,
+  isMarkdownPreviewPath,
   isPdfMime,
   isSvgMime,
   mimeFromPath,
@@ -30,6 +32,9 @@ import {
   errorMessage,
   followingDocumentView,
   hasNoTextSource,
+  openDocumentView,
+  stickyDocumentView,
+  type DocumentViewContext,
   type ProjectFileClipboard,
   type ProjectFileTab,
   type ProjectFileView,
@@ -304,10 +309,33 @@ class ProjectFilesWorkspace {
     return this.explorer.openDirectoryPreview(projectId, path)
   }
 
+  /**
+   * What the open-view decision needs to know about this project: the view the
+   * reader chose for Markdown (remembered per project) and whether annotations
+   * have a conversation to attach to right now.
+   */
+  private documentViewContext(projectId: string): DocumentViewContext {
+    return {
+      markdownView: fileExplorerStore.project(projectId).markdownView,
+      annotateAvailable: contextSidebarState.threadIdForProject(projectId) !== null
+    }
+  }
+
+  /**
+   * Remember the view the reader picked for a Markdown document, so opening the
+   * next one never drags them out of the view they chose. Every other file kind
+   * keeps its own default, which is why only Markdown is recorded.
+   */
+  rememberDocumentView(projectId: string, path: string, view: ProjectFileView): void {
+    if (!isMarkdownPreviewPath(path)) return
+    if (view !== 'annotate' && view !== 'preview' && view !== 'source') return
+    fileExplorerStore.update(projectId, { markdownView: view })
+  }
+
   async openFile(
     projectId: string,
     path: string,
-    preferredView: ProjectFileView = 'source',
+    preferredView?: ProjectFileView,
     focusLine?: number
   ): Promise<void> {
     if (this.focusOpenFileTab(projectId, path, focusLine)) {
@@ -318,7 +346,13 @@ class ProjectFilesWorkspace {
       this.pinTab(projectId, `working:${path}`)
       return
     }
-    await this.openWorkingTab(projectId, path, preferredView, false, focusLine)
+    await this.openWorkingTab(
+      projectId,
+      path,
+      preferredView ?? openDocumentView(path, this.documentViewContext(projectId)),
+      false,
+      focusLine
+    )
   }
 
   /** Open a file in preview mode: a transient tab (italicised title) that is
@@ -338,7 +372,12 @@ class ProjectFilesWorkspace {
       return
     }
     const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
-    await this.openWorkingTab(projectId, path, followingDocumentView(activeTab?.view, path), true)
+    await this.openWorkingTab(
+      projectId,
+      path,
+      followingDocumentView(activeTab?.view, path, this.documentViewContext(projectId)),
+      true
+    )
   }
 
   /** Focus an existing sidebar file tab by path before any caller creates a
@@ -467,7 +506,11 @@ class ProjectFilesWorkspace {
     // diff view, so the user never has to re-select the mode for every file.
     const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
     if (preferredView === 'diff') {
-      const following = followingDocumentView(activeTab?.view, path)
+      const following = stickyDocumentView(
+        activeTab?.view,
+        path,
+        this.documentViewContext(projectId)
+      )
       if (following !== 'source') preferredView = following
     }
     const tabId = `checkpoint:${threadId}:${checkpointId}:${path}`
@@ -574,7 +617,7 @@ class ProjectFilesWorkspace {
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    tab.view = documentViewFor(tab.view, nextPath)
+    tab.view = documentViewFor(tab.view, nextPath, this.documentViewContext(projectId))
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, tab.preview)
@@ -614,7 +657,7 @@ class ProjectFilesWorkspace {
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    tab.view = documentViewFor(tab.view, nextPath)
+    tab.view = documentViewFor(tab.view, nextPath, this.documentViewContext(projectId))
     state.activeTabId = nextTabId
 
     if (state.sessions[nextPath]) {
@@ -911,7 +954,7 @@ class ProjectFilesWorkspace {
     tab.checkpointDiff = null
     tab.loadingDiff = false
     const nextMime = mimeFromPath(nextPath)
-    tab.view = documentViewFor(tab.view, nextPath)
+    tab.view = documentViewFor(tab.view, nextPath, this.documentViewContext(projectId))
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
