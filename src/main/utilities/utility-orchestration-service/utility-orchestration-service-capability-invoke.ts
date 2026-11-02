@@ -22,6 +22,7 @@ import {
   UtilityRegistryService
 } from '../utility-registry-service'
 import { CITE_ENTRY_LIMIT, CITE_OPERATIONS, CITE_PATH_LIMIT } from '../../../lib/cited-work'
+import { BROWSER_PLAYBOOK } from '../cio-browser-prompt'
 import { CUA_PLAYBOOK } from '../cio-cua-prompt'
 import { mcpCatalogPayload } from '../mcp-tool-catalog'
 import {
@@ -493,7 +494,10 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
     }
     if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.host.browserExecutor) throw new Error('The in-app browser is unavailable')
-      return { tools: BROWSER_UTILITY_TOOLS }
+      // The catalog is a list of single actions, so it travels with the contract
+      // that says how to drive a page in one call and how to stay in a live
+      // conversation until it is resolved.
+      return { instructions: BROWSER_PLAYBOOK, tools: BROWSER_UTILITY_TOOLS }
     }
     if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // The operation catalog travels with the playbook, because unlike the scope

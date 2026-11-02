@@ -10,6 +10,7 @@ import { withActionSummaryAdvice, withActionSummarySchema } from '../../../lib/t
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
+import { BROWSER_WAIT_MAX_TIMEOUT_MS } from '../../browser/browser-service/browser-agent-page'
 import { videoStudioTools } from '../../video/video-studio-tools'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
@@ -367,22 +368,31 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'wait',
     description:
-      'Wait, in the page, until a condition holds or the time is up: an element appears, an element goes away, text appears, or the address changes. Reading state is easier than guessing with a fixed pause, and a timeout answers with what the page looked like rather than failing the call.',
+      "Wait, in the page, until a condition holds or the time is up: an element appears, an element goes away, text appears, the address changes, or the visible text changes from what it is now. Reading state is easier than guessing with a fixed pause, and a timeout answers with what the page looked like rather than failing the call. changed with a selector waits for that element's text to change, which is how you poll a live conversation for a reply.",
     inputSchema: {
       type: 'object',
       properties: {
         selector: {
           type: 'string',
-          description: 'Wait for this element to be present and visible.'
+          description:
+            'Wait for this element to be present and visible. With changed, the element whose text must change.'
         },
         gone: { type: 'boolean', description: 'With selector: wait for it to disappear.' },
         visible: {
           type: 'boolean',
           description: 'false with selector: wait for it to exist even if hidden.'
         },
+        changed: {
+          type: 'boolean',
+          description:
+            'Wait for the visible text to become different from what it was when the wait started, on the whole page or on the selector. Use it to wait for the next message in a chat.'
+        },
         text: { type: 'string', description: 'Wait for this text to appear in the page.' },
         urlIncludes: { type: 'string', description: 'Wait for the address to contain this.' },
-        timeoutMs: { type: 'number', description: 'Up to 30000. Defaults to 5000.' },
+        timeoutMs: {
+          type: 'number',
+          description: `Up to ${BROWSER_WAIT_MAX_TIMEOUT_MS}. Defaults to 5000.`
+        },
         page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
