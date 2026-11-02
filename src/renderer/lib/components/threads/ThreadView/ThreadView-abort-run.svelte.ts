@@ -234,20 +234,7 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         nextCheckpoints,
         request
       )
-      // A rescued tail card means no rule could place the newest finished
-      // turn's card and the safety net drew it instead. It is a bug report, so
-      // it says which turn and what the renderer was holding.
-      if (this.root.pollStreamParts.transcriptIndex.tailCardRescued) {
-        logRendererDev(
-          `Turn cards: drew the newest finished turn's card at the transcript tail ${JSON.stringify(
-            {
-              threadId: id,
-              checkpoints: this.checkpoints.length,
-              messages: this.root.buildSpecActionPrompt.structureMessages.length
-            }
-          )}`
-        )
-      }
+      this.reportTurnCards(id)
     } catch (error) {
       // A silently dropped read blanks every turn card in the thread for the
       // whole session (the list is the only source a card is drawn from), so a
@@ -313,6 +300,38 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
       // it already holds.
       return list
     }
+  }
+
+  /**
+   * What the transcript index decided about turn cards for this thread.
+   *
+   * "The card is not showing" cannot be checked from the database: the rows are
+   * correct and the rules place the card when they are fed the loaded window, so
+   * the only thing that can be wrong is what the renderer was holding. One dev
+   * line per checkpoint read pins that down   how many messages the index saw,
+   * how many cards it placed, which checkpoint owns the tail, and whether the
+   * safety net had to draw it.
+   */
+  private reportTurnCards(threadId: string): void {
+    const index = this.root.pollStreamParts.transcriptIndex
+    const messages = this.root.buildSpecActionPrompt.structureMessages
+    const tail = messages.length - 1
+    let cards = 0
+    for (const flag of index.checkpointCard) if (flag) cards += 1
+    logRendererDev(
+      `Turn cards: ${JSON.stringify({
+        threadId,
+        messages: messages.length,
+        checkpoints: this.checkpoints.length,
+        cards,
+        tailRole: messages[tail]?.role ?? null,
+        tailIsTurnEnd: index.isTurnEnd[tail] ?? false,
+        tailCheckpoint: index.checkpoint[tail]?.id ?? null,
+        tailChanges: index.checkpoint[tail]?.changes.length ?? null,
+        rescued: index.tailCardRescued,
+        chatMode: this.root.props.chatMode
+      })}`
+    )
   }
 
   /**
