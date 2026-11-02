@@ -72,6 +72,33 @@ export async function piNativeProviderIds(
 }
 
 /**
+ * Every native Pi provider and the model ids it holds, as one comparable line.
+ *
+ * A provider's identity alone does not describe what the model picker offers:
+ * adding or removing a model in `models.json` changes the catalog while the id
+ * stays the same, so a cache keyed on ids keeps serving a model the provider no
+ * longer has, and choosing it fails with "Model not found". This signature makes
+ * that edit visible. A missing or unreadable file is an empty signature, which
+ * simply forces the catalog to be read again.
+ */
+export async function piNativeProviderModelSignature(modelsPath = PI_MODELS_PATH): Promise<string> {
+  const config = await tryReadJsoncObject(modelsPath)
+  const providers = record(config?.['providers']) ?? {}
+  return Object.keys(providers)
+    .sort()
+    .map((id) => {
+      const models = record(providers[id])?.['models']
+      const ids = Array.isArray(models)
+        ? models
+            .map((entry) => stringValue(record(entry)?.['id']))
+            .filter((modelId): modelId is string => modelId !== undefined)
+        : []
+      return `${id}=${ids.join(',')}`
+    })
+    .join('|')
+}
+
+/**
  * Provider ids the user configured natively in opencode's
  * `~/.config/opencode/opencode.json` (`provider` entries   explicit connect
  * targets regardless of whether their entry carries an API key), minus ids the
