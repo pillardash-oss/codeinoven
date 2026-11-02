@@ -310,7 +310,7 @@ export class BrowserServiceAgentUtility {
         contents,
         agentTypeScript({ selector, text, append: input['append'] === true })
       )
-      await this.host.paintAgentCursorAtElement(tab, selector, false)
+      await this.host.paintAgentCursorAtElement(tab, selector)
       if (input['submit'] === true) {
         await pressAgentKey(contents, { key: 'Enter', modifiers: [], times: 1 })
       }
@@ -327,7 +327,7 @@ export class BrowserServiceAgentUtility {
             result: { pressed: false, reason: 'the target could not be focused', detail: focused }
           }
         }
-        await this.host.paintAgentCursorAtElement(tab, selector, false)
+        await this.host.paintAgentCursorAtElement(tab, selector)
       }
       const result = await pressAgentKey(contents, {
         key: this.host.requiredInputString(input, 'key'),
@@ -417,8 +417,7 @@ export class BrowserServiceAgentUtility {
         deltaY: this.host.agentSignedNumber(input['deltaY'], 0),
         modifiers: normalizeAgentModifiers(input['modifiers'])
       })
-      const pressed = action === 'click' || action === 'down'
-      await this.host.paintAgentCursor(tab, point, pressed)
+      await this.host.paintAgentCursor(tab, point)
       return {
         ...utilityContext,
         result: { action, x: point.x, y: point.y, button, trusted: true }
@@ -430,7 +429,7 @@ export class BrowserServiceAgentUtility {
       const to = await this.host.agentPointFrom(input, tab, 'to')
       const modifiers = normalizeAgentModifiers(input['modifiers'])
       const result = await dragAgentMouse(contents, { from, to, modifiers })
-      await this.host.paintAgentCursor(tab, to, true)
+      await this.host.paintAgentCursor(tab, to)
       return { ...utilityContext, result: { ...result, from, to, trusted: true } }
     }
     if (operation === 'wait') {

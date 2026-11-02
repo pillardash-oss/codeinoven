@@ -4,22 +4,22 @@ import { type ContrastLevel } from '../types/settings'
  * How the agent's cursor is drawn over a page.
  *
  * The mark is the app's, not the page's, so its appearance comes from the app's own
- * tokens rather than from the site it is sitting on   and it has to stay legible on
- * all of them, from a pure white form to a pure black video frame. Contrast is
- * therefore structural: the gold reticle is always drawn over a wider obsidian edge,
- * and the pin that marks the exact point is ivory with an obsidian outline, so the
- * two-tone pair carries the shape on a light page (the dark edge) and on a dark page
- * (the light body) where a single-tone mark would vanish into one of them. The accent
- * is the gold the whole mark is built from, so it still says which app it belongs to
- * (see `src/renderer/app.css` for the palette these values come from).
+ * tokens rather than from the site it is sitting on, and it has to stay legible on all
+ * of them, from a pure white form to a pure black video frame. Contrast is therefore
+ * structural: the gold blade is filled with the accent and outlined in obsidian, so it
+ * separates from a white page (the edge), from a near-black one (the body) and from a
+ * page painted the same gold (the edge between them). Nothing about the mark moves:
+ * there is no rotation, no pulse and no keyframes, so a page with the agent on it costs
+ * exactly one node and its inline styles (see `src/renderer/app.css` for the palette).
  */
 export interface AgentCursorAppearance {
-  /** The pin on the exact point: always the light half of the primary pair. */
+  /** The mark's edge: always the light half of the primary pair, kept for a caller
+   *  that needs a light separator on a dark surface. */
   fill: string
-  /** Every separating edge: the dark half of that pair, drawn under each accent stroke. */
+  /** The blade's outline: the dark half of that pair, so the gold body separates from a
+   *  page painted the same gold. */
   stroke: string
-  /** The reticle's brackets, its turning index and its press pulse, at the contrast
-   *  level the app is showing. */
+  /** The blade itself, at the contrast level the app is showing. */
   accent: string
   /** Multiplier for the whole mark, from the app's own UI scale. */
   scale: number

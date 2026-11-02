@@ -487,30 +487,31 @@ export function agentHitTestScript(point: { x: number; y: number }): string {
 }
 
 /**
- * Move the agent's own mark to a point, and optionally show a press.
+ * Move the agent's own mark to a point.
  *
- * The mark is a lock-on reticle rather than a pointer: a pointing hand says a person
- * is here, and this says a system is tracking this point. Four gold corner brackets
- * frame the target, an index of four ticks turns slowly so a still page still shows
- * something is working, and an ivory pin sits exactly on the point the action touched
- * so accuracy is never in doubt. Nothing about it is a page's own cursor, which is
- * the whole intention.
+ * The mark is a cursor rather than a reticle: a solid gold blade whose tip is the
+ * point the action touched, notched at the back so it never reads as a pin. A game's
+ * cursor is the reference, because that is the one place a pointer is unmistakably an
+ * instrument, and it points rather than tracks, which is what an action does.
  *
- * Contrast is structural, not hopeful: every gold stroke is drawn over a wider
- * obsidian stroke, and the pin is ivory with an obsidian edge, so the mark separates
- * from a white page, a near-black one, and a page painted the accent's own gold.
+ * It is completely static. There is no rotation, no pulse and no keyframes, so a page
+ * with the agent on it costs exactly one node and its inline styles: nothing runs
+ * while the app waits for the next action.
+ *
+ * Contrast is structural, not hopeful: the gold body sits in an obsidian edge, so the
+ * mark separates from a white page, a near-black one, and a page painted the accent's
+ * own gold. It is drawn as a node of its own, so a screenshot shows it and no
+ * snapshot mistakes it for page content.
  */
 export function agentCursorScript(request: {
   x: number
   y: number
-  press: boolean
   hide: boolean
   appearance: AgentCursorAppearance
 }): string {
   return `(() => {
     const MARK_ATTR = ${JSON.stringify(AGENT_OWNED_ATTRIBUTE)};
     const HOST_ID = '__cio-agent-cursor';
-    const STYLE_ID = '__cio-agent-cursor-style';
     const APPEARANCE = ${JSON.stringify(request.appearance)};
     const appearanceKey = JSON.stringify(APPEARANCE);
     const existing = document.getElementById(HOST_ID);
@@ -529,138 +530,42 @@ export function agentCursorScript(request: {
       record.appearanceKey !== appearanceKey
     ) {
       if (existing) existing.remove();
-      const { fill, stroke, accent, scale } = APPEARANCE;
-      if (!document.getElementById(STYLE_ID)) {
-        const style = document.createElement('style');
-        style.id = STYLE_ID;
-        style.setAttribute(MARK_ATTR, 'cursor-style');
-        style.textContent =
-          '@keyframes cio-agent-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}' +
-          '@media (prefers-reduced-motion: reduce){#' + HOST_ID + ' .cio-agent-orbit{animation:none}}';
-        (document.head || document.documentElement).appendChild(style);
-      }
-      const UNIT = 40;
+      const { stroke, accent, scale } = APPEARANCE;
+      // The blade's own box, in units, with its tip on the hotspot so the point the
+      // action touched is the point that is drawn.
+      const LEFT = -20;
+      const TIP = -3;
       const host = document.createElement('div');
       host.id = HOST_ID;
       host.setAttribute(MARK_ATTR, 'cursor');
       host.setAttribute('aria-hidden', 'true');
+      // \`all:initial\` first: the mark sits inside a stranger's document, and a page
+      // rule that gives every svg a margin, a line height or a fill would otherwise
+      // move or recolour it. Inline declarations win over the page's own rules, so the
+      // mark is drawn where the action happened on any page rather than on a polite one.
       host.style.cssText =
-        'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;transition:left 90ms linear,top 90ms linear;';
+        'all:initial;display:block;position:fixed;left:0;top:0;width:0;height:0;margin:0;padding:0;' +
+        'z-index:2147483647;pointer-events:none;transition:left 90ms linear,top 90ms linear;';
       const svgNs = 'http://www.w3.org/2000/svg';
       const svg = document.createElementNS(svgNs, 'svg');
-      svg.setAttribute('width', String(UNIT * scale));
-      svg.setAttribute('height', String(UNIT * scale));
-      svg.setAttribute('viewBox', '0 0 ' + UNIT + ' ' + UNIT);
+      svg.setAttribute('width', String(40 * scale));
+      svg.setAttribute('height', String(40 * scale));
+      svg.setAttribute('viewBox', '0 0 40 40');
       svg.style.cssText =
-        'position:absolute;left:' + (-UNIT / 2) * scale + 'px;top:' + (-UNIT / 2) * scale + 'px;overflow:visible;' +
-        'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.55)) drop-shadow(0 0 1px rgba(0,0,0,0.4));';
-      /** One accent stroke, built as three: an ivory halo, an obsidian edge, then the
-       *  gold. A thin gold line alone is a 1.9:1 mark on a white page, and the same line
-       *  is lost in a near-black one; the two neutral rings are what make the mark hold
-       *  on a white page (the obsidian edge), on a black one (the ivory halo) and on a
-       *  page painted the accent's own gold (the edge between them). */
-      const edgedStroke = (node, width, opacity) => {
-        const halo = node.cloneNode(false);
-        halo.setAttribute('stroke', fill);
-        halo.setAttribute('stroke-width', String(width + 3.6));
-        halo.setAttribute('fill', 'none');
-        halo.setAttribute('opacity', String(opacity));
-        svg.appendChild(halo);
-        const edge = node.cloneNode(false);
-        edge.setAttribute('stroke', stroke);
-        edge.setAttribute('stroke-width', String(width + 1.8));
-        edge.setAttribute('fill', 'none');
-        edge.setAttribute('opacity', String(opacity));
-        svg.appendChild(edge);
-        node.setAttribute('stroke', accent);
-        node.setAttribute('stroke-width', String(width));
-        node.setAttribute('fill', 'none');
-        node.setAttribute('opacity', String(opacity));
-        svg.appendChild(node);
-      };
-      const edgedPath = (d, width, opacity) => {
-        const path = document.createElementNS(svgNs, 'path');
-        path.setAttribute('d', d);
-        path.setAttribute('stroke-linecap', 'butt');
-        path.setAttribute('stroke-linejoin', 'miter');
-        edgedStroke(path, width, opacity);
-      };
-      // Corner brackets, square and unrounded: the frame of a viewfinder.
-      edgedPath('M4 13 L4 4 L13 4', 2.4, 1);
-      edgedPath('M27 4 L36 4 L36 13', 2.4, 1);
-      edgedPath('M36 27 L36 36 L27 36', 2.4, 1);
-      edgedPath('M13 36 L4 36 L4 27', 2.4, 1);
-      // The turning index: four ticks that keep moving while the app works.
-      const orbit = document.createElementNS(svgNs, 'g');
-      orbit.setAttribute('class', 'cio-agent-orbit');
-      orbit.style.cssText = 'transform-origin:' + UNIT / 2 + 'px ' + UNIT / 2 + 'px;animation:cio-agent-orbit 2.8s linear infinite;';
-      for (const [x1, y1, x2, y2] of [[20, 1.5, 20, 6], [38.5, 20, 34, 20], [20, 38.5, 20, 34], [1.5, 20, 6, 20]]) {
-        const halo = document.createElementNS(svgNs, 'line');
-        const edge = document.createElementNS(svgNs, 'line');
-        const tick = document.createElementNS(svgNs, 'line');
-        for (const node of [halo, edge, tick]) {
-          node.setAttribute('x1', String(x1));
-          node.setAttribute('y1', String(y1));
-          node.setAttribute('x2', String(x2));
-          node.setAttribute('y2', String(y2));
-          orbit.appendChild(node);
-        }
-        halo.setAttribute('stroke', fill);
-        halo.setAttribute('stroke-width', '4.2');
-        edge.setAttribute('stroke', stroke);
-        edge.setAttribute('stroke-width', '2.6');
-        tick.setAttribute('stroke', accent);
-        tick.setAttribute('stroke-width', '1.4');
-      }
-      svg.appendChild(orbit);
-      // The pin sits on the exact point, and it is the ivory/obsidian pair so it reads
-      // on any page even where the accent does not.
-      const pinEdge = document.createElementNS(svgNs, 'rect');
-      pinEdge.setAttribute('x', '17.1');
-      pinEdge.setAttribute('y', '17.1');
-      pinEdge.setAttribute('width', '5.8');
-      pinEdge.setAttribute('height', '5.8');
-      pinEdge.setAttribute('fill', stroke);
-      pinEdge.setAttribute('stroke', 'none');
-      svg.appendChild(pinEdge);
-      const pin = document.createElementNS(svgNs, 'rect');
-      pin.setAttribute('x', '18.2');
-      pin.setAttribute('y', '18.2');
-      pin.setAttribute('width', '3.6');
-      pin.setAttribute('height', '3.6');
-      pin.setAttribute('fill', fill);
-      svg.appendChild(pin);
-      // A square pulse, because this app does not round its corners.
-      const pulse = document.createElement('div');
-      const pulseSize = 30 * scale;
-      pulse.style.cssText =
-        'position:absolute;left:' + (-pulseSize / 2) + 'px;top:' + (-pulseSize / 2) + 'px;' +
-        'width:' + pulseSize + 'px;height:' + pulseSize + 'px;box-sizing:border-box;opacity:0;' +
-        'border:1.5px solid ' + accent + ';box-shadow:0 0 0 1.5px rgba(8,24,37,0.55);';
-      host.appendChild(pulse);
+        'all:initial;display:block;position:absolute;left:' + LEFT * scale + 'px;top:' + TIP * scale + 'px;' +
+        'margin:0;padding:0;overflow:visible;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5));';
+      const blade = document.createElementNS(svgNs, 'path');
+      blade.setAttribute('d', 'M20 3 L33.5 34 L20 27 L6.5 34 Z');
+      blade.style.cssText =
+        'fill:' + accent + ';stroke:' + stroke + ';stroke-width:1.6;stroke-linejoin:miter;';
+      svg.appendChild(blade);
       host.appendChild(svg);
       (document.body || document.documentElement).appendChild(host);
-      record = { host, pulse, svg, appearanceKey };
+      record = { host, svg, appearanceKey };
       globalThis.__cioAgentCursor = record;
     }
     record.host.style.left = ${JSON.stringify(request.x)} + 'px';
     record.host.style.top = ${JSON.stringify(request.y)} + 'px';
-    if (${request.press ? 'true' : 'false'}) {
-      const from = APPEARANCE.scale * 0.8;
-      try {
-        record.pulse.animate(
-          [
-            { opacity: 0.85, transform: 'scale(' + from + ')' },
-            { opacity: 0, transform: 'scale(' + APPEARANCE.scale * 1.6 + ')' }
-          ],
-          { duration: 320, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)' }
-        );
-        record.svg.animate(
-          [{ transform: 'scale(0.88)' }, { transform: 'scale(1)' }],
-          { duration: 240, easing: 'ease-out' }
-        );
-      } catch {}
-    }
     return { cursor: true, x: ${JSON.stringify(request.x)}, y: ${JSON.stringify(request.y)} };
   })()`
 }

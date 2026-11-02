@@ -105,10 +105,12 @@ material way, and the difference is deliberate.
     while a naive tool reports success. Each write reports the value the page kept.
   - A synthetic mark, marked `data-cio-agent` so no snapshot mistakes it for page
     content, is drawn at the point each action touched, so a screenshot shows where the
-    agent worked. It is a lock-on reticle rather than a pointer (gold corner brackets
-    over an obsidian edge, a turning index of four ticks, and an ivory pin on the exact
-    point, with a square pulse on a press) because the mark says a system is tracking
-    the point, not that a hand is there. Its palette and scale come from the app
+    agent worked. It is a game-style cursor rather than a selection pointer: a solid
+    gold blade whose tip is that point, notched at the back, outlined in obsidian so it
+    separates from a white page, a near-black one and a page painted the same gold. It
+    is completely static, with no rotation, pulse or keyframes, so an agent that has
+    acted leaves one node and its inline styles on the page and nothing running between
+    actions. Its palette and scale come from the app
     (`src/lib/browser/agent-cursor.ts`), and no text is drawn into a page frame. Screenshots also capture the whole document (`fullPage`) or one
     element through the debugger's `Page.captureScreenshot`, falling back to the
     viewport when the debugger cannot answer.

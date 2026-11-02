@@ -904,20 +904,12 @@ export class BrowserService {
     return this.cursorAppearance.current()
   }
 
-  async paintAgentCursor(
-    tab: BrowserTab,
-    point: { x: number; y: number },
-    press: boolean
-  ): Promise<void> {
-    return this.agentScriptUnit.paintAgentCursor(tab, point, press)
+  async paintAgentCursor(tab: BrowserTab, point: { x: number; y: number }): Promise<void> {
+    return this.agentScriptUnit.paintAgentCursor(tab, point)
   }
 
-  async paintAgentCursorAtElement(
-    tab: BrowserTab,
-    selector: string,
-    press: boolean
-  ): Promise<void> {
-    return this.agentScriptUnit.paintAgentCursorAtElement(tab, selector, press)
+  async paintAgentCursorAtElement(tab: BrowserTab, selector: string): Promise<void> {
+    return this.agentScriptUnit.paintAgentCursorAtElement(tab, selector)
   }
 
   requiredInputString(input: Record<string, unknown>, field: string, allowEmpty = false): string {

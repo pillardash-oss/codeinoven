@@ -298,10 +298,8 @@ const cursorAppearance = agentCursorAppearance({
 describe('agent cursor', () => {
   it('draws one marked node and moves it instead of stacking copies', () => {
     document.body.innerHTML = '<button>Go</button>'
-    run(agentCursorScript({ x: 10, y: 20, press: true, hide: false, appearance: cursorAppearance }))
-    run(
-      agentCursorScript({ x: 30, y: 40, press: false, hide: false, appearance: cursorAppearance })
-    )
+    run(agentCursorScript({ x: 10, y: 20, hide: false, appearance: cursorAppearance }))
+    run(agentCursorScript({ x: 30, y: 40, hide: false, appearance: cursorAppearance }))
     const cursors = document.querySelectorAll(`[${AGENT_OWNED_ATTRIBUTE}="cursor"]`)
     expect(cursors.length).toBe(1)
     const host = cursors[0]
@@ -310,7 +308,7 @@ describe('agent cursor', () => {
   })
 
   it('removes it when asked', () => {
-    run(agentCursorScript({ x: 1, y: 1, press: false, hide: true, appearance: cursorAppearance }))
+    run(agentCursorScript({ x: 1, y: 1, hide: true, appearance: cursorAppearance }))
     expect(document.querySelectorAll(`[${AGENT_OWNED_ATTRIBUTE}="cursor"]`).length).toBe(0)
   })
 })
