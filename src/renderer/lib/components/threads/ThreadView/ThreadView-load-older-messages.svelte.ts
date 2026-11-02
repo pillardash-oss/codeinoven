@@ -63,6 +63,10 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
   /** Set by `bind()`: whether the conversation was left scrolled away. */
   userScrolledAway = $state(false)
 
+  /** Where the reader last was, so a scroll event can tell travel direction.
+   *  Plain, not reactive: only the scroll handler reads it. */
+  private lastScrollTop = 0
+
   /** Set by `bind()`: how many messages the first paint mounts. */
   mountedCount = $state(0)
 
@@ -282,7 +286,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   onScroll(): void {
     if (!this.scrollEl) return
-    const away = !this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
+    // Any upward travel detaches the reader, even inside the at-bottom band.
+    // Measured only against where the reader was, the band made the first small
+    // nudge of a trackpad gesture still read as "at the bottom", so the tail
+    // follower grabbed the viewport back on the next content resize and the
+    // reader could not scroll away at all. A downward scroll onto the bottom
+    // still re-attaches them, and so does an explicit jump to the latest.
+    const previousTop = this.lastScrollTop
+    this.lastScrollTop = this.scrollEl.scrollTop
+    const movedUp = this.scrollEl.scrollTop < previousTop - 0.5
+    const away = movedUp || !this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
     // Pin the window to what the reader is reading the moment they leave the
     // tail, and release it back to the tail-relative window when they return.
     // While pinned, a streaming turn grows the window instead of sliding it
