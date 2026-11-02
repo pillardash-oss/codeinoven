@@ -254,8 +254,14 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
       clearDraftLabelCookie(thread.id)
     }
     scopeState.updateThread(thread)
-    if (workspaceState.selectedThread?.id === thread.id) {
+    const selected = workspaceState.selectedThread
+    const onScreen = selected?.projectId === thread.projectId && selected.id === thread.id
+    if (onScreen) {
       workspaceState.updateThread(thread)
+      // The thread is the one the user is looking at, so whatever this update
+      // announced has already been read in the conversation itself. Its notice
+      // leaves the panel with it instead of waiting to be dismissed by hand.
+      notificationPanelState.acknowledgeOpenThread(thread)
     }
     // Reconcile the thread's notices on every status update: a needs-attention
     // notice stays while the thread is parked (reading it answers nothing) and

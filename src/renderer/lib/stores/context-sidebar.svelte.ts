@@ -23,6 +23,7 @@ import {
   type ThreadNoteContextTab
 } from './context-sidebar-types'
 import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
+import { notificationPanelState } from './notification-panel.svelte'
 
 export type {
   ActionsContextTab,
@@ -908,6 +909,10 @@ class ContextSidebarState {
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
     if (this.notificationsVisible) {
+      // The panel always opens on Attention: it is the one list that says what
+      // is waiting on the user right now, so reopening the panel never lands
+      // on whichever tab the previous visit happened to leave behind.
+      notificationPanelState.setTab('attention')
       this.stickyNotesVisible = false
       if (this.browser.visible) this.browser.detachView()
       this.browser.visible = false

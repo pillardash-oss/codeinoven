@@ -5,7 +5,13 @@ const subscribe = vi.hoisted(() => vi.fn())
 
 vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
 vi.mock('$lib/stores/assistants.svelte', () => ({
-  assistants: { missedRuns: [], spaceColor: null, assistants: [] }
+  assistants: {
+    missedRuns: [],
+    recentBackgroundRuns: [],
+    spaceColor: null,
+    assistants: [],
+    dismissBackgroundRun: vi.fn()
+  }
 }))
 
 import { APP_SLUG } from '$shared/brand'
@@ -164,6 +170,95 @@ describe('bulk dismissal', () => {
   })
 })
 
+describe('the attention tab', () => {
+  it('is the tab the panel opens on', () => {
+    expect(panel.topTab).toBe('attention')
+  })
+
+  it('collects a waiting notice from every family into one list', () => {
+    panel.add(payload('project', { kind: 'attention' }))
+    panel.add(payload('chat', { kind: 'attention', projectId: INBOX_PROJECT_ID, source: 'chat' }))
+    panel.add(
+      payload('assistant', {
+        kind: 'attention',
+        projectId: ASSISTANT_SPACE_ID,
+        source: 'assistant'
+      })
+    )
+    panel.add(payload('settled', { kind: 'completed' }))
+
+    expect(new Set(panel.attentionNotifications.map((n) => n.id))).toEqual(
+      new Set(['project', 'chat', 'assistant'])
+    )
+    expect(panel.attentionCount).toBe(3)
+  })
+
+  it('clears only the waiting notices and tombstones them', () => {
+    const attentionId = `${APP_SLUG}-project-1-thread-1-awaiting_approval-100`
+    panel.add(payload(attentionId, { kind: 'attention' }))
+    panel.add(payload('settled', { kind: 'completed' }))
+
+    panel.dismissAttention()
+
+    expect(panel.attentionNotifications).toEqual([])
+    expect(panel.projectNotifications.map((n) => n.id)).toEqual(['settled'])
+    expect(invoke).toHaveBeenCalledWith('notification:dismissInbox', attentionId)
+    // The durable side is told one id at a time, and the tombstone keeps the
+    // parked thread from rebuilding the notice on the next scope load.
+    panel.hydrateFromThreads([thread({ status: 'awaiting_approval' })], [])
+    expect(panel.attentionNotifications).toEqual([])
+  })
+
+  it('drops the unattended runs a run row already stands for', async () => {
+    const { assistants } = await import('$lib/stores/assistants.svelte')
+    const mocked = assistants as unknown as {
+      recentBackgroundRuns: Array<{ runThreadId: string; outcome?: string }>
+    }
+    mocked.recentBackgroundRuns = [
+      { runThreadId: 'noticed', outcome: 'parked' },
+      { runThreadId: 'parked', outcome: 'parked' },
+      { runThreadId: 'settled', outcome: 'completed' }
+    ]
+    panel.add(payload('notice', { kind: 'attention', threadId: 'noticed' }))
+
+    expect(panel.attentionBackgroundRuns.map((run) => run.runThreadId)).toEqual(['parked'])
+    expect(panel.attentionCount).toBe(2)
+  })
+})
+
+describe('acknowledging the thread the user opened', () => {
+  it('retires every entry the thread carried, durably', () => {
+    const attentionId = `${APP_SLUG}-project-1-thread-1-awaiting_approval-100`
+    panel.add(payload(attentionId, { kind: 'attention' }))
+    panel.add(payload('other', { kind: 'attention', threadId: 'thread-2' }))
+
+    panel.acknowledgeOpenThread(thread({ status: 'awaiting_approval', read: true }))
+
+    expect(panel.attentionNotifications.map((n) => n.id)).toEqual(['other'])
+    expect(invoke).toHaveBeenCalledWith('notification:dismissInbox', attentionId)
+  })
+
+  it('acknowledges the unattended run that executed on that thread', async () => {
+    const { assistants } = await import('$lib/stores/assistants.svelte')
+    const mocked = assistants as unknown as {
+      recentBackgroundRuns: Array<{ runThreadId: string }>
+      dismissBackgroundRun: ReturnType<typeof vi.fn>
+    }
+    mocked.recentBackgroundRuns = [{ runThreadId: 'run-1' }]
+
+    panel.acknowledgeOpenThread(thread({ id: 'run-1', read: true }))
+
+    expect(mocked.dismissBackgroundRun).toHaveBeenCalledWith('run-1')
+  })
+
+  it('never rebuilds a read thread from thread-state hydration', () => {
+    // A parked thread the user already read is live state on its own row; it
+    // must not come back to the panel on the next scope load or launch.
+    panel.hydrateFromThreads([thread({ status: 'awaiting_approval', read: true })], [])
+    expect(panel.attentionNotifications).toEqual([])
+  })
+})
+
 describe('restoring the durable inbox', () => {
   it('adopts restored entries and their tombstones', async () => {
     invoke.mockResolvedValue({
@@ -174,7 +269,7 @@ describe('restoring the durable inbox', () => {
     await panel.restoreFromStore()
 
     expect(panel.totalCount).toBe(1)
-    expect(panel.visible.map((n) => n.id)).toEqual(['kept'])
+    expect(panel.projectNotifications.map((n) => n.id)).toEqual(['kept'])
     // The tombstone has to seed the live guard too, or a re-delivery would
     // resurrect what the user retired in the previous session.
     panel.add(payload('gone'))
@@ -271,7 +366,7 @@ describe('dropping a deleted thread', () => {
 
     panel.dismissForThread('project-1', 'gone')
 
-    expect(panel.visible.map((n) => n.id)).toEqual(['b'])
+    expect(panel.projectNotifications.map((n) => n.id)).toEqual(['b'])
     expect(invoke).toHaveBeenCalledWith('notification:dismissInboxForThread', 'project-1', 'gone')
   })
 })
@@ -311,7 +406,7 @@ describe('opening the thread', () => {
     panel.add(payload('a', { threadId: 'thread-1' }))
     panel.add(payload('b', { threadId: 'thread-2' }))
     panel.reconcileThread(thread({ id: 'thread-1', status: 'completed', read: true }))
-    expect(panel.visible.map((n) => n.id)).toEqual(['b'])
+    expect(panel.projectNotifications.map((n) => n.id)).toEqual(['b'])
   })
 })
 

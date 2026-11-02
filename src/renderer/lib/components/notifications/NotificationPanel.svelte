@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
@@ -82,6 +83,16 @@
         run: BackgroundRun
       }
 
+  /**
+   * One row the Attention tab can show, tagged with the moment it reports so the
+   * three sources (a notice, a missed fire, and a parked unattended run) read as
+   * one newest-first list instead of three separate sections.
+   */
+  type AttentionRow =
+    | { kind: 'notice'; id: string; at: number; notification: InAppNotification }
+    | { kind: 'missed'; id: string; at: number; run: MissedRun }
+    | { kind: 'background'; id: string; at: number; run: BackgroundRun }
+
   let { onOpenThread }: Props = $props()
 
   /**
@@ -113,6 +124,7 @@
   }
 
   const topTabs: { key: NotificationTopTab; label: string }[] = [
+    { key: 'attention', label: 'Attention' },
     { key: 'projects', label: 'Projects' },
     { key: 'chats', label: 'Chats' },
     { key: 'assistants', label: 'Assistants' },
@@ -129,6 +141,10 @@
 
   function subFiltersFor(tab: NotificationTopTab): NotificationSubFilter[] {
     switch (tab) {
+      // Attention is already the filtered view: every row on it is waiting on
+      // the user, so there is nothing left for a second-level filter to narrow.
+      case 'attention':
+        return []
       case 'projects':
         return ['all', 'done', 'attention', 'spec', 'issues']
       case 'chats':
@@ -145,6 +161,8 @@
 
   function topTabCount(tab: NotificationTopTab): number {
     switch (tab) {
+      case 'attention':
+        return notificationPanelState.attentionCount
       case 'projects':
         return notificationPanelState.projectCount('all')
       case 'chats':
@@ -158,6 +176,8 @@
 
   function subCount(tab: NotificationTopTab, sub: NotificationSubFilter): number {
     switch (tab) {
+      case 'attention':
+        return 0
       case 'projects':
         return notificationPanelState.projectCount(sub)
       case 'chats':
@@ -194,6 +214,7 @@
 
   let showingAppErrors = $derived(notificationPanelState.topTab === 'app-errors')
   let showingAssistants = $derived(notificationPanelState.topTab === 'assistants')
+  let showingAttention = $derived(notificationPanelState.topTab === 'attention')
   /** Whether the active tab shows any row at all, which is exactly when its
    *  clear-all is offered. Every tab can clear everything it shows, including the
    *  missed fires and unattended runs the Assistants tab renders straight from
@@ -201,10 +222,36 @@
   let hasVisibleItems = $derived(
     showingAppErrors
       ? appErrorState.count > 0
-      : showingAssistants
-        ? notificationPanelState.assistantCount(notificationPanelState.subFilter) > 0
-        : notificationPanelState.visible.length > 0
+      : showingAttention
+        ? notificationPanelState.attentionCount > 0
+        : showingAssistants
+          ? notificationPanelState.assistantCount(notificationPanelState.subFilter) > 0
+          : notificationPanelState.visible.length > 0
   )
+
+  /**
+   * The Attention tab's single list: every waiting notice, every missed fire,
+   * and every unattended run still parked on a decision, from any project,
+   * chat, or assistant, newest first.
+   */
+  const attentionRows = $derived.by<AttentionRow[]>(() => {
+    const rows: AttentionRow[] = []
+    for (const n of notificationPanelState.attentionNotifications) {
+      rows.push({ kind: 'notice', id: `notice:${n.id}`, at: n.timestamp, notification: n })
+    }
+    for (const run of notificationPanelState.attentionMissedRuns) {
+      rows.push({ kind: 'missed', id: `missed:${run.id}`, at: run.dueAt, run })
+    }
+    for (const run of notificationPanelState.attentionBackgroundRuns) {
+      rows.push({
+        kind: 'background',
+        id: `background:${run.runThreadId}`,
+        at: run.settledAt ?? run.startedAt,
+        run
+      })
+    }
+    return rows.sort((a, b) => b.at - a.at)
+  })
 
   // Missed runs are surfaced per assistant: one group per owning assistant, plus a
   // single group for assistant-less tasks. Both the groups and the panel's tab
@@ -449,6 +496,11 @@
       appErrorState.dismissAll()
       return
     }
+    if (tab === 'attention') {
+      notificationPanelState.dismissAttention()
+      void dismissAttentionRuns()
+      return
+    }
     notificationPanelState.dismissTab(tab)
     // The Assistants tab is two stores: the notices the notification panel owns,
     // and the missed fires and unattended runs the assistant store owns. Clearing
@@ -456,6 +508,17 @@
     // them, so the tab is retired through both in one action.
     if (tab === 'assistants') void dismissAssistantRuns()
     else contextSidebarState.hide()
+  }
+
+  /** Retire the Attention tab's run rows: missed fires and parked runs. A run
+   *  that already settled is not on this tab, so it is left in the ledger. */
+  async function dismissAttentionRuns(): Promise<void> {
+    const missed = notificationPanelState.attentionMissedRuns
+    const runs = notificationPanelState.attentionBackgroundRuns
+    await Promise.all([
+      ...missed.map((run) => dismissMissedRun(run.id)),
+      ...runs.map((run) => dismissBackgroundRun(run.runThreadId))
+    ])
   }
 
   /** Retire the Assistants tab's run rows: missed fires and unattended runs. */
@@ -574,7 +637,7 @@
   {/if}
 {/snippet}
 
-{#snippet notificationCard(n: InAppNotification)}
+{#snippet notificationCard(n: InAppNotification, showSource = false)}
   {@const active = busyId === n.id}
   <div
     class="group flex cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {active
@@ -607,15 +670,19 @@
         <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(n.timestamp)}</span>
       </div>
       <!--
-        An assistant notice drops the source line: the reader is already on the
-        Assistants tab, so naming the assistant space under every row said
-        nothing, and the row's own title plus its outcome line carry the meaning.
+        An assistant notice drops the source line on the Assistants tab, where
+        the reader is already inside that assistant's section. The Attention tab
+        mixes every family into one list, so there it names the source it came
+        from instead of leaving the row unattributed.
       -->
-      {#if !notificationPanelState.isAssistant(n)}
+      {#if showSource || !notificationPanelState.isAssistant(n)}
         <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
           {#if n.source === 'chat'}
             <CioMessage size={10} class="shrink-0" />
             <span>Chat</span>
+          {:else if notificationPanelState.isAssistant(n)}
+            <CioSubagent size={10} class="shrink-0" />
+            <span class="truncate">{assistantNameFor(n.assistantId) ?? 'Assistant'}</span>
           {:else}
             <span
               class="h-1.5 w-1.5 shrink-0"
@@ -870,7 +937,26 @@
 
   <!-- Content -->
   <div class="min-h-0 flex-1 overflow-y-auto">
-    {#if showingAppErrors}
+    {#if showingAttention}
+      {#if attentionRows.length === 0}
+        <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
+          <CioAttention size={20} class="text-dimmed" />
+          <p class="text-xs text-muted">Nothing needs attention</p>
+        </div>
+      {:else}
+        <div class="space-y-1 p-1.5">
+          {#each attentionRows as row (row.id)}
+            {#if row.kind === 'notice'}
+              {@render notificationCard(row.notification, true)}
+            {:else if row.kind === 'missed'}
+              {@render missedRunRow(row.run)}
+            {:else}
+              {@render backgroundRunRow(row.run)}
+            {/if}
+          {/each}
+        </div>
+      {/if}
+    {:else if showingAppErrors}
       {#if appErrorState.count === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
           <CioDebugger size={20} class="text-dimmed" />
