@@ -36,6 +36,19 @@ export function foldSlide(): SlideParams {
 }
 
 /**
+ * How long a fold takes on this machine, after the reduced-motion rule.
+ *
+ * A surface that keeps something on screen through a fold   the one row a folded
+ * group leaves for the thread being worked in   waits this long before drawing it,
+ * because the fold's outgoing element still holds its height in the flow while it
+ * animates and drawing the row in the same frame would show it twice. Zero when
+ * the OS asks for reduced motion, where the fold is an instant swap.
+ */
+export function foldDuration(): number {
+  return motionDuration(FOLD_MS)
+}
+
+/**
  * The fold a body plays as its own clip height opens or closes, scripted rather
  * than left to a CSS transition on `max-height`.
  *

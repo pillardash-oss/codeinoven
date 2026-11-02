@@ -12,6 +12,7 @@
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import { fly, slide } from 'svelte/transition'
 
   import { DropdownMenu } from 'bits-ui'
@@ -590,7 +591,7 @@
               </button>
             </div>
             {#if expandedGroupId === group.id}
-              <div class="mb-1 border p-3" transition:slide={{ duration: 150 }}>
+              <div class="mb-1 border p-3" transition:slide={foldSlide()}>
                 <BrowserBookmarkGroupEditor
                   {group}
                   onSaved={() => (expandedGroupId = null)}

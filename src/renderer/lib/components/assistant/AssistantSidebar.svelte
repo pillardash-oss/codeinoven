@@ -7,6 +7,8 @@
   import SidebarListRow from '$lib/components/shared/SidebarListRow.svelte'
   import { RowPageBudget, THREAD_LIST_PAGE_SIZE } from '$lib/components/shared/RowPageBudget.svelte'
   import { ListRowReflow, rowArrangement } from '$lib/motion'
+  import { foldSlide } from '$lib/components/shared/card-motion'
+  import { slide } from 'svelte/transition'
   import { ThreadOrderSettle } from '$lib/components/workspace/thread-order-settle.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { pinnedThreadSort, threadSort } from '$lib/stores/workspace.svelte'
@@ -740,7 +742,7 @@
           onDropTask={onAssignTask}
         />
         {#if isExpanded}
-          <div class="mb-1 ml-2 border-l border-border pl-1.5">
+          <div transition:slide={foldSlide()} class="mb-1 ml-2 border-l border-border pl-1.5">
             {#if searching && query.trim().length > 0 && visibleRows.length === 0}
               <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
             {:else}
