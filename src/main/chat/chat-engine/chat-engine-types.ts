@@ -6,6 +6,7 @@ import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
 import type { UtilitySuggestionResolution } from '../../../lib/utility-suggestion'
+import type { AgentMcpSignInResolution } from '../../../lib/mcp-sign-in'
 import type {
   FileChangeSource,
   AgentMessage,
@@ -382,6 +383,13 @@ export interface PendingQuestionInfo {
   settleUtilitySuggestion?: (resolution: UtilitySuggestionResolution) => void
   /** The suggestion card was answered, dismissed, or timed out. */
   resumeUtilitySuggestionAfterSettlement?: boolean
+  /**
+   * Set for an app-owned MCP sign-in card. The gateway connection that hit the
+   * server's OAuth refusal is still open, so the user's answer settles here
+   * instead of travelling to a harness: the grant itself is written by the
+   * shared OAuth service, and the gateway retries once it reports a sign-in.
+   */
+  settleMcpSignIn?: (resolution: AgentMcpSignInResolution) => void
 }
 
 /**

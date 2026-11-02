@@ -215,6 +215,16 @@ export interface BrowserExtensionSidePanelOpenRequest {
 export type BrowserExtensionTabEventName =
   'onCreated' | 'onUpdated' | 'onRemoved' | 'onActivated' | 'onHighlighted'
 
+/**
+ * The window events the app is the author of.
+ *
+ * Electron draws no extension window, so the one window an extension asks for is
+ * this app's, and only this app can say that it ended. `onRemoved` is the event a
+ * password manager waits on to abandon a passkey prompt: without it the page's
+ * ceremony is pending for the rest of the page's life.
+ */
+export type BrowserExtensionWindowEventName = 'onRemoved'
+
 /** One tab event, in the shape `chrome.tabs` hands a listener its arguments. */
 export interface BrowserExtensionTabReplay {
   name: BrowserExtensionTabEventName
@@ -425,6 +435,17 @@ export class BrowserExtensionService {
     args: unknown[]
   ): void {
     return this.units['runtime'].onTabEvent(projectId, boxId, name, args)
+  }
+
+  /** One window fact for the extensions loaded in a jar: the app's own news that
+   *  the window it lent an extension is gone. */
+  onWindowEvent(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWindowEventName,
+    args: unknown[]
+  ): void {
+    return this.units['runtime'].onWindowEvent(projectId, boxId, name, args)
   }
   onWebNavigationEvent(
     projectId: string,

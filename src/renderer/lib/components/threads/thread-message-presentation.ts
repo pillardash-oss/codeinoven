@@ -15,6 +15,7 @@ import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
 import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
+import { resolveModelProvider, catalogModelEntry } from '$shared/provider-identity'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
 import { generatedTokens, type LiveGenerationRate } from '$lib/token-rate.svelte'
 import { recordedTokenRate } from '$shared/usage-rate'
@@ -301,30 +302,43 @@ export function inlineFileTagsForMessage(
   return tags
 }
 
-/** Provider catalog entry the message was answered through, when known. */
+/**
+ * Provider catalog entry the message was answered through, when known.
+ *
+ * The message's harness travels with the lookup because a provider id is only
+ * unique inside a harness, and the model is used only to pick between providers
+ * that share an id: matching on the model alone answered a message that ran
+ * through one gateway with the mark of another provider offering the same model.
+ */
 export function messageProvider(
   msg: AgentMessage,
   providers: readonly ProviderCatalog[]
 ): ProviderCatalog | undefined {
-  if (msg.providerId) {
-    const direct = providers.find((p) => p.id === msg.providerId)
-    if (direct) return direct
-  }
-  if (!msg.modelId) return undefined
-  return providers.find((p) => p.models.some((m) => m.id === msg.modelId))
+  return resolveModelProvider(providers, {
+    providerId: msg.providerId,
+    harnessId: msg.harnessId,
+    modelId: msg.modelId
+  })
 }
 
-/** Human model name: catalog display name, else the raw model id. */
+/**
+ * Human model name: catalog display name, else the raw model id.
+ *
+ * The message's own provider decides which catalog entry names it. When that
+ * entry is gone the model's id is only reused if every provider listing it
+ * names it the same, so a model offered by another provider under its own
+ * qualified name never labels this message.
+ */
 export function messageModelLabel(
   msg: AgentMessage,
   allModels: readonly ProviderModel[]
 ): string | null {
   if (!msg.modelId) return null
-  const model =
-    allModels.find(
-      (m) => m.id === msg.modelId && (!msg.providerId || m.providerId === msg.providerId)
-    ) ?? allModels.find((m) => m.id === msg.modelId)
-  if (model) return model.name
+  const entry = catalogModelEntry(allModels, {
+    providerId: msg.providerId,
+    modelId: msg.modelId
+  })
+  if (entry) return entry.name
   // Fast variants may be absent from harness catalogs: fall back to a derived label.
   return fastVariantForModelId(msg.modelId)?.label ?? msg.modelId
 }
@@ -391,11 +405,10 @@ export function messageThinkingLevel(
   allModels: readonly ProviderModel[]
 ): ThinkingLevel | null {
   if (!msg.modelId) return null
-  const modelId = fastBaseModelId(msg.modelId)
-  const model =
-    allModels.find(
-      (m) => m.id === modelId && (!msg.providerId || m.providerId === msg.providerId)
-    ) ?? allModels.find((m) => m.id === modelId)
+  const model = catalogModelEntry(allModels, {
+    providerId: msg.providerId,
+    modelId: fastBaseModelId(msg.modelId)
+  })
   const presets = model?.thinkingPresets ?? []
   // A model known not to reason never shows a thinking badge, even when a
   // generic level was stamped onto its rows.

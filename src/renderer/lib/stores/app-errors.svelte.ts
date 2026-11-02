@@ -1,6 +1,7 @@
 import { toast } from 'svelte-sonner'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { copyText } from '$lib/copy-text'
+import { isBenignRendererErrorMessage } from '$shared/renderer-error-classification'
 
 export type AppErrorKind = 'error' | 'warning'
 
@@ -311,14 +312,20 @@ function installUncaughtErrorCapture(): void {
   disposePrevious?.()
   const onError = (event: ErrorEvent) => {
     const error: unknown = event.error
-    appErrorState.capture('error', messageFrom(error, event.message || 'Uncaught app error'), {
+    const message = messageFrom(error, event.message || 'Uncaught app error')
+    // Engine bookkeeping (a ResizeObserver scheduling more layout than a frame
+    // allows) is not an app failure and must not appear in the Errors panel.
+    if (isBenignRendererErrorMessage(message)) return
+    appErrorState.capture('error', message, {
       details: error instanceof Error ? serializeError(error) : undefined,
       thread: currentThreadRef()
     })
   }
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
     const reason: unknown = event.reason
-    appErrorState.capture('error', messageFrom(reason, 'Unhandled promise rejection'), {
+    const message = messageFrom(reason, 'Unhandled promise rejection')
+    if (isBenignRendererErrorMessage(message)) return
+    appErrorState.capture('error', message, {
       details: reason instanceof Error ? serializeError(reason) : undefined,
       thread: currentThreadRef()
     })

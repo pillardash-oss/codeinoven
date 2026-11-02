@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioMic from '@pdslng/cio-icon/CioMic.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
@@ -25,11 +26,13 @@
   const VISIBLE_DOWNLOADS = 4
 
   let hasThreads = $derived((payload?.projects.length ?? 0) > 0)
+  let speech = $derived(payload?.speech ?? null)
+  let hasSpeech = $derived(speech !== null)
   let downloads = $derived(payload?.downloads ?? [])
   let visibleDownloads = $derived(downloads.slice(0, VISIBLE_DOWNLOADS))
   let remainingDownloadCount = $derived(Math.max(0, downloads.length - VISIBLE_DOWNLOADS))
   let hasDownloads = $derived(downloads.length > 0)
-  let hasListings = $derived(hasThreads || hasDownloads)
+  let hasListings = $derived(hasThreads || hasSpeech || hasDownloads)
   let forcing = $derived(updateBlockers.forcing)
   let failure = $derived(updateBlockers.failure)
 
@@ -37,13 +40,21 @@
    * What stopping this costs, in the order the sections above list it.
    *
    * Unlike the close gate, nothing here pauses instead of stopping: a thread
-   * interrupted mid-turn comes back as a failed turn to retry. A download is the
-   * exception the close gate already draws: its bytes are kept and the next
-   * launch continues it, so it is named as a pause rather than left unexplained.
+   * interrupted mid-turn comes back as a failed turn to retry, and a voice
+   * recording that has not reached its field is gone. A download is the exception
+   * the close gate already draws: its bytes are kept and the next launch
+   * continues it, so it is named as a pause rather than left unexplained.
    */
   let costs = $derived.by(() => {
     const parts: string[] = []
     if (hasThreads) parts.push('working threads stop mid-turn')
+    if (hasSpeech) {
+      parts.push(
+        speech?.phase === 'recording'
+          ? 'the voice recording stops before it is saved'
+          : 'the voice transcription stops before it is pasted'
+      )
+    }
     if (hasDownloads) parts.push('running downloads pause and continue next time')
     if (parts.length === 0) return ''
     const listed =
@@ -70,8 +81,15 @@
     !hasListings && (payload?.activeCount ?? 0) > 0
       ? `The update is waiting on ${payload?.activeCount} session${
           payload?.activeCount === 1 ? '' : 's'
-        } with no thread or download to show.`
+        } with no thread, dictation or download to show.`
       : ''
+  )
+
+  /** The voice stage that has not finished, and what waiting for it means. */
+  let speechSentence = $derived(
+    speech?.phase === 'recording'
+      ? 'A voice recording is still open. The update installs once it has been transcribed and pasted.'
+      : 'A voice recording is still being transcribed. The update installs once it has been pasted.'
   )
 
   /** What installing does to the downloads above: a pause with the bytes kept,
@@ -94,6 +112,13 @@
 
       {#if hasThreads}
         <WorkingThreadList projects={payload.projects} />
+      {/if}
+
+      {#if hasSpeech}
+        <div class="flex items-start gap-2 text-sm leading-relaxed text-muted">
+          <CioMic size={14} class="mt-0.5 shrink-0 text-accent" />
+          <span>{speechSentence}</span>
+        </div>
       {/if}
 
       {#if hasDownloads}

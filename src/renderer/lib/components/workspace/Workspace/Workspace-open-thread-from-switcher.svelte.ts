@@ -7,6 +7,7 @@ import { browserAddressFocus } from '$lib/stores/browser-address-focus'
 import { contextSidebarState, type ContextSidebarTab } from '$lib/stores/context-sidebar.svelte'
 import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
 import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
@@ -22,6 +23,7 @@ import {
   threadTracksReadStatus,
   usesThreadWorkspaceMount
 } from '$shared/types'
+import { isThreadBusyStatus, settledThreadReadsUnread } from '$shared/thread-status-policy'
 import { tick } from 'svelte'
 import type { ProjectFamilyLanding } from '../../layout/AppHeaderNavigationController.svelte'
 import { type ContextDockItem } from '../../layout/ContextDock.svelte'
@@ -120,7 +122,6 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
     // project root (a chat's artifact directory, an assistant task's working
     // directory); the mount must be registered before the root listing.
     if (usesThreadWorkspaceMount(this.selectedThread.projectId)) {
-      projectFilesWorkspace.ensureState(this.selectedThread.projectId)
       projectFilesWorkspace.setThreadMount(this.selectedThread.projectId, this.selectedThread.id)
       await projectFilesWorkspace.loadDirectory(this.selectedThread.projectId, '')
       contextSidebarState.openFiles(this.selectedThread.projectId, this.selectedThread.id)
@@ -265,7 +266,7 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
 
   /** Rail badge for the coordinator dock item, mirroring the auditor's live
    *  state so a hidden context sidebar still reports working / error / done. */
-  coordinatorRailBadge = $derived.by((): ContextDockItem['badge'] => {
+  private auditorRailBadge = $derived.by((): ContextDockItem['badge'] => {
     if (!this.selectedThread) return undefined
     const auditor = this.auditorThread
     if (auditor?.status === 'failed') return 'error'
@@ -290,6 +291,93 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
       return 'working'
     }
     return undefined
+  })
+
+  /**
+   * The runs this thread dispatched, which the rail has to speak for.
+   *
+   * A dispatched run is a thread of another project, so its own sidebar row is
+   * nowhere near the thread that asked for it: if it is waiting on a permission
+   * or a question, or it failed, or it finished with a result nobody has read,
+   * the rail icon is the only surface that can say so without the user opening
+   * the board.
+   */
+  private orchestrationRuns = $derived.by(() => {
+    const thread = this.selectedThread
+    if (!thread) return []
+    return orchestrationCoordinatorState.rowsFor(
+      thread.projectId,
+      activeThreadRowId(thread) ?? thread.id
+    )
+  })
+
+  /** What the rail must say about those runs, most urgent first. */
+  private orchestrationRailState = $derived.by(
+    (): 'attention' | 'error' | 'working' | 'unread' | null => {
+      const runs = this.orchestrationRuns
+      if (runs.length === 0) return null
+      if (runs.some((run) => run.status === 'awaiting_approval')) return 'attention'
+      if (runs.some((run) => run.status === 'failed')) return 'error'
+      if (runs.some((run) => isThreadBusyStatus(run.status))) return 'working'
+      if (runs.some((run) => settledThreadReadsUnread(run, run.read))) return 'unread'
+      return null
+    }
+  )
+
+  /** The tone the orchestration runs alone justify, or undefined for unread, which
+   *  has no status tone of its own. */
+  private orchestrationRailTone = $derived.by((): ContextDockItem['badge'] => {
+    switch (this.orchestrationRailState) {
+      case 'attention':
+      case 'error':
+      case 'working':
+        return this.orchestrationRailState
+      default:
+        return undefined
+    }
+  })
+
+  /** The coordinator rail badge: the auditor's state first, because the auditor is
+   *  the selected thread's own child, then what the thread dispatched elsewhere. */
+  coordinatorRailBadge = $derived(this.auditorRailBadge ?? this.orchestrationRailTone)
+
+  /** The unread accent, which has no status tone. A real tone always wins, so an
+   *  attention badge can never be hidden behind the unread colour. */
+  coordinatorRailBadgeColor = $derived.by((): string | undefined => {
+    if (this.coordinatorRailBadge) return undefined
+    return this.orchestrationRailState === 'unread' ? 'var(--color-thread-unread)' : undefined
+  })
+
+  /** What the badge above means, in words a tooltip can show. */
+  coordinatorRailBadgeTitle = $derived.by((): string | undefined => {
+    if (this.auditorRailBadge) {
+      switch (this.auditorRailBadge) {
+        case 'working':
+          return 'Auditor working'
+        case 'working-paused':
+          return 'Auditor waiting to retry'
+        case 'error':
+          return 'Auditor failed'
+        case 'attention':
+          return 'Auditor needs attention'
+        case 'done':
+          return 'Audit report ready'
+        default:
+          return undefined
+      }
+    }
+    switch (this.orchestrationRailState) {
+      case 'attention':
+        return 'A dispatched run needs attention'
+      case 'error':
+        return 'A dispatched run failed'
+      case 'working':
+        return 'Dispatched work is still running'
+      case 'unread':
+        return 'A dispatched run finished with a result you have not read'
+      default:
+        return undefined
+    }
   })
 
   openCoordinatorTab(): void {

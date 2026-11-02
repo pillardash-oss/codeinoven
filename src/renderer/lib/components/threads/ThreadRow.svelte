@@ -73,6 +73,7 @@
   import { THREAD_DRAG_TYPE } from '$lib/components/chats/chat-composer-drop-source'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
+  import { resolveModelProvider } from '$shared/provider-identity'
   import type { Thread } from '$shared/types'
   import {
     coordinatorHasActiveDelegates,
@@ -306,10 +307,15 @@
 
   /** Provider name for the thread's current model, resolved for its vendor icon. */
   let currentModelProviderName = $derived.by((): string | null => {
-    const providerId = thread.settings?.providerId
-    if (!providerId) return null
-    const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
-    return providers.find((provider) => provider.id === providerId)?.name ?? null
+    const provider = resolveModelProvider(
+      providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached(),
+      {
+        providerId: thread.settings?.providerId,
+        harnessId: thread.settings?.harnessId,
+        modelId: thread.settings?.modelId
+      }
+    )
+    return provider?.name ?? null
   })
 
   /** Provider id of the thread's current model   ids drive icon resolution so

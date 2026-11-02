@@ -41,6 +41,7 @@
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import ModelSettingsPicker from './ModelSettingsPicker.svelte'
   import { fastMultiplierFor, fastSelectionModelId } from '$shared/fast-inference'
+  import { catalogModelEntry, providerModel, resolveModelProvider } from '$shared/provider-identity'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import ModelPickerList from './ModelPickerList.svelte'
@@ -226,15 +227,17 @@
     )
   )
   let selectedProvider = $derived(
-    displayProviders.find(
-      (provider) => provider.id === providerId && provider.harnessId === harnessId
-    ) ??
-      displayProviders.find((provider) => provider.id === providerId) ??
-      displayProviders.find((provider) => provider.models.some((model) => model.id === modelId))
+    resolveModelProvider(displayProviders, { providerId, harnessId, modelId })
   )
   let selectedModel = $derived(
-    selectedProvider?.models.find((model) => model.id === modelId) ??
-      displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
+    providerModel(selectedProvider, modelId) ??
+      catalogModelEntry(
+        displayProviders.flatMap((provider) => provider.models),
+        {
+          providerId,
+          modelId
+        }
+      )
   )
   /**
    * The selected model's own properties, resolved through the shared store for

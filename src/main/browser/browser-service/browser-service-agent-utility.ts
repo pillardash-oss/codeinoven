@@ -1,3 +1,4 @@
+import type { WebContents } from 'electron'
 import type { PermissionLevel } from '../../../lib/types'
 import {
   browserActionTargetScript,
@@ -7,10 +8,12 @@ import {
 import {
   agentCheckScript,
   agentEvaluateScript,
+  agentFieldValueScript,
   agentFocusScript,
   agentHitTestScript,
   agentScrollScript,
   agentSelectScript,
+  agentPrepareTypingScript,
   agentSnapshotScript,
   agentTypeScript,
   agentWaitScript
@@ -18,6 +21,7 @@ import {
 import {
   agentCount,
   dragAgentMouse,
+  MAX_TYPED_KEYSTROKES,
   normalizeAgentModifiers,
   pressAgentKey,
   sendAgentMouse
@@ -306,11 +310,12 @@ export class BrowserServiceAgentUtility {
           result: { typed: false, reason: 'target changed; inspect the page and retry' }
         }
       }
-      const result = await this.host.runAgentScript(
-        contents,
-        agentTypeScript({ selector, text, append: input['append'] === true })
-      )
-      await this.host.paintAgentCursorAtElement(tab, selector, false)
+      const result = await this.typeWithKeys(contents, {
+        selector,
+        text,
+        append: input['append'] === true
+      })
+      await this.host.paintAgentCursorAtElement(tab, selector)
       if (input['submit'] === true) {
         await pressAgentKey(contents, { key: 'Enter', modifiers: [], times: 1 })
       }
@@ -327,7 +332,7 @@ export class BrowserServiceAgentUtility {
             result: { pressed: false, reason: 'the target could not be focused', detail: focused }
           }
         }
-        await this.host.paintAgentCursorAtElement(tab, selector, false)
+        await this.host.paintAgentCursorAtElement(tab, selector)
       }
       const result = await pressAgentKey(contents, {
         key: this.host.requiredInputString(input, 'key'),
@@ -417,8 +422,7 @@ export class BrowserServiceAgentUtility {
         deltaY: this.host.agentSignedNumber(input['deltaY'], 0),
         modifiers: normalizeAgentModifiers(input['modifiers'])
       })
-      const pressed = action === 'click' || action === 'down'
-      await this.host.paintAgentCursor(tab, point, pressed)
+      await this.host.paintAgentCursor(tab, point)
       return {
         ...utilityContext,
         result: { action, x: point.x, y: point.y, button, trusted: true }
@@ -430,7 +434,7 @@ export class BrowserServiceAgentUtility {
       const to = await this.host.agentPointFrom(input, tab, 'to')
       const modifiers = normalizeAgentModifiers(input['modifiers'])
       const result = await dragAgentMouse(contents, { from, to, modifiers })
-      await this.host.paintAgentCursor(tab, to, true)
+      await this.host.paintAgentCursor(tab, to)
       return { ...utilityContext, result: { ...result, from, to, trusted: true } }
     }
     if (operation === 'wait') {
@@ -471,6 +475,68 @@ export class BrowserServiceAgentUtility {
   }
 
   /** Route a browser action through the ledger and confirm consequential effects. */
+  /**
+   * Type the way a hand would: focus the field, then send the text as keystrokes.
+   *
+   * A page distinguishes a script from a keyboard, so a field written through its value
+   * setter never fires the `keydown` a search-as-you-type box, a shortcut handler or a
+   * rich editor listens for. The text therefore goes in as real key sequences, up to
+   * {@link MAX_TYPED_KEYSTROKES} characters; anything longer, and any text with a line
+   * break (Enter submits the form it is typed into), is inserted in one step instead,
+   * and the result says which happened.
+   */
+  private async typeWithKeys(
+    contents: WebContents,
+    request: { selector: string; text: string; append: boolean }
+  ): Promise<Record<string, unknown>> {
+    const prepared = asObject(
+      await this.host.runAgentScript(contents, agentPrepareTypingScript(request))
+    )
+    if (prepared?.['ok'] !== true) {
+      return { typed: false, reason: prepared?.['reason'] ?? 'element is not editable' }
+    }
+    const typedWithKeys = !/[\r\n]/u.test(request.text)
+      ? request.text.slice(0, MAX_TYPED_KEYSTROKES)
+      : ''
+    const remainder = request.text.slice(typedWithKeys.length)
+    for (const character of typedWithKeys) {
+      await pressAgentKey(contents, { key: character, modifiers: [], times: 1 })
+    }
+    if (remainder.length > 0) {
+      // Keys already replaced the prepared selection, so only the rest of the text has
+      // to append. When no key was sent (a line break, or an empty text that clears the
+      // field) the insert carries the caller's own append flag instead.
+      await this.host.runAgentScript(
+        contents,
+        agentTypeScript({
+          selector: request.selector,
+          text: remainder,
+          append: request.append || typedWithKeys.length > 0
+        })
+      )
+    }
+    const read = asObject(
+      await this.host.runAgentScript(contents, agentFieldValueScript(request.selector))
+    )
+    const expected =
+      (request.append ? Number(prepared['previousLength'] ?? 0) : 0) + request.text.length
+    const length = Number(read?.['length'] ?? 0)
+    return {
+      typed: true,
+      mode: typedWithKeys.length === request.text.length ? 'keys' : 'inserted',
+      keystrokes: typedWithKeys.length,
+      inserted: remainder.length,
+      applied: length === expected,
+      length,
+      value: read?.['value'] ?? '',
+      ...(length === expected
+        ? {}
+        : {
+            reason: 'the field did not keep the text it was given; check its type or its validation'
+          })
+    }
+  }
+
   async approveAttachedPageOperation(
     operation: string,
     input: Record<string, unknown>,

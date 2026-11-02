@@ -238,6 +238,13 @@ export function wireChatEngine(
     engine.state.utilityOrchestration.setUtilitySuggestionExecutor((entry, context) =>
       engine.requestUtilitySuggestion(entry, context)
     )
+    // An MCP server that refuses for lack of authorization has to reach the user
+    // mid-turn, so the connection waits on a card. The card signs in through the
+    // same OAuth flow the Utilities page uses, and the gateway retries once the
+    // grant is stored, so the agent's tool call resumes instead of failing.
+    engine.state.utilityOrchestration.setMcpSignInExecutor((target, context) =>
+      engine.requestMcpSignIn(target, context)
+    )
     // The workstation tools: reading the Ovens, harnesses, models and accounts,
     // and dispatching real work onto a chosen machine. The engine owns every
     // piece a dispatch needs, so it supplies the executor to the same gateway.

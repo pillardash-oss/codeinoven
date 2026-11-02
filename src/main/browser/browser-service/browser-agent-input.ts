@@ -32,6 +32,14 @@ const DRAG_STEP_MS = 10
 const MAX_DRAG_STEPS = 24
 /** Repeats one press may ask for, so a held key cannot flood the page. */
 const MAX_KEY_REPEATS = 20
+/**
+ * Characters one `type` call sends as real keystrokes.
+ *
+ * Every key is a trusted down, character and up with a settle between them, so the
+ * ceiling is about time rather than correctness: past it the rest is inserted in one
+ * step, which keeps a long paste from taking half a minute.
+ */
+export const MAX_TYPED_KEYSTROKES = 200
 
 /** Names a person uses for the keys that carry no character. */
 const KEY_ALIASES: Readonly<Record<string, string>> = {

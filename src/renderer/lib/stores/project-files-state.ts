@@ -7,7 +7,7 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { posixDirname } from '$shared/paths'
-import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
+import { fileExplorerStore, type MarkdownViewPreference } from '$lib/stores/file-explorer.svelte'
 import {
   isAudioMime,
   isDocumentPreviewMime,
@@ -176,39 +176,97 @@ export function hasNoTextSource(mime: string): boolean {
 }
 
 /**
+ * What the open-view decision needs to know about the reader.
+ */
+export interface DocumentViewContext {
+  /** The view the reader last chose for Markdown, or null while they never
+   *  chose one. */
+  markdownView: MarkdownViewPreference | null
+  /** The annotation view attaches to a conversation, so it only exists with one
+   *  open; without it a Markdown document falls back to its rendered preview. */
+  annotateAvailable: boolean
+}
+
+/**
+ * The view a Markdown document opens in.
+ *
+ * Markdown is read and marked up rather than typed, so it opens ready to
+ * annotate. The reader's own choice wins from then on: choosing the source view
+ * for a document keeps every later Markdown document in the source view.
+ */
+export function markdownOpenView(context: DocumentViewContext): ProjectFileView {
+  if (context.markdownView === 'source' || context.markdownView === 'preview') {
+    return context.markdownView
+  }
+  return context.annotateAvailable ? 'annotate' : 'preview'
+}
+
+/**
  * The view a working tab shows after it is re-pointed at another file.
  *
  * A document view belongs to the file that renders it, so it follows only a file
- * that can render it: an `annotate` view survives while the next file is
- * annotatable Markdown, and otherwise falls back to a plain preview or the
- * editor's source view. `diff` and `source` are always kept, and a file with no
- * text session (image, PDF, media, converted document) is always previewed   a
+ * that can render it: Markdown opens the way Markdown always opens, an
+ * `annotate` view of any other file falls back to a plain preview or the
+ * editor's source view, and `diff`/`source` are always kept. A file with no text
+ * session (image, PDF, media, converted document) is always previewed, so a
  * swap never downgrades the file editor's own view.
  */
-export function documentViewFor(current: ProjectFileView, nextPath: string): ProjectFileView {
-  if (current === 'annotate') {
-    if (isMarkdownPreviewPath(nextPath)) return 'annotate'
-    return supportsFilePreview(nextPath) ? 'preview' : 'source'
-  }
+export function documentViewFor(
+  current: ProjectFileView,
+  nextPath: string,
+  context: DocumentViewContext
+): ProjectFileView {
+  if (isMarkdownPreviewPath(nextPath)) return markdownOpenView(context)
   if (isPreviewableBinary(mimeFromPath(nextPath))) return 'preview'
+  if (current === 'annotate') return supportsFilePreview(nextPath) ? 'preview' : 'source'
   if (current === 'preview' && supportsFilePreview(nextPath)) return 'preview'
   return current
 }
 
 /**
- * The view a newly opened file keeps from the view the panel is already showing.
+ * The view a file opens in when the caller asks for no particular one.
+ *
+ * Markdown opens the way Markdown opens, and every other file opens as source,
+ * which is what a text file wants and what the editor has always defaulted to.
+ */
+export function openDocumentView(nextPath: string, context: DocumentViewContext): ProjectFileView {
+  if (isMarkdownPreviewPath(nextPath)) return markdownOpenView(context)
+  return 'source'
+}
+
+/**
+ * The view a newly opened file opens in.
  *
  * Opening a file is the one place a view follows the user rather than the file:
- * preview mode opens another previewable file as a preview, and an annotation
- * view opens another annotatable document ready to annotate. Every other
- * combination opens as source, which is what a text file wants.
+ * preview mode opens another previewable file as a preview, and Markdown always
+ * opens the way Markdown opens. Every other combination opens as source, which
+ * is what a text file wants.
  */
 export function followingDocumentView(
   current: ProjectFileView | undefined,
-  nextPath: string
+  nextPath: string,
+  context: DocumentViewContext
 ): ProjectFileView {
-  if (current === 'annotate' && isMarkdownPreviewPath(nextPath)) return 'annotate'
+  if (isMarkdownPreviewPath(nextPath)) return markdownOpenView(context)
   if (current === 'preview' && supportsFilePreview(nextPath)) return 'preview'
+  return 'source'
+}
+
+/**
+ * The view a checkpoint file list keeps from the document already on screen.
+ *
+ * Walking a list of changed files must not make the reader re-pick a mode for
+ * every file, yet a diff is what that list is for: an annotation view stays only
+ * on Markdown, a preview stays only on a file that renders, and everything else
+ * returns `source` so the caller keeps its own diff default.
+ */
+export function stickyDocumentView(
+  current: ProjectFileView | undefined,
+  nextPath: string,
+  context: DocumentViewContext
+): ProjectFileView {
+  if (current === 'preview' && supportsFilePreview(nextPath)) return 'preview'
+  if (current === 'annotate' && isMarkdownPreviewPath(nextPath)) return markdownOpenView(context)
   return 'source'
 }
 

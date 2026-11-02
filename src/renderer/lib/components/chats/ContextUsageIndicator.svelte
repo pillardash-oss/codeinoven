@@ -9,6 +9,8 @@
   import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { resolveModelProvider } from '$shared/provider-identity'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type {
     AgentBankedResets,
@@ -148,6 +150,9 @@
       : `${Math.round(efficiencyKpis.cacheHitRatio * 100)}%`
   )
 
+  /** Every catalog the app has loaded, so a model row's mark is resolved from the
+   *  provider it ran through rather than from its id alone. */
+  const providers = $derived(providerCatalog.allCached())
   /** Collapsed harness sections   sections are open by default. */
   const collapsedHarnesses = new SvelteSet<string>()
   function toggleHarness(id: string): void {
@@ -202,8 +207,13 @@
       <div class="flex items-baseline justify-between gap-3 py-0.5 text-[0.625rem]">
         <span class="flex min-w-0 items-center gap-1.5">
           {#if model.providerId}
+            {@const provider = resolveModelProvider(providers, {
+              providerId: model.providerId,
+              harnessId: model.harnessId,
+              modelId: model.modelId
+            })}
             <VendorIcon
-              name={model.providerId}
+              name={provider?.name ?? model.providerId}
               id={model.providerId}
               size={11}
               class="shrink-0 text-dimmed"

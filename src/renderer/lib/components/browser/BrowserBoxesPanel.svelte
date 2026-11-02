@@ -3,6 +3,7 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioStar from '@pdslng/cio-icon/CioStar.svelte'
+  import { foldSlide } from '$lib/components/shared/card-motion'
   import { fly, slide } from 'svelte/transition'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { jarIdForBox, type GlobalBrowserBox } from '$lib/stores/global-browser-types'
@@ -171,11 +172,7 @@
           </div>
 
           {#if expanded}
-            <div
-              id="box-settings-{box.id}"
-              class="mb-1 border p-3"
-              transition:slide={{ duration: 150 }}
-            >
+            <div id="box-settings-{box.id}" class="mb-1 border p-3" transition:slide={foldSlide()}>
               <BrowserBoxEditor {box} onDeleted={() => (expandedBoxId = null)} />
             </div>
           {/if}

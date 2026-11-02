@@ -5,9 +5,12 @@
  * the readiness probe, and the `.gguf` picker all happen here. The installs and
  * the servers themselves run in the PTY service, so the user watches real output.
  */
-import { BrowserWindow, dialog } from 'electron'
+import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+// The app's own picker wrapper: it reopens where the human last picked, which
+// is what every other file picker here does.
+import { dialog } from '../system/file-dialogs'
 import {
   isLlamaCppHostValid,
   isLlamaCppPortValid,

@@ -763,6 +763,29 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   }
 
   /**
+   * Report the MCP sign-in card's outcome to the main process.
+   *
+   * The sign-in itself already ran through the shared OAuth flow, which wrote the
+   * grant into the encrypted vault; this only settles the gateway connection that
+   * hit the server's refusal, which then retries with that grant. Nothing about
+   * the grant travels through here.
+   */
+  async handleMcpSignInSubmit(requestId: string, answer: string): Promise<void> {
+    await invoke(
+      'agent:answerQuestion',
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.handleAgentEvent.thread.id,
+      requestId,
+      [[answer]]
+    )
+    this.root.sources.resolvedQuestionRequestIds.add(requestId)
+    this.root.handleAgentEvent.pendingQuestionRequests =
+      this.root.handleAgentEvent.pendingQuestionRequests.filter(
+        (request) => request.requestId !== requestId
+      )
+  }
+
+  /**
    * Hold a secret card's countdown while the user works on it: the same
    * interaction that pauses a question (an update with no next index) clears the
    * request's deadline. The card owns the best-effort handling, so a pause that

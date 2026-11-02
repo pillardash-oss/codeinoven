@@ -15,8 +15,9 @@ export interface PermissionRequest {
    * Tool name the caller could not classify as read-only. Pi's built-in MCP
    * tools, `codemode`, `tool_search`, and anything a later harness release adds
    * reach the gate without a path or a command, so no rule below can stand in
-   * for their behavior. Auto Review asks about them; Full Access keeps
-   * auto-approving, like every other request in that mode.
+   * for their behavior. An unverifiable capability is critical by definition,
+   * so Auto Review asks about it; Full Access keeps auto-approving, like every
+   * other request in that mode.
    */
   unclassifiedTool?: string
 }
@@ -364,6 +365,9 @@ export class PermissionPolicy {
       )
     }
 
+    // Auto Review stops for critical work only. Everything high risk and below
+    // runs without a card, which is why the scope rules below no longer deny a
+    // path just for leaving the open project.
     // File-System-OFF chats only auto-approve reads confined to the attached
     // files. Shell commands, writes, and reads elsewhere must ask   the agent
     // must not reach the broader file system (or the shell) unprompted.
@@ -394,20 +398,22 @@ export class PermissionPolicy {
       )
     }
 
-    const pathReason = this.getAutoReviewPathReason(paths)
-    if (pathReason) {
-      return this.createDecision('ask', false, pathReason, risk, scope)
+    const pathDenial = this.getAutoReviewPathDenial(paths, risk)
+    if (pathDenial) {
+      return this.createDecision('ask', false, pathDenial.reason, pathDenial.risk, scope)
     }
 
     // A tool the caller could not classify is never auto-approved. The
     // extension already ruled out a read-only surface, and no path rule can
     // replace the behavior of a tool the app does not know, so the user decides.
+    // It carries critical risk because an unverifiable capability can do
+    // anything, which is exactly the tier Auto Review still stops for.
     if (unclassifiedTool) {
       return this.createDecision(
         'ask',
         false,
         `"${unclassifiedTool}" is a tool CodeInOven cannot verify as read-only, so it needs your approval.`,
-        'medium',
+        'critical',
         scope
       )
     }
@@ -551,7 +557,20 @@ export class PermissionPolicy {
     )
   }
 
-  private getAutoReviewPathReason(paths: readonly string[]): string | undefined {
+  /** Path rules that still produce a card in Auto Review.
+   *
+   * Only a critical request is stopped by where it points. Auto Review runs
+   * every operation that is not critical, so reading or editing a file outside
+   * the open project (an absolute external path, or one that traverses out of
+   * it) no longer parks the turn behind a card. Projects, chats, and assistants
+   * all resolve through this policy, so the same rule governs each of them.
+   * What stays gated is the sensitive-file block list, which is an explicit
+   * denial regardless of tier, and the path scope of an already critical
+   * request. */
+  private getAutoReviewPathDenial(
+    paths: readonly string[],
+    risk: PermissionRisk
+  ): { reason: string; risk: PermissionRisk } | undefined {
     for (const path of paths) {
       const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
 
@@ -561,25 +580,38 @@ export class PermissionPolicy {
         continue
       }
 
-      if (hasTraversal(path)) {
-        return `Path traversal is not permitted: ${path}`
-      }
-
       // File-System-OFF chats are restricted to the provided attachments.
       if (this.restrictToAllowed) {
-        return `This chat is restricted to the files you attached. Reading other local files requires your approval: ${path}`
-      }
-
-      if (!isWithinDirectory(this.projectRoot, resolvedPath)) {
-        if (isAllowedExternalPath(resolvedPath)) {
-          continue
+        return {
+          reason: `This chat is restricted to the files you attached. Reading other local files requires your approval: ${path}`,
+          risk
         }
-        const type = isAbsolute(path) ? 'absolute external path' : 'path outside the project root'
-        return `The ${type} is not permitted: ${path}`
       }
 
-      if (this.isProtectedPath(resolvedPath)) {
-        return `Protected path access requires explicit approval: ${path}`
+      // The block list protects secrets the session does not own, so it is a
+      // critical card wherever the target lives. A session's own workspace is
+      // excluded: that is its own work, not someone else's secret.
+      if (!this.isWorkspacePath(resolvedPath) && this.isProtectedPath(resolvedPath)) {
+        return {
+          reason: `Protected path access requires explicit approval: ${path}`,
+          risk: 'critical'
+        }
+      }
+
+      if (risk !== 'critical') {
+        continue
+      }
+
+      if (hasTraversal(path)) {
+        return { reason: `Path traversal is not permitted: ${path}`, risk }
+      }
+
+      if (
+        !isWithinDirectory(this.projectRoot, resolvedPath) &&
+        !isAllowedExternalPath(resolvedPath)
+      ) {
+        const type = isAbsolute(path) ? 'absolute external path' : 'path outside the project root'
+        return { reason: `The ${type} is not permitted: ${path}`, risk }
       }
     }
 

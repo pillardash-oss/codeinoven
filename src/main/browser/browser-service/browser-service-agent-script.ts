@@ -171,7 +171,7 @@ export class BrowserServiceAgentScript {
       const x = Math.round(Number(point['x']))
       const y = Math.round(Number(point['y']))
       await sendAgentMouse(contents, { action: 'click', x, y, clickCount, modifiers })
-      await this.paintAgentCursor(tab, { x, y }, true)
+      await this.paintAgentCursor(tab, { x, y })
       return { clicked: true, via: 'pointer', x, y, clickCount }
     }
     const fallback =
@@ -184,11 +184,7 @@ export class BrowserServiceAgentScript {
   }
 
   /** Draw the agent's own pointer at a point, so a capture shows where it acted. */
-  async paintAgentCursor(
-    tab: BrowserTab,
-    point: { x: number; y: number },
-    press: boolean
-  ): Promise<void> {
+  async paintAgentCursor(tab: BrowserTab, point: { x: number; y: number }): Promise<void> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) return
     try {
@@ -196,7 +192,6 @@ export class BrowserServiceAgentScript {
         agentCursorScript({
           x: Math.round(point.x),
           y: Math.round(point.y),
-          press,
           hide: false,
           appearance: await this.host.agentCursorAppearance()
         })
@@ -207,22 +202,17 @@ export class BrowserServiceAgentScript {
   }
 
   /** Draw the agent's pointer on an element, when the element can be measured. */
-  async paintAgentCursorAtElement(
-    tab: BrowserTab,
-    selector: string,
-    press: boolean
-  ): Promise<void> {
+  async paintAgentCursorAtElement(tab: BrowserTab, selector: string): Promise<void> {
     const described = asObject(
       await this.runAgentScript(tab.view.webContents, agentElementPointScript(selector)).catch(
         () => null
       )
     )
     if (described?.['found'] !== true) return
-    await this.paintAgentCursor(
-      tab,
-      { x: Number(described['x']), y: Number(described['y']) },
-      press
-    )
+    await this.paintAgentCursor(tab, {
+      x: Number(described['x']),
+      y: Number(described['y'])
+    })
   }
 
   requiredInputString(input: Record<string, unknown>, field: string, allowEmpty = false): string {

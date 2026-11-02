@@ -99,13 +99,23 @@ material way, and the difference is deliberate.
   - A `snapshot` reports what an agent needs to act: a `ref` carried on the element
     itself, the unique CSS selector a person would write, the live `value`, `checked`,
     `disabled` and `readOnly` state, a select's options, and the element's box. Typing
-    goes through the field's own value setter and emits `beforeinput`/`input`/`change`,
-    because assigning `element.value` updates a framework's value tracker and makes the
-    following `input` event look unchanged, which is how a refined form ends up empty
-    while a naive tool reports success. Each write reports the value the page kept.
-  - A synthetic cursor, marked `data-cio-agent` so no snapshot mistakes it for page
+    is a keyboard: the field is focused, its content selected or collapsed to the end,
+    and the text goes in as `keyDown`/`char`/`keyUp` through the input pipeline, so a
+    page's own `keydown` handlers, a search-as-you-type box and a rich editor see it.
+    Two cases fall back to a single insert through the field's own value setter with
+    `beforeinput`/`input`/`change`, because no keyboard can carry them safely: text
+    past the keystroke ceiling (`MAX_TYPED_KEYSTROKES`), and text containing a line
+    break, since Enter submits the form it is typed into. Either way the result says
+    which path ran and reports the value the page kept.
+  - A synthetic mark, marked `data-cio-agent` so no snapshot mistakes it for page
     content, is drawn at the point each action touched, so a screenshot shows where the
-    agent worked. Screenshots also capture the whole document (`fullPage`) or one
+    agent worked. It is a game-style cursor rather than a selection pointer: a solid
+    gold blade whose tip is that point, notched at the back, outlined in obsidian so it
+    separates from a white page, a near-black one and a page painted the same gold. It
+    is completely static, with no rotation, pulse or keyframes, so an agent that has
+    acted leaves one node and its inline styles on the page and nothing running between
+    actions. Its palette and scale come from the app
+    (`src/lib/browser/agent-cursor.ts`), and no text is drawn into a page frame. Screenshots also capture the whole document (`fullPage`) or one
     element through the debugger's `Page.captureScreenshot`, falling back to the
     viewport when the debugger cannot answer.
 - **A conversation's thread browser page is reachable by its agent, in whatever box it

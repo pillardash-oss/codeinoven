@@ -5,6 +5,8 @@
   import { getProjectIcon } from '$lib/project-icons'
   import { contentThreadFamily } from '$lib/content-view-threads'
   import { contentFamilyIcon } from '$lib/content-view-icons'
+  import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { preloadThreadConversation } from '$lib/stores/thread-preload'
@@ -120,6 +122,30 @@
     return contentFamilyIcon({ projectId: entry.tab.projectId })
   }
 
+  /**
+   * The container mark a thread row wears.
+   *
+   * An assistant thread belongs to one assistant, and that assistant carries its
+   * own icon and accent colour, so the row wears that assistant's actual mark
+   * instead of the default assistant glyph. Only an assistant that never picked
+   * an icon falls back to the default mark, which is the same fallback every
+   * assistant surface uses. Chats keep their family glyph, and a project thread
+   * keeps its project icon.
+   */
+  function threadContainer(entry: ThreadSwitcherEntry): {
+    url: string | null
+    glyph: Component | null
+  } {
+    if (entry.kind !== 'thread') return { url: null, glyph: null }
+    if (contentThreadFamily(entry.thread) !== 'assistant') {
+      return { url: projectIcon(entry), glyph: contentFamilyIcon(entry.thread) }
+    }
+    const assistant = assistants.assistantForTask(entry.thread)
+    if (!assistant) return { url: null, glyph: AssistantDefaultIcon }
+    const url = getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null)
+    return url ? { url, glyph: null } : { url: null, glyph: AssistantDefaultIcon }
+  }
+
   /** The hover tooltip for one entry, phrased for the kind of surface it is. */
   function entryTitle(entry: ThreadSwitcherEntry): string {
     if (entry.kind === 'browser') return `Switch to ${browserTabLabel(entry.tab)}`
@@ -213,6 +239,10 @@
     if (entries.length === 0) return
 
     if (!open) {
+      // The rows resolve an assistant thread's own icon, so the assistant list
+      // has to be here. Read on the first open rather than at mount, so a
+      // session that never switches threads carries no assistant subscription.
+      assistants.initialize()
       nativeFailed = false
       previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
       restoreFocusOnClose = true
@@ -253,6 +283,9 @@
     // that is empty only because the browser runtime never loaded.
     if (!isBrowserLoaded()) ensureStoredBrowserTabs()
     if (entries.length === 0) return
+    // Same assistant list read as the keyboard open: a thread row wears the
+    // icon of the assistant it belongs to.
+    assistants.initialize()
     nativeFailed = false
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     restoreFocusOnClose = true
@@ -441,7 +474,7 @@
   >
     {#each entries as entry, index (threadSwitcherEntryKey(entry))}
       {@const entryKey = threadSwitcherEntryKey(entry)}
-      {@const resolvedProjectIcon = projectIcon(entry)}
+      {@const containerIcon = threadContainer(entry)}
       <button
         type="button"
         role="option"
@@ -495,8 +528,8 @@
                   ? 'Assistant'
                   : 'Project'}
             selected={entryKey === highlightedKey}
-            projectIconUrl={resolvedProjectIcon}
-            projectIconGlyph={contentFamilyIcon(entry.thread)}
+            projectIconUrl={containerIcon.url}
+            projectIconGlyph={containerIcon.glyph}
           />
         {/if}
       </button>

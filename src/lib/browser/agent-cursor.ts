@@ -3,28 +3,31 @@ import { type ContrastLevel } from '../types/settings'
 /**
  * How the agent's cursor is drawn over a page.
  *
- * The pointer is the app's, not the page's, so its appearance comes from the app's
- * own tokens rather than from the site it is sitting on   and it has to stay legible
- * on all of them, from a pure white form to a pure black video frame. That is why the
- * pointer is drawn in the two halves of the primary pair rather than in one colour: a
- * light body with a dark outline reads as one shape on a light page (the outline) and
- * on a dark page (the body), where a single-tone pointer disappears into one of them.
- * The press ring carries the accent, so the moving mark still says which app it
- * belongs to (see `src/renderer/app.css` for the palette these values come from).
+ * The mark is the app's, not the page's, so its appearance comes from the app's own
+ * tokens rather than from the site it is sitting on, and it has to stay legible on all
+ * of them, from a pure white form to a pure black video frame. Contrast is therefore
+ * structural: the gold blade is filled with the accent and outlined in obsidian, so it
+ * separates from a white page (the edge), from a near-black one (the body) and from a
+ * page painted the same gold (the edge between them). Nothing about the mark moves:
+ * there is no rotation, no pulse and no keyframes, so a page with the agent on it costs
+ * exactly one node and its inline styles (see `src/renderer/app.css` for the palette).
  */
 export interface AgentCursorAppearance {
-  /** Pointer body: always the light half of the primary pair. */
+  /** The mark's edge: always the light half of the primary pair, kept for a caller
+   *  that needs a light separator on a dark surface. */
   fill: string
-  /** Pointer outline and the ring's separating edge: the dark half of that pair. */
+  /** The blade's outline: the dark half of that pair, so the gold body separates from a
+   *  page painted the same gold. */
   stroke: string
-  /** Press ring, themed at the contrast level the app is showing. */
+  /** The blade itself, at the contrast level the app is showing. */
   accent: string
-  /** Multiplier for the pointer and its ring, from the app's own UI scale. */
+  /** Multiplier for the whole mark, from the app's own UI scale. */
   scale: number
 }
 
 /** Ivory and obsidian: the two ends of `--color-primary`, kept as literals because a
- *  page has no access to the app's stylesheet. */
+ *  page has no access to the app's stylesheet, and both are needed at once for the
+ *  edge-under-every-stroke rule to hold on any page colour. */
 const POINTER_LIGHT = '#f5f4f0'
 const POINTER_DARK = '#081825'
 

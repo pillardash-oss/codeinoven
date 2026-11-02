@@ -830,8 +830,8 @@
       reportError(
         error,
         revealing
-          ? 'Could not show the assistant behavior thread'
-          : 'Could not hide the assistant behavior thread'
+          ? 'Could not show the Getting started thread'
+          : 'Could not hide the Getting started thread'
       )
     } finally {
       knowledgeThreadBusy = false
@@ -1771,25 +1771,40 @@
 
 {#snippet knowledgeThreadAction()}
   {#if assistant && knowledgeThread}
-    <!-- The knowledge thread is pinned for life and has exactly two states. Hide
-         puts it away for the session, Show brings it back and opens it, so the
-         panel is always the way back to the assistant's authoring thread. -->
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      title={knowledgeThreadHidden
-        ? 'Show the assistant behavior thread again'
-        : 'Hide the assistant behavior thread from the sidebar'}
-      disabled={knowledgeThreadBusy}
-      onclick={() => void toggleKnowledgeThread()}
-    >
-      <AssistantIcon mark="knowledge" size={14} class="shrink-0" />
-      <span class="truncate">
-        {knowledgeThreadHidden
-          ? 'Show assistant behavior thread'
-          : 'Hide assistant behavior thread'}
-      </span>
-    </button>
+    <!--
+      The Getting started thread is pinned for life and has exactly two states.
+      Hide puts its row away for the session and Show brings it back; Modify
+      behavior always lands in the thread itself, revealing it first when it was
+      hidden, so the panel is never a dead end when the user wants to change what
+      the assistant knows. Hide reads left, the action that opens the thread
+      right, the way every footer in the app splits a falsy from a truthy action.
+    -->
+    <div class="flex shrink-0 items-center gap-2 border-t border-border px-3 py-1.5">
+      <button
+        type="button"
+        class="flex min-w-0 items-center gap-1.5 text-left text-[0.625rem] text-muted transition-colors hover:text-foreground disabled:opacity-50"
+        title={knowledgeThreadHidden
+          ? 'Show the Getting started thread in the sidebar again'
+          : 'Hide the Getting started thread from the sidebar'}
+        disabled={knowledgeThreadBusy}
+        onclick={() => void toggleKnowledgeThread()}
+      >
+        <AssistantIcon mark="knowledge" size={14} class="shrink-0" />
+        <span class="truncate">
+          {knowledgeThreadHidden ? 'Show getting started' : 'Hide getting started'}
+        </span>
+      </button>
+      <button
+        type="button"
+        class="ml-auto flex shrink-0 items-center gap-1.5 bg-elevated px-2.5 py-1 text-[0.625rem] text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
+        title="Open the Getting started thread to change what this assistant knows and does"
+        disabled={knowledgeThreadBusy}
+        onclick={openKnowledgeTask}
+      >
+        <CioPencil size={12} strokeWidth={1.8} />
+        <span class="truncate">Modify behavior</span>
+      </button>
+    </div>
   {/if}
 {/snippet}
 

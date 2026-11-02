@@ -611,6 +611,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.speechService = null
     Logger.error('Speech services unavailable; dictation stays disabled', error)
   }
+  // A recording still being produced, and a transcript the model has not
+  // answered yet, are lost by a restart, so dictation holds an unattended
+  // install back exactly like a working thread. Read from the speech service's
+  // own capture and job state, which is the same state its progress events
+  // report, so nothing has to be sent over for the gate to know.
+  state.updaterService?.setDictationActivitySource({
+    activity: () => state.speechService?.dictationActivity() ?? { recording: 0, transcribing: 0 }
+  })
   // Initialize auto-evict timers from persisted sound settings
   try {
     const cfg = await storage.getConfig()

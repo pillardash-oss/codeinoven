@@ -277,11 +277,27 @@ export function mcpAuthorizationFailure(request: McpConnectionRequest, error: un
     : request.config.oauth?.enabled
       ? request.authorization
         ? 'The server rejected the stored authorization; authorize it again in Utilities'
-        : 'Its authorization has not been completed yet; use Authorize in Utilities'
-      : 'This server requires OAuth authorization; turn MCP authorization on for it in Utilities'
+        : 'Its authorization has not been completed yet; authorize it in Utilities, or on the sign-in card a turn offers when it needs this server'
+      : 'This server requires OAuth authorization; turn MCP authorization on for it in Utilities, or sign in from the card a turn offers when it needs this server'
   return new Error(`Utility \`${name}\` could not be reached: ${message}. ${guidance}`, {
     cause: error
   })
+}
+
+/**
+ * Turn a refusal the app already offered to fix into the reason it still stands.
+ *
+ * The user was shown the server's sign-in card and chose not to sign in, so the
+ * agent is told exactly that instead of being pointed at a Utilities page it
+ * cannot reach. Retrying the same server inside the turn would only ask the user
+ * again for an answer they just gave, so the message says not to.
+ */
+export function mcpSignInDeclinedFailure(request: McpConnectionRequest, error: unknown): Error {
+  const name = request.owner?.name ?? 'MCP server'
+  return new Error(
+    `Utility \`${name}\` needs authorization and the user declined the sign-in, so it is unavailable for the rest of this turn. Continue without its tools, and do not call it again here.`,
+    { cause: error }
+  )
 }
 
 /**

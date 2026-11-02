@@ -17,6 +17,7 @@
   import ComposerQueuedCard from '../ComposerQueuedCard.svelte'
   import AgentQuestionCard from '../AgentQuestionCard.svelte'
   import AgentSecretCard from '../AgentSecretCard.svelte'
+  import AgentMcpSignInCard from '../AgentMcpSignInCard.svelte'
   import PermissionRequestCard from '../PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from '../ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from '../AgentProviderStatusCard.svelte'
@@ -539,7 +540,14 @@
         {:else if board.handleAgentEvent.pendingQuestionRequests.length > 0 && !board.composerScope.assistantRecapSupersedesQuestion && (!board.submitBrainstormDecision.achievementAutonomous || board.handleAgentEvent.pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
           {@const pendingRequest = board.handleAgentEvent.pendingQuestionRequests[0]}
           {#key pendingRequest.requestId}
-            {#if pendingRequest.questions.some((question) => question.secretRequest === true)}
+            {#if pendingRequest.questions.some((question) => question.mcpSignIn !== undefined)}
+              <AgentMcpSignInCard
+                request={pendingRequest}
+                onSubmit={board.composerScope.handleMcpSignInSubmit}
+                onDismiss={board.unmirroredTraceStartTime.handleQuestionDismiss}
+                onPause={board.composerScope.handleSecretPause}
+              />
+            {:else if pendingRequest.questions.some((question) => question.secretRequest === true)}
               <AgentSecretCard
                 request={pendingRequest}
                 scope={{

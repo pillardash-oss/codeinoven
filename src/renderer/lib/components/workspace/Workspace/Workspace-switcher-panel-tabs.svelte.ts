@@ -207,22 +207,9 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
     return this.contextGroups().flat().find(opensInSidebar)
   }
 
-  coordinatorRailBadgeTitle = $derived.by(() => {
-    switch (this.root.openThreadFromSwitcher.coordinatorRailBadge) {
-      case 'working':
-        return 'Auditor working'
-      case 'working-paused':
-        return 'Auditor waiting to retry'
-      case 'error':
-        return 'Auditor failed'
-      case 'attention':
-        return 'Auditor needs attention'
-      case 'done':
-        return 'Audit report ready'
-      default:
-        return undefined
-    }
-  })
+  /** The badge's own wording, owned beside the badge itself: one derivation
+   *  decides whether the rail is reporting an auditor or a dispatched run. */
+  coordinatorRailBadgeTitle = $derived(this.root.openThreadFromSwitcher.coordinatorRailBadgeTitle)
 
   browser = new WorkspaceBrowserController({
     getSelectedProjectId: () => this.root.openThreadFromSwitcher.selectedThread?.projectId ?? null
@@ -449,7 +436,7 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
       this.root.createThreadInProject.upsertThreadInList(updated)
       scopeState.updateThread(updated)
     } catch (error) {
-      reportError(error, 'Could not hide the assistant behavior thread')
+      reportError(error, 'Could not hide the Getting started thread')
     }
   }
 

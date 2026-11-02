@@ -52,7 +52,17 @@ class BrowserExtensionDropdownState {
    */
   async toggle(owner: BrowserExtensionDropdownOwner, extensionId: string): Promise<void> {
     const current = this.open
-    if (current && current.tabId === owner.tabId && current.extensionId === extensionId) {
+    // A window the extension asked the app for is not the extension's own popup, so
+    // reaching for the icon while one is on screen opens the popup instead of
+    // taking away a prompt the page underneath is still waiting on.
+    const currentIsActionPopup =
+      current !== null && browserPopupWindows.find(current.popupId)?.windowRequested !== true
+    if (
+      current &&
+      currentIsActionPopup &&
+      current.tabId === owner.tabId &&
+      current.extensionId === extensionId
+    ) {
       this.close()
       return
     }
@@ -84,6 +94,22 @@ class BrowserExtensionDropdownState {
     if (!current) return
     this.open = null
     browserPopupWindows.dismiss(current.popupId)
+  }
+
+  /**
+   * Show a window the extension opened for one of this tab's pages.
+   *
+   * A thread browser has no rail, so a window an extension asks the app for is
+   * only ever on screen if this dropdown takes it: a passkey prompt is opened by a
+   * page's ceremony, not by a click on the extension's icon, so nothing the user
+   * does here would otherwise bring it up and the request would wait on a prompt
+   * that was never drawn.
+   *
+   * One dropdown per tab, so a second window replaces the one on screen rather than
+   * stacking native views over the same toolbar.
+   */
+  adopt(owner: BrowserExtensionDropdownOwner, extensionId: string, popupId: string): void {
+    this.open = { ...owner, extensionId, popupId }
   }
 }
 

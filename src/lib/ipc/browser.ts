@@ -83,6 +83,16 @@ export interface BrowserPopupWindow {
    */
   extensionId: string | null
   /**
+   * Whether this is a window the extension asked the app for, rather than the
+   * action popup a click on its icon opens.
+   *
+   * The distinction matters to whatever is presenting the page: an action popup
+   * belongs to the extension's icon and is replaced by the next click on it, while
+   * a window the extension asked for belongs to the request that opened it   a
+   * passkey prompt, for instance   and has to be brought to the front on its own.
+   */
+  windowRequested: boolean
+  /**
    * The size an extension's own popup asked for by laying its document out, in
    * density-independent pixels, or null while it has not reported one.
    *

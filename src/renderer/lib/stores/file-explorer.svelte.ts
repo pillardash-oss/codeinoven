@@ -15,6 +15,13 @@ export const FILE_EXPLORER_DEFAULT_WIDTH = 208
 export const FILE_EXPLORER_MIN_WIDTH = 176
 export const FILE_EXPLORER_MAX_WIDTH = 480
 
+/**
+ * The views a Markdown document can be opened in when it is rendered rather
+ * than shown as raw text. Persisted per project as the reader's own choice, so
+ * a reader who works in code view is never dragged back to another view.
+ */
+export type MarkdownViewPreference = 'annotate' | 'preview' | 'source'
+
 export interface FileExplorerProjectState {
   expandedDirectories: Record<string, boolean>
   revealedPath: string | null
@@ -23,6 +30,9 @@ export interface FileExplorerProjectState {
   width: number
   /** User choice to keep the automatically applied checkpoint filter off. */
   lastTurnAutoOverride: boolean
+  /** View the reader last chose for a Markdown document, or null while they
+   *  never chose one: Markdown then opens ready to annotate. */
+  markdownView: MarkdownViewPreference | null
 }
 
 export interface FileExplorerSnapshot {
@@ -44,7 +54,8 @@ export function emptyFileExplorerProjectState(): FileExplorerProjectState {
     selectedPaths: [],
     explorerVisible: true,
     width: FILE_EXPLORER_DEFAULT_WIDTH,
-    lastTurnAutoOverride: false
+    lastTurnAutoOverride: false,
+    markdownView: null
   }
 }
 
@@ -87,6 +98,10 @@ function parseWidth(value: unknown): number {
   return typeof value === 'number' ? clampFileExplorerWidth(value) : FILE_EXPLORER_DEFAULT_WIDTH
 }
 
+function parseMarkdownView(value: unknown): MarkdownViewPreference | null {
+  return value === 'annotate' || value === 'preview' || value === 'source' ? value : null
+}
+
 function parseProjectState(value: unknown): FileExplorerProjectState | null {
   if (!isRecord(value)) return null
   return {
@@ -95,7 +110,8 @@ function parseProjectState(value: unknown): FileExplorerProjectState | null {
     selectedPaths: parseSelectedPaths(value.selectedPaths),
     explorerVisible: value.explorerVisible !== false,
     width: parseWidth(value.width),
-    lastTurnAutoOverride: value.lastTurnAutoOverride === true
+    lastTurnAutoOverride: value.lastTurnAutoOverride === true,
+    markdownView: parseMarkdownView(value.markdownView)
   }
 }
 

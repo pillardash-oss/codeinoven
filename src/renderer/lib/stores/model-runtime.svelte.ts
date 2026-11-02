@@ -6,6 +6,7 @@ import {
   offeredContextWindow
 } from '$shared/model-runtime-settings'
 import { providerCatalog } from './provider-catalog.svelte'
+import { catalogModelEntry, providerModel, resolveModelProvider } from '$shared/provider-identity'
 
 /**
  * How old an account's own model properties may be before a thread re-reads
@@ -53,13 +54,17 @@ function findModel(
   catalogs: readonly ProviderCatalog[],
   selection: ModelRuntimeSelection
 ): ProviderModel | undefined {
-  const provider =
-    catalogs.find(
-      (catalog) => catalog.harnessId === selection.harnessId && catalog.id === selection.providerId
-    ) ?? catalogs.find((catalog) => catalog.id === selection.providerId)
+  const provider = resolveModelProvider(catalogs, {
+    providerId: selection.providerId,
+    harnessId: selection.harnessId,
+    modelId: selection.modelId
+  })
   return (
-    provider?.models.find((model) => model.id === selection.modelId) ??
-    catalogs.flatMap((catalog) => catalog.models).find((model) => model.id === selection.modelId)
+    providerModel(provider, selection.modelId) ??
+    catalogModelEntry(
+      catalogs.flatMap((catalog) => catalog.models),
+      { providerId: selection.providerId, modelId: selection.modelId }
+    )
   )
 }
 

@@ -272,9 +272,11 @@ export class ViewRailActivity {
 }
 
 /**
- * The single activity pill a rail view shows, chosen by priority: working
- * outranks attention, which outranks a failure, which outranks a parked retry.
- * Working is what the user asked for; attention is a card only they can answer;
+ * The single activity pill a rail view shows, chosen by priority: attention
+ * outranks working, which outranks a failure, which outranks a parked retry.
+ * Attention is a card only the user can answer, so it can never be hidden behind
+ * a number of runs that clear themselves, which is exactly how a waiting thread
+ * used to reach the bell and never the rail. Working is what the user asked for;
  * a failure needs them until they act; a retry resolves itself when its window
  * opens. The returned label always carries the family's full breakdown. Returns
  * null when the family is quiet.
@@ -346,23 +348,42 @@ export function viewBadgesFor(
       : null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
-  if (activity.working > 0) {
+  /**
+   * What the family has waiting on the user, counted over both sources that
+   * know about it.
+   *
+   * The thread counts see the rows the renderer holds, which is a bounded recent
+   * slice per project; the durable notices see every thread that is parked on a
+   * card, the one fact the rail exists to report. Taking the larger of the two
+   * keeps the mark from vanishing when a waiting thread falls outside the slice,
+   * which is how a waiting assistant run reached the bell and never the rail.
+   */
+  const attentionCount = Math.max(
+    activity.attention,
+    notificationPanelState.attentionRailSummary(family)?.count ?? 0
+  )
+  // A thread waiting on the user outranks a thread producing work, because
+  // working resolves itself and a parked card does not. The rail reports one
+  // pill per item, so letting working win hid the wait behind a number the user
+  // could not answer: the parked thread then showed only in the bell, however
+  // long it waited.
+  if (attentionCount > 0) {
     return {
       activity: {
-        tone: 'working',
-        count: activity.working,
-        label: familyActivityLabel(family, activity),
+        tone: 'attention',
+        count: attentionCount,
+        label: familyActivityLabel(family, { ...activity, attention: attentionCount }),
         icon
       },
       unread: unreadBadge,
       playing
     }
   }
-  if (activity.attention > 0) {
+  if (activity.working > 0) {
     return {
       activity: {
-        tone: 'attention',
-        count: activity.attention,
+        tone: 'working',
+        count: activity.working,
         label: familyActivityLabel(family, activity),
         icon
       },

@@ -373,13 +373,43 @@
     tab = 'conversation'
   }
 
+  /**
+   * The repository this reader acts on, read at the start of an action.
+   *
+   * `identity` is derived from the Git panel's origin remote, and the panel drops
+   * that state the moment it is deactivated or re-targeted (navigating off the
+   * project, switching scope), so the prop can be null while an action is still
+   * in flight. A merge is the clearest case: it keeps polling this reader after
+   * it succeeds. Reading the prop after an await is what threw `Cannot read
+   * properties of null (reading 'owner')` out of a page that had already moved
+   * on, so every action that outlives its first await takes this snapshot first
+   * and stops when there is no repository left to act on.
+   */
+  function currentRepository(): { owner: string; repo: string } | null {
+    return identity
+  }
+
   async function refresh(): Promise<void> {
-    await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
+    const repository = currentRepository()
+    if (!repository) return
+    await gitState.ensurePullRequestBundle(
+      projectId,
+      repository.owner,
+      repository.repo,
+      number,
+      true
+    )
     // The history is read again with it, because every write this reader makes can
     // add a row to it: a close, a reopen, a merge, a draft transition. Reading it
     // here is what keeps the stream matching what the reader just did, and it is one
     // request against the bundle's several.
-    void gitState.ensureConversationTimeline(projectId, identity.owner, identity.repo, number, true)
+    void gitState.ensureConversationTimeline(
+      projectId,
+      repository.owner,
+      repository.repo,
+      number,
+      true
+    )
     agentReports = await gitState.loadAgentReports(projectId, number)
   }
 
@@ -638,14 +668,18 @@
 
   async function merge(): Promise<void> {
     mergeConfirm = false
+    // Snapshot the repository before the first await: the panel can drop its
+    // identity while this runs, and the polling loop below outlives it.
+    const repository = currentRepository()
+    if (!repository) return
     // GitHub ignores custom title/message for rebase, which preserves the
     // original commits. Trimmed-empty values are omitted so GitHub uses its own.
     mergePending = true
     try {
       const merged = await gitState.mergePullRequest(
         projectId,
-        identity.owner,
-        identity.repo,
+        repository.owner,
+        repository.repo,
         number,
         method,
         method === 'rebase' ? undefined : commitTitle.trim() || undefined,
@@ -656,8 +690,14 @@
         // The merge already succeeded, but the detail still reads "open" until
         // GitHub propagates the new state. Keep refreshing so the merge button
         // stays in its loading state (never re-enabled while it says "open")
-        // until the status flips to "merged" or an error surfaces.
-        for (let attempt = 0; attempt < 4 && prState === 'open' && !gitState.error; attempt += 1) {
+        // until the status flips to "merged" or an error surfaces. The loop
+        // also ends when this reader no longer has a repository to read: the
+        // panel it belonged to is gone and there is nothing left to poll for.
+        for (
+          let attempt = 0;
+          attempt < 4 && prState === 'open' && !gitState.error && currentRepository() !== null;
+          attempt += 1
+        ) {
           await refresh()
         }
       }

@@ -285,16 +285,18 @@ export const IPC_EVENT_CONTRACT = {
   'window:historyForward': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
   /**
-   * What a pending update install is still waiting on: working sessions and live
-   * terminal processes first, then browser downloads whose bytes are still
-   * arriving. Pushed on every deferred decision, so a rail button, an open
-   * Settings card and the blockers modal all read the same answer.
+   * What a pending update install is still waiting on: working sessions first,
+   * then browser downloads whose bytes are still arriving, then voice recordings
+   * that have not been transcribed and pasted. Pushed on every deferred
+   * decision, so a rail button, an open Settings card and the blockers modal all
+   * read the same answer. A live terminal is never part of it: only threads,
+   * downloads and dictation hold an update back.
    *
-   * Two numbers rather than one payload object on purpose: the event contract is
-   * one large union, and an object payload here pushes TypeScript's
+   * Separate numbers rather than one payload object on purpose: the event
+   * contract is one large union, and an object payload here pushes TypeScript's
    * representation of it past its complexity limit in the preload bridge.
    */
-  'updater:waiting-for-work': [] as unknown as [threads: number, downloads: number],
+  'updater:waiting-for-work': [] as unknown as [threads: number, downloads: number, speech: number],
   /**
    * State of the app-owned TypeSafe (Jev) capability, pushed after any change
    * to the key or after a connection check, so an open Settings card never

@@ -693,6 +693,16 @@ export class UtilityOrchestrationServiceOrchestration {
     const cuaUtility = state.eligible.get(CUA_UTILITY_ID)
     if (cuaUtility && !next.has(CUA_UTILITY_ID)) next.set(CUA_UTILITY_ID, cuaUtility)
     state.eligible = next
+    // An activated utility keeps the definition it was activated with, so an
+    // edit made while the turn runs (re-pointed URL, another header) has to be
+    // carried into that entry too: invocation reads it before the eligible map,
+    // and a stale copy there would keep the old settings in force until the turn
+    // ended. Dropping the client is `ensureMcpClient`'s job, which compares the
+    // settings each connection was opened with.
+    for (const utilityId of state.activated.keys()) {
+      const fresh = next.get(utilityId)
+      if (fresh) state.activated.set(utilityId, fresh)
+    }
     // A refresh lists only what is eligible now, so an activated utility missing
     // from it was disabled, deleted, or moved out of scope while this turn ran.
     // Dropping it here is what lands that change mid-turn: the call the transcript
@@ -734,6 +744,14 @@ export class UtilityOrchestrationServiceOrchestration {
       // The next search must re-read the registry instead of serving the set this
       // turn built before the change.
       state.eligibilityRefreshedAt = 0
+      // Re-read it now rather than waiting for a search. A capability that was
+      // only edited (a re-pointed URL, another header) is still eligible, and
+      // leaving it forgotten until the agent searched again made the edit read
+      // as the utility having disappeared mid-turn. A disabled or deleted one
+      // stays out of the fresh list, so this cannot resurrect it.
+      await this.refreshEligible(state, { force: true }).catch((error: unknown) =>
+        Logger.dev('Eligible utilities could not be re-read after a registry change:', error)
+      )
       if (wasReachable) await this.audit(state, 'utility.registry_changed', { utilityId })
     }
   }
@@ -749,6 +767,7 @@ export class UtilityOrchestrationServiceOrchestration {
     const client = state.clients.get(utilityId)
     state.cuaSessionIds.delete(utilityId)
     state.clients.delete(utilityId)
+    state.clientSignatures.delete(utilityId)
     if (!client) return
     if (sessionId) {
       await client.callTool('end_session', { session: sessionId }).catch(() => undefined)
@@ -905,6 +924,7 @@ export class UtilityOrchestrationServiceOrchestration {
     const utilityId = resolved.utility.id
     if (state.clients.get(utilityId) === client) {
       state.clients.delete(utilityId)
+      state.clientSignatures.delete(utilityId)
       if (this.isComputerUseUtility(resolved)) state.cuaSessionIds.delete(utilityId)
     }
     await client.close().catch(() => undefined)

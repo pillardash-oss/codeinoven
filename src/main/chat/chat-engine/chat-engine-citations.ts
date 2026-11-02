@@ -1,8 +1,9 @@
 import { Logger } from '../../system/logger'
-import { broadcastThreadUpdate } from '../thread-events'
+import { broadcastThreadMessagesChanged } from '../thread-events'
 import { resolveCitedEntries } from '../cited-entries-service'
 import { CITE_ENTRY_LIMIT, normalizeCitedPath, type CitedEntry } from '../../../lib/cited-work'
 import { assistantReportIsTerminal } from '../../../lib/assistant-reports'
+import { citedWorkMessageId } from '../../../lib/published-messages'
 import { conversationWorkspaceDirectory } from '../../../lib/types'
 import type { AgentMessage, Thread, ThreadStatus } from '../../../lib/types'
 import { rawErrorMessage } from './chat-engine-errors'
@@ -110,7 +111,7 @@ export class ChatEngineCitations {
 
   private async publishEntries(thread: Thread, entries: CitedEntry[]): Promise<void> {
     const at = Date.now()
-    const id = `cio-cited-work-${thread.id}-${at}`
+    const id = citedWorkMessageId(thread.id, at)
     const message: AgentMessage = {
       id,
       role: 'assistant',
@@ -130,7 +131,11 @@ export class ChatEngineCitations {
       completedAt: at
     }
     await this.host.threadManager.upsertMessages(thread.projectId, thread.id, [message])
-    broadcastThreadUpdate(thread)
+    // The row lands after the turn's own messages, so a conversation already open
+    // on this thread never sees it through the stream. `thread:messagesChanged` is
+    // what makes a cached thread re-read its tail, which is the only path an
+    // app-published row has into a view that is already on screen.
+    broadcastThreadMessagesChanged(thread.projectId, thread.id)
   }
 
   /** The directory a thread's cited paths resolve against, or null when it has none. */

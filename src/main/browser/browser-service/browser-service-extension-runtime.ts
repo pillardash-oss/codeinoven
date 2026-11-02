@@ -19,7 +19,8 @@ import {
   type BrowserExtensionSidePanelOpenRequest,
   type BrowserExtensionTabEventName,
   type BrowserExtensionTabReplay,
-  type BrowserExtensionWebNavigationEventName
+  type BrowserExtensionWebNavigationEventName,
+  type BrowserExtensionWindowEventName
 } from '../extensions/browser-extension-service'
 import { type BrowserExtensionSidePanelHost } from './browser-extension-side-panels'
 import { buildExtensionMenuItems, extensionClickContexts } from './browser-context-menu'
@@ -164,6 +165,21 @@ export class BrowserServiceExtensionRuntime {
     // of the lifecycle either concerns the tab's jar or belongs to a tab that is
     // going away, and a tab that goes away takes its own popups with it.
     if (name === 'onUpdated' || name === 'onActivated') this.reportExtensionPageTabs(tabId)
+  }
+
+  /**
+   * One window fact, aimed at the extensions loaded in that jar.
+   *
+   * A window an extension asked this app for is the app's to report gone: it is the
+   * only side that knows the page ended. See `BrowserExtensionWindowEventName`.
+   */
+  notifyExtensionWindow(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWindowEventName,
+    args: unknown[]
+  ): void {
+    this.host.extensions.onWindowEvent(projectId, boxId, name, args)
   }
 
   /**

@@ -52,7 +52,8 @@ import {
   type BrowserExtensionSidePanelOpenRequest,
   type BrowserExtensionTabEventName,
   type BrowserExtensionTabReplay,
-  type BrowserExtensionWebNavigationEventName
+  type BrowserExtensionWebNavigationEventName,
+  type BrowserExtensionWindowEventName
 } from './extensions/browser-extension-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
@@ -904,20 +905,12 @@ export class BrowserService {
     return this.cursorAppearance.current()
   }
 
-  async paintAgentCursor(
-    tab: BrowserTab,
-    point: { x: number; y: number },
-    press: boolean
-  ): Promise<void> {
-    return this.agentScriptUnit.paintAgentCursor(tab, point, press)
+  async paintAgentCursor(tab: BrowserTab, point: { x: number; y: number }): Promise<void> {
+    return this.agentScriptUnit.paintAgentCursor(tab, point)
   }
 
-  async paintAgentCursorAtElement(
-    tab: BrowserTab,
-    selector: string,
-    press: boolean
-  ): Promise<void> {
-    return this.agentScriptUnit.paintAgentCursorAtElement(tab, selector, press)
+  async paintAgentCursorAtElement(tab: BrowserTab, selector: string): Promise<void> {
+    return this.agentScriptUnit.paintAgentCursorAtElement(tab, selector)
   }
 
   requiredInputString(input: Record<string, unknown>, field: string, allowEmpty = false): string {
@@ -1284,6 +1277,15 @@ export class BrowserService {
     args: unknown[]
   ): void {
     this.extensionRuntimeUnit.notifyExtensionTab(tabId, projectId, boxId, name, args)
+  }
+
+  notifyExtensionWindow(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWindowEventName,
+    args: unknown[]
+  ): void {
+    this.extensionRuntimeUnit.notifyExtensionWindow(projectId, boxId, name, args)
   }
 
   reportExtensionPageTabs(tabId: string): void {

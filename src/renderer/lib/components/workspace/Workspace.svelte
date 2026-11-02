@@ -371,6 +371,7 @@
               icon: board.openThreadFromSwitcher.coordinator.icon,
               active: board.switcherPanelTabs.dockKindActive('coordinator'),
               badge: board.openThreadFromSwitcher.coordinatorRailBadge,
+              badgeColor: board.openThreadFromSwitcher.coordinatorRailBadgeColor,
               badgeTitle: board.switcherPanelTabs.coordinatorRailBadgeTitle,
               onSelect: () =>
                 board.switcherPanelTabs.toggleDockPanel(

@@ -4,6 +4,7 @@
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import { artifactThemeStyles } from './artifact-theme'
+  import { flushSvgViewBox } from './artifact-flush-svg'
   import { sanitizedHtmlArtifactDocument, sanitizedSvgArtifact } from './artifact'
   import { ARTIFACT_STAGE_CLASS, ARTIFACT_STAGE_ID, type ArtifactKind } from './artifact'
   import {
@@ -633,6 +634,10 @@ ${appInteractiveElementRules()}`
   // artifact's canvas overrides it, and are already rewritten for the stage box
   // because a shadow tree is what they now style.
   let appliedSource: string | null = null
+  /** Bumped when the artifact's own DOM is rebuilt, so the flush pass re-runs. */
+  let mountToken = $state(0)
+  /** The canvas the artifact declared, kept so the viewer can restore it. */
+  let svgSourceViewBox: string | null = null
   $effect(() => {
     const stage = stageEl
     const sourceSheet = sourceSheetEl
@@ -642,11 +647,35 @@ ${appInteractiveElementRules()}`
     if (kind === 'svg') {
       sourceSheet.textContent = ''
       stage.innerHTML = svgMarkup(code)
+      svgSourceViewBox = stage.querySelector('svg')?.getAttribute('viewBox') ?? null
+      mountToken += 1
       return
     }
     const artifact = sanitizedHtmlArtifactDocument(code)
     sourceSheet.textContent = artifact.styles
     stage.innerHTML = artifact.markup
+  })
+
+  // In the conversation the picture is flushed to its drawing. The message
+  // column already owns the gutter, so a canvas an artifact padded inside its own
+  // viewBox would read as a second inset, and the picture would sit narrower than
+  // every other message in the thread. The viewer is the artifact's page, so
+  // there the authored canvas comes back and the padding is the viewer's own.
+  $effect(() => {
+    const mounted = mountToken
+    const flush = !fill
+    const stage = stageEl
+    if (!stage || kind !== 'svg') return
+    // The canvas is re-measured once per mount, never once per zoom or resize:
+    // this effect is about which canvas is drawn, not where it has been scrolled.
+    void mounted
+    const svg = stage.querySelector('svg')
+    if (!(svg instanceof SVGSVGElement)) return
+    if (!flush) {
+      if (svgSourceViewBox !== null) svg.setAttribute('viewBox', svgSourceViewBox)
+      return
+    }
+    flushSvgViewBox(svg)
   })
 
   // A zoom or a pan moves every element the pins, the hover box and the open

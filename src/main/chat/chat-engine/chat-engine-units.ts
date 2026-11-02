@@ -12,6 +12,7 @@ import { ChatEngineThreadsTitle } from './chat-engine-threads-title'
 import { ChatEngineLifecycleBoot } from './chat-engine-lifecycle-boot'
 import { ChatEngineQuestionsAsk } from './chat-engine-questions-ask'
 import { ChatEngineSecrets } from './chat-engine-secrets'
+import { ChatEngineMcpSignIn } from './chat-engine-mcp-sign-in'
 import { ChatEngineQuestions } from './chat-engine-questions'
 import { ChatEngineSpeech } from './chat-engine-speech'
 import { ChatEngineRuntimeWorkflows } from './chat-engine-runtime-workflows'
@@ -75,6 +76,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'lifecycle-boot': new ChatEngineLifecycleBoot(engine),
     'questions-ask': new ChatEngineQuestionsAsk(engine),
     secrets: new ChatEngineSecrets(engine),
+    'mcp-sign-in': new ChatEngineMcpSignIn(engine),
     questions: new ChatEngineQuestions(engine),
     speech: new ChatEngineSpeech(engine),
     'runtime-workflows': new ChatEngineRuntimeWorkflows(engine),

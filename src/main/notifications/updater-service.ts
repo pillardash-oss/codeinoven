@@ -5,6 +5,7 @@ import { Logger } from '../system/logger'
 import type {
   BrowserDownload,
   CloseConfirmationProject,
+  UpdateBlockerSpeechPhase,
   UpdateBlockers,
   UpdaterChangelog,
   UpdaterStatus
@@ -109,6 +110,18 @@ export interface DownloadActivitySource {
   inFlightDownloads(): BrowserDownload[]
 }
 
+/**
+ * The dictation pipeline this process is running, as the install gate sees it.
+ *
+ * Supply-only, like the downloads: the speech service owns the open microphones
+ * and the transcription jobs, and the gate asks rather than keeping a second
+ * copy of that state.
+ */
+export interface DictationActivitySource {
+  /** Open microphones and unanswered transcriptions, right now. */
+  activity(): { recording: number; transcribing: number }
+}
+
 /** A download holds the unattended install back only while its bytes arrive. */
 function activelyDownloading(downloads: readonly BrowserDownload[]): BrowserDownload[] {
   // A download the user paused is not progressing: it keeps its bytes and
@@ -129,6 +142,8 @@ export class UpdaterService {
   private activitySources: SessionActivitySource[] = []
   /** The browser's live transfers, or null before the browser graph exists. */
   private downloadSource: DownloadActivitySource | null = null
+  /** The dictation pipeline, or null while speech is unavailable. */
+  private dictationSource: DictationActivitySource | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private _status: UpdaterStatus
   private statusListeners: Set<(status: UpdaterStatus) => void> = new Set()
@@ -428,6 +443,33 @@ export class UpdaterService {
   }
 
   /**
+   * Register dictation as a gate on the unattended install.
+   *
+   * A recording the user is still producing and a transcript the model has not
+   * answered yet are both lost by a quit, because the audio never reaches the
+   * caret. Only working threads, running downloads and dictation hold an update
+   * back; an open terminal does not.
+   */
+  setDictationActivitySource(source: DictationActivitySource | null): void {
+    this.dictationSource = source
+  }
+
+  /**
+   * Dictation the install is still waiting on, read once per decision.
+   *
+   * A source that fails is read as idle: the gate must never be wedged open by
+   * its own bookkeeping, and the transcript path reports its own failure.
+   */
+  private dictationActivity(): { recording: number; transcribing: number } {
+    try {
+      return this.dictationSource?.activity() ?? { recording: 0, transcribing: 0 }
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read dictation activity', error)
+      return { recording: 0, transcribing: 0 }
+    }
+  }
+
+  /**
    * Downloads the unattended install is still waiting on, oldest first.
    * An explicit install (`installApproved`) and a tray-initiated one are direct
    * requests: they proceed, and the shutdown pipeline keeps every running
@@ -462,10 +504,15 @@ export class UpdaterService {
     // Read once: the count and the list must describe the same instant, or the
     // modal's wording disagrees with the rows under it.
     const downloads = this.blockingDownloads()
+    const dictation = this.dictationActivity()
+    const speechPhase: UpdateBlockerSpeechPhase | null =
+      dictation.recording > 0 ? 'recording' : dictation.transcribing > 0 ? 'transcribing' : null
     return {
       version: this._status.availableVersion ?? '',
-      activeCount: this.activeSessionCount() + downloads.length,
+      activeCount:
+        this.activeSessionCount() + dictation.recording + dictation.transcribing + downloads.length,
       projects,
+      speech: speechPhase ? { phase: speechPhase } : null,
       downloads
     }
   }
@@ -1088,17 +1135,21 @@ export class UpdaterService {
         (this.installRecoveryPending && !this.installApproved && !this.forceUpdateInBackground
           ? 1
           : 0)
-      // Downloads are read after the thread count because the read is too cheap
-      // to do on a path that is about to install anyway, and never for an
-      // install the user or the tray asked for directly.
-      const downloads = threadCount === 0 ? this.blockingDownloads() : []
-      if (threadCount === 0 && downloads.length === 0) {
+      // Dictation is read before downloads because a recording is the one piece
+      // of work here the user cannot get back, and every path below waits on it.
+      const dictation = this.dictationActivity()
+      const speechCount = dictation.recording + dictation.transcribing
+      // Downloads are read after the counts because the read is too cheap to do
+      // on a path that is about to install anyway, and never for an install the
+      // user or the tray asked for directly.
+      const downloads = threadCount === 0 && speechCount === 0 ? this.blockingDownloads() : []
+      if (threadCount === 0 && speechCount === 0 && downloads.length === 0) {
         this.quitAndInstallNow()
         return
       }
 
       this.updateState({ state: 'waiting' })
-      this.broadcastWaitingForWork(threadCount, downloads.length)
+      this.broadcastWaitingForWork(threadCount, downloads.length, speechCount)
 
       this.clearDeferredInstall()
       this.deferredInstallPoll = setInterval(() => {
@@ -1149,10 +1200,10 @@ export class UpdaterService {
     return count
   }
 
-  private broadcastWaitingForWork(threads: number, downloads: number): void {
+  private broadcastWaitingForWork(threads: number, downloads: number, speech: number): void {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        sendToRenderer(win.webContents, 'updater:waiting-for-work', threads, downloads)
+        sendToRenderer(win.webContents, 'updater:waiting-for-work', threads, downloads, speech)
       }
     }
   }

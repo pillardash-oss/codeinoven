@@ -1,11 +1,12 @@
 <script lang="ts">
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import { onDestroy } from 'svelte'
   import { slide } from 'svelte/transition'
   import type { Component, Snippet } from 'svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { Thread } from '$shared/types'
   import { pinnedFold, type PinnedSectionKey } from '$lib/stores/pinned-fold.svelte'
-  import { foldSlide } from '$lib/components/shared/card-motion'
+  import { foldSlide, foldDuration } from '$lib/components/shared/card-motion'
   import { foldedSectionRows } from '$lib/thread-section-rows'
 
   interface Props {
@@ -108,6 +109,39 @@
    */
   const visibleThreads = $derived(folded ? foldedSectionRows(threads, activeThreadId) : threads)
 
+  /**
+   * Whether the fold's motion has finished, so the row a folded section keeps for
+   * the thread being worked in may draw.
+   *
+   * The peek row cannot mount in the same frame as the fold: an outgoing `slide`
+   * holds the list in flow while its height collapses, so the peek drawn beside it
+   * would show the active thread twice for the length of the fold. Drawn after it,
+   * the section closes in one motion and then rests on that one row.
+   */
+  let foldSettled = $state(true)
+  let foldSettleTimer: ReturnType<typeof setTimeout> | undefined
+
+  function settleFold(): void {
+    clearTimeout(foldSettleTimer)
+    foldSettled = false
+    const settle = foldDuration()
+    if (settle <= 0) {
+      foldSettled = true
+      return
+    }
+    foldSettleTimer = setTimeout(() => (foldSettled = true), settle)
+  }
+
+  function toggleFold(): void {
+    clearTimeout(foldSettleTimer)
+    if (!folded) settleFold()
+    else foldSettled = true
+    if (onToggleFold) onToggleFold()
+    else pinnedFold.toggle(sectionKey)
+  }
+
+  onDestroy(() => clearTimeout(foldSettleTimer))
+
   /** The header of a keyed group list (the threads view's status groups) sits in
    *  the same two columns a row does: the fold control takes the mark column, so
    *  the group's glyph and label land on the axis the row titles start at.
@@ -145,7 +179,7 @@
       aria-expanded={!folded}
       aria-label="{folded ? 'Expand' : 'Fold'} {label}"
       title="{folded ? 'Expand' : 'Fold'} {label}"
-      onclick={() => (onToggleFold ? onToggleFold() : pinnedFold.toggle(sectionKey))}
+      onclick={() => toggleFold()}
     >
       <!-- The fold control is one column wide only for a keyed group, so the
            glyph that follows it starts where a row's content starts. -->
@@ -173,34 +207,52 @@
       <span class="text-[0.625rem] text-dimmed/70">{threads.length}</span>
     </button>
 
-    {#if !headerOnly && visibleThreads.length > 0}
+    {#if !headerOnly}
       <!-- The fold plays the same motion as every other fold in the app
            (`foldSlide`), so a pinned section closing or opening moves rather
            than blinks. A status group's rows already get this: the sidebar drops
            them from its own keyed list, which the `animate:` on that list
            animates. This one owns its rows, so it carries the transition
-           itself. -->
-      <div transition:slide={foldSlide()} class="space-y-px" role="list">
-        {#each visibleThreads as thread (thread.id)}
-          {#if row}
-            {@render row(thread)}
-          {:else}
-            <ThreadRow
-              {thread}
-              {detailed}
-              {hideProjectName}
-              projectIconUrl={getRowIcon(thread)}
-              selected={activeThreadId === thread.id}
-              {onOpen}
-              {onRename}
-              {onTogglePin}
-              {onDelete}
-              {onFork}
-              onMoveThread={onMovePinnedThread}
-            />
-          {/if}
-        {/each}
-      </div>
+           itself, and the list is the only child of its own branch so folding
+           never drops an ancestor that would take the motion with it.
+
+           Folded, the section still shows the one thread the user is working in.
+           That row draws after the fold has finished, because an outgoing `slide`
+           holds the list in flow while it collapses and drawing the row in the same
+           frame would show the active thread twice. -->
+      {#if folded}
+        {#if foldSettled && visibleThreads.length > 0}
+          <div class="space-y-px" role="list">
+            {@render threadRows(visibleThreads)}
+          </div>
+        {/if}
+      {:else if threads.length > 0}
+        <div transition:slide={foldSlide()} class="space-y-px" role="list">
+          {@render threadRows(threads)}
+        </div>
+      {/if}
     {/if}
   </div>
 {/if}
+
+{#snippet threadRows(rows: readonly Thread[])}
+  {#each rows as thread (thread.id)}
+    {#if row}
+      {@render row(thread)}
+    {:else}
+      <ThreadRow
+        {thread}
+        {detailed}
+        {hideProjectName}
+        projectIconUrl={getRowIcon(thread)}
+        selected={activeThreadId === thread.id}
+        {onOpen}
+        {onRename}
+        {onTogglePin}
+        {onDelete}
+        {onFork}
+        onMoveThread={onMovePinnedThread}
+      />
+    {/if}
+  {/each}
+{/snippet}

@@ -173,6 +173,15 @@ export class SpeechService {
    * then pays the whole model load after the user hits send.
    */
   private readonly openCaptures = new Set<string>()
+  /**
+   * Transcriptions whose transcript has not been handed back yet: the model and
+   * any cleanup pass are still working on words the user already spoke.
+   *
+   * Counted from the moment the renderer asks for the transcription until the
+   * answer is returned, because a restart in that window loses a recording the
+   * user has no way to recover.
+   */
+  private dictationTranscriptions = 0
   private readonly eviction: SpeechRuntimeEviction
   private readonly playground = new SpeechPlaygroundStore()
 
@@ -528,6 +537,7 @@ export class SpeechService {
         state: this.queue.state(queued.id) ?? { state: 'queued', position: 1 }
       }
     })
+    this.dictationTranscriptions += 1
     try {
       const rawTranscript = (await queued.result).trim()
       if (rawTranscript.length === 0) {
@@ -587,6 +597,8 @@ export class SpeechService {
         attempt.errors.push({ stage: 'transcribing', error, occurredAt: Date.now() })
       })
       throw cause
+    } finally {
+      this.dictationTranscriptions -= 1
     }
   }
 
@@ -1254,6 +1266,42 @@ export class SpeechService {
   private releaseCapture(sessionId: string): void {
     if (!this.openCaptures.delete(sessionId)) return
     this.touch('asr')
+  }
+
+  /**
+   * Forget every open microphone, for a renderer that went away mid-recording.
+   *
+   * A reload or a dead renderer takes the recorder, the audio it was still
+   * uploading and the ability to finish the attempt with it. The capture can
+   * never be completed, and a session left in this set would read as "someone is
+   * still speaking" forever, holding an update install back for a microphone
+   * that no longer exists.
+   */
+  abandonOpenCaptures(): void {
+    if (this.openCaptures.size === 0) return
+    const sessionIds = [...this.openCaptures]
+    this.openCaptures.clear()
+    for (const sessionId of sessionIds) {
+      // A native capture keeps recording in its own worker, outside the renderer
+      // that asked for it, so it is stopped rather than only forgotten.
+      void this.nativeCapture.stop(sessionId).catch(() => undefined)
+    }
+    this.touch('asr')
+  }
+
+  /**
+   * ASR work an app restart would destroy right now: microphones that are still
+   * open and transcriptions that have not answered yet.
+   *
+   * Read by the update gate, which must never quit through a recording the user
+   * is still producing. The renderer pastes the transcript the moment this
+   * answers, so the wait ends with the transcript rather than with the caret.
+   */
+  dictationActivity(): { recording: number; transcribing: number } {
+    return {
+      recording: this.openCaptures.size,
+      transcribing: this.dictationTranscriptions
+    }
   }
 
   private isCapabilityBusy(capability: SpeechCapability): boolean {

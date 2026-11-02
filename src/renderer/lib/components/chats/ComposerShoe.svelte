@@ -414,15 +414,34 @@
     void document.fonts?.ready.then(() => {
       if (!disposed) measure()
     })
+    /**
+     * The read above writes the row's own stage, and that write resizes the row and
+     * the card hugging it, which is exactly what the observer watches. Running the
+     * read inside the delivery therefore reschedules layout the browser had no frame
+     * left to report, and Chromium logs it as "ResizeObserver loop completed with
+     * undelivered notifications" on ordinary composer work. One queued frame
+     * collapses however many reports arrive into a single read once the layout has
+     * settled, and the stage write is idempotent, so it stops after one pass.
+     */
+    let pendingFrame = 0
+    function schedule(): void {
+      if (disposed || pendingFrame !== 0) return
+      pendingFrame = requestAnimationFrame(() => {
+        pendingFrame = 0
+        if (!disposed) measure()
+      })
+    }
     // The composer's own width is the room, and the card is what reports the row
     // outgrowing it. Observing the card alone never reports the room coming back: a
     // card that hugs a truncated row keeps its width while the composer grows around
     // it, which is how a figure stayed hidden after the composer had space for it.
-    const observer = new ResizeObserver(measure)
+    const observer = new ResizeObserver(schedule)
     observer.observe(wrapper)
     observer.observe(card)
     return () => {
       disposed = true
+      if (pendingFrame !== 0) cancelAnimationFrame(pendingFrame)
+      pendingFrame = 0
       observer.disconnect()
     }
   }

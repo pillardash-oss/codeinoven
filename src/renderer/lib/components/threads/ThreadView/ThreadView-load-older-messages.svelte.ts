@@ -303,20 +303,12 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // entries arriving at the tail.
     if (away && !this.userScrolledAway) {
       this.windowStartId = this.root.composerScope.mountedWindowStartId()
-    } else if (
-      !away &&
-      this.userScrolledAway &&
-      !this.loadingOlderMessages &&
-      !this.viewportSettling
-    ) {
-      // A transcript that fits the viewport is at its bottom AND at its top at
-      // the same time, so a page landing above the reader can leave them
-      // "at the bottom" by measurement while they are reading history. The
-      // release is skipped while a load is running or settling, otherwise it
-      // unmounted the page that had just arrived and left the reader at a top
-      // that refused to load again.
-      this.windowStartId = null
     }
+    // The mounted window only ever grows. Releasing the anchor on the way back
+    // down used to unmount every page the reader had loaded, which is what made
+    // the transcript flicker at the bottom of a scroll and what made the same
+    // history load and mount again on the next scroll up. History that was
+    // mounted stays mounted, off screen included.
     this.userScrolledAway = away
     // Self-heal: the mounted window must never sit at zero while the store
     // holds messages   a windowed view that collapsed to nothing would leave
@@ -825,7 +817,9 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     this.userScrolledAway = false
-    this.windowStartId = null
+    // The mounted window is grow-only: a reader who jumped back to the latest
+    // message keeps every page they had already loaded, so scrolling up again
+    // finds the same work in the document instead of mounting it from scratch.
     this.scrollEl.scrollTo({ top: this.scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
       if (!this.scrollEl || this.userScrolledAway) return

@@ -133,6 +133,11 @@
   )
   /** Whether this tree is reading a checkout that lives on an Oven. */
   let ovenFile = $derived(Boolean(ovenRootThread(projectId)))
+  // Register the mount before any state is prepared, so this panel opens the
+  // conversation's own surface instead of creating a threadless one first. The
+  // effect below keeps it current if the mount changes while it stays mounted.
+  // svelte-ignore state_referenced_locally
+  projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   $effect(() => {
     projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   })
@@ -424,6 +429,20 @@
   /** An annotation is a composer reference, so there has to be a conversation
    *  open for it to attach to; the toolbar explains that instead of hiding. */
   let annotateDisabled = $derived(!activeThreadId || deletedAtCheckpoint)
+  /**
+   * The annotator is the only thing that can render the annotation view, so a
+   * document that lost it (no conversation open, no annotatable content, or a
+   * file deleted at the checkpoint) falls back to its rendered preview rather
+   * than an empty body. Markdown opens in the annotation view by default, which
+   * is why this repair can be reached without the reader ever pressing the
+   * toggle.
+   */
+  $effect(() => {
+    const tab = activeTab
+    if (!tab || tab.view !== 'annotate') return
+    if (showAnnotateToggle && !annotateDisabled) return
+    projectFilesWorkspace.setView(projectId, tab.id, showAnnotateToggle ? 'preview' : 'source')
+  })
   /** The active document as a read-aloud target. Read-aloud is offered for
    *  exactly the documents that carry annotations, the rendered Markdown whose
    *  text the viewer holds as plain source; the speaker control then hides
@@ -972,11 +991,14 @@
   /**
    * A find belongs to the surface that was searched, so a view change puts it
    * away instead of leaving a bar aimed at text that is no longer on screen.
+   * The chosen view is remembered for Markdown, so the next document opens the
+   * way this one was left instead of snapping back to the default.
    */
   function changeView(view: ProjectFileView): void {
     if (!activeTab) return
     findNavState.closeFileDocumentFind()
     findNavState.closeEditorFind()
+    projectFilesWorkspace.rememberDocumentView(projectId, activeTab.path, view)
     projectFilesWorkspace.setView(projectId, activeTab.id, view)
   }
 

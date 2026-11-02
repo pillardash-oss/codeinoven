@@ -23,8 +23,15 @@ import {
   threadStatusPolicy
 } from '$shared/thread-status-policy'
 
-/** Top-level panel sections. */
-export type NotificationTopTab = 'projects' | 'chats' | 'assistants' | 'app-errors'
+/**
+ * Top-level panel sections.
+ *
+ * Attention leads the panel and is what the panel opens on. It is not a family
+ * of its own: it collects everything waiting on the user whichever family
+ * raised it, so a parked gate never requires hunting through Projects, Chats
+ * and Assistants to find it.
+ */
+export type NotificationTopTab = 'attention' | 'projects' | 'chats' | 'assistants' | 'app-errors'
 
 /** Second-level filters shown under the active top tab. */
 export type NotificationSubFilter = 'all' | 'done' | 'attention' | 'spec' | 'issues'
@@ -62,6 +69,19 @@ export interface UnreadRailSummary {
   label: string
   /** All distinct unread accents, in the same order and colours as the bell. */
   colors: string[]
+}
+
+/**
+ * What one thread family has waiting on the user, as the view rail reports it.
+ *
+ * The count is deliberately the union of the durable notices the bell holds and
+ * the assistant rows the assistant store owns, never the renderer's bounded
+ * thread slice: a thread parked on a card must light its rail item whatever page
+ * the user is on, even after it has fallen out of the recent-thread window.
+ */
+export interface RailAttentionSummary {
+  count: number
+  label: string
 }
 
 const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotification['kind']> = {
@@ -165,7 +185,7 @@ class NotificationPanelState {
    * next restore, and what seeds that restore.
    */
   private _dismissed = new SvelteSet<string>()
-  topTab: NotificationTopTab = $state('projects')
+  topTab: NotificationTopTab = $state('attention')
   subFilter: NotificationSubFilter = $state('all')
   /** The Assistants tab's assistants/tasks narrowing. Ignored by every other tab. */
   assistantSubject: NotificationAssistantSubject = $state('all')
@@ -229,6 +249,65 @@ class NotificationPanelState {
    *  scheduled missed runs, which live in the assistant store rather than here. */
   get assistantNotifications(): InAppNotification[] {
     return this._notifications.filter((n) => this.isAssistant(n))
+  }
+
+  /**
+   * Everything on the panel that is waiting on the user, whichever family it
+   * came from: the gate notices a project, chat, or assistant run raised, plus
+   * the assistant rows the assistant store owns (a scheduled fire that was
+   * missed while the app was closed, and an unattended run still parked on a
+   * decision). The Attention tab renders all of them in one list.
+   */
+  get attentionNotifications(): InAppNotification[] {
+    return newestFirst(this._notifications.filter((n) => n.kind === 'attention'))
+  }
+
+  /** Missed scheduled fires, newest first. A missed fire is an attention state
+   *  by definition, so it belongs on the Attention tab as well as under its
+   *  assistant's section on the Assistants tab. */
+  get attentionMissedRuns(): MissedRun[] {
+    return [...assistants.missedRuns].sort((a, b) => b.dueAt - a.dueAt)
+  }
+
+  /** Unattended runs still waiting on the user (running, or parked on a gate),
+   *  minus a run whose own notice already stands for it on the panel. */
+  get attentionBackgroundRuns(): BackgroundRun[] {
+    const noticed = new Set(this._notifications.map((n) => n.threadId))
+    return assistants.recentBackgroundRuns.filter(
+      (run) =>
+        !noticed.has(run.runThreadId) && backgroundRunNotificationKind(run.outcome) === 'attention'
+    )
+  }
+
+  /** Rows the Attention tab shows, and therefore the number on its tab badge. */
+  get attentionCount(): number {
+    return (
+      this.attentionNotifications.length +
+      this.attentionMissedRuns.length +
+      this.attentionBackgroundRuns.length
+    )
+  }
+
+  /**
+   * Clear the Attention tab.
+   *
+   * The inbox has no `attention` family to clear, so each waiting notice is
+   * retired by id on both sides: the tombstone is what keeps thread-state
+   * hydration from rebuilding it on the next scope load or launch. The
+   * assistant rows are cleared by the panel itself, through the assistant
+   * store's own acknowledgements.
+   */
+  dismissAttention(): void {
+    const ids: string[] = []
+    const kept: InAppNotification[] = []
+    for (const n of this._notifications) {
+      if (n.kind === 'attention') ids.push(n.id)
+      else kept.push(n)
+    }
+    if (ids.length === 0) return
+    for (const id of ids) this._dismissed.add(id)
+    this._notifications = kept
+    for (const id of ids) void invoke('notification:dismissInbox', id).catch(() => {})
   }
 
   /** Assistant notices that survive both the sub-filter and the subject filter. */
@@ -304,6 +383,8 @@ class NotificationPanelState {
         return newestFirst(this.byKind(this.chatNotifications, this.subFilter))
       case 'assistants':
         return this.assistantVisibleNotifications
+      case 'attention':
+        return this.attentionNotifications
       case 'app-errors':
         return []
     }
@@ -388,6 +469,40 @@ class NotificationPanelState {
       count,
       label: `${count} unread ${familyLabel}${count === 1 ? '' : 's'}`,
       colors
+    }
+  }
+
+  /**
+   * Everything waiting on the user inside one thread family, for its rail item.
+   *
+   * The rail used to read this from the in-memory thread list alone, and that
+   * list is a bounded recent slice per project: a thread parked on a permission,
+   * question or secret that fell outside the window wore no rail mark at all,
+   * while the bell listed it under Attention. The rail is the one indicator that
+   * is on screen on every page, so it reads the same durable notices the bell
+   * reads, plus the assistant rows (a missed scheduled fire, an unattended run
+   * still parked on a decision) that only the assistant store holds.
+   *
+   * A background run whose thread already raised a notice is excluded so one
+   * waiting run is never counted twice.
+   */
+  attentionRailSummary(family: 'projects' | 'chats' | 'assistant'): RailAttentionSummary | null {
+    let count = this._notifications.filter((notification) => {
+      if (notification.kind !== 'attention') return false
+      if (family === 'projects')
+        return !this.isChat(notification) && !this.isAssistant(notification)
+      if (family === 'chats') return this.isChat(notification)
+      return this.isAssistant(notification)
+    }).length
+    if (family === 'assistant') {
+      count += this.attentionMissedRuns.length + this.attentionBackgroundRuns.length
+    }
+    if (count === 0) return null
+    const noun =
+      family === 'projects' ? 'project thread' : family === 'chats' ? 'chat' : 'assistant run'
+    return {
+      count,
+      label: `${count} ${noun}${count === 1 ? '' : 's'} ${count === 1 ? 'needs' : 'need'} attention`
     }
   }
 
@@ -502,7 +617,7 @@ class NotificationPanelState {
    * the assistant store and keep their own per-entry dismiss, so clearing the
    * assistants tab drops only its notifications.
    */
-  dismissTab(tab: Exclude<NotificationTopTab, 'app-errors'>): void {
+  dismissTab(tab: Exclude<NotificationTopTab, 'app-errors' | 'attention'>): void {
     this.retireBy((n) => this.survivesTabClear(n, tab))
     void invoke('notification:clearInbox', this.familyOf(tab)).catch(() => {})
   }
@@ -530,7 +645,9 @@ class NotificationPanelState {
 
   /** The tab being cleared, as the store groups it. Clearing a tab removes the
    *  family it names, so this is the tab itself rather than its complement. */
-  private familyOf(tab: Exclude<NotificationTopTab, 'app-errors'>): NotificationFamily {
+  private familyOf(
+    tab: Exclude<NotificationTopTab, 'app-errors' | 'attention'>
+  ): NotificationFamily {
     if (tab === 'chats') return 'chat'
     return tab === 'assistants' ? 'assistant' : 'project'
   }
@@ -543,7 +660,7 @@ class NotificationPanelState {
    */
   private survivesTabClear(
     n: InAppNotification,
-    tab: Exclude<NotificationTopTab, 'app-errors'>
+    tab: Exclude<NotificationTopTab, 'app-errors' | 'attention'>
   ): boolean {
     if (tab === 'projects') return this.isChat(n) || this.isAssistant(n)
     if (tab === 'chats') return !this.isChat(n)
@@ -565,6 +682,31 @@ class NotificationPanelState {
       else this._dismissed.add(n.id)
     }
     this._notifications = kept
+  }
+
+  /**
+   * Acknowledge everything the panel holds for a thread the user has opened.
+   *
+   * Opening a thread is reading it, and reading it is its acknowledgement:
+   * whatever notice was waiting there (a settled run, a parked gate, a ready
+   * spec, a failure) has done its job the moment its conversation is on screen.
+   * Each entry is retired through `dismiss`, so the tombstone reaches the
+   * durable inbox too and neither a restart nor thread-state hydration can put
+   * a notification back on a thread that was already read. An unattended run
+   * that executed on this very thread is acknowledged with it.
+   *
+   * Missed scheduled fires are deliberately not acknowledged here: their row
+   * carries the Run now and Dismiss actions, and opening the task is not the
+   * same decision as retiring the miss.
+   */
+  acknowledgeOpenThread(thread: Thread): void {
+    const entries = this._notifications.filter(
+      (entry) => entry.projectId === thread.projectId && entry.threadId === thread.id
+    )
+    for (const entry of entries) this.dismiss(entry.id)
+    for (const run of assistants.recentBackgroundRuns) {
+      if (run.runThreadId === thread.id) void assistants.dismissBackgroundRun(run.runThreadId)
+    }
   }
 
   /**
@@ -630,13 +772,13 @@ class NotificationPanelState {
   hydrateFromThreads(threads: Thread[], projects: Project[] = []): void {
     const projectById = new Map(projects.map((project) => [project.id, project]))
     for (const thread of threads) {
-      // A parked thread is live state, so it keeps its needs-attention entry
-      // whether or not the user has read it, exactly like the menu bar icon:
-      // reading the thread answers nothing, and only the status change that
-      // answers the card ends the state. Every other notice is rehydrated only
-      // while unread, because reading the thread is its acknowledgement.
+      // Only an unread thread is rebuilt. Reading a thread acknowledges every
+      // notice it carried, including a needs-attention one: the parked state is
+      // still visible on the thread's own row, and re-raising it here would put
+      // a notification the user already read back in front of them on the next
+      // scope load or launch.
       if (isOrchestrationChildThread(thread)) continue
-      if (thread.read && !threadStatusPolicy(thread.status).awaitingUser) continue
+      if (thread.read) continue
 
       const project = projectById.get(thread.projectId)
       const isChat = thread.projectId === INBOX_PROJECT_ID
