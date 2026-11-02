@@ -18,8 +18,12 @@ import type { ThreadContextReference } from '$lib/thread-context'
 class ForkOriginStore {
   /** Resolved references by `projectId/threadId`; a resolved null means "not a fork". */
   #references = new SvelteMap<string, ThreadContextReference | null>()
-  /** Keys already being read, so one open does not fire twice. */
-  #loading = new Set<string>()
+  /**
+   * Keys already resolved or in flight. A plain Set on purpose: the effect that
+   * asks for an origin must not subscribe to the map it writes, or every resolved
+   * reference would re-run that effect for nothing.
+   */
+  #settled = new Set<string>()
 
   /** The parent a fork shows above its composer, or null. */
   referenceFor(projectId: string, threadId: string): ThreadContextReference | null {
@@ -28,9 +32,9 @@ class ForkOriginStore {
 
   /** Resolve one thread's fork origin, once. Safe to call on every open. */
   ensure(projectId: string, threadId: string): void {
-    const key = `${projectId}/${threadId}`
-    if (this.#references.has(key) || this.#loading.has(key)) return
-    this.#loading.add(key)
+    const key = keyOf(projectId, threadId)
+    if (this.#settled.has(key)) return
+    this.#settled.add(key)
     void invoke('thread:forkOrigin', projectId, threadId)
       .then((origin) => {
         this.#references.set(
@@ -47,11 +51,13 @@ class ForkOriginStore {
       .catch(() => {
         // A failed read leaves the answer unknown, so the next open asks again
         // instead of caching a fork as an ordinary thread for the session.
-      })
-      .finally(() => {
-        this.#loading.delete(key)
+        this.#settled.delete(key)
       })
   }
+}
+
+function keyOf(projectId: string, threadId: string): string {
+  return `${projectId}/${threadId}`
 }
 
 export const forkOrigins = new ForkOriginStore()
