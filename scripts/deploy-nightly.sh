@@ -33,6 +33,12 @@
 #     nightly's base equals the last published stable release, i.e. the first
 #     nightly of a new stable cycle (stable 0.5.52 -> dev/nightly 0.5.53),
 #     mirroring `promotion-version.yml`.
+#   - Names the promotion with the exact nightly it publishes. The counter in
+#     `v<version>-nightly.<N>` is resolved before the PR opens
+#     (`scripts/resolve-nightly-tag.ts`, the same resolver nightly.yml uses), so
+#     the PR title - and every Actions run titled with it - reads
+#     "Promote dev to nightly: 0.5.69-nightly.3" instead of a version that
+#     repeats for every nightly of the same base.
 #   - Runs non-interactively once the version gate passes: opens (or reuses)
 #     the promotion PR and enables auto-merge without prompting, since running
 #     the script at all is the confirmation.
@@ -266,10 +272,25 @@ if ! BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
   fi
 fi
 
+# --- 4. name the nightly this promotion publishes ----------------------------
+# The base version repeats for every nightly of the same cycle, so the only
+# thing that identifies THIS promotion is the counter in `nightly.<N>`.
+# `nightly.yml` re-resolves it with the same script right before packaging, so
+# the PR title and the published tag cannot drift into two different schemes: if
+# another nightly lands first, the workflow publishes the next counter and only
+# the title is off by one, never the release.
+if ! NIGHTLY_TAG="$(bun scripts/resolve-nightly-tag.ts --version "$DEV_VERSION" 2>/dev/null)" \
+    || [[ -z "$NIGHTLY_TAG" ]]; then
+  die "Could not resolve the nightly tag for $DEV_VERSION. Check that 'gh' is authenticated and that origin is reachable, then re-run."
+fi
+NIGHTLY_LABEL="${NIGHTLY_TAG#v}"
+PROMOTION_TITLE="Promote dev to nightly: ${NIGHTLY_LABEL}"
+
 say ""
 say "${C_BOLD}Promotion summary:${C_RESET}"
 say "  dev      -> ${C_GREEN}$(git rev-parse --short "$DEV_SHA")${C_RESET}  (version $DEV_VERSION)"
 say "  nightly  -> ${C_GREEN}$(git rev-parse --short origin/nightly)${C_RESET}  (version $NIGHTLY_VERSION)"
+say "  publishes -> ${C_GREEN}${NIGHTLY_TAG}${C_RESET}  (next nightly of $DEV_VERSION)"
 say ""
 
 BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
@@ -284,11 +305,21 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ -n "$EXISTING_PR" ]]; then
     PR_NUMBER="$EXISTING_PR"
     ok "Reusing existing open PR #$PR_NUMBER (dev -> nightly)."
+    # A reused PR keeps the title it was opened with, which may still name the
+    # nightly that already shipped. Retitle it so the run list shows this one.
+    CURRENT_TITLE="$(gh pr view "$PR_NUMBER" --json title --jq .title 2>/dev/null || true)"
+    if [[ "$CURRENT_TITLE" != "$PROMOTION_TITLE" ]]; then
+      if gh pr edit "$PR_NUMBER" --title "$PROMOTION_TITLE" >/dev/null 2>&1; then
+        ok "Retitled PR #$PR_NUMBER to \"$PROMOTION_TITLE\"."
+      else
+        warn "Could not retitle PR #$PR_NUMBER; it still reads \"$CURRENT_TITLE\"."
+      fi
+    fi
   else
-    say "Opening PR: dev -> nightly..."
+    say "Opening PR: dev -> nightly ($NIGHTLY_LABEL)..."
     PR_URL="$(gh pr create --base nightly --head dev \
-      --title "Promote dev to nightly: $DEV_VERSION" \
-      --body "Automated nightly promotion via \`bun run deploy:nightly\`.")"
+      --title "$PROMOTION_TITLE" \
+      --body "Automated nightly promotion via \`bun run deploy:nightly\`. Publishes \`${NIGHTLY_LABEL}\` (base ${DEV_VERSION}, counter resolved by \`scripts/resolve-nightly-tag.ts\`). The Nightly workflow re-resolves that counter at publish time and is authoritative.")"
     PR_NUMBER="$(basename "$PR_URL")"
     ok "Opened $PR_URL"
   fi
@@ -307,4 +338,4 @@ fi
 
 say ""
 say "${C_BOLD}Done.${C_RESET} Once the PR merges, the nightly workflow will build and publish "
-say "v${DEV_VERSION}-nightly-{N} — verify it on GitHub before promoting to main."
+say "${NIGHTLY_TAG} (the workflow re-resolves the counter at publish time; if another nightly lands first, that next counter is what ships). Verify it on GitHub before promoting to main."

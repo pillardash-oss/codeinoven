@@ -72,35 +72,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The counter is resolved by the same script the promotion PR titles
+          # itself with, so the nightly a human promoted and the nightly CI
+          # publishes are one value, not two guesses. The script accepts only a
+          # stable major.minor.patch base and counts both the dot form
+          # (nightly.3, what publishes now) and the legacy hyphen form.
           base="$(node -p "require('./package.json').version")"
-          if ! printf '%s' "$base" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "::error::package.json version must be stable major.minor.patch, got $base"
-            exit 1
-          fi
+          tag="$(bun scripts/resolve-nightly-tag.ts --version "$base")"
           echo "version=$base" >> "$GITHUB_OUTPUT"
-          # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1
-          # nightly's package.json already bumped to next patch, so base is next stable.
-          # N increments per base version. Supports legacy v{base}-nightly.{N} tags.
-          max_n=0
-          for tag in $(git ls-remote --tags origin "v${base}-nightly*" | awk '{print $2}' | sed 's|refs/tags/||'); do
-            # match vX.Y.Z-nightly-N or vX.Y.Z-nightly.N
-            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
-            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
-          done
-          # Also check GitHub releases (covers tags not yet fetched / race)
-          for tag in $(gh release list --limit 200 --json tagName --jq '.[].tagName' 2>/dev/null | grep -E "^v${base}-nightly[.-][0-9]+$" || true); do
-            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
-            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
-          done
-          next=$((max_n + 1))
-          # Use a DOT between the channel and the counter (nightly.N): electron-updater's
-          # GitHub provider derives the nightly channel from the first dot-separated
-          # prerelease identifier. With a hyphen (nightly-N) the identifier is "nightly-N",
-          # which never matches the configured "nightly" channel and the update check
-          # fails with ERR_UPDATER_NO_PUBLISHED_VERSIONS ("No published versions on GitHub").
-          echo "tag=v${base}-nightly.${next}" >> "$GITHUB_OUTPUT"
-          echo "full=${base}-nightly.${next}" >> "$GITHUB_OUTPUT"
-          echo "Resolved nightly tag v${base}-nightly.${next} (base $base, max existing $max_n)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "full=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Resolved nightly tag $tag (base $base)"
 
   # The build body and the publish body live in .github/actions/build-app and
   # .github/actions/publish-release. release.yml runs the same two actions with
