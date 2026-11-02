@@ -132,5 +132,46 @@ export function summarizeCheckpointRows(rows: readonly Record<string, unknown>[]
       failed.push(typeof id === 'string' ? id : 'unknown')
     }
   }
-  return { summaries, failed }
+  return { summaries: foldRetriedAttempts(summaries), failed }
+}
+
+/**
+ * Fold a retried turn's stopped attempts into the attempt that finished it.
+ *
+ * A retried prompt owns exactly one card: the renderer gives the turn to the
+ * newest checkpoint of that prompt and suppresses the attempt it replaced. When
+ * each attempt was recorded from its own baseline, the attempt that finally
+ * finished the turn reported only the files it touched itself, so a card for
+ * three files appeared under a turn that changed thirty three. New turns are
+ * continued on one checkpoint now (see `CheckpointManager.beginTurn`), and this
+ * heals the turns recorded before that: a stopped attempt that ended before the
+ * finishing attempt began hands its files to the finishing card.
+ *
+ * Only failed and interrupted attempts are folded, only into a completed
+ * attempt of the same prompt, and only when that attempt started after the
+ * stopped one ended, which is what makes them one turn rather than two.
+ */
+function foldRetriedAttempts(summaries: TurnCheckpointSummary[]): TurnCheckpointSummary[] {
+  const ownerByPrompt = new Map<string, TurnCheckpointSummary>()
+  for (const summary of summaries) {
+    const prompt = summary.sourceMessageId
+    if (!prompt || summary.status !== 'completed') continue
+    const current = ownerByPrompt.get(prompt)
+    if (!current || current.createdAt < summary.createdAt) ownerByPrompt.set(prompt, summary)
+  }
+  if (ownerByPrompt.size === 0) return summaries
+  for (const attempt of summaries) {
+    const prompt = attempt.sourceMessageId
+    if (!prompt) continue
+    if (attempt.status !== 'failed' && attempt.status !== 'interrupted') continue
+    if (attempt.changes.length === 0 || attempt.completedAt === undefined) continue
+    const owner = ownerByPrompt.get(prompt)
+    if (!owner || owner.id === attempt.id) continue
+    if (owner.createdAt < attempt.completedAt) continue
+    const known = new Set(owner.changes.map((change) => change.path))
+    const inherited = attempt.changes.filter((change) => !known.has(change.path))
+    if (inherited.length === 0) continue
+    owner.changes = [...owner.changes, ...inherited]
+  }
+  return summaries
 }

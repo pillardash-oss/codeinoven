@@ -61,6 +61,15 @@ const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
 /** Row bound for one thread's checkpoint list (the read used to cap at 10 000). */
 const CHECKPOINT_LIST_MAX_ROWS = 10_000
 
+/**
+ * How recently a turn must have stopped short for the next dispatch of its
+ * prompt to be treated as a retry of that same turn rather than new work.
+ */
+const RETRY_CONTINUATION_WINDOW_MS = 30 * 60 * 1000
+
+/** Bound for the stopped attempts read behind one prompt (a retry chain is short). */
+const FOLDED_ATTEMPT_MAX_ROWS = 32
+
 export interface TurnCheckpoint {
   id: string
   projectId: string
@@ -215,26 +224,82 @@ export class CheckpointManager {
     assertId(projectId)
     assertId(threadId)
     return this.withBlobLock(projectId, async () => {
-      const id = generateId()
       const tracker = this.tracker(projectId)
-      const checkpoint: TurnCheckpoint = {
-        id,
-        projectId,
-        threadId,
-        ...(sourceMessageId ? { sourceMessageId } : {}),
-        label,
-        status: 'active',
-        before: await tracker.snapshot(projectPath, { includeGitMetadata }),
-        changes: [],
-        createdAt: Date.now()
-      }
+      // A retry of a prompt whose attempt failed or was interrupted continues
+      // that turn rather than starting a new one. A fresh baseline here is what
+      // made a retried turn's card wrong: the files the failed attempt had
+      // already written were part of the new baseline, so the finished card
+      // reported only what the retry itself touched. Reusing the row keeps the
+      // turn's original `before` snapshot and the changes it already recorded,
+      // and `completeTurn` folds them into the diff it computes at the end.
+      const resumed = sourceMessageId
+        ? await this.resumableTurn(projectId, threadId, sourceMessageId)
+        : null
+      const checkpoint: TurnCheckpoint = resumed
+        ? {
+            ...resumed,
+            label,
+            status: 'active',
+            after: undefined,
+            lineStats: undefined,
+            breakdown: undefined,
+            completedAt: undefined,
+            stopReason: undefined,
+            failure: undefined,
+            rolledBackAt: undefined,
+            rolledBackPaths: undefined
+          }
+        : {
+            id: generateId(),
+            projectId,
+            threadId,
+            ...(sourceMessageId ? { sourceMessageId } : {}),
+            label,
+            status: 'active',
+            before: await tracker.snapshot(projectPath, { includeGitMetadata }),
+            changes: [],
+            createdAt: Date.now()
+          }
       await this.save(checkpoint)
       await this.writeRow(
         'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id, owner_pid) VALUES(?, ?, ?, ?)',
-        [projectId, threadId, id, process.pid]
+        [projectId, threadId, checkpoint.id, process.pid]
       )
       return checkpoint
     })
+  }
+
+  /**
+   * The prompt's own attempt that stopped short, if one is recent enough to be
+   * the attempt this dispatch retries.
+   *
+   * Only a turn that failed or was interrupted is continued: a completed turn
+   * that the reader re-runs is new work on top of a finished card, and a turn
+   * still running owns its own row. The window keeps an old row from being
+   * revived long after the user moved on.
+   */
+  private async resumableTurn(
+    projectId: string,
+    threadId: string,
+    sourceMessageId: string
+  ): Promise<TurnCheckpoint | null> {
+    const rows = await this.queryRows(
+      `SELECT data FROM turn_checkpoints
+        WHERE project_id = ? AND thread_id = ?
+          AND json_extract(data, '$.sourceMessageId') = ?
+          AND json_extract(data, '$.status') IN ('failed', 'interrupted')
+          AND json_extract(data, '$.completedAt') >= ?
+        ORDER BY created_at DESC LIMIT 1`,
+      [projectId, threadId, sourceMessageId, Date.now() - RETRY_CONTINUATION_WINDOW_MS],
+      1
+    )
+    const row = rows[0]
+    if (!row) return null
+    try {
+      return JSON.parse(String(row['data'])) as TurnCheckpoint
+    } catch {
+      return null
+    }
   }
 
   /** Paths whose current content differs from a checkpoint's before-snapshot.
@@ -351,6 +416,17 @@ export class CheckpointManager {
       const changes = changedPaths
         ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
         : allChanges.filter((change) => keepChange(change.path))
+      // A continued turn arrives holding what its stopped attempt already
+      // recorded. Those files are this turn's work whether or not the diff can
+      // still see them (a trimmed baseline, a concurrent turn contesting the
+      // project, a completion that only accepts claimed paths), so they are
+      // folded back in unless this completion explicitly excludes them.
+      for (const inherited of checkpoint.changes) {
+        if (changes.some((change) => change.path === inherited.path)) continue
+        if (changedPaths && !changedPaths.has(inherited.path)) continue
+        if (excludedPaths?.has(inherited.path) ?? false) continue
+        changes.push(inherited)
+      }
       // A turn whose real diff was entirely filtered away is the one case where
       // the file-changes card silently shows nothing. Record why, bounded, so a
       // missing card can be explained from the log instead of a reproduction.
@@ -1057,13 +1133,51 @@ export class CheckpointManager {
     const viaWorker = await this.db
       .queryCheckpointSummariesViaWorker(latestSql, [projectId, threadId], 1)
       .catch(() => null)
-    if (viaWorker?.ok) return viaWorker.summaries[0] ?? null
+    if (viaWorker?.ok) {
+      const newest = viaWorker.summaries[0] ?? null
+      if (!newest) return null
+      return (await this.foldStoppedAttempts(projectId, threadId, [newest]))[0] ?? newest
+    }
     const rows = await this.queryRows(latestSql, [projectId, threadId], 1)
     const row = rows[0]
     if (!row) return null
     return toTurnCheckpointSummary(
       repairCheckpointChanges(JSON.parse(String(row['data'])) as TurnCheckpoint)
     )
+  }
+
+  /**
+   * Hand a retried turn's stopped attempts to the attempt that finished it, so
+   * the Changes rail counts the same files the turn's card lists.
+   *
+   * A single-row read cannot see the attempt that failed before it, so this
+   * only when the newest turn has a prompt to look up  reads that prompt's
+   * stopped attempts and lets `summarizeCheckpointRows` fold them. One extra
+   * bounded worker read, on the same rows the list itself reads.
+   */
+  private async foldStoppedAttempts(
+    projectId: string,
+    threadId: string,
+    summaries: TurnCheckpointSummary[]
+  ): Promise<TurnCheckpointSummary[]> {
+    const prompts = summaries
+      .filter((summary) => summary.status === 'completed' && summary.sourceMessageId)
+      .map((summary) => summary.sourceMessageId)
+    if (prompts.length === 0) return summaries
+    const rows = await this.db
+      .queryCheckpointSummariesViaWorker(
+        `SELECT data FROM turn_checkpoints
+          WHERE project_id = ? AND thread_id = ?
+            AND json_extract(data, '$.sourceMessageId') = ?
+            AND json_extract(data, '$.status') IN ('failed', 'interrupted', 'completed')
+          ORDER BY created_at DESC`,
+        [projectId, threadId, prompts[0]],
+        FOLDED_ATTEMPT_MAX_ROWS
+      )
+      .catch(() => null)
+    if (!rows?.ok) return summaries
+    const folded = rows.summaries.find((summary) => summary.id === summaries[0]?.id)
+    return folded ? [folded, ...summaries.slice(1)] : summaries
   }
 
   async getFileDiff(
