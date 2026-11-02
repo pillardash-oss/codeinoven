@@ -371,6 +371,30 @@ describe('CoolifyProvider', () => {
       expect(log).toBe('')
     })
 
+    it('reads the requested deployment on its own instead of the whole history', async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ deployment_uuid: 'dep-9', status: 'failed', logs: 'older build log' })
+      )
+
+      const log = await makeProvider().getLogs('app-1', 'dep-9')
+
+      expect(log).toBe('older build log')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(requestUrl()).toContain('/deployments/dep-9')
+    })
+
+    it('falls back to the history list when the single deployment route is missing', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({ message: 'route missing' }, 404))
+        .mockResolvedValueOnce(
+          jsonResponse([{ deployment_uuid: 'dep-9', status: 'failed', logs: 'older build log' }])
+        )
+
+      const log = await makeProvider().getLogs('app-1', 'dep-9')
+
+      expect(log).toBe('older build log')
+    })
+
     it('caps an oversized deployment log at the byte cap', async () => {
       const oversized = 'x'.repeat(250_000)
       fetchMock.mockResolvedValueOnce(
@@ -480,6 +504,19 @@ describe('CoolifyProvider', () => {
       })
       expect(deployments[1]).toMatchObject({ id: 'dep-abc-2', status: 'failed' })
       expect(requestUrl()).toContain('/deployments/applications/app-1')
+    })
+
+    it('omits the build log from the history rows', async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({
+          count: 1,
+          deployments: [{ deployment_uuid: 'dep-1', status: 'finished', logs: 'build ok' }]
+        })
+      )
+
+      const deployments = await makeProvider().listDeployments('app-1')
+
+      expect(deployments[0]).not.toHaveProperty('log')
     })
 
     it('parses a data-wrapped payload for older Coolify versions', async () => {

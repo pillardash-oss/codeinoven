@@ -104,7 +104,7 @@ export class CoolifyProvider implements DeploymentProvider {
     if (application === null) return null
     const container = this.toApplicationContainer(application)
     if (!container) return null
-    const [latest] = await this.fetchDeployments(containerId)
+    const [latest] = await this.fetchDeployments(containerId, 'latest')
     if (!latest) return container
     return {
       ...container,
@@ -116,7 +116,13 @@ export class CoolifyProvider implements DeploymentProvider {
 
   /** Capped raw log text for a deployment, or the latest deployment when no id is given. */
   async getLogs(containerId: string, deploymentId?: string): Promise<string> {
-    const deployments = await this.fetchDeployments(containerId)
+    // One deployment's log is asked for at a time, so read that deployment
+    // instead of pulling every log in the history just to drop all but one.
+    if (deploymentId) {
+      const single = await this.readDeploymentLog(deploymentId)
+      if (single !== null) return single
+    }
+    const deployments = await this.fetchDeployments(containerId, deploymentId ? 'all' : 'latest')
     const target = deploymentId
       ? deployments.find((deployment) => deployment.id === deploymentId)
       : deployments[0]
@@ -131,9 +137,35 @@ export class CoolifyProvider implements DeploymentProvider {
     return this.capLog(logs)
   }
 
-  /** List the most recent deployments/builds for an application, newest first. */
+  /**
+   * Capped log of one deployment read on its own, or null when this Coolify
+   * version does not serve that route (older builds 404/405 it) so the caller
+   * can fall back to the per-application deployment list.
+   */
+  private async readDeploymentLog(deploymentId: string): Promise<string | null> {
+    const response = await this.request(`/deployments/${encodeURIComponent(deploymentId)}`, {
+      method: 'GET'
+    }).catch((failure: unknown) => {
+      if (
+        failure instanceof CoolifyProviderError &&
+        (failure.status === 404 || failure.status === 405)
+      ) {
+        return null
+      }
+      throw failure
+    })
+    if (response === null) return null
+    const record = this.asRecord(response)
+    const logs = typeof record['logs'] === 'string' ? record['logs'] : ''
+    return logs ? this.capLog(logs) : null
+  }
+
+  /**
+   * List the most recent deployments/builds for an application, newest first.
+   * The history rows only need metadata, so no logs ride along.
+   */
   async listDeployments(containerId: string): Promise<CloudDeploymentDeployment[]> {
-    const deployments = await this.fetchDeployments(containerId)
+    const deployments = await this.fetchDeployments(containerId, 'none')
     return deployments.slice(0, CloudDeploymentDeploymentLimit)
   }
 
@@ -146,8 +178,17 @@ export class CoolifyProvider implements DeploymentProvider {
     }
   }
 
-  /** Fetch deployment records for an application, newest first, or [] when absent. */
-  private async fetchDeployments(containerId: string): Promise<CloudDeploymentDeployment[]> {
+  /**
+   * Fetch deployment records for an application, newest first, or [] when absent.
+   *
+   * `logSelection` decides which records carry their (capped) log, because a
+   * history of ten deployments would otherwise pull ten logs over IPC for the
+   * one the detail view actually opens.
+   */
+  private async fetchDeployments(
+    containerId: string,
+    logSelection: 'none' | 'latest' | 'all'
+  ): Promise<CloudDeploymentDeployment[]> {
     const response = await this.request(
       `/deployments/applications/${encodeURIComponent(containerId)}?take=${CloudDeploymentDeploymentLimit}&skip=0`,
       { method: 'GET' }
@@ -174,7 +215,9 @@ export class CoolifyProvider implements DeploymentProvider {
           : []
     const deployments: CloudDeploymentDeployment[] = []
     for (const item of items) {
-      const deployment = this.toDeployment(item)
+      const needsLog =
+        logSelection === 'all' || (logSelection === 'latest' && deployments.length === 0)
+      const deployment = this.toDeployment(item, needsLog)
       if (deployment) deployments.push(deployment)
     }
     return deployments
@@ -294,7 +337,7 @@ export class CoolifyProvider implements DeploymentProvider {
    * when the record is not deployment-shaped (the published spec mislabels this
    * endpoint's response as `Application`, so defensive identity checks apply).
    */
-  private toDeployment(payload: unknown): CloudDeploymentDeployment | null {
+  private toDeployment(payload: unknown, includeLog: boolean): CloudDeploymentDeployment | null {
     if (typeof payload !== 'object' || payload === null) return null
     const record = payload as Record<string, unknown>
     const id = this.readString(record, 'deployment_uuid')
@@ -311,7 +354,7 @@ export class CoolifyProvider implements DeploymentProvider {
       id: id ?? rawStatus,
       status: mapDeploymentStatus(rawStatus)
     }
-    const log = typeof record['logs'] === 'string' ? record['logs'] : undefined
+    const log = includeLog && typeof record['logs'] === 'string' ? record['logs'] : undefined
     if (log) deployment.log = this.capLog(log)
     const updatedAt = this.parseEpochMs(this.readString(record, 'updated_at'))
     if (updatedAt !== undefined) deployment.updatedAt = updatedAt

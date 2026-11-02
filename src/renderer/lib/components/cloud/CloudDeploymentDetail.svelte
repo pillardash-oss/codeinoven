@@ -104,6 +104,19 @@
     return indexes
   })
 
+  /**
+   * Line index to position in {@link searchMatches}, laid out once per query so
+   * the log rows never scan the match list (that turned every render into a
+   * lines-by-matches walk on a long log).
+   */
+  const searchMatchPositions = $derived.by((): number[] => {
+    const positions: number[] = new Array<number>(logLines.length).fill(-1)
+    searchMatches.forEach((lineIndex, matchIndex) => {
+      positions[lineIndex] = matchIndex
+    })
+    return positions
+  })
+
   function openSearch(): void {
     searchOpen = true
     activeMatch = searchMatches.length > 0 ? 0 : 0
@@ -547,7 +560,7 @@
         <div class="p-3">
           <div class="space-y-0.5 font-mono text-[0.625rem] leading-relaxed">
             {#each logLines as line, index (index)}
-              {@const matchIndex = searchMatches.indexOf(index)}
+              {@const matchIndex = searchMatchPositions[index] ?? -1}
               {@const isActiveMatch = matchIndex !== -1 && matchIndex === activeMatch}
               <div
                 data-log-line={index}
