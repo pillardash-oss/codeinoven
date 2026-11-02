@@ -1,7 +1,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { UpdaterStatus, UpdaterWaitingWork } from '$shared/ipc-contract'
 
-const NO_WAITING_WORK: UpdaterWaitingWork = { threads: 0, downloads: 0 }
+const NO_WAITING_WORK: UpdaterWaitingWork = { threads: 0, downloads: 0, speech: 0 }
 
 class UpdaterState {
   status = $state<UpdaterStatus>({
@@ -21,8 +21,8 @@ class UpdaterState {
     })
     this.cleanups.push(unsubStatus)
 
-    const unsubWaiting = subscribe('updater:waiting-for-work', (threads, downloads) => {
-      this.waitingFor = { threads, downloads }
+    const unsubWaiting = subscribe('updater:waiting-for-work', (threads, downloads, speech) => {
+      this.waitingFor = { threads, downloads, speech }
     })
     this.cleanups.push(unsubWaiting)
   }
