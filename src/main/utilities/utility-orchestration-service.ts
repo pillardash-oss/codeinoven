@@ -436,6 +436,17 @@ export interface TurnState {
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
   /**
+   * The connection settings each cached client was opened with, keyed like
+   * `clients`.
+   *
+   * A utility can be edited while a turn runs: its URL, headers, command or
+   * arguments may all change under a connection this turn already holds. A
+   * client opened with the old settings answers for the old endpoint, so the
+   * signature is what lets the next call notice the change and reconnect
+   * instead of quietly serving a stale one.
+   */
+  clientSignatures: Map<string, string>
+  /**
    * Connections being established right now, keyed like `clients`.
    *
    * The gateway serves concurrent calls, so two of them can reach the same

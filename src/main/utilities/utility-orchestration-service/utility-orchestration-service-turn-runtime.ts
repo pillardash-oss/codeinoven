@@ -225,6 +225,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
+      clientSignatures: new Map(),
       connecting: new Map(),
       attributionSequence: 0,
       searched: false,

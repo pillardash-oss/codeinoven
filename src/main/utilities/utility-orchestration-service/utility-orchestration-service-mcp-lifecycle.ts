@@ -22,8 +22,9 @@ export class UtilityOrchestrationServiceMcpLifecycle {
   async ensureMcpClient(state: TurnState, resolved: ResolvedUtility): Promise<McpClient> {
     const utilityId = resolved.utility.id
     const utility = mcpCapableUtility(resolved.utility)
+    const signature = connectionSignature(utility)
     const cached = state.clients.get(utilityId)
-    if (cached?.usable) {
+    if (cached?.usable && state.clientSignatures.get(utilityId) === signature) {
       if (
         this.host.units['orchestration'].isComputerUseUtility(resolved) &&
         !state.cuaSessionIds.has(utilityId)
@@ -32,13 +33,26 @@ export class UtilityOrchestrationServiceMcpLifecycle {
       }
       return cached
     }
-    if (cached) {
+    if (cached && state.clientSignatures.get(utilityId) !== signature) {
+      // The utility was re-pointed while this turn held a connection to it. The
+      // cached client was opened with the settings that have since changed: a
+      // different URL, another header, a new command. Left in place it would keep
+      // answering from the endpoint the user just replaced, which reads as the
+      // edit having been dropped (a query-string pin on a remote MCP, say).
+      // Releasing it here makes the edit land on the very next call.
+      if (state.cuaSessionIds.has(utilityId)) {
+        await this.host.units['orchestration'].releaseUtility(state, utilityId)
+      } else {
+        await this.releaseStaleClient(state, utilityId, cached)
+      }
+    } else if (cached) {
       // The connection stopped answering (a request timed out, the child died,
       // the remote session was lost), so it is replaced instead of reused. A
       // computer-use session is forgotten with it: that session lives inside the
       // daemon the old connection was talking to, so the new connection starts
       // its own rather than naming one that no longer exists.
       state.clients.delete(utilityId)
+      state.clientSignatures.delete(utilityId)
       state.cuaSessionIds.delete(utilityId)
       await cached.close().catch(() => undefined)
     }
@@ -48,10 +62,22 @@ export class UtilityOrchestrationServiceMcpLifecycle {
     try {
       const client = await connecting
       state.clients.set(utilityId, client)
+      state.clientSignatures.set(utilityId, signature)
       return client
     } finally {
       if (state.connecting.get(utilityId) === connecting) state.connecting.delete(utilityId)
     }
+  }
+
+  /** Close one connection a changed utility definition made obsolete. */
+  private async releaseStaleClient(
+    state: TurnState,
+    utilityId: string,
+    client: McpClient
+  ): Promise<void> {
+    state.clients.delete(utilityId)
+    state.clientSignatures.delete(utilityId)
+    await client.close().catch(() => undefined)
   }
 
   /**
@@ -231,4 +257,35 @@ function iconHostFor(url: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * The settings a connection is actually opened with, as one comparable string.
+ *
+ * Two clients are interchangeable only while this stays equal, which is why it
+ * covers everything that reaches the transport and nothing that does not: the
+ * OAuth grant is resolved from the vault on every connection, so rotating one
+ * must not churn a working client. Keys are sorted so a re-read definition with
+ * differently ordered headers or environment compares equal.
+ */
+function connectionSignature(
+  utility: UtilityDefinitionFor<'mcp'> | UtilityDefinitionFor<'computer_use'>
+): string {
+  if (utility.kind === 'computer_use') {
+    return JSON.stringify(['computer_use', utility.config.endpoint ?? ''])
+  }
+  const config = utility.config
+  return JSON.stringify([
+    'mcp',
+    config.transport,
+    config.command ?? '',
+    config.args ?? [],
+    config.url ?? '',
+    sortedEntries(config.environment),
+    sortedEntries(config.headers)
+  ])
+}
+
+function sortedEntries(value: Record<string, string> | undefined): [string, string][] {
+  return Object.entries(value ?? {}).sort(([left], [right]) => left.localeCompare(right))
 }
