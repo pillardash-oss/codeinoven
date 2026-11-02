@@ -44,10 +44,12 @@ import type {
   VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
+  McpSignInContext,
   UtilitySuggestionContext
 } from '../utilities/utility-orchestration-service'
 import type { EngineeringToolOperation } from '../../lib/engineering-tools'
 import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
+import { type AgentMcpSignInResolution } from '../../lib/mcp-sign-in'
 import type {
   ImageDescriptorExecutorRequest,
   ImageDescriptorResult
@@ -92,6 +94,7 @@ import type {
   ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
   AgentUtilitySuggestionEntry,
+  AgentMcpSignInTarget,
   SpecGenerationRequest,
   SpecActionIntent,
   UserMessagePresentation,
@@ -576,6 +579,12 @@ export class ChatEngine {
     context: UtilitySuggestionContext
   ): Promise<UtilitySuggestionResolution> {
     return this.units['utilities'].requestUtilitySuggestion(entry, context)
+  }
+  async requestMcpSignIn(
+    target: AgentMcpSignInTarget,
+    context: McpSignInContext
+  ): Promise<AgentMcpSignInResolution> {
+    return this.units['mcp-sign-in'].requestMcpSignIn(target, context)
   }
   async dismissQuestion(projectId: string, threadId: string, requestId: string): Promise<void> {
     return this.units['questions-ask'].dismissQuestion(projectId, threadId, requestId)

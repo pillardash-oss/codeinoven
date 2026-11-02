@@ -73,6 +73,32 @@ export interface AgentUtilitySuggestionEntry {
   utilities: AgentUtilitySuggestionUtility[]
 }
 
+/**
+ * One remote MCP server that asked to be authorized before it will answer.
+ *
+ * The card is the app's, not the agent's: the agent only ever sees the tool call
+ * resume once the server accepts the grant, and this is everything the card needs
+ * to name the server, explain what the server wants, and say how far the grant
+ * reaches. It never carries a token, a code, or a client secret.
+ */
+export interface AgentMcpSignInTarget {
+  /** Installed MCP utility the grant belongs to. */
+  utilityId: string
+  /** The server's own name, as Utilities shows it. */
+  name: string
+  /** Where the server lives: its URL, or its launch command for a local server. */
+  endpoint?: string
+  /** Host the card resolves the server's icon from, when it has one. */
+  iconHost?: string
+  /**
+   * How far the grant reaches once it lands. A global utility is authorized for
+   * the whole app; a project- or thread-scoped one only where it is installed.
+   */
+  grantScope: 'global' | 'project' | 'thread'
+  /** What the agent was doing when the server refused, in the user's terms. */
+  reason?: string
+}
+
 /** A structured question the agent is asking the user. */
 export interface AgentQuestion {
   /** OpenCode question request id (used to submit the answer via the question API). */
@@ -107,6 +133,12 @@ export interface AgentQuestion {
    * app installs the proposal only when the user picks the install option.
    */
   utilitySuggestion?: AgentUtilitySuggestionEntry
+  /**
+   * The question is the app's MCP sign-in card. It renders as a card with the
+   * server's name and icon and a single Sign in action, and the canonical
+   * question submission settles the tool call waiting on it.
+   */
+  mcpSignIn?: AgentMcpSignInTarget
   /** The user's submitted answer text. */
   answer?: string
   /** Raw tool input payload, preserved for debugging schema drift. */

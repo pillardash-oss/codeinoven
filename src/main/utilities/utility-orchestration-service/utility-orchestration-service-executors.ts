@@ -9,6 +9,7 @@ import type {
   CuaOperationEvent,
   DesignCapabilityExecutor,
   EngineeringToolExecutor,
+  McpSignInExecutor,
   OrchestrationExecutor,
   PawnToolExecutor,
   SecretRequestExecutor,
@@ -100,6 +101,19 @@ export class UtilityOrchestrationServiceExecutors {
    */
   setSecretRequestExecutor(executor: SecretRequestExecutor | null): void {
     this.host.secretRequestExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the MCP sign-in card.
+   *
+   * A remote MCP server that refuses for lack of authorization has to reach the
+   * user, and only the chat engine owns the pending-question surface that shows
+   * a card and waits for it. The authorization itself is the shared OAuth
+   * service's, so the card and the Utilities page sign in the same server the
+   * same way, and the grant they produce is the same one.
+   */
+  setMcpSignInExecutor(executor: McpSignInExecutor | null): void {
+    this.host.mcpSignInExecutor = executor
   }
 
   /**

@@ -2,7 +2,12 @@ import type { ResolvedUtility, UtilityDefinitionFor } from '../../../lib/types'
 import { type McpClient } from '../../agents/mcp-stdio-client'
 import { Logger } from '../../system/logger'
 import { RemoteMcpClient } from '../utility-orchestration/remote-mcp-client'
-import { connectMcpServer, mcpOAuthChallengeHeader } from '../mcp-connection'
+import {
+  connectMcpServer,
+  mcpOAuthChallengeHeader,
+  mcpSignInDeclinedFailure,
+  mcpTargetLabel
+} from '../mcp-connection'
 import { mcpCapableUtility } from '../utility-orchestration-service'
 import type { TurnState } from '../utility-orchestration-service'
 import type { UtilityOrchestrationService } from '../utility-orchestration-service'
@@ -126,22 +131,81 @@ export class UtilityOrchestrationServiceMcpLifecycle {
     }
     // One shared starter, which the Utilities connection test calls too, so a
     // server that tests green is a server this gateway can start.
-    return connectMcpServer({
-      config: utility.config,
-      environment: await this.host.units['orchestration'].credentialEnvironment(utility),
-      credentials: utility.credentials,
-      // Resolved here, where the vault lives: an authorized server is connected
-      // with the bearer its grant issued, and an expired one is renewed from its
-      // refresh token before the request leaves.
-      authorization: (await this.host.mcpOAuth?.accessToken(utility)) ?? null,
-      owner: { name: utility.name, credentials: utility.credentials },
-      // Attribute the running server to the turn that started it, so the task
-      // manager can say which thread an MCP belongs to.
-      context: { projectId: state.request.projectId, threadId: state.request.threadId }
-    }).catch(async (error: unknown) => {
-      await this.noteMcpOAuthChallenge(utility, error)
-      throw error
-    })
+    //
+    // A server that refuses for lack of authorization is not a dead end: the app
+    // raises its sign-in card, and a completed sign-in earns exactly one retry
+    // with the grant the browser flow just stored. Nothing loops: a retry that is
+    // refused again ends the connection with the refusal.
+    let target: UtilityDefinitionFor<'mcp'> = utility
+    for (let attempt = 0; ; attempt += 1) {
+      const connection = {
+        config: target.config,
+        environment: await this.host.units['orchestration'].credentialEnvironment(target),
+        credentials: target.credentials,
+        // Resolved here, where the vault lives: an authorized server is connected
+        // with the bearer its grant issued, and an expired one is renewed from its
+        // refresh token before the request leaves.
+        authorization: (await this.host.mcpOAuth?.accessToken(target)) ?? null,
+        owner: { name: target.name, credentials: target.credentials },
+        // Attribute the running server to the turn that started it, so the task
+        // manager can say which thread an MCP belongs to.
+        context: { projectId: state.request.projectId, threadId: state.request.threadId }
+      }
+      try {
+        return await connectMcpServer(connection)
+      } catch (error) {
+        const challenge = mcpOAuthChallengeHeader(error)
+        if (!challenge) throw error
+        await this.noteMcpOAuthChallenge(target, challenge)
+        if (attempt > 0) throw error
+        const signIn = await this.signInAfterChallenge(state, target)
+        if (signIn === 'unavailable') throw error
+        if (signIn === 'declined') throw mcpSignInDeclinedFailure(connection, error)
+        // Persisting a grant rewrote the utility's OAuth block, so the retry reads
+        // the saved definition instead of the copy resolved before the sign-in.
+        const saved = await this.host.registry.get(target.id)
+        if (saved?.kind !== 'mcp') throw error
+        target = saved
+      }
+    }
+  }
+
+  /**
+   * Show the sign-in card for a server that refused for lack of authorization.
+   *
+   * Only a remote server this app installed can be authorized here: a local
+   * server is authorized by its own environment, an uninstalled one by the
+   * harness that owns it, and a device with no secure storage has nowhere to keep
+   * a grant. Those cases report `unavailable`, which keeps today's refusal rather
+   * than claiming a user declined something they were never shown.
+   */
+  private async signInAfterChallenge(
+    state: TurnState,
+    utility: UtilityDefinitionFor<'mcp'>
+  ): Promise<'unavailable' | 'declined' | 'signed_in'> {
+    const executor = this.host.mcpSignInExecutor
+    const url = utility.config.url
+    if (!executor || !this.host.mcpOAuth || !url || utility.config.transport === 'stdio') {
+      return 'unavailable'
+    }
+    if (!this.host.vault.isAvailable()) return 'unavailable'
+    const resolution = await executor(
+      {
+        utilityId: utility.id,
+        name: utility.name,
+        endpoint: mcpTargetLabel(utility.config),
+        ...(iconHostFor(url) ? { iconHost: iconHostFor(url) } : {}),
+        grantScope: utility.scope.level
+      },
+      {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId,
+        projectPath: state.request.projectPath,
+        sessionId: state.request.sessionId,
+        harnessId: state.request.harnessId
+      }
+    )
+    return resolution.status === 'signed_in' ? 'signed_in' : 'declined'
   }
 
   /**
@@ -155,5 +219,16 @@ export class UtilityOrchestrationServiceMcpLifecycle {
     await this.host.mcpOAuth?.noteChallenge(utility.id, challenge).catch((cause: unknown) => {
       Logger.dev('MCP OAuth challenge could not be recorded:', cause)
     })
+  }
+}
+
+/** The host a remote server's own icon is resolved from, when it has one. */
+function iconHostFor(url: string): string | undefined {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+    return parsed.host.toLowerCase() || undefined
+  } catch {
+    return undefined
   }
 }

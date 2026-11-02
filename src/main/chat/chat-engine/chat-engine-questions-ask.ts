@@ -10,6 +10,7 @@ import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validatio
 import { InactiveQuestionTurnError, QuestionRequestGoneError } from '../../drivers/driver.interface'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { utilitySuggestionResolution } from '../../../lib/utility-suggestion'
+import { mcpSignInResolution } from '../../../lib/mcp-sign-in'
 import type {
   AgentEvent,
   AgentMessage,
@@ -54,6 +55,21 @@ export class ChatEngineQuestionsAsk {
       requestId
     )
     const safeAnswers = validateQuestionAnswers(answers, pending.request.questions)
+    // An MCP sign-in card is app-owned too: the card already signed the user in
+    // through the shared OAuth flow, so the answer settles the gateway connection
+    // that hit the server's refusal instead of travelling to a harness. Nothing is
+    // persisted from it: the retried tool call is the record the agent needs.
+    if (pending.settleMcpSignIn) {
+      await this.host.units['questions'].resolvePendingQuestion(
+        pending,
+        'answered',
+        safeAnswers,
+        async () => {
+          pending.settleMcpSignIn?.(mcpSignInResolution(safeAnswers))
+        }
+      )
+      return
+    }
     // An agent-proposed capability is an app-owned request with no harness behind
     // it: the user's choice settles the waiting gateway call here, and only the
     // gateway installs, and only on acceptance.
@@ -231,6 +247,20 @@ export class ChatEngineQuestionsAsk {
         undefined,
         async () => {
           pending.settleSecret?.({ status: 'dismissed', secrets: [] })
+        }
+      )
+      return
+    }
+    if (pending.settleMcpSignIn) {
+      // A sign-in card has no harness side either: declining it settles the
+      // waiting connection as un-authorized so the agent continues without the
+      // server instead of hanging on a request the user closed.
+      await this.host.units['questions'].resolvePendingQuestion(
+        pending,
+        'dismissed',
+        undefined,
+        async () => {
+          pending.settleMcpSignIn?.({ status: 'declined' })
         }
       )
       return

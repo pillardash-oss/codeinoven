@@ -7,6 +7,7 @@ import type {
   UtilityDefinitionFor,
   PermissionLevel,
   AgentUtilitySuggestionEntry,
+  AgentMcpSignInTarget,
   ThreadSearchResult
 } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -29,6 +30,7 @@ import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import { UtilityScopeFootprintService } from './utility-scope-footprint'
 import { type ThreadBankEntry } from './utility-orchestration/utility-turn-state'
 import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
+import type { AgentMcpSignInResolution } from '../../lib/mcp-sign-in'
 import type { McpOAuthService } from './mcp-oauth/mcp-oauth-service'
 import { buildUtilityOrchestrationServiceUnits } from './utility-orchestration-service/utility-orchestration-service-units'
 
@@ -120,9 +122,7 @@ export interface UtilityTurnRequest {
    * paths the turn cited as its own work, so the chat engine can publish one card
    * per entry when the turn settles.
    */
-  citeWork?: (
-    paths: string[]
-  ) => Promise<{
+  citeWork?: (paths: string[]) => Promise<{
     cited: Array<{ name: string; path: string; kind: 'file' | 'directory' }>
     missing: string[]
   }>
@@ -312,6 +312,27 @@ export type UtilitySuggestionExecutor = (
 
 /** Which turn is proposing, so the card is bound to the right thread and session. */
 export interface UtilitySuggestionContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
+/**
+ * Runs one MCP sign-in for the turn that needs it: it surfaces the card, awaits
+ * the user's browser authorization and reports what they did. The chat engine
+ * supplies it because it owns the pending-question machinery and the broadcast
+ * the renderer reads; the authorization itself stays with the shared OAuth
+ * service, so a grant a turn uses is a grant the Utilities page issued.
+ */
+export type McpSignInExecutor = (
+  target: AgentMcpSignInTarget,
+  context: McpSignInContext
+) => Promise<AgentMcpSignInResolution>
+
+/** Which turn is asking, so the card is bound to the right thread and session. */
+export interface McpSignInContext {
   projectId: string
   threadId: string
   projectPath: string
@@ -515,6 +536,7 @@ export class UtilityOrchestrationService {
   scopeToolExecutor: ScopeToolExecutor | null = null
   secretRequestExecutor: SecretRequestExecutor | null = null
   utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
+  mcpSignInExecutor: McpSignInExecutor | null = null
   orchestrationExecutor: OrchestrationExecutor | null = null
   appControlExecutor: AppControlExecutor | null = null
   engineeringExecutor: EngineeringToolExecutor | null = null
@@ -600,6 +622,9 @@ export class UtilityOrchestrationService {
   }
   setUtilitySuggestionExecutor(executor: UtilitySuggestionExecutor | null): void {
     return this.units['capability-invoke'].setUtilitySuggestionExecutor(executor)
+  }
+  setMcpSignInExecutor(executor: McpSignInExecutor | null): void {
+    return this.units['executors'].setMcpSignInExecutor(executor)
   }
   setOrchestrationExecutor(executor: OrchestrationExecutor | null): void {
     return this.units['executors'].setOrchestrationExecutor(executor)
