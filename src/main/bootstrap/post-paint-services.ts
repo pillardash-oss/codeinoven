@@ -253,7 +253,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { SecretVault },
     { GitHubAuthService },
     { CioCleanupService },
-    { broadcastCioCleanupProgress, broadcastCioCleanupState }
+    { broadcastCioCleanupProgress, broadcastCioCleanupState },
+    { FollowUpService },
+    { FollowUpStore },
+    { createFollowUpExecutor }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -282,7 +285,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../storage/secret-vault'),
     import('../git/github-auth-service'),
     import('../cio-cleanup/cio-cleanup-service'),
-    import('../cio-cleanup/cio-cleanup-events')
+    import('../cio-cleanup/cio-cleanup-events'),
+    import('../follow-ups/follow-up-service'),
+    import('../follow-ups/follow-up-store'),
+    import('../follow-ups/follow-up-executor')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -948,6 +954,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     heartbeatScheduler: state.heartbeatScheduler,
     assistantManager: state.assistantManager ?? undefined,
     assistantScheduler: state.assistantScheduler ?? undefined,
+    cancelThreadFollowUps: (threadId) => {
+      state.followUpService?.cancelForThread(threadId)
+    },
     cioCleanup: state.cioCleanup ?? undefined,
     autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
@@ -1237,6 +1246,48 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     } catch (error) {
       Logger.error('Assistant scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      // Agent-scheduled wakes: one clock for the whole app, armed only while a
+      // wake is pending, resuming the thread it was scheduled on.
+      const followUps = new FollowUpService({
+        store: new FollowUpStore(storage),
+        findThread: (threadId) => {
+          const thread = new ThreadRepo(database).get(threadId)
+          if (!thread) return null
+          return {
+            projectId: thread.projectId,
+            status: thread.status,
+            settings: thread.settings,
+            title: thread.title
+          }
+        },
+        sendPrompt: async ({ projectId, threadId, settings, text, visible }) => {
+          if (!state.chatEngine) throw new Error('The chat engine is not available')
+          await state.chatEngine.sendPrompt(
+            projectId,
+            threadId,
+            settings,
+            text,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal',
+            undefined,
+            undefined,
+            visible
+          )
+        }
+      })
+      state.followUpService = followUps
+      state.chatEngine?.setFollowUpExecutor(createFollowUpExecutor(followUps))
+      await followUps.start()
+    } catch (error) {
+      Logger.error('Follow-up scheduler startup failed (non-fatal):', error)
     }
 
     try {

@@ -38,6 +38,10 @@ export function hasUpcomingWork(state: BootstrapState, database: Database): bool
       const due = scheduler.nextDueAt(now)
       if (due !== null && due - now <= Math.max(lead, 60_000)) return true
     }
+    // A thread's own wake is work the app still owes, even though it belongs to a
+    // conversation rather than to an assistant task.
+    const followUp = state.followUpService?.nextDueAt() ?? null
+    if (followUp !== null && followUp - now <= 60_000) return true
     if (state.retryScheduler?.hasPendingRetryBefore(now + SCHEDULED_RETRY_WAKE_WINDOW_MS)) {
       return true
     }
@@ -115,6 +119,13 @@ export function residencyReason(state: BootstrapState, database: Database): Resi
       if (scheduler.hasTaskOnTheClock()) return 'schedule-armed'
     }
     if (state.heartbeatScheduler?.hasHeartbeatOnTheClock()) return 'heartbeat-armed'
+    // A pending follow-up is a thread wake the user agreed to, so the process has
+    // to outlive its window for it exactly as it does for a scheduled run.
+    const followUpDue = state.followUpService?.nextDueAt() ?? null
+    if (followUpDue !== null) {
+      const lead = state.backgroundLifecycle?.wakeLeadMs ?? 0
+      return followUpDue - now <= Math.max(lead, 60_000) ? 'run-due' : 'schedule-armed'
+    }
   } catch (error) {
     Logger.error('Background residency check failed', error)
     return 'unreadable'

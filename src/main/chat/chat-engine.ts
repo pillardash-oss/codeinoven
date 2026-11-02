@@ -40,6 +40,7 @@ import type {
   BrowserUtilityExecutor,
   DesignCapabilityExecutor,
   EngineeringToolContext,
+  FollowUpExecutor,
   PawnToolContext,
   VideoCapabilityExecutor,
   ScopeToolExecutor,
@@ -500,6 +501,14 @@ export class ChatEngine {
   }
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     return this.units['utilities'].setBrowserUtilityExecutor(executor)
+  }
+  /**
+   * Register the app-owned follow-up capability. The app supplies it after paint
+   * because it owns the persisted wake and the clock that fires it, while the
+   * engine only knows how to start a turn on the thread that gets woken.
+   */
+  setFollowUpExecutor(executor: FollowUpExecutor | null): void {
+    return this.units['utilities'].setFollowUpExecutor(executor)
   }
   setExpertSettings(settings: ExpertSettingsService | null): void {
     return this.units['utilities-mcp'].setExpertSettings(settings)

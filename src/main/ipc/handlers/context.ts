@@ -83,6 +83,8 @@ export interface RegisterIpcHandlersOptions {
   heartbeatScheduler?: HeartbeatSchedulerService
   /** Assistant View's assistant scheduler (app-open-only firing, missed-run records). */
   assistantScheduler?: AssistantSchedulerService
+  /** Drops a thread's agent-scheduled wakes when that thread is deleted. */
+  cancelThreadFollowUps?: (threadId: string) => void
   /** Durable record of gates the app resolved without the user (attention rail). */
   autoAnswerStore?: AutoAnswerStore
   /** Shared assistant manager; defaults to a database-backed instance. */
@@ -234,6 +236,11 @@ export interface IpcHandlerContext {
   orchestrationDispatchRepo: OrchestrationDispatchRepo
   assistantManager: AssistantManager
   assistantScheduler: AssistantSchedulerService | undefined
+  /**
+   * Drops the agent-scheduled wakes armed on a thread that is being deleted, so
+   * a pending follow-up cannot wake a thread that no longer exists.
+   */
+  cancelThreadFollowUps?: (threadId: string) => void
   autoAnswerStore: AutoAnswerStore | undefined
   privilegedIpc: PrivilegedIpcValidator
   /** Register a privileged channel whose sender frame must be trusted. */
