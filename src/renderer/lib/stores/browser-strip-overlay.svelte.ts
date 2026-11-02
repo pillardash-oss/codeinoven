@@ -173,6 +173,7 @@ class BrowserStripOverlayState {
     if (strip === null) {
       this.stopAckWatch()
       this.pointerInside = false
+      sidebarState.reportPointer(false)
       void invoke('browser:setStripOverlay', null).catch(() => {})
       return
     }
@@ -181,6 +182,7 @@ class BrowserStripOverlayState {
     // so the pointer starts out inside it: a report saying so would only arrive
     // later, and the panel must not close before the first real report does.
     this.pointerInside = true
+    sidebarState.reportPointer(true)
     const revision = (this.nextRevision += 1)
     try {
       this.armAckWatch(revision)
@@ -257,11 +259,13 @@ class BrowserStripOverlayState {
     if (report.kind === 'pointer') {
       if (report.over) {
         this.pointerInside = true
+        sidebarState.reportPointer(true)
         if (this.closeTimer !== undefined) clearTimeout(this.closeTimer)
         this.closeTimer = undefined
         return
       }
       this.pointerInside = false
+      sidebarState.reportPointer(false)
       this.scheduleClose()
       return
     }
@@ -338,6 +342,10 @@ class BrowserStripOverlayState {
     this.closeTimer = setTimeout(() => {
       this.closeTimer = undefined
       if (this.pointerInside) return
+      // The panel is hosting an interaction it opened (a search popover on the
+      // strip), and the pointer left for that rather than for the app behind
+      // it. The hold releases the panel when that interaction ends.
+      if (sidebarState.held) return
       sidebarState.hoverOpen = false
     }, HOVER_GRACE_MS)
   }
