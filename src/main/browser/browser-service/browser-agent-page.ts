@@ -345,6 +345,70 @@ export function agentTypeScript(request: {
   })()`
 }
 
+/**
+ * Make a field ready for real keystrokes.
+ *
+ * Typing like a hand means the field must hold the caret where those keys go, so this
+ * focuses it and either selects what is already there (a replace: the first key
+ * overwrites the selection) or collapses to the end (an append). Nothing is written
+ * here; the keys that follow are the only thing that changes the value.
+ */
+export function agentPrepareTypingScript(request: { selector: string; append: boolean }): string {
+  return `(() => {
+    ${pageHelpers()}
+    const element = resolveElement(${JSON.stringify(request.selector)});
+    if (!element) return { ok: false, reason: 'not found' };
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      if (element.disabled) return { ok: false, reason: 'the field is disabled' };
+      if (element.readOnly) return { ok: false, reason: 'the field is read-only' };
+      if (element.type === 'file') return { ok: false, reason: 'a file input takes files, not text' };
+      element.focus();
+      const end = element.value ? element.value.length : 0;
+      try { element.setSelectionRange(${request.append ? 'end, end' : '0, end'}); } catch {}
+      return {
+        ok: true,
+        editable: true,
+        kind: element.tagName.toLowerCase(),
+        selected: ${request.append ? '0' : 'end'},
+        previousLength: end
+      };
+    }
+    if (element.isContentEditable || element.getAttribute('contenteditable') !== null) {
+      element.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      if (${request.append ? 'true' : 'false'}) range.collapse(false);
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      return { ok: true, editable: true, kind: 'contenteditable', selected: ${request.append ? '0' : '1'} };
+    }
+    return { ok: false, reason: 'element is not editable' };
+  })()`
+}
+
+/** Read back what a field holds now, for a result that reports the outcome. */
+export function agentFieldValueScript(selector: string): string {
+  return `(() => {
+    ${pageHelpers()}
+    const element = resolveElement(${JSON.stringify(selector)});
+    if (!element) return { found: false };
+    const masked = element instanceof HTMLInputElement && element.type === 'password';
+    const raw =
+      element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+        ? String(element.value || '')
+        : String(element.innerText || element.textContent || '');
+    return {
+      found: true,
+      masked,
+      length: raw.length,
+      value: masked ? '[redacted]' : raw.slice(0, ${MAX_VALUE_CHARS})
+    };
+  })()`
+}
+
 /** Put the caret in a field, so a following key press lands where the agent means. */
 export function agentFocusScript(selector: string): string {
   return `(() => {

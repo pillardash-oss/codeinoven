@@ -208,7 +208,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'type',
     description:
-      'Fill an input, textarea, or editable element, and report the value the page actually kept. This is what a framework-controlled form (React and friends) needs: it goes through the field\u2019s own value setter and emits beforeinput/input/change, so component state updates exactly as it does for a person. Replaces the value unless append is true. Pass submit true to press Enter afterwards.',
+      'Type into an input, textarea, or editable element, and report the value the page actually kept. The text arrives as real keystrokes, down, character and up through the browser\u2019s own input pipeline, so a page\u2019s keydown handlers, a search-as-you-type box and a rich editor all see it. Replaces the value unless append is true. Text longer than 200 characters, or text with a line break (Enter would submit the form), is inserted in one step instead, and the result says which happened. Pass submit true to press Enter afterwards.',
     inputSchema: {
       type: 'object',
       properties: {
