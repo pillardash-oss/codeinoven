@@ -70,6 +70,8 @@ import type {
 import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
 import { withoutTransportParts } from './chat-engine-message-merge'
 import { formatProjectReferenceContext } from './chat-engine-message-text'
+import { firstTurnForkNotice } from './chat-engine-fork-parent'
+import { readForkOrigin } from '../../../lib/engines/thread-manager-fork'
 import {
   MAX_RECAP_TOKENS,
   SPEC_GENERATION_FAILURE_USER_MESSAGE,
@@ -326,7 +328,16 @@ export class ChatEngineTurnsSendPrompt {
       targetThread?.scopeBucketId
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
-    let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
+    // A forked thread opens with the thread its context was copied from, so the
+    // agent can read the rest of that conversation itself instead of answering
+    // from the copy alone. Only the fork's first turn carries it.
+    const forkOrigin = await readForkOrigin(projectId, threadId)
+    const forkParentContext = forkOrigin
+      ? await firstTurnForkNotice(this.host.database, threadId, forkOrigin)
+      : null
+    let hiddenContext = [forkParentContext, hiddenPromptContext, projectReferenceContext]
+      .filter(Boolean)
+      .join('\n\n')
     // A run of an assistant that already has its knowledge: the knowledge is the
     // instruction set, and this contract tells the agent to supply any
     // connection the run needs that is not set up, asking the user for what

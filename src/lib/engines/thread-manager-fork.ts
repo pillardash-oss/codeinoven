@@ -1,4 +1,4 @@
-import { writeFile, mkdir } from 'fs/promises'
+import { writeFile, mkdir, readFile } from 'fs/promises'
 import { join } from 'path'
 import { getConfigRoot } from '../utils'
 import { messageId as createMessageId } from '../id'
@@ -62,6 +62,57 @@ export interface ForkThreadInput {
   checkpointId?: string
   messageId?: string
   targetProjectId?: string
+}
+
+/**
+ * Where a fork came from, as recorded next to the fork's own artifacts.
+ *
+ * The fork writes this once and never touches it again, so a reader can cache it
+ * for the life of the process: a thread id is never reused, and a missing file
+ * stays missing.
+ */
+export interface ForkOrigin {
+  /** The thread this one was forked from. */
+  parentThreadId: string
+  /** Epoch ms the fork was made. Every copied message is older than this. */
+  forkedAt: number
+}
+
+const forkOriginCache = new Map<string, ForkOrigin | null>()
+
+/**
+ * The origin recorded for a forked thread, or null for a thread that was not
+ * forked. Used by the send path to point the agent at the thread its context
+ * came from (see `firstTurnForkNotice`).
+ */
+export async function readForkOrigin(
+  projectId: string,
+  threadId: string
+): Promise<ForkOrigin | null> {
+  const key = `${projectId}/${threadId}`
+  const cached = forkOriginCache.get(key)
+  if (cached !== undefined) return cached
+  let origin: ForkOrigin | null = null
+  try {
+    const raw = await readFile(
+      join(getConfigRoot(), 'projects', projectId, 'threads', threadId, 'branches', 'origin.json'),
+      'utf8'
+    )
+    const parsed: unknown = JSON.parse(raw)
+    const record = parsed as { parentThreadId?: unknown; forkedAt?: unknown }
+    if (typeof record.parentThreadId === 'string' && record.parentThreadId.length > 0) {
+      origin = {
+        parentThreadId: record.parentThreadId,
+        forkedAt: typeof record.forkedAt === 'number' ? record.forkedAt : 0
+      }
+    }
+  } catch {
+    // No origin file: an ordinary thread, or a fork whose metadata could not be
+    // read. Either way it is not a fork the send path can point at.
+    origin = null
+  }
+  forkOriginCache.set(key, origin)
+  return origin
 }
 
 /**
