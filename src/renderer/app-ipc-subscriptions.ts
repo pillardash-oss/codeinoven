@@ -51,8 +51,6 @@ export interface AppIpcSubscriptionDeps {
   ) => Promise<void>
   setCloseConfirmation: (payload: CloseConfirmationPayload | null) => void
   confirmForceClose: () => Promise<void>
-  /** Park the window (destroy it, keep the backend alive) instead of quitting. */
-  parkWindow: () => Promise<void>
   setInstanceRole: (role: InstanceRole) => void
   /** Raise the one-time start-at-login offer (raised after an assistant's first knowledge). */
   showStartAtLoginOffer: () => void
@@ -223,12 +221,22 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     // The renderer owns the unsaved-file editor state, so it computes the
     // pending files here. Downloads arrive with the payload: main is the one
     // download owner, and its list is already the truth. With nothing pending
-    // the close proceeds right away as a park when background mode keeps the
-    // backend alive, otherwise a quit.
+    // a quit proceeds right away.
+    //
+    // A park is never answered here. Parking tears the window down while the
+    // backend keeps running, so it owes the user a message even when nothing is
+    // pending: the app's browser, its previews, its terminals and its editors go
+    // with the window and only come back when it is reopened. That is the user's
+    // call to make, so the prompt is always shown.
     const files = [...projectFilesWorkspace.getUnsavedFiles(), ...standaloneFiles.getUnsavedFiles()]
     const park = payload.park === true
-    if (payload.projects.length === 0 && files.length === 0 && payload.downloads.length === 0) {
-      void (park ? deps.parkWindow() : deps.confirmForceClose())
+    if (
+      !park &&
+      payload.projects.length === 0 &&
+      files.length === 0 &&
+      payload.downloads.length === 0
+    ) {
+      void deps.confirmForceClose()
       return
     }
     deps.setCloseConfirmation({

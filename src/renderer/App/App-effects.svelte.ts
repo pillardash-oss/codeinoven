@@ -152,7 +152,6 @@ export class AppEffects extends BoardUnit<App> {
         setCloseConfirmation: (payload) =>
           (this.root.settleCloseConfirmationThread.closeConfirmation = payload),
         confirmForceClose: this.root.settleCloseConfirmationThread.confirmForceClose,
-        parkWindow: this.root.settleCloseConfirmationThread.parkWindow,
         setInstanceRole: (role) => (this.root.state.instanceRole = role),
         settleCloseConfirmationThread:
           this.root.settleCloseConfirmationThread.settleCloseConfirmationThread,
