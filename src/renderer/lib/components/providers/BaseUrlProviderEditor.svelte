@@ -12,6 +12,7 @@
   import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { toast } from 'svelte-sonner'
+  import { SvelteSet } from 'svelte/reactivity'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
@@ -24,6 +25,7 @@
   import EnumSelect from '../ui/EnumSelect.svelte'
   import Switch from '../ui/Switch.svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
+  import { mergeSavedProviderModels, type ProviderModelDraft } from './provider-model-merge'
   import { creditsLabel } from '$lib/format/usage'
   import {
     PROVIDER_USAGE_FORMATS,
@@ -41,7 +43,6 @@
     BaseUrlProvider,
     BaseUrlProviderCopyClipboardRequest,
     BaseUrlProviderCreateRequest,
-    BaseUrlProviderModel,
     BaseUrlProviderUpdateRequest,
     BaseUrlProviderUsageFormat,
     BaseUrlProviderUsagePreview,
@@ -364,7 +365,7 @@
    *  moment it is saved   the picker cache already overlays saved providers. */
   async function resolveModelsToSave(
     headers: Record<string, string> | undefined
-  ): Promise<Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>> {
+  ): Promise<ProviderModelDraft[]> {
     if (draft.models.length > 0) return buildModels()
     const baseURL = draft.baseURL.trim()
     if (!baseURL) return []
@@ -527,7 +528,31 @@
   }
 
   function removeModel(index: number): void {
+    const removed = draft.models[index]
+    // Only this button removes a model on purpose; the id is remembered so the
+    // save below does not put it back.
+    if (removed && removed.id.trim()) removedModelIds.add(removed.id.trim())
     draft.models = draft.models.filter((_, i) => i !== index)
+  }
+
+  /** Rows removed on purpose in this editing session. */
+  const removedModelIds = new SvelteSet<string>()
+
+  /**
+   * The list a save writes.
+   *
+   * The editor submits its whole form, so a draft seeded before a model was
+   * added elsewhere would write that model away: two saved models became one,
+   * and the picker kept offering the one that vanished. The provider is re-read
+   * here and everything it already holds is kept, except rows the user removed
+   * with the remove button.
+   */
+  async function modelsToSave(submitted: ProviderModelDraft[]): Promise<ProviderModelDraft[]> {
+    if (!draft.id) return submitted
+    await baseUrlProviderStore.load().catch(() => undefined)
+    const latest = baseUrlProviderStore.providers.find((candidate) => candidate.id === draft.id)
+    const savedModels = latest?.models ?? provider?.models ?? []
+    return mergeSavedProviderModels(submitted, savedModels, removedModelIds)
   }
 
   function parseHeaders(value: string): Record<string, string> | undefined {
@@ -545,7 +570,7 @@
     return Object.keys(headers).length > 0 ? headers : undefined
   }
 
-  function buildModels(): Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }> {
+  function buildModels(): ProviderModelDraft[] {
     return draft.models.map((model) => {
       const id = model.id.trim() || model.name.trim()
       if (!id) throw new Error('Every model needs an ID or name.')
@@ -582,7 +607,7 @@
     submitting = true
     try {
       const headers = parseHeaders(draft.headers)
-      const models = await resolveModelsToSave(headers)
+      const models = await modelsToSave(await resolveModelsToSave(headers))
       const currentHarnessIds = baseUrlProviderStore.providers
         .filter((candidate) => candidate.id === draft.id)
         .map((candidate) => candidate.harnessId)
