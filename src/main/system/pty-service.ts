@@ -1094,7 +1094,15 @@ export class PtyService {
     return this.sessions.has(id)
   }
 
-  destroyAll(): void {
+  /**
+   * End every live session, and wait for the processes to be gone.
+   *
+   * Quit awaits this: the stop is a hangup, then a grace period, then a kill, so
+   * a caller that merely starts it and exits leaves a server behind on its port
+   * (which is how an earlier llama.cpp server outlived the app). Sessions are
+   * stopped in parallel, so the wait is one grace period, not one per session.
+   */
+  async destroyAll(): Promise<void> {
     this.stopped = true
     for (const pending of this.pendingStarts.values()) pending.cancelled = true
     this.pendingStarts.clear()
@@ -1102,9 +1110,7 @@ export class PtyService {
     this.commandOutput.clear()
     this.sender = null
     this.stopIdleWatchdog()
-    for (const id of [...this.sessions.keys()]) {
-      void this.destroy(id)
-    }
+    await Promise.allSettled([...this.sessions.keys()].map((id) => this.destroy(id)))
   }
 
   /**
