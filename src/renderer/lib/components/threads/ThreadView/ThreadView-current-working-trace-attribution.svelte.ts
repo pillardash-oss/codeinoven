@@ -32,6 +32,7 @@ import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { modelKey } from '$lib/model-keys'
+import { catalogModelEntry, providerModel, resolveModelProvider } from '$shared/provider-identity'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { toast } from 'svelte-sonner'
 import { reportError } from '$lib/stores/app-errors.svelte'
@@ -721,15 +722,13 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
 
   /** Display name of the thread's selected model, or null when none is set. */
   centeredModelName = $derived.by(() => {
-    if (!this.root.loadOlderMessages.settings.modelId) return null
-    const model =
-      this.allModels.find(
-        (m) =>
-          m.id === this.root.loadOlderMessages.settings.modelId &&
-          (!this.root.loadOlderMessages.settings.providerId ||
-            m.providerId === this.root.loadOlderMessages.settings.providerId)
-      ) ?? this.allModels.find((m) => m.id === this.root.loadOlderMessages.settings.modelId)
-    return model?.name ?? this.root.loadOlderMessages.settings.modelId
+    const settings = this.root.loadOlderMessages.settings
+    if (!settings.modelId) return null
+    const model = catalogModelEntry(this.allModels, {
+      providerId: settings.providerId,
+      modelId: settings.modelId
+    })
+    return model?.name ?? settings.modelId
   })
 
   /**
@@ -741,21 +740,23 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     const selection = this.liveWorkingSelection ?? this.root.loadOlderMessages.settings
     const modelId = selection.modelId
     const baseModelId = fastBaseModelId(modelId)
+    // The provider is resolved once, by harness and id, and the model is then
+    // read from that provider: picking either by model id alone answered with
+    // another provider's name and mark when one model is offered by several.
+    const provider = resolveModelProvider(this.providers, {
+      providerId: selection.providerId,
+      harnessId: selection.harnessId,
+      modelId
+    })
     const model =
-      this.allModels.find(
-        (candidate) => candidate.id === modelId && candidate.providerId === selection.providerId
-      ) ??
-      this.allModels.find(
-        (candidate) => candidate.id === baseModelId && candidate.providerId === selection.providerId
-      ) ??
-      this.allModels.find((candidate) => candidate.id === modelId) ??
-      this.allModels.find((candidate) => candidate.id === baseModelId)
+      providerModel(provider, modelId) ??
+      providerModel(provider, baseModelId) ??
+      catalogModelEntry(this.allModels, { providerId: selection.providerId, modelId }) ??
+      catalogModelEntry(this.allModels, {
+        providerId: selection.providerId,
+        modelId: baseModelId
+      })
     const thinkingPresets = model?.thinkingPresets ?? []
-    const provider =
-      this.providers.find(
-        (candidate) =>
-          candidate.harnessId === selection.harnessId && candidate.id === selection.providerId
-      ) ?? this.providers.find((candidate) => candidate.id === selection.providerId)
 
     return {
       modelLabel: modelId

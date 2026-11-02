@@ -16,6 +16,7 @@
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
   import ModelPickerVendorIcons from '$lib/components/shared/ModelPickerVendorIcons.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { resolveModelProvider } from '$shared/provider-identity'
   import { browserTabMuteLabel } from '$lib/stores/browser-tab-status'
   import {
     browserTabLabel,
@@ -103,7 +104,11 @@
     // custom base-URL one) still resolves, because the mark is picked by id first.
     const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
     const providerName =
-      providers.find((provider) => provider.id === providerId)?.name ?? providerId
+      resolveModelProvider(providers, {
+        providerId,
+        harnessId,
+        modelId: thread.settings?.modelId
+      })?.name ?? providerId
     return { harnessId, providerId, providerName }
   })
   const groups = $derived(globalBrowser.groups)

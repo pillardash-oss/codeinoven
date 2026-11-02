@@ -1,4 +1,5 @@
 import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
+import { resolveModelProvider } from '$shared/provider-identity'
 import type {
   AgentMessage,
   AgentPart,
@@ -366,11 +367,13 @@ export function catalogModelLabel(
     models.find((m) => modelId.endsWith(`/${m.id}`))
   return model?.name ?? modelId
 }
-
 /** Display name of the provider that runs this worker, when the catalog has it. */
 export function catalogProviderName(
   activity: AgentSubagentActivity,
   providers: ProviderCatalog[]
 ): string | undefined {
-  return providers.find((p) => p.id === activity.providerId)?.name ?? undefined
+  return resolveModelProvider(providers, {
+    providerId: activity.providerId,
+    modelId: activity.modelId
+  })?.name
 }
