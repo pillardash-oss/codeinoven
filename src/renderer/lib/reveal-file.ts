@@ -82,11 +82,19 @@ function insideRoot(root: string, path: string): boolean {
   return target === normalizedRoot || target.startsWith(`${normalizedRoot}/`)
 }
 
+/**
+ * Reveal one entry in the project tree and open it.
+ *
+ * `view` is the caller's own choice: a line citation needs the source editor to
+ * place a caret, and an annotation needs the annotator. Everything else passes
+ * nothing and gets the file kind's own default, which is what makes a Markdown
+ * link open ready to annotate instead of as raw text.
+ */
 async function revealEntry(
   projectId: string,
   entry: ProjectFileEntry,
   focusLine?: number,
-  view: ProjectFileView = 'source'
+  view?: ProjectFileView
 ): Promise<void> {
   if (entry.kind === 'file') {
     await projectFilesWorkspace.revealFile(projectId, entry.path)
@@ -187,7 +195,7 @@ export async function openProjectFileFromAbsolutePath(
   const entry = await exactEntry(projectId, relativePath)
   if (!entry) return false
   await ensureProjectFilesReady(projectId)
-  await revealEntry(projectId, entry, focusLine)
+  await revealEntry(projectId, entry, focusLine, focusLine === undefined ? undefined : 'source')
   return true
 }
 
@@ -356,7 +364,10 @@ export async function revealCitationFile(
   const relativePath = relativeProjectPath(projectPath, targetPath)
   const exact = await exactEntry(projectId, relativePath)
   if (exact) {
-    await revealEntry(projectId, exact, focusLine)
+    // A citation that names a line is a citation of source code, so the editor
+    // is what has to open and put its caret there. A plain document link opens
+    // the way that document always opens.
+    await revealEntry(projectId, exact, focusLine, focusLine === undefined ? undefined : 'source')
     return
   }
   // An absolute path the tree could not resolve still exists on disk: reveal it
