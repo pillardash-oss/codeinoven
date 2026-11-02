@@ -2,17 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const invoke = vi.hoisted(() => vi.fn())
 const subscribe = vi.hoisted(() => vi.fn())
+/**
+ * The assistant store the panel reads its own rows from, held hoisted so a test
+ * can hand it a missed fire or a parked unattended run. The panel imports it
+ * directly, and a per-test module reset would otherwise hand the assertion a
+ * different object than the one the store talks to.
+ */
+const assistantStore = vi.hoisted(() => ({
+  missedRuns: [] as unknown[],
+  recentBackgroundRuns: [] as unknown[],
+  spaceColor: null as string | null,
+  assistants: [] as unknown[],
+  dismissBackgroundRun: vi.fn()
+}))
 
 vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
-vi.mock('$lib/stores/assistants.svelte', () => ({
-  assistants: {
-    missedRuns: [],
-    recentBackgroundRuns: [],
-    spaceColor: null,
-    assistants: [],
-    dismissBackgroundRun: vi.fn()
-  }
-}))
+vi.mock('$lib/stores/assistants.svelte', () => ({ assistants: assistantStore }))
 
 import { APP_SLUG } from '$shared/brand'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
@@ -74,6 +79,8 @@ beforeEach(async () => {
   invoke.mockReset()
   invoke.mockResolvedValue(undefined)
   vi.resetModules()
+  assistantStore.missedRuns = []
+  assistantStore.recentBackgroundRuns = []
   const { notificationPanelState } = await import('$lib/stores/notification-panel.svelte')
   panel = notificationPanelState
 })
@@ -478,5 +485,72 @@ describe('routing a temporary chat notification', () => {
     expect(entry && panel.accentColor(entry)).toBe('var(--color-danger)')
     expect(panel.hasTemporaryChat).toBe(false)
     expect(panel.hasError).toBe(true)
+  })
+})
+
+/**
+ * The view rail is the one indicator on screen on every page, so what it reports
+ * has to come from the durable notices the bell holds, not only from the
+ * renderer's bounded thread slice. These cases pin the family split and the
+ * assistant rows the assistant store owns.
+ */
+describe('attention summary for the view rail', () => {
+  it('reports the parked notices of its own family only', () => {
+    panel.add(payload('project-gate', { kind: 'attention', projectId: 'project-1' }))
+    panel.add(
+      payload('chat-gate', { kind: 'attention', source: 'chat', projectId: INBOX_PROJECT_ID })
+    )
+    panel.add(
+      payload('assistant-gate', {
+        kind: 'attention',
+        source: 'assistant',
+        projectId: ASSISTANT_SPACE_ID
+      })
+    )
+    expect(panel.attentionRailSummary('projects')).toEqual({
+      count: 1,
+      label: '1 project thread needs attention'
+    })
+    expect(panel.attentionRailSummary('chats')).toEqual({
+      count: 1,
+      label: '1 chat needs attention'
+    })
+    expect(panel.attentionRailSummary('assistant')).toEqual({
+      count: 1,
+      label: '1 assistant run needs attention'
+    })
+  })
+
+  it('reports nothing for a quiet family', () => {
+    panel.add(payload('done', { kind: 'completed' }))
+    expect(panel.attentionRailSummary('projects')).toBeNull()
+    expect(panel.attentionRailSummary('assistant')).toBeNull()
+  })
+
+  it('counts a missed scheduled fire and a parked unattended run as assistant attention', () => {
+    assistantStore.missedRuns = [{ threadId: 'missed-1', assistantId: 'a1', dueAt: 10 }]
+    assistantStore.recentBackgroundRuns = [
+      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: undefined }
+    ]
+    expect(panel.attentionRailSummary('assistant')).toEqual({
+      count: 2,
+      label: '2 assistant runs need attention'
+    })
+    expect(panel.attentionRailSummary('projects')).toBeNull()
+  })
+
+  it('never counts the same parked run twice: its own notice already stands for it', () => {
+    assistantStore.recentBackgroundRuns = [
+      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: undefined }
+    ]
+    panel.add(
+      payload('run-gate', {
+        kind: 'attention',
+        source: 'assistant',
+        projectId: ASSISTANT_SPACE_ID,
+        threadId: 'run-1'
+      })
+    )
+    expect(panel.attentionRailSummary('assistant')?.count).toBe(1)
   })
 })

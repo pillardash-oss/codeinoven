@@ -71,6 +71,19 @@ export interface UnreadRailSummary {
   colors: string[]
 }
 
+/**
+ * What one thread family has waiting on the user, as the view rail reports it.
+ *
+ * The count is deliberately the union of the durable notices the bell holds and
+ * the assistant rows the assistant store owns, never the renderer's bounded
+ * thread slice: a thread parked on a card must light its rail item whatever page
+ * the user is on, even after it has fallen out of the recent-thread window.
+ */
+export interface RailAttentionSummary {
+  count: number
+  label: string
+}
+
 const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotification['kind']> = {
   done: 'completed',
   attention: 'attention',
@@ -456,6 +469,40 @@ class NotificationPanelState {
       count,
       label: `${count} unread ${familyLabel}${count === 1 ? '' : 's'}`,
       colors
+    }
+  }
+
+  /**
+   * Everything waiting on the user inside one thread family, for its rail item.
+   *
+   * The rail used to read this from the in-memory thread list alone, and that
+   * list is a bounded recent slice per project: a thread parked on a permission,
+   * question or secret that fell outside the window wore no rail mark at all,
+   * while the bell listed it under Attention. The rail is the one indicator that
+   * is on screen on every page, so it reads the same durable notices the bell
+   * reads, plus the assistant rows (a missed scheduled fire, an unattended run
+   * still parked on a decision) that only the assistant store holds.
+   *
+   * A background run whose thread already raised a notice is excluded so one
+   * waiting run is never counted twice.
+   */
+  attentionRailSummary(family: 'projects' | 'chats' | 'assistant'): RailAttentionSummary | null {
+    let count = this._notifications.filter((notification) => {
+      if (notification.kind !== 'attention') return false
+      if (family === 'projects')
+        return !this.isChat(notification) && !this.isAssistant(notification)
+      if (family === 'chats') return this.isChat(notification)
+      return this.isAssistant(notification)
+    }).length
+    if (family === 'assistant') {
+      count += this.attentionMissedRuns.length + this.attentionBackgroundRuns.length
+    }
+    if (count === 0) return null
+    const noun =
+      family === 'projects' ? 'project thread' : family === 'chats' ? 'chat' : 'assistant run'
+    return {
+      count,
+      label: `${count} ${noun}${count === 1 ? '' : 's'} ${count === 1 ? 'needs' : 'need'} attention`
     }
   }
 
