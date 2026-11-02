@@ -2,6 +2,8 @@ import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
 import type { McpUtilityConfig, UtilityCredentialMetadata } from '../../lib/types'
 import { resolveEnvironmentReferences } from './utility-orchestration/utility-input'
 import { McpHttpError, RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
+import { purgeCorruptPackageInstall } from './mcp-scratch-recovery'
+import { Logger } from '../system/logger'
 
 /** The connection half of an MCP utility config, shared by the turn gateway and the connection test. */
 export type McpConnectionConfig = Pick<
@@ -60,9 +62,9 @@ export async function connectMcpServer(request: McpConnectionRequest): Promise<M
   }
   if (config.transport === 'stdio') {
     if (!config.command) throw new Error('stdio MCP command is not configured')
-    try {
-      return await StdioMcpClient.connect(
-        config.command,
+    const start = (): Promise<McpClient> =>
+      StdioMcpClient.connect(
+        config.command ?? '',
         config.args ?? [],
         {
           ...config.environment,
@@ -70,7 +72,28 @@ export async function connectMcpServer(request: McpConnectionRequest): Promise<M
         },
         clientOwner
       )
+    try {
+      return await start()
     } catch (error) {
+      // A package runner (bunx/npx) keeps its install in a temp directory and
+      // reuses it from its lockfile. A run that was killed while writing that
+      // tree leaves it half-materialized, and every later start then dies in the
+      // module loader over a package the lockfile claims is there. Clearing the
+      // broken tree and starting once more is the only recovery the runner
+      // offers; the second attempt reinstalls from the package cache.
+      const purged = await purgeCorruptPackageInstall(error)
+      if (purged.length > 0) {
+        Logger.info(
+          `Cleared a broken package install for ${config.command} and retried it:`,
+          purged.join(', ')
+        )
+        try {
+          return await start()
+        } catch (retryError) {
+          if (!owner) throw retryError
+          throw mcpStartupFailure(owner, environment, retryError)
+        }
+      }
       if (!owner) throw error
       throw mcpStartupFailure(owner, environment, error)
     }
