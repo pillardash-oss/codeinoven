@@ -309,6 +309,39 @@
     )
     return items
   }
+  /**
+   * Open one of the two project searches without a token under the cursor.
+   *
+   * The viewer menu asks for exactly the search a right-click on a word offers,
+   * but it has no word to seed the query with, so it starts empty and the
+   * modal's own input takes the focus.
+   */
+  export function searchProjectText(seed = ''): boolean {
+    return openSearch('grep', seed)
+  }
+  export function findProjectFile(seed = ''): boolean {
+    return openSearch('files', seed)
+  }
+  function openSearch(
+    next: 'grep' | 'files',
+    seed: string,
+    at: { x: number; y: number } = { x: 16, y: 80 }
+  ): boolean {
+    if (!active) return false
+    clearTimeout(hoverLeaveTimer)
+    anchor = at
+    mode = next
+    query = seed
+    selectedIndex = 0
+    results = []
+    truncated = false
+    hover = null
+    open = true
+    error = ''
+    scheduleSearch()
+    return true
+  }
+
   export function handle(
     action: 'definition' | 'references' | 'documentation' | 'hover' | 'grep' | 'files',
     token: IdeToken
@@ -319,15 +352,10 @@
       anchor = { x: token.x || 16, y: (token.y || 64) + 12 }
     }
     if (action === 'grep' || action === 'files') {
-      mode = action
-      query = action === 'grep' ? token.word : ''
-      selectedIndex = 0
-      results = []
-      hover = null
-      open = true
-      error = ''
-      scheduleSearch()
-      return true
+      return openSearch(action, action === 'grep' ? token.word : '', {
+        x: anchor.x,
+        y: anchor.y
+      })
     }
     if (action === 'hover' && (!capabilities?.hover || open || busy)) return false
     const id = ++sequence

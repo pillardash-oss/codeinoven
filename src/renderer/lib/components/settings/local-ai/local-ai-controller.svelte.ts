@@ -13,6 +13,7 @@ import {
   buildLlamaServerArgs,
   llamaCppPtyId,
   type LlamaCppBrewJobKind,
+  type LlamaCppLogStream,
   type LlamaCppProbeResult,
   type LlamaCppServerEntry
 } from '$shared/llama-cpp'
@@ -37,6 +38,9 @@ const PROBE_INTERVAL_MS = 2_000
 const PROBE_LIMIT = 900
 /** A card keeps the last lines of a failure, never the whole log, in its notice. */
 const FAILURE_TAIL_LINES = 6
+/** An adopted server is watched for as long as it runs, since nothing else tells
+ *  the app when it exits. */
+const ADOPTED_PROBE_MS = 5_000
 
 const ANSI_PATTERN = new RegExp(
   [
@@ -59,6 +63,11 @@ interface RunningHandle {
   probes: number
   /** True between a stop request and the PTY's exit event, so the exit is not a crash. */
   stopping: boolean
+  /** True when the server was already running and this page only found it, so
+   *  there is no PTY of ours behind it and stopping means ending its process. */
+  adopted: boolean
+  /** True when the row's log is read from its own file rather than a live PTY. */
+  following: boolean
   /** Partial last line, kept so a chunk boundary never splits a log line. */
   partial: string
 }
@@ -86,18 +95,24 @@ export class LocalAiController {
   /** Start a row, streaming its output into the card and polling for readiness. */
   async start(entry: LlamaCppServerEntry, executable: string): Promise<void> {
     if (this.handles.has(entry.id)) return
-    const args = buildLlamaServerArgs(entry)
+    const args = buildLlamaServerArgs(entry, await this.logPathOf(entry.id))
     if (args.length === 0) {
       this.setStatus(entry.id, 'failed')
       this.notice = { ...this.notice, [entry.id]: 'This server has no model to load' }
       return
     }
+    // A server that already answers on this address is adopted rather than
+    // started again: a row can outlive the renderer that launched it, and a
+    // second process on the same port only ends in a bind error.
+    if (await this.adoptIfServing(entry)) return
     const handle: RunningHandle = {
       entry,
       unsubscribe: [],
       timer: null,
       probes: 0,
       stopping: false,
+      adopted: false,
+      following: false,
       partial: ''
     }
     this.handles.set(entry.id, handle)
@@ -138,8 +153,22 @@ export class LocalAiController {
       if (this.statusOf(entry.id) === 'starting') this.scheduleProbe(entry)
       return
     }
-    const result = await invoke('llamaCpp:probe', entry.host, entry.port)
-    if (!result.ready) return
+    if (await this.adoptIfServing(entry)) return
+    // Nothing is answering, so show what the last run left in its log file
+    // instead of an empty terminal for a server this machine already ran.
+    await this.seedLog(entry.id)
+  }
+
+  /** Take over a server that is already answering, so the card can show it and
+   *  stop it. Returns whether there was one to adopt. */
+  private async adoptIfServing(entry: LlamaCppServerEntry): Promise<boolean> {
+    let result: LlamaCppProbeResult
+    try {
+      result = await invoke('llamaCpp:probe', entry.host, entry.port)
+    } catch {
+      return false
+    }
+    if (!result.ready || this.handles.has(entry.id)) return false
     const ptyId = llamaCppPtyId(entry.id)
     const handle: RunningHandle = {
       entry,
@@ -147,6 +176,8 @@ export class LocalAiController {
       timer: null,
       probes: 0,
       stopping: false,
+      adopted: true,
+      following: false,
       partial: ''
     }
     this.handles.set(entry.id, handle)
@@ -158,13 +189,94 @@ export class LocalAiController {
     )
     this.setStatus(entry.id, 'running')
     this.setLoadedModel(entry.id, result.models[0] ?? '')
+    this.notice = { ...this.notice, [entry.id]: '' }
+    // The PTY that carried this server's output may be gone with the app
+    // instance that launched it; its own log file is what streams instead.
+    await this.followLog(entry)
+    this.scheduleAdoptedProbe(entry)
+    return true
+  }
+
+  /** No PTY exit event will come for an adopted server, so a slow probe is what
+   *  notices that it died. */
+  private scheduleAdoptedProbe(entry: LlamaCppServerEntry): void {
+    const handle = this.handles.get(entry.id)
+    if (!handle || handle.stopping) return
+    handle.timer = setTimeout(() => void this.probeAdopted(entry), ADOPTED_PROBE_MS)
+  }
+
+  private async probeAdopted(entry: LlamaCppServerEntry): Promise<void> {
+    if (!this.handles.has(entry.id)) return
+    let ready: boolean
+    try {
+      ready = (await invoke('llamaCpp:probe', entry.host, entry.port)).ready
+    } catch {
+      ready = false
+    }
+    if (!this.handles.has(entry.id)) return
+    if (ready) {
+      this.scheduleAdoptedProbe(entry)
+      return
+    }
+    this.stopHandle(entry.id)
+    this.setStatus(entry.id, 'failed')
+    this.setLoadedModel(entry.id, '')
+    this.notice = { ...this.notice, [entry.id]: 'The server stopped answering on its port' }
+  }
+
+  /** The log file a row's server writes, empty when main refuses the id. */
+  private async logPathOf(entryId: string): Promise<string | undefined> {
+    try {
+      return await invoke('llamaCpp:logPath', entryId)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Show what a row's log file already holds, without following it. */
+  private async seedLog(entryId: string): Promise<void> {
+    if ((this.logs[entryId] ?? []).length > 0) return
+    try {
+      const lines = await invoke('llamaCpp:logTail', entryId)
+      if (lines.length === 0 || this.handles.has(entryId)) return
+      this.logs = { ...this.logs, [entryId]: lines.slice(-LOG_LINE_LIMIT) }
+    } catch {
+      // A row with no log file keeps the empty state.
+    }
+  }
+
+  /**
+   * Ask main where this row's log comes from. A live PTY keeps streaming on its
+   * own channels; otherwise the server's log file is followed, which is the only
+   * source left for a process the app did not start in this instance.
+   */
+  private async followLog(entry: LlamaCppServerEntry): Promise<void> {
+    const handle = this.handles.get(entry.id)
+    if (!handle) return
+    let stream: LlamaCppLogStream
+    try {
+      stream = await invoke('llamaCpp:logStream', entry.id, true)
+    } catch {
+      return
+    }
+    if (!this.handles.has(entry.id)) return
+    if (stream.lines.length > 0 && (this.logs[entry.id] ?? []).length === 0) {
+      this.logs = { ...this.logs, [entry.id]: stream.lines.slice(-LOG_LINE_LIMIT) }
+    }
+    handle.following = stream.source === 'file'
   }
 
   /** Stop a server and keep its row and its log. */
   async stop(entryId: string): Promise<void> {
     const handle = this.handles.get(entryId)
     if (handle) handle.stopping = true
-    await invoke('pty:destroy', llamaCppPtyId(entryId))
+    if (handle?.adopted) {
+      // This server has no PTY of ours to destroy (it outlived the app that
+      // launched it), so the process that holds the port is what stops it.
+      await invoke('llamaCpp:stopServer', handle.entry.port)
+    } else {
+      await invoke('pty:destroy', llamaCppPtyId(entryId))
+    }
     this.stopHandle(entryId)
     this.setStatus(entryId, 'stopped')
     this.setLoadedModel(entryId, '')
@@ -188,8 +300,12 @@ export class LocalAiController {
   dispose(): void {
     for (const entryId of [...this.handles.keys()]) {
       const handle = this.handles.get(entryId)
-      if (handle) handle.stopping = true
-      void invoke('pty:destroy', llamaCppPtyId(entryId))
+      // An adopted server was already running when this page found it, so
+      // leaving the page is not a reason to stop it.
+      if (handle && !handle.adopted) {
+        handle.stopping = true
+        void invoke('pty:destroy', llamaCppPtyId(entryId))
+      }
       this.stopHandle(entryId)
       this.setStatus(entryId, 'stopped')
     }
@@ -212,6 +328,7 @@ export class LocalAiController {
     if (!handle) return
     const stopping = handle.stopping
     const tail = this.failureTail(entryId)
+    const busy = this.portBusyNotice(handle.entry)
     this.stopHandle(entryId)
     if (stopping) {
       this.setStatus(entryId, 'stopped')
@@ -222,8 +339,17 @@ export class LocalAiController {
     const exitCode = typeof code === 'number' ? code : 0
     this.notice = {
       ...this.notice,
-      [entryId]: tail || `The server exited with code ${exitCode}`
+      [entryId]: busy || tail || `The server exited with code ${exitCode}`
     }
+  }
+
+  /** A failed bind is not a llama.cpp problem: the address is already taken, and
+   *  the log line saying so is cryptic next to the raw exit code. */
+  private portBusyNotice(entry: LlamaCppServerEntry): string {
+    const lines = this.logs[entry.id] ?? []
+    const busy = lines.some((line) => /couldn't bind HTTP server socket/iu.test(line))
+    if (!busy) return ''
+    return `Port ${entry.port} is already in use. Stop whatever listens there, or give this server another port.`
   }
 
   private failureTail(entryId: string): string {
@@ -271,6 +397,9 @@ export class LocalAiController {
   private stopHandle(entryId: string): void {
     const handle = this.handles.get(entryId)
     if (!handle) return
+    // The file watcher lives in main, so it is closed explicitly instead of
+    // waiting for the unsubscribe below to be noticed.
+    if (handle.following) void invoke('llamaCpp:logStream', entryId, false)
     for (const unsubscribe of handle.unsubscribe) unsubscribe()
     if (handle.timer) clearTimeout(handle.timer)
     this.handles.delete(entryId)

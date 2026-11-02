@@ -1089,6 +1089,11 @@ export class PtyService {
     await stopPtyProcesses(session.process.pid)
   }
 
+  /** Whether a PTY under this id is still alive, i.e. its output still streams. */
+  hasSession(id: string): boolean {
+    return this.sessions.has(id)
+  }
+
   destroyAll(): void {
     this.stopped = true
     for (const pending of this.pendingStarts.values()) pending.cancelled = true

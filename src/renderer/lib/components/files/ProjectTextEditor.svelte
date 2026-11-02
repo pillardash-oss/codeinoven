@@ -83,6 +83,15 @@
   let handledReplaceNonce = 0
   let handledEditNonce = 0
 
+  /** Project-wide searches live in the IDE tools this editor mounts, so a
+   *  toolbar that has no token under the cursor reaches them through here. */
+  export function searchProjectText(): boolean {
+    return ideTools?.searchProjectText() ?? false
+  }
+  export function findProjectFile(): boolean {
+    return ideTools?.findProjectFile() ?? false
+  }
+
   onMount(() => {
     const hostElement = host
     if (!hostElement) return

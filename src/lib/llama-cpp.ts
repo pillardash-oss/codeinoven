@@ -189,15 +189,63 @@ export function tokenizeLlamaCppFlags(value: string): string[] {
 }
 
 /**
+ * The model id llama-server advertises in `/v1/models`, and the id a custom
+ * provider must store to be selectable as `provider/model`.
+ *
+ * Without an alias llama.cpp names the model after the absolute `-m` path, so a
+ * provider saved from that list carries an id no selection can address, and the
+ * same model is called one thing on the card and another in the picker. The
+ * alias is the label the app already shows, reduced to characters a model id can
+ * hold.
+ */
+export function llamaCppModelAlias(entry: LlamaCppServerEntry): string {
+  const label = llamaCppModelLabel(entry)
+  const alias = label
+    .replace(/[^A-Za-z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 96)
+  return alias || 'llama.cpp'
+}
+
+/**
+ * The id to record for a model an OpenAI-compatible endpoint reports.
+ *
+ * llama.cpp answers `/v1/models` with the absolute `.gguf` path it was started
+ * with. That path is not a model id: a selection is written as
+ * `provider/model`, so it would carry the user's home directory into every
+ * request. A GGUF path is reduced to its file name; every other id is kept as
+ * served, since `org/model` and `org/model@q4` are real ids elsewhere.
+ */
+export function llamaCppAddressableModelId(id: string): string {
+  const absolute = id.startsWith('/') || /^[a-zA-Z]:[\\/]/u.test(id)
+  if (!absolute || !/\.gguf$/iu.test(id)) return id
+  const segments = id.split(/[\\/]/u)
+  return segments[segments.length - 1] || id
+}
+
+/**
  * The argv `llama-server` is launched with. The model selector comes first so
  * the generated command reads the same as the one the user would type.
+ *
+ * `logFile` is where the app asks the server to write its log as well, so a
+ * server that outlives the app still has a log to read afterwards. It is left
+ * out of the copyable command: that path belongs to the app, not the user.
  */
-export function buildLlamaServerArgs(entry: LlamaCppServerEntry): string[] {
+export function buildLlamaServerArgs(entry: LlamaCppServerEntry, logFile?: string): string[] {
   const source = llamaCppModelSource(entry)
   if (!source) return []
   const args = source.kind === 'local' ? ['-m', source.path] : huggingFaceArgs(source.reference)
   args.push('--host', entry.host.trim(), '--port', String(entry.port))
-  args.push(...tokenizeLlamaCppFlags(entry.extraFlags))
+  const flags = tokenizeLlamaCppFlags(entry.extraFlags)
+  // An alias the user set in the extra flags wins; the generated one only keeps
+  // the served id addressable when they gave none.
+  if (!flags.some((flag) => flag === '-a' || flag.startsWith('--alias'))) {
+    args.push('--alias', llamaCppModelAlias(entry))
+  }
+  if (logFile && !flags.some((flag) => flag.startsWith('--log-file'))) {
+    args.push('--log-file', logFile)
+  }
+  args.push(...flags)
   return args
 }
 
@@ -373,6 +421,19 @@ export interface LlamaCppRuntimeStatus {
   latestVersion: string
   /** One sentence the card shows under the status. */
   detail: string
+}
+
+/**
+ * Where a row's log comes from, and what the file already holds.
+ *
+ * `pty` means the process is still attached to the terminal that started it, so
+ * its output arrives over the PTY channels. `file` means the row reads the
+ * server's own `--log-file` instead, which is all that is left once the app
+ * instance that launched it is gone.
+ */
+export interface LlamaCppLogStream {
+  source: 'pty' | 'file'
+  lines: string[]
 }
 
 /** The readiness answer for a started server. */

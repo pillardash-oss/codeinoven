@@ -197,6 +197,19 @@ material way, and the difference is deliberate.
   the browser that asked, beside the page the extension is acting on, validated by
   the same rule a link click goes through. Only a `type: 'popup'` window on the
   extension's own page is the popout the rail hosts.
+- **A launch from an extension's own page opens a tab.** Electron answers no
+  `chrome.tabs.create` in a way that reaches a tab strip, so a password manager's
+  "launch" row, which is exactly that call for the address the entry holds, opened
+  nothing at all. The app owns the tabs, so `compat/cio-page-tabs.js` replaces
+  `tabs.create` on both roots in the page's own world, the ask travels the channel
+  `chrome.runtime.openOptionsPage` already uses (`browser-extension-page-tabs.ts`),
+  and `BrowserServiceExtensionPages.openTabFromExtensionPage` validates the address
+  by the rule a link click is held to and opens the page beside the tab that surface
+  acts on, in that page's jar. The answer is the new tab's `WebContents` id, which is
+  the id this runtime's `tabs` API answers with, so a caller that watches the tab it
+  opened finds it again. The worker's half is wrapped the same way in the
+  compatibility preamble, on the `open-tab` route `chrome.windows.create` already
+  used.
 - **An extension's own popup is told which tab it is acting on.** The app hosts an
   action's popup in a rail popup and gives it the keyboard on first show, so the
   runtime answered the page's `chrome.tabs.query({ active: true })` with the popup's

@@ -32,6 +32,7 @@ export interface ExtensionPagesHost {
   readonly popupWindows: BrowserService['popupWindows']
   readonly reportExtensionPageTabs: BrowserService['reportExtensionPageTabs']
   readonly sessionForProject: BrowserService['sessionForProject']
+  readonly sidePanels: BrowserService['sidePanels']
   readonly tabForContents: BrowserService['tabForContents']
   readonly tabs: BrowserService['tabs']
   readonly validateTabNavigationUrl: BrowserService['validateTabNavigationUrl']
@@ -40,6 +41,67 @@ export interface ExtensionPagesHost {
 
 export class BrowserServiceExtensionPages {
   constructor(private readonly host: ExtensionPagesHost) {}
+
+  /**
+   * Open a web page because an extension's own page called `chrome.tabs.create`,
+   * and answer with the id of the tab that page now lives in.
+   *
+   * There is no second window: the tab strip is the app's, so a launch from a
+   * password manager's popup becomes a tab beside the page that popup was acting
+   * on, in that page's jar, held to the same address rule a link click is. The id
+   * returned is the new page's `WebContents` id, which is the id this runtime's
+   * own `chrome.tabs` answers with, so the caller's own bookkeeping works against
+   * the tab it opened.
+   *
+   * Null for a request with nothing to open, an address the browser will not
+   * navigate to, or a surface that no longer has a tab to open beside   in which
+   * case the page's call answers with no tab rather than a promise that hangs.
+   *
+   * `active` is accepted for the shape `chrome.tabs.create` documents, and the tab
+   * is revealed either way: the strip is the one surface this browser has, and a
+   * tab the user was not shown is a page they cannot reach.
+   */
+  openTabFromExtensionPage(
+    contentsId: number,
+    request: { url: string; active: boolean }
+  ): number | null {
+    const owner = this.ownerForExtensionSurface(contentsId)
+    if (!owner) {
+      Logger.dev('An extension page asked for a tab with no page to open it beside')
+      return null
+    }
+    try {
+      const url = this.host.validateTabNavigationUrl(owner.projectId, owner.boxId, request.url)
+      return this.host.openNewTabFor(owner, url).id
+    } catch (error: unknown) {
+      Logger.dev('An extension page asked for a tab on an address it may not open:', {
+        url: request.url,
+        error
+      })
+      return null
+    }
+  }
+
+  /**
+   * The tab an extension's own document acts on.
+   *
+   * A document the app hosts for an extension   an action popup in the rail, a
+   * side panel, an extension page opened as a tab   stands beside one page of one
+   * browser and is that page's to act on, so the request a document makes lands
+   * where the document came from. Null when the surface is gone and its tab with
+   * it, which is a request with nowhere to go.
+   */
+  ownerForExtensionSurface(contentsId: number): BrowserPageOwner | null {
+    const record = this.host.popupWindows.recordForContents(contentsId)
+    const tabId =
+      record?.tabId ??
+      this.host.sidePanels.tabIdForContents(contentsId) ??
+      this.host.tabForContents(contentsId)?.id
+    if (!tabId) return null
+    const tab = this.host.tabs.get(tabId)
+    if (!tab) return null
+    return { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId }
+  }
 
   /** Resolve a worker window request and route it to the surface it belongs on. */
   /**
