@@ -37,6 +37,16 @@ export class McpOAuthController {
   busy = $state(false)
   /** The latest `progress` message while a browser flow runs; `null` otherwise. */
   progress = $state<string | null>(null)
+  /**
+   * The authorization page the running flow opened, once it exists.
+   *
+   * The address only exists after the flow has discovered the authorization
+   * server and registered this app with it, so there is nothing a surface could
+   * offer before the user starts signing in. Once it is here, a surface shows it
+   * as a real link: the app's link context menu copies it and hands it to any
+   * browser, which is what a runner that cannot open the built-in one needs.
+   */
+  authUrl = $state<string | null>(null)
   error = $state<string | null>(null)
   clientId = $state('')
   clientSecret = $state('')
@@ -81,6 +91,7 @@ export class McpOAuthController {
     if (!utilityId || this.busy) return
     this.busy = true
     this.error = null
+    this.authUrl = null
     this.progress = 'Starting authorization…'
     if (this.status) this.status = { ...this.status, state: 'authorizing' }
     try {
@@ -104,6 +115,7 @@ export class McpOAuthController {
   async cancel(): Promise<void> {
     const utilityId = this.#utilityId
     if (!utilityId) return
+    this.authUrl = null
     try {
       const status = await invoke('utilities:cancelMcpOAuth', utilityId)
       if (this.#utilityId !== utilityId) return
@@ -166,6 +178,9 @@ export class McpOAuthController {
     if (payload.utilityId !== this.#utilityId) return
     switch (payload.kind) {
       case 'authorize':
+        // Recorded before the page is opened, so the address survives a browser
+        // the user closed, blocked, or would rather replace with their own.
+        this.authUrl = payload.authUrl
         void this.#openAuthPage(payload.authUrl)
         break
       case 'progress':
@@ -175,6 +190,7 @@ export class McpOAuthController {
         this.status = payload.status
         this.busy = false
         this.progress = null
+        this.authUrl = null
         this.error = null
         break
       case 'failed':

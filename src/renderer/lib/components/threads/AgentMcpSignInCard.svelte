@@ -13,6 +13,7 @@
   import { dismissSlide, foldSlide, rowArrive } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
   import { McpOAuthController } from '../settings/utility-editor-modal-mcp-oauth.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { MCP_SIGN_IN_COMPLETED_ANSWER } from '$shared/mcp-sign-in'
   import type { PendingAgentQuestionRequest } from '$shared/types'
@@ -137,6 +138,20 @@
     working = false
   }
 
+  /**
+   * Open the authorization page again, where the user's link routing says.
+   *
+   * The anchor exists so the address can be read, copied and handed to another
+   * browser; a plain click still follows the app's own link routing instead of
+   * navigating this window away from the thread.
+   */
+  function openAuthPage(event: MouseEvent): void {
+    const url = oauth.authUrl
+    if (!url) return
+    event.preventDefault()
+    void openInBrowser(url)
+  }
+
   async function decline(): Promise<void> {
     if (working) return
     working = true
@@ -215,6 +230,23 @@
 
         {#if progress}
           <p class="text-xs text-muted" aria-live="polite">{progress}</p>
+        {/if}
+
+        {#if oauth.authUrl}
+          <!-- The address only exists once the flow has registered this app, so
+             it appears here rather than on the button. As a real link it carries
+             the app's link menu: Right-click copies it or hands it to any browser,
+             which is the escape hatch for a browser that never opened. -->
+          <p class="text-xs text-muted">
+            Waiting for the browser to finish. If the page did not open, right-click
+            <a
+              href={oauth.authUrl}
+              data-external-url={oauth.authUrl}
+              title="Right-click to copy this link, or open it in another browser"
+              class="text-foreground underline decoration-dimmed underline-offset-2 hover:decoration-foreground"
+              onclick={openAuthPage}>the authorization page</a
+            > to copy its link or open it somewhere else.
+          </p>
         {/if}
 
         {#if failure}
