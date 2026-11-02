@@ -8,7 +8,10 @@ import type {
 } from '../../../lib/types'
 import { PI_THINKING_PRESETS } from '../../../lib/pi-thinking-presets'
 import { buildProcessEnvironmentAsync } from '../cli-environment'
-import { piNativeProviderIds } from '../../agents/native-provider-config-service'
+import {
+  piNativeProviderIds,
+  piNativeProviderModelSignature
+} from '../../agents/native-provider-config-service'
 import type { PiAuthConfigService } from '../../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../../providers/base-url-provider-service'
 import { apiKeyEnvVarFor } from '../../providers/base-url-provider-service'
@@ -209,7 +212,8 @@ export class PiModelCatalog {
     return catalogs.filter((catalog) => connected.has(catalog.id))
   }
 
-  /** Cheap staleness signature of the connected-provider set; see the interface contract. */
+  /** Cheap staleness signature of the connected-provider set and its models; see
+   *  the interface contract. */
   async providerCatalogFingerprint(): Promise<string | null> {
     const connected = await this.connectedProviderIds()
     if (connected === null) return null
@@ -220,7 +224,14 @@ export class PiModelCatalog {
       .map((provider) => `${provider.id}=${provider.models.map((model) => model.id).join(',')}`)
       .sort()
       .join('|')
-    return JSON.stringify([[...connected].sort(), overlayModels])
+    // Providers configured in the account's own `models.json` are not in the
+    // overlay above, so their model lists are read from that file: a model added
+    // or removed there must invalidate the cached catalog, or the picker keeps
+    // offering a model the provider no longer serves.
+    const nativeModels = await piNativeProviderModelSignature(
+      this.host.agentDirectory ? join(this.host.agentDirectory, 'models.json') : undefined
+    ).catch(() => '')
+    return JSON.stringify([[...connected].sort(), overlayModels, nativeModels])
   }
 
   /**

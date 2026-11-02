@@ -494,6 +494,17 @@ export class ThreadManager {
   }
 
   /**
+   * A thread by id, whatever project it lives in.
+   *
+   * A fork records the id of the thread it came from, and that thread may sit in
+   * another project (a chat continued inside a project, an assistant task handed
+   * off). Resolving it through the worker keeps the seek off the main thread.
+   */
+  async getThreadById(threadId: string): Promise<Thread | null> {
+    return this.threadRepo.getViaWorker(threadId)
+  }
+
+  /**
    * Thread list for one project, read on the database worker for the same
    * reason as `getThread`: the sidebar and the git flows ask for it whenever a
    * scope board opens, and a stalled read there freezes the whole app.

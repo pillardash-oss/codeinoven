@@ -25,7 +25,13 @@ import {
   subagentActivityFromPayload,
   subagentTimeRange
 } from './pi-subagent'
-import { mapPiCost, mapPiNormalizedUsage, mapPiUsage } from './pi-usage'
+import {
+  mapPiCost,
+  mapPiNormalizedUsage,
+  mapPiUsage,
+  piCatalogCostProvenance,
+  piCostIsProviderReported
+} from './pi-usage'
 import type { PiStreamContext, PiTurnState } from './pi-stream-types'
 import { errorText, messageTimestamp, numberValue, record, stringValue } from './pi-values'
 import { isTaskReconcileNudge, reconcileAnswerMessageId } from './pi-task-reconcile'
@@ -917,6 +923,10 @@ function buildAssistantMessage(
   const content = Array.isArray(message['content']) ? message['content'] : []
   const messageId = `pi-${sessionId}-${turnState.turnIndex}`
   const now = messageTimestamp(message)
+  const modelId = stringValue(message['model'])
+  // The concrete model that answered, which a provider behind a virtual model
+  // names while the request carried a different id.
+  const responseModel = stringValue(message['responseModel'])
   const parts: AgentPart[] = []
   const events: SessionAgentEvent[] = []
   content.forEach((blockValue, index) => {
@@ -929,6 +939,7 @@ function buildAssistantMessage(
   const usage = accumulateTurnUsage(turnState, mapPiUsage(message['usage']))
   const normalizedUsage = mapPiNormalizedUsage(message['usage'])
   const cost = mapPiCost(message['usage'])
+  const billedCost = piCostIsProviderReported(message['usage'])
   const rawError = errorText(message)
   const continuableError =
     message['stopReason'] === 'error' &&
@@ -944,11 +955,19 @@ function buildAssistantMessage(
     parts,
     createdAt: now,
     harnessId: 'pi',
-    modelId: stringValue(message['model']),
+    modelId,
     providerId: stringValue(message['provider']),
+    // Pricing reads the model the provider actually ran; `modelId` keeps the
+    // id the turn was started with, so the transcript shows what the user chose.
+    ...(responseModel && responseModel !== modelId ? { pricingModelId: responseModel } : {}),
     ...(usage ? { tokens: usage } : {}),
     ...(normalizedUsage ? { normalizedUsage } : {}),
     ...(cost !== undefined ? { cost } : {}),
+    // Pi prices a response itself when the provider reports no charge, so the
+    // figure has to say it came from a catalog rather than a bill.
+    ...(cost !== undefined && !billedCost
+      ? { costProvenance: piCatalogCostProvenance(responseModel ?? modelId, now) }
+      : {}),
     // A continuable finish-reason flake must not mark the mirrored message as
     // failed: the driver silently re-prompts and the turn keeps going.
     ...(failed ? { error: rawError } : {})

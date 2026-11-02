@@ -663,11 +663,47 @@ export function agentScrollScript(request: {
 }
 
 /**
+ * Longest one in-page wait may hold, in milliseconds.
+ *
+ * A wait used to stop at 30 s, which is shorter than the pause before a support
+ * reply: an agent polling a live conversation had to spend a model step per
+ * half minute and usually gave up instead. Two minutes keeps a poll loop cheap
+ * and still finishes well inside the engine's five-minute silence watchdog, so
+ * a patient wait can never be mistaken for a dead session.
+ */
+export const BROWSER_WAIT_MAX_TIMEOUT_MS = 120_000
+
+/** How often a `changed` wait re-reads the page: text comparison is the cost. */
+const CHANGED_POLL_INTERVAL_MS = 400
+
+/**
+ * The text one `changed` wait compares between polls.
+ *
+ * It is scoped to the selector when one is given (a message list, a thread
+ * container) and to the whole page otherwise, so a wait can watch the part of a
+ * live conversation that actually carries the reply.
+ */
+function waitSignatureSource(selector: string | undefined): string {
+  return selector
+    ? `(() => {
+        let element = null;
+        try { element = document.querySelector(${JSON.stringify(selector)}); } catch { element = null; }
+        return element instanceof HTMLElement ? (element.innerText ?? element.textContent ?? '') : '';
+      })`
+    : `(() => { const body = document.body; return body ? (body.innerText ?? body.textContent ?? '') : ''; })`
+}
+
+/**
  * Wait for a page condition, in the page, for a bounded time.
  *
  * It resolves rather than throws on timeout, because "the thing the agent wanted
  * never appeared" is an answer it has to read and act on, not an exception that
  * hides what the page looked like.
+ *
+ * `changed` is the condition a live conversation needs: instead of naming text it
+ * cannot know in advance, the caller waits for the visible text to become
+ * different from what it was when the wait started. The reply it is waiting for
+ * is exactly that change.
  */
 export function agentWaitScript(request: {
   selector?: string
@@ -675,8 +711,37 @@ export function agentWaitScript(request: {
   urlIncludes?: string
   gone?: boolean
   visible?: boolean
+  changed?: boolean
   timeoutMs: number
 }): string {
+  const timeoutMs = JSON.stringify(
+    Math.max(0, Math.min(request.timeoutMs, BROWSER_WAIT_MAX_TIMEOUT_MS))
+  )
+  if (request.changed) {
+    return `(() => {
+      ${pageHelpers()}
+      const timeoutMs = ${timeoutMs};
+      const readSignature = ${waitSignatureSource(request.selector)};
+      const baseline = (() => { try { return readSignature(); } catch { return ''; } })();
+      const startedAt = Date.now();
+      return new Promise((resolve) => {
+        const check = () => {
+          let current = baseline;
+          try { current = readSignature(); } catch { current = baseline; }
+          if (current !== baseline) {
+            resolve({ ok: true, matched: true, changed: true, waitedMs: Date.now() - startedAt, readyState: document.readyState, url: location.href });
+            return;
+          }
+          if (Date.now() - startedAt >= timeoutMs) {
+            resolve({ ok: false, matched: false, changed: false, timedOut: true, waitedMs: Date.now() - startedAt, readyState: document.readyState, url: location.href });
+            return;
+          }
+          setTimeout(check, ${CHANGED_POLL_INTERVAL_MS});
+        };
+        check();
+      });
+    })()`
+  }
   const condition = request.selector
     ? `(() => {
         let element = null;
@@ -694,7 +759,7 @@ export function agentWaitScript(request: {
         : `document.readyState === 'complete'`
   return `(() => {
     ${pageHelpers()}
-    const timeoutMs = ${JSON.stringify(Math.max(0, Math.min(request.timeoutMs, 30000)))};
+    const timeoutMs = ${timeoutMs};
     const startedAt = Date.now();
     return new Promise((resolve) => {
       const check = () => {

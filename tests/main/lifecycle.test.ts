@@ -191,7 +191,7 @@ describe('lifecycle   PtyService destroyAll', () => {
     const sessions = (pty as unknown as { sessions: Map<string, unknown> }).sessions
     sessions.set('test-pty-1', mockSession)
 
-    pty.destroyAll()
+    await pty.destroyAll()
 
     // `destroy` stops the tree asynchronously, so wait for the signal instead of
     // reading it in the same tick the loop was entered.

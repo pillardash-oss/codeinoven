@@ -107,7 +107,10 @@ export interface CloseConfirmationDeps {
  *
  * The renderer is always asked   it owns the unsaved-file editor state, which
  * also gates the close. It replies through `app:confirmClose` immediately when
- * nothing is pending, or shows the confirmation modal otherwise.
+ * nothing is pending, or shows the confirmation modal otherwise. A park is the
+ * one close it never replies to on its own: parking keeps the runs alive but
+ * takes the window, the app's browser, its previews and its terminals with it,
+ * so the prompt is shown even with nothing pending.
  */
 export function requestCloseConfirmation(deps: CloseConfirmationDeps): void {
   const { state, window, park = false, install = false } = deps

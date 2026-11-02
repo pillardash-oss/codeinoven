@@ -48,10 +48,14 @@ export class AppSettleCloseConfirmationThread extends BoardUnit<App> {
    *
    * A listed download deliberately does not hold that up: closing pauses it and
    * keeps its bytes for a later resume, so it never needs an answer of its own.
+   *
+   * A park prompt is never settled this way: it exists to explain what closing
+   * the window costs (the app's browser, its previews, its terminals and its
+   * editors all go with it), so the user's answer is the only way through.
    */
   settleCloseConfirmationThread(thread: Thread): void {
     const current = this.closeConfirmation
-    if (!current || isThreadWorking(thread)) return
+    if (!current || current.park === true || isThreadWorking(thread)) return
 
     const projects: CloseConfirmationProject[] = []
     for (const project of current.projects) {
@@ -63,9 +67,8 @@ export class AppSettleCloseConfirmationThread extends BoardUnit<App> {
     if (projects.length === current.projects.length) return
 
     if (projects.length === 0 && current.files.length === 0) {
-      const park = current.park === true
       this.closeConfirmation = null
-      void (park ? this.parkWindow() : this.confirmForceClose())
+      void this.confirmForceClose()
       return
     }
     this.closeConfirmation = { ...current, projects }

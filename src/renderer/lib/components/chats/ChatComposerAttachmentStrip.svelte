@@ -20,6 +20,7 @@
     type ComposerRelocationRequest
   } from './composer-relocation'
   import type { StartAfterSelection } from './chat-composer-attachments'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import type { ThreadContextReference } from '$lib/thread-context'
   import type { PromptAttachment, PromptReference } from '$shared/types'
 
@@ -29,6 +30,8 @@
     startAfterThreads: StartAfterSelection[]
     /** Conversations attached to this message as context. */
     threadReferences: readonly ThreadContextReference[]
+    /** The thread this conversation was forked from, drawn with the attachments. */
+    forkParentReference: ThreadContextReference | null
     /** Chat view only: surfaces the chat-only File System mode chip. */
     showChatModes: boolean
     /** Chat view only: whether File System mode is currently on. */
@@ -68,6 +71,7 @@
     references,
     startAfterThreads,
     threadReferences,
+    forkParentReference,
     showChatModes,
     fileSystemMode,
     previewUrls,
@@ -124,7 +128,7 @@
 </script>
 
 <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
-{#if attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || threadReferences.length > 0 || (showChatModes && fileSystemMode)}
+{#if attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || threadReferences.length > 0 || forkParentReference !== null || (showChatModes && fileSystemMode)}
   <div class="flex flex-col gap-1.5 px-3 pt-2.5">
     <div class="flex flex-wrap items-center gap-1.5">
       {#if showChatModes && fileSystemMode}
@@ -231,11 +235,22 @@
         </div>
       {/if}
     </div>
-    {#if threadReferences.length > 0}
+    {#if threadReferences.length > 0 || forkParentReference !== null}
       <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Context threads">
+        {#if forkParentReference}
+          <!-- First, because it is the context this conversation already carries:
+               the agent was told to read the thread the fork was copied from. -->
+          <ThreadContextPill
+            reference={forkParentReference}
+            onOpen={() =>
+              void openThreadById(forkParentReference.projectId, forkParentReference.threadId)}
+            forkedFrom
+          />
+        {/if}
         {#each threadReferences as reference (reference.threadId)}
           <ThreadContextPill
             {reference}
+            onOpen={() => void openThreadById(reference.projectId, reference.threadId)}
             onRemove={() => onRemoveThreadContext(reference.threadId)}
           />
         {/each}

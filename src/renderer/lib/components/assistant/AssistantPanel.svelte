@@ -1796,12 +1796,12 @@
       </button>
       <button
         type="button"
-        class="ml-auto flex shrink-0 items-center gap-1.5 bg-elevated px-2.5 py-1 text-[0.625rem] text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
+        class="ml-auto flex min-w-0 items-center gap-1.5 text-left text-[0.625rem] text-muted transition-colors hover:text-foreground disabled:opacity-50"
         title="Open the Getting started thread to change what this assistant knows and does"
         disabled={knowledgeThreadBusy}
         onclick={openKnowledgeTask}
       >
-        <CioPencil size={12} strokeWidth={1.8} />
+        <CioPencil size={14} strokeWidth={1.8} class="shrink-0" />
         <span class="truncate">Modify behavior</span>
       </button>
     </div>

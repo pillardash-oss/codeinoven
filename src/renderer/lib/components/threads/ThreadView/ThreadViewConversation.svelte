@@ -50,6 +50,7 @@
   import { modelKey } from '$lib/model-keys'
   import { promptArrive } from '$lib/motion'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { logRendererDev } from '$lib/system/renderer-logger'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import type { AgentPart, TurnStreamCompletedTurn } from '$shared/types'
@@ -76,6 +77,23 @@
 
   /** The board the surface built, and the few values only it can build. */
   let { board }: { board: ThreadViewBoard } = $props()
+
+  /**
+   * Decide, once per distinct state, whether the transcript's final turn drew
+   * its file-changes card.
+   *
+   * "The card is not showing" cannot be answered from the database or from the
+   * index alone: both can be right while the branch that draws it never renders.
+   * This reports the gate exactly as the markup evaluates it for the last
+   * message, so the next report names the condition that failed.
+   */
+  let lastCardReport = ''
+  function reportTailCard(state: Record<string, unknown>): void {
+    const key = JSON.stringify(state)
+    if (key === lastCardReport) return
+    lastCardReport = key
+    logRendererDev(`Turn cards: gate ${key}`)
+  }
 
   /**
    * The column the header's thread name aligns to, when this surface is the one
@@ -948,6 +966,20 @@
                     </div>
                   {/if}
 
+                  {#if absIndex === board.loadOlderMessages.messages.length - 1}
+                    {reportTailCard({
+                      threadId: board.handleAgentEvent.thread.id,
+                      absIndex,
+                      messages: board.loadOlderMessages.messages.length,
+                      visible: board.composerScope.visibleMessages.length,
+                      msgId: msg.id,
+                      isTurnEnd,
+                      chatMode: board.props.chatMode,
+                      checkpoint: turnCheckpoint?.id ?? null,
+                      changes: turnCheckpoint?.changes.length ?? -1,
+                      card: board.pollStreamParts.transcriptIndex.checkpointCard[absIndex] ?? false
+                    })}
+                  {/if}
                   {#if !board.props.chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && (board.pollStreamParts.transcriptIndex.checkpointCard[absIndex] ?? false)}
                     <div class="mt-3">
                       <RunChangesCard

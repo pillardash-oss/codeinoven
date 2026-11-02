@@ -528,9 +528,11 @@ thread's browser keep their own list, so a page read inside a thread never appea
 in the global browser's history or under its address palette, and a local project's
 threads share one history because they already share one browser and one tab strip.
 The global browser's list is durable (`browser:loadHistory` /
-`browser:saveHistory`); a thread browser's lives for the session and is discarded
-when its last tab closes, so a thread's browsing never reaches app storage and
-never outlives the browser that made it.
+`browser:saveHistory`); a thread browser's lives for the renderer session and is
+never written, so a thread's browsing never reaches app storage. It also outlives
+the browser that made it: closing a thread browser's last tab and reopening it for
+the same project, assistant or chat still offers what was read there, and quitting
+the app is what drops it.
 
 ### Closing a tab that is asleep
 

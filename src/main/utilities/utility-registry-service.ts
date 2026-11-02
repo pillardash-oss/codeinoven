@@ -192,7 +192,7 @@ export class UtilityRegistryService {
         kind: 'computer_use',
         name: 'cio:browser',
         description:
-          'Runs project- and thread-scoped browsers for localhost and web application testing: navigation, element snapshots with live values and stable references, real pointer and keyboard input (clicks, hover, drag, typing, key presses, select and checkbox control, scrolling), page-condition waits, page evaluation, reviewed file uploads, viewport, full-page and element screenshots, and browser console diagnostics. This is also the browser that renders your own design, prototype and video work at the URL the app served it on, so open it there before you describe the result.',
+          'Runs project- and thread-scoped browsers for localhost and web application testing: navigation, element snapshots with live values and stable references, real pointer and keyboard input (clicks, hover, drag, typing, key presses, select and checkbox control, scrolling), page-condition waits including waiting for the page content to change, page evaluation, reviewed file uploads, viewport, full-page and element screenshots, and browser console diagnostics. It also carries a live conversation with another party such as a business support, billing or sales chat, a queued ticket, or another agent, which it can poll until the conversation resolves. This is also the browser that renders your own design, prototype and video work at the URL the app served it on, so open it there before you describe the result.',
         enabled: true,
         activation: 'on_demand',
         scope: { level: 'global' },

@@ -16,7 +16,8 @@ import {
   agentPrepareTypingScript,
   agentSnapshotScript,
   agentTypeScript,
-  agentWaitScript
+  agentWaitScript,
+  BROWSER_WAIT_MAX_TIMEOUT_MS
 } from './browser-agent-page'
 import {
   agentCount,
@@ -448,7 +449,13 @@ export class BrowserServiceAgentUtility {
             : {}),
           ...(input['gone'] === true ? { gone: true } : {}),
           ...(input['visible'] === false ? { visible: false } : {}),
-          timeoutMs: this.host.agentBoundedNumber(input['timeoutMs'], 5000, 0, 30000)
+          ...(input['changed'] === true ? { changed: true } : {}),
+          timeoutMs: this.host.agentBoundedNumber(
+            input['timeoutMs'],
+            5000,
+            0,
+            BROWSER_WAIT_MAX_TIMEOUT_MS
+          )
         })
       )
       return { ...utilityContext, result }

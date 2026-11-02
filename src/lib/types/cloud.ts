@@ -42,7 +42,11 @@ export interface CloudDeploymentDeployment {
   updatedAt?: number
   /** Commit hash the deployment built, when the provider reports it. */
   commit?: string
-  /** Capped raw build log for this deployment, when available. */
+  /**
+   * Capped raw build log for this deployment. Only present when the log was
+   * asked for: the history list omits it so a page of deployments never ships
+   * every log across IPC.
+   */
   log?: string
 }
 

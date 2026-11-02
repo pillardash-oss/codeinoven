@@ -10,7 +10,9 @@
  * (`browser:loadHistory` / `browser:saveHistory`), because renderer `localStorage`
  * is scoped to the renderer origin and silently empties whenever another app
  * instance holds the profile. An unboxed conversation list lives in this renderer
- * for the session and dies with its browser's last tab.
+ * for the session and is never written: it outlives the browser that made it, so
+ * closing a thread browser and reopening it still offers what was read there, and
+ * quitting is what drops it.
  *
  * A visit is derived from main's own page state (`browser:state`), which is
  * published for every tab whichever surface is showing it and carries the tab's
@@ -89,14 +91,6 @@ export class BrowserHistoryState {
    * `conversationScopeId` the tab strip does.
    */
   private scopeResolver: BrowserHistoryScopeResolver | null = null
-  /**
-   * Whether a browser surface currently holds at least one tab.
-   *
-   * Injected by the runtime seam from the tab list that owns the surface, and null
-   * until then: with no answer available no scope can be proven dead, and dropping
-   * one would throw away a history the user is still reading.
-   */
-  private isLiveThreadScope: ((scope: string) => boolean) | null = null
 
   /** The last visit recorded for each tab. Plain, not reactive: nothing renders
    *  it. */
@@ -129,11 +123,6 @@ export class BrowserHistoryState {
    *  {@link start}, so even the first visit is filed under the right scope. */
   setScopeResolver(resolver: BrowserHistoryScopeResolver): void {
     this.scopeResolver = resolver
-  }
-
-  /** Take the live-surface predicate. Called once by the runtime seam. */
-  setLiveThreadScope(predicate: (scope: string) => boolean): void {
-    this.isLiveThreadScope = predicate
   }
 
   /**
@@ -312,29 +301,16 @@ export class BrowserHistoryState {
   }
 
   /**
-   * Drop the history of every thread browser that no longer exists.
+   * Drop what the store remembers about one tab, because the tab is gone.
    *
-   * Called when a browser's tab list changes, which is the moment a surface can
-   * lose its last tab, and again from {@link record}. The second call is the one
-   * that closes a race: a `browser:state` sent just before the destroy of a tab can
-   * land just after the close, and it must not put back the history that close has
-   * already discarded.
+   * Only the tab's own visit guard goes with it. The surface's list stays for the
+   * rest of the session: a conversation's unboxed history outlives the browser
+   * that made it, so reopening that thread browser still offers what was read
+   * there. A reopened tab of the same conversation counts its page again, because
+   * the guard was one tab's, not the surface's.
    */
-  pruneThreadScopes(): void {
-    if (!this.isLiveThreadScope) return
-    let changed = false
-    for (const scope of Object.keys(this.lists)) {
-      if (this.isPersistentScope(scope) || this.isLive(scope)) continue
-      delete this.lists[scope]
-      changed = true
-    }
-    if (!changed) return
-    // A tab of a dropped surface must start a fresh visit rather than be treated as
-    // already recorded into a list that no longer exists.
-    for (const [tabId, visit] of this.lastVisit) {
-      if (this.isLive(visit.scope)) continue
-      this.lastVisit.delete(tabId)
-    }
+  forgetTab(tabId: string): void {
+    this.lastVisit.delete(tabId)
   }
 
   // ─── Recording ────────────────────────────────────────────────────────────
@@ -351,15 +327,8 @@ export class BrowserHistoryState {
    */
   private record(state: BrowserPageState): void {
     const scope = this.scopeFor(state.projectId, state.threadId, state.boxId)
-    // A thread browser is only as long-lived as its tabs, so reconcile the lists
-    // against the surfaces that still exist before filing this report. Doing it
-    // here as well as on every tab-list change closes the one race a tab-list
-    // change cannot: a `browser:state` sent just before a tab was destroyed can
-    // land just after the close, and it must not bring the history back.
-    const threadScope = !this.isPersistentScope(scope)
-    if (threadScope) this.pruneThreadScopes()
     const url = state.design || state.composition ? null : normalizeBrowserLibraryUrl(state.url)
-    if (url === null || (threadScope && !this.isLive(scope))) {
+    if (url === null) {
       this.lastVisit.delete(state.tabId)
       return
     }
@@ -370,14 +339,6 @@ export class BrowserHistoryState {
     }
     this.lastVisit.set(state.tabId, { scope, url })
     this.recordVisit(scope, url, state.title)
-  }
-
-  /** Whether a surface still exists to record a visit against. The global browser
-   *  always does; a thread browser is asked of the tab list that owns it, and
-   *  before that answer is available nothing is treated as gone. */
-  private isLive(scope: string): boolean {
-    if (scope === BROWSER_HISTORY_GLOBAL_SCOPE) return true
-    return this.isLiveThreadScope?.(scope) ?? true
   }
 
   /** Fold a later report's title onto the visit it belongs to. A page often
@@ -442,10 +403,9 @@ export class BrowserHistoryState {
    * Evict the oldest visits of one surface past the cap.
    *
    * The cap is applied per surface rather than to a total: a surface only gains
-   * visits while its browser has tabs, and dies with the last of them, so the
-   * number of lists that can exist is already bounded by the browsers the user has
-   * open. One limit, the one the user set, is worth more than a second one nobody
-   * can explain.
+   * visits while its browser has tabs open, so the number of lists that can exist
+   * is already bounded by the conversations browsed this session. One limit, the
+   * one the user set, is worth more than a second one nobody can explain.
    *
    * Reports whether anything went.
    */

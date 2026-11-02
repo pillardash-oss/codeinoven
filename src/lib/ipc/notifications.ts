@@ -52,6 +52,11 @@ export interface CloseConfirmationPayload {
    * The close is a park, not a quit: the window is torn down but the backend
    * keeps running so scheduled work still fires. The renderer answers with
    * `app:parkWindow` instead of `app:confirmClose`.
+   *
+   * A park is asked about even when nothing is pending. The runs survive the
+   * window, but the surfaces drawn in it do not: the app's browser, its
+   * previews, its terminals and its editors all go with the renderer, so the
+   * prompt is the only place the user is told that before it happens.
    */
   park?: boolean
 }

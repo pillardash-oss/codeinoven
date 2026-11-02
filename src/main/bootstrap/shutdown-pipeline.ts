@@ -61,7 +61,9 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
-    state.ptyService?.destroyAll()
+    // Awaited so the quit does not race the hangup: a server that is only signalled
+    // as the process exits keeps its port after the app is gone.
+    await state.ptyService?.destroyAll()
   } catch (error) {
     Logger.error('PTY cleanup failed during shutdown:', error)
   }

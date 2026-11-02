@@ -854,11 +854,6 @@ class ContextSidebarState {
     return this.threadBrowserScopeId(projectId, threadId)
   }
 
-  /** Whether a browser surface still has a tab of the sidebar's browser docked. */
-  browserScopeIsLive(scope: string): boolean {
-    return this.browser.isScopeLive(scope)
-  }
-
   /** Opens the thread's note as a sidebar panel, creating one the first time
    *  it's visited so the panel is ready to write into even before a note
    *  exists. The body loads asynchronously onto the tab itself (not local
