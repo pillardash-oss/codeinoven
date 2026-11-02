@@ -1,0 +1,14 @@
+{
+  "name": "@codeinoven/backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CodeInOven backend: identity, devices, per-user content store, prompts",
+  "scripts": {
+    "dev": "go run ./cmd/server",
+    "build": "go build -o build/server ./cmd/server",
+    "check": "go vet ./...",
+    "test": "go test ./...",
+    "seed": "go run ./cmd/seed",
+    "db:setup": "bash scripts/db-setup.sh"
+  }
+}

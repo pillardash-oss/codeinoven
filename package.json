@@ -80,7 +80,13 @@
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
     "msix:build": "bun scripts/msix.ts",
-    "msix:submit": "bun scripts/store-submission.ts"
+    "msix:submit": "bun scripts/store-submission.ts",
+    "services:db:setup": "bash services/backend/scripts/db-setup.sh",
+    "services:backend:dev": "cd services/backend && go run ./cmd/server",
+    "services:backend:seed": "cd services/backend && go run ./cmd/seed",
+    "services:mobile:dev": "cd services/mobile && bun run dev",
+    "services:mobile:build": "cd services/mobile && bun run build",
+    "services:mobile:check": "cd services/mobile && bun run check"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
