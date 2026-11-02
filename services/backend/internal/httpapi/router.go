@@ -69,6 +69,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/auth/{provider}/start", s.handleOAuthStart)
 	mux.HandleFunc("GET /v1/auth/{provider}/callback", s.handleOAuthCallback)
 	mux.HandleFunc("GET /v1/auth/oauth/done", s.handleOAuthDone)
+	mux.HandleFunc("GET /v1/auth/providers", s.handleOAuthProviders)
+	mux.HandleFunc("POST /v1/auth/oauth/exchange", s.handleOAuthExchange)
 
 	// Identity, signed in.
 	mux.Handle("POST /v1/auth/sign-out", s.requireSession(http.HandlerFunc(s.handleSignOut)))
@@ -84,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	// Content.
 	mux.Handle("GET /v1/projects", s.requireSession(http.HandlerFunc(s.handleListProjects)))
 	mux.Handle("GET /v1/projects/{id}", s.requireSession(http.HandlerFunc(s.handleGetProject)))
+	mux.Handle("GET /v1/assistants", s.requireSession(http.HandlerFunc(s.handleListAssistants)))
 	mux.Handle("GET /v1/threads", s.requireSession(http.HandlerFunc(s.handleListThreads)))
 	mux.Handle("GET /v1/threads/{id}", s.requireSession(http.HandlerFunc(s.handleGetThread)))
 	mux.Handle("GET /v1/threads/{id}/messages", s.requireSession(http.HandlerFunc(s.handleListMessages)))

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // CreateDevice records a device for a user. Devices are named by the client; the
@@ -138,4 +140,27 @@ func (s *Store) DeviceExists(ctx context.Context, userID, deviceID string) (bool
 		return false, fmt.Errorf("store: device exists: %w", err)
 	}
 	return exists, nil
+}
+
+// DeviceByID returns one live device owned by the user.
+func (s *Store) DeviceByID(ctx context.Context, userID, deviceID string) (Device, error) {
+	var (
+		device    Device
+		lastSeen  time.Time
+		createdAt time.Time
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, platform, last_seen_at, created_at
+		FROM devices
+		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`, deviceID, userID,
+	).Scan(&device.ID, &device.Name, &device.Platform, &lastSeen, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Device{}, ErrNotFound
+	}
+	if err != nil {
+		return Device{}, fmt.Errorf("store: device by id: %w", err)
+	}
+	device.LastSeenAt = FromTime(lastSeen)
+	device.CreatedAt = FromTime(createdAt)
+	return device, nil
 }

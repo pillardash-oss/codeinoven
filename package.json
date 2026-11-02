@@ -86,7 +86,11 @@
     "services:backend:seed": "cd services/backend && go run ./cmd/seed",
     "services:mobile:dev": "cd services/mobile && bun run dev",
     "services:mobile:build": "cd services/mobile && bun run build",
-    "services:mobile:check": "cd services/mobile && bun run check"
+    "services:mobile:check": "cd services/mobile && bun run check",
+    "services:mobile:db:setup": "bash services/backend/scripts/db-setup.sh codeinoven_mobile_dev",
+    "services:backend:dev:mobile": "cd services/backend && HTTP_ADDR=127.0.0.1:8081 PUBLIC_BASE_URL=http://127.0.0.1:8081 DATABASE_URL='postgres://localhost:5432/codeinoven_mobile_dev?sslmode=disable' go run ./cmd/server",
+    "services:backend:seed:mobile": "cd services/backend && DATABASE_URL='postgres://localhost:5432/codeinoven_mobile_dev?sslmode=disable' go run ./cmd/seed",
+    "services:mobile:android": "cd services/mobile && VITE_API_BASE=http://10.0.2.2:8081 bun run build && bunx cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

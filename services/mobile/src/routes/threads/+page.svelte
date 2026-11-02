@@ -3,6 +3,7 @@
   import CioInbox from '@pdslng/cio-icon/CioInbox.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import { api, ApiError } from '#lib/api/client'
   import {
     INBOX_GROUPS,
@@ -13,6 +14,8 @@
   } from '#lib/api/status'
   import type { Project, Thread, ThreadStatus } from '#lib/api/types'
   import AppBar from '#lib/components/AppBar.svelte'
+  import Sheet from '#lib/components/Sheet.svelte'
+  import Switch from '#lib/components/Switch.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
   import { page } from '$app/state'
 
@@ -29,6 +32,22 @@
   let error = $state<string | null>(null)
   let inbox = $state(false)
   let group = $state<InboxGroup | 'all'>('all')
+
+  /**
+   * The inbox's groups. A short press turns grouping on; a long press opens the
+   * panel that decides which groups exist and in what order, and the tabs draw
+   * exactly what that panel says.
+   */
+  const INBOX_KEY = 'cio.mobile.inbox.groups'
+  interface GroupRow {
+    id: InboxGroup
+    enabled: boolean
+  }
+
+  let groupRows = $state<GroupRow[]>(INBOX_GROUPS.map((entry) => ({ id: entry.id, enabled: true })))
+  let drawerOpen = $state(false)
+  let press: ReturnType<typeof setTimeout> | undefined
+  let longPressed = false
   let searchOpen = $state(false)
   let query = $state('')
   /** Focus the filter as soon as it appears, for the same reason as Projects. */
@@ -59,8 +78,87 @@
   }
 
   onMount(() => {
+    groupRows = readGroups()
     void load()
   })
+
+  function readGroups(): GroupRow[] {
+    const fallback = INBOX_GROUPS.map((entry) => ({ id: entry.id, enabled: true }))
+    try {
+      const raw = globalThis.localStorage?.getItem(INBOX_KEY)
+      if (!raw) return fallback
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return fallback
+      const known = new Set(INBOX_GROUPS.map((entry) => entry.id))
+      const rows: GroupRow[] = []
+      for (const item of parsed) {
+        if (typeof item !== 'object' || item === null) continue
+        const candidate = item as { id?: unknown; enabled?: unknown }
+        if (typeof candidate.id !== 'string' || !known.has(candidate.id as InboxGroup)) continue
+        rows.push({ id: candidate.id as InboxGroup, enabled: candidate.enabled !== false })
+      }
+      for (const entry of INBOX_GROUPS) {
+        if (!rows.some((row) => row.id === entry.id)) rows.push({ id: entry.id, enabled: true })
+      }
+      return rows
+    } catch {
+      return fallback
+    }
+  }
+
+  function writeGroups(): void {
+    try {
+      globalThis.localStorage?.setItem(INBOX_KEY, JSON.stringify(groupRows))
+    } catch {
+      // A phone with no storage still groups; it just forgets the arrangement.
+    }
+  }
+
+  function toggleGroup(id: InboxGroup, enabled: boolean): void {
+    groupRows = groupRows.map((row) => (row.id === id ? { ...row, enabled } : row))
+    if (!enabled && group === id) group = 'all'
+    writeGroups()
+  }
+
+  function moveGroup(id: InboxGroup, direction: -1 | 1): void {
+    const index = groupRows.findIndex((row) => row.id === id)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= groupRows.length) return
+    const next = [...groupRows]
+    const [moved] = next.splice(index, 1)
+    if (!moved) return
+    next.splice(target, 0, moved)
+    groupRows = next
+    writeGroups()
+  }
+
+  let activeGroups = $derived(
+    groupRows
+      .filter((row) => row.enabled)
+      .map((row) => INBOX_GROUPS.find((entry) => entry.id === row.id))
+      .filter((entry): entry is (typeof INBOX_GROUPS)[number] => entry !== undefined)
+  )
+
+  function beginPress(): void {
+    longPressed = false
+    press = setTimeout(() => {
+      longPressed = true
+      drawerOpen = true
+    }, 450)
+  }
+
+  function endPress(): void {
+    if (press) clearTimeout(press)
+    press = undefined
+  }
+
+  function pressInbox(): void {
+    if (longPressed) {
+      longPressed = false
+      return
+    }
+    toggleInbox()
+  }
 
   function projectOf(id: string): Project | null {
     return projects.find((project) => project.id === id) ?? null
@@ -124,7 +222,11 @@
       aria-label="Inbox: group threads by status"
       title="Inbox: group threads by status"
       aria-pressed={inbox}
-      onclick={toggleInbox}
+      onpointerdown={beginPress}
+      onpointerup={endPress}
+      onpointerleave={endPress}
+      onpointercancel={endPress}
+      onclick={pressInbox}
     >
       <CioInbox size={20} />
     </button>
@@ -163,7 +265,7 @@
     >
       All
     </button>
-    {#each INBOX_GROUPS as entry (entry.id)}
+    {#each activeGroups as entry (entry.id)}
       <button
         class="tab"
         type="button"
@@ -177,6 +279,50 @@
     {/each}
   </div>
 {/if}
+
+<Sheet open={drawerOpen} onclose={() => (drawerOpen = false)} label="Inbox groups">
+  <div class="sheet-grab"></div>
+  <div class="sheet-head">
+    <h2>Inbox</h2>
+    <button type="button" onclick={() => (drawerOpen = false)}>Done</button>
+  </div>
+  {#each groupRows as row (row.id)}
+    {@const entry = INBOX_GROUPS.find((item) => item.id === row.id)}
+    <div class="sheet-row">
+      <i
+        class="dot"
+        data-tone={row.id}
+        style:color={entry?.tone ? toneColor(entry.tone) : undefined}
+      ></i>
+      <span class="name">{entry?.label ?? row.id}</span>
+      <button
+        class="grip"
+        type="button"
+        aria-label="Move {entry?.label ?? row.id} up"
+        title="Move {entry?.label ?? row.id} up"
+        disabled={groupRows[0]?.id === row.id}
+        onclick={() => moveGroup(row.id, -1)}
+      >
+        <CioChevronDown size={16} class="flip" />
+      </button>
+      <button
+        class="grip"
+        type="button"
+        aria-label="Move {entry?.label ?? row.id} down"
+        title="Move {entry?.label ?? row.id} down"
+        disabled={groupRows[groupRows.length - 1]?.id === row.id}
+        onclick={() => moveGroup(row.id, 1)}
+      >
+        <CioChevronDown size={16} />
+      </button>
+      <Switch
+        checked={row.enabled}
+        label="Show {entry?.label ?? row.id} in the inbox"
+        onchange={(on) => toggleGroup(row.id, on)}
+      />
+    </div>
+  {/each}
+</Sheet>
 
 <div class="list">
   {#if loading}
@@ -213,6 +359,19 @@
     color: var(--color-foreground);
     font: inherit;
     font-size: 0.9375rem;
+  }
+
+  /* The reorder controls are the same glyph twice, one of them turned over, so
+     the panel has one drawing per direction instead of two. */
+  :global(.flip) {
+    transform: rotate(180deg);
+  }
+
+  .sheet-row .dot {
+    flex: none;
+    width: 0.5rem;
+    height: 0.5rem;
+    background: currentColor;
   }
 
   .tab-count {

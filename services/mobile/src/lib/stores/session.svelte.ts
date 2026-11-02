@@ -76,6 +76,14 @@ class SessionStore {
     )
   }
 
+  /**
+   * Finish a provider sign-in: the browser round trip left a one-time code, and
+   * this exchanges it for this device's own session.
+   */
+  async completeOAuth(code: string): Promise<boolean> {
+    return this.authenticate(() => api.exchangeOAuth({ code }))
+  }
+
   async signOut(): Promise<void> {
     try {
       await api.signOut()

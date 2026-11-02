@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The mobile debug build talks to a development backend over plain HTTP, and the
+  Android emulator reaches the host through the 10.0.2.2 alias. Cleartext is
+  allowed for that alias alone: every other host, and the shipped app, keeps the
+  platform default of TLS.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- `adb reverse tcp:8081 tcp:8081` makes the emulator's own localhost the
+             host's, which is what lets a provider redirect URI of
+             http://localhost:8081 be registered and still work in development. -->
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

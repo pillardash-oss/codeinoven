@@ -12,6 +12,7 @@ weight 200, 2px corners, hairline rules, and the handcrafted icon set from
 
 | Screen | Read and write |
 | --- | --- |
+| Sign-in | Google and GitHub through the system browser, email and password as the fallback |
 | Projects | Every project as a foldable strip, its threads inside it, and the activity cluster above them |
 | Threads | All threads in one run ordered by what needs the user first, with inbox grouping by status |
 | Conversation | One thread's transcript, a composer that queues a prompt for an Oven, and a drawer of thread facts |
@@ -34,8 +35,23 @@ bun run services:mobile:dev    # terminal 2
 The dev server is at `http://127.0.0.1:5174` and proxies `/api/*` to the backend,
 so the browser build and the native build ask for the same paths.
 
-Sign in with the seeded demo account (`bun run services:backend:seed` prints it),
-or create an account in the app.
+Sign in with Google, GitHub, or the seeded demo account
+(`bun run services:backend:seed` prints it).
+
+### Provider sign-in in the app
+
+Google and GitHub sign in through the system browser, because a provider will not
+render inside a WebView. The callback returns on `codeinoven://auth`, and the app
+trades its one-time code for this device's session. That needs the dev backend on
+`http://localhost:8081` with the provider callback URLs registered for that host:
+
+```sh
+adb reverse tcp:8081 tcp:8081
+VITE_API_BASE=http://localhost:8081 bun run build
+```
+
+Without those credentials the two buttons explain that the server has no provider
+configured instead of failing in the browser, and email sign-in still works.
 
 ## A real device
 

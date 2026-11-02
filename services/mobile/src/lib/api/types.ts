@@ -105,6 +105,20 @@ export interface Message {
   createdAt: number
 }
 
+export interface Assistant {
+  id: string
+  name: string
+  description: string
+  scheduleName: string | null
+  color: string | null
+  customSvg: string | null
+  scheduled: boolean
+  paused: boolean
+  threadCount: number
+  lastRunAt: number | null
+  updatedAt: number
+}
+
 export interface Session {
   id: string
   deviceId: string | null

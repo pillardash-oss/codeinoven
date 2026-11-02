@@ -1,5 +1,6 @@
 import type {
   AccountUser,
+  Assistant,
   AuthResult,
   Device,
   Message,
@@ -161,6 +162,13 @@ export const api = {
 
   signOut: () => data<void>('/v1/auth/sign-out', { method: 'POST' }),
 
+  /** Which provider sign-ins this server can actually complete. */
+  providers: () => data<Record<string, boolean>>('/v1/auth/providers'),
+
+  /** Trade the one-time code from the browser round trip for a session. */
+  exchangeOAuth: (input: { code: string }) =>
+    data<AuthResult>('/v1/auth/oauth/exchange', { method: 'POST', body: input }),
+
   me: () => data<AccountUser>('/v1/me'),
 
   updateMe: (input: { name: string }) =>
@@ -173,6 +181,8 @@ export const api = {
   sessions: () => data<Session[]>('/v1/auth/sessions'),
 
   revokeSession: (id: string) => data<void>(`/v1/auth/sessions/${id}`, { method: 'DELETE' }),
+
+  assistants: () => data<Assistant[]>('/v1/assistants'),
 
   projects: (input: ProjectQuery = {}, signal?: AbortSignal) =>
     page<Project>(`/v1/projects${query(input)}`, { signal }),

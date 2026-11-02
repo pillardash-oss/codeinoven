@@ -1,17 +1,19 @@
 <script lang="ts">
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
   import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
   import { page } from '$app/state'
 
   /**
-   * The app's primary navigation. Three destinations, because the phone reads
-   * and prompts: projects, the threads inside them, and the account that signs
-   * this device in. Everything else stays on the desktop on purpose.
+   * The app's primary navigation. Four destinations, because the phone reads and
+   * prompts: projects, the threads inside them, the assistants that run on their
+   * own, and the account that signs this device in.
    */
   const items = [
     { href: '/', label: 'Projects', icon: CioProjects },
     { href: '/threads', label: 'Threads', icon: CioThreads },
+    { href: '/assistant', label: 'Assistant', icon: CioSparkles },
     { href: '/account', label: 'Account', icon: CioTabSettings }
   ]
 

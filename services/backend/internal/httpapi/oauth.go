@@ -24,6 +24,11 @@ import (
 const (
 	oauthStateCookie = "cio_oauth_state"
 	oauthStateTTL    = 10 * time.Minute
+	// oauthAppRedirect is the app's own deep link. The callback appends the
+	// one-time code to it and the native shell picks the link up.
+	oauthAppRedirect = "codeinoven://auth"
+	// oauthHandoffTTL is how long the app has to trade the code for a session.
+	oauthHandoffTTL = 2 * time.Minute
 )
 
 // oauthProvider is one configured identity provider.
@@ -104,7 +109,13 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := s.signState(provider.name, platform)
+	redirect, err := s.oauthRedirectTarget(r.URL.Query().Get("redirect"))
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+
+	state := s.signState(provider.name, platform, redirect)
 	http.SetCookie(w, &http.Cookie{
 		Name:     oauthStateCookie,
 		Value:    state,
@@ -137,54 +148,69 @@ func (s *Server) oauthRedirectURL(providerName string) string {
 
 // signState binds a provider, a device platform and a timestamp into an HMAC
 // signed value. It is stored in a cookie and echoed back by the provider.
-func (s *Server) signState(providerName, platform string) string {
+func (s *Server) signState(providerName, platform, redirect string) string {
 	payload := strings.Join([]string{
 		auth.NewOpaqueToken(),
 		providerName,
 		platform,
 		strconv.FormatInt(time.Now().Unix(), 10),
+		base64.RawURLEncoding.EncodeToString([]byte(redirect)),
 	}, "|")
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." +
 		base64.RawURLEncoding.EncodeToString(s.stateMAC(payload))
 }
 
-// verifyState checks the signature, the age and the provider binding.
-func (s *Server) verifyState(state, providerName string) (string, error) {
+// oauthState is what a signed state value carries across the provider round trip.
+type oauthState struct {
+	Platform string
+	// Redirect is where the callback sends the browser afterwards. Empty means
+	// this service's own result page, which is the desktop and browser case.
+	Redirect string
+}
+
+// verifyState checks the signature, the age and the provider binding, and
+// returns where the flow came from and where it should hand off.
+func (s *Server) verifyState(state, providerName string) (oauthState, error) {
 	parts := strings.Split(state, ".")
 	if len(parts) != 2 {
-		return "", errors.New("malformed state")
+		return oauthState{}, errors.New("malformed state")
 	}
 
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return "", errors.New("malformed state payload")
+		return oauthState{}, errors.New("malformed state payload")
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", errors.New("malformed state signature")
+		return oauthState{}, errors.New("malformed state signature")
 	}
 	payload := string(payloadBytes)
 	if !hmac.Equal(signature, s.stateMAC(payload)) {
-		return "", errors.New("state signature mismatch")
+		return oauthState{}, errors.New("state signature mismatch")
 	}
 
 	fields := strings.Split(payload, "|")
-	if len(fields) != 4 {
-		return "", errors.New("malformed state fields")
+	if len(fields) != 5 {
+		return oauthState{}, errors.New("malformed state fields")
 	}
 	if fields[1] != providerName {
-		return "", errors.New("state provider mismatch")
+		return oauthState{}, errors.New("state provider mismatch")
 	}
 
 	issuedAt, err := strconv.ParseInt(fields[3], 10, 64)
 	if err != nil {
-		return "", errors.New("malformed state timestamp")
+		return oauthState{}, errors.New("malformed state timestamp")
 	}
 	if time.Since(time.Unix(issuedAt, 0)) > oauthStateTTL {
-		return "", errors.New("state expired")
+		return oauthState{}, errors.New("state expired")
 	}
 
-	return fields[2], nil
+	redirectBytes, err := base64.RawURLEncoding.DecodeString(fields[4])
+	if err != nil {
+		return oauthState{}, errors.New("malformed state redirect")
+	}
+
+	return oauthState{Platform: fields[2], Redirect: string(redirectBytes)}, nil
 }
 
 func (s *Server) stateMAC(payload string) []byte {
@@ -221,7 +247,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	platform, err := s.verifyState(state, name)
+	stateValues, err := s.verifyState(state, name)
 	if err != nil {
 		s.log.Warn("oauth state rejected", "provider", name, "error", err.Error())
 		s.redirectOAuthDone(w, r, "error", "state")
@@ -266,6 +292,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	platform := stateValues.Platform
 	deviceName := defaultDeviceName(platform)
 	device, err := s.store.FindDevice(ctx, user.ID, deviceName, platform)
 	if err != nil {
@@ -295,9 +322,24 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		s.redirectOAuthDone(w, r, "error", "session")
 		return
 	}
-	s.setSessionCookie(w, token)
 
 	s.log.Info("oauth sign-in", "provider", name, "user", user.ID, "device", device.ID, "platform", platform)
+
+	// A native app cannot read this browser's cookie, so it gets a one-time code
+	// instead and trades it for its own session over HTTPS. A browser keeps the
+	// cookie and is sent to the result page.
+	if stateValues.Redirect != "" {
+		code, err := s.createOAuthHandoff(ctx, user.ID, device.ID)
+		if err != nil {
+			s.log.Error("oauth handoff failed", "user", user.ID, "error", err.Error())
+			s.redirectOAuthHandoff(w, r, stateValues.Redirect, "", "handoff")
+			return
+		}
+		s.redirectOAuthHandoff(w, r, stateValues.Redirect, code, "")
+		return
+	}
+
+	s.setSessionCookie(w, token)
 	s.redirectOAuthDone(w, r, "ok", "")
 }
 
@@ -553,4 +595,132 @@ func (s *Server) handleOAuthDone(w http.ResponseWriter, r *http.Request) {
 	}
 	writePage(w, http.StatusBadRequest, "Sign-in failed",
 		"The provider did not complete the sign-in. Return to CodeInOven and try again.")
+}
+
+// oauthRedirectTarget validates where the callback may hand the browser back to.
+//
+// Only two shapes are allowed: the app's own deep link, and a browser origin
+// this service already trusts for CORS. Anything else is refused rather than
+// becoming an open redirect.
+func (s *Server) oauthRedirectTarget(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", nil
+	}
+	if strings.EqualFold(value, oauthAppRedirect) {
+		return oauthAppRedirect, nil
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return "", badRequest("redirect is not a valid app target")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", badRequest("redirect must use http or https")
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+	if !s.allowedOrigins[origin] {
+		return "", badRequest("redirect origin is not allowed")
+	}
+	return origin, nil
+}
+
+// createOAuthHandoff mints a one-time code that stands for the session the app
+// has just been issued, so the token never travels in a URL.
+func (s *Server) createOAuthHandoff(ctx context.Context, userID, deviceID string) (string, error) {
+	code := auth.NewOpaqueToken()
+	hash := auth.HashToken(code)
+	if err := s.store.CreateOAuthCode(
+		ctx, auth.NewID(auth.PrefixOAuthCode), userID, deviceID, hash, oauthHandoffTTL,
+	); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// redirectOAuthHandoff sends the browser back to the app, with the code on
+// success and an error reason on failure.
+func (s *Server) redirectOAuthHandoff(w http.ResponseWriter, r *http.Request, target, code, reason string) {
+	params := url.Values{}
+	if code != "" {
+		params.Set("code", code)
+	}
+	if reason != "" {
+		params.Set("error", reason)
+	}
+
+	var destination string
+	if strings.EqualFold(target, oauthAppRedirect) {
+		destination = oauthAppRedirect + "?" + params.Encode()
+	} else {
+		destination = target + "/sign-in?" + params.Encode()
+	}
+	http.Redirect(w, r, destination, http.StatusFound)
+}
+
+// oauthExchangeRequest is the POST /v1/auth/oauth/exchange body.
+type oauthExchangeRequest struct {
+	Code   string         `json:"code"`
+	Device *deviceRequest `json:"device"`
+}
+
+// handleOAuthExchange trades a one-time handoff code for a session, which is how
+// a native app turns a browser sign-in into its own bearer token.
+func (s *Server) handleOAuthExchange(w http.ResponseWriter, r *http.Request) {
+	var req oauthExchangeRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		writeError(w, s.log, badRequest("code is required"))
+		return
+	}
+
+	handoff, err := s.store.ConsumeOAuthCode(r.Context(), auth.HashToken(code))
+	if err != nil {
+		if errors.Is(err, store.ErrOAuthCode) {
+			writeError(w, s.log, unauthorized())
+			return
+		}
+		writeError(w, s.log, err)
+		return
+	}
+
+	user, err := s.store.UserByID(r.Context(), handoff.UserID)
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+
+	device, err := s.store.DeviceByID(r.Context(), handoff.UserID, handoff.DeviceID)
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+
+	if _, err := s.store.EnsureStore(r.Context(), auth.NewID(auth.PrefixStore), user.ID); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+
+	_, token, err := s.startSession(r.Context(), user.ID, device.ID, r)
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+
+	s.log.Info("oauth handoff exchanged", "user", user.ID, "device", device.ID)
+	writeData(w, http.StatusOK, authPayload{User: user, Token: token, Device: device})
+}
+
+// handleOAuthProviders reports which providers this server can complete, so a
+// client hides a button instead of offering a sign-in that cannot finish.
+func (s *Server) handleOAuthProviders(w http.ResponseWriter, r *http.Request) {
+	configured := make(map[string]bool, len(s.providers))
+	for name, provider := range s.providers {
+		configured[name] = provider.credentials.Enabled()
+	}
+	writeData(w, http.StatusOK, configured)
 }

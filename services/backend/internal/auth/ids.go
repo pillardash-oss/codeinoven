@@ -27,7 +27,9 @@ const (
 	PrefixProject    = "prj"
 	PrefixThread     = "th"
 	PrefixMessage    = "msg"
-	PrefixPrompt     = "prm"
+	// PrefixOAuthCode names a one-time handoff code row, never a token.
+	PrefixOAuthCode = "oac"
+	PrefixPrompt    = "prm"
 )
 
 // NewID returns `<prefix>_<16 base32 characters>` backed by crypto/rand.

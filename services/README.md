@@ -31,15 +31,39 @@ the same relative paths. The app reads `PUBLIC_API_BASE` and calls `${base}/v1/.
 
 ## Running
 
+Development has two separate states on purpose, so a phone testing a build can
+never touch the desktop's data or a deployed instance:
+
+| State | Port | Database | Used by |
+| --- | --- | --- | --- |
+| Desktop development | 8080 | `codeinoven_dev` | the desktop app and the browser |
+| Mobile development | 8081 | `codeinoven_mobile_dev` | the emulator and a physical phone |
+
 ```sh
-# one time: create the local database
+# one time: create both databases
 bun run services:db:setup
+bun run services:mobile:db:setup
 
-# terminal 1
+# desktop development
 bun run services:backend:dev
-
-# terminal 2
 bun run services:mobile:dev
+
+# mobile development (separate database, separate port)
+bun run services:backend:dev:mobile
+bun run services:backend:seed:mobile
+```
+
+The mobile app talks to the mobile backend at `http://localhost:8081`, which the
+emulator reaches through `adb reverse tcp:8081 tcp:8081`. Using `localhost` rather
+than the host alias keeps the OAuth redirect URI Google and GitHub accept
+registerable (`http://localhost:8081/...`). A physical phone on the same network
+uses the host's LAN address instead, and that address must also be registered.
+
+```sh
+adb reverse tcp:8081 tcp:8081
+cd services/mobile && VITE_API_BASE=http://localhost:8081 bun run build
+bun run services:mobile:android
+adb install -r services/mobile/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 `services:db:setup` creates `codeinoven_dev` if it is missing. The server applies migrations at
@@ -255,6 +279,35 @@ production.
 | `ENVIRONMENT` | `development` or `production` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Enables Google sign-in |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Enables GitHub sign-in |
+
+### Provider sign-in and the app handoff
+
+`GET /v1/auth/providers` reports which providers are configured, so a client hides
+a button instead of offering a sign-in that cannot finish. The native flow is:
+
+1. the app opens the system browser at
+   `/v1/auth/{provider}/start?platform=android&redirect=codeinoven%3A%2F%2Fauth`
+2. the callback mints a two-minute, single-use code and redirects to
+   `codeinoven://auth?code=...`
+3. the app exchanges that code with `POST /v1/auth/oauth/exchange`, and no token
+   ever travels through a URL
+
+The redirect target in the state is allowlisted: the app scheme, or a browser
+origin already trusted for CORS. Anything else is refused.
+
+Register these callback URLs with each provider:
+
+| Provider | Callback URL |
+| --- | --- |
+| Google (GCP Web application client) | `http://localhost:8081/v1/auth/google/callback` |
+| GitHub (OAuth App, not a GitHub App) | `http://localhost:8081/v1/auth/github/callback` |
+
+Credentials live in `services/backend/.env.oauth`, which is gitignored and mode
+`0600`. The mobile dev script sources it when it exists:
+
+```sh
+set -a; . services/backend/.env.oauth; set +a
+```
 
 ## Native builds
 

@@ -129,6 +129,23 @@ func run() error {
 				rows++
 			}
 		}
+
+		for order, assistant := range seedAssistants() {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO assistants (
+					id, name, description, schedule_name, color, custom_svg,
+					scheduled, paused, thread_count, last_run_at, sort_order,
+					created_at, updated_at
+				) VALUES ($1,$2,$3,NULLIF($4,''),$5,NULLIF($6,''),$7,$8,$9,$10,$11,$10,$10)`,
+				auth.NewID("ast"), assistant.name, assistant.description,
+				assistant.schedule, assistant.color, assistant.customSVG,
+				assistant.scheduled, assistant.paused, assistant.threads,
+				now.Add(-time.Duration(order+1)*22*time.Hour), order,
+			); err != nil {
+				return fmt.Errorf("insert assistant %s: %w", assistant.name, err)
+			}
+			rows++
+		}
 		return nil
 	})
 	if err != nil {

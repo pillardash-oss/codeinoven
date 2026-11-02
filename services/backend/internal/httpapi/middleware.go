@@ -142,6 +142,9 @@ func originSet(configured []string) map[string]bool {
 	allowed := map[string]bool{
 		"capacitor://localhost": true,
 		"http://localhost":      true,
+		// Capacitor 8 serves Android from https://localhost by default, so the
+		// packaged app is a different origin than the browser one.
+		"https://localhost":     true,
 		"http://127.0.0.1:5174": true,
 	}
 	for _, origin := range configured {

@@ -142,7 +142,8 @@ running against the seeded service; offline cache and native projects are the re
 ### Phase 2: per-user store and read API
 Provision a schema per user, migrate it, serve projects, threads and messages from it.
 
-**State: built**, with the filtering done on the server.
+**State: built**, with the filtering done on the server, plus assistants read from
+the same store.
 
 ### Phase 3: prompting and sync
 Queued prompts, Oven heartbeat and presence, the sync outbox and pull endpoints, the desktop adapter.

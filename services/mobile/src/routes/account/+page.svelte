@@ -10,6 +10,7 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import AppBar from '#lib/components/AppBar.svelte'
+  import Switch from '#lib/components/Switch.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge } from '#lib/api/status'
   import type { Device, DevicePlatform } from '#lib/api/types'
@@ -351,30 +352,22 @@
             Match the system
             <span class="sw-sub">Use whatever the phone is set to</span>
           </span>
-          <button
-            class="sw"
-            type="button"
-            role="switch"
-            aria-checked={theme === 'system'}
-            aria-label="Match the system appearance"
-            title="Match the system appearance"
-            onclick={() => setTheme(theme === 'system' ? 'light' : 'system')}
-          ></button>
+          <Switch
+            checked={theme === 'system'}
+            label="Match the system appearance"
+            onchange={(on) => setTheme(on ? 'system' : 'light')}
+          />
         </div>
         <div class="sw-row">
           <span class="sw-label">
             Dark
             <span class="sw-sub">Always dark, whatever the phone does</span>
           </span>
-          <button
-            class="sw"
-            type="button"
-            role="switch"
-            aria-checked={theme === 'dark'}
-            aria-label="Dark appearance"
-            title="Dark appearance"
-            onclick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          ></button>
+          <Switch
+            checked={theme === 'dark'}
+            label="Dark appearance"
+            onchange={(on) => setTheme(on ? 'dark' : 'light')}
+          />
         </div>
       </div>
     </article>

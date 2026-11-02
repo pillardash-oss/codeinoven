@@ -19,9 +19,12 @@
     "native:android": "cap open android"
   },
   "dependencies": {
+    "@capacitor/app": "8.0.1",
+    "@capacitor/browser": "8.0.3",
     "@capacitor/core": "^8.6.0",
     "@capacitor/preferences": "^8.0.1",
-    "@pdslng/cio-icon": "^0.1.1"
+    "@pdslng/cio-icon": "^0.1.1",
+    "bits-ui": "^2.20.3"
   },
   "devDependencies": {
     "@capacitor/android": "^8.6.0",

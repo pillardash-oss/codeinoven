@@ -4,6 +4,7 @@
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import Composer from '#lib/components/Composer.svelte'
+  import Sheet from '#lib/components/Sheet.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
   import type { Message, Thread } from '#lib/api/types'
@@ -295,30 +296,26 @@
     {/if}
   </div>
 
-  {#if drawerOpen}
-    <button
-      class="scrim"
-      type="button"
-      aria-label="Close thread details"
-      title="Close thread details"
-      onclick={() => (drawerOpen = false)}
-    ></button>
-    <aside class="sheet drawer" aria-label="Thread details">
-      <div class="sheet-grab"></div>
-      <div class="sheet-head">
-        <h2>This thread</h2>
-        <button type="button" onclick={() => (drawerOpen = false)}>Done</button>
-      </div>
-      <div class="drawer-scroll">
-        {#each details as detail (detail.label)}
-          <div class="run">
-            <span>{detail.label}</span>
-            <em title={detail.value}>{detail.value}</em>
-          </div>
-        {/each}
-      </div>
-    </aside>
-  {/if}
+  <Sheet
+    open={drawerOpen}
+    onclose={() => (drawerOpen = false)}
+    placement="right"
+    label="Thread details"
+  >
+    <div class="sheet-grab"></div>
+    <div class="sheet-head">
+      <h2>This thread</h2>
+      <button type="button" onclick={() => (drawerOpen = false)}>Done</button>
+    </div>
+    <div class="drawer-scroll">
+      {#each details as detail (detail.label)}
+        <div class="run">
+          <span>{detail.label}</span>
+          <em title={detail.value}>{detail.value}</em>
+        </div>
+      {/each}
+    </div>
+  </Sheet>
 </div>
 
 <style>
@@ -363,27 +360,8 @@
     margin-top: 0.75rem;
   }
 
-  /* The drawer comes from the right on a conversation, because the reading
-     column stays where it was and the panel is an aside, not a page. */
-  .scrim {
-    display: block;
-    width: 100%;
-    padding: 0;
-    border: 0;
-    cursor: pointer;
-  }
-
-  .sheet.drawer {
-    display: flex;
-    top: 0;
-    bottom: 0;
-    left: auto;
-    right: 0;
-    width: min(22rem, 88%);
-    max-height: none;
-    border-top: 0;
-    border-left: 1px solid var(--color-border-strong);
-  }
+  /* The panel comes from the right on a conversation, because the reading column
+     stays where it was and the panel is an aside, not a page. */
 
   .drawer-scroll {
     padding: 0 var(--gutter) 0.5rem;

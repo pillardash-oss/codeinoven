@@ -625,7 +625,7 @@ html.dark .mark.orange {
 .nav {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   padding: 0.5rem 0 calc(0.5rem + env(safe-area-inset-bottom, 0));
   border-top: 1px solid var(--color-border);
   background: var(--color-app);
@@ -1598,8 +1598,68 @@ html.dark .mark.orange {
   display: none;
 }
 
-.strip[data-open='false'] .strip-body {
-  display: none;
+/* Folds are animated, not toggled. The body keeps its box and collapses it, so
+   the strip below moves up instead of jumping, and a phone with reduced motion
+   asked for gets the jump it asked for. 40rem clears the tallest strip the list
+   draws (four threads and the link to the rest). */
+.strip-body {
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  transition:
+    max-height 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.strip[data-open='true'] .strip-body {
+  max-height: 40rem;
+  opacity: 1;
+}
+
+/* A list arrives rather than appearing: one short rise, no layout work. */
+.list > * {
+  animation: list-in 160ms cubic-bezier(0.215, 0.61, 0.355, 1) both;
+}
+
+.tabs.inbox {
+  animation: tabs-in 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+/* A row that enters a filtered list fades up in its own place. Rows already on
+   screen are not re-animated, because each is keyed by its thread id. */
+.list a.row {
+  animation: row-in 120ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+@keyframes list-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tabs-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* A thread row inside a strip sits under the project name, so its own mark is
@@ -1647,15 +1707,19 @@ html.dark .mark.orange {
    list draws them, each with a Switch for visibility and a grip to move it. */
 
 .scrim {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(8, 24, 37, 0.3);
   z-index: 20;
-  display: none;
+  animation: scrim-in 220ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.scrim.closing {
+  animation: scrim-out 160ms cubic-bezier(0.215, 0.61, 0.355, 1) forwards;
 }
 
 .sheet {
-  position: absolute;
+  position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
@@ -1663,12 +1727,11 @@ html.dark .mark.orange {
   background: var(--color-surface);
   border-top: 1px solid var(--color-border-strong);
   padding-bottom: env(safe-area-inset-bottom, 0);
-  display: none;
+  animation: sheet-in 220ms cubic-bezier(0.215, 0.61, 0.355, 1);
 }
 
-.app[data-sheet='inbox'] .scrim,
-.app[data-sheet='inbox'] .sheet {
-  display: block;
+.sheet.closing {
+  animation: sheet-out 180ms cubic-bezier(0.215, 0.61, 0.355, 1) forwards;
 }
 
 .sheet-grab {
@@ -1793,20 +1856,6 @@ html.dark .mark.orange {
    comes up from the bottom: projects with their threads, the current one
    marked, and the way to the inbox at the top. One row is one line, because the
    job of the drawer is to move, not to describe. */
-
-.drawer {
-  display: none;
-  max-height: 82%;
-  flex-direction: column;
-}
-
-.app[data-sheet='drawer'] .scrim {
-  display: block;
-}
-
-.app[data-sheet='drawer'] .drawer {
-  display: flex;
-}
 
 .drawer .sheet-head {
   padding-bottom: 0.5rem;
@@ -2081,4 +2130,22 @@ html.dark .mark.orange {
 .row.compact {
   padding-top: 0.5rem;
   padding-bottom: 0.5rem;
+}
+
+/* Motion is the app's, not the prototype's: one set of rates, on transform and
+   opacity only, and nothing at all for a device that asks for less. */
+@media (prefers-reduced-motion: reduce) {
+  .scrim,
+  .scrim.closing,
+  .sheet,
+  .sheet.closing,
+  .drawer,
+  .drawer.closing,
+  .strip-body,
+  .row,
+  .tabs.inbox,
+  .list > * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
