@@ -6,11 +6,10 @@ declare const __CODEINOVEN_APP_VERSION__: string
 
 /**
  * Frameless splash shown as soon as Electron permits a window, the app `ready`
- * event (a window simply cannot exist before that in Electron). Shown
- * immediately rather than gated on `ready-to-show`; the matching
- * `backgroundColor` means the Obsidian surface paints the instant the window
- * exists, then the logo/spinner layer on top. Closed once the main window
- * paints.
+ * event (a window simply cannot exist before that in Electron). It is created
+ * hidden and revealed on its own first painted frame, because a shown window
+ * that has not painted yet presents a blank (white) surface. Closed once the main
+ * window paints.
  */
 export type SplashVisualOutcome = 'ready' | 'closed' | 'load-failed' | 'timeout'
 
@@ -19,13 +18,12 @@ const SPLASH_VISUAL_TIMEOUT_MS = 5_000
 /**
  * How long the boot may stop for the splash's first frame.
  *
- * The splash window is created with `show: true` and a matching
- * `backgroundColor`, so the user is looking at the app's surface the instant the
- * window exists; the frame that arrives at `ready-to-show` only adds the logo on
- * top of it. Waiting the full visual ceiling for that logo is what cost a slow
- * launch up to 4,999 ms of dead time before SQLite had even opened (measured in
- * the durable startup log), so the barrier now gives the frame a short grace
- * period and the boot continues without it.
+ * The splash window paints itself while hidden and is revealed on that frame, so
+ * the boot does not need to wait for it at all: the frame only decides when the
+ * window appears, never when storage starts. Waiting the full visual ceiling for
+ * that logo is what once cost a slow launch up to 4,999 ms of dead time before
+ * SQLite had even opened (measured in the durable startup log), so the barrier
+ * gives the frame a short grace period and the boot continues without it.
  */
 export const SPLASH_BARRIER_DEADLINE_MS = 250
 
@@ -72,7 +70,12 @@ function waitForSplashVisual(splash: BrowserWindow): Promise<SplashVisualOutcome
       resolveVisual(outcome)
     }
     const timeout = setTimeout(() => finish('timeout'), SPLASH_VISUAL_TIMEOUT_MS)
-    splash.once('ready-to-show', () => finish('ready'))
+    // The window exists hidden so its first frame is painted before anything can
+    // be on screen, and this is the reveal of that frame.
+    splash.once('ready-to-show', () => {
+      if (!splash.isDestroyed() && !splash.isVisible()) splash.show()
+      finish('ready')
+    })
     splash.once('closed', () => finish('closed'))
     splash.webContents.once('did-fail-load', () => finish('load-failed'))
   })
@@ -100,7 +103,14 @@ export function createSplashWindow(
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    show: true,
+    // Created hidden on purpose. A window that is already on screen while it waits
+    // for its first frame presents the window server's blank surface, which is
+    // white whatever `backgroundColor` says, so the launch screen would appear as a
+    // white rectangle before its content did. `paintWhenInitiallyHidden` keeps
+    // Chromium painting the hidden window, and `ready-to-show` then reveals a frame
+    // that already exists.
+    show: false,
+    paintWhenInitiallyHidden: true,
     backgroundColor: '#000000',
     webPreferences: {
       contextIsolation: true,

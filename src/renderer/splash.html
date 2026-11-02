@@ -23,7 +23,20 @@
         height: 100%;
       }
 
-      body {
+      /*
+       * `html body`, not `body`: the renderer build emits ONE stylesheet for every
+       * entry (`cssCodeSplit: false`, in electron.vite.config.ts), so this document
+       * is handed the app's own sheet as well, and its `body` rule paints
+       * `var(--color-app)`. This document never carries the `dark` class that sheet
+       * keys its tokens on, so that rule resolved to the LIGHT surface and the
+       * launch screen flashed cream before the logo: the whole window was the app's
+       * light background with near-white strokes on it.
+       *
+       * The descendant selector outranks that single-class-element rule whatever
+       * order the two sheets arrive in, so the launch screen stays black and keeps
+       * the brand face no matter what the shared sheet says about `body`.
+       */
+      html body {
         display: flex;
         align-items: center;
         justify-content: center;
@@ -32,6 +45,8 @@
         font-family:
           'Oven Box', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
           'Cascadia Code', monospace;
+        font-weight: 400;
+        -webkit-font-smoothing: antialiased;
         overflow: hidden;
         user-select: none;
         cursor: default;

@@ -988,7 +988,7 @@
              in a different list and travels with the reflow pair above instead
              of Svelte's FLIP. -->
       <div bind:this={threadsListElement}>
-        {#each threadSections as section (section.key)}
+        {#each threadSections as section, sectionIndex (section.key)}
           <!-- The section spans the heading and its rows, so `position: sticky`
                  keeps the heading put while its own rows pass underneath and the
                  next section pushes it out as that section reaches the top. Three
@@ -1038,6 +1038,13 @@
                 sectionThreads,
                 TIMELINE_PAGE_SIZE
               )}
+          <!-- Older history is the tail of this list, so its control belongs to
+               the last section, inside the fold that holds the tail's rows. Left
+               as a sibling of the sections it floated under a folded group with
+               no visible tie to it; nested here it reads as the section's own
+               ending and folds away with the group it continues. -->
+          {@const isLastSection = sectionIndex === threadSections.length - 1}
+          {@const showLoadOlder = isLastSection && !searchPanelActive && hasMoreHistory}
           <section>
             {#if section.group}
               {@const group = section.group}
@@ -1063,7 +1070,7 @@
                 />
               </div>
             {/if}
-            <div class="space-y-px {section.group ? 'pb-5' : ''}" role="list">
+            <div class="space-y-px {section.group && !isLastSection ? 'pb-5' : ''}" role="list">
               {#each sectionThreads as thread (thread.id)}
                 {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
                 <SidebarListRow
@@ -1119,6 +1126,17 @@
                 Show less
               </button>
             {/if}
+            {#if showLoadOlder}
+              <button
+                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait {section.group
+                  ? 'pb-5'
+                  : ''}"
+                disabled={historyLoading}
+                onclick={() => void onLoadHistoryPage()}
+              >
+                {historyLoading ? 'Loading history…' : 'Load older threads'}
+              </button>
+            {/if}
           </section>
         {:else}
           {#if searchPanelActive || pinnedTimelineThreads.length === 0}
@@ -1134,17 +1152,19 @@
                     : 'No threads in the selected projects'}
             </p>
           {/if}
+          <!-- No section owns the tail here, so the older-history control falls
+               back to the pane itself. -->
+          {#if !searchPanelActive && hasMoreHistory}
+            <button
+              class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+              disabled={historyLoading}
+              onclick={() => void onLoadHistoryPage()}
+            >
+              {historyLoading ? 'Loading history…' : 'Load older threads'}
+            </button>
+          {/if}
         {/each}
       </div>
-      {#if !searchPanelActive && hasMoreHistory}
-        <button
-          class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-          disabled={historyLoading}
-          onclick={() => void onLoadHistoryPage()}
-        >
-          {historyLoading ? 'Loading history…' : 'Load older threads'}
-        </button>
-      {/if}
     </SidebarListPane>
     <SidebarListPane name="projects" visible={!loading && projectsTreeVisible}>
       <!-- Pinned threads above everything. This block owns its rows, so it
