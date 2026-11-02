@@ -131,9 +131,22 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
     })
   }
 
-  /** Reads the view the panel was left on, once the board is bound. */
+  /**
+   * Reads the view the panel was left on, once the board is bound.
+   *
+   * The `$state` fields below are initialised before this board exists, so they
+   * can only be seeded from defaults. Seeding them again here is what actually
+   * restores the saved view on a remount (hiding the sidebar destroys this
+   * component, and so does navigating away from the project): without it a
+   * pending direct PR navigation such as "View PR" lands on an empty Changes
+   * tab, because the persisted `pulls` tab and its selected pull request are
+   * overwritten by those defaults.
+   */
   bindSavedView(): void {
     this.savedView = this.root.confirmAcceptAllConflicts.initialViewState()
+    this.activeTab = this.savedView.activeTab
+    this.selectedCommit = this.savedView.selectedCommit
+    this.selectedPullRequest = this.savedView.selectedPullRequest
   }
 
   /** Builds the controllers that read sibling units. */

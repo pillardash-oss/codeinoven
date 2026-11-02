@@ -166,12 +166,13 @@ export class GitStatusPanelEffects extends BoardUnit<GitStatusPanel> {
         () => void this.root.confirmPrMerge.loadGitHubAuth()
       )
       const unsubscribePullRequestOpen = gitPanelView.onPullRequestOpen(
-        (requestedProjectId, requestedThreadId, pullRequest) => {
-          if (
-            requestedProjectId !== this.root.props.projectId ||
-            requestedThreadId !== this.root.props.threadId
-          )
-            return
+        (requestedProjectId, _requestedThreadId, pullRequest) => {
+          // Only the project matters: the view state is stored per project (Git
+          // is repository context), so a request aimed at a sibling thread of
+          // the same project still owns this panel. Filtering on the thread as
+          // well dropped direct PR navigation whenever the panel was open on a
+          // different thread than the one the PR came from.
+          if (requestedProjectId !== this.root.props.projectId) return
           this.root.handlePrListAction.selectedPullRequest = pullRequest
           this.root.handlePrListAction.activeTab = 'pulls'
         }
