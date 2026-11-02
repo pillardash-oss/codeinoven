@@ -10,6 +10,7 @@ import type {
   DeploymentProviderContext
 } from './deployment-provider.interface'
 import { COOLIFY_BASE_URL_ENV, resolveCoolifyBaseUrl } from './base-url'
+import { capDeploymentLogPayload, MAX_DEPLOYMENT_LOG_CHARACTERS } from './deployment-log-cap'
 
 /** Human-readable platform name surfaced by the Cloud Deployments panel. */
 export const COOLIFY_DISPLAY_NAME = 'Coolify'
@@ -21,7 +22,7 @@ export const COOLIFY_API_PREFIX = '/api/v1'
 const COOLIFY_FETCH_TIMEOUT_MS = 15_000
 
 /** Cap on the raw deployment/runtime log text streamed into the app (roughly 200 KB). */
-const MAX_CONTAINER_LOG_BYTES = 200_000
+const MAX_CONTAINER_LOG_BYTES = MAX_DEPLOYMENT_LOG_CHARACTERS
 
 /** Runtime log lines requested when no deployment log is available. */
 const DEFAULT_LOG_LINES = 200
@@ -398,9 +399,13 @@ export class CoolifyProvider implements DeploymentProvider {
     return Number.isFinite(parsed) ? parsed : undefined
   }
 
+  /**
+   * Trim an oversized log while keeping a payload the renderer can still read.
+   * Structured (JSON array) logs keep their newest entries; plain text keeps
+   * its leading characters.
+   */
   private capLog(log: string): string {
-    if (log.length <= MAX_CONTAINER_LOG_BYTES) return log
-    return log.slice(0, MAX_CONTAINER_LOG_BYTES)
+    return capDeploymentLogPayload(log, MAX_CONTAINER_LOG_BYTES)
   }
 }
 

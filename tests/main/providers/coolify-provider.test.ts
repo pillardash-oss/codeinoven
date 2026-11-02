@@ -382,6 +382,27 @@ describe('CoolifyProvider', () => {
       expect(log).toHaveLength(200_000)
     })
 
+    it('keeps the newest entries when an oversized JSON log is trimmed', async () => {
+      const entries = Array.from({ length: 4000 }, (_, index) => ({
+        output: `run ${index}: ${'y'.repeat(40)}`,
+        type: 'stdout',
+        timestamp: '2026-08-11T06:49:50.202938Z'
+      }))
+      const oversized = JSON.stringify(entries)
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse([{ deployment_uuid: 'dep-1', status: 'failed', logs: oversized }])
+      )
+
+      const log = await makeProvider().getLogs('app-1')
+
+      expect(log.length).toBeLessThanOrEqual(200_000)
+      const kept: unknown = JSON.parse(log)
+      if (!Array.isArray(kept)) throw new Error('the trimmed log must stay a JSON array')
+      const last = kept[kept.length - 1] as { output?: string }
+      expect(last.output).toBe(`run 3999: ${'y'.repeat(40)}`)
+      expect(log.startsWith('[')).toBe(true)
+    })
+
     it('caps an oversized runtime log at the byte cap', async () => {
       const oversized = 'x'.repeat(250_000)
       fetchMock.mockResolvedValueOnce(jsonResponse([]))
