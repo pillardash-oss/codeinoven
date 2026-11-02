@@ -56,6 +56,22 @@ export interface SessionsHost {
  */
 export const BROWSER_IDENTITY_PRELOAD_FILE = 'browser-identity-preload.cjs'
 
+/** The id the identity preload is registered under on a jar's session. */
+const BROWSER_IDENTITY_PRELOAD_ID = 'codeinoven-browser-identity'
+
+/**
+ * The partitions whose passkey listener is already attached.
+ *
+ * A jar's `Session` belongs to the process, not to the window that configured it.
+ * Parking the app to the menu bar and reopening it tears this service down and builds
+ * a new one while Electron keeps the very same `Session` objects, so the wiring that
+ * a session keeps   an event listener, unlike a handler, is never replaced by being
+ * set again   must be attached once per session for the whole run. This set lives at
+ * module scope, which outlives every service, so a reopened window cannot stack a
+ * second listener on a jar that already answers passkey requests.
+ */
+const passkeyWiredPartitions = new Set<string>()
+
 export class BrowserServiceSessions {
   constructor(private readonly host: SessionsHost) {}
 
@@ -179,17 +195,20 @@ export class BrowserServiceSessions {
     // honestly instead of leaving both to hang: a request offering exactly one
     // account completes with that account, and a request that would need the user to
     // choose is declined, which lets the site fall back to its own sign-in.
-    browserSession.on('select-webauthn-account', (_event, details, callback) => {
-      const chosen =
-        details.accounts.length === 1 ? Reflect.get(details.accounts[0], 'credentialId') : null
-      Logger.info('Browser passkey account request answered', {
-        partition,
-        relyingPartyId: details.relyingPartyId,
-        offered: details.accounts.length,
-        chosen: typeof chosen === 'string'
+    if (!passkeyWiredPartitions.has(partition)) {
+      passkeyWiredPartitions.add(partition)
+      browserSession.on('select-webauthn-account', (_event, details, callback) => {
+        const chosen =
+          details.accounts.length === 1 ? Reflect.get(details.accounts[0], 'credentialId') : null
+        Logger.info('Browser passkey account request answered', {
+          partition,
+          relyingPartyId: details.relyingPartyId,
+          offered: details.accounts.length,
+          chosen: typeof chosen === 'string'
+        })
+        callback(typeof chosen === 'string' ? chosen : null)
       })
-      callback(typeof chosen === 'string' ? chosen : null)
-    })
+    }
     // One identity across everything a site can read. The user agent already names a
     // plain Chrome, while Chromium's own client hints and `navigator.userAgentData` name
     // Chromium, so a site that reads both is told two browsers rendered the page: that
@@ -197,14 +216,7 @@ export class BrowserServiceSessions {
     // be secure". The hints are rewritten on the way out, and the preload that makes the
     // page's own object agree has to be registered before the jar's first page exists.
     // See `browser-client-hints.ts`.
-    const identityPreload = this.ensureBrowserIdentityPreload()
-    if (identityPreload !== null) {
-      browserSession.registerPreloadScript({
-        type: 'frame',
-        id: 'codeinoven-browser-identity',
-        filePath: identityPreload
-      })
-    }
+    const identityPreload = this.installBrowserIdentityPreload(browserSession)
     browserSession.webRequest.onBeforeSendHeaders(
       { urls: ['http://*/*', 'https://*/*'] },
       (details, done) => {
@@ -221,6 +233,41 @@ export class BrowserServiceSessions {
     })
     this.host.configuredSessions.add(partition)
     return browserSession
+  }
+
+  /**
+   * Attach the identity preload to one jar, at most once per session.
+   *
+   * The registration lives on the `Session`, which outlives the window that made it,
+   * while `configuredSessions` is this service's own view and is emptied when the
+   * window is parked. So a reopened window reached a jar that still carried the very
+   * same script and registering the id again threw `Cannot register preload script
+   * with existing ID 'codeinoven-browser-identity'` out of whichever IPC call had
+   * asked for that jar   a design thumbnail, a tab open, a preview. Asking the
+   * session what it already has makes this idempotent: the same file is left alone,
+   * and a script pointing at a file that no longer exists (the config root moved) is
+   * swapped for the freshly written one.
+   */
+  installBrowserIdentityPreload(browserSession: Session): string | null {
+    const identityPreload = this.ensureBrowserIdentityPreload()
+    if (identityPreload === null) return null
+    try {
+      const registered = browserSession
+        .getPreloadScripts()
+        .find((script) => script.id === BROWSER_IDENTITY_PRELOAD_ID)
+      if (registered?.filePath === identityPreload) return identityPreload
+      if (registered) browserSession.unregisterPreloadScript(BROWSER_IDENTITY_PRELOAD_ID)
+      browserSession.registerPreloadScript({
+        type: 'frame',
+        id: BROWSER_IDENTITY_PRELOAD_ID,
+        filePath: identityPreload
+      })
+    } catch (error: unknown) {
+      // The identity preload only keeps a page's own client hints honest. A jar that
+      // refuses it is still a usable jar, so this never fails the caller's work.
+      Logger.error('The browser identity preload could not be attached:', error)
+    }
+    return identityPreload
   }
 
   /**
