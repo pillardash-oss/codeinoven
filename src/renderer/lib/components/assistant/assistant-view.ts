@@ -378,44 +378,37 @@ export function groupRunsByAssistant<
 }
 
 /**
- * The runs an assistant renders at its own level, beside its task rows, newest
- * first:
+ * The threads an assistant renders in its own list, as one chronology:
  *
- * - every task's runs, so a task row never nests them. An assistant's Getting
- *   started seed is the one exception while the assistant is still authoring (its
- *   knowledge unsaved): its runs stay nested inside it, since they are the failed
- *   startup passes that set the assistant up, and they lift here once the knowledge
- *   is saved;
- * - any run whose task is no longer on screen, so hiding the Getting started
- *   thread never hides the runs it produced.
+ * - every task that renders inside the assistant (a user-pinned task leaves for
+ *   the Pinned section and is not part of this list);
+ * - every run of those tasks, and any run whose task is no longer on screen at
+ *   all (a hidden Getting started thread), so hiding a thread never hides the
+ *   runs it produced.
  *
- * A run whose task renders elsewhere in the sidebar (a pinned task that left
- * for the Pinned section) is never hoisted: it keeps nesting under that row.
+ * A task and the runs it produced are threads of the same assistant, so nothing
+ * is grouped: a scheduled run can sit between two tasks, a Getting started
+ * thread can fall to the bottom of the list, and the whole list then sorts by
+ * last activity exactly as a project's threads do. Retention is the only thing
+ * the Getting started pin does (it keeps the thread from being evicted), and it
+ * does not lift the row out of its place here.
+ *
+ * A run whose task renders elsewhere (a pinned task, in the Pinned section)
+ * stays nested under that row, so it is left out of this list.
  */
-export function assistantSiblingRuns<
-  T extends Pick<Thread, 'assistantTaskId' | 'assistantId' | 'createdAt'>
->(
+export function assistantThreadRows<T extends { id: string; assistantTaskId?: string | null }>(
+  tasks: readonly T[],
   runs: readonly T[],
-  setupDone: boolean,
-  renderedTaskIds: ReadonlySet<string>,
-  tasksById: ReadonlyMap<string, Pick<Thread, 'assistantGettingStarted'>>
+  renderedElsewhereTaskIds: ReadonlySet<string>
 ): T[] {
-  const hoisted = runs.filter((run) => {
+  const rows: T[] = [...tasks]
+  for (const run of runs) {
     const taskId = run.assistantTaskId
-    if (!taskId) return false
-    const parent = tasksById.get(taskId)
-    // A parent that is not on screen at all (a hidden knowledge thread) has no row
-    // left to nest under, so the run rises to the assistant.
-    if (!parent) return true
-    // A parent that renders elsewhere (the Pinned section) still owns it.
-    if (!renderedTaskIds.has(taskId)) return false
-    // While the assistant is still authoring, its Getting started seed nests its
-    // own runs; every other task's runs, and the seed's once the knowledge is
-    // saved, lift to the assistant's own level.
-    return setupDone || !isAssistantSetupThread(parent)
-  })
-  hoisted.sort((a, b) => b.createdAt - a.createdAt)
-  return hoisted
+    if (!taskId) continue
+    if (renderedElsewhereTaskIds.has(taskId)) continue
+    rows.push(run)
+  }
+  return rows
 }
 
 /**

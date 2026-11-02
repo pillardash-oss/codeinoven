@@ -9,12 +9,11 @@
   import { ListRowReflow, rowArrangement } from '$lib/motion'
   import { ThreadOrderSettle } from '$lib/components/workspace/thread-order-settle.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
-  import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
+  import { pinnedThreadSort, threadSort } from '$lib/stores/workspace.svelte'
   import { sortAssistants } from '$shared/assistant-order'
   import {
     isAssistantSetupThread,
     isThreadWorking,
-    assistantKnowledgeComplete,
     type Assistant,
     type Thread
   } from '$shared/types'
@@ -33,8 +32,8 @@
     assistantForeignThread,
     assistantSubjectName,
     assistantThreadCount,
+    assistantThreadRows,
     previewRuns,
-    assistantSiblingRuns,
     runNeedsUserAttention
   } from './assistant-view'
 
@@ -263,15 +262,44 @@
   )
 
   /**
-   * Holds activity-driven reordering of the task lists back, exactly as the
+   * Every thread an assistant draws in its own list, already in one chronology.
+   *
+   * A task and the runs it produced are threads of the same assistant, so they
+   * are ordered against each other by their own last activity, exactly as a
+   * project's threads are. Nothing is grouped: a scheduled run can sit between
+   * two tasks, and an assistant's Getting started thread can fall to the bottom
+   * of the list. Its pin is retention only (it is never evicted) and does not
+   * lift the row out of its place here. Only a user-pinned task leaves for the
+   * Pinned section above, and it keeps its own runs nested there.
+   */
+  const threadRowsByAssistant = $derived.by(() => {
+    const pinnedTaskIds = new SvelteSet(pinnedTasks.map((task) => task.id))
+    const rowsByAssistant = new SvelteMap<string, Thread[]>()
+    for (const [assistantId, list] of nestedTasksByAssistant) {
+      rowsByAssistant.set(
+        assistantId,
+        assistantThreadRows(list, runsByAssistant.get(assistantId) ?? EMPTY_RUNS, pinnedTaskIds)
+      )
+    }
+    // Runs can outlive their assistant's task list (the task was removed), so an
+    // assistant left with only runs still draws them.
+    for (const [assistantId, runs] of runsByAssistant) {
+      if (rowsByAssistant.has(assistantId)) continue
+      rowsByAssistant.set(assistantId, assistantThreadRows(EMPTY_TASKS, runs, pinnedTaskIds))
+    }
+    for (const rows of rowsByAssistant.values()) rows.sort((a, b) => threadSort(a, b))
+    return rowsByAssistant
+  })
+
+  /**
+   * Holds activity-driven reordering of the assistant lists back, exactly as the
    * thread sidebars do: the lists sort by last activity, and a live run ticks
-   * constantly, so without this an assistant's tasks re-sort under the reader on
-   * every tick. Runs sort by creation and never move, so only the task lists are
-   * settled.
+   * constantly, so without this an assistant's rows re-sort under the reader on
+   * every tick.
    */
   const assistantOrderSettle = new ThreadOrderSettle()
 
-  /** One page of tasks per assistant is mounted; the rest is one click away. */
+  /** One page of rows per assistant is mounted; the rest is one click away. */
   const assistantTaskBudget = new RowPageBudget(THREAD_LIST_PAGE_SIZE)
 
   // The assistant list travels on the same pair of measurements as the thread
@@ -287,7 +315,8 @@
 
   /**
    * The rows the assistant list is about to draw, in render order: the pinned
-   * tasks, then each assistant's tasks and their runs, then the standalone tasks.
+   * tasks, then each assistant's own chronology of tasks and runs, then the
+   * standalone tasks.
    *
    * It is built from the data lists rather than mirrored from every fold, so it
    * only changes when rows really move. A fold animates its own height (`slide`)
@@ -299,10 +328,7 @@
       { key: 'pinned', rowKeys: pinnedTasks.map((task) => task.id) },
       ...orderedAssistants.map((assistant) => ({
         key: `assistant:${assistant.id}`,
-        rowKeys: [
-          ...nestedAssistantTasks(assistant.id).map((task) => task.id),
-          ...runsOfAssistant(assistant.id).map((run) => run.id)
-        ]
+        rowKeys: threadRowsOfAssistant(assistant.id).map((row) => row.id)
       })),
       { key: 'standalone', rowKeys: standaloneTasks.map((task) => task.id) }
     ])
@@ -314,7 +340,7 @@
     for (const assistant of orderedAssistants) {
       const key = `assistant:${assistant.id}`
       activeKeys.add(key)
-      assistantOrderSettle.sync(key, nestedTasksByAssistant.get(assistant.id) ?? EMPTY_TASKS)
+      assistantOrderSettle.sync(key, threadRowsOfAssistant(assistant.id))
     }
     assistantOrderSettle.sync('assistant:standalone', standaloneTasks)
     assistantOrderSettle.prune(activeKeys)
@@ -400,40 +426,13 @@
     return assistantSubjectName(parent, assistantName, '') || null
   }
 
-  /** The runs an assistant shows at its own level, beside its task rows (see
-   *  `assistantSiblingRuns`). */
-  function siblingRuns(assistant: Assistant): readonly Thread[] {
-    const runs = runsOfAssistant(assistant.id)
-    if (runs.length === 0) return EMPTY_RUNS
-    const renderedTaskIds = new Set(nestedAssistantTasks(assistant.id).map((task) => task.id))
-    return assistantSiblingRuns(
-      runs,
-      assistantKnowledgeComplete(assistant),
-      renderedTaskIds,
-      tasksById
-    )
-  }
-
   /**
-   * Whether a task row nests its own runs. Only an assistant's Getting started
-   * thread nests, and only while the assistant is still being written: its runs
-   * are the failed startup passes that set the assistant up. Every other task's
-   * runs, and the seed's once its knowledge is saved, lift to the assistant's own
-   * level instead, so a task row never swallows a run. An assistant-less task has
-   * no assistant row to lift them to, so it keeps them (see the Tasks and Pinned
-   * sections, which always nest).
+   * One assistant's tasks and runs in their own last-activity chronology (see
+   * `threadRowsByAssistant`). Nothing is grouped here: the rows are the threads
+   * themselves, in the one order the reader sees.
    */
-  function taskNestsRuns(task: Thread, assistant: Assistant): boolean {
-    return !assistantKnowledgeComplete(assistant) && isAssistantSetupThread(task)
-  }
-
-  /**
-   * The assistant's tasks that render nested under it. A user-pinned task leaves
-   * for the Pinned section above, but a pinned knowledge thread stays here: its pin
-   * is retention, not a request to move it out of its assistant.
-   */
-  function nestedAssistantTasks(assistantId: string): readonly Thread[] {
-    return nestedTasksByAssistant.get(assistantId) ?? EMPTY_TASKS
+  function threadRowsOfAssistant(assistantId: string): readonly Thread[] {
+    return threadRowsByAssistant.get(assistantId) ?? EMPTY_TASKS
   }
 
   /** The accent colour a flat (pinned) row should tint its icon with. */
@@ -454,30 +453,22 @@
   /**
    * Whether an assistant's rows are on screen. The user's own call wins; without
    * one the assistant follows the automatic rule: open while its own inline search
-   * is open, and open while the selected thread is one of its rows, meaning its
-   * task, a run nested under that task, or a run lifted to the assistant's own
-   * level, so the row the user is working in stays on screen.
-   *
-   * `siblingRunRows` is passed in because every render call site already resolves
-   * it for the run rows it draws; only a click has to resolve it again.
+   * is open, and open while the selected thread is one of the rows it draws, so
+   * the row the user is working in stays on screen.
    */
-  function assistantExpanded(assistant: Assistant, siblingRunRows: readonly Thread[]): boolean {
+  function assistantExpanded(assistant: Assistant): boolean {
     const choice = assistantFoldChoice.get(assistant.id)
     if (choice !== undefined) return choice
     if (assistantSearchOpen.has(assistant.id)) return true
     const selected = selectedThreadId
     if (!selected) return false
-    return (
-      nestedAssistantTasks(assistant.id).some(
-        (task) => task.id === selected || runsFor(task.id).some((run) => run.id === selected)
-      ) || siblingRunRows.some((run) => run.id === selected)
-    )
+    return threadRowsOfAssistant(assistant.id).some((thread) => thread.id === selected)
   }
 
   /** Fold or open an assistant: the row flips what the user is looking at, and that
    *  decision outranks the automatic rule from then on. */
   function toggleAssistant(assistant: Assistant): void {
-    assistantFoldChoice.set(assistant.id, !assistantExpanded(assistant, siblingRuns(assistant)))
+    assistantFoldChoice.set(assistant.id, !assistantExpanded(assistant))
   }
 
   function openAssistantSearch(assistant: Assistant): void {
@@ -490,17 +481,38 @@
     assistantSearchQueries.delete(assistant.id)
   }
 
-  function filteredAssistantTasks(assistant: Assistant): readonly Thread[] {
+  /**
+   * The rows an assistant draws, in the settled order the reader sees. The inline
+   * query narrows them and never reorders them, so a search never moves a row out
+   * from where the reader remembers it.
+   */
+  function filteredAssistantRows(assistant: Assistant): readonly Thread[] {
     const query = (assistantSearchQueries.get(assistant.id) ?? '').trim().toLowerCase()
-    // The settled order is what the reader sees, so both the open list and the
-    // search filter read from it; the query then narrows the rows, never reorders
-    // them.
-    const list = assistantOrderSettle.view(
+    const rows = assistantOrderSettle.view(
       `assistant:${assistant.id}`,
-      nestedAssistantTasks(assistant.id)
+      threadRowsOfAssistant(assistant.id)
     )
-    if (!assistantSearchOpen.has(assistant.id) || query.length === 0) return list
-    return list.filter((task) => task.title.toLowerCase().includes(query))
+    if (!assistantSearchOpen.has(assistant.id) || query.length === 0) return rows
+    return rows.filter((row) => row.title.toLowerCase().includes(query))
+  }
+
+  /**
+   * The rows a page mounts. The head slice is the page; a run that needs the user
+   * is appended even when it sits beyond it, because a failure or a card waiting
+   * for an answer is the loudest thing this list reports and paging must not bury
+   * it the way it buries history.
+   */
+  function assistantPage(assistant: Assistant, rows: readonly Thread[]): Thread[] {
+    const shown = assistantTaskBudget.visibleRows(
+      `assistant:${assistant.id}`,
+      rows,
+      selectedThreadId
+    )
+    const shownIds = new SvelteSet(shown.map((row) => row.id))
+    const needingUser = rows.filter(
+      (row) => Boolean(row.assistantTaskId) && !shownIds.has(row.id) && runNeedsUserAttention(row)
+    )
+    return needingUser.length === 0 ? shown : [...shown, ...needingUser]
   }
 
   function startEdit(assistant: Assistant): void {
@@ -576,6 +588,47 @@
   {/if}
 {/snippet}
 
+{#snippet assistantThreadRow(assistant: Assistant, row: Thread)}
+  {@const isRun = Boolean(row.assistantTaskId)}
+  <SidebarListRow rowKey={row.id} createdAt={row.createdAt} attachedAt={assistantListAttachedAt}>
+    <AssistantTaskRow
+      task={row}
+      variant={isRun ? 'run' : 'task'}
+      media={isRun
+        ? []
+        : [
+            ...new SvelteSet(
+              [row, ...runsFor(row.id)].flatMap((thread) => threadMediaActivity(thread.id))
+            )
+          ]}
+      foreignThread={assistantForeignThread(row, runsFor(row.id), (projectId, threadId) =>
+        foreignRuns.isForeign(projectId, threadId)
+      )}
+      color={assistant.color}
+      active={row.id === selectedThreadId}
+      missed={missedThreadIds.has(row.id)}
+      nextRunAt={isRun ? null : assistantStore.nextRunForTask(row)}
+      contextLabel={isRun ? runContextLabel(row, false, assistant.name) : null}
+      scheduled={assistantStore.taskScheduled(row)}
+      onToggleScheduled={(target) => void toggleTaskScheduled(target)}
+      onSelect={(selected) => {
+        // Working inside an assistant keeps it open: the user's own call, so the
+        // automatic rule cannot fold it back.
+        assistantFoldChoice.set(assistant.id, true)
+        onOpenTask(selected)
+        if (!isRun) onOpenAssistantKnowledge(assistant)
+      }}
+      onRename={onRenameTask}
+      onTogglePin={onTogglePinTask}
+      onDelete={onDeleteTask}
+      onFork={onForkTask}
+      onOpenNotes={onOpenTaskNotes}
+      onHandedOff={onHandedOffTask}
+      {onHideKnowledge}
+    />
+  </SidebarListRow>
+{/snippet}
+
 {#snippet taskWithRuns(
   task: Thread,
   color: string | undefined,
@@ -647,17 +700,12 @@
 
       {#each orderedAssistants as assistant (assistant.id)}
         {@const assistantTaskList = assistantTasks(assistant.id)}
-        {@const visibleTasks = filteredAssistantTasks(assistant)}
-        {@const tasksShown = assistantTaskBudget.visibleRows(
-          `assistant:${assistant.id}`,
-          visibleTasks,
-          selectedThreadId
-        )}
-        {@const tasksHidden = assistantTaskBudget.hiddenCount(visibleTasks, tasksShown)}
+        {@const visibleRows = filteredAssistantRows(assistant)}
+        {@const rowsShown = assistantPage(assistant, visibleRows)}
+        {@const rowsHidden = assistantTaskBudget.hiddenCount(visibleRows, rowsShown)}
         {@const searching = assistantSearchOpen.has(assistant.id)}
         {@const query = assistantSearchQueries.get(assistant.id) ?? ''}
-        {@const siblingRunRows = siblingRuns(assistant)}
-        {@const isExpanded = assistantExpanded(assistant, siblingRunRows)}
+        {@const isExpanded = assistantExpanded(assistant)}
         <AssistantRow
           {assistant}
           media={[
@@ -693,39 +741,26 @@
         />
         {#if isExpanded}
           <div class="mb-1 ml-2 border-l border-border pl-1.5">
-            {#if searching && query.trim().length > 0 && visibleTasks.length === 0}
+            {#if searching && query.trim().length > 0 && visibleRows.length === 0}
               <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
             {:else}
-              {#each tasksShown as task (task.id)}
-                {@render taskWithRuns(
-                  task,
-                  assistant.color,
-                  (selected) => {
-                    // Working inside an assistant keeps it open: the user's own
-                    // call, so the automatic rule cannot fold it back.
-                    assistantFoldChoice.set(assistant.id, true)
-                    onOpenTask(selected)
-                    onOpenAssistantKnowledge(assistant)
-                  },
-                  taskNestsRuns(task, assistant)
-                )}
+              {#each rowsShown as row (row.id)}
+                {@render assistantThreadRow(assistant, row)}
               {:else}
-                {#if siblingRunRows.length === 0}
-                  <p class="px-2 py-1 text-[0.625rem] text-dimmed">
-                    {assistantTaskList.length > 0
-                      ? `${assistantTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
-                      : 'No tasks in this assistant yet.'}
-                  </p>
-                {/if}
+                <p class="px-2 py-1 text-[0.625rem] text-dimmed">
+                  {assistantTaskList.length > 0
+                    ? `${assistantTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
+                    : 'No tasks in this assistant yet.'}
+                </p>
               {/each}
-              {#if tasksHidden > 0}
+              {#if rowsHidden > 0}
                 <button
                   type="button"
                   class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                   onclick={() =>
-                    assistantTaskBudget.showMore(`assistant:${assistant.id}`, visibleTasks.length)}
+                    assistantTaskBudget.showMore(`assistant:${assistant.id}`, visibleRows.length)}
                 >
-                  Show {tasksHidden} more
+                  Show {rowsHidden} more
                 </button>
               {:else if assistantTaskBudget.visibleCount(`assistant:${assistant.id}`) > THREAD_LIST_PAGE_SIZE}
                 <button
@@ -737,14 +772,6 @@
                 </button>
               {/if}
             {/if}
-            {@render runRows(
-              siblingRunRows,
-              assistant.color,
-              `assistant:${assistant.id}`,
-              `Runs of ${assistant.name}`,
-              false,
-              assistant.name
-            )}
           </div>
         {/if}
       {/each}

@@ -12,7 +12,7 @@ import {
   handoffSummary,
   isAssistantConfirmation,
   assistantGap,
-  assistantSiblingRuns,
+  assistantThreadRows,
   latestKnowledgeDraft,
   latestAssistantPlanDraft,
   missedTabVisible,
@@ -172,41 +172,45 @@ describe('assistant-view presentation helpers', () => {
     expect(grouped.get('r2')?.map((run) => run.id)).toEqual(['other-run'])
   })
 
-  it('keeps a setting-up assistant’s runs nested inside Getting started', () => {
-    const runs = [
-      { id: 'run-new', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 30 },
-      { id: 'run-old', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 10 }
-    ]
-    const tasksById = new Map([['seed', { assistantGettingStarted: true }]])
-    const rendered = new Set(['seed'])
-    expect(assistantSiblingRuns(runs, false, rendered, tasksById)).toEqual([])
+  it('merges a task’s runs into the assistant’s own row list', () => {
+    const rows = assistantThreadRows(
+      [
+        { id: 'task-1', assistantTaskId: null },
+        { id: 'seed', assistantTaskId: null }
+      ],
+      [
+        { id: 'run-new', assistantTaskId: 'task-1' },
+        { id: 'run-old', assistantTaskId: 'task-1' }
+      ],
+      new Set()
+    )
+    // Nothing is grouped: the run rows sit in the same list as the tasks, which is
+    // what lets the caller order all of them by last activity.
+    expect(rows.map((row) => row.id)).toEqual(['task-1', 'seed', 'run-new', 'run-old'])
   })
 
-  it('moves a set-up assistant’s Getting started runs beside it, newest first', () => {
-    const runs = [
-      { id: 'run-old', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 10 },
-      { id: 'run-new', assistantTaskId: 'seed', assistantId: 'r1', createdAt: 30 }
-    ]
-    const tasksById = new Map([['seed', { assistantGettingStarted: true }]])
-    const rendered = new Set(['seed'])
-    expect(assistantSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
-      'run-new',
-      'run-old'
-    ])
+  it('leaves a run whose task renders elsewhere (a pinned task) out of the list', () => {
+    const rows = assistantThreadRows(
+      [{ id: 'seed', assistantTaskId: null }],
+      [
+        { id: 'pinned-run', assistantTaskId: 'pinned-task' },
+        { id: 'seed-run', assistantTaskId: 'seed' }
+      ],
+      new Set(['pinned-task'])
+    )
+    expect(rows.map((row) => row.id)).toEqual(['seed', 'seed-run'])
   })
 
-  it('hoists a hidden task’s runs, but never one whose task nests elsewhere', () => {
-    const runs = [
-      { id: 'pinned-task-run', assistantTaskId: 'pinned-task', assistantId: 'r1', createdAt: 5 },
-      { id: 'hidden-seed-run', assistantTaskId: 'hidden-seed', assistantId: 'r1', createdAt: 15 }
-    ]
-    // The pinned task stays on screen (in the Pinned section), so its run is
-    // not rendered under the assistant; the hidden seed is not on screen at all.
-    const tasksById = new Map([['pinned-task', { assistantGettingStarted: false }]])
-    const rendered = new Set<string>()
-    expect(assistantSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
-      'hidden-seed-run'
-    ])
+  it('keeps a hidden task’s runs, and every run of a removed task', () => {
+    const rows = assistantThreadRows(
+      [],
+      [
+        { id: 'hidden-seed-run', assistantTaskId: 'hidden-seed' },
+        { id: 'orphan-run', assistantTaskId: 'deleted-task' }
+      ],
+      new Set()
+    )
+    expect(rows.map((row) => row.id)).toEqual(['hidden-seed-run', 'orphan-run'])
   })
 })
 
