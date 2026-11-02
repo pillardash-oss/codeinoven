@@ -65,10 +65,11 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * so every effect here is owned by the component.
    */
   init(): void {
-    // A trace the reader expanded belongs to the visit that expanded it: opening
-    // this thread again starts from the fold each turn asks for, so a settled
-    // thread never returns with an old turn's work expanded. Only the running
-    // turn re-opens, which it does by itself once it is live.
+    // A trace the reader expanded on a settled turn belongs to the visit that
+    // expanded it: opening this thread again starts from the fold each turn asks
+    // for, so a settled thread never returns with an old turn's work expanded.
+    // A run that is still live keeps the trace it was showing, because coming
+    // back to a working thread must not fold the work in progress.
     agentRuns.resetTraceView(
       this.root.handleAgentEvent.thread.projectId,
       this.root.pollStreamParts.conversationId
