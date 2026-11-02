@@ -133,6 +133,11 @@
   )
   /** Whether this tree is reading a checkout that lives on an Oven. */
   let ovenFile = $derived(Boolean(ovenRootThread(projectId)))
+  // Register the mount before any state is prepared, so this panel opens the
+  // conversation's own surface instead of creating a threadless one first. The
+  // effect below keeps it current if the mount changes while it stays mounted.
+  // svelte-ignore state_referenced_locally
+  projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   $effect(() => {
     projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   })

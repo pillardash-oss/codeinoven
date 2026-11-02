@@ -24,6 +24,7 @@ import {
   type TerminalPlacement,
   type ThreadSidebarContext
 } from './context-sidebar-types'
+import { usesThreadWorkspaceMount } from '$shared/types'
 import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 /**
@@ -35,6 +36,14 @@ import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
 export interface SidebarTabContextsHost {
   activeProjectId(): string | null
   activeThreadId(): string | null
+  /**
+   * The conversation a thread's surfaces belong to (see
+   * `conversationScopeId`). An assistant's threads share the assistant, a
+   * standalone chat or assistant-less task owns its own, and a project's
+   * threads share the project. The sidebar store holds no thread rows, so the
+   * workspace resolves this one identity.
+   */
+  threadScopeId(projectId: string, threadId: string): string
   terminalPlacement(): TerminalPlacement
   hideBrowserForFocus(): void
   clearNotifications(): void
@@ -65,15 +74,19 @@ export class SidebarTabContexts {
 
   get activeProjectContext(): ProjectSidebarContext | null {
     const activeProjectId = this.host.activeProjectId()
-    return activeProjectId ? (this.projectContexts[activeProjectId] ?? null) : null
+    if (!activeProjectId) return null
+    return (
+      this.projectContexts[this.projectContextKey(activeProjectId, this.host.activeThreadId())] ??
+      null
+    )
   }
 
   contextFor(projectId: string, threadId: string): ThreadSidebarContext | null {
     return this.contexts[contextKey(projectId, threadId)] ?? null
   }
 
-  projectContextFor(projectId: string): ProjectSidebarContext | null {
-    return this.projectContexts[projectId] ?? null
+  projectContextFor(projectId: string, threadId?: string | null): ProjectSidebarContext | null {
+    return this.projectContexts[this.projectContextKey(projectId, threadId ?? null)] ?? null
   }
 
   activeTabIdForKind(
@@ -118,25 +131,71 @@ export class SidebarTabContexts {
     return this.contexts[key]
   }
 
-  ensureProjectContext(projectId: string): ProjectSidebarContext {
-    const existing = this.projectContexts[projectId]
+  /**
+   * The key one project's sidebar tabs live under.
+   *
+   * A real project's threads share its workspace, so they share one context and
+   * a file the user opened in one thread is still open in the next. A hidden
+   * conversation container (the inbox, the assistant space, the global browser)
+   * is different: it is one project holding many independent conversations whose
+   * file trees mount different directories, so every conversation owns its own
+   * context and never sees another conversation's file tabs.
+   */
+  private projectContextKey(projectId: string, threadId: string | null): string {
+    if (!usesThreadWorkspaceMount(projectId)) return projectId
+    const scopeId = threadId ? this.host.threadScopeId(projectId, threadId) : ''
+    return scopeId ? `${projectId}::${scopeId}` : projectId
+  }
+
+  /** Every context holding one project's tabs. For a conversation container that
+   *  is only the conversation on screen: a rename or a pin belongs to the files
+   *  the user is looking at, and the same relative path exists in another
+   *  assistant's own directory. */
+  private projectContextViews(projectId: string): ProjectSidebarContext[] {
+    if (!usesThreadWorkspaceMount(projectId)) return Object.values(this.projectContexts)
+    const context =
+      this.projectContexts[this.projectContextKey(projectId, this.host.activeThreadId())]
+    return context ? [context] : []
+  }
+
+  ensureProjectContext(projectId: string, threadId?: string | null): ProjectSidebarContext {
+    const key = this.projectContextKey(projectId, threadId ?? null)
+    const existing = this.projectContexts[key]
     if (existing) return existing
+    // A conversation entering the region for the first time inherits the region
+    // the user just left in this project: which tool the sidebar was showing and
+    // whether it was open at all. Where the tool's content goes per conversation
+    // is `ensureActiveThreadPanel`'s job. A real project has one context, so
+    // there is nothing to inherit.
+    const region = this.siblingRegion(projectId)
     const context: ProjectSidebarContext = {
       projectId,
       tabs: [],
-      activeKind: null,
+      activeKind: region?.activeKind ?? null,
       activeTabIds: {},
       terminalActiveTabId: null,
-      visible: false,
-      terminalDockOpen: false,
+      visible: region?.visible ?? false,
+      terminalDockOpen: region?.terminalDockOpen ?? false,
       terminalSequence: 0
     }
-    this.projectContexts[projectId] = context
-    return this.projectContexts[projectId]
+    this.projectContexts[key] = context
+    return this.projectContexts[key]
+  }
+
+  /** The region an existing conversation of the same project is showing, which
+   *  a conversation entering for the first time carries over. */
+  private siblingRegion(projectId: string): ProjectSidebarContext | null {
+    let fallback: ProjectSidebarContext | null = null
+    for (const context of Object.values(this.projectContexts)) {
+      if (context.projectId !== projectId) continue
+      if (context.visible && context.activeKind) return context
+      fallback ??= context
+    }
+    return fallback
   }
 
   rebindProjectTabs(projectId: string, threadId: string): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     for (const tab of context.tabs) {
       // The knowledge panel's thread is its own anchor task, not "the current
       // thread": re-targeting it would let an assistant-less panel turn into
@@ -148,9 +207,13 @@ export class SidebarTabContexts {
   }
 
   ensureActiveThreadPanel(projectId: string, threadId: string, threadTitle?: string): void {
-    const project = this.ensureProjectContext(projectId)
+    const project = this.ensureProjectContext(projectId, threadId)
     const kind = project.activeKind
-    if (!project.visible || !kind || PROJECT_TAB_KINDS.has(kind)) return
+    if (!project.visible || !kind) return
+    if (PROJECT_TAB_KINDS.has(kind)) {
+      this.ensureProjectPanel(projectId, threadId, kind)
+      return
+    }
     const thread = this.ensureContext(projectId, threadId)
     const existing = thread.tabs.filter((tab) => tab.kind === kind).at(-1)
     if (existing) {
@@ -186,6 +249,41 @@ export class SidebarTabContexts {
     else if (kind === 'debugger') this.openDebugger(projectId, threadId)
     else if (kind === 'thread-note' && threadTitle)
       this.openThreadNote(projectId, threadId, threadTitle)
+  }
+
+  /**
+   * Carry the region's active project tool over to the conversation now on
+   * screen.
+   *
+   * A real project's threads share one context, so the tool the user had open is
+   * already there and this is a no-op. A hidden conversation container gives each
+   * conversation its own context, so the conversation being entered may have no
+   * tab of that kind yet. The tools that cost nothing to open are opened for it,
+   * which is what keeps the sidebar where the user left it while showing that
+   * conversation's own files. A terminal, cloud-deployment list, memory section or
+   * assistant knowledge panel is deliberately never opened on someone's behalf (a
+   * terminal would spawn a shell, and the rest need an anchor only their own
+   * opener knows), so the region closes instead of showing a panel for a
+   * conversation that is not on screen.
+   */
+  private ensureProjectPanel(
+    projectId: string,
+    threadId: string,
+    kind: ContextSidebarTab['kind']
+  ): void {
+    if (!usesThreadWorkspaceMount(projectId)) return
+    const context = this.ensureProjectContext(projectId, threadId)
+    const existing = context.tabs.filter((tab) => tab.kind === kind).at(-1)
+    if (existing) {
+      context.activeKind = kind
+      context.activeTabIds[kind] = context.activeTabIds[kind] ?? existing.id
+      context.visible = true
+      return
+    }
+    if (kind === 'files') this.openFiles(projectId, threadId)
+    else if (kind === 'git') this.openGit(projectId, threadId)
+    else if (kind === 'actions') this.openActions(projectId, threadId)
+    else context.visible = false
   }
 
   /** Focus an existing tab in its owning project or thread context. */
@@ -252,7 +350,7 @@ export class SidebarTabContexts {
    *  looking at. The browser tab only ever appears when no file has been
    *  opened yet. */
   openFiles(projectId: string, threadId: string): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const filesTabs = context.tabs.filter((tab) => tab.kind === 'files')
     if (filesTabs.length > 0) {
       const activeTab = context.tabs.find((tab) => tab.id === context.activeTabIds.files)
@@ -280,7 +378,7 @@ export class SidebarTabContexts {
     path: string,
     preview = false
   ): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const id = `files:${projectId}:${fileTabId}`
     const existingIndexes = context.tabs.reduce<number[]>((indexes, tab, index) => {
       if (tab.id === id) indexes.push(index)
@@ -334,7 +432,7 @@ export class SidebarTabContexts {
     nextFileTabId: string,
     nextPath: string
   ): void {
-    for (const context of Object.values(this.projectContexts)) {
+    for (const context of this.projectContextViews(projectId)) {
       const tab = context.tabs.find(
         (t) => t.kind === 'files' && t.projectId === projectId && t.fileTabId === previousFileTabId
       )
@@ -360,7 +458,7 @@ export class SidebarTabContexts {
      *  file right now (a preview replacing another preview). */
     focus: boolean
   ): boolean {
-    for (const context of Object.values(this.projectContexts)) {
+    for (const context of this.projectContextViews(projectId)) {
       const index = context.tabs.findIndex(
         (tab) =>
           tab.kind === 'files' && tab.projectId === projectId && tab.fileTabId === previousFileTabId
@@ -393,7 +491,7 @@ export class SidebarTabContexts {
   /** Stop rendering a file tab as a preview (italicised), used when the user
    *  starts editing it, which pins the tab. */
   pinProjectFile(projectId: string, fileTabId: string): void {
-    for (const context of Object.values(this.projectContexts)) {
+    for (const context of this.projectContextViews(projectId)) {
       for (const tab of context.tabs) {
         if (
           tab.kind === 'files' &&
@@ -408,7 +506,7 @@ export class SidebarTabContexts {
   }
 
   closeProjectFile(projectId: string, fileTabIds: ReadonlySet<string>): void {
-    for (const context of Object.values(this.projectContexts)) {
+    for (const context of this.projectContextViews(projectId)) {
       // eslint-disable-next-line svelte/prefer-svelte-reactivity
       const closingIds = new Set(
         context.tabs
@@ -505,7 +603,7 @@ export class SidebarTabContexts {
   }
 
   openGit(projectId: string, threadId: string): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const id = `git:${projectId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
@@ -529,7 +627,7 @@ export class SidebarTabContexts {
   }
 
   openActions(projectId: string, threadId: string): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const id = `actions:${projectId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
@@ -638,7 +736,7 @@ export class SidebarTabContexts {
   }
 
   openCloudDeployments(projectId: string, threadId: string): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const id = `cloud-deployment:${projectId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
@@ -709,7 +807,7 @@ export class SidebarTabContexts {
     assistantId: string | null,
     title: string
   ): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const id = `assistant-knowledge:${projectId}:${assistantId ?? threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing && existing.kind === 'assistant-knowledge') {
@@ -736,7 +834,7 @@ export class SidebarTabContexts {
     section?: MemorySection,
     assistantId?: string
   ): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const id = `memory:${projectId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
@@ -914,7 +1012,7 @@ export class SidebarTabContexts {
   }
 
   openPrimaryTerminal(projectId: string, threadId: string): void {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     const existing = context.tabs.find(
       (tab) => tab.kind === 'terminal' && tab.projectId === projectId
     )
@@ -927,15 +1025,20 @@ export class SidebarTabContexts {
   }
 
   openNewTerminal(projectId: string, threadId: string, startingDirectory?: string): string {
-    const context = this.ensureProjectContext(projectId)
+    const context = this.ensureProjectContext(projectId, threadId)
     context.terminalSequence += 1
     const sequence = context.terminalSequence
-    const id = `terminal:${projectId}:${sequence}`
+    // A conversation container hosts several independent conversations, each with
+    // its own context, so two of them would otherwise number their first shell
+    // alike and the second would take over the first one's pty. The conversation
+    // keeps every shell's identity unique.
+    const scope = usesThreadWorkspaceMount(projectId) ? threadId : projectId
+    const id = `terminal:${scope}:${sequence}`
     const tab: TerminalContextTab = {
       id,
       kind: 'terminal',
       title: sequence === 1 ? 'Terminal' : `Terminal ${sequence}`,
-      terminalId: `workbench-${projectId}-${sequence}`,
+      terminalId: `workbench-${scope}-${sequence}`,
       projectId,
       threadId
     }
@@ -1067,7 +1170,7 @@ export class SidebarTabContexts {
     this.recordPanelVisit(tab)
     this.host.hideBrowserForFocus()
     context.activeTabIds[tab.kind] = id
-    const project = this.ensureProjectContext(context.projectId)
+    const project = this.ensureProjectContext(context.projectId, context.threadId)
     project.activeKind = tab.kind
     // A panel focused on a thread that is not the one on screen is remembered
     // where it belongs, but it must not surface the region: the tab lives in that

@@ -54,16 +54,15 @@ async function ensureProjectFilesReady(projectId: string, mountThreadId?: string
 
   // Citation clicks must be able to create the file surface themselves.
   // Prepare both reactive stores synchronously so Workspace can mount the
-  // sidebar immediately while the directory IPC request continues.
-  projectFilesWorkspace.ensureState(projectId)
-  if (activeThreadId !== threadId) contextSidebarState.activateThread(projectId, threadId)
-  contextSidebarState.openFiles(projectId, threadId)
-  // Conversations browse their own app-owned workspace directory (a chat's
-  // workspace directory, an assistant task's working directory); the mount must
-  // be registered before the root listing resolves through the thread root.
+  // sidebar immediately while the directory IPC request continues. The mount is
+  // registered first: it selects which conversation's surface this is, and a
+  // citation belongs to the conversation that cited it.
   if (usesThreadWorkspaceMount(projectId)) {
     projectFilesWorkspace.setThreadMount(projectId, mountThreadId ?? (threadId || null))
   }
+  projectFilesWorkspace.ensureState(projectId)
+  if (activeThreadId !== threadId) contextSidebarState.activateThread(projectId, threadId)
+  contextSidebarState.openFiles(projectId, threadId)
   await projectFilesWorkspace.loadDirectory(projectId, '')
 }
 

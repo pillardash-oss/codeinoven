@@ -52,10 +52,16 @@ export { createProjectFilesState } from './project-files-state'
 
 class ProjectFilesWorkspace {
   private projects: Record<string, ProjectFilesState> = $state({})
+  /** Conversation whose own workspace directory each project's file tree is
+   *  mounted on right now. Lives outside the states because it is what selects
+   *  which state applies: a hidden conversation container is one project holding
+   *  many independent conversations, and each of them browses its own directory. */
+  private mountThreads: Record<string, string | null> = $state({})
 
   private explorer = new ProjectFilesExplorer({
     stateFor: (projectId) => this.ensureState(projectId),
     existingState: (projectId) => this.projects[this.cacheKey(projectId)],
+    stateKeyFor: (projectId) => this.cacheKey(projectId),
     scopeFor: (projectId) => this.scopeFor(projectId),
     threadArg: (projectId) => this.threadArg(projectId),
     mountKeyFor: (projectId) => this.mountKeyFor(projectId),
@@ -71,12 +77,24 @@ class ProjectFilesWorkspace {
     this.explorer.clipboard = value
   }
 
-  /** The scope bucket the project's file operations must target right now.
-   *  This value is sent to the main process, so it must stay a real scope
-   *  bucket id. A mounted conversation workspace is threaded separately via
-   *  `threadArg`; only cache keys below use the mount-aware key. */
+  /** The state key one project's file surface lives under.
+   *
+   *  A real project's threads share its workspace, so they share one surface and
+   *  a file the user opened in one thread is still open in the next. A hidden
+   *  conversation container (a chat, an assistant task, a browser conversation)
+   *  mounts each conversation's own workspace directory instead, so the open
+   *  files, their editor sessions, and the cached listings belong to the
+   *  conversation that read them and never surface in another one. */
   private cacheKey(projectId: string): string {
-    return ovenRootKey(projectId) ?? projectId
+    const ovenKey = ovenRootKey(projectId)
+    if (ovenKey) return ovenKey
+    if (!usesThreadWorkspaceMount(projectId)) return projectId
+    return `${projectId}::${this.mountThread(projectId) ?? ''}`
+  }
+
+  /** The conversation the project's file surface is mounted on right now. */
+  private mountThread(projectId: string): string | null {
+    return this.mountThreads[projectId] ?? null
   }
 
   private scopeFor(projectId: string): string {
@@ -89,16 +107,18 @@ class ProjectFilesWorkspace {
   private mountKeyFor(projectId: string): string {
     const ovenKey = ovenRootKey(projectId)
     if (ovenKey) return ovenKey
-    const threadId = this.projects[projectId]?.mountThreadId ?? null
+    const threadId = this.mountThread(projectId)
     if (threadId && usesThreadWorkspaceMount(projectId)) return `thread:${threadId}`
     return this.scopeFor(projectId)
   }
 
   /** Register the conversation whose own workspace directory the file tree is
    *  mounted on (a chat's artifact directory or an assistant task's working
-   *  directory). Switching threads (or unmounting) changes the effective
-   *  scope, so every cached listing is dropped and re-read. */
+   *  directory). Each conversation keeps its own surface, so switching
+   *  conversations shows that conversation's files instead of the last one's. */
   setThreadMount(projectId: string, threadId: string | null): void {
+    if (this.mountThread(projectId) === threadId) return
+    this.mountThreads[projectId] = threadId
     this.ensureState(projectId).mountThreadId = threadId
   }
 
@@ -106,7 +126,7 @@ class ProjectFilesWorkspace {
   private threadArg(projectId: string): string | undefined {
     const ovenThread = ovenRootThread(projectId)
     if (ovenThread) return ovenThread.id
-    return this.projects[projectId]?.mountThreadId ?? undefined
+    return this.mountThread(projectId) ?? undefined
   }
 
   ensureState(projectId: string): ProjectFilesState {
@@ -117,8 +137,9 @@ class ProjectFilesWorkspace {
     const ovenThread = ovenRootThread(projectId)
     state.ovenThreadId = ovenThread?.id
     state.ovenId = ovenThread?.settings?.ovenId
+    state.mountThreadId = this.mountThread(projectId)
     this.projects[key] = state
-    this.explorer.markPendingRestore(projectId)
+    this.explorer.markPendingRestore(key)
     return state
   }
 

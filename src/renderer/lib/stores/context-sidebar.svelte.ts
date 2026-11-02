@@ -175,6 +175,10 @@ class ContextSidebarState {
   private tabContexts = new SidebarTabContexts({
     activeProjectId: () => this.activeProjectId,
     activeThreadId: () => this.activeRowThreadId ?? this.activeThreadId,
+    // The same conversation identity the browser tabs group by: a hidden
+    // conversation container's sidebar tabs follow the conversation on screen,
+    // so one assistant's own files never stand in the next one's panel.
+    threadScopeId: (projectId, threadId) => this.threadBrowserScopeId(projectId, threadId),
     terminalPlacement: () => this.terminalPlacement,
     hideBrowserForFocus: () => this.browser.hideForFocus(),
     clearNotifications: () => {
@@ -549,7 +553,7 @@ class ContextSidebarState {
     this.activeThreadId = threadId
     this.activeRowThreadId = rowThreadId ?? threadId
     const contextThreadId = this.activeRowThreadId
-    this.tabContexts.ensureProjectContext(projectId)
+    this.tabContexts.ensureProjectContext(projectId, contextThreadId)
     this.tabContexts.ensureContext(projectId, contextThreadId)
     this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
     this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)

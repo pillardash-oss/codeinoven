@@ -122,7 +122,6 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
     // project root (a chat's artifact directory, an assistant task's working
     // directory); the mount must be registered before the root listing.
     if (usesThreadWorkspaceMount(this.selectedThread.projectId)) {
-      projectFilesWorkspace.ensureState(this.selectedThread.projectId)
       projectFilesWorkspace.setThreadMount(this.selectedThread.projectId, this.selectedThread.id)
       await projectFilesWorkspace.loadDirectory(this.selectedThread.projectId, '')
       contextSidebarState.openFiles(this.selectedThread.projectId, this.selectedThread.id)
