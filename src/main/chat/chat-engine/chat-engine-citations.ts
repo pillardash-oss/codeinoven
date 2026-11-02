@@ -3,6 +3,7 @@ import { broadcastThreadMessagesChanged } from '../thread-events'
 import { resolveCitedEntries } from '../cited-entries-service'
 import { CITE_ENTRY_LIMIT, normalizeCitedPath, type CitedEntry } from '../../../lib/cited-work'
 import { assistantReportIsTerminal } from '../../../lib/assistant-reports'
+import { citedWorkMessageId } from '../../../lib/published-messages'
 import { conversationWorkspaceDirectory } from '../../../lib/types'
 import type { AgentMessage, Thread, ThreadStatus } from '../../../lib/types'
 import { rawErrorMessage } from './chat-engine-errors'
@@ -110,7 +111,7 @@ export class ChatEngineCitations {
 
   private async publishEntries(thread: Thread, entries: CitedEntry[]): Promise<void> {
     const at = Date.now()
-    const id = `cio-cited-work-${thread.id}-${at}`
+    const id = citedWorkMessageId(thread.id, at)
     const message: AgentMessage = {
       id,
       role: 'assistant',

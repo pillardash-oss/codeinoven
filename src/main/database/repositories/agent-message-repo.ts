@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import { capDecodedParts, capPersistedParts } from '../../chat/bounded-tool-output'
 import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
+import { isAppPublishedMessageId } from '../../../lib/published-messages'
 import type { Database } from '../database'
 import type {
   AgentMessage,
@@ -275,11 +276,11 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant',
-    // `inlineArtifact` has no column: app-published artifact rows are
-    // recognized by their stable id prefix, so the flag survives a reload.
-    // Without this the artifact merges into the surrounding turn and its
-    // content folds away inside the working trace.
-    ...(row.id.startsWith('cio-artifact-') ? { inlineArtifact: true as const } : {}),
+    // `inlineArtifact` has no column: app-published rows are recognized by their
+    // stable id prefix, so the flag survives a reload. Without this the row merges
+    // into the surrounding turn and its content folds away inside the working
+    // trace, which is what made a cited card render as nothing at all.
+    ...(isAppPublishedMessageId(row.id) ? { inlineArtifact: true as const } : {}),
     origin: row.origin as AgentMessageOrigin,
     ...(row.visibility !== 'conversation'
       ? { visibility: row.visibility as AgentMessageVisibility }
