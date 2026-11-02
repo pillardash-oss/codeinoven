@@ -9,10 +9,24 @@
     /** Brings the attached conversation into view. The badge names a thread the
      *  user can already read, so clicking the name opens it. */
     onOpen: () => void
-    onRemove: () => void
+    /**
+     * Detaches the reference. Absent when the badge is the thread's own fork
+     * parent: that is a fact about the conversation, not something the user
+     * attached, so it carries no control that would suggest it can be undone.
+     */
+    onRemove?: () => void
+    /** True when this badge stands for the thread the conversation was forked
+     *  from, so the titles say why it is there. */
+    forkedFrom?: boolean
   }
 
-  let { reference, onOpen, onRemove }: Props = $props()
+  let { reference, onOpen, onRemove, forkedFrom = false }: Props = $props()
+
+  const openTitle = $derived(
+    forkedFrom
+      ? `Open ${reference.title}   this thread was forked from it, so the agent can read it for context`
+      : `Open ${reference.title}   attached to this message as context`
+  )
 
   /** The icon of the project the attached thread lives in. A project this window
    *  never loaded falls back to a conversation mark rather than to a blank. */
@@ -32,7 +46,7 @@
   <button
     type="button"
     class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 transition-colors hover:bg-info/15 hover:text-foreground"
-    title={`Open ${reference.title}   attached to this message as context`}
+    title={openTitle}
     aria-label={`Open ${reference.title}`}
     onclick={onOpen}
   >
@@ -43,13 +57,15 @@
     {/if}
     <span class="max-w-40 truncate">{reference.title}</span>
   </button>
-  <button
-    type="button"
-    class="flex shrink-0 items-center justify-center border-l border-info/30 px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-    title={`Detach ${reference.title} from this message`}
-    aria-label={`Detach ${reference.title} from this message`}
-    onclick={onRemove}
-  >
-    <CioClose size={11} />
-  </button>
+  {#if onRemove}
+    <button
+      type="button"
+      class="flex shrink-0 items-center justify-center border-l border-info/30 px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+      title={`Detach ${reference.title} from this message`}
+      aria-label={`Detach ${reference.title} from this message`}
+      onclick={onRemove}
+    >
+      <CioClose size={11} />
+    </button>
+  {/if}
 </div>

@@ -2,6 +2,7 @@ import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { GLOBAL_BROWSER_PROJECT_ID, isBrowserTabId } from '../../../lib/ipc/browser'
 import { broadcastNoteChanged } from '../../chat/thread-events'
 import { parseThreadContextUsage } from '../../database/repositories/thread-repo'
+import { readForkOrigin } from '../../../lib/engines/thread-manager-fork'
 import { messageId } from '../../../lib/id'
 import {
   validateBoundedString,
@@ -336,6 +337,27 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
       return threadManager.setIndependentAudit(safeProjectId, safeThreadId, enabled)
     }
   )
+  /**
+   * The thread a fork was copied from, for the composer that shows it.
+   *
+   * A fork writes its parent into its own branch metadata and nothing else reads
+   * it, so this is the surface that turns that fact into a thread reference the
+   * renderer can draw. A parent that has since been deleted resolves to null, and
+   * the turn still tells the agent to work with the context it already has.
+   */
+  ipcMain.handle('thread:forkOrigin', async (_, projectId: unknown, threadId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    const origin = await readForkOrigin(safeProjectId, safeThreadId)
+    if (!origin) return null
+    const parent = await threadManager.getThreadById(origin.parentThreadId)
+    if (!parent) return null
+    return {
+      parentProjectId: parent.projectId,
+      parentThreadId: parent.id,
+      parentTitle: parent.title
+    }
+  })
   ipcMain.handle(
     'thread:fork',
     async (

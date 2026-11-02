@@ -166,7 +166,13 @@ export class ChatEngineTurnsSendPrompt {
         settings.permissionLevel,
         settings.harnessId
       )
+      // A remote Oven runs the same turn, so a forked thread's first prompt
+      // carries the same pointer to the thread its context came from.
+      const remoteForkOrigin = await readForkOrigin(projectId, threadId)
       const remoteContext = [
+        remoteForkOrigin
+          ? ((await firstTurnForkNotice(this.host.database, threadId, remoteForkOrigin)) ?? '')
+          : '',
         promptContext ? validateBoundedString(promptContext, 'Prompt context', 1, 100_000) : '',
         ...validatePromptReferences(promptReferences).map(
           (reference) =>

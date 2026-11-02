@@ -23,6 +23,20 @@ import type {
 } from '../types'
 import type { Contract } from './contract-helpers'
 
+/**
+ * The thread a fork was copied from, resolved for the renderer.
+ *
+ * A fork records its parent in its own branch metadata, so this is the one read
+ * that lets any surface show that parent the way an attached thread is shown: by
+ * project, id and title. Null when the thread was not forked, or when the parent
+ * no longer exists.
+ */
+export interface ForkOriginReference {
+  parentProjectId: string
+  parentThreadId: string
+  parentTitle: string
+}
+
 export const invokeThreadContract = {
   'taskManager:list': {} as Contract<[], TaskManagerSnapshot>,
   'taskManager:killProcess': {} as Contract<[pid: number, force: boolean], void>,
@@ -139,6 +153,10 @@ export const invokeThreadContract = {
       targetProjectId?: string
     ],
     Thread
+  >,
+  'thread:forkOrigin': {} as Contract<
+    [projectId: string, threadId: string],
+    ForkOriginReference | null
   >,
   'thread:get': {} as Contract<[projectId: string, threadId: string], Thread | null>,
   'thread:list': {} as Contract<[projectId: string], Thread[]>,

@@ -105,6 +105,13 @@ export interface Props {
   onStartAfterThreadsChange?: (threads: StartAfterSelection[]) => void
   /** Opens a selected source thread from the composer badge popover. */
   onOpenStartAfterThread?: (threadId: string) => void | Promise<void>
+  /**
+   * The thread this conversation was forked from. Drawn above the composer the way
+   * an attached thread is drawn, and never detachable: the send path tells the
+   * agent where its copied context came from, so this only shows the user which
+   * conversation that is.
+   */
+  forkParentReference?: ThreadContextReference | null
   /** Restart-safe conversations attached to this composer as context. */
   initialThreadReferences?: ThreadContextReference[]
   /** Persists or clears the conversations attached to this composer. */

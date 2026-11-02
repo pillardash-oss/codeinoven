@@ -39,6 +39,7 @@
   import AssistantReadyCard from '$lib/components/assistant/AssistantReadyCard.svelte'
   import AssistantSessionQuestion from '$lib/components/assistant/AssistantSessionQuestion.svelte'
   import { rendererRecovery, publishDraftActivity } from '$lib/stores/renderer-recovery.svelte'
+  import { forkOrigins } from '$lib/stores/fork-origins.svelte'
   import { modelKey } from '$lib/model-keys'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { assistantIsScheduled } from '$shared/types'
@@ -58,6 +59,24 @@
     activeActions: ActionDefinition[]
     compactionFold: { readonly folded: boolean }
   } = $props()
+
+  /**
+   * The thread this conversation was forked from, shown above the composer the
+   * way an attached thread is shown. A fork's parent is not the user's
+   * attachment, so it cannot be detached and it is never written into the draft:
+   * the composer only draws it, and the send path itself tells the agent where
+   * the copied context came from.
+   */
+  const forkParentReference = $derived(
+    forkOrigins.referenceFor(
+      board.handleAgentEvent.thread.projectId,
+      board.handleAgentEvent.thread.id
+    )
+  )
+
+  $effect(() => {
+    forkOrigins.ensure(board.handleAgentEvent.thread.projectId, board.handleAgentEvent.thread.id)
+  })
 </script>
 
 <div
@@ -1000,6 +1019,7 @@
                     board.handleAgentEvent.thread.projectId,
                     board.handleAgentEvent.thread.id
                   )}
+                  {forkParentReference}
                   onValueChange={(value) => {
                     rendererRecovery.setDraft(
                       board.handleAgentEvent.thread.projectId,

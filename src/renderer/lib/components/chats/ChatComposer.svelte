@@ -331,6 +331,7 @@
     references={board.props.references}
     startAfterThreads={board.handleDropData.startAfterThreads}
     threadReferences={board.handleDropData.threadReferences}
+    forkParentReference={board.props.forkParentReference ?? null}
     showChatModes={board.props.showChatModes}
     fileSystemMode={board.handleDropData.resolved.fileSystemMode}
     previewUrls={board.handleDropData.preview.urls}
