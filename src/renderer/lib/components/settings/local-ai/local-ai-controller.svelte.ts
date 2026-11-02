@@ -11,6 +11,7 @@ import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   buildLlamaServerArgs,
+  llamaCppModelAlias,
   llamaCppPtyId,
   type LlamaCppBrewJobKind,
   type LlamaCppLogStream,
@@ -92,19 +93,77 @@ export class LocalAiController {
     return status === 'starting' || status === 'running'
   }
 
-  /** Start a row, streaming its output into the card and polling for readiness. */
+  /** A start waiting for the user to accept that the model already bound to
+   *  that address is stopped first, since one port serves one model at a time. */
+  pendingTakeover = $state<{
+    entry: LlamaCppServerEntry
+    executable: string
+    otherModel: string
+  } | null>(null)
+
+  /**
+   * Start a row.
+   *
+   * A server already answering on that address is reused when it serves this
+   * row's model, whatever app instance launched it. When it serves a different
+   * model, the port cannot hold both, so the start waits for the user to agree
+   * to stopping the one that is there.
+   */
   async start(entry: LlamaCppServerEntry, executable: string): Promise<void> {
     if (this.handles.has(entry.id)) return
+    const ready = await this.probeOf(entry)
+    if (ready.ready && this.servesEntry(entry, ready.models)) {
+      await this.adopt(entry, ready.models[0] ?? '')
+      return
+    }
+    if (ready.ready) {
+      this.pendingTakeover = { entry, executable, otherModel: ready.models[0] ?? 'Another model' }
+      return
+    }
+    await this.spawn(entry, executable)
+  }
+
+  /** The user agreed: stop what holds the address, then start this row. */
+  async confirmTakeover(): Promise<void> {
+    const pending = this.pendingTakeover
+    if (!pending) return
+    this.pendingTakeover = null
+    for (const [entryId, handle] of [...this.handles]) {
+      if (handle.entry.port !== pending.entry.port) continue
+      await this.stop(entryId)
+    }
+    // Anything else on the port (a server of an earlier app instance) has no
+    // handle of ours to stop through.
+    await invoke('llamaCpp:stopServer', pending.entry.port)
+    await this.spawn(pending.entry, pending.executable)
+  }
+
+  cancelTakeover(): void {
+    this.pendingTakeover = null
+  }
+
+  /** Whether a row's own model is among the ids a server answers with. */
+  private servesEntry(entry: LlamaCppServerEntry, models: readonly string[]): boolean {
+    const alias = llamaCppModelAlias(entry)
+    return models.some((model) => model === alias)
+  }
+
+  private async probeOf(entry: LlamaCppServerEntry): Promise<LlamaCppProbeResult> {
+    try {
+      return await invoke('llamaCpp:probe', entry.host, entry.port)
+    } catch {
+      return { ready: false, models: [], error: 'The readiness probe failed' }
+    }
+  }
+
+  /** Launch the row in a terminal, streaming its output into the card. */
+  private async spawn(entry: LlamaCppServerEntry, executable: string): Promise<void> {
     const args = buildLlamaServerArgs(entry, await this.logPathOf(entry.id))
     if (args.length === 0) {
       this.setStatus(entry.id, 'failed')
       this.notice = { ...this.notice, [entry.id]: 'This server has no model to load' }
       return
     }
-    // A server that already answers on this address is adopted rather than
-    // started again: a row can outlive the renderer that launched it, and a
-    // second process on the same port only ends in a bind error.
-    if (await this.adoptIfServing(entry)) return
     const handle: RunningHandle = {
       entry,
       unsubscribe: [],
@@ -153,22 +212,19 @@ export class LocalAiController {
       if (this.statusOf(entry.id) === 'starting') this.scheduleProbe(entry)
       return
     }
-    if (await this.adoptIfServing(entry)) return
-    // Nothing is answering, so show what the last run left in its log file
-    // instead of an empty terminal for a server this machine already ran.
+    const ready = await this.probeOf(entry)
+    if (ready.ready && this.servesEntry(entry, ready.models)) {
+      await this.adopt(entry, ready.models[0] ?? '')
+      return
+    }
+    // Nothing of this row is answering, so show what the last run left in its
+    // log file instead of an empty terminal.
     await this.seedLog(entry.id)
   }
 
-  /** Take over a server that is already answering, so the card can show it and
-   *  stop it. Returns whether there was one to adopt. */
-  private async adoptIfServing(entry: LlamaCppServerEntry): Promise<boolean> {
-    let result: LlamaCppProbeResult
-    try {
-      result = await invoke('llamaCpp:probe', entry.host, entry.port)
-    } catch {
-      return false
-    }
-    if (!result.ready || this.handles.has(entry.id)) return false
+  /** Take over a server that is already answering this row's model. */
+  private async adopt(entry: LlamaCppServerEntry, modelId: string): Promise<void> {
+    if (this.handles.has(entry.id)) return
     const ptyId = llamaCppPtyId(entry.id)
     const handle: RunningHandle = {
       entry,
@@ -188,13 +244,12 @@ export class LocalAiController {
       subscribe(`pty:exit:${ptyId}`, (code) => this.handleExit(entry.id, code))
     )
     this.setStatus(entry.id, 'running')
-    this.setLoadedModel(entry.id, result.models[0] ?? '')
+    this.setLoadedModel(entry.id, modelId)
     this.notice = { ...this.notice, [entry.id]: '' }
     // The PTY that carried this server's output may be gone with the app
     // instance that launched it; its own log file is what streams instead.
     await this.followLog(entry)
     this.scheduleAdoptedProbe(entry)
-    return true
   }
 
   /** No PTY exit event will come for an adopted server, so a slow probe is what
@@ -343,13 +398,14 @@ export class LocalAiController {
     }
   }
 
-  /** A failed bind is not a llama.cpp problem: the address is already taken, and
-   *  the log line saying so is cryptic next to the raw exit code. */
+  /** A failed bind is not a llama.cpp problem: the address is already taken by
+   *  something that is not a llama-server, whose log line is cryptic next to a
+   *  raw exit code. Another llama-server is handled before the start instead. */
   private portBusyNotice(entry: LlamaCppServerEntry): string {
     const lines = this.logs[entry.id] ?? []
     const busy = lines.some((line) => /couldn't bind HTTP server socket/iu.test(line))
     if (!busy) return ''
-    return `Port ${entry.port} is already in use. Stop whatever listens there, or give this server another port.`
+    return `Another program is using port ${entry.port}. Pick another port, or stop it first.`
   }
 
   private failureTail(entryId: string): string {

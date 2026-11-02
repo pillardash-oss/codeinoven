@@ -77,7 +77,7 @@
   }
 
   async function save(entry: LlamaCppServerEntry): Promise<void> {
-    const problem = llamaCppEntryProblem(entry, entries)
+    const problem = llamaCppEntryProblem(entry)
     if (problem) {
       toast.error(problem)
       return
@@ -226,5 +226,27 @@
   <p class="text-sm leading-relaxed text-muted">
     {pendingDelete?.name ?? 'This server'} will be removed from the app, and its process stopped if it
     is running. The model file on disk is left alone.
+  </p>
+</ConfirmDialog>
+
+<!-- One port serves one model at a time. A start on an address that already
+     answers with another model stops that one, and the user is told which. -->
+<ConfirmDialog
+  open={localAi.pendingTakeover !== null}
+  title="Start this model instead?"
+  confirmLabel="Stop and start"
+  onCancel={() => localAi.cancelTakeover()}
+  onConfirm={() => void localAi.confirmTakeover()}
+>
+  <p class="text-sm leading-relaxed text-muted">
+    <span class="font-mono">{localAi.pendingTakeover?.otherModel ?? 'Another model'}</span> is
+    running on
+    <span class="font-mono"
+      >{localAi.pendingTakeover?.entry.host}:{localAi.pendingTakeover?.entry.port}</span
+    >.
+  </p>
+  <p class="mt-2 text-sm leading-relaxed text-muted">
+    That server is stopped first, then {localAi.pendingTakeover?.entry.name ?? 'this model'} loads on
+    the same address.
   </p>
 </ConfirmDialog>

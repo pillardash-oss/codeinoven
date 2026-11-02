@@ -316,29 +316,15 @@ export function nextFreeLlamaCppPort(entries: readonly LlamaCppServerEntry[]): n
   return port
 }
 
-/** True when another saved row already binds this port. */
-export function llamaCppPortConflict(
-  entries: readonly LlamaCppServerEntry[],
-  candidate: Pick<LlamaCppServerEntry, 'id' | 'host' | 'port'>
-): LlamaCppServerEntry | null {
-  const host = candidate.host.trim().toLowerCase()
-  const wildcard = host === '0.0.0.0' || host === '::'
-  return (
-    entries.find((entry) => {
-      if (entry.id === candidate.id || entry.port !== candidate.port) return false
-      const other = entry.host.trim().toLowerCase()
-      if (other === host) return true
-      // A wildcard bind claims every interface on that port.
-      return wildcard || other === '0.0.0.0' || other === '::'
-    }) ?? null
-  )
-}
-
-/** Why a row cannot be saved, or null when it can. */
-export function llamaCppEntryProblem(
-  entry: LlamaCppServerEntry,
-  entries: readonly LlamaCppServerEntry[]
-): string | null {
+/**
+ * Why a row cannot be saved, or null when it can.
+ *
+ * Two rows may name the same address on purpose: one port serves one model at a
+ * time, and the user is allowed to keep several saved models pointed at it, then
+ * start whichever one they want. Starting one while another is bound there asks
+ * before the running model is stopped, so this validation must not refuse it.
+ */
+export function llamaCppEntryProblem(entry: LlamaCppServerEntry): string | null {
   const name = entry.name.trim()
   if (name.length === 0) return 'Give the server a name'
   if (name.length > LLAMA_CPP_NAME_MAX_LENGTH) return 'The name is too long'
@@ -347,9 +333,6 @@ export function llamaCppEntryProblem(
   if (!isLlamaCppHostValid(entry.host)) return 'Enter a host such as 127.0.0.1'
   if (!isLlamaCppPortValid(entry.port)) return 'Enter a port between 1 and 65535'
   if (entry.extraFlags.length > LLAMA_CPP_FLAGS_MAX_LENGTH) return 'The extra flags are too long'
-  const conflict = llamaCppPortConflict(entries, entry)
-  if (conflict)
-    return `Port ${entry.port} is already used by ${conflict.name.trim() || 'another server'}`
   return null
 }
 
@@ -397,7 +380,7 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
       port: isLlamaCppPortValid(port) ? port : DEFAULT_LLAMA_CPP_PORT,
       extraFlags
     }
-    if (llamaCppEntryProblem(entry, entries) !== null) continue
+    if (llamaCppEntryProblem(entry) !== null) continue
     ids.add(id)
     entries.push(entry)
   }

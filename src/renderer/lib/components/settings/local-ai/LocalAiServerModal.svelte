@@ -286,7 +286,7 @@
   }
 
   function submit(): void {
-    const problem = llamaCppEntryProblem(draft, entries)
+    const problem = llamaCppEntryProblem(draft)
     if (problem) {
       error = problem
       return
