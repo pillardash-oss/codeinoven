@@ -12,6 +12,7 @@
     buildLlamaServerArgs,
     describeLlamaServerCommand,
     formatHuggingFaceModelReference,
+    groupLlamaCppServers,
     isLlamaCppHostValid,
     isLlamaCppPortValid,
     llamaCppEntryProblem,
@@ -78,6 +79,22 @@
   const testedAddress = $derived(`${host.trim()}:${Number(port)}`)
   const visibleTest = $derived(
     testResult && testResult.address === testedAddress ? testResult : null
+  )
+
+  /**
+   * The server that already runs on this address. An address is the server, so
+   * a second row on it is another model of that server, never a second server,
+   * and the editor says which one it is before saving.
+   */
+  const existingServer = $derived.by(() => {
+    const address = `${host.trim() || DEFAULT_LLAMA_CPP_HOST}:${Number(port)}`
+    const others = entries.filter((entry) => entry.id !== initial.id)
+    return groupLlamaCppServers(others).find((group) => group.address === address) ?? null
+  })
+  const existingServerModels = $derived(
+    (existingServer?.entries ?? [])
+      .map((entry) => entry.name.trim() || llamaCppModelLabel(entry))
+      .join(', ')
   )
 
   /**
@@ -407,6 +424,21 @@
           <input class={monoFieldClass} bind:value={port} inputmode="numeric" placeholder="8080" />
         </label>
       </div>
+      {#if existingServer}
+        <div class="flex items-start gap-2 border bg-elevated px-3 py-2">
+          <CioAlertCircle size={13} class="mt-0.5 shrink-0 text-muted" />
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            <span class="font-mono text-foreground">{existingServer.address}</span> already runs the
+            server that holds
+            {existingServer.entries.length === 1
+              ? 'this model'
+              : `these ${existingServer.entries.length} models`}
+            in Settings → Local AI:
+            <span class="text-foreground">{existingServerModels}</span>. Saving adds this model to
+            that server, and one of its models runs at a time.
+          </p>
+        </div>
+      {/if}
       <label class="block space-y-1 text-xs font-medium">
         <span>Extra flags · one per line</span>
         <textarea

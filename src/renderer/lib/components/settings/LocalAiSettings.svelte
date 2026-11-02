@@ -5,10 +5,13 @@
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import {
+    groupLlamaCppServers,
     llamaCppEntryProblem,
+    llamaCppServerAddress,
     nextFreeLlamaCppPort,
     type LlamaCppRuntimeStatus,
-    type LlamaCppServerEntry
+    type LlamaCppServerEntry,
+    type LlamaCppServerGroup
   } from '$shared/llama-cpp'
   import { uuidv7 } from '$shared/id'
   import { onMount } from 'svelte'
@@ -32,6 +35,8 @@
   let detecting = $state(false)
   let detectError = $state('')
   const entries = $derived(config.llamaCppServers ?? [])
+  /** An address is the server; its saved models are the rows under it. */
+  const groups = $derived(groupLlamaCppServers(entries))
   const executable = $derived(runtime?.path || 'llama-server')
 
   let expanded = $state<Record<string, boolean>>({})
@@ -39,6 +44,14 @@
   let modalKey = $state(0)
   let editing = $state<LlamaCppServerEntry | null>(null)
   let pendingDelete = $state<LlamaCppServerEntry | null>(null)
+  /** The server the row being removed belongs to, so the dialog can say whether
+   *  it removes a whole server or one of its models. */
+  const pendingDeleteGroup = $derived.by(() => {
+    const target = pendingDelete
+    if (!target) return null
+    const address = llamaCppServerAddress(target)
+    return groups.find((group) => group.address === address) ?? null
+  })
 
   async function detect(): Promise<void> {
     detecting = true
@@ -72,6 +85,13 @@
 
   function openEdit(entry: LlamaCppServerEntry): void {
     editing = entry
+    modalKey++
+    modalOpen = true
+  }
+
+  /** Add another model to a server that already exists on this address. */
+  function addModelTo(group: LlamaCppServerGroup): void {
+    editing = { ...newEntry(), host: group.host, port: group.port }
     modalKey++
     modalOpen = true
   }
@@ -182,22 +202,47 @@
       </p>
     </div>
   {:else}
-    <div class="@container space-y-3">
-      {#each entries as entry (entry.id)}
-        <LocalAiServerCard
-          {entry}
-          {executable}
-          status={localAi.statusOf(entry.id)}
-          logLines={localAi.logOf(entry.id)}
-          loadedModel={localAi.loadedModel[entry.id] ?? ''}
-          notice={localAi.notice[entry.id] ?? ''}
-          expanded={expanded[entry.id] ?? false}
-          onToggle={() => toggle(entry.id)}
-          onStart={() => start(entry)}
-          onStop={() => void localAi.stop(entry.id)}
-          onEdit={() => openEdit(entry)}
-          onDelete={() => (pendingDelete = entry)}
-        />
+    <div class="@container space-y-5">
+      {#each groups as group (group.address)}
+        <section class="space-y-2">
+          <div
+            class="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-1"
+          >
+            <p class="flex min-w-0 items-center gap-2 text-xs">
+              <span class="truncate font-mono text-muted" title={group.address}
+                >{group.address}</span
+              >
+              <span class="shrink-0 text-dimmed"
+                >{group.entries.length}
+                {group.entries.length === 1 ? 'model' : 'models'}</span
+              >
+            </p>
+            <button
+              type="button"
+              class="shrink-0 px-1 py-0.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title="Add another model to the server on {group.address}"
+              onclick={() => addModelTo(group)}
+            >
+              Add model
+            </button>
+          </div>
+          {#each group.entries as entry (entry.id)}
+            <LocalAiServerCard
+              {entry}
+              {executable}
+              status={localAi.statusOf(entry.id)}
+              logLines={localAi.logOf(entry.id)}
+              loadedModel={localAi.loadedModel[entry.id] ?? ''}
+              notice={localAi.notice[entry.id] ?? ''}
+              expanded={expanded[entry.id] ?? false}
+              onToggle={() => toggle(entry.id)}
+              onStart={() => start(entry)}
+              onStop={() => void localAi.stop(entry.id)}
+              onEdit={() => openEdit(entry)}
+              onDelete={() => (pendingDelete = entry)}
+            />
+          {/each}
+        </section>
       {/each}
     </div>
   {/if}
@@ -217,16 +262,23 @@
 
 <ConfirmDialog
   open={pendingDelete !== null}
-  title="Remove server"
+  title={(pendingDeleteGroup?.entries.length ?? 1) > 1 ? 'Remove model' : 'Remove server'}
   confirmLabel="Remove"
   variant="danger"
   onCancel={() => (pendingDelete = null)}
   onConfirm={() => (pendingDelete ? remove(pendingDelete) : undefined)}
 >
   <p class="text-sm leading-relaxed text-muted">
-    {pendingDelete?.name ?? 'This server'} will be removed from the app, and its process stopped if it
+    {pendingDelete?.name ?? 'This model'} will be removed from the app, and its process stopped if it
     is running. The model file on disk is left alone.
   </p>
+  {#if pendingDelete && pendingDeleteGroup && pendingDeleteGroup.entries.length > 1}
+    <p class="mt-2 text-sm leading-relaxed text-muted">
+      The server on <span class="font-mono">{pendingDeleteGroup.address}</span> keeps its other
+      {pendingDeleteGroup.entries.length - 1}
+      {pendingDeleteGroup.entries.length - 1 === 1 ? 'model' : 'models'}.
+    </p>
+  {/if}
 </ConfirmDialog>
 
 <!-- One port serves one model at a time. A start on an address that already
