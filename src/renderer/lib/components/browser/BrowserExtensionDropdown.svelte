@@ -26,6 +26,10 @@
   interface Props {
     /** The tab whose toolbar opened this, so a panel for another tab draws none. */
     tabId: string
+    projectId: string
+    threadId: string
+    /** The box the tab runs in, or null for the conversation's own jar. */
+    boxId: string | null
     /**
      * The extension button, which the card hangs under.
      *
@@ -35,7 +39,7 @@
     anchor: HTMLElement | undefined
   }
 
-  let { tabId, anchor }: Props = $props()
+  let { tabId, projectId, threadId, boxId, anchor }: Props = $props()
 
   /** The smallest a popup may be drawn, which is Chrome's own floor. */
   const MIN_WIDTH = 240
@@ -213,6 +217,31 @@
     }
     seenPopupId = current.popupId
     void tick().then(() => placePopup(current.popupId).catch(() => {}))
+  })
+
+  /**
+   * A window the extension opened for this tab, which this card is its only home.
+   *
+   * A page's passkey ceremony makes an extension ask the app for a window of its
+   * own, and nothing in this panel would bring one up: there is no rail here, only
+   * this dropdown. So the window the extension asked for is what opens it, and the
+   * page underneath is busy waiting on that prompt.
+   */
+  const requestedWindow = $derived(
+    browserPopupWindows
+      .forTab(tabId)
+      .find((candidate) => candidate.windowRequested && candidate.extensionId !== null) ?? null
+  )
+
+  $effect(() => {
+    const requested = requestedWindow
+    if (!requested || requested.extensionId === null) return
+    if (browserExtensionDropdown.forTab(tabId)?.popupId === requested.id) return
+    browserExtensionDropdown.adopt(
+      { tabId, projectId, threadId, boxId },
+      requested.extensionId,
+      requested.id
+    )
   })
 
   /**

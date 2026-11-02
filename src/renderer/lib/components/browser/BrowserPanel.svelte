@@ -841,7 +841,13 @@
           {/if}
         </button>
         {#if panelVisible}
-          <BrowserExtensionDropdown {tabId} anchor={extensionButton} />
+          <BrowserExtensionDropdown
+            {tabId}
+            projectId={tabProjectId}
+            threadId={tabThreadId}
+            boxId={tabBoxId}
+            anchor={extensionButton}
+          />
         {/if}
       </div>
       {#if authoredWork}

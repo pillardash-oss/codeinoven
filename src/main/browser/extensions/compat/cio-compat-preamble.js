@@ -629,6 +629,31 @@
     }
   }
 
+  // The same for the two window events this app is the author of, for the reason
+  // the window itself exists: Electron has no extension window, so the app hands
+  // the extension one (`chrome.windows.create` answers with it from below) and the
+  // app is the only side that can report it gone. A password manager waits on
+  // `onRemoved` to abandon the passkey prompt that window was showing, so a window
+  // that closes without this event leaves the page's ceremony pending forever.
+  const windowEvents = {}
+  for (const name of ['onCreated', 'onRemoved', 'onFocusChanged', 'onBoundsChanged']) {
+    const dispatcher = makeRealEvent()
+    windowEvents[name] = dispatcher
+    for (const root of roots) {
+      const windowsApi = root && root.windows
+      if (!windowsApi) continue
+      try {
+        Object.defineProperty(windowsApi, name, {
+          value: dispatcher,
+          configurable: true,
+          writable: true
+        })
+      } catch (error) {
+        state.errors.push('windows-' + name + ': ' + String(error))
+      }
+    }
+  }
+
   // The same for the two runtime events the app synthesizes.
   const runtimeEvents = {}
   for (const name of ['onStartup', 'onInstalled']) {
@@ -1901,6 +1926,10 @@
     }
     return tabActivity.replayGate
   }
+  // The ids this app lends an extension: the same two numbers the app reports a
+  // window ending under, and the same pair `src/lib/browser/browser-extension-window.ts`
+  // documents. They are a contract, not a preference: a different number here is a
+  // window the extension never hears is gone.
   const HOSTED_POPUP_WINDOW_ID = 2147483646
   const HOSTED_POPUP_TAB_ID = 2147483645
   const hostedPopout = { url: null, focused: false }
@@ -2249,6 +2278,18 @@
       )
     } else if (command.kind === 'dark-reader-tab-policy') {
       applyDarkReaderPolicy(command)
+    } else if (command.kind === 'window') {
+      const args = Array.isArray(command.args) ? command.args : []
+      // A window this app handed the extension is gone. It is forgotten here first,
+      // so `chrome.tabs.query` and `runtime.getContexts` stop reporting a window
+      // whose page no longer exists, and the extension's own listeners then hear it
+      // under the id they were given.
+      if (command.name === 'onRemoved' && args[0] === HOSTED_POPUP_WINDOW_ID) {
+        hostedPopout.url = null
+        hostedPopout.focused = false
+      }
+      const dispatcher = windowEvents[command.name]
+      if (dispatcher) emitRecorded(command.name, dispatcher, args)
     } else if (command.kind === 'tab') {
       const args = Array.isArray(command.args) ? command.args : []
       if (command.name === 'onActivated') {

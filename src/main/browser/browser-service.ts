@@ -52,7 +52,8 @@ import {
   type BrowserExtensionSidePanelOpenRequest,
   type BrowserExtensionTabEventName,
   type BrowserExtensionTabReplay,
-  type BrowserExtensionWebNavigationEventName
+  type BrowserExtensionWebNavigationEventName,
+  type BrowserExtensionWindowEventName
 } from './extensions/browser-extension-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
@@ -1276,6 +1277,15 @@ export class BrowserService {
     args: unknown[]
   ): void {
     this.extensionRuntimeUnit.notifyExtensionTab(tabId, projectId, boxId, name, args)
+  }
+
+  notifyExtensionWindow(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWindowEventName,
+    args: unknown[]
+  ): void {
+    this.extensionRuntimeUnit.notifyExtensionWindow(projectId, boxId, name, args)
   }
 
   reportExtensionPageTabs(tabId: string): void {

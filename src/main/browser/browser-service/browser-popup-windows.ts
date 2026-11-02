@@ -38,6 +38,7 @@ import type { BrowserPopupWindow, BrowserViewBounds } from '../../../lib/ipc-con
 import { fetchIconAsDataUrl } from '../../editor/favicon-service'
 import { Logger } from '../../system/logger'
 import { measureExtensionPopupSize } from '../extensions/browser-extension-popup-size'
+import { loadExtensionDocument } from '../extensions/browser-extension-page-load'
 import { applyBrowserPageBackground } from './browser-page-background'
 import type { BrowserPageOwner, BrowserViewport } from './browser-types'
 
@@ -70,6 +71,26 @@ export interface BrowserPopupWindowRecord {
    * may make outside its own files is the one every page may make.
    */
   extensionId: string | null
+  /**
+   * The key of the extension window this page is, or null for the action popup the
+   * extension's icon opens and for any page's own popup.
+   *
+   * An extension asks for a window with `chrome.windows.create`, and the worker
+   * shim answers with one window id for all of them. Those windows are still
+   * distinct documents with distinct lifetimes, which is what this key keeps: the
+   * action popup stays where it was, and a passkey prompt opens beside it instead
+   * of replacing it.
+   */
+  windowKey: string | null
+  /**
+   * Whether the extension asked the app for this window, rather than the user
+   * opening the extension's action popup.
+   *
+   * A window the extension asked for is the extension's to end: closing it tells
+   * the extension so under the id it was handed, and its page is destroyed rather
+   * than parked, because the ceremony it was showing is over.
+   */
+  windowRequested: boolean
   view: WebContentsView
   url: string
   title: string
@@ -119,6 +140,15 @@ export interface BrowserPopupWindowHost {
   wire(record: BrowserPopupWindowRecord): void
   /** The list changed, so the rail's copy of it is stale. */
   changed(): void
+  /**
+   * One window the extension asked for is gone.
+   *
+   * The extension is told under the id the shim handed it, which is the only way
+   * it learns that the prompt it is waiting on will never be answered: a password
+   * manager aborts the pending ceremony here, and without it the page's promise
+   * never settles and every later attempt is refused as already pending.
+   */
+  windowClosed(record: BrowserPopupWindowRecord): void
 }
 
 function isUsableViewport(viewport: BrowserViewport | null): viewport is BrowserViewport {
@@ -205,6 +235,8 @@ export class BrowserPopupWindows {
       threadId: context.owner.threadId,
       boxId: context.owner.boxId,
       extensionId: null,
+      windowKey: null,
+      windowRequested: false,
       side: false,
       view: this.viewFor(contents),
       url: context.url,
@@ -245,6 +277,8 @@ export class BrowserPopupWindows {
   hostExtension(context: {
     owner: BrowserPageOwner
     extensionId: string
+    /** The extension window this page is, or null for its retained action popup. */
+    windowKey: string | null
     url: string
     view: WebContentsView
     viewport: BrowserViewport | null
@@ -258,6 +292,8 @@ export class BrowserPopupWindows {
       threadId: context.owner.threadId,
       boxId: context.owner.boxId,
       extensionId: context.extensionId,
+      windowKey: context.windowKey,
+      windowRequested: context.windowKey !== null,
       side: false,
       view: context.view,
       url: context.url,
@@ -283,7 +319,8 @@ export class BrowserPopupWindows {
     Logger.dev('Browser extension popup opened', {
       popupId: record.id,
       tabId: record.tabId,
-      extensionId: context.extensionId
+      extensionId: context.extensionId,
+      windowKey: context.windowKey
     })
     this.viewHost.changed()
     return record.id
@@ -313,6 +350,8 @@ export class BrowserPopupWindows {
       threadId: context.owner.threadId,
       boxId: context.owner.boxId,
       extensionId: null,
+      windowKey: null,
+      windowRequested: false,
       side: true,
       view: context.view,
       url: context.url,
@@ -356,6 +395,7 @@ export class BrowserPopupWindows {
         loading: record.loading,
         activationSequence: record.activationSequence,
         extensionId: record.extensionId,
+        windowRequested: record.windowRequested,
         preferredViewport: record.preferredViewport
       })
     }
@@ -431,7 +471,13 @@ export class BrowserPopupWindows {
     return null
   }
 
-  /** Find the cached action popup for one extension session, even while hidden. */
+  /**
+   * The retained action popup one extension has for a jar, if it has one.
+   *
+   * Only the action popup: the windows the extension asked the app for are keyed
+   * by their own address and never take this one's place, because a passkey prompt
+   * that reused the vault popup left neither of them working.
+   */
   extensionPopupForJar(
     extensionId: string,
     projectId: string,
@@ -440,6 +486,7 @@ export class BrowserPopupWindows {
     for (const record of this.popups.values()) {
       if (
         record.extensionId === extensionId &&
+        record.windowKey === null &&
         record.projectId === projectId &&
         record.boxId === boxId
       ) {
@@ -449,45 +496,108 @@ export class BrowserPopupWindows {
     return null
   }
 
-  /** Navigate the retained extension view to one of its own pages. */
+  /** The window one extension already has open for one jar under one key. */
+  extensionWindowFor(
+    extensionId: string,
+    projectId: string,
+    boxId: string | null,
+    windowKey: string
+  ): string | null {
+    for (const record of this.popups.values()) {
+      if (
+        record.extensionId === extensionId &&
+        record.windowKey === windowKey &&
+        record.projectId === projectId &&
+        record.boxId === boxId
+      ) {
+        return record.id
+      }
+    }
+    return null
+  }
+
+  /**
+   * Bring back a window the extension asked for, at the page it asked for.
+   *
+   * The window keeps the tab that asked for it   it is not a popup that follows the
+   * user around   so nothing about its owner changes here; only that it is on screen
+   * again and showing the address this request named.
+   */
+  async activateExtensionWindow(id: string, url: string): Promise<boolean> {
+    const record = this.popups.get(id)
+    const page = record ? pageOf(record) : undefined
+    if (!record || record.windowKey === null || !page || page.isDestroyed()) return false
+    record.hidden = false
+    record.activationSequence += 1
+    const loaded = await this.navigateExtensionPopup(id, url)
+    this.viewHost.changed()
+    return loaded
+  }
+
+  /**
+   * Load one of an extension's own pages into a popup that already exists.
+   *
+   * One navigation, awaited, because a second `loadURL` for the same address
+   * supersedes the first and Electron reports the loser as `ERR_ABORTED`   which is
+   * what the app then mistook for a page that never loaded.
+   */
   async navigateExtensionPopup(id: string, url: string): Promise<boolean> {
     const record = this.popups.get(id)
     const page = record ? pageOf(record) : undefined
     if (!record || record.extensionId === null || !page || page.isDestroyed()) return false
-    if (record.url === url || page.getURL() === url) return true
-    await page.loadURL(url)
-    return true
+    if (record.url === url && page.getURL() === url) return true
+    return loadExtensionDocument(page, url)
   }
 
-  /** Reuse one extension page in a new tab and make it visible in the rail again. */
-  retargetExtensionPopup(
+  /**
+   * Reuse one extension page in a new tab and make it visible in the rail again.
+   *
+   * `targetUrl` is the page this reuse should show, and it is loaded here rather
+   * than by the caller: one navigation, in one place, awaited before the rail is
+   * told the popup is current. An extension window is not retargeted at all   it
+   * belongs to the tab that asked for it.
+   */
+  async retargetExtensionPopup(
     id: string,
     owner: { tabId: string; projectId: string; threadId: string; boxId: string | null },
     targetUrl?: string
-  ): boolean {
+  ): Promise<boolean> {
     const record = this.popups.get(id)
     if (!record || record.extensionId === null || record.projectId !== owner.projectId) return false
     if (record.boxId !== owner.boxId) return false
+    if (record.windowKey !== null) return false
     const changedTab = record.tabId !== owner.tabId
     if (changedTab) this.hide(id)
     record.tabId = owner.tabId
     record.threadId = owner.threadId
     record.hidden = false
     record.activationSequence += 1
-    if (changedTab) {
-      // Action popups assume a fresh document on a different tab. Bitwarden keeps
-      // its first tab and collected form details in application observables; API
-      // snapshots alone cannot update those caches. Reuse the native view and
-      // refresh its document against the new owner before it can autofill.
+    // Action popups assume a fresh document on a different tab. Bitwarden keeps
+    // its first tab and collected form details in application observables; API
+    // snapshots alone cannot update those caches. So a document that moves to
+    // another tab, or is asked for another of the extension's pages, is reloaded
+    // here before it can autofill, and the caller awaits that one load.
+    let loaded = true
+    if (targetUrl) {
+      loaded = await this.navigateExtensionPopup(id, targetUrl).catch((error: unknown) => {
+        Logger.dev('A retained extension popup could not show its requested page:', {
+          id,
+          targetUrl,
+          error
+        })
+        return false
+      })
+    } else if (changedTab) {
       const page = pageOf(record)
       if (page && !page.isDestroyed()) {
-        void page.loadURL(targetUrl ?? page.getURL()).catch((error: unknown) => {
+        loaded = await loadExtensionDocument(page, page.getURL()).catch((error: unknown) => {
           Logger.dev('A retained extension popup could not refresh for its tab:', { id, error })
+          return false
         })
       }
     }
     this.viewHost.changed()
-    return true
+    return loaded
   }
 
   /** Visible action popups follow tab switches within their existing session. */
@@ -497,16 +607,27 @@ export class BrowserPopupWindows {
   ): void {
     for (const record of this.popups.values()) {
       if (!record.extensionId || record.hidden || record.tabId === owner.tabId) continue
+      // A window the extension asked for belongs to the tab that asked: dragging a
+      // passkey prompt onto whichever tab the user just clicked would load a page
+      // for a site the prompt is not about.
+      if (record.windowKey !== null) continue
       if (record.projectId !== owner.projectId || record.boxId !== owner.boxId) continue
-      this.retargetExtensionPopup(record.id, owner, popupUrl(record.extensionId) ?? undefined)
+      void this.retargetExtensionPopup(record.id, owner, popupUrl(record.extensionId) ?? undefined)
     }
   }
 
-  /** Hide a user's extension popup while keeping its page alive for the next use. */
+  /**
+   * Take an extension popup off screen: park its action popup, end its window.
+   *
+   * The two are different objects in a browser. An action popup the user clicked
+   * away from is still there behind the icon, which is why its page is kept. A
+   * window the extension asked for is over when it is closed   the prompt it was
+   * showing cannot be re-shown   so it ends, and the extension is told.
+   */
   dismiss(id: string): void {
     const record = this.popups.get(id)
     if (!record) return
-    if (record.extensionId === null) {
+    if (record.extensionId === null || record.windowRequested) {
       this.close(id, 'the user closed its window')
       return
     }
@@ -692,6 +813,10 @@ export class BrowserPopupWindows {
     this.popups.delete(id)
     if (this.displayedId === id) this.displayedId = null
     this.viewHost.discard(record.view)
+    // A window the extension asked for is reported back to it, so an extension
+    // waiting on its own window learns it is gone   which is how a password manager
+    // abandons the passkey ceremony nothing is going to answer.
+    if (record.windowRequested) this.viewHost.windowClosed(record)
     this.viewHost.changed()
   }
 

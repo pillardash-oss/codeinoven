@@ -45,6 +45,7 @@ import { DARK_READER_EXTENSION_ID } from '../../../../lib/browser/browser-darkre
 import type {
   BrowserExtensionTabEventName,
   BrowserExtensionWebNavigationEventName,
+  BrowserExtensionWindowEventName,
   LoadedJar
 } from '../browser-extension-service'
 import type { BrowserExtensionService } from '../browser-extension-service'
@@ -515,6 +516,26 @@ export class BrowserExtensionServiceRuntime {
     const state = this.host.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
     for (const bridge of state.bridges.values()) void bridge.push({ kind: 'tab', name, args })
+  }
+
+  /**
+   * One window fact, delivered into every extension loaded in that jar.
+   *
+   * The window an extension opens with `chrome.windows.create` is hosted by the
+   * app, so the app is the only side that knows it ended. `onRemoved` is what a
+   * password manager's passkey prompt waits on to abandon the ceremony: a window
+   * that closes silently leaves the page's WebAuthn promise pending forever, and
+   * every later attempt on that page is refused as already pending.
+   */
+  onWindowEvent(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWindowEventName,
+    args: unknown[]
+  ): void {
+    const state = this.host.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state || state.bridges.size === 0) return
+    for (const bridge of state.bridges.values()) void bridge.push({ kind: 'window', name, args })
   }
 
   /**
