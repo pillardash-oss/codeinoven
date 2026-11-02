@@ -44,6 +44,7 @@ import {
   isDarkSchemeSource
 } from '$lib/markdown-remote-images'
 import { githubReferencesExtension, type GithubRepoContext } from '$lib/github-references'
+import { linkifyBareWebUrls } from './bare-web-links'
 import { githubEmojiExtension, hasGithubEmojiCandidate } from './github-emoji'
 import { githubEmojiRevision } from './github-emoji-data.svelte'
 
@@ -129,6 +130,17 @@ function createMarked(allowHtml: boolean, repository: GithubRepoContext | null):
         if (renderingLink || !/^https?:\/\/[^\s<>]+$/i.test(text)) return false
         const href = escapeHtmlAttribute(text)
         return `<a href="${href}"><code>${escapeHtml(text)}</code></a>`
+      },
+      text(token: Tokens.Text | Tokens.Escape) {
+        // marked autolinks a URL only when it carries a scheme or a `www.`
+        // prefix, so a bare host written in prose (a credential card's
+        // "create it at app.example.com/settings/keys") stayed unclickable.
+        // html escaping stays with the default renderer, which this returns to
+        // whenever there is nothing to link or the text is already final.
+        if (renderingLink || token.type !== 'text') return false
+        if (token.tokens && token.tokens.length > 0) return false
+        if (token.escaped) return false
+        return linkifyBareWebUrls(token.text, escapeHtml) ?? false
       }
     }
   })
