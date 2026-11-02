@@ -85,7 +85,6 @@
 
   let filledCount = $derived(request.questions.filter((_, index) => entryAnswered(index)).length)
   let allFilled = $derived(filledCount === total)
-  let currentAnswered = $derived(entryAnswered(currentIndex))
   // The close in the head ends the whole request, never the entry on screen.
   let dismissTitle = $derived(total > 1 ? 'Dismiss all secrets' : 'Dismiss this request')
   // The send key resolved through the user's keymap overrides, so the stepper's
@@ -188,24 +187,32 @@
    * step motion plays once, in the direction the card actually moved.
    */
   function showEntry(index: number): void {
-    if (index === currentIndex) return
+    if (working || index === currentIndex) return
+    // Reading through the secrets is the user working on the card, so the
+    // countdown is held while they step rather than expiring under their hands.
+    pauseCountdown()
     const direction: StepDirection = index > currentIndex ? 1 : -1
     if (entryBody) playEntryStep(entryBody, direction)
     currentIndex = index
   }
 
   /**
-   * Move to the next entry, or submit when the current one is the last. Used by
-   * the footer button, by Cmd/Ctrl+Enter in the alternative editor, and by the
-   * same combination in the value field.
+   * Step forward: to the next secret while there is one, and to submitting on
+   * the last. Stepping is navigation and nothing else, so it is never gated on
+   * the entry being answered: the card opens on the first secret, and a user has
+   * to be able to read every prompt before deciding which value belongs where.
+   * Submitting is the card's primary action and stays gated on every entry.
+   * Used by the footer stepper, by Cmd/Ctrl+Enter in the alternative editor, and
+   * by the same combination in the value field, so the advertised shortcut and
+   * the arrow it sits on always do the same thing.
    */
   function advance(): void {
-    if (working || !currentAnswered) return
+    if (working) return
     if (currentIndex < total - 1) {
       showEntry(currentIndex + 1)
       return
     }
-    void handleSubmit()
+    if (allFilled) void handleSubmit()
   }
 
   /**
