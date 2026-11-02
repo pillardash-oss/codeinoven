@@ -20,6 +20,7 @@
     type ComposerRelocationRequest
   } from './composer-relocation'
   import type { StartAfterSelection } from './chat-composer-attachments'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import type { ThreadContextReference } from '$lib/thread-context'
   import type { PromptAttachment, PromptReference } from '$shared/types'
 
@@ -236,6 +237,7 @@
         {#each threadReferences as reference (reference.threadId)}
           <ThreadContextPill
             {reference}
+            onOpen={() => void openThreadById(reference.projectId, reference.threadId)}
             onRemove={() => onRemoveThreadContext(reference.threadId)}
           />
         {/each}
