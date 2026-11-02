@@ -60,6 +60,13 @@ export { EXPLAIN_SELECTION_PROMPT, STICKY_NOTES_TAB } from './context-sidebar-ty
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 /**
+ * How long a closed notification panel keeps the tab it was last on. Reopening
+ * inside this window shows the same section again, because the user stepped
+ * away from the panel rather than away from what it was showing; past it the
+ * panel opens on Attention, the one list of what is waiting right now.
+ */
+const NOTIFICATION_PANEL_TAB_GRACE_MS = 5 * 60 * 1000
+/**
  * The room the rail always leaves for the surface beside it.
  *
  * The rail shares its row with the conversation (and, in the global browser,
@@ -104,7 +111,29 @@ class ContextSidebarState {
    *  delegates to its coordinator, so the child opens the parent's tab context
    *  instead of an empty one. See `activeThreadRowId`. */
   private activeRowThreadId: string | null = $state(null)
-  private notificationsVisible = $state(false)
+  private notificationsVisibleState = $state(false)
+  /**
+   * When the notification panel was last closed, so reopening it can tell a user
+   * who stepped away for a moment from one coming back to it much later.
+   * `0` means this session never closed it, which always starts on Attention.
+   */
+  private notificationsHiddenAt = 0
+
+  /**
+   * Whether the notifications panel owns the shared sidebar region. Every close
+   * path (the toggle, `hide`, another rail surface taking the region, a tab
+   * close) writes through this setter, which is what records the moment it went
+   * away without each of those paths having to remember to.
+   */
+  get notificationsVisible(): boolean {
+    return this.notificationsVisibleState
+  }
+
+  private set notificationsVisible(visible: boolean) {
+    if (visible === this.notificationsVisibleState) return
+    this.notificationsVisibleState = visible
+    if (!visible) this.notificationsHiddenAt = Date.now()
+  }
   /** Global sticky notes share the right sidebar region with notifications. */
   private stickyNotesVisible = $state(false)
   /** The auto-resolved decision panel, held with the conversation it belongs to.
@@ -909,10 +938,15 @@ class ContextSidebarState {
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
     if (this.notificationsVisible) {
-      // The panel always opens on Attention: it is the one list that says what
-      // is waiting on the user right now, so reopening the panel never lands
-      // on whichever tab the previous visit happened to leave behind.
-      notificationPanelState.setTab('attention')
+      // A panel the user closed a moment ago reopens on the same tab, so
+      // switching to Projects and coming straight back stays on Projects.
+      // Only a panel left closed for longer than the grace window, or one this
+      // session never closed at all, opens on Attention: it is the one list
+      // that says what is waiting on the user right now.
+      const hiddenFor = Date.now() - this.notificationsHiddenAt
+      if (this.notificationsHiddenAt === 0 || hiddenFor > NOTIFICATION_PANEL_TAB_GRACE_MS) {
+        notificationPanelState.setTab('attention')
+      }
       this.stickyNotesVisible = false
       if (this.browser.visible) this.browser.detachView()
       this.browser.visible = false
