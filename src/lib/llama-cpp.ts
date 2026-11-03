@@ -33,6 +33,8 @@ export const MAX_LLAMA_CPP_PORT = 65_535
  */
 export interface LlamaCppServerEntry {
   id: string
+  /** Engine this server belongs to. Only llama.cpp is launched by the app. */
+  runtime: LocalAiRuntimeId
   name: string
   /** Absolute path of an imported local `.gguf` file. */
   modelPath: string
@@ -391,6 +393,11 @@ function boundedString(value: unknown, max: number): string | null {
  * rather than failing the launch, matching how the other tolerant config lists
  * are read.
  */
+/** The engine an entry belongs to; an older save without one is llama.cpp. */
+function readEntryRuntime(value: unknown): LocalAiRuntimeId {
+  return value === 'mlx' || value === 'coreml' ? value : 'llama.cpp'
+}
+
 export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
   if (!Array.isArray(value)) throw new TypeError('Llama.cpp servers must be a list')
   if (value.length > MAX_LLAMA_CPP_SERVERS) {
@@ -412,6 +419,7 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
     const port = typeof raw.port === 'number' ? raw.port : Number.NaN
     const entry: LlamaCppServerEntry = {
       id,
+      runtime: readEntryRuntime(raw.runtime),
       name,
       modelPath,
       modelReference,
@@ -434,78 +442,6 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
  * the Local AI page, which is the one place a local model's memory policy is set.
  */
 export type LocalAiRuntimeId = 'llama.cpp' | 'mlx' | 'coreml'
-
-/** A runtime whose server this app does not launch itself. */
-export type LocalAiEndpointRuntime = Exclude<LocalAiRuntimeId, 'llama.cpp'>
-
-/**
- * A local inference server the user runs on this machine, registered so the app
- * can address it and hand its address to a provider.
- *
- * llama.cpp entries are launched by the app; an MLX or Core ML server is started
- * by the user's own tooling, so the app registers where it listens and which
- * model it answers with rather than pretending it can spawn a binary it does not
- * know how to launch.
- */
-export interface LocalAiEndpoint {
-  id: string
-  runtime: LocalAiEndpointRuntime
-  name: string
-  host: string
-  port: number
-  /** Model id the server answers with, e.g. an `mlx-community` repository. */
-  model: string
-}
-
-/** Most endpoints one runtime may keep. */
-export const MAX_LOCAL_AI_ENDPOINTS = 32
-
-const ENDPOINT_NAME_MAX_LENGTH = 120
-const ENDPOINT_MODEL_MAX_LENGTH = 256
-
-function endpointRuntime(value: unknown): LocalAiEndpointRuntime | null {
-  return value === 'mlx' || value === 'coreml' ? value : null
-}
-
-/** Read one saved endpoint list, dropping rows that cannot address anything. */
-export function validateLocalAiEndpoints(value: unknown): LocalAiEndpoint[] {
-  if (!Array.isArray(value)) throw new TypeError('Local AI endpoints must be a list')
-  if (value.length > MAX_LOCAL_AI_ENDPOINTS) {
-    throw new TypeError(`At most ${MAX_LOCAL_AI_ENDPOINTS} local AI endpoints can be saved`)
-  }
-  const entries: LocalAiEndpoint[] = []
-  const ids = new Set<string>()
-  for (const raw of value) {
-    if (!isRecord(raw)) continue
-    const id = boundedString(raw.id, 128)
-    const runtime = endpointRuntime(raw.runtime)
-    if (!id || ids.has(id) || !runtime) continue
-    const name = boundedString(raw.name, ENDPOINT_NAME_MAX_LENGTH)
-    const host = boundedString(raw.host, LLAMA_CPP_HOST_MAX_LENGTH)
-    const model = boundedString(raw.model, ENDPOINT_MODEL_MAX_LENGTH)
-    if (name === null || host === null || model === null) continue
-    const port = typeof raw.port === 'number' ? raw.port : Number.NaN
-    ids.add(id)
-    entries.push({
-      id,
-      runtime,
-      name,
-      host: host || DEFAULT_LLAMA_CPP_HOST,
-      port: isLlamaCppPortValid(port) ? port : DEFAULT_LLAMA_CPP_PORT,
-      model
-    })
-  }
-  return entries
-}
-
-/** Read a stored endpoint list without failing the whole config on bad rows. */
-export function readLocalAiEndpoints(value: unknown): LocalAiEndpoint[] {
-  try {
-    return validateLocalAiEndpoints(value)
-  } catch {
-    return []
-  }
-}
 
 /** One runtime row on the Local AI page. */
 export interface LocalAiRuntimeSummary {

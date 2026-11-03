@@ -45,11 +45,7 @@ import {
   isModelProfileId,
   isUsableModelProfile
 } from '../../../lib/model-profiles'
-import {
-  isLocalAiUnloadOption,
-  validateLlamaCppServers,
-  validateLocalAiEndpoints
-} from '../../../lib/llama-cpp'
+import { isLocalAiUnloadOption, validateLlamaCppServers } from '../../../lib/llama-cpp'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import {
   MAX_BROWSER_HIBERNATION_MINUTES,
@@ -240,7 +236,6 @@ const CONFIG_PATCH_FIELDS = new Set([
   'cioCleanupRetentionDays',
   'cioCleanupExcludedCategories',
   'llamaCppServers',
-  'localAiEndpoints',
   'llamaCppUnload'
 ])
 
@@ -969,12 +964,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Local AI unload window is invalid')
     }
     patch.llamaCppUnload = value.llamaCppUnload
-  }
-
-  if ('localAiEndpoints' in value) {
-    // An endpoint names a server the user runs; one that cannot address a host
-    // and port is refused here rather than saved and failing on probe.
-    patch.localAiEndpoints = validateLocalAiEndpoints(value.localAiEndpoints)
   }
 
   if ('llamaCppServers' in value) {

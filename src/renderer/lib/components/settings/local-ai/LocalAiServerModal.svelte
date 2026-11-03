@@ -18,7 +18,8 @@
     llamaCppEntryProblem,
     llamaCppModelLabel,
     parseHuggingFaceModelReference,
-    type LlamaCppServerEntry
+    type LlamaCppServerEntry,
+    type LocalAiRuntimeId
   } from '$shared/llama-cpp'
   import { uuidv7 } from '$shared/id'
   import { onDestroy, tick } from 'svelte'
@@ -27,6 +28,8 @@
   import { stripTerminalEscapes } from './local-ai-controller.svelte'
 
   interface Props {
+    /** Engine the saved row belongs to. Only llama.cpp can be launched here. */
+    runtime?: LocalAiRuntimeId
     initial: LlamaCppServerEntry
     entries: readonly LlamaCppServerEntry[]
     /** The resolved `llama-server` a row would launch. */
@@ -35,7 +38,10 @@
     onSave: (entry: LlamaCppServerEntry) => void | Promise<void>
   }
 
-  let { initial, entries, executable, onClose, onSave }: Props = $props()
+  let { runtime = 'llama.cpp', initial, entries, executable, onClose, onSave }: Props = $props()
+
+  /** The engine whose server the app starts itself. */
+  const managed = $derived(runtime === 'llama.cpp')
 
   const fieldClass = 'h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary'
   const monoFieldClass =
@@ -115,6 +121,7 @@
 
   const draft = $derived<LlamaCppServerEntry>({
     id: initial.id || uuidv7(),
+    runtime,
     name: name.trim(),
     modelPath: source === 'local' ? modelPath.trim() : '',
     modelReference: source === 'huggingface' ? modelReference.trim() : '',
@@ -473,7 +480,7 @@
       {/if}
     </fieldset>
 
-    {#if command}
+    {#if command && managed}
       <div class="border bg-raised p-3">
         <p class="text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">Command</p>
         <p class="mt-1 break-all font-mono text-[0.6875rem] leading-relaxed text-muted">
@@ -496,7 +503,9 @@
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50 {managed
+            ? ''
+            : 'hidden'}"
           title="Start the row on {testedAddress}, stop it once llama.cpp begins loading the model"
           disabled={testing}
           onclick={() => void testConnection()}

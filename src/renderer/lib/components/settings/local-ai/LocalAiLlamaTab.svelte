@@ -65,6 +65,7 @@
   function newEntry(): LlamaCppServerEntry {
     return {
       id: uuidv7(),
+      runtime: 'llama.cpp',
       name: 'Local server',
       modelPath: '',
       modelReference: '',
@@ -202,6 +203,7 @@
 {#if modalOpen && editing}
   {#key modalKey}
     <LocalAiServerModal
+      runtime="llama.cpp"
       initial={editing}
       {entries}
       {executable}
