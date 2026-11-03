@@ -51,10 +51,7 @@ function reader(rows: string[]): RunChecksReader {
 describe('toolCallsFromParts', () => {
   it('finds the tool parts in a message and ignores the rest', () => {
     const calls = toolCallsFromParts(
-      partsJson([
-        { type: 'text', id: 't', messageID: 'm', text: 'I ran the tests.' },
-        toolPart({})
-      ])
+      partsJson([{ type: 'text', id: 't', messageID: 'm', text: 'I ran the tests.' }, toolPart({})])
     )
     expect(calls).toHaveLength(1)
     expect(calls[0]?.tool).toBe('bash')
@@ -106,9 +103,7 @@ describe('readRunChecks', () => {
 
   it('yields no checks at all for a prose-only run', async () => {
     const { checks } = await readRunChecks(
-      reader([
-        partsJson([{ type: 'text', id: 't', messageID: 'm', text: 'I fixed it.' }])
-      ]),
+      reader([partsJson([{ type: 'text', id: 't', messageID: 'm', text: 'I fixed it.' }])]),
       'thread1'
     )
     expect(checks).toEqual([])

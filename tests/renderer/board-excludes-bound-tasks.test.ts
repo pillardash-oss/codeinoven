@@ -3,7 +3,10 @@ import {
   belongsOnProjectBoard,
   boardThreadsFor
 } from '../../src/renderer/lib/components/threads/thread-dispatch-badge'
-import { assistantRowScopeLabel, parkedRunLine } from '../../src/renderer/lib/components/threads/bound-scope-label'
+import {
+  assistantRowScopeLabel,
+  parkedRunLine
+} from '../../src/renderer/lib/components/threads/bound-scope-label'
 import type { Thread } from '../../src/lib/types'
 import { ASSISTANT_SPACE_ID } from '../../src/lib/types'
 

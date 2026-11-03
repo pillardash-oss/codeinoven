@@ -91,7 +91,11 @@ describe('run receipt contrast', () => {
       const surface = theme.token('--color-surface')
       expect(contrast(theme.token('--color-foreground'), surface)).toBeGreaterThanOrEqual(4.5)
       expect(contrast(theme.token('--color-muted'), surface)).toBeGreaterThanOrEqual(4.5)
-      const failed = mix(theme.token('--color-danger'), theme.token('--color-foreground'), STATUS_INK_MIX_PERCENT)
+      const failed = mix(
+        theme.token('--color-danger'),
+        theme.token('--color-foreground'),
+        STATUS_INK_MIX_PERCENT
+      )
       const stopped = mix(
         theme.token('--color-warning'),
         theme.token('--color-foreground'),

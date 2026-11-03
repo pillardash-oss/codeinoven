@@ -65,9 +65,7 @@ function receipt(): RunReceipt {
     },
     baseSha: 'base1',
     headSha: 'head1',
-    commits: [
-      { hash: 'head1', shortHash: 'head1', subject: 'A change', author: 'Ada', at: 2 }
-    ],
+    commits: [{ hash: 'head1', shortHash: 'head1', subject: 'A change', author: 'Ada', at: 2 }],
     files: [
       {
         path: 'src/features/receipt.ts',

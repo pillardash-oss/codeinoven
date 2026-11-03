@@ -7,7 +7,11 @@ import {
   threadScopeTarget
 } from '../../src/lib/bound-scope'
 import type { Thread } from '../../src/lib/types'
-import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID, INBOX_PROJECT_ID } from '../../src/lib/types'
+import {
+  ASSISTANT_SPACE_ID,
+  GLOBAL_BROWSER_PROJECT_ID,
+  INBOX_PROJECT_ID
+} from '../../src/lib/types'
 
 /** The smallest thread each case needs: identity, home, and an optional binding. */
 function thread(home: string, extra: Partial<Thread> = {}): Thread {

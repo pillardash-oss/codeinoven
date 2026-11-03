@@ -105,12 +105,15 @@ describe('run receipt states', () => {
       state: 'ready',
       projectId: 'project1',
       threadId: 'run1',
-      scope: { projectId: 'project1', scopeBucketId: 'default', scopeName: 'Default', branch: null },
+      scope: {
+        projectId: 'project1',
+        scopeBucketId: 'default',
+        scopeName: 'Default',
+        branch: null
+      },
       baseSha: 'base1',
       headSha: 'head1',
-      files: [
-        { path: 'src/a.ts', status: 'modified', additions: 1, deletions: 0, binary: false }
-      ],
+      files: [{ path: 'src/a.ts', status: 'modified', additions: 1, deletions: 0, binary: false }],
       truncated: { files: true },
       readAt: 1
     })

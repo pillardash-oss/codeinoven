@@ -120,7 +120,12 @@ function thread(overrides: Partial<Thread> = {}): Thread {
 }
 
 function service(
-  options: { git?: ReceiptGit; counts?: GitCounts; value?: Thread | null; cache?: RunReceiptCache } = {}
+  options: {
+    git?: ReceiptGit
+    counts?: GitCounts
+    value?: Thread | null
+    cache?: RunReceiptCache
+  } = {}
 ): { service: RunReceiptService; counts: GitCounts; setThread: (thread: Thread | null) => void } {
   const counts = options.counts ?? { status: 0, log: 0, rangeFiles: 0 }
   let current = options.value === undefined ? thread() : options.value
@@ -226,7 +231,9 @@ describe('receipt performance guardrails', () => {
     const directory = join(process.cwd(), 'src', 'main', 'chat', 'run-receipt')
     const files = await readdir(directory)
     const sources = await Promise.all(
-      files.filter((file) => file.endsWith('.ts')).map((file) => readFile(join(directory, file), 'utf8'))
+      files
+        .filter((file) => file.endsWith('.ts'))
+        .map((file) => readFile(join(directory, file), 'utf8'))
     )
     sources.push(await readFile(join(directory, '..', 'run-receipt-service.ts'), 'utf8'))
     for (const source of sources) {
@@ -255,7 +262,9 @@ describe('git range parsing', () => {
 describe('git range read against a real repository', () => {
   const directories: string[] = []
   afterEach(async () => {
-    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+    await Promise.all(
+      directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
+    )
   })
 
   it('reports one file with its real line counts, in one read', async () => {

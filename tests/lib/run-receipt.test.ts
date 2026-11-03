@@ -33,7 +33,12 @@ describe('shapeRunReceipt', () => {
       state: 'ready',
       projectId: 'project1',
       threadId: 'thread1',
-      scope: { projectId: 'project1', scopeBucketId: 'default', scopeName: 'Default', branch: 'dev' },
+      scope: {
+        projectId: 'project1',
+        scopeBucketId: 'default',
+        scopeName: 'Default',
+        branch: 'dev'
+      },
       baseSha: 'a'.repeat(40),
       headSha: 'b'.repeat(40),
       commits: [
@@ -58,7 +63,12 @@ describe('shapeRunReceipt', () => {
       state: 'ready',
       projectId: 'project1',
       threadId: 'thread1',
-      scope: { projectId: 'project1', scopeBucketId: 'default', scopeName: 'Default', branch: null },
+      scope: {
+        projectId: 'project1',
+        scopeBucketId: 'default',
+        scopeName: 'Default',
+        branch: null
+      },
       baseSha: null,
       headSha: null,
       readAt: 1
@@ -154,10 +164,14 @@ describe('receiptSummaryLine', () => {
       'No starting commit recorded'
     )
     expect(
-      receiptSummaryLine(shapeRunReceipt({ ...base, state: 'parked', reason: 'the scope is missing', readAt: 1 }))
+      receiptSummaryLine(
+        shapeRunReceipt({ ...base, state: 'parked', reason: 'the scope is missing', readAt: 1 })
+      )
     ).toBe('Parked: the scope is missing')
     expect(
-      receiptSummaryLine(shapeRunReceipt({ ...base, state: 'error', reason: 'git failed', readAt: 1 }))
+      receiptSummaryLine(
+        shapeRunReceipt({ ...base, state: 'error', reason: 'git failed', readAt: 1 })
+      )
     ).toBe('Could not read: git failed')
   })
 })
