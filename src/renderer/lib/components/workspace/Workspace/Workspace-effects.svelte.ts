@@ -2,10 +2,12 @@ import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelt
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
+import { viewShowsWorkspaceShell } from '$lib/content-view-projects'
 import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { motionDuration } from '$lib/motion'
+import { openInBrowser } from '$lib/open-in-browser'
 import { isOverlayOpen } from '$lib/overlay-close.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { speechController } from '$lib/speech/speech-controller.svelte'
@@ -795,6 +797,14 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
             context.reveal,
             context.boxId
           )
+          return
+        }
+        // A surface with no project context is not a workspace thread: Settings,
+        // Scope and the app-wide browser all replace the shell, so a plain link
+        // clicked there belongs where every other in-app link goes, never in a
+        // project thread's browser the reader cannot connect to the page in front.
+        if (!viewShowsWorkspaceShell(rendererRecovery.activeView)) {
+          void openInBrowser(url, 'global')
           return
         }
         if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
