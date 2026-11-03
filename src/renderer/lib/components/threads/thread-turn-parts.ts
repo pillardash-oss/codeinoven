@@ -203,6 +203,32 @@ function resolveCheckpointOwners(
     if (message) indexByMessageId.set(message.id, index)
   }
 
+  // Which indices close a turn, in one backward pass. `isTurnEndIndex` walks
+  // forward from each candidate, so asking it inside the loops below would make
+  // a long transcript quadratic for no reason. `closesAfter` carries what the
+  // next meaningful message is: a non-transparent prompt closes everything above
+  // it, an assistant opens a run that must not be closed, and an activity notice
+  // changes nothing.
+  const closesTurn: boolean[] = new Array(messages.length).fill(false)
+  let closesAfter = true
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!message || message.inlineArtifact) continue
+    if (message.role === 'assistant') {
+      closesTurn[index] = closesAfter
+      closesAfter = false
+      continue
+    }
+    if (!isTurnTransparentUserMessage(message)) closesAfter = true
+  }
+  // A transcript that ends on a finished answer has nothing left streaming, so a
+  // card placed at its tail is reporting a turn the reader already watched end.
+  let lastVisible = messages.length - 1
+  while (lastVisible >= 0 && messages[lastVisible]?.inlineArtifact) lastVisible -= 1
+  const finalMessage = lastVisible >= 0 ? messages[lastVisible] : undefined
+  const transcriptFinished =
+    finalMessage?.role === 'assistant' && finalMessage.completedAt !== undefined
+
   // Two checkpoints for one prompt (a resumed or retried turn) share a slot;
   // the newest one owns the turn, including while it is still running: an
   // active run supersedes the attempt that failed before it.
@@ -233,6 +259,7 @@ function resolveCheckpointOwners(
     const windowEnd = starts[i + 1] ?? messages.length
     const turnEnd = nextTurnStartIndex(messages, start, windowEnd)
     let cardIndex = -1
+    let lastOwnedEnd = -1
     for (let index = start; index < windowEnd; index++) {
       const message = messages[index]
       if (!message || message.role !== 'assistant' || message.inlineArtifact) continue
@@ -243,8 +270,19 @@ function resolveCheckpointOwners(
       if (!isCompleted(checkpoint)) continue
       owners[index] = checkpoint
       if (index < turnEnd) cardIndex = index
+      if (closesTurn[index]) lastOwnedEnd = index
     }
-    if (cardIndex >= 0 && isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
+    // A checkpoint can own a run that continues past the prompt which ends its
+    // own window. An internal continuation (a retry, an incomplete-turn nudge)
+    // carries the user's prompt as its source, so the transcript grows a turn no
+    // checkpoint is anchored to, and the assistants after that prompt are still
+    // this turn's work: its card belongs at the end of the run it owns, not
+    // above the prompt that interrupted the accounting. That is exactly the
+    // shape where the finished turn drew no card at all.
+    if (transcriptFinished && lastOwnedEnd >= turnEnd && closesTurn[lastOwnedEnd]) {
+      cardIndex = lastOwnedEnd
+    }
+    if (cardIndex >= 0 && closesTurn[cardIndex]) card[cardIndex] = true
     // A steer splits the turn into the work already done and the work it was
     // steered into, so the earlier half gets its own card above the steered
     // message, listing only the files recorded up to that point. The turn's own
@@ -256,7 +294,7 @@ function resolveCheckpointOwners(
       if (!promptContinuesTurn(messages, index, start)) continue
       const boundary = previousAssistantIndex(messages, index)
       if (boundary <= start || boundary >= cardIndex) continue
-      if (isTurnEndIndex(messages, boundary)) steer[boundary] = index
+      if (closesTurn[boundary]) steer[boundary] = index
     }
   }
 
@@ -286,7 +324,7 @@ function resolveCheckpointOwners(
     }
     // The fallback can match a trailing assistant of a run a later attempt
     // replaced, so it too places a card only where a turn actually ends.
-    if (isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
+    if (closesTurn[cardIndex]) card[cardIndex] = true
     index = cardIndex
   }
 
