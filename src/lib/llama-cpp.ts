@@ -455,6 +455,14 @@ export interface LocalAiRuntimeSummary {
  */
 export const LOCAL_AI_UNLOAD_OPTIONS = ['5m', '10m', '20m', '30m', 'keep'] as const
 
+/** What "Unload now" released, so the page can name it instead of saying "done". */
+export interface LocalAiUnloadResult {
+  /** Servers that were resident and stopped. */
+  stopped: number
+  /** Model files those servers had loaded. */
+  models: string[]
+}
+
 export type LocalAiUnloadOption = (typeof LOCAL_AI_UNLOAD_OPTIONS)[number]
 
 /** 30 minutes: long enough to stay warm across a working session. */

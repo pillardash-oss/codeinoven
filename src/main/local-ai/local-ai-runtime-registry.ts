@@ -18,7 +18,8 @@ import {
   DEFAULT_LOCAL_AI_UNLOAD_OPTION,
   localAiUnloadMs,
   type LocalAiRuntimeId,
-  type LocalAiUnloadOption
+  type LocalAiUnloadOption,
+  type LocalAiUnloadResult
 } from '../../lib/llama-cpp'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { sharedLlamaRuntimeService } from '../speech/llama-runtime-service'
@@ -196,6 +197,26 @@ export class LocalAiRuntimeRegistry {
     const entry = this.servers.get(handle.key)
     if (!entry || entry.handle.generation !== handle.generation) return
     await this.stop(handle.key, entry, 'released')
+  }
+
+  /**
+   * Stop every resident server now, whatever its window says.
+   *
+   * The Local AI page's "Unload now" is the user overriding the window. It stops
+   * the servers a feature may be using at this moment, which is why the page asks
+   * first: the next cleanup or search loads the model again and pays its load
+   * time. The result names what was released so the page can say so.
+   */
+  async unloadNow(): Promise<LocalAiUnloadResult> {
+    const entries = [...this.servers.entries()]
+    const models = entries.map(([, entry]) => entry.handle.modelFile)
+    await Promise.all(
+      entries.map(async ([key, entry]) => {
+        if (this.servers.get(key) === entry) await this.stop(key, entry, 'unload-now')
+      })
+    )
+    Logger.info('Local AI models unloaded on request', { stopped: models.length })
+    return { stopped: models.length, models }
   }
 
   /** Stop every server. Called from app quit, after the consumers are disposed. */

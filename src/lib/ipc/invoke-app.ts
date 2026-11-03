@@ -17,7 +17,8 @@ import type {
   LlamaCppLogStream,
   LlamaCppProbeResult,
   LlamaCppRuntimeStatus,
-  LocalAiRuntimeSummary
+  LocalAiRuntimeSummary,
+  LocalAiUnloadResult
 } from '../llama-cpp'
 /** One file the user explicitly chooses to save from the renderer. */
 export interface SaveFileInput {
@@ -54,6 +55,7 @@ export const invokeAppContract = {
   >,
   /** The local inference runtimes this machine can drive, for the Local AI page. */
   'localAi:runtimes': {} as Contract<[], LocalAiRuntimeSummary[]>,
+  'localAi:unloadNow': {} as Contract<[], LocalAiUnloadResult>,
   /** The `llama-server` the app can launch here, its version and its installer. */
   'llamaCpp:detect': {} as Contract<[], LlamaCppRuntimeStatus>,
   /** Ask a started server for its loaded model ids, which is what readiness means. */
