@@ -5,6 +5,8 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
   import CioDisk from '@pdslng/cio-icon/CioDisk.svelte'
+  import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
@@ -89,6 +91,9 @@
   let checking = $state(false)
   /** True only while a background 5s poll is in flight. */
   let polling = $state(false)
+  /** True while the user has paused automatic refresh, so the list stays put
+   *  and menu actions are not closed out from under them mid-interaction. */
+  let pollPaused = $state(false)
   let error = $state('')
   /** The list's ordering; memory, heaviest first, is the default. */
   let sort = $state<TaskSort>(DEFAULT_TASK_SORT)
@@ -547,12 +552,34 @@
   // Auto-refresh every 5 seconds while the modal stays open. The snapshot
   // resolves project and thread names through the database, so it stops on the
   // quit signal: the main process closes that database while the window is
-  // still open.
+  // still open. Pausing the poll disarms the timer entirely instead of letting
+  // it tick and discard its result.
   $effect(() => {
-    if (!open || appQuitState.quitting) return
+    if (!open || appQuitState.quitting || pollPaused) return
     const timer = setInterval(() => void poll(), 5000)
     return () => clearInterval(timer)
   })
+
+  /**
+   * Drop rows the moment an action ends them, so the list answers the click
+   * immediately and the reconciliation happens in the background.
+   *
+   * The rows are removed before the stop/kill requests resolve and a silent
+   * poll then re-reads the truth. Awaiting a full snapshot first is what used
+   * to blank the entire surface behind a spinner after a single interaction.
+   */
+  function dropRows(pids: readonly number[], serviceIds: readonly string[]): void {
+    if (pids.length > 0) {
+      const gone = new Set(pids)
+      processes = processes.filter((process) => !gone.has(process.pid))
+      for (const pid of pids) selected.delete(pid)
+    }
+    if (serviceIds.length > 0) {
+      const gone = new Set(serviceIds)
+      services = services.filter((service) => !gone.has(service.id))
+      for (const serviceId of serviceIds) selectedServices.delete(serviceId)
+    }
+  }
 
   function processName(command: string): string {
     const executable = command.trim().split(/\s+/u)[0] ?? command
@@ -785,16 +812,22 @@
     const processTargets = selectedProcesses
     const serviceTargets = selectedServiceRows
     if (processTargets.length === 0 && serviceTargets.length === 0) return
+    const pids = processTargets.map((process) => process.pid)
+    const serviceIds = serviceTargets.map((service) => service.id)
     ending = true
     error = ''
+    dropRows(pids, serviceIds)
     try {
-      await Promise.all([
-        ...processTargets.map((process) => invoke('taskManager:killProcess', process.pid, false)),
-        ...serviceTargets.map((service) => invoke('taskManager:stopService', service.id))
+      const results = await Promise.allSettled([
+        ...pids.map((pid) => invoke('taskManager:killProcess', pid, false)),
+        ...serviceIds.map((serviceId) => invoke('taskManager:stopService', serviceId))
       ])
-      selected.clear()
-      selectedServices.clear()
-      await load()
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure?.status === 'rejected') {
+        const reason: unknown = failure.reason
+        error =
+          reason instanceof Error ? reason.message : 'One or more runtimes could not be stopped.'
+      }
     } catch (killError) {
       error =
         killError instanceof Error
@@ -802,6 +835,8 @@
           : 'One or more runtimes could not be stopped.'
     } finally {
       ending = false
+      // Reconcile silently: the failed rows reappear, the ended ones stay gone.
+      void poll()
     }
   }
 
@@ -826,15 +861,24 @@
 
   async function confirmForceEnd(): Promise<void> {
     if (forceEndTargets.length === 0 || forceEnding) return
+    const targets = forceEndTargets
+    forceEndTargets = []
     forceEnding = true
     error = ''
+    dropRows(
+      targets.map((process) => process.pid),
+      []
+    )
     try {
-      await Promise.all(
-        forceEndTargets.map((process) => invoke('taskManager:killProcess', process.pid, true))
+      const results = await Promise.allSettled(
+        targets.map((process) => invoke('taskManager:killProcess', process.pid, true))
       )
-      selected.clear()
-      forceEndTargets = []
-      await load()
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure?.status === 'rejected') {
+        const reason: unknown = failure.reason
+        error =
+          reason instanceof Error ? reason.message : 'One or more processes could not be killed.'
+      }
     } catch (killError) {
       error =
         killError instanceof Error
@@ -842,6 +886,7 @@
           : 'One or more processes could not be killed.'
     } finally {
       forceEnding = false
+      void poll()
     }
   }
 
@@ -863,19 +908,25 @@
       await performEnd()
       return
     }
+    const serviceIds = target.services.map((service) => service.id)
+    stopConfirm = null
     stopping = true
     error = ''
+    dropRows([], serviceIds)
     try {
-      await Promise.all(
-        target.services.map((service) => invoke('taskManager:stopService', service.id))
+      const results = await Promise.allSettled(
+        serviceIds.map((serviceId) => invoke('taskManager:stopService', serviceId))
       )
-      for (const service of target.services) selectedServices.delete(service.id)
-      stopConfirm = null
-      await load()
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure?.status === 'rejected') {
+        const reason: unknown = failure.reason
+        error = reason instanceof Error ? reason.message : 'The service could not be stopped.'
+      }
     } catch (stopError) {
       error = stopError instanceof Error ? stopError.message : 'The service could not be stopped.'
     } finally {
       stopping = false
+      void poll()
     }
   }
 </script>
@@ -903,7 +954,10 @@
     {/if}
 
     <div class="min-h-0 flex-1 overflow-y-auto">
-      {#if checking}
+      {#if checking && processes.length === 0 && services.length === 0}
+        <!-- The full-view spinner belongs to the first snapshot only. Once a
+        list exists, every later refresh is silent: the rows on screen keep
+        answering clicks while the new snapshot lands. -->
         <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
           <span
             class="task-manager-spinner h-5 w-5 shrink-0 rounded-full border-2 border-transparent"
@@ -1327,6 +1381,15 @@
               {processes.length} processes · {services.length} services
             {/if}
           </p>
+          {#if pollPaused}
+            <span
+              class="shrink-0 border border-border bg-elevated px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
+              title="Automatic refresh is paused"
+              aria-label="Automatic refresh is paused"
+            >
+              Paused
+            </span>
+          {/if}
           <span
             class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
             title="Total memory used by the listed processes and services"
@@ -1387,6 +1450,26 @@
             <CioClose size={13} />
           {:else}
             <CioSearch size={13} />
+          {/if}
+        </button>
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center border border-border transition-colors {pollPaused
+            ? 'bg-overlay text-foreground'
+            : 'bg-elevated text-dimmed hover:bg-overlay hover:text-foreground'}"
+          aria-pressed={pollPaused}
+          title={pollPaused
+            ? 'Resume automatic refresh every 5 seconds'
+            : 'Pause automatic refresh so the list stops changing while you work'}
+          aria-label={pollPaused
+            ? 'Resume automatic refresh every 5 seconds'
+            : 'Pause automatic refresh so the list stops changing while you work'}
+          onclick={() => (pollPaused = !pollPaused)}
+        >
+          {#if pollPaused}
+            <CioPlay size={13} />
+          {:else}
+            <CioPause size={13} />
           {/if}
         </button>
       </div>
