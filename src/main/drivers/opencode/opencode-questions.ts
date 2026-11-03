@@ -62,6 +62,7 @@ export function mapOpenCodeQuestion(raw: unknown): AgentQuestion | null {
   const prompt = extractQuestionPrompt(input)
   if (!prompt.trim()) return null
   const visual = normalizeQuestionVisual(input['visual'])
+  const instruction = stringValue(input['instruction']) ?? stringValue(input['instructions'])
   return {
     prompt,
     header: stringValue(input['header']),
@@ -69,6 +70,7 @@ export function mapOpenCodeQuestion(raw: unknown): AgentQuestion | null {
     options: options.length > 0 ? options : undefined,
     richOptions: richOptions.length > 0 ? richOptions : undefined,
     ...(visual ? { visual } : {}),
+    ...(instruction ? { instruction } : {}),
     multiple: input['multiple'] === true,
     custom: input['custom'] !== false
   }

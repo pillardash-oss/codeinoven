@@ -96,10 +96,12 @@ function mapFormField(field: FormField, record: Record<string, unknown>): AgentQ
   const description = stringValue(record['description'])
   const prompt = description ?? title ?? field.key
   const visual = normalizeQuestionVisual(record['visual'])
+  const instruction = stringValue(record['instruction']) ?? stringValue(record['instructions'])
   const base: AgentQuestion = {
     prompt,
     ...(title ? { header: title.slice(0, 30) } : {}),
-    ...(visual ? { visual } : {})
+    ...(visual ? { visual } : {}),
+    ...(instruction ? { instruction } : {})
   }
   if (field.kind === 'choice') {
     return {
