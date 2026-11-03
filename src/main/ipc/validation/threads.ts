@@ -3,6 +3,7 @@ import {
   validateModelRuntimeSettings
 } from '../../../lib/model-runtime-settings'
 import type {
+  BoundScopeRebind,
   ChecklistItemStatus,
   CreateProjectInput,
   CreateThreadInput,
@@ -117,8 +118,35 @@ const CREATE_THREAD_FIELDS = new Set([
   'assistantId',
   'assistantGettingStarted',
   'assistantTaskId',
-  'scheduled'
+  'scheduled',
+  'boundScope'
 ])
+
+const BOUND_SCOPE_FIELDS = new Set(['projectId', 'scopeBucketId', 'homeProjectId'])
+
+/**
+ * A thread's bound project scope, as the renderer may submit it.
+ *
+ * Shape only: whether the project exists and the bucket is still on its board
+ * is a database question, so the thread manager answers it where it already has
+ * both repos. A half-written pair is rejected here rather than stored, because
+ * a row with a project and no scope names no checkout at all.
+ */
+export function validateBoundScope(value: unknown): BoundScopeRebind {
+  const input = assertRecord(value, 'Bound scope')
+  rejectUnknownFields(input, BOUND_SCOPE_FIELDS, 'bound scope')
+  if (input.projectId === undefined || input.scopeBucketId === undefined) {
+    throw new TypeError('A bound scope needs both a project and a scope bucket')
+  }
+  const bound: BoundScopeRebind = {
+    projectId: validateEntityId(input.projectId, 'Bound project ID'),
+    scopeBucketId: validateEntityId(input.scopeBucketId, 'Bound scope bucket ID')
+  }
+  if (input.homeProjectId !== undefined) {
+    bound.homeProjectId = validateEntityId(input.homeProjectId, 'Bound home project ID')
+  }
+  return bound
+}
 
 export function validateThreadStatus(value: unknown): ThreadStatus {
   return assertEnum(value, THREAD_STATUSES, 'thread status')
@@ -410,6 +438,9 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
     }
     sanitized.scheduled = input.scheduled
   }
+  if (input.boundScope !== undefined) {
+    sanitized.boundScope = validateBoundScope(input.boundScope)
+  }
   return sanitized
 }
 
@@ -421,7 +452,8 @@ const UPDATE_THREAD_FIELDS = new Set([
   'scopeBucketId',
   'lastActivity',
   'read',
-  'assistantGettingStarted'
+  'assistantGettingStarted',
+  'boundScope'
 ])
 
 export function validateThreadUpdateInput(
@@ -437,6 +469,7 @@ export function validateThreadUpdateInput(
     | 'lastActivity'
     | 'read'
     | 'assistantGettingStarted'
+    | 'boundScope'
   >
 > {
   const input = assertRecord(value, 'Thread update input')
@@ -453,6 +486,7 @@ export function validateThreadUpdateInput(
       | 'lastActivity'
       | 'read'
       | 'assistantGettingStarted'
+      | 'boundScope'
     >
   > = {}
 
@@ -492,6 +526,9 @@ export function validateThreadUpdateInput(
       input.assistantGettingStarted,
       'Assistant getting-started flag'
     )
+  }
+  if (input.boundScope !== undefined) {
+    sanitized.boundScope = validateBoundScope(input.boundScope)
   }
 
   return sanitized

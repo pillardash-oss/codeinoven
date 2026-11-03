@@ -1,6 +1,7 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioCalendarClock from '@pdslng/cio-icon/CioCalendarClock.svelte'
   import CioCalendarOff from '@pdslng/cio-icon/CioCalendarOff.svelte'
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
@@ -22,12 +23,16 @@
   import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import AssistantHandoffModals from './AssistantHandoffModals.svelte'
+  import AssistantTaskScopePicker from './AssistantTaskScopePicker.svelte'
+  import { assistantRowScopeLabel, parkedRunLine } from '$lib/components/threads/bound-scope-label'
+  import { scopeWorktreeHealthGuidance } from '$shared/scope-worktree-health'
   import { createAssistantHandoff } from './assistant-handoff.svelte'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
@@ -176,6 +181,35 @@
   })
 
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
+
+  /**
+   * The scope line a bound task wears, and nothing at all for an unbound one.
+   *
+   * A run nested under its task inherits the task's binding rather than
+   * repeating it, so the sidebar reads as one task working in one checkout.
+   */
+  const scopeLine = $derived.by(() => {
+    if (isRun) return null
+    const bound = task.boundScope
+    if (!bound) return null
+    return assistantRowScopeLabel({
+      boundScope: bound,
+      bucketName: scopeState.bucketFor(bound.projectId, bound.scopeBucketId)?.name
+    })
+  })
+
+  /**
+   * A run parked on its bound scope's health says so in the app's own wording,
+   * and carries the full repair guidance in its tooltip. A run in that state is
+   * waiting on the user, so it must never read as an ordinary idle task.
+   */
+  const parkLine = $derived.by(() => {
+    const reason = task.parkReason
+    if (!reason) return null
+    return parkedRunLine(scopeWorktreeHealthGuidance({ category: reason.category }).cause)
+  })
+
+  let scopePickerOpen = $state(false)
 
   /** The assistant marks tint with the assistant's accent, or the muted ink. */
   const iconStyle = $derived(`color: ${color ?? 'var(--color-muted)'}`)
@@ -444,9 +478,9 @@
           class="min-w-0 flex-1 truncate text-[0.625rem] {foreignTransfer?.error
             ? 'text-danger'
             : 'text-dimmed'}"
-          title={foreignTransfer?.error ?? scheduleLabel ?? undefined}
+          title={foreignTransfer?.error ?? task.parkReason?.message ?? scheduleLabel ?? undefined}
         >
-          {foreignTransfer?.error ?? runLine}
+          {foreignTransfer?.error ?? parkLine ?? runLine}
         </span>
         <ThreadNoteMark threadId={task.id} />
         <AuthoredWorkMarks kinds={authoredWorkKinds} />
@@ -458,6 +492,15 @@
           <ThreadIndicatorSlot {indicator} />
         {/if}
       </span>
+      {#if scopeLine}
+        <span
+          class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
+          title="Works in the {scopeLine} scope"
+        >
+          <CioFolderGit size={10} aria-hidden="true" />
+          <span class="min-w-0 truncate">{scopeLine}</span>
+        </span>
+      {/if}
     </span>
   </button>
 
@@ -485,6 +528,25 @@
         {:else}
           <CioSwap size={13} aria-hidden="true" />
         {/if}
+      </button>
+    {/if}
+    {#if !isRun}
+      <button
+        type="button"
+        class="flex size-6 shrink-0 items-center justify-center transition-colors hover:bg-elevated {task.boundScope
+          ? 'text-accent'
+          : 'text-dimmed'}"
+        title={task.boundScope
+          ? 'Change the project scope this task works in'
+          : 'Bind this task to a project scope'}
+        aria-label={task.boundScope
+          ? 'Change the project scope this task works in'
+          : 'Bind this task to a project scope'}
+        onclick={() => {
+          scopePickerOpen = true
+        }}
+      >
+        <CioFolderGit size={13} aria-hidden="true" />
       </button>
     {/if}
     {#if !isRun && task.assistantId && onToggleScheduled}
@@ -585,6 +647,17 @@
   threadTitle={task.title}
   onClose={actionsMenu.cancelDelete}
   onConfirm={actionsMenu.confirmDelete}
+/>
+
+<AssistantTaskScopePicker
+  {task}
+  open={scopePickerOpen}
+  onClose={() => {
+    scopePickerOpen = false
+  }}
+  onBound={() => {
+    scopePickerOpen = false
+  }}
 />
 
 <AssistantHandoffModals controller={handoff} />

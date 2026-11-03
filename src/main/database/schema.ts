@@ -36,7 +36,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * without a bump reaches fresh installs only and silently skips every database
  * already on disk.
  */
-export const DATABASE_SCHEMA_VERSION = 5
+export const DATABASE_SCHEMA_VERSION = 6
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -132,6 +132,16 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   authored_work_kind   TEXT CHECK(authored_work_kind IN ('design','video')),
   authored_work_kinds  TEXT,
   scope_bucket_id      TEXT DEFAULT 'default',
+  -- The project scope a thread runs in when that is not its home, the commit
+  -- its run started from, and the assistant that dispatched it into existence.
+  -- All three are JSON or scalar columns with no backfill, so a fresh install
+  -- matches an upgraded one and an old row keeps resolving where it resolved.
+  bound_scope_project_id TEXT,
+  bound_scope_scope_id   TEXT,
+  bound_scope_home_project_id TEXT,
+  run_base             TEXT,
+  dispatch_origin      TEXT,
+  park_reason          TEXT,
   settings             TEXT,
   context_usage        TEXT,
   session_id           TEXT,

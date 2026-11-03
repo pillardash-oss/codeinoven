@@ -27,6 +27,7 @@ import {
   DEFAULT_SCOPE_BUCKET_ID,
   scopeSliceForStatus,
   type ScopeSlice,
+  type BoundScopeRebind,
   type Thread,
   type Project,
   type CreateThreadInput,
@@ -364,6 +365,12 @@ export class ThreadManager {
       settings: input.settings,
       featureSlug: input.featureSlug,
       scopeBucketId: input.scopeBucketId,
+      // A bound scope is part of the created row itself for the same reason the
+      // assistant fields are: the creation broadcast carries this object, and a
+      // binding written afterwards would be wiped by that payload.
+      boundScope: input.boundScope,
+      runBase: input.runBase,
+      dispatchOrigin: input.dispatchOrigin,
       assignmentId: input.assignmentId,
       assignmentRole: input.assignmentRole,
       assignmentTaskId: input.assignmentTaskId,
@@ -404,6 +411,10 @@ export class ThreadManager {
       if (!project) {
         throw new Error(`Project not found: ${input.projectId}`)
       }
+      // A binding names a checkout, so both halves must still exist: an unknown
+      // project or a bucket that has left the board would resolve to nothing and
+      // silently point every evidence surface at no repository at all.
+      if (input.boundScope) await this.assertBoundScopeTarget(input.boundScope)
       const scopedBuckets = scopedBucketIdsFromBoard(
         await this.scopeManager.getBoardSnapshot(input.projectId)
       )
@@ -426,6 +437,13 @@ export class ThreadManager {
       // The new thread lands first so the optimistic create always yields a
       // persisted row; the bounded bucket delete is best-effort cleanup that
       // must never roll back the creation it is making room for.
+      // A bound task's directory is its bound scope's, resolved by the same
+      // authority every project thread uses. The home container never wins:
+      // falling back to assistant storage is exactly the behaviour the park
+      // gate exists to prevent.
+      if (input.boundScope) {
+        await this.resolveBoundCompatibilityRoot(input.boundScope, thread)
+      }
       await this.resolveCompatibilityRoot(input.projectId, input.scopeBucketId, thread)
       await this.threadRepo.upsertViaWorker(thread)
       if (evictionCandidateIds.length > 0) {
@@ -472,6 +490,28 @@ export class ThreadManager {
    * authoritative root. Renderer-supplied directories never win when the
    * scope resolves; unhealthy managed scopes fail closed.
    */
+  /**
+   * Assert that a bound scope names a project that exists and a bucket that is
+   * still on that project's board.
+   *
+   * Shape validation happens at the IPC boundary; existence is a database
+   * question and belongs where both repos are already in hand. A removed scope
+   * is rejected rather than accepted and followed to the Default scope, because
+   * a binding is a user's explicit choice of checkout.
+   */
+  private async assertBoundScopeTarget(boundScope: BoundScopeRebind): Promise<void> {
+    const project = await this.projectRepo.getViaWorker(boundScope.projectId)
+    if (!project) {
+      throw new Error(`Project not found: ${boundScope.projectId}`)
+    }
+    const board = await this.scopeManager.getBoardSnapshot(boundScope.projectId)
+    if (!board.buckets.some((bucket) => bucket.id === boundScope.scopeBucketId)) {
+      throw new Error(
+        `Scope ${boundScope.scopeBucketId} is not on project ${boundScope.projectId}`
+      )
+    }
+  }
+
   private async resolveCompatibilityRoot(
     projectId: string,
     scopeBucketId: string | undefined,
@@ -479,6 +519,25 @@ export class ThreadManager {
   ): Promise<void> {
     if (!this.scopeRoots || !scopeBucketId) return
     const resolved = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+    if (resolved) thread.workingDirectory = resolved
+  }
+
+  /**
+   * A bound task's compatibility directory comes from its bound scope.
+   *
+   * Fail-closed on purpose: an unhealthy managed scope throws out of the
+   * provider, and the caller parks the run with that reason instead of letting
+   * the thread keep whatever directory it had.
+   */
+  private async resolveBoundCompatibilityRoot(
+    boundScope: BoundScopeRebind,
+    thread: Thread
+  ): Promise<void> {
+    if (!this.scopeRoots) return
+    const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+      boundScope.projectId,
+      boundScope.scopeBucketId
+    )
     if (resolved) thread.workingDirectory = resolved
   }
 
@@ -725,6 +784,7 @@ export class ThreadManager {
         | 'authoredWorkKinds'
         | 'implementationBrainstorm'
         | 'scopeBucketId'
+        | 'boundScope'
         | 'lastActivity'
         | 'read'
         | 'assignmentId'
@@ -751,6 +811,16 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
+    // Only an assistant task has a home and a workspace that can differ. A
+    // project thread already names its own scope, so accepting a binding for
+    // one would create a second, contradictory answer to the same question.
+    if (input.boundScope !== undefined) {
+      if (existing.projectId !== ASSISTANT_SPACE_ID) {
+        throw new Error('Only an assistant task can be bound to a project scope')
+      }
+      if (input.boundScope) await this.assertBoundScopeTarget(input.boundScope)
+    }
+
     // Moving a thread to a different scope counts as activity on it: the
     // thread jumps to the top of the destination scope instead of arriving
     // with a stale timestamp (which would also make it the immediate
@@ -774,6 +844,9 @@ export class ThreadManager {
       authoredWorkKind: input.authoredWorkKind ?? existing.authoredWorkKind,
       authoredWorkKinds: input.authoredWorkKinds ?? existing.authoredWorkKinds,
       scopeBucketId: input.scopeBucketId ?? existing.scopeBucketId,
+      // A rebind is an explicit user action, so it replaces the pair outright;
+      // omitting the field leaves the existing binding untouched.
+      boundScope: input.boundScope !== undefined ? input.boundScope : existing.boundScope,
       read: input.read ?? existing.read,
       assignmentId: input.assignmentId ?? existing.assignmentId,
       assignmentRole: input.assignmentRole ?? existing.assignmentRole,
@@ -804,6 +877,21 @@ export class ThreadManager {
           ? undefined
           : existing.scopeSortOrder,
       updatedAt: Date.now()
+    }
+
+    // Rebinding a task re-derives its directory from the destination scope, on
+    // the same rule a scope move follows, before anything can act on it.
+    if (
+      this.scopeRoots &&
+      input.boundScope !== undefined &&
+      input.workingDirectory === undefined &&
+      (input.boundScope?.projectId ?? null) !== (existing.boundScope?.projectId ?? null)
+    ) {
+      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+        input.boundScope.projectId,
+        input.boundScope.scopeBucketId
+      )
+      if (resolved) updated.workingDirectory = resolved
     }
 
     // Moving a thread between scopes re-derives its compatibility working
@@ -1159,6 +1247,39 @@ export class ThreadManager {
     return assignmentIds
   }
 
+  /**
+   * Park a run on a typed reason until the user repairs its scope.
+   *
+   * The status is `working-paused` rather than `failed`, because nothing went
+   * wrong with the work: the checkout it needs is not usable yet, and the
+   * repair action is the user's next step. The reason is stored whole so the
+   * row and the receipt can name the category and repeat the app's own guidance
+   * after a restart.
+   */
+  async parkThread(
+    projectId: string,
+    threadId: string,
+    reason: NonNullable<Thread['parkReason']>
+  ): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    const now = Date.now()
+    const updated: Thread = {
+      ...existing,
+      status: 'working-paused',
+      lastOutcome: 'parked',
+      parkReason: reason,
+      lastError: reason.message,
+      lastErrorAt: now,
+      updatedAt: now,
+      lastActivity: now,
+      sortOrder: undefined,
+      scopeSortOrder: undefined
+    }
+    await this.threadRepo.upsertViaWorker(updated)
+    await this.announce(updated)
+    return updated
+  }
+
   async setStatus(
     projectId: string,
     threadId: string,
@@ -1199,9 +1320,16 @@ export class ThreadManager {
             ? 'parked'
             : existing.lastOutcome
 
+    // A resumed run is no longer parked: the reason belongs to the attempt that
+    // refused to start, so a turn that does start clears it.
+    const clearedPark =
+      existing.parkReason !== undefined &&
+      (status === 'executing' || status === 'completed' || status === 'failed')
+
     const updated: Thread = {
       ...existing,
       status,
+      ...(clearedPark ? { parkReason: undefined } : {}),
       scopeSortOrder:
         scopeSliceForStatus(existing.status) === scopeSliceForStatus(status)
           ? existing.scopeSortOrder
