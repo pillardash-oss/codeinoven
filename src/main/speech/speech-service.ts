@@ -69,6 +69,13 @@ import { toSpeechError } from './speech-service/speech-error-mapping'
 
 export { speechResult } from './speech-service/speech-error-mapping'
 
+/**
+ * How far a finished native take may fall short of its recorded length before
+ * it counts as lost audio rather than conversion jitter. A clean take is within
+ * a few milliseconds; the one that prompted this fix kept 13 s of 160 s.
+ */
+const NATIVE_CAPTURE_SHORTFALL_MS = 2_000
+
 interface InstalledArtifactIndex {
   version: 1
   artifacts: SpeechInstalledArtifact[]
@@ -445,8 +452,23 @@ export class SpeechService {
     durationMs: number
   ): Promise<SpeechRecordingAttempt> {
     this.releaseCapture(sessionId)
-    await this.nativeCapture.stop(sessionId)
-    const attempt = await this.storage.finalizeCapture(sessionId, durationMs)
+    const report = await this.nativeCapture.stop(sessionId)
+    const attempt = await this.storage.finalizeCapture(sessionId, durationMs, report)
+    const shortfall = durationMs - (attempt.capturedMs ?? durationMs)
+    if (report.warning || shortfall > NATIVE_CAPTURE_SHORTFALL_MS) {
+      // A take that lost its microphone used to be finished and transcribed as
+      // if it were whole, which is exactly how 2m40s of speech became a 13s
+      // transcript. The attempt now carries what it really captured, and the
+      // renderer tells the user instead of letting the fragment pass as whole.
+      Logger.error('Native voice recording captured less audio than it recorded.', {
+        attemptId: attempt.id,
+        durationMs,
+        capturedMs: attempt.capturedMs ?? null,
+        shortfallMs: shortfall,
+        warning: report.warning ?? null,
+        engineRestarts: report.engineRestarts
+      })
+    }
     this.emit({
       kind: 'capture',
       capture: { state: 'stopping', sessionId, attemptId: attempt.id }

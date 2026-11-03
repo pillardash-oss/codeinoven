@@ -222,6 +222,13 @@ export interface SpeechRecordingAttempt {
   audioId?: string
   audioAvailable: boolean
   durationMs?: number
+  /**
+   * How much audio the finished file actually holds, for recordings whose
+   * capture side can report it (the native microphone worker). A take that
+   * lost its microphone is far shorter than `durationMs`, and this is what
+   * makes that difference visible instead of silently transcribing a fragment.
+   */
+  capturedMs?: number
   byteSize: number
   mimeType?: string
   rawTranscript?: string
