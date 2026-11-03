@@ -91,6 +91,7 @@ export interface AgentUtilityHost {
   readonly stage: BrowserService['stage']
   readonly stateFor: BrowserService['stateFor']
   readonly tabs: BrowserService['tabs']
+  readonly previousPageTarget: BrowserService['previousPageTarget']
   readonly threadBrowserHint: BrowserService['threadBrowserHint']
   readonly touchParkedTab: BrowserService['touchParkedTab']
   readonly uploadFiles: BrowserService['uploadFiles']
@@ -255,6 +256,7 @@ export class BrowserServiceAgentUtility {
       // Which page the answer came from, so the agent can tell a page it opened
       // apart from the page the user is reading.
       page: attached ? ('user' as const) : ('agent' as const),
+      ...this.movedPageHint(contextKey, tabId),
       ...this.host.threadBrowserHint(scope, tabId, contextKey)
     }
     if (operation === 'viewport') {
@@ -556,6 +558,30 @@ export class BrowserServiceAgentUtility {
         : {
             reason: 'the field did not keep the text it was given; check its type or its validation'
           })
+    }
+  }
+
+  /**
+   * Say so when the page moved between two calls.
+   *
+   * `page "strip"` is defined as whatever the strip shows now, so the user opening
+   * another tab legitimately moves it. The one thing that must never happen is a model
+   * typing into a different site without being told, which is why the tab this call did
+   * not want is named in its result instead of silently replacing the last one.
+   */
+  private movedPageHint(
+    contextKey: string,
+    answeredTabId: string
+  ): { pageMoved?: { fromTabId: string; fromUrl: string; detail: string } } {
+    const previous = this.host.previousPageTarget(contextKey)
+    if (!previous || previous.tabId === answeredTabId) return {}
+    return {
+      pageMoved: {
+        fromTabId: previous.tabId,
+        fromUrl: previous.url,
+        detail:
+          'The page this call worked on is not the one the previous call worked on, because page "strip" follows the tab the user is on. Read the page before acting again, or open a page of your own with "open" and use page "agent" to keep one across the user\u2019s tab switches.'
+      }
     }
   }
 
