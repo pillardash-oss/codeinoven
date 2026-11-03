@@ -786,14 +786,25 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
   private async mergeResolvedPullRequest(pullNumber: number): Promise<boolean> {
     const identity = this.root.handlePrListAction.githubIdentity
     if (!identity) return false
-    const merged = await gitState.mergePullRequest(
-      this.root.props.projectId,
-      identity.owner,
-      identity.repo,
-      pullNumber,
-      appConfigState.defaultMergeMethod
-    )
-    return merged !== null
+    // GitHub recomputes a pull request's mergeability asynchronously after the
+    // push that resolved the conflicts, so the first attempt can be refused for
+    // a state that is already gone. Only that refusal is retried: permission
+    // prompts and real rule violations are final.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500))
+      const merged = await gitState.mergePullRequest(
+        this.root.props.projectId,
+        identity.owner,
+        identity.repo,
+        pullNumber,
+        appConfigState.defaultMergeMethod
+      )
+      if (merged !== null) return true
+      if (!/not mergeable|conflict|cannot be merged|mergeability/iu.test(gitState.error ?? '')) {
+        return false
+      }
+    }
+    return false
   }
 
   atRiskFiles = $derived(this.changes.length > 0 ? this.changes.map((change) => change.path) : [])
