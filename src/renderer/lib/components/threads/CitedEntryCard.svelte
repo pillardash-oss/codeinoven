@@ -19,6 +19,6 @@ are the whole of what it produced: one bordered surface, one row per entry. A
 turn that also changed files shows these rows inside its changes card instead. -->
 <div class="min-w-0 border border-border bg-surface">
   {#each entries as entry (entry.path)}
-    <CitedEntryRow {entry} {projectId} {threadId} />
+    <CitedEntryRow {entry} {projectId} {threadId} density="card" />
   {/each}
 </div>

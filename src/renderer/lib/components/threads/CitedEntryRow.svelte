@@ -14,9 +14,20 @@
     projectId?: string | null
     /** The thread the row is drawn in, which is where a served design opens. */
     threadId?: string | null
+    /**
+     * Where the row is drawn.
+     *
+     * `card` is the row standing for the whole answer: it carries the card's own
+     * padding and type size, because it is the only thing on that surface. `list`
+     * is the same row inside a bigger card, sharing the diff rows' rhythm and its
+     * hairline, so two sections of one card read as one list.
+     */
+    density?: 'card' | 'list'
   }
 
-  let { entry, projectId = null, threadId = null }: Props = $props()
+  let { entry, projectId = null, threadId = null, density = 'list' }: Props = $props()
+
+  const inCard = $derived(density === 'card')
 
   const modifiedAt = $derived(formatDateTimeCompact(entry.modifiedAt))
   const isFolder = $derived(entry.kind === 'directory')
@@ -53,16 +64,26 @@
 </script>
 
 <div
-  class="flex min-h-9 w-full items-center gap-2 border-b border-border px-3 transition-colors last:border-b-0 hover:bg-elevated"
+  class={[
+    'flex w-full min-w-0 items-center transition-colors hover:bg-elevated',
+    inCard ? 'gap-3 px-3 py-2' : 'min-h-9 gap-2 border-b border-border px-3 last:border-b-0'
+  ]}
 >
   {#if isFolder}
-    <CioFolder size={15} strokeWidth={1.6} class="shrink-0 text-muted" />
+    <CioFolder size={inCard ? 16 : 15} strokeWidth={1.6} class="shrink-0 text-muted" />
   {:else}
-    <CioFileText size={15} strokeWidth={1.6} class="shrink-0 text-muted" />
+    <CioFileText size={inCard ? 16 : 15} strokeWidth={1.6} class="shrink-0 text-muted" />
   {/if}
   <div class="min-w-0 flex-1">
-    <div class="truncate text-[0.75rem] font-medium text-foreground">{entry.name}</div>
-    <div class="text-[0.6875rem] text-dimmed">
+    <div
+      class={[
+        'truncate font-medium text-foreground',
+        inCard ? 'text-[0.8125rem]' : 'text-[0.75rem]'
+      ]}
+    >
+      {entry.name}
+    </div>
+    <div class={inCard ? 'text-[0.75rem] text-dimmed' : 'text-[0.6875rem] text-dimmed'}>
       {work === 'design'
         ? 'Design'
         : work === 'video'
