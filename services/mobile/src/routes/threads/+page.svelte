@@ -14,6 +14,7 @@
   } from '#lib/api/status'
   import type { Project, Thread, ThreadStatus } from '#lib/api/types'
   import AppBar from '#lib/components/AppBar.svelte'
+  import FamilyTitle from '#lib/components/FamilyTitle.svelte'
   import Sheet from '#lib/components/Sheet.svelte'
   import Switch from '#lib/components/Switch.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
@@ -116,7 +117,7 @@
 
   function toggleGroup(id: InboxGroup, enabled: boolean): void {
     groupRows = groupRows.map((row) => (row.id === id ? { ...row, enabled } : row))
-    if (!enabled && group === id) group = 'all'
+    if (!enabled && group === id) setGroup('all')
     writeGroups()
   }
 
@@ -184,6 +185,37 @@
     projectFilter ? (projectOf(projectFilter)?.name ?? 'Project') : 'Threads'
   )
 
+  /**
+   * A list of a hundred and twenty rows drawn at once is a stall on a phone, so
+   * the list grows in pages as it scrolls. The rows already on screen keep their
+   * identity, which is what makes the filter's arrivals cheap.
+   */
+  const PAGE = 40
+  let shown = $state(PAGE)
+
+  function grow(node: HTMLElement): () => void {
+    const listen = (): void => {
+      if (node.scrollTop + node.clientHeight < node.scrollHeight - 320) return
+      if (shown >= visible.length) return
+      shown = Math.min(visible.length, shown + PAGE)
+    }
+    node.addEventListener('scroll', listen, { passive: true })
+    return () => node.removeEventListener('scroll', listen)
+  }
+
+  /** Any change of filter starts the list again at the first page. */
+  function setGroup(next: InboxGroup | 'all'): void {
+    group = next
+    shown = PAGE
+  }
+
+  function search(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLInputElement)) return
+    query = target.value
+    shown = PAGE
+  }
+
   function statusWeight(status: ThreadStatus): number {
     return STATUS_WEIGHT[status] ?? 99
   }
@@ -200,11 +232,19 @@
 
   function toggleInbox(): void {
     inbox = !inbox
-    if (!inbox) group = 'all'
+    if (!inbox) setGroup('all')
   }
 </script>
 
 <AppBar title={scopeName} count={visible.length}>
+  {#snippet titleSlot()}
+    <FamilyTitle
+      current="threads"
+      count={visible.length}
+      projects={projects.length}
+      threads={threads.length}
+    />
+  {/snippet}
   {#snippet actions()}
     <button
       class="icon-btn"
@@ -246,7 +286,8 @@
   <div class="search-row">
     <input
       {@attach focusOnMount}
-      bind:value={query}
+      value={query}
+      oninput={search}
       type="search"
       placeholder="Filter threads"
       aria-label="Filter threads"
@@ -261,7 +302,7 @@
       class="tab"
       type="button"
       aria-pressed={group === 'all'}
-      onclick={() => (group = 'all')}
+      onclick={() => setGroup('all')}
     >
       All
     </button>
@@ -271,7 +312,7 @@
         type="button"
         aria-pressed={group === entry.id}
         style:color={entry.tone ? toneColor(entry.tone) : undefined}
-        onclick={() => (group = entry.id)}
+        onclick={() => setGroup(entry.id)}
       >
         {entry.label}
         {#if countFor(entry.id) > 0}<span class="tab-count">{countFor(entry.id)}</span>{/if}
@@ -324,7 +365,7 @@
   {/each}
 </Sheet>
 
-<div class="list">
+<div class="list" {@attach grow}>
   {#if loading}
     {#each [0, 1, 2, 3, 4] as row (row)}
       <div class="skeleton-row" aria-hidden="true"><span></span></div>
@@ -339,7 +380,7 @@
       {query || group !== 'all' ? 'No thread matches this filter' : 'No threads yet'}
     </p>
   {:else}
-    {#each visible as thread (thread.id)}
+    {#each visible.slice(0, shown) as thread (thread.id)}
       <ThreadRow {thread} project={projectOf(thread.projectId)} showProject />
     {/each}
   {/if}

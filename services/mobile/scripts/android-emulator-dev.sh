@@ -71,9 +71,14 @@ if [ ! -d android ]; then
 fi
 
 # 4. Build the web bundle with the backend origin baked in, copy it into the
-#    shell, and package the debug APK.
+#    shell, and package the debug APK. `VITE_API_BASE` is exported for the whole
+#    step, not just the bundle: `cap sync` reads it too, and it is what decides
+#    whether the WebView may open a plain HTTP request from its https://localhost
+#    origin. A build whose sync ran without it packages a shell that drops every
+#    call to the backend as mixed content.
 if [ "$BUILD" = true ]; then
-  VITE_API_BASE="$API_BASE" bun run build
+  export VITE_API_BASE="$API_BASE"
+  bun run build
   bunx cap sync android
   (cd android && ./gradlew assembleDebug)
 fi

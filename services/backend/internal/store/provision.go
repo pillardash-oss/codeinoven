@@ -159,7 +159,10 @@ func (s *Store) ReplaceContent(
 	ctx context.Context, schemaName string, write func(tx pgx.Tx) error,
 ) error {
 	return s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `TRUNCATE messages, prompts, threads, projects`); err != nil {
+		// Assistants belong to the same replace: an assistant has no natural key
+		// in this schema, so a seed that left them behind doubled every one on
+		// the next run. The list is the whole content, in dependency order.
+		if _, err := tx.Exec(ctx, `TRUNCATE messages, prompts, threads, projects, assistants`); err != nil {
 			return fmt.Errorf("store: truncate content: %w", err)
 		}
 		return write(tx)

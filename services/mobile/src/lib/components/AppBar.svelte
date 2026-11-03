@@ -13,11 +13,13 @@
     /** A back control replaces the title's left padding, as the design draws it. */
     back?: { href: string; label: string } | null
     actions?: Snippet
+    /** A title that is a control of its own, such as the Projects/Threads switch. */
+    titleSlot?: Snippet
     /** Draw the hairline under the bar even before the list scrolls. */
     ruled?: boolean
   }
 
-  let { title, count = null, back = null, actions, ruled = false }: Props = $props()
+  let { title, count = null, back = null, actions, titleSlot, ruled = false }: Props = $props()
 </script>
 
 <header class={['bar', { talk: back !== null || ruled }]}>
@@ -28,10 +30,14 @@
       </a>
     {/if}
     <div class="bar-title">
-      <h1>
-        {title}
-        {#if count !== null && count !== undefined}<span class="count">{count}</span>{/if}
-      </h1>
+      {#if titleSlot}
+        {@render titleSlot()}
+      {:else}
+        <h1>
+          {title}
+          {#if count !== null && count !== undefined}<span class="count">{count}</span>{/if}
+        </h1>
+      {/if}
     </div>
     {#if actions}
       <div class="actions">{@render actions()}</div>

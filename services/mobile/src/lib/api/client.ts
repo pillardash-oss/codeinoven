@@ -67,6 +67,39 @@ interface RequestOptions {
   signal?: AbortSignal
 }
 
+/**
+ * No screen may wait on the service forever. A phone on a bad network is the
+ * normal case, not an exception: a request that never answers would hold the
+ * shell on its loading state and read as a frozen app, so every call has a
+ * deadline and reports its own timeout as a network failure.
+ */
+const REQUEST_TIMEOUT_MS = 12_000
+
+interface Deadline {
+  signal: AbortSignal
+  expired: () => boolean
+  done: () => void
+}
+
+function deadlineFor(outer: AbortSignal | undefined): Deadline {
+  const controller = new AbortController()
+  let expired = false
+  const timer = setTimeout(() => {
+    expired = true
+    controller.abort()
+  }, REQUEST_TIMEOUT_MS)
+  const forward = (): void => controller.abort()
+  outer?.addEventListener('abort', forward, { once: true })
+  return {
+    signal: controller.signal,
+    expired: () => expired,
+    done: () => {
+      clearTimeout(timer)
+      outer?.removeEventListener('abort', forward)
+    }
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestOptions = {}
@@ -75,6 +108,7 @@ async function request<T>(
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
   if (bearerToken) headers.Authorization = `Bearer ${bearerToken}`
 
+  const deadline = deadlineFor(options.signal)
   let response: Response
   try {
     response = await fetch(`${API_BASE}${path}`, {
@@ -82,14 +116,20 @@ async function request<T>(
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       credentials: 'omit',
-      signal: options.signal
+      signal: deadline.signal
     })
   } catch (cause) {
     // A network failure is not an HTTP answer: name it so a screen can offer a
     // retry instead of showing an empty list as though the account had none.
-    throw new ApiError('network', 'Cannot reach CodeInOven right now.', 0, {
-      cause: cause instanceof Error ? cause.message : String(cause)
-    })
+    const timedOut = deadline.expired()
+    throw new ApiError(
+      timedOut ? 'timeout' : 'network',
+      timedOut ? 'The oven did not answer in time.' : 'Cannot reach CodeInOven right now.',
+      0,
+      { cause: cause instanceof Error ? cause.message : String(cause) }
+    )
+  } finally {
+    deadline.done()
   }
 
   if (response.status === 204) return { data: undefined as T }
