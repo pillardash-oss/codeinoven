@@ -202,8 +202,8 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
-    state.displayService?.dispose()
-    state.displayService = null
+    const { disposeDisplayRuntime } = await import('../display/display-runtime')
+    await disposeDisplayRuntime()
   } catch (error) {
     Logger.error('Display preview cleanup failed during shutdown:', error)
   }

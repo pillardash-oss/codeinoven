@@ -1,9 +1,6 @@
 import { BrowserWindow } from 'electron'
 import {
   DISPLAY_CONTROLS_BY_KIND,
-  DISPLAY_SOURCE_KINDS,
-  isDisplayControlAction,
-  isDisplaySourceKind,
   type DisplayCapturePhase,
   type DisplayCaptureState,
   type DisplayControlAction,
@@ -13,7 +10,6 @@ import {
   type DisplaySourceKind,
   type DisplaySourceListing
 } from '../../lib/ipc/display'
-import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { Logger } from '../system/logger'
@@ -92,27 +88,6 @@ export class DisplayService {
   private watchingWindow = false
 
   constructor(private readonly deps: DisplayServiceDeps) {}
-
-  /** Register the renderer boundary. Idempotent, so a reload cannot double-register. */
-  registerIpc(): void {
-    if (this.ipcRegistered) return
-    this.ipcRegistered = true
-    ipcMain.handle('display:listSources', (_event, kind: unknown) =>
-      this.listSources(requireKind(kind))
-    )
-    ipcMain.handle('display:start', (_event, request: unknown) => {
-      this.start(requireRequest(request))
-    })
-    ipcMain.handle('display:demand', (_event, sessionId: unknown, demand: unknown) => {
-      this.setDemand(requireSessionId(sessionId), requireDemand(demand))
-    })
-    ipcMain.handle('display:stop', (_event, sessionId: unknown) => {
-      this.stop(requireSessionId(sessionId))
-    })
-    ipcMain.handle('display:control', (_event, sessionId: unknown, action: unknown) =>
-      this.control(requireSessionId(sessionId), requireControl(action))
-    )
-  }
 
   /** Every target one kind can offer right now. Read-only and never cached. */
   async listSources(kind: DisplaySourceKind): Promise<DisplaySourceListing> {
@@ -359,64 +334,5 @@ export class DisplayService {
         sendToRenderer(window.webContents, channel, payload)
       }
     }
-  }
-}
-
-/** Reject anything that is not one of the four kinds the app can mirror. */
-function requireKind(value: unknown): DisplaySourceKind {
-  if (!isDisplaySourceKind(value)) {
-    throw new TypeError(`A display source must be one of ${DISPLAY_SOURCE_KINDS.join(', ')}`)
-  }
-  return value
-}
-
-function requireControl(value: unknown): DisplayControlAction {
-  if (!isDisplayControlAction(value)) throw new TypeError('That display control is not known')
-  return value
-}
-
-function requireSessionId(value: unknown): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 128) {
-    throw new TypeError('A display session id must be a non-empty string')
-  }
-  return value
-}
-
-function requireDemand(value: unknown): DisplayFrameDemand {
-  if (typeof value !== 'object' || value === null) {
-    throw new TypeError('A display demand must be an object')
-  }
-  const demand = value as { maxDimension?: unknown; visible?: unknown }
-  if (typeof demand.maxDimension !== 'number' || !Number.isFinite(demand.maxDimension)) {
-    throw new TypeError('A display demand must carry a finite maxDimension')
-  }
-  if (typeof demand.visible !== 'boolean') {
-    throw new TypeError('A display demand must carry a visible flag')
-  }
-  return { maxDimension: demand.maxDimension, visible: demand.visible }
-}
-
-function requireRequest(value: unknown): DisplaySessionRequest {
-  if (typeof value !== 'object' || value === null) {
-    throw new TypeError('A display session request must be an object')
-  }
-  const request = value as {
-    sessionId?: unknown
-    tabId?: unknown
-    kind?: unknown
-    sourceId?: unknown
-  }
-  const kind = requireKind(request.kind)
-  if (typeof request.tabId !== 'string' || request.tabId.length === 0) {
-    throw new TypeError('A display session request must name the tab it belongs to')
-  }
-  if (typeof request.sourceId !== 'string' || request.sourceId.length === 0) {
-    throw new TypeError('A display session request must name a source')
-  }
-  return {
-    sessionId: requireSessionId(request.sessionId),
-    tabId: request.tabId,
-    kind,
-    sourceId: request.sourceId
   }
 }

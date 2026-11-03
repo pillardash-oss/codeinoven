@@ -20,6 +20,8 @@
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { displayAvailability } from '$lib/stores/display-availability.svelte'
   import { captureActivities } from '$shared/media-activity'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
@@ -411,21 +413,27 @@
           ]
         : authoredWork
 
-    // The display panel rides the coordinator group: it is the same kind of
-    // supervision surface, showing what the project's agents are driving that the
-    // desktop cannot (a headless Android emulator, a booted simulator, the screen).
-    coordination.push({
-      id: 'display',
-      label: board.switcherPanelTabs.dockKindActive('display')
-        ? `Hide ${feature('display').name}`
-        : `Show ${feature('display').name}`,
-      icon: feature('display').icon,
-      active: board.switcherPanelTabs.dockKindActive('display'),
-      onSelect: () =>
-        board.switcherPanelTabs.toggleDockPanel('display', () =>
-          contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
-        )
-    })
+    // The display panel has no rail item by default: it is a view of work an agent
+    // started (an emulator it launched, a simulator it booted, a window it is
+    // driving), so the control appears only once that has happened. Leaving a
+    // preview open keeps it there for as long as the tab lives.
+    const showsDisplay =
+      displayAvailability.available ||
+      contextSidebarState.tabs.some((tab) => tab.kind === 'display')
+    if (showsDisplay) {
+      coordination.push({
+        id: 'display',
+        label: board.switcherPanelTabs.dockKindActive('display')
+          ? `Hide ${feature('display').name}`
+          : `Show ${feature('display').name}`,
+        icon: feature('display').icon,
+        active: board.switcherPanelTabs.dockKindActive('display'),
+        onSelect: () =>
+          board.switcherPanelTabs.toggleDockPanel('display', () =>
+            contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
+          )
+      })
+    }
 
     // Browser tabs keep their own hairline-separated group: they are live pages,
     // not a written aside, so they do not ride with history.
@@ -531,6 +539,18 @@
       subagents,
       autoAnswerTools
     ]
+  })
+
+  /**
+   * Tell main when an agent is working.
+   *
+   * That flag is the whole gate on the display presence watch: while nothing runs,
+   * the app never reads the process table looking for a device. One boolean per
+   * transition, so a busy badge changing costs nothing.
+   */
+  $effect(() => {
+    const working = [...agentRuns.runs.values()].some((run) => run.busy)
+    displayAvailability.noteAgentWorking(working)
   })
 
   /**

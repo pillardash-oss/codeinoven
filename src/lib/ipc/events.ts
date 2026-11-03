@@ -349,6 +349,8 @@ export const IPC_EVENT_CONTRACT = {
   'display:frame': [] as unknown as [frame: DisplayFrame],
   /** Where one display session is: starting, live, retrying, or failed. */
   'display:captureState': [] as unknown as [state: DisplayCaptureState],
+  /** An agent started or attached to a display target, so the rail item appears. */
+  'display:available': [] as unknown as [available: boolean],
   /**
    * Progress of an in-app Cua Driver update. The update itself answers over
    * `computerUse:updateCua`; this stream carries the installer's milestones so a

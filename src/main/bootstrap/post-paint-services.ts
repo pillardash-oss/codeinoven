@@ -884,13 +884,21 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
   })
   videoStudio.registerIpc()
-  // The display panel mirrors whatever the agents are driving (an emulator with
-  // no window, a booted simulator, the desktop). Its sessions live only while a
-  // mirror tab is on screen, so constructing the service costs nothing until one
-  // is opened.
-  const { DisplayService } = await import('../display/display-service')
-  state.displayService = new DisplayService({ window: () => state.mainWindow })
-  state.displayService.registerIpc()
+  // The display panel is not part of a launch: its rail item appears only after an
+  // agent starts or attaches to a display target, and its capture modules load on
+  // the first frame someone asks for. What is registered here is the thin IPC
+  // boundary plus the presence watch that decides when the panel exists at all.
+  const { registerDisplayIpc } = await import('../display/display-ipc')
+  registerDisplayIpc({
+    window: () => state.mainWindow,
+    listAgentProcesses: async () => {
+      const processes = await state.chatEngine?.state.agentProcesses.listAll()
+      return (processes ?? []).map((process) => ({
+        command: process.command,
+        threadId: process.threadId
+      }))
+    }
+  })
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
       studio: videoStudio.execute,

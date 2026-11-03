@@ -159,6 +159,21 @@ export function isDisplayControlAction(value: unknown): value is DisplayControlA
   )
 }
 
+/**
+ * Whether the panel should exist at all.
+ *
+ * The display panel is not a tool the user browses to: it is a window into work
+ * an agent started on its own (an emulator, a simulator, a screen it is driving).
+ * Until an agent does that, the app holds nothing: no rail item, no service, no
+ * polling. `available` is what turns the rail item on, and `since` is when the app
+ * first noticed, so a surface can say "an agent started this" without guessing.
+ */
+export interface DisplayAvailability {
+  available: boolean
+  /** When the app first saw an agent start or attach to a display target. */
+  since?: number
+}
+
 export const invokeDisplayContract = {
   /**
    * Enumerate one kind's targets.
@@ -179,5 +194,14 @@ export const invokeDisplayContract = {
    * kind does not advertise in `DISPLAY_CONTROLS_BY_KIND`, so the UI and the
    * boundary agree without a second copy of the rule.
    */
-  'display:control': {} as Contract<[sessionId: string, action: DisplayControlAction], void>
+  'display:control': {} as Contract<[sessionId: string, action: DisplayControlAction], void>,
+  /** Read the presence flag. One call restores the rail item after a reload. */
+  'display:presence': {} as Contract<[], DisplayAvailability>,
+  /**
+   * Tell main that an agent is working right now, or stopped.
+   *
+   * Presence costs one process-table read, so it only ever runs while this is
+   * true: an idle app never looks for a device.
+   */
+  'display:noteAgentWorking': {} as Contract<[working: boolean], void>
 }
