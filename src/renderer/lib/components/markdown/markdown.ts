@@ -579,7 +579,14 @@ export function blockHtml(
   const html = hasImage
     ? injectContentImages(selectPictureVariant(withFavicons, schemeState.current))
     : withFavicons
-  if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
+  // Evict the oldest entry instead of dropping the whole map. During a stream
+  // each frame inserts a new tail-block key, so a full reset used to send every
+  // block in the message back through marked and DOMPurify every few seconds:
+  // the single most expensive thing the renderer did while an agent wrote.
+  if (htmlCache.size >= HTML_CACHE_LIMIT) {
+    const oldest = htmlCache.keys().next().value
+    if (oldest !== undefined) htmlCache.delete(oldest)
+  }
   htmlCache.set(cacheKey, html)
   return html
 }
