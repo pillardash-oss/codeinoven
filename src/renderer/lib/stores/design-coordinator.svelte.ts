@@ -100,7 +100,9 @@ class DesignCoordinatorState {
       threadId,
       label,
       icon: COORDINATOR_ICON_BY_KIND[kind],
-      panel: { component: 'design', props: { projectId, threadId, kind } }
+      // Marked as the rail's board so the panel browses the project's work instead
+      // of leading with the empty surface a session's own board shows.
+      panel: { component: 'design', props: { projectId, threadId, kind, projectBoard: true } }
     })
     contextSidebarState.openCoordinator(projectId, threadId, label)
   }

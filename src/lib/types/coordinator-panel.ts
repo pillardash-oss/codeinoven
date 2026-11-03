@@ -114,4 +114,12 @@ export interface DesignCoordinatorPanelProps {
    * not record the viewing thread as being in it.
    */
   kind?: AuthoredWorkKind
+  /**
+   * Whether the project's rail opened this board to browse the project's work.
+   *
+   * A session's board leads with nothing until the thread writes work of its own, so
+   * a design another thread made is never put in front of a session that has none.
+   * The rail's board browses, so it puts the newest one in front instead.
+   */
+  projectBoard?: boolean
 }
