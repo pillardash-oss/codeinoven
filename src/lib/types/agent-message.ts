@@ -18,18 +18,17 @@ import type {
 } from './usage'
 
 /**
- * A picture the agent drew to make a question or one of its options judgeable.
+ * A picture the agent drew to make one option judgeable.
  *
  * A question about something that does not exist yet (a new mark on a card, a
  * layout, a flow) cannot be answered from words alone: the user is asked to
  * choose between things they cannot see. The agent therefore creates the
- * smallest picture that shows what it means and pastes it into the question it
- * is asking, and the card offers it behind one eye button.
+ * smallest picture that shows what an option means and pastes it into that
+ * option, and the card offers it behind the option's eye button.
  *
  * The eye is the alternative to the walkthrough (the copyable instruction): the
- * same card, the same option, two ways to understand the same choice. When an
- * entry carries both, the card draws the two buttons side by side with space
- * between them.
+ * same option, two ways to understand the same choice. When an option carries
+ * both, the card draws the two buttons side by side, divided by a rule.
  *
  * Exactly one of the fields is set, in this precedence order:
  *
@@ -156,17 +155,6 @@ export interface AgentQuestion {
   multiple?: boolean
   /** Allow the user to type a custom answer (default: true). */
   custom?: boolean
-  /**
-   * A picture of what the whole question is about, shown behind the card's eye
-   * button. Options carry their own when the choice is between alternatives.
-   */
-  visual?: AgentQuestionVisual
-  /**
-   * A walkthrough of how to produce the answer to the whole question (a command
-   * to run, a sequence to follow), offered behind the card's copy button.
-   * Options carry their own when a step belongs to one alternative.
-   */
-  instruction?: string
   /** The question asks the user to share files; offer composer-style file attachment. */
   fileRequest?: boolean
   /** The question asks for a secret value; render a password input instead of options. */

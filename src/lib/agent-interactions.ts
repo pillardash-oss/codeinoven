@@ -225,18 +225,12 @@ function normalizeQuestion(value: unknown, index: number): AgentQuestion | null 
     : []
   const header = firstString(input['header'], input['label'])
   const description = firstString(input['description'], input['help'])
-  const visual = normalizeQuestionVisual(
-    input['visual'] ?? input['preview'] ?? input['mockup'] ?? input['diagram']
-  )
-  const instruction = firstString(input['instruction'], input['instructions'])
   return {
     prompt,
     ...(header ? { header } : {}),
     ...(description && description !== prompt ? { description } : {}),
     ...(options.length > 0 ? { options } : {}),
     ...(richOptions.length > 0 ? { richOptions } : {}),
-    ...(visual ? { visual } : {}),
-    ...(instruction ? { instruction } : {}),
     ...(input['multiple'] === true || input['multiSelect'] === true ? { multiple: true } : {}),
     ...(input['fileRequest'] === true ? { fileRequest: true } : {}),
     ...(input['secretRequest'] === true

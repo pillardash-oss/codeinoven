@@ -7,14 +7,19 @@
   import type { QuestionVisualSource } from './question-visual-source'
 
   /**
-   * The picture behind a question's or an option's eye button.
+   * The picture behind an option's eye button.
    *
    * A decision about something that does not exist yet is made from what the
-   * user can see, so the card carries the agent's smallest picture of it and
-   * this modal is the one place it is shown at a readable size. The picture is
-   * read-only: no source toggle, no copy, no inspection, because nothing here
-   * is a document the user edits, only a drawing that answers "what would that
-   * look like?".
+   * user can see, so the card offers the agent's picture of that option and this
+   * modal is the one place it is shown. Most visuals are artifacts: an HTML
+   * mockup, an SVG drawing, an image, or a flow. They need the whole window to
+   * be judged, so this opens as a full screen surface rather than a dialog, and
+   * it carries no footer: the canonical header's collapse control is the only
+   * dismissal, exactly as every other full screen surface in the app.
+   *
+   * The picture is read-only: no source toggle, no copy, no inspection, because
+   * nothing here is a document the user edits, only a drawing that answers
+   * "what would that look like?".
    *
    * HTML and SVG are drawn in a sandboxed frame through the same sanitizers and
    * theme tokens an inline artifact uses, so a mockup stands in the app's own
@@ -22,7 +27,7 @@
    */
   interface Props {
     open: boolean
-    /** What the eye button was opened on: the question itself, or one option. */
+    /** The option the eye button was opened on. */
     title: string
     source: QuestionVisualSource | null
     onClose: () => void
@@ -41,25 +46,26 @@
   })
 </script>
 
-<!-- Drawn in the app window so the picture is selectable and scrollable like the
-     rest of the app; the native overlay projection cannot host a live frame. -->
+<!-- Full screen, in the app window: the picture is the surface the user is
+     looking at, and a live frame has to be hosted where the app's own document
+     is. -->
 <Modal
   {open}
   {onClose}
   {title}
-  size="xl"
+  placement="fullscreen"
   fill
   nativePresentation={false}
-  contentClass="flex flex-col overflow-hidden bg-app p-0"
+  contentClass="flex min-h-0 flex-1 flex-col overflow-hidden bg-app p-0"
 >
   {#if source}
     <div class="flex min-h-0 flex-1 flex-col">
       {#if source.kind === 'mermaid'}
-        <div class="min-h-0 flex-1 overflow-auto bg-surface p-4">
+        <div class="min-h-0 flex-1 overflow-auto bg-surface p-6">
           <DeferredMermaidDiagram code={source.code} />
         </div>
       {:else if source.kind === 'image'}
-        <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-app p-4">
+        <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-app p-6">
           <img
             src={source.src}
             alt={source.caption ?? title}
@@ -75,26 +81,15 @@
         ></iframe>
       {/if}
       {#if source.caption}
-        <p class="shrink-0 border-t border-border bg-surface px-4 py-2 text-xs text-muted">
+        <p class="shrink-0 border-t border-border bg-surface px-6 py-2 text-xs text-muted">
           {source.caption}
         </p>
       {/if}
     </div>
   {:else}
-    <div class="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-muted">
+    <div class="flex flex-1 flex-col items-center justify-center gap-2 bg-app p-8 text-muted">
       <CioEye size={20} />
       <p class="text-xs">This visual could not be drawn.</p>
     </div>
   {/if}
-
-  {#snippet footer()}
-    <button
-      type="button"
-      data-modal-dismiss
-      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
-      onclick={onClose}
-    >
-      Close
-    </button>
-  {/snippet}
 </Modal>

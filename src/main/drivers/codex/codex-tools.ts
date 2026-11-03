@@ -48,8 +48,6 @@ interface CodexQuestionItemSchema {
       maxItems: number
       items: CodexQuestionOptionSchema
     }
-    visual: CodexQuestionVisualSchema
-    instruction: { type: 'string'; minLength: number }
     multiple: { type: 'boolean' }
   }
   required: ['question', 'header', 'options']
@@ -149,8 +147,6 @@ export const CODEX_QUESTION_TOOL: CodexQuestionToolSpec = {
                 required: ['label', 'description']
               }
             },
-            visual: CODEX_QUESTION_VISUAL_SCHEMA,
-            instruction: { type: 'string', minLength: 1 },
             multiple: { type: 'boolean' }
           },
           required: ['question', 'header', 'options']
@@ -183,7 +179,7 @@ export function codexQuestionTool(maxQuestions: number): CodexQuestionToolSpec {
   }
 }
 export const CODEX_QUESTION_INSTRUCTION =
-  "The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode. When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card; the question itself takes the same field when one walkthrough produces any answer. When the decision is about something that does not exist yet (a new mark, layout, flow or screen), or words alone would leave the user guessing between choices they cannot picture, create the picture yourself, copy it inline and put it in `visual.html` for a temporary mockup, `visual.image` for a picture you generated, `visual.svg` for a drawing, or `visual.mermaid` for a flow. Attach it to the question when it applies to the whole choice, or to an option when it shows what that option produces. A picture and a walkthrough are alternatives for the same entry, so an entry may carry both: the card shows both buttons side by side. Keep the picture simple: enough to make the decision, nothing more."
+  "The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode. When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card. When the decision is about something that does not exist yet (a new mark, layout, flow or screen), or words alone would leave the user guessing between choices they cannot picture, create the picture yourself, copy it inline and put it in the option it describes: `visual.html` for a temporary mockup, `visual.image` for a picture you generated, `visual.svg` for a drawing, or `visual.mermaid` for a flow. A picture belongs to an option, never to the question itself. An option may carry both a picture and a walkthrough, and the card shows both buttons side by side. Keep the picture simple: enough to make the decision, nothing more."
 
 export function utilityKey(value: string): string {
   return (

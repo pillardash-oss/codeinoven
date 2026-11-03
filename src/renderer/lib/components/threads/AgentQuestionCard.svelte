@@ -473,23 +473,12 @@
     walkthroughTarget = { subject, text }
   }
 
-  /** Opens the question's own walkthrough, named by its header. */
-  function openQuestionWalkthrough(question: AgentQuestion): void {
-    openWalkthrough(question.header ?? 'this question', question.instruction)
-  }
-
-  /** Opens the picture attached to the question or to one of its options. */
+  /** Opens the picture attached to one of the question's options. */
   function openVisual(visual: AgentQuestionVisual | undefined, label: string): void {
     if (working || !visual) return
     visualTarget = { title: label, visual }
   }
 
-  // The question's own visual, and the visual of any option that carries one.
-  // A question about alternatives usually shows each alternative separately, so
-  // both forms are offered through the same eye glyph.
-  const questionVisualTitle = $derived(
-    question.visual?.caption ?? `What ${question.header ?? 'this question'} means`
-  )
   const visualSource = $derived(
     questionVisualSource(visualTarget?.visual, projectId, threadIdForPreview)
   )
@@ -584,21 +573,6 @@
           {/if}
         </div>
 
-        <!-- The question's own two ways in, as siblings under its prompt: the
-             picture of what it means and the walkthrough that produces it. An
-             entry that carries only one shows only that one. -->
-        {#if hasQuestionVisual(question.visual) || question.instruction}
-          <QuestionEntryActions
-            hasWalkthrough={Boolean(question.instruction)}
-            hasVisual={hasQuestionVisual(question.visual)}
-            subject={question.header ?? 'this question'}
-            variant="standalone"
-            disabled={working}
-            onWalkthrough={() => openQuestionWalkthrough(question)}
-            onVisual={() => openVisual(question.visual, questionVisualTitle)}
-          />
-        {/if}
-
         {#if question.richOptions && question.richOptions.length > 0}
           <div class="grid gap-2" role="group" aria-label="Answer options">
             {#each question.richOptions as option (option.label)}
@@ -606,8 +580,8 @@
               <!-- The option is a split control: selecting it is one button, and the
                    picture and the walkthrough it carries get their own buttons so
                    neither sits inside the selection target. The two are siblings
-                   with a space between them, so an option that has both shows
-                   both instead of one hiding the other. -->
+                   separated by a rule, so an option that has both shows both
+                   instead of one hiding the other. -->
               <CardOption
                 title={option.label}
                 description={option.description}
