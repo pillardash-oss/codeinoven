@@ -36,7 +36,7 @@
   import { threadChangesState } from '$lib/stores/thread-changes.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import type { Project } from '$shared/types'
+  import type { AutoAnswerThreadScope, Project } from '$shared/types'
   import { activeThreadRowId, ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
   import { cubicOut } from 'svelte/easing'
   import { SvelteSet } from 'svelte/reactivity'
@@ -498,17 +498,10 @@
     // Auto-resolved gates sit at the very bottom of the rail: they are the
     // app's own record of what it decided while the user was away, not a
     // workspace tool. The item is keyed to the open conversation, so it appears
-    // only on the thread a decision concerns (or on its task, or on any thread
-    // of its assistant), and disappears once that scope has nothing unread.
-    const attentionScope = selectedThread
-      ? {
-          id: selectedThread.id,
-          projectId: selectedThread.projectId,
-          ...(selectedThread.assistantId ? { assistantId: selectedThread.assistantId } : {}),
-          ...(selectedThread.assistantTaskId
-            ? { assistantTaskId: selectedThread.assistantTaskId }
-            : {})
-        }
+    // only on the thread a decision concerns (or on the task it ran for), and
+    // disappears once that scope has nothing unread.
+    const attentionScope: AutoAnswerThreadScope | null = selectedThread
+      ? { id: selectedThread.id, projectId: selectedThread.projectId }
       : null
     const attentionItems = attentionScope ? attentionState.unreadFor(attentionScope) : []
     const autoAnswerTools: ContextDockItem[] =
