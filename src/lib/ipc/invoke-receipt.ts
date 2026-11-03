@@ -25,12 +25,7 @@ import type { Contract } from './contract-helpers'
  */
 export const invokeReceiptContract = {
   'receipt:read': {} as Contract<
-    [
-      projectId: string,
-      threadId: string,
-      scopeBucketId?: string,
-      refresh?: boolean
-    ],
+    [projectId: string, threadId: string, scopeBucketId?: string, refresh?: boolean],
     RunReceipt
   >
 }

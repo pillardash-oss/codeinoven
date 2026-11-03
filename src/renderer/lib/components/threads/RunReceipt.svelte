@@ -79,9 +79,7 @@
     >
       <CioChevronDown
         size={11}
-        class="shrink-0 text-muted transition-transform duration-150 {folded
-          ? '-rotate-90'
-          : ''}"
+        class="shrink-0 text-muted transition-transform duration-150 {folded ? '-rotate-90' : ''}"
         aria-hidden="true"
       />
       <span id={`run-receipt-${thread.id}`} class="shrink-0 font-medium text-foreground">
@@ -125,7 +123,11 @@
       {#if ready}
         <div class="flex flex-col gap-1">
           <p class="text-muted">Changed in this run</p>
-          <RunReceiptFiles files={receipt.files} truncated={receipt.truncated.files} emptyLabel="This run committed no file changes." />
+          <RunReceiptFiles
+            files={receipt.files}
+            truncated={receipt.truncated.files}
+            emptyLabel="This run committed no file changes."
+          />
         </div>
         <div class="flex flex-col gap-1">
           <p class="text-muted">Left uncommitted</p>

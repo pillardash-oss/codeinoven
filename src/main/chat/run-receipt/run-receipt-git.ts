@@ -23,13 +23,23 @@ import { DEFAULT_RUN_RECEIPT_BOUNDS } from '../../../lib/types'
 /** The Git operations a receipt read uses, and the only ones it may use. */
 export interface ReceiptGit {
   getStatus(projectPath: string): Promise<GitStatus>
-  log(projectPath: string, limit: number): Promise<{ hash: string; shortHash: string; message: string; author: string; date: number }[]>
+  log(
+    projectPath: string,
+    limit: number
+  ): Promise<{ hash: string; shortHash: string; message: string; author: string; date: number }[]>
   rangeFiles(
     projectPath: string,
     from: string,
     to?: string
   ): Promise<
-    { path: string; oldPath?: string; status: GitFileStatus; additions: number; deletions: number; binary: boolean }[]
+    {
+      path: string
+      oldPath?: string
+      status: GitFileStatus
+      additions: number
+      deletions: number
+      binary: boolean
+    }[]
   >
 }
 
@@ -85,7 +95,13 @@ function toReceiptFile(file: {
  * the run made exactly `bounds.commits` commits.
  */
 export function commitsSince(
-  entries: readonly { hash: string; shortHash: string; message: string; author: string; date: number }[],
+  entries: readonly {
+    hash: string
+    shortHash: string
+    message: string
+    author: string
+    date: number
+  }[],
   baseSha: string,
   bounds: RunReceiptBounds = DEFAULT_RUN_RECEIPT_BOUNDS
 ): { commits: RunReceiptCommit[]; truncated: boolean } {

@@ -28,7 +28,7 @@
   import SpeechPlaybackButton from '../../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../../speech/speech-controller.svelte'
   import WorkingTrace from '../WorkingTrace.svelte'
-  import RunReceiptBlock from '../RunReceipt.svelte'
+  import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { runReceiptState } from '$lib/stores/run-receipt.svelte'
   import { isBoundAssistantTask } from '$shared/bound-scope'
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
@@ -97,10 +97,9 @@
   /**
    * The receipt is read once per range. A running run reads its state, and a run
    * that settles re-reads exactly once, which is the app's own settle signal
-   * doing the invalidation instead of a timer.
+   * doing the invalidation instead of a timer. The store owns the dedupe, so this
+   * body only reports what the thread looks like right now.
    */
-  let receiptSyncedKey = $state('')
-
   $effect(() => {
     const thread = receiptThread
     const bound = thread?.boundScope
@@ -109,12 +108,7 @@
       thread.status === 'completed' ||
       thread.status === 'failed' ||
       thread.status === 'working-paused'
-    const key = `${thread.id}:${settled ? 'settled' : 'live'}:${thread.updatedAt}`
-    if (receiptSyncedKey === key) return
-    receiptSyncedKey = key
-    void (settled
-      ? runReceiptState.refresh(bound.projectId, thread.id, bound.scopeBucketId)
-      : runReceiptState.ensure(bound.projectId, thread.id, bound.scopeBucketId))
+    runReceiptState.sync(bound.projectId, thread.id, bound.scopeBucketId, settled, thread.updatedAt)
   })
 
   /**
@@ -1395,7 +1389,16 @@
       {#if receiptThread}
         {@const receipt = runReceiptState.receiptFor(receiptThread.id)}
         {#if receipt}
-          <RunReceiptBlock thread={receiptThread} {receipt} />
+          {#await loadCachedPanelModule(PANEL_KEYS.runReceipt, () => import('../RunReceipt.svelte'))}
+            <!-- The receipt loads after a run settles, so the wait is a blank line
+                 rather than a placeholder that would claim a receipt exists. -->
+            <div class="h-4" aria-hidden="true"></div>
+          {:then { default: RunReceiptBlock }}
+            <RunReceiptBlock thread={receiptThread} {receipt} />
+          {:catch}
+            <!-- A receipt that cannot load leaves the conversation exactly as it
+                 was: it is evidence, never a requirement. -->
+          {/await}
         {/if}
       {/if}
 

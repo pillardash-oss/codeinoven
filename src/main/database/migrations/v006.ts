@@ -1,5 +1,6 @@
 import type { Database as DatabaseType } from 'better-sqlite3'
 import type { DatabaseMigration } from './migration'
+import { addColumn, tableColumns } from './migration-helpers'
 
 /**
  * Schema version 6: a thread can run in a project scope that is not its home,
@@ -27,19 +28,23 @@ import type { DatabaseMigration } from './migration'
  * - `park_reason` is the typed reason a run parked on its bound scope's health.
  *   Stored so a parked run still explains itself after a restart, and cleared
  *   the moment the run leaves the parked state.
+ *
+ * Each column is added only when it is missing. A database written before the
+ * version gate runs the catch-all migration first, which builds the current
+ * snapshot, so these columns can already be present when this file runs; adding
+ * them blindly made that upgrade fail on a duplicate column.
  */
 export const versionSixMigration: DatabaseMigration = {
   version: 6,
   summary:
     'threads record the project scope they run in, their run base, and their dispatch origin',
   apply(connection: DatabaseType): void {
-    connection.exec(`
-ALTER TABLE threads ADD COLUMN bound_scope_project_id TEXT;
-ALTER TABLE threads ADD COLUMN bound_scope_scope_id TEXT;
-ALTER TABLE threads ADD COLUMN bound_scope_home_project_id TEXT;
-ALTER TABLE threads ADD COLUMN run_base TEXT;
-ALTER TABLE threads ADD COLUMN dispatch_origin TEXT;
-ALTER TABLE threads ADD COLUMN park_reason TEXT;
-`)
+    const columns = tableColumns(connection, 'threads')
+    addColumn(connection, columns, 'threads', 'bound_scope_project_id', 'TEXT')
+    addColumn(connection, columns, 'threads', 'bound_scope_scope_id', 'TEXT')
+    addColumn(connection, columns, 'threads', 'bound_scope_home_project_id', 'TEXT')
+    addColumn(connection, columns, 'threads', 'run_base', 'TEXT')
+    addColumn(connection, columns, 'threads', 'dispatch_origin', 'TEXT')
+    addColumn(connection, columns, 'threads', 'park_reason', 'TEXT')
   }
 }

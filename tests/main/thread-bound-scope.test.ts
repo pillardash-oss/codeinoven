@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import type { Database } from '../../src/main/database/database'
 import { ThreadRepo } from '../../src/main/database/repositories/thread-repo'
-import { validateCreateThreadInput, validateThreadUpdateInput } from '../../src/main/ipc/validation/threads'
+import {
+  validateCreateThreadInput,
+  validateThreadUpdateInput
+} from '../../src/main/ipc/validation/threads'
 import type { Thread, ThreadDispatchOrigin } from '../../src/lib/types'
 import { ASSISTANT_SPACE_ID } from '../../src/lib/types'
 import { createTestDb, destroyTestDb } from './database/test-helper'
@@ -107,10 +110,10 @@ describe('thread bound scope persistence', () => {
 
   it('reads a half-written pair as unbound rather than resolving a checkout', async () => {
     await readBack(assistantTask())
-    await db.executeViaWorker(
-      'UPDATE threads SET bound_scope_project_id = ? WHERE id = ?',
-      [PROJECT_ID, ASSISTANT_TASK_ID]
-    )
+    await db.executeViaWorker('UPDATE threads SET bound_scope_project_id = ? WHERE id = ?', [
+      PROJECT_ID,
+      ASSISTANT_TASK_ID
+    ])
     const stored = await repo.getViaWorker(ASSISTANT_TASK_ID)
     expect(stored?.boundScope).toBeUndefined()
   })
@@ -136,6 +139,24 @@ describe('thread bound scope persistence', () => {
     )
     expect(stored.runBase?.sha).toBe('a'.repeat(40))
     expect(stored.dispatchOrigin).toEqual(origin)
+  })
+
+  it('keeps the dispatch origin unchanged when the thread later runs', async () => {
+    const origin: ThreadDispatchOrigin = {
+      initiatorProjectId: ASSISTANT_SPACE_ID,
+      initiatorThreadId: 'initiator-1',
+      at: 7
+    }
+    const stored = await readBack(assistantTask({ dispatchOrigin: origin }))
+    // A later run writes status, activity and errors through the same upsert,
+    // so the origin has to survive a full row rewrite unchanged.
+    const running = await readBack({
+      ...stored,
+      status: 'executing',
+      lastActivity: stored.lastActivity + 1_000,
+      updatedAt: stored.updatedAt + 1_000
+    })
+    expect(running.dispatchOrigin).toEqual(origin)
   })
 
   it('drops a corrupt run base instead of inventing a range', async () => {
@@ -172,9 +193,9 @@ describe('bound scope validation', () => {
   })
 
   it('rejects a pair missing its project', () => {
-    expect(() =>
-      validateThreadUpdateInput({ boundScope: { scopeBucketId: 'default' } })
-    ).toThrow(/both a project and a scope/u)
+    expect(() => validateThreadUpdateInput({ boundScope: { scopeBucketId: 'default' } })).toThrow(
+      /both a project and a scope/u
+    )
   })
 
   it('rejects an unknown field on the pair', () => {

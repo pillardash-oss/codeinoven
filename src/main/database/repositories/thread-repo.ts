@@ -188,9 +188,7 @@ function threadBoundScopeFromRow(row: ThreadRow): Thread['boundScope'] {
   return {
     projectId: row.bound_scope_project_id,
     scopeBucketId: row.bound_scope_scope_id,
-    ...(row.bound_scope_home_project_id
-      ? { homeProjectId: row.bound_scope_home_project_id }
-      : {})
+    ...(row.bound_scope_home_project_id ? { homeProjectId: row.bound_scope_home_project_id } : {})
   }
 }
 

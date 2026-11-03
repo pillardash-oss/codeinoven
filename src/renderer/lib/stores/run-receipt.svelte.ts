@@ -16,6 +16,8 @@ import type { RunReceipt } from '$shared/types'
  */
 class RunReceiptStore {
   #receipts = $state<Record<string, RunReceipt>>({})
+  /** The last signature each thread was synced at, so a re-render costs nothing. */
+  #synced = new Map<string, string>()
   #loading = $state<Record<string, boolean>>({})
   #pending = new Map<string, Promise<RunReceipt | null>>()
 
@@ -26,6 +28,29 @@ class RunReceiptStore {
 
   isLoading(threadId: string): boolean {
     return this.#loading[threadId] === true
+  }
+
+  /**
+   * Bring one thread's receipt up to date for the state it is in.
+   *
+   * Called from the conversation as its run settles, with the settled flag and
+   * the thread's own activity stamp as the signature: an unchanged thread costs a
+   * map lookup and no read, and a settle costs exactly one. The dedupe lives here
+   * rather than in a component so no surface has to carry bookkeeping state.
+   */
+  sync(
+    projectId: string,
+    threadId: string,
+    scopeBucketId: string | undefined,
+    settled: boolean,
+    updatedAt: number
+  ): void {
+    const signature = `${settled ? 'settled' : 'live'}:${updatedAt}`
+    if (this.#synced.get(threadId) === signature) return
+    this.#synced.set(threadId, signature)
+    void (settled
+      ? this.refresh(projectId, threadId, scopeBucketId)
+      : this.ensure(projectId, threadId, scopeBucketId))
   }
 
   /** Read the receipt unless one is already held for this thread. */
@@ -44,6 +69,7 @@ class RunReceiptStore {
     const next = { ...this.#receipts }
     delete next[threadId]
     this.#receipts = next
+    this.#synced.delete(threadId)
   }
 
   async #read(
@@ -58,13 +84,7 @@ class RunReceiptStore {
     this.#loading = { ...this.#loading, [threadId]: true }
     const request = (async (): Promise<RunReceipt | null> => {
       try {
-        const receipt = await invoke(
-          'receipt:read',
-          projectId,
-          threadId,
-          scopeBucketId,
-          refresh
-        )
+        const receipt = await invoke('receipt:read', projectId, threadId, scopeBucketId, refresh)
         this.#receipts = { ...this.#receipts, [threadId]: receipt }
         return receipt
       } catch (error) {

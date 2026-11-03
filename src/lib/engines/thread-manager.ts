@@ -506,9 +506,7 @@ export class ThreadManager {
     }
     const board = await this.scopeManager.getBoardSnapshot(boundScope.projectId)
     if (!board.buckets.some((bucket) => bucket.id === boundScope.scopeBucketId)) {
-      throw new Error(
-        `Scope ${boundScope.scopeBucketId} is not on project ${boundScope.projectId}`
-      )
+      throw new Error(`Scope ${boundScope.scopeBucketId} is not on project ${boundScope.projectId}`)
     }
   }
 

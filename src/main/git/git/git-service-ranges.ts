@@ -149,7 +149,7 @@ export function mergeRangeReads(
     const counts_ = countsByPath.get(entry.path)
     return {
       path: entry.path,
-      ...(entry.oldPath ?? counts_?.oldPath
+      ...((entry.oldPath ?? counts_?.oldPath)
         ? { oldPath: entry.oldPath ?? counts_?.oldPath }
         : {}),
       status: entry.status,

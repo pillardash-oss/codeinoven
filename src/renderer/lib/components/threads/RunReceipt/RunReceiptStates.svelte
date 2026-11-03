@@ -19,7 +19,9 @@
 {#if receipt.state === 'running'}
   <p class="text-xs text-muted">This run has not settled yet, so its range is still moving.</p>
 {:else if receipt.state === 'parked'}
-  <p class="text-xs" style="color: {STATUS_INK.warning}">{receipt.reason ?? 'This run is parked.'}</p>
+  <p class="text-xs" style="color: {STATUS_INK.warning}">
+    {receipt.reason ?? 'This run is parked.'}
+  </p>
 {:else if receipt.state === 'no-base'}
   <p class="text-xs text-muted">
     This run recorded no starting commit, so what it changed cannot be known. Runs started before

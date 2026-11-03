@@ -34,7 +34,12 @@
   import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { INBOX_PROJECT_ID, usesThreadWorkspaceMount, type AgentPart, type Project } from '$shared/types'
+  import {
+    INBOX_PROJECT_ID,
+    usesThreadWorkspaceMount,
+    type AgentPart,
+    type Project
+  } from '$shared/types'
   import { threadEvidenceProjectId } from '$shared/bound-scope'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 

@@ -63,7 +63,13 @@ export function registerReceiptHandlers(ctx: IpcHandlerContext): void {
 
   trustedIpcMain.handle(
     'receipt:read',
-    async (_, projectId: unknown, threadId: unknown, scopeBucketId?: unknown, refresh?: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      threadId: unknown,
+      scopeBucketId?: unknown,
+      refresh?: unknown
+    ) => {
       const request = validateReceiptRequest(projectId, threadId, scopeBucketId, refresh)
       return service.read(request)
     }

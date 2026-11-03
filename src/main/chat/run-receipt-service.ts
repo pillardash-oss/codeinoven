@@ -231,7 +231,12 @@ export class RunReceiptService {
     scope: { projectId: string; scopeBucketId: string },
     receipt: RunReceipt
   ): void {
-    const key = RunReceiptCache.key(scope.projectId, scope.scopeBucketId, receipt.baseSha, receipt.headSha)
+    const key = RunReceiptCache.key(
+      scope.projectId,
+      scope.scopeBucketId,
+      receipt.baseSha,
+      receipt.headSha
+    )
     this.cache.set(key, receipt)
     this.index.set(indexKey, { key })
   }
@@ -239,10 +244,7 @@ export class RunReceiptService {
   private async scopeName(projectId: string, scopeBucketId: string): Promise<string> {
     try {
       const board = await this.deps.scopeBoard(projectId)
-      return (
-        board.buckets.find((bucket) => bucket.id === scopeBucketId)?.name ??
-        scopeBucketId
-      )
+      return board.buckets.find((bucket) => bucket.id === scopeBucketId)?.name ?? scopeBucketId
     } catch {
       // A board that cannot be read names no scope, and the id is the honest
       // fallback: it is the identity the run resolved.

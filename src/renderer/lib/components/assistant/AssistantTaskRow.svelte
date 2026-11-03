@@ -30,7 +30,7 @@
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import AssistantHandoffModals from './AssistantHandoffModals.svelte'
-  import AssistantTaskScopePicker from './AssistantTaskScopePicker.svelte'
+  import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { assistantRowScopeLabel, parkedRunLine } from '$lib/components/threads/bound-scope-label'
   import { scopeWorktreeHealthGuidance } from '$shared/scope-worktree-health'
   import { createAssistantHandoff } from './assistant-handoff.svelte'
@@ -649,15 +649,24 @@
   onConfirm={actionsMenu.confirmDelete}
 />
 
-<AssistantTaskScopePicker
-  {task}
-  open={scopePickerOpen}
-  onClose={() => {
-    scopePickerOpen = false
-  }}
-  onBound={() => {
-    scopePickerOpen = false
-  }}
-/>
+{#if scopePickerOpen}
+  {#await loadCachedPanelModule(PANEL_KEYS.taskScopePicker, () => import('./AssistantTaskScopePicker.svelte'))}
+    <!-- The picker is opened by an action, so it loads then; nothing is shown
+         until it can actually pick a scope. -->
+    <span class="sr-only" role="status">Loading the project scope picker</span>
+  {:then { default: AssistantTaskScopePicker }}
+    <AssistantTaskScopePicker
+      {task}
+      onClose={() => {
+        scopePickerOpen = false
+      }}
+      onBound={() => {
+        scopePickerOpen = false
+      }}
+    />
+  {:catch}
+    <span class="sr-only" role="status">The project scope picker could not load</span>
+  {/await}
+{/if}
 
 <AssistantHandoffModals controller={handoff} />

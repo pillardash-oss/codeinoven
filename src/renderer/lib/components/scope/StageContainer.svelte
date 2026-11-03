@@ -46,7 +46,9 @@
    * Filtering here is what makes "one transcript, one board" hold structurally
    * rather than by convention.
    */
-  let boardThreads = $derived(threads.filter((thread) => belongsOnProjectBoard(thread, thread.projectId)))
+  let boardThreads = $derived(
+    threads.filter((thread) => belongsOnProjectBoard(thread, thread.projectId))
+  )
 
   function handleDragOver(event: DragEvent): void {
     event.preventDefault()

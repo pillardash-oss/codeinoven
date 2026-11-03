@@ -28,6 +28,25 @@ Favor a clean editor surface on the app canvas, separated by hairline borders. K
 
 Extend the existing composer pieces in `src/renderer/lib/components/chats/` before creating parallel controls: `ChatComposer.svelte`, `ComposerShoe.svelte`, `ChatComposerPermissionPicker.svelte`, `EngineeringToolbox.svelte`, and `ContextUsageIndicator.svelte` cover the demonstrated anatomy. Reuse shared UI primitives such as `Modal.svelte`, `ConfirmDialog.svelte`, `SideSheet.svelte`, `Switch.svelte`, `EmptyState.svelte`, and `StatusPill.svelte` where their roles fit. Compose modal variants on the canonical `Modal.svelte` shell. No `components.json` convention was present in the checked project paths. [src/renderer/lib/components/chats/ChatComposer.svelte](src/renderer/lib/components/chats/ChatComposer.svelte) [src/renderer/lib/components/chats/ComposerShoe.svelte](src/renderer/lib/components/chats/ComposerShoe.svelte) [src/renderer/lib/components/ui/Modal.svelte](src/renderer/lib/components/ui/Modal.svelte) [src/renderer/lib/components/ui/ConfirmDialog.svelte](src/renderer/lib/components/ui/ConfirmDialog.svelte) [.cio/designs/chosen/index.html](.cio/designs/chosen/index.html)
 
+## The run receipt
+
+A settled run ends with one receipt block in the conversation, and it follows
+the same contract as every other reading in the app:
+
+- A definition list: one label column, counts right-aligned, one hairline per
+  boundary. No card grid, no badges, no uppercase micro-headings, no rounded
+  corners.
+- Open by default, folding to one summary line that still states the totals
+  (files with `+`/`−`, commits, checks, what is left uncommitted). The fold is
+  remembered per thread.
+- Type no smaller than 0.75 rem, semantic colour tokens only, and `--color-dimmed`
+  reserved for marks rather than content strings.
+- Status ink is mixed toward the foreground, because the raw `--color-danger` and
+  `--color-warning` values do not clear 4.5:1 on either surface
+  (`src/renderer/lib/components/threads/RunReceipt/run-receipt-ink.ts`).
+- Its actions open the existing per-thread rail. The block never renders a
+  per-file diff.
+
 ## Interaction states
 
 Controls use quiet surface changes on hover and pressed/expanded states; selected menu options are marked with `aria-checked` and an inline check. Keep disabled actions visibly subdued. The composer’s primary action changes meaning with state: send when idle, queue while a turn is working and text is present, and stop while working with an empty editor. The usage control exposes a labelled dialog with progress values. Preserve the compact layout at narrow widths by truncating secondary labels before removing their identifying marks. [.cio/designs/chosen/index.html](.cio/designs/chosen/index.html) [.cio/designs/chosen/styles.css](.cio/designs/chosen/styles.css)

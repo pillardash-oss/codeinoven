@@ -107,7 +107,8 @@ export function checksFromToolCalls(
     if (!isShellToolName(call.tool)) continue
     const command = commandFromToolInput(call.input)
     if (!command) continue
-    if (call.status !== 'completed' && call.status !== 'error' && call.status !== 'aborted') continue
+    if (call.status !== 'completed' && call.status !== 'error' && call.status !== 'aborted')
+      continue
     const exitCode = exitCodeFromMetadata(call.metadata)
     const outcome: RunReceiptCheck['outcome'] =
       call.status === 'completed' && (exitCode === undefined || exitCode === 0)
@@ -221,10 +222,13 @@ export function receiptSummaryLine(receipt: RunReceipt): string {
   if (receipt.state === 'running') return 'Run in progress'
   if (receipt.state === 'no-base') return 'No starting commit recorded'
   if (receipt.state === 'parked') return receipt.reason ? `Parked: ${receipt.reason}` : 'Parked'
-  if (receipt.state === 'error') return receipt.reason ? `Could not read: ${receipt.reason}` : 'Could not read'
+  if (receipt.state === 'error')
+    return receipt.reason ? `Could not read: ${receipt.reason}` : 'Could not read'
   const parts: string[] = []
   if (receipt.totals.count > 0) {
-    parts.push(`${plural(receipt.totals.count, 'file', 'files')} ${formatLineCounts(receipt.totals)}`)
+    parts.push(
+      `${plural(receipt.totals.count, 'file', 'files')} ${formatLineCounts(receipt.totals)}`
+    )
   } else {
     parts.push('No files changed')
   }

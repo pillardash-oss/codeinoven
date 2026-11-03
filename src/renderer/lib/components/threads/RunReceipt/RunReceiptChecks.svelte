@@ -43,7 +43,8 @@
     {#each checks as check, index (index)}
       <li class="flex min-w-0 flex-col gap-0.5 py-0.5 text-xs">
         <div class="flex min-w-0 items-baseline gap-2">
-          <code class="min-w-0 flex-1 truncate text-muted" title={check.command}>{check.command}</code
+          <code class="min-w-0 flex-1 truncate text-muted" title={check.command}
+            >{check.command}</code
           >
           <span class="shrink-0 text-right" style:color={outcomeInk(check.outcome)}>
             {OUTCOME_LABEL[check.outcome]}{check.exitCode === undefined

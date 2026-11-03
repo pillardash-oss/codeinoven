@@ -20,24 +20,32 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { onMount } from 'svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeChoice, type Thread } from '$shared/types'
 
   interface Props {
     /** The assistant task being bound. Only a task has a home and a scope to tell apart. */
     task: Thread
-    open: boolean
     onClose: () => void
     /** The task as the main process stored it after the binding was applied. */
     onBound: (thread: Thread) => void
   }
 
-  let { task, open, onClose, onBound }: Props = $props()
+  /**
+   * Mounted only while it is open, so every field starts from the task's current
+   * binding without an effect that would have to reset state on a prop change.
+   */
+  let { task, onClose, onBound }: Props = $props()
 
-  /** The project whose scopes are being offered; `null` until one is picked. */
-  let projectId = $state<string | null>(null)
+  /** A project the user picked here; absent keeps the task's own binding. */
+  let chosenProjectId = $state<string | null>(null)
+  /** The project whose scopes are being offered; the task's own when it has one. */
+  let projectId = $derived(chosenProjectId ?? task.boundScope?.projectId ?? null)
   /** A choice awaiting confirmation, which is what the footer confirms. */
   let pending = $state<
-    { kind: 'bind'; projectId: string; scopeBucketId: string; name: string } | { kind: 'unbind' } | null
+    | { kind: 'bind'; projectId: string; scopeBucketId: string; name: string }
+    | { kind: 'unbind' }
+    | null
   >(null)
   let busy = $state(false)
   let creating = $state(false)
@@ -49,18 +57,10 @@
     [...scopeState.projectRecords].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
   )
 
-  $effect(() => {
-    if (!open) return
-    pending = null
-    busy = false
-    creating = false
-    projectId = bound?.projectId ?? null
-  })
-
-  $effect(() => {
-    const target = projectId
-    if (!open || !target) return
-    void scopeState.ensureBoardLoaded(target)
+  onMount(() => {
+    // One bounded board read, only for a task that already names a project. A
+    // task being bound for the first time loads its board when the user picks.
+    if (projectId) void scopeState.ensureBoardLoaded(projectId)
   })
 
   let board = $derived(projectId ? scopeState.boards.get(projectId) : undefined)
@@ -92,7 +92,8 @@
 
   function chooseProject(next: string): void {
     pending = null
-    projectId = next
+    chosenProjectId = next
+    void scopeState.ensureBoardLoaded(next)
   }
 
   function selectChoice(choice: ScopeChoice): void {
@@ -144,11 +145,11 @@
 </script>
 
 <Modal
-  {open}
+  open
   title="Task project scope"
   description="Choose the project checkout this assistant task works in."
   size="lg"
-  onClose={onClose}
+  {onClose}
   onEscapeKeydown={(event) => {
     if (creating) {
       event.preventDefault()
@@ -185,7 +186,7 @@
     {:else}
       <div class="relative min-h-0 flex-1">
         <ScopePickerMenu
-          projectId={projectId}
+          {projectId}
           value={currentChoice}
           {busy}
           autofocusSearch
@@ -203,7 +204,7 @@
             creating = true
           }}
           onClose={() => {
-            projectId = null
+            chosenProjectId = null
             pending = null
           }}
         />
