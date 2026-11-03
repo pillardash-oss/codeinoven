@@ -72,6 +72,8 @@ export interface AgentUtilityHost {
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentTargetChanged: BrowserService['agentTargetChanged']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
+  readonly boxOfExistingTab: BrowserService['boxOfExistingTab']
+  readonly closeUnreferencedAgentTabs: BrowserService['closeUnreferencedAgentTabs']
   readonly captureScreenshot: BrowserService['captureScreenshot']
   readonly clickAgentTarget: BrowserService['clickAgentTarget']
   readonly conversationScope: BrowserService['conversationScope']
@@ -88,6 +90,7 @@ export interface AgentUtilityHost {
   readonly runAgentScript: BrowserService['runAgentScript']
   readonly stage: BrowserService['stage']
   readonly stateFor: BrowserService['stateFor']
+  readonly tabs: BrowserService['tabs']
   readonly threadBrowserHint: BrowserService['threadBrowserHint']
   readonly touchParkedTab: BrowserService['touchParkedTab']
   readonly uploadFiles: BrowserService['uploadFiles']
@@ -144,14 +147,26 @@ export class BrowserServiceAgentUtility {
     if (operation === 'open') {
       const url = validateBrowserUrl(this.host.requiredInputString(input, 'url'))
       const attention = validateAttention(input['attention'])
-      const tabId = `browser:agent:${crypto.randomUUID()}`
-      const tab = this.host.ensureTab(tabId, projectId, threadId)
+      // One agent tab per conversation. A research turn opens several pages, and
+      // minting a tab for each one left a renderer process behind every time:
+      // 154 processes and 7.8 GB in a five hour session. The tab this
+      // conversation already owns is navigated instead.
+      const existing = this.host.agentTabIds.get(contextKey) ?? null
+      const reused = existing !== null && this.host.tabs.has(existing)
+      const tabId = reused && existing ? existing : `browser:agent:${crypto.randomUUID()}`
+      const tab = this.host.ensureTab(tabId, projectId, threadId, this.host.boxOfExistingTab(tabId))
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
-      this.host.parkTab(tabId)
+      if (!reused) this.host.parkTab(tabId)
+      else if (this.host.activeTabId !== tabId && !this.host.stage.isParked(tab.view)) {
+        // The parked cap can drop a view off the stage window without freeing it,
+        // so a reused tab is mounted again before it navigates.
+        this.host.parkTab(tabId)
+      }
       this.host.load(tabId, url)
       this.host.agentTabIds.set(contextKey, tabId)
+      this.host.closeUnreferencedAgentTabs(contextKey)
       // An opportunistic reveal is skipped once the user has shown twice that
       // they leave agent-opened tabs straight away.
       const relaxed = attention === 'focus' && this.host.isRelaxed(threadId)

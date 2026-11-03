@@ -212,7 +212,12 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
   coordinatorRailBadgeTitle = $derived(this.root.openThreadFromSwitcher.coordinatorRailBadgeTitle)
 
   browser = new WorkspaceBrowserController({
-    getSelectedProjectId: () => this.root.openThreadFromSwitcher.selectedThread?.projectId ?? null
+    getSelectedProjectId: () => this.root.openThreadFromSwitcher.selectedThread?.projectId ?? null,
+    getSelectedThreadId: () => this.root.openThreadFromSwitcher.selectedThread?.id ?? null,
+    closeThreadBrowser: () => {
+      if (this.dockKindActive('browser'))
+        this.toggleDockPanel('browser', this.root.state.focusBrowser)
+    }
   })
 
   browserFullscreenThreadId = $state<string | null>(null)

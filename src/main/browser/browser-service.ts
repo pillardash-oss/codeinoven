@@ -955,8 +955,16 @@ export class BrowserService {
     url: string
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
+    /** The tab the app remembers for this screen, or null when it remembers none. */
+    preferredTabId?: string | null
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
     return this.surfacesUnit.openDesignScreen(input)
+  }
+
+  /** Whether this browser still holds one tab, which is what makes a remembered
+   *  tab trustworthy rather than stale. */
+  hasTab(tabId: string): boolean {
+    return this.surfacesUnit.hasTab(tabId)
   }
 
   async showThreadWorkTab(input: {
@@ -1172,6 +1180,10 @@ export class BrowserService {
 
   destroy(tabId: string, reason: BrowserTabDestroyReason): void {
     this.tabsUnit.destroy(tabId, reason)
+  }
+
+  closeUnreferencedAgentTabs(contextKey: string): number {
+    return this.tabsUnit.closeUnreferencedAgentTabs(contextKey)
   }
 
   // ---------------------------------------------------------------------------
