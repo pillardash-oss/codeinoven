@@ -4,10 +4,11 @@
 /**
  * Local mirror of the GitHub Actions CI checks, matched to the host OS.
  *
- * Every job in .github/workflows/quality.yml, security.yml and the per-OS part
- * of nightly.yml is represented here as a stage. Running this script on macOS
- * runs the macOS stages, on Windows the Windows stages, on Linux the Linux
- * stages — so a green local run means the same-named CI jobs would pass.
+ * Every job in .github/workflows/quality.yml (which owns the suite, the security
+ * scans and the per-platform runtime jobs) and the per-OS part of nightly.yml is
+ * represented here as a stage. Running this script on macOS runs the macOS
+ * stages, on Windows the Windows stages, on Linux the Linux stages — so a green
+ * local run means the same-named CI jobs would pass.
  *
  * Usage:
  *   bun run ci:local                 # full platform-appropriate run
@@ -254,18 +255,18 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
     stages.push(await stage('install', 'Frozen install', installCommand))
   }
 
-  // Mirrors the quality.yml jobs check, lint, test, build (shared runtime) plus
-  // the audit job, which now lives in security.yml.
+  // Mirrors the quality.yml `suite` job (type check, lint, tests) plus the two
+  // security steps it now carries, the gitleaks scan and the dependency audit.
   // The test stage pins CI=true because GitHub Actions always sets it — running
   // vitest with the exact CI environment keeps the local mirror faithful, so a
-  // green local test stage means the CI Tests job sees the same behavior.
+  // green local test stage means the CI suite job's tests see the same behavior.
   stages.push(
     await stage('check', 'Type check', ['bun', 'run', 'check']),
     await stage('lint', 'Lint', ['bun', 'run', 'lint', '.']),
     await stage('test', 'Tests', ['bun', 'run', 'test'], undefined, { CI: 'true' }),
     // The `audit` script, not a bare `bun audit`, so this stage and the
-    // security.yml job share one accepted-advisory list. See that workflow for
-    // why GHSA-ch52-4w7c-c8xp is accepted.
+    // `suite` job's audit step share one accepted-advisory list. See that step
+    // for why GHSA-ch52-4w7c-c8xp is accepted.
     await stage('audit', 'Dependency audit', ['bun', 'run', 'audit'])
   )
 
@@ -301,17 +302,17 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
     await stage('bundle-budgets', 'Bundle budgets', ['bun', 'run', 'check:bundle'])
   )
 
-  // security.yml "Detect leaked secrets": gitleaks runs locally when installed.
-  // The flags match the workflow command exactly, including `--exit-code 1`:
-  // without it the stage can never fail, so a local run would report green for
-  // a secrets scan that GitHub Actions rejects.
+  // quality.yml `suite` job, "Scan for secrets with Gitleaks": gitleaks runs
+  // locally when installed. The flags match the workflow command exactly,
+  // including `--exit-code 1`: without it the stage can never fail, so a local
+  // run would report green for a secrets scan that GitHub Actions rejects.
   stages.push({
     id: 'gitleaks',
-    hint: 'Install gitleaks (brew install gitleaks) to mirror the security.yml secrets scan.',
+    hint: 'Install gitleaks (brew install gitleaks) to mirror the suite job secrets scan.',
     label: 'Secrets scan (gitleaks)',
     run: async () => {
       if (!(await hasBinary('gitleaks'))) {
-        process.stdout.write('[ci-local] gitleaks not installed — skipping (see security.yml)\n')
+        process.stdout.write('[ci-local] gitleaks not installed — skipping (see quality.yml)\n')
         return 0
       }
       return runStep(
@@ -420,7 +421,7 @@ async function writeGateReports(
       `- Host platform: ${target}`,
       `- Exit code: ${failure.exitCode}`,
       `- Started at (unix): ${startedAt}`,
-      '- Mirrors: the same-named job(s) in `.github/workflows/quality.yml`, `security.yml`, `nightly.yml`',
+      '- Mirrors: the same-named job(s) in `.github/workflows/quality.yml` and `nightly.yml`',
       '',
       '## Output',
       '',

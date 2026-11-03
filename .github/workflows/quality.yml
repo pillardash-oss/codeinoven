@@ -1,5 +1,12 @@
 name: Quality
 
+# One workflow owns every pull-request gate: the suite, the security scans, the
+# per-platform runtime jobs and the single required "Release verification"
+# check. Security used to be its own workflow with its own (byte-identical)
+# `policy` job, its own concurrency group and its own check suite; the split also
+# meant a failing `bun audit` or Gitleaks scan was not part of any required
+# check. Both scans are now steps of the gated `suite` job.
+#
 # The full suite runs exactly once per change, on the pull request that is the
 # last gate before the content lands:
 #   - on every pull_request (feature PRs, dev -> nightly promotion PRs)
@@ -12,11 +19,20 @@ name: Quality
 # could only re-confirm that same content.
 #
 # A nightly -> main promotion PR re-delivers the exact content that just
-# passed the full suite, so only the cheap "Release promotion
-# policy" job runs there; the heavy jobs report "Skipped" (treated as
-# passing by required-check policies). Pushes to main are excluded entirely:
-# main only ever receives nightly promotion merges, which were just checked
-# on the promotion PR.
+# passed the full suite, so only the cheap `policy` job runs there; the heavy
+# jobs report "Skipped" (treated as passing by required-check policies). Pushes
+# to main are excluded entirely: main only ever receives nightly promotion
+# merges, which were just checked on the promotion PR.
+#
+# Runner choice is deliberate and is a capacity decision, not a preference.
+# GitHub's macOS arm64 hosted pool is capacity constrained and admits it in the
+# job annotations ("Due to capacity constraints, jobs targeting macOS arm64
+# runners may experience longer queue times"), and a job that cannot be placed is
+# aborted after ~15 minutes regardless of `timeout-minutes` ("The job was not
+# acquired by Runner of type hosted even after multiple attempts"). Quality #928
+# failed exactly that way on `Tests`. So each pull request now makes at most ONE
+# macOS arm64 acquisition, and every gate that does not need macOS runs on
+# ubuntu-latest.
 on:
   pull_request:
   workflow_dispatch:
@@ -29,14 +45,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # One job decides whether the heavy suite runs. A composite action cannot set
-  # a job-level `if`, so this decision cannot live in .github/actions/setup; it
-  # used to be restated verbatim on all nine heavy jobs, which meant changing
-  # the policy meant nine coordinated edits.
+  # One job decides whether the heavy suite runs and validates the promotion
+  # version. A composite action cannot set a job-level `if`, so the decision
+  # cannot live in .github/actions/setup. The promotion validation used to be its
+  # own job on the same ubuntu image with the same checkout and the same Bun
+  # setup; folding it here removes a dispatch with nothing to do on ordinary PRs.
   policy:
-    name: Determine suite scope
+    name: Suite scope and release policy
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       skip: ${{ steps.scope.outputs.skip }}
 
@@ -55,22 +72,21 @@ jobs:
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
-  promotion-policy:
-    name: Release promotion policy
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
+      # The promotion policy is a pull_request-only concern, so its steps are
+      # guarded instead of living in a separate job that would otherwise occupy a
+      # runner for a couple of `git show` calls.
       - name: Check out repository
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Bun
+        if: github.event_name == 'pull_request'
         uses: ./.github/actions/setup
 
       - name: Read promotion versions
+        if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_BRANCH: ${{ github.base_ref }}
@@ -94,28 +110,32 @@ jobs:
           echo "CURRENT_VERSION=$(jq -r .version package.json)" >> "$GITHUB_ENV"
 
       - name: Validate branch direction and version bump
+        if: github.event_name == 'pull_request'
         env:
           BASE_BRANCH: ${{ github.base_ref }}
           HEAD_BRANCH: ${{ github.head_ref }}
         run: bun scripts/validate-release-promotion.ts
 
-  # Dependency auditing lives in security.yml. It used to run here as well,
-  # which meant every push paid for the same `bun audit` twice.
-  #
-  # Every job below sets up through .github/actions/setup, so there is no
-  # separate install job: each one installs the locked dependency tree itself,
-  # exactly as the old `install` gate's dependents already did.
-
-  check:
-    name: Type check
+  # Every gate that needs nothing but a POSIX shell, Bun and the locked
+  # dependency tree runs in this one job: one runner acquisition, one install, and
+  # a fail-fast order that spends nothing on the test suite when the type check is
+  # already red. It used to be four separate macOS jobs (check, lint, test, build)
+  # plus two ubuntu security jobs, which is six acquisitions and six installs for
+  # the same checks.
+  suite:
+    name: Quality and security suite
     needs: [policy]
     if: needs.policy.outputs.skip != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
+      # Full history on purpose: Gitleaks scans the commits, not just the working
+      # tree, so a shallow clone would silently weaken the secrets gate.
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
@@ -125,31 +145,105 @@ jobs:
       - name: Type check
         run: bun run check
 
-  lint:
-    name: Lint
-    needs: [policy]
-    if: needs.policy.outputs.skip != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Bun and dependencies
-        uses: ./.github/actions/setup
-        with:
-          install: 'true'
-
       - name: Lint
         run: bun run lint .
 
-  test:
-    name: Tests
+      - name: Tests
+        run: bun run test
+
+      - name: Install Gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan for secrets with Gitleaks
+        run: gitleaks detect --redact --verbose --exit-code 1
+
+      # The command is the `audit` script, not a bare `bun audit`, so the accepted
+      # advisory list has exactly one home (package.json) instead of one copy per
+      # caller. It currently accepts five:
+      #
+      #   GHSA-ch52-4w7c-c8xp (high, CVE-2026-93748), http-cache-semantics <=4.2.0
+      #   reachable only through electron-builder > dmg-builder >
+      #   app-builder-lib > @electron/get@3 > got > cacheable-request. Upstream has
+      #   published no fix (`first_patched_version: null`; 4.2.0 is `latest`), so
+      #   `bun audit fix` reports "no published version fixes" and suggests this
+      #   same flag. Every package on that path is already at its newest published
+      #   version, and the only way to drop it is an @electron/get ^5 override,
+      #   which is ESM-only and cannot be require()d by app-builder-lib's CJS.
+      #   The advisory needs a shared cache serving one user's zeroed response to
+      #   another; here it is reached only by the build-time Electron download.
+      #
+      #   GHSA-hp3w-g68c-fv3c (moderate), sprintf-js <=1.1.3
+      #   reachable through mammoth > argparse, js-yaml > argparse (electron-builder,
+      #   electron-updater, builder-util), and electron > @electron/get >
+      #   global-agent > roarr. Upstream has published no fix
+      #   (`first_patched_version: null`; 1.1.3 is `latest`), so `bun audit fix`
+      #   reports "no published version fixes" and suggests this same flag. The
+      #   advisory needs a caller-supplied format string with an unbounded
+      #   precision specifier; every path here passes a fixed internal format.
+      #
+      #   GHSA-2p57-rm9w-gvfp (high, CVE-2024-29415), ip <=2.0.1
+      #   reachable through @mediabunny/server > node-av > werift, which
+      #   misclassifies addresses such as 127.1, 012.1.2.3 and 000:0:0000::01 as
+      #   globally routable in `isPublic`. Upstream has published no fix
+      #   (`first_patched_version: null`; 2.0.1 is `latest`), so `bun audit fix`
+      #   reports "no published version fixes" and suggests this same flag. werift
+      #   is the only package here that requires `ip`, and it is its ICE layer that
+      #   does: `isLoopback`, `isV4Format`, `toBuffer` and `toString`, never
+      #   `isPublic`, so the misclassified function has no caller in this tree.
+      #   The pack that pulls werift in (@mediabunny/server, installed on demand
+      #   for video matting) decodes a local file and runs local inference, opens
+      #   no peer connection and takes no peer-supplied address.
+      #
+      #   GHSA-gcqx-w48m-w2h4 (low), deepmerge >=4.2.0 <=4.3.1
+      #   reachable only through the devDependency @sveltejs/vite-plugin-svelte,
+      #   which merges the svelte config at build time. Upstream has published no
+      #   fix (`first_patched_version: null`; 4.3.1 is `latest`, the fix is still
+      #   an open issue in its repository), so `bun audit fix` reports "no
+      #   published version fixes" and suggests this flag. Nothing here reaches it
+      #   at runtime: the only source it ever merges is this repository's own
+      #   svelte.config.js, no user or network input, and the package ships no
+      #   runtime code in the app bundle. The other dependency this audit used to
+      #   report, qs (GHSA-6pq8-jhm2-2vcw), is fixed rather than accepted: the `qs`
+      #   override in package.json pins 6.16.2.
+      #
+      #   GHSA-g3hv-75wg-m249 (moderate), minimatch <11.0.1
+      #   reachable through four separate major lines: eslint >
+      #   @eslint/config-array > minimatch@10.2.6 (also @typescript-eslint/typescript-estree
+      #   and the devDependency @earendil-works/pi-coding-agent), glob@7 and
+      #   @electron/asar@3 and dir-compare@4 > minimatch@3.1.5, @electron/universal@2 >
+      #   minimatch@9.0.9, filelist@1 > minimatch@5.1.9. Upstream has published a
+      #   fix (11.0.1), but no parent in this tree accepts it: the newest
+      #   published version of every one of those packages still declares ^10.2.x,
+      #   ^9, ^5 or ^3, so `bun audit fix` reports "no published version fixes"
+      #   within range and the only remaining lever is a blanket minimatch ^11
+      #   override. That override is what the flag is avoiding, not a shortcut
+      #   around it: minimatch 3/5/9 throw when called as a function
+      #   (`require('minimatch')(path, pattern)`, see @electron/asar's
+      #   lib/asar.js and glob's common.js), so forcing 11 there breaks asar
+      #   unpacking and electron-builder packaging outright. The advisory needs a
+      #   caller-supplied glob pattern with amplified brace/globstar parts; every
+      #   pattern on these paths is a literal from this repository's own config,
+      #   and the whole chain is devDependency/build tooling that ships no runtime
+      #   code in the app bundle. Remove the flag once any of those parents widen
+      #   to ^11.
+      #
+      # Remove the flag from the `audit` script as soon as upstream ships a fix.
+      - name: Audit dependencies
+        run: bun run audit
+
+  # The one macOS acquisition per pull request. It exists only for what genuinely
+  # needs macOS: the unit suite in a Darwin environment and the production build
+  # whose bundle budgets are measured there. Packaging and the packaged-app
+  # startup smoke for macOS belong to the nightly/release build, not to a PR.
+  macos-runtime:
+    name: macOS quality and bundle budgets
     needs: [policy]
     if: needs.policy.outputs.skip != 'true'
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -163,29 +257,13 @@ jobs:
       - name: Tests
         run: bun run test
 
-  build:
-    name: Production build
-    needs: [policy]
-    if: needs.policy.outputs.skip != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    env:
-      CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
+      - name: Build Pi harness
+        run: bun run harness:build-pi
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Bun and dependencies
-        uses: ./.github/actions/setup
-        with:
-          install: 'true'
-
-      - name: Production build
-        run: bun run build:production
-
-      - name: Bundle budgets
-        run: bun run check:bundle
+      - name: Production build and bundle budgets
+        run: |
+          bun run build:production
+          bun run check:bundle
 
   windows-runtime:
     name: Windows quality and packaged startup
@@ -291,36 +369,36 @@ jobs:
 
   verify-release:
     name: Release verification
-    needs: [policy, check, lint, test, build, windows-runtime, linux-runtime]
+    needs: [policy, suite, macos-runtime, windows-runtime, linux-runtime]
     # `always()` so a failed dependency still reaches the assertion below.
     # Without it GitHub skips this job when a `needs` job fails, and a skipped
     # required check counts as passing, which would let a red PR merge.
     if: always() && needs.policy.outputs.skip != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 15
+    # ubuntu-latest, not macOS: this job only runs Bash over the results of jobs
+    # that already did the work. Parking it in the constrained macOS arm64 pool
+    # was a fifth acquisition for a pure assertion.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       # This job is the required status check on `dev` and `nightly`. It used to
       # run `bun run verify:release`, which is `check && lint && test && audit &&
-      # build:production && check:bundle`: every one of those had just run in a
-      # job above on this same macOS image and commit, and it rebuilt the whole
-      # application a second time on the critical path. It now asserts those
-      # jobs' results instead.
+      # build:production && check:bundle`: every one of those now runs in a job
+      # above on this same commit, and it rebuilt the whole application a second
+      # time on the critical path. It asserts those jobs' results instead, and it
+      # no longer re-runs the audit itself now that the audit is a step of the
+      # gated `suite` job.
       - name: Assert every gated job succeeded
         env:
-          CHECK_RESULT: ${{ needs.check.result }}
-          LINT_RESULT: ${{ needs.lint.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
+          SUITE_RESULT: ${{ needs.suite.result }}
+          MACOS_RESULT: ${{ needs.macos-runtime.result }}
           WINDOWS_RESULT: ${{ needs.windows-runtime.result }}
           LINUX_RESULT: ${{ needs.linux-runtime.result }}
         run: |
           failed=0
           for entry in \
-            "Type check:$CHECK_RESULT" \
-            "Lint:$LINT_RESULT" \
-            "Tests:$TEST_RESULT" \
-            "Production build:$BUILD_RESULT" \
+            "Quality and security suite:$SUITE_RESULT" \
+            "macOS quality and bundle budgets:$MACOS_RESULT" \
             "Windows quality and packaged startup:$WINDOWS_RESULT" \
             "Linux quality and packaged startup:$LINUX_RESULT"; do
             label="${entry%%:*}"
@@ -332,18 +410,3 @@ jobs:
             fi
           done
           exit "$failed"
-
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Bun and dependencies
-        uses: ./.github/actions/setup
-        with:
-          install: 'true'
-
-      # The dependency audit lives in security.yml, which is not a required
-      # check, so it is the one part of `verify:release` this gate keeps running
-      # itself; everything else it used to run is covered by the jobs asserted
-      # above.
-      - name: Audit dependencies
-        run: bun run audit

@@ -7,7 +7,6 @@ CodeInOven is a free, open-source desktop workspace for coordinated agentic soft
 Website: [codeinoven.com](https://codeinoven.com) · [Download](https://codeinoven.com/download) · [Contributing](CONTRIBUTING.md) · [Support](SECURITY.md) · [License](LICENSE)
 
 [![CI](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml)
-[![Security](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/pillardash-oss/codeinoven?label=version)](https://github.com/pillardash-oss/codeinoven/releases/latest)
 
