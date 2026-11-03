@@ -177,6 +177,23 @@ export interface CloudDeploymentContextTab {
   threadId: string
 }
 
+/**
+ * The display panel: previews of the targets agents are driving (an Android
+ * target over adb, a booted iOS Simulator, the desktop).
+ *
+ * It is a project tab because the preview survives switching between the
+ * project's threads   the work it mirrors belongs to the project, not to the tab
+ * that happened to open it. Which targets are open lives in the display store,
+ * so the tab itself carries only its scope.
+ */
+export interface DisplayContextTab {
+  id: string
+  kind: 'display'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export interface NotificationContextTab {
   id: string
   kind: 'notifications'
@@ -422,6 +439,7 @@ export type ContextSidebarTab =
   | ActionsContextTab
   | ThreadNoteContextTab
   | CloudDeploymentContextTab
+  | DisplayContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
   | StickyNotesContextTab
@@ -491,6 +509,7 @@ export const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
   'actions',
   'git',
   'cloud-deployment',
+  'display',
   'memory',
   'assistant-knowledge'
 ])

@@ -883,6 +883,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
   })
   videoStudio.registerIpc()
+  // The display panel mirrors whatever the agents are driving (an emulator with
+  // no window, a booted simulator, the desktop). Its sessions live only while a
+  // mirror tab is on screen, so constructing the service costs nothing until one
+  // is opened.
+  const { DisplayService } = await import('../display/display-service')
+  state.displayService = new DisplayService({ window: () => state.mainWindow })
+  state.displayService.registerIpc()
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
       studio: videoStudio.execute,

@@ -44,6 +44,7 @@ import type {
   ThreadClickedPayload
 } from './notifications'
 import type { UpdaterStatus } from './updater'
+import type { DisplayCaptureState, DisplayFrame } from './display'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
   BrowserOverlayAck,
@@ -337,6 +338,17 @@ export const IPC_EVENT_CONTRACT = {
   'projectFiles:ideProgress': [] as unknown as [progress: IdeProgress],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
+  /**
+   * One preview frame for the display panel, already downscaled and encoded.
+   *
+   * Pushed rather than polled: a session only produces frames while its stage is
+   * on screen, so the stream stopping is itself the signal that nothing is being
+   * captured. `tabId` rides along so a frame that lands after its tab closed is
+   * dropped instead of painted into another tab's stage.
+   */
+  'display:frame': [] as unknown as [frame: DisplayFrame],
+  /** Where one display session is: starting, live, retrying, or failed. */
+  'display:captureState': [] as unknown as [state: DisplayCaptureState],
   /**
    * Progress of an in-app Cua Driver update. The update itself answers over
    * `computerUse:updateCua`; this stream carries the installer's milestones so a

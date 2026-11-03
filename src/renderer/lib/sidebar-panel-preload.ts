@@ -52,6 +52,14 @@ export function preloadDiffPanelChunk(): Promise<unknown> {
   )
 }
 
+/** Warm the display panel's module chunk so the preview opens on a live frame. */
+export function preloadDisplayPanelChunk(): Promise<unknown> {
+  return loadPanelModule(
+    PANEL_KEYS.display,
+    () => import('$lib/components/display/DisplayPanel.svelte')
+  )
+}
+
 /** Warm the terminal panel's module chunk so opening a shell is instant. */
 export function preloadTerminalPanelChunk(): Promise<unknown> {
   return loadPanelModule(
@@ -82,7 +90,8 @@ export function warmSidebarPanels(): void {
     preloadGitPanelChunk,
     preloadFilesPanelChunk,
     preloadDiffPanelChunk,
-    preloadTerminalPanelChunk
+    preloadTerminalPanelChunk,
+    preloadDisplayPanelChunk
   ])
 }
 

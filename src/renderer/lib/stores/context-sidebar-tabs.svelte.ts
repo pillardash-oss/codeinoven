@@ -754,6 +754,31 @@ export class SidebarTabContexts {
   }
 
   /**
+   * Dock the display panel for a project.
+   *
+   * One tab per project, because what it mirrors is the work the project's agents
+   * are doing; the targets themselves are the display store's business, so the tab
+   * only re-scopes to the thread the user came back on.
+   */
+  openDisplay(projectId: string, threadId: string): void {
+    const context = this.ensureProjectContext(projectId, threadId)
+    const id = `display:${projectId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      if (existing.kind === 'display') existing.threadId = threadId
+      this.focusInProjectContext(context, id)
+      return
+    }
+    this.openProject(context, {
+      id,
+      kind: 'display',
+      title: 'Display',
+      projectId,
+      threadId
+    })
+  }
+
+  /**
    * Dock the coordinator for a thread. The title tracks the coordination kind
    * (Assignment vs Achievement vs Audit), so an existing tab is re-titled rather than
    * duplicated when a thread switches modes.

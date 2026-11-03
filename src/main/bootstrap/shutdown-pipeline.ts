@@ -201,6 +201,13 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.displayService?.dispose()
+    state.displayService = null
+  } catch (error) {
+    Logger.error('Display preview cleanup failed during shutdown:', error)
+  }
+
+  try {
     ipcMain.removeHandler('prototypePreview:getOrigin')
     state.chatEngine?.setPrototypePreviewRegistrar(null)
     await state.prototypePreviewService?.dispose()

@@ -15,6 +15,7 @@ import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
 import { pipState } from '$lib/stores/pip.svelte'
+import { displayPanel } from '$lib/stores/display-panel.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -394,6 +395,10 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
   // initialise the store here so the overlay's dynamic import can be gated on
   // `pipState.active` without ever missing a frame.
+  // The display panel keeps its open targets for as long as the thread lives;
+  // subscribing here (rather than in the panel) means a frame that lands while
+  // the dock is switching panels is applied instead of dropped.
+  displayPanel.init()
   pipState.init()
   // Load which threads carry a user note so sidebar rows and the right-dock
   // indicator can react; the store keeps itself in sync via `note:changed`.

@@ -45,6 +45,7 @@ export const PANEL_KEYS = {
   debugger: 'panel:debugger',
   sources: 'panel:sources',
   cloudDeployment: 'panel:cloud-deployment',
+  display: 'panel:display',
   temporaryChat: 'panel:temporary-chat',
   assistantKnowledge: 'panel:assistant-knowledge',
   assignmentCoordinator: 'panel:assignment-coordinator',

@@ -487,6 +487,14 @@
           {:catch error}
             {@render panelLoadFailed(PANEL_KEYS.cloudDeployment, 'Cloud deployment', error)}
           {/await}
+        {:else if activeContextTab.kind === 'display'}
+          {#await loadCachedPanelModule(PANEL_KEYS.display, () => import('../display/DisplayPanel.svelte'))}
+            {@render panelLoading('Display')}
+          {:then { default: DisplayPanel }}
+            <DisplayPanel />
+          {:catch error}
+            {@render panelLoadFailed(PANEL_KEYS.display, 'Display', error)}
+          {/await}
         {:else if activeContextTab.kind === 'temporary-chat'}
           {#await loadCachedPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
             {@render panelLoading('Chat')}

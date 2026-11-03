@@ -17,6 +17,7 @@ import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
+import type { DisplayService } from '../display/display-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { SkillUpdateService } from '../utilities/skill-updates'
 import type { PowerWakeService } from '../system/power-wake-service'
@@ -97,6 +98,8 @@ export interface BootstrapState {
   harnessInstallService: HarnessInstallService | null
   harnessManifestService: HarnessManifestService | null
   computerUsePipService: ComputerUsePipService | null
+  /** Preview sessions for the display panel, one per open mirror tab. */
+  displayService: DisplayService | null
   notificationService: NotificationService | null
   updaterService: UpdaterService | null
   skillUpdateService: SkillUpdateService | null
@@ -199,6 +202,7 @@ export function createBootstrapState(): BootstrapState {
     harnessInstallService: null,
     harnessManifestService: null,
     computerUsePipService: null,
+    displayService: null,
     notificationService: null,
     updaterService: null,
     skillUpdateService: null,

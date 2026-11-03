@@ -411,6 +411,22 @@
           ]
         : authoredWork
 
+    // The display panel rides the coordinator group: it is the same kind of
+    // supervision surface, showing what the project's agents are driving that the
+    // desktop cannot (a headless Android emulator, a booted simulator, the screen).
+    coordination.push({
+      id: 'display',
+      label: board.switcherPanelTabs.dockKindActive('display')
+        ? `Hide ${feature('display').name}`
+        : `Show ${feature('display').name}`,
+      icon: feature('display').icon,
+      active: board.switcherPanelTabs.dockKindActive('display'),
+      onSelect: () =>
+        board.switcherPanelTabs.toggleDockPanel('display', () =>
+          contextSidebarState.openDisplay(selectedThread.projectId, selectedThread.id)
+        )
+    })
+
     // Browser tabs keep their own hairline-separated group: they are live pages,
     // not a written aside, so they do not ride with history.
     const browserTabs: ContextDockItem[] = []

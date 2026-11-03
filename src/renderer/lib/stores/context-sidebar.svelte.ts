@@ -894,6 +894,10 @@ class ContextSidebarState {
     this.tabContexts.openCloudDeployments(projectId, threadId)
   }
 
+  openDisplay(projectId: string, threadId: string): void {
+    this.tabContexts.openDisplay(projectId, threadId)
+  }
+
   /**
    * Dock the coordinator for a thread. The title tracks the coordination kind
    * (Assignment vs Achievement vs Audit), so an existing tab is re-titled rather than
