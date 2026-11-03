@@ -28,6 +28,9 @@
   import SpeechPlaybackButton from '../../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../../speech/speech-controller.svelte'
   import WorkingTrace from '../WorkingTrace.svelte'
+  import RunReceiptBlock from '../RunReceipt.svelte'
+  import { runReceiptState } from '$lib/stores/run-receipt.svelte'
+  import { isBoundAssistantTask } from '$shared/bound-scope'
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import InlineMediaFigure from '../InlineMediaFigure.svelte'
   import InlineImageFigure from '../InlineImageFigure.svelte'
@@ -78,6 +81,41 @@
 
   /** The board the surface built, and the few values only it can build. */
   let { board }: { board: ThreadViewBoard } = $props()
+
+  /**
+   * The run thread a receipt belongs to, when this conversation is one.
+   *
+   * A receipt describes what *a run* did, so only a bound run thread carries one:
+   * an ordinary project thread's work is already shown by the rail's Changes, and
+   * an assistant task without a binding has no checkout to describe.
+   */
+  let receiptThread = $derived.by(() => {
+    const thread = board.handleAgentEvent.thread
+    return isBoundAssistantTask(thread) && thread.assistantTaskId ? thread : null
+  })
+
+  /**
+   * The receipt is read once per range. A running run reads its state, and a run
+   * that settles re-reads exactly once, which is the app's own settle signal
+   * doing the invalidation instead of a timer.
+   */
+  let receiptSyncedKey = $state('')
+
+  $effect(() => {
+    const thread = receiptThread
+    const bound = thread?.boundScope
+    if (!thread || !bound) return
+    const settled =
+      thread.status === 'completed' ||
+      thread.status === 'failed' ||
+      thread.status === 'working-paused'
+    const key = `${thread.id}:${settled ? 'settled' : 'live'}:${thread.updatedAt}`
+    if (receiptSyncedKey === key) return
+    receiptSyncedKey = key
+    void (settled
+      ? runReceiptState.refresh(bound.projectId, thread.id, bound.scopeBucketId)
+      : runReceiptState.ensure(bound.projectId, thread.id, bound.scopeBucketId))
+  })
 
   /**
    * Decide, once per distinct state, whether the transcript's final turn drew
@@ -1352,6 +1390,13 @@
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
         />
+      {/if}
+
+      {#if receiptThread}
+        {@const receipt = runReceiptState.receiptFor(receiptThread.id)}
+        {#if receipt}
+          <RunReceiptBlock thread={receiptThread} {receipt} />
+        {/if}
       {/if}
 
       {#if board.unmirroredTraceStartTime.brainstormReportRefreshing || board.buildSpecActionPrompt.delegatedWorkBusy || board.composerScope.assignmentFormulating || (board.buildSpecActionPrompt.heldSteerAbsIndex === -1 && !board.buildSpecActionPrompt.pendingLiveTurn && !board.submitBrainstormDecision.activePlanningEntry && !board.harnessUsage.specFormulating && board.switchProject.busy && board.pollStreamParts.latestTurnRenderableParts.length === 0)}
