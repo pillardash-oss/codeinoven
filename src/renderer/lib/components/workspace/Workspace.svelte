@@ -76,9 +76,10 @@
     updateConfig
   }))
   /**
-   * Dock contents, grouped: history, then workspace tools, then session tools.
-   * Every entry is a toggle   the rail itself is always visible, only the
-   * panel (or, for history, the floating jump menu) comes and goes.
+   * Dock contents, grouped: history (which also carries the thread note and, on
+   * an assistant task, the assistant's behavior), then workspace tools, then
+   * session tools. Every entry is a toggle   the rail itself is always visible,
+   * only the panel (or, for history, the floating jump menu) comes and goes.
    */
   board.switcherPanelTabs.setContextGroups(() => dockGroups)
   let dockGroups = $derived.by((): ContextDockItem[][] => {
@@ -98,6 +99,48 @@
     // Before the first message it falls back to a plain history icon: there's
     // no count worth showing yet, and "0" reads as a stuck/broken badge.
     const hasMessages = workspaceState.messageCount > 0
+
+    // The thread note rides in history's own group, right after it: the two are
+    // always reached together, so they read as one pair instead of the note
+    // sitting far down the rail behind its own hairline. It is always present
+    //   not just once a note exists   so it also doubles as the "add a note"
+    // entry point; the amber tone only kicks in once there is something written
+    // to draw attention to.
+    const hasThreadNote = threadNotesState.has(selectedThread.id)
+    const threadNoteEntry: ContextDockItem = {
+      id: 'note',
+      label: hasThreadNote
+        ? `${feature('thread-note').name} available`
+        : `Add a ${feature('thread-note').name.toLowerCase()}`,
+      icon: feature('thread-note').icon,
+      active: board.switcherPanelTabs.dockKindActive('thread-note'),
+      tone: hasThreadNote ? 'warning' : undefined,
+      onSelect: () =>
+        board.switcherPanelTabs.toggleDockPanel('thread-note', () =>
+          contextSidebarState.openThreadNote(
+            selectedThread.projectId,
+            selectedThread.id,
+            selectedThread.title
+          )
+        )
+    }
+
+    // An assistant task's own authoring surface rides the same group, right
+    // after the note: history, the note and the assistant's behavior are the
+    // three panels of one thread's identity.
+    const assistantBehaviorEntry: ContextDockItem | null = isAssistantThread
+      ? {
+          id: 'assistant-knowledge',
+          label: 'Assistant behavior',
+          icon: AssistantKnowledgeIcon,
+          active: board.switcherPanelTabs.dockKindActive('assistant-knowledge'),
+          onSelect: () =>
+            board.switcherPanelTabs.toggleDockPanel('assistant-knowledge', () =>
+              board.mergeThreadsInList.openAssistantKnowledgeForTask(selectedThread)
+            )
+        }
+      : null
+
     const history: ContextDockItem[] = [
       {
         id: 'history',
@@ -110,25 +153,10 @@
         menu: board.jumpToHistoryMessage.showHistoryMenu ? historyMenu : undefined,
         onSelect: () =>
           (board.jumpToHistoryMessage.showHistoryMenu = !board.jumpToHistoryMessage.showHistoryMenu)
-      }
+      },
+      threadNoteEntry,
+      ...(assistantBehaviorEntry ? [assistantBehaviorEntry] : [])
     ]
-
-    // The knowledge panel is an assistant task's own authoring surface: it sits
-    // right under history, above the workspace tools.
-    const assistantTools: ContextDockItem[] = isAssistantThread
-      ? [
-          {
-            id: 'assistant-knowledge',
-            label: 'Assistant behavior',
-            icon: AssistantKnowledgeIcon,
-            active: board.switcherPanelTabs.dockKindActive('assistant-knowledge'),
-            onSelect: () =>
-              board.switcherPanelTabs.toggleDockPanel('assistant-knowledge', () =>
-                board.mergeThreadsInList.openAssistantKnowledgeForTask(selectedThread)
-              )
-          }
-        ]
-      : []
 
     const workspaceTools: ContextDockItem[] = []
     if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
@@ -383,36 +411,15 @@
           ]
         : authoredWork
 
-    // The thread-note indicator sits below its own hairline. It's always
-    // present   not just once a note exists   so it also doubles as the "add a
-    // note" entry point; the amber tone only kicks in once there's something
-    // written to draw attention to.
-    const hasThreadNote = threadNotesState.has(selectedThread.id)
-    const threadNote: ContextDockItem[] = [
-      {
-        id: 'note',
-        label: hasThreadNote
-          ? `${feature('thread-note').name} available`
-          : `Add a ${feature('thread-note').name.toLowerCase()}`,
-        icon: feature('thread-note').icon,
-        active: board.switcherPanelTabs.dockKindActive('thread-note'),
-        tone: hasThreadNote ? 'warning' : undefined,
-        onSelect: () =>
-          board.switcherPanelTabs.toggleDockPanel('thread-note', () =>
-            contextSidebarState.openThreadNote(
-              selectedThread.projectId,
-              selectedThread.id,
-              selectedThread.title
-            )
-          )
-      }
-    ]
+    // Browser tabs keep their own hairline-separated group: they are live pages,
+    // not a written aside, so they do not ride with history.
+    const browserTabs: ContextDockItem[] = []
     if (board.state.browserTabs.length > 0) {
       const name =
         board.state.browserTabs.length === 1
           ? (board.state.browserTabs.at(-1)?.title ?? 'Browser')
           : `${board.state.browserTabs.length} browser tabs`
-      threadNote.push({
+      browserTabs.push({
         id: 'browser',
         label: board.switcherPanelTabs.dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: CioThreadBrowser,
@@ -500,12 +507,11 @@
 
     return [
       history,
-      assistantTools,
       workspaceTools,
       sessionTools,
       temporaryChats,
       coordination,
-      threadNote,
+      browserTabs,
       subagents,
       autoAnswerTools
     ]
