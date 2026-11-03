@@ -4,6 +4,7 @@
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { STAGE_COLORS, STAGE_LABELS, type ThreadStage } from '$lib/stores/scope.svelte'
   import type { Thread } from '$shared/types'
+  import { belongsOnProjectBoard } from '$lib/components/threads/thread-dispatch-badge'
 
   interface Props {
     bucketId: string
@@ -38,6 +39,14 @@
   }: Props = $props()
 
   let dropActive = $state(false)
+
+  /**
+   * Bound assistant tasks keep their single home on the Assistant view, so they
+   * are never listed on a project's board even though they work in its checkout.
+   * Filtering here is what makes "one transcript, one board" hold structurally
+   * rather than by convention.
+   */
+  let boardThreads = $derived(threads.filter((thread) => belongsOnProjectBoard(thread, thread.projectId)))
 
   function handleDragOver(event: DragEvent): void {
     event.preventDefault()
@@ -84,21 +93,21 @@
     >
       {#if collapsed}
         <CioForward size={13} class="shrink-0 text-dimmed" />
-        <span class="text-[0.625rem] tabular-nums text-dimmed">{threads.length}</span>
+        <span class="text-[0.625rem] tabular-nums text-dimmed">{boardThreads.length}</span>
         <span class="sr-only">{STAGE_LABELS[stage]}</span>
       {:else}
         <CioChevronDown size={13} class="shrink-0 text-dimmed" />
         <span class="text-[0.6875rem] font-semibold uppercase tracking-wide text-foreground">
           {STAGE_LABELS[stage]}
         </span>
-        <span class="ml-auto text-[0.625rem] tabular-nums text-dimmed">{threads.length}</span>
+        <span class="ml-auto text-[0.625rem] tabular-nums text-dimmed">{boardThreads.length}</span>
       {/if}
     </button>
   </div>
 
   {#if !collapsed}
     <div class="min-h-0 flex-1 space-y-px overflow-y-auto py-1" role="list">
-      {#each threads as thread (thread.id)}
+      {#each boardThreads as thread (thread.id)}
         <div data-scope-thread-row="true">
           <ThreadRow
             {thread}

@@ -5,6 +5,7 @@ import type {
   ProviderCatalog,
   ProviderModel,
   Thread,
+  ThreadDispatchOrigin,
   ThreadSettings,
   ThinkingLevel
 } from '../../lib/types'
@@ -18,6 +19,7 @@ import {
 } from '../../lib/thinking-presets'
 import { isRemoteOvenId, LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
+import { ASSISTANT_SPACE_ID } from '../../lib/types/project'
 import { listHarnesses } from '../agents/harness-registry'
 import { Logger } from '../system/logger'
 import { ORCHESTRATION_STATUS_TOOL_NAME } from '../../lib/orchestration-tools'
@@ -118,6 +120,7 @@ export interface OrchestrationDeps {
     projectId: string
     title: string
     settings: ThreadSettings
+    dispatchOrigin?: ThreadDispatchOrigin
   }) => Promise<Thread>
   /** Run a prompt on a thread, exactly as the app does for its own dispatch. */
   sendPrompt: (input: {
@@ -421,7 +424,21 @@ async function dispatchWork(
     ...(ovenPath ? { ovenPath } : {})
   }
 
-  const thread = await deps.createThread({ projectId, title, settings })
+  const thread = await deps.createThread({
+    projectId,
+    title,
+    settings,
+    // The board states a dispatched row's origin from the row itself, so the
+    // fact is written once, here, with the thread it describes.
+    dispatchOrigin: {
+      ...(requestingThread?.projectId === ASSISTANT_SPACE_ID && requestingThread.assistantId
+        ? { assistantId: requestingThread.assistantId }
+        : {}),
+      initiatorProjectId: context.projectId,
+      initiatorThreadId: context.threadId,
+      at: Date.now()
+    }
+  })
   dispatches.remember({
     runThreadId: thread.id,
     requestingProjectId: context.projectId,
