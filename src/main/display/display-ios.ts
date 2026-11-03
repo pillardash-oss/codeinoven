@@ -1,4 +1,7 @@
-import type { NativeImage } from 'electron'
+import { app, type NativeImage } from 'electron'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { DisplaySourceDescriptor, DisplaySourceListing } from '../../lib/ipc/display'
 import { type DisplayCapture, decodeDisplayImage } from './display-capture'
 import { captureCommand, captureText } from './display-exec'
@@ -104,11 +107,21 @@ export async function listIosSources(): Promise<DisplaySourceListing> {
   return { kind: 'ios', sources }
 }
 
-/** A live framebuffer reader for one booted simulator. */
+/**
+ * A live framebuffer reader for one booted simulator.
+ *
+ * `simctl io screenshot` writes a file, and its own help text advertises `-` for
+ * stdout, but this Xcode's simctl treats `-` as the literal filename: it writes a
+ * file called `-` in the working directory and prints nothing. A frame therefore
+ * goes through a private temp directory, created once per session and removed
+ * with it, which also keeps the renderer's copy exactly one read away.
+ */
 export class IosDisplayCapture implements DisplayCapture {
   readonly kind = 'ios' as const
   private cancelled: (() => void) | null = null
   private disposed = false
+  /** Screen-capture scratch for this session, created on the first frame. */
+  private directory: Promise<string | null> | null = null
 
   constructor(
     readonly sourceId: string,
@@ -117,17 +130,21 @@ export class IosDisplayCapture implements DisplayCapture {
 
   async grab(_maxDimension: number): Promise<NativeImage | null> {
     if (this.disposed) return null
+    const directory = await this.ensureDirectory()
+    if (!directory) return null
+    const file = join(directory, 'frame.png')
     // `--mask=ignored` keeps a notched device's screenshot rectangular, which is
     // what a preview wants: a transparent corner band is not information.
     const command = captureCommand(
       SIMCTL,
-      ['simctl', 'io', this.sourceId, 'screenshot', '--type=png', '--mask=ignored', '-'],
+      ['simctl', 'io', this.sourceId, 'screenshot', '--type=png', '--mask=ignored', file],
       SIMCTL_CAPTURE_TIMEOUT_MS
     )
     this.cancelled = command.cancel
     try {
-      const bytes = await command.promise
+      await command.promise
       if (this.disposed) return null
+      const bytes = await readFile(file)
       return decodeDisplayImage(bytes)
     } finally {
       this.cancelled = null
@@ -138,5 +155,20 @@ export class IosDisplayCapture implements DisplayCapture {
     this.disposed = true
     this.cancelled?.()
     this.cancelled = null
+    const directory = this.directory
+    this.directory = null
+    void directory
+      ?.then((path) => (path ? rm(path, { recursive: true, force: true }) : undefined))
+      .catch(() => undefined)
+  }
+
+  /** The session's scratch directory, or null when the platform refused to make one. */
+  private ensureDirectory(): Promise<string | null> {
+    if (this.directory) return this.directory
+    const created = mkdtemp(join(app.getPath('temp') ?? tmpdir(), 'codeinoven-display-'))
+      .catch(() => mkdtemp(join(tmpdir(), 'codeinoven-display-')))
+      .catch(() => null)
+    this.directory = created
+    return created
   }
 }

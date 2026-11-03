@@ -46,6 +46,10 @@ const TARGET_INTERVAL_MS: Record<DisplaySourceKind, number> = {
 }
 /** How often an on-screen-but-paused session looks again. Pausing is not stopping. */
 const IDLE_POLL_MS = 600
+/** Floor between two captures of one session. A source slower than its target
+ *  interval (a simulator screenshot costs about a second) would otherwise be
+ *  captured back to back for as long as the tab is open. */
+const MIN_CAPTURE_GAP_MS = 250
 /** First wait after a failure, doubled per consecutive failure. */
 const RETRY_BASE_MS = 500
 /** Ceiling for the backoff, so a device that comes back is noticed within seconds. */
@@ -264,7 +268,10 @@ export class DisplayService {
         timestamp: Date.now()
       }
       this.send('display:frame', frame, window)
-      this.schedule(session, TARGET_INTERVAL_MS[session.kind] - (Date.now() - startedAt))
+      this.schedule(
+        session,
+        Math.max(MIN_CAPTURE_GAP_MS, TARGET_INTERVAL_MS[session.kind] - (Date.now() - startedAt))
+      )
     } catch (error) {
       if (session.disposed) return
       this.fail(session, error)
