@@ -50,6 +50,7 @@ import { MlxSpeechBackend } from './backends/mlx-backend'
 import { CoreMlSpeechBackend } from './backends/coreml-backend'
 import { LlamaServerSpeechBackend, setLlamaServerBinary } from './backends/llama-backend'
 import { LlamaRuntimeService, sharedLlamaRuntimeService } from './llama-runtime-service'
+import { sharedLocalAiRuntimeRegistry } from '../local-ai/local-ai-runtime-registry'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
@@ -212,10 +213,10 @@ export class SpeechService {
       ['coreml', new CoreMlSpeechBackend(paths.coremlWorkerPath)],
       [
         'gguf',
-        new LlamaServerSpeechBackend(
-          (pid, command, cwd) => this.llamaRuntime.registerServerProcess(pid, command, cwd),
-          (pid) => this.llamaRuntime.unregisterServerProcess(pid),
-          (pid, command, cwd) => this.trackProcess?.(pid, command, cwd)
+        // The local AI runtime registry owns this backend's server process, so
+        // the backend only carries the request shape and the lesson prompts.
+        new LlamaServerSpeechBackend(sharedLocalAiRuntimeRegistry(), (pid, command, cwd) =>
+          this.trackProcess?.(pid, command, cwd)
         )
       ]
     ])

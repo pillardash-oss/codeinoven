@@ -426,6 +426,69 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
   return entries
 }
 
+/**
+ * The local inference runtimes the app can drive.
+ *
+ * `llama.cpp` runs as a `llama-server` process the app spawns, while `mlx` and
+ * `coreml` are bound into the speech workers. All three are listed together on
+ * the Local AI page, which is the one place a local model's memory policy is set.
+ */
+export type LocalAiRuntimeId = 'llama.cpp' | 'mlx' | 'coreml'
+
+/** One runtime row on the Local AI page. */
+export interface LocalAiRuntimeSummary {
+  id: LocalAiRuntimeId
+  label: string
+  available: boolean
+  /** Version and path when available, the reason it is not when it is not. */
+  detail: string
+  /** The jobs the app runs on this runtime. */
+  uses: string[]
+}
+
+/**
+ * How long a resident local model stays loaded after its last use.
+ *
+ * One window for every local server the app owns: the same model is held for
+ * speech cleanup and for search embeddings, so two windows would only decide
+ * which subsystem re-loads it first. `keep` pins it for the rest of the session.
+ */
+export const LOCAL_AI_UNLOAD_OPTIONS = ['5m', '10m', '20m', '30m', 'keep'] as const
+
+export type LocalAiUnloadOption = (typeof LOCAL_AI_UNLOAD_OPTIONS)[number]
+
+/** 30 minutes: long enough to stay warm across a working session. */
+export const DEFAULT_LOCAL_AI_UNLOAD_OPTION: LocalAiUnloadOption = '30m'
+
+const LOCAL_AI_UNLOAD_MS: Readonly<Record<Exclude<LocalAiUnloadOption, 'keep'>, number>> = {
+  '5m': 5 * 60_000,
+  '10m': 10 * 60_000,
+  '20m': 20 * 60_000,
+  '30m': 30 * 60_000
+}
+
+export const LOCAL_AI_UNLOAD_LABELS: Readonly<Record<LocalAiUnloadOption, string>> = {
+  '5m': '5 minutes',
+  '10m': '10 minutes',
+  '20m': '20 minutes',
+  '30m': '30 minutes',
+  keep: 'Never unload'
+}
+
+export function isLocalAiUnloadOption(value: unknown): value is LocalAiUnloadOption {
+  return typeof value === 'string' && LOCAL_AI_UNLOAD_OPTIONS.some((option) => option === value)
+}
+
+/** A stored value that is no longer a valid option falls back to the default. */
+export function readLocalAiUnloadOption(value: unknown): LocalAiUnloadOption {
+  return isLocalAiUnloadOption(value) ? value : DEFAULT_LOCAL_AI_UNLOAD_OPTION
+}
+
+/** How long the window lasts, or null when the user pinned the model. */
+export function localAiUnloadMs(option: LocalAiUnloadOption): number | null {
+  return option === 'keep' ? null : LOCAL_AI_UNLOAD_MS[option]
+}
+
 /** What the binary card states about the machine it is running on. */
 export interface LlamaCppRuntimeStatus {
   platform: NodeJS.Platform

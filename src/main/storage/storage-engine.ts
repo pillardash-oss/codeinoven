@@ -1,5 +1,9 @@
 import { DEFAULT_IDE_LANGUAGE_SERVERS } from '../../lib/ide-language-servers'
-import { readLlamaCppServers } from '../../lib/llama-cpp'
+import {
+  DEFAULT_LOCAL_AI_UNLOAD_OPTION,
+  readLlamaCppServers,
+  readLocalAiUnloadOption
+} from '../../lib/llama-cpp'
 import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
 import {
   BUNDLED_PI_FILE_POLICY,
@@ -143,7 +147,8 @@ const DEFAULT_CONFIG: AppConfig = {
   cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
   sound: DEFAULT_SPEECH_SETTINGS,
-  llamaCppServers: []
+  llamaCppServers: [],
+  llamaCppUnload: DEFAULT_LOCAL_AI_UNLOAD_OPTION
 }
 
 /**
@@ -428,6 +433,9 @@ export class StorageEngine {
       // Read tolerantly: a hand-edited row is dropped instead of failing the
       // launch, and a stored row list never needs a migration.
       llamaCppServers: readLlamaCppServers(config?.llamaCppServers),
+      // A stored value this build no longer offers falls back to the shipped
+      // window instead of leaving a local model pinned or expiring too soon.
+      llamaCppUnload: readLocalAiUnloadOption(config?.llamaCppUnload),
       cioCleanupRetentionDays: clampNumber(
         config?.cioCleanupRetentionDays,
         MIN_CIO_CLEANUP_RETENTION_DAYS,

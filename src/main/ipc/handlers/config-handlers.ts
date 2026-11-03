@@ -22,6 +22,7 @@ import {
 } from './config-helpers'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { Logger } from '../../system/logger'
+import { sharedLocalAiRuntimeRegistry } from '../../local-ai/local-ai-runtime-registry'
 import { sendToRenderer } from '../renderer-delivery'
 import type {
   AgentRole,
@@ -394,6 +395,11 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       maxHoldMs: config.maxBackgroundWakeHoldMs
     })
     void options.backgroundLifecycle?.applyConfig(config)
+    if (patch.llamaCppUnload !== undefined) {
+      // Live, not at next launch: the window the user picked applies to the
+      // servers already resident, without re-loading a model to change it.
+      sharedLocalAiRuntimeRegistry().setUnloadOption(config.llamaCppUnload)
+    }
     if (patch.sound && options.speechService) {
       options.speechService.updateUnloadOptions({
         asr: patch.sound.asrUnload,

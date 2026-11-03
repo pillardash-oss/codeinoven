@@ -45,7 +45,7 @@ Transcript cleanup and lesson learning require a real instruction-following mode
 
 1. **Discovery first.** At startup the speech service scans `$CODEINOVEN_LLAMA_SERVER_PATH`, the canonical `~/.local/bin` location, Homebrew prefixes, and every `PATH` directory for a `llama-server` binary and probes its version. An existing install is reused transparently and preferred when it matches the pinned release line.
 2. **Consented download.** If nothing is found, Sound → Models shows a download action stating exactly what will be fetched: the pinned prebuilt CPU release of llama.cpp (`b10644`), its size, and that it will be installed into the CodeInOven configuration directory (`speech/runtime/llama-b10644`). The archive's SHA-256 is verified against a pinned digest before extraction; partial installs are impossible.
-3. **Serving.** Cleanup inference runs in a locally spawned `llama-server` bound to `127.0.0.1` on an ephemeral port. The same resident-process policy applies as for ASR/TTS: instant reuse while active, unloaded after the configured idle delay.
+3. **Serving.** Cleanup inference runs in a locally spawned `llama-server` bound to `127.0.0.1` on an ephemeral port. The process belongs to the local AI runtime registry, not to speech: search embeddings launch the same binary through the same registry, which shares one server per (runtime, model file, port), journals it for the next launch, and unloads it on the single idle window configured on the Local AI page. Cleanup itself is interactive use, so it restarts that window.
 
 Downloads are per-platform: macOS arm64/x64, Ubuntu arm64/x64, and Windows x64/arm64 CPU builds from the official ggml-org release assets.
 
@@ -134,7 +134,11 @@ The former separate "Local-LLM base URL" preference was removed: the discover-or
 
 ## Model memory
 
-Speech models are kept resident so later use is instant, and are unloaded after a per-subsystem idle delay. Each subsystem (speech-to-text, cleanup LLM, text-to-speech) exposes an unload option of `30 minutes`, `1 hour`, or `keep until the application closes`. The defaults are 30 minutes. Unloading runs as part of application-close cleanup and is scheduled with batched, non-blocking timers so it never stalls the main thread.
+Models are kept resident so later use is instant, and are unloaded after an idle delay.
+
+The speech workers   speech-to-text and text-to-speech   expose a per-subsystem window on Sound → Preferences: `5`, `10`, `20`, or `30 minutes`, or `keep until the application closes`, defaulting to 30 minutes. Both the idle and the memory-pressure paths schedule with non-blocking timers, so neither ever stalls the main thread.
+
+The cleanup LLM is a `llama.cpp` server, so its window moved with the process to the Local AI page (`llamaCppUnload` in app config): one setting there covers every local server the app owns, which is what lets speech cleanup and search embeddings share one process. A background search index pass never extends that window; only a cleanup, a search, or an explicit warm-up does. Unloading ends the process through the owned-process journal, and the journal is drained on application close.
 
 ## Lesson learning
 

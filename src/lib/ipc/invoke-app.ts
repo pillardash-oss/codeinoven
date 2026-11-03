@@ -13,7 +13,12 @@ import type { NativeFloatingPanelBounds } from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
-import type { LlamaCppLogStream, LlamaCppProbeResult, LlamaCppRuntimeStatus } from '../llama-cpp'
+import type {
+  LlamaCppLogStream,
+  LlamaCppProbeResult,
+  LlamaCppRuntimeStatus,
+  LocalAiRuntimeSummary
+} from '../llama-cpp'
 /** One file the user explicitly chooses to save from the renderer. */
 export interface SaveFileInput {
   suggestedName: string
@@ -47,6 +52,8 @@ export const invokeAppContract = {
     [role: AgentRole, selection: AgentModelSelection],
     AppConfig
   >,
+  /** The local inference runtimes this machine can drive, for the Local AI page. */
+  'localAi:runtimes': {} as Contract<[], LocalAiRuntimeSummary[]>,
   /** The `llama-server` the app can launch here, its version and its installer. */
   'llamaCpp:detect': {} as Contract<[], LlamaCppRuntimeStatus>,
   /** Ask a started server for its loaded model ids, which is what readiness means. */

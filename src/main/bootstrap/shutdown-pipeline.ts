@@ -26,6 +26,7 @@ import type { WindowStateService } from '../system/window-state'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { BootstrapState } from './bootstrap-state'
 import { flushSessionStorage } from './quit-lifecycle'
+import { sharedLocalAiRuntimeRegistry } from '../local-ai/local-ai-runtime-registry'
 
 export interface ShutdownContext {
   state: BootstrapState
@@ -239,6 +240,15 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     state.searchService = null
   } catch (error) {
     Logger.error('Search service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    // Every local inference server the app spawned is journaled, and this is
+    // where the journal is drained: the registry ends each process it still owns
+    // instead of leaving it to a kill on the next launch.
+    await sharedLocalAiRuntimeRegistry().dispose()
+  } catch (error) {
+    Logger.error('Local AI runtime cleanup failed during shutdown:', error)
   }
 
   // A take-over pass must never start while the process is shutting down.

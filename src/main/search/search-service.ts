@@ -24,7 +24,7 @@ import {
 } from '../../lib/search/types'
 import { normalizeInPlace } from '../../lib/search/vector'
 import { SearchModelDownloader } from './embedding-model-downloader'
-import type { EmbeddingRuntime } from './llama-embedding-runtime'
+import type { EmbeddingCallOptions, EmbeddingRuntime } from './llama-embedding-runtime'
 import { LlamaEmbeddingRuntime, embeddingWorkingContext } from './llama-embedding-runtime'
 import { SearchModelImporter, type ImportProbe } from './search-model-importer'
 import { ThreadEmbeddingIndex, composeDocument } from './thread-embedding-index'
@@ -39,6 +39,16 @@ import {
 
 /** Interval between light staleness sweeps while intent search is enabled. */
 const PERIODIC_SWEEP_MS = 5 * 60 * 1000
+
+/**
+ * Whether an embed is a person waiting or background indexing.
+ *
+ * The local AI registry restarts its unload window only for an interactive
+ * embed. A sweep that re-armed it on every pass held the embedding model for the
+ * whole session, so the window the user chose never fired.
+ */
+const INTERACTIVE: EmbeddingCallOptions = { interactive: true }
+const BACKGROUND: EmbeddingCallOptions = { interactive: false }
 
 /**
  * Minimum spacing between whole-corpus sweeps triggered by a new thread.
@@ -106,8 +116,6 @@ export interface SearchServiceHost {
    * sweep with an opaque model-load error.
    */
   runtimeBuild: () => number | null
-  registerProcess: (pid: number, command: string, cwd: string) => void
-  unregisterProcess: (pid: number) => void
 }
 
 /**
@@ -355,7 +363,7 @@ export class SearchService {
         const startedAt = performance.now()
         await this.index.indexNow(
           id,
-          (texts) => this.embedWith(runtime, texts, controller.signal),
+          (texts) => this.embedWith(runtime, texts, controller.signal, BACKGROUND),
           options
         )
         await paceIndexing(startedAt, controller.signal)
@@ -744,9 +752,10 @@ export class SearchService {
   private async embedOne(
     runtime: EmbeddingRuntime,
     text: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options: EmbeddingCallOptions = INTERACTIVE
   ): Promise<Float32Array> {
-    const [vector] = await this.embedWith(runtime, [text], signal)
+    const [vector] = await this.embedWith(runtime, [text], signal, options)
     if (!vector) throw new Error('The embedding model returned no vector.')
     return vector
   }
@@ -755,9 +764,10 @@ export class SearchService {
   private async embedWith(
     runtime: EmbeddingRuntime,
     texts: readonly string[],
-    signal: AbortSignal
+    signal: AbortSignal,
+    options: EmbeddingCallOptions
   ): Promise<Float32Array[]> {
-    const vectors = await runtime.embed(texts, signal)
+    const vectors = await runtime.embed(texts, signal, options)
     for (const vector of vectors) normalizeInPlace(vector)
     return vectors
   }
@@ -771,9 +781,9 @@ export class SearchService {
    * no-op unless intent search is enabled with a model the local runtime can
    * load, and idempotent while a boot is already in flight.
    *
-   * The embed is not about the text: it is what re-arms the runtime's idle timer
-   * (five minutes), so a warm-up nobody follows up on is retired again instead of
-   * holding the model for the rest of the session.
+   * The warm is an explicit interactive use, so it restarts the Local AI unload
+   * window: a warm-up nobody follows up on is retired again when that window
+   * elapses instead of holding the model for the rest of the session.
    */
   warm(): void {
     const model = this.activeModel()
@@ -852,7 +862,7 @@ export class SearchService {
       const effectiveTokens = embeddingWorkingContext(this.settings.contextTokens)
       const modelSignature = modelSignatureOf(model, effectiveTokens)
       const result = await this.index.sweep(
-        (texts) => this.embedWith(runtime, texts, controller.signal),
+        (texts) => this.embedWith(runtime, texts, controller.signal, BACKGROUND),
         {
           modelSignature,
           documentPrefix: model.documentPrefix,
@@ -963,7 +973,8 @@ export class SearchService {
         const vector = await this.embedOne(
           runtime,
           composeDocument(job.model.documentPrefix, job.thread.title, summary),
-          signal
+          signal,
+          BACKGROUND
         )
         if (signal.aborted || job.generation !== this.generation || this.index.isParked(id))
           continue
