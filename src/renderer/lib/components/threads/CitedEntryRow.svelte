@@ -66,24 +66,21 @@
 <div
   class={[
     'flex w-full min-w-0 items-center transition-colors hover:bg-elevated',
-    inCard ? 'gap-3 px-3 py-2' : 'min-h-9 gap-2 border-b border-border px-3 last:border-b-0'
+    inCard
+      ? 'gap-3 px-3 py-2'
+      : 'min-h-11 gap-2.5 border-b border-border px-3 py-1.5 last:border-b-0'
   ]}
 >
   {#if isFolder}
-    <CioFolder size={inCard ? 16 : 15} strokeWidth={1.6} class="shrink-0 text-muted" />
+    <CioFolder size={16} strokeWidth={1.6} class="shrink-0 text-muted" />
   {:else}
-    <CioFileText size={inCard ? 16 : 15} strokeWidth={1.6} class="shrink-0 text-muted" />
+    <CioFileText size={16} strokeWidth={1.6} class="shrink-0 text-muted" />
   {/if}
   <div class="min-w-0 flex-1">
-    <div
-      class={[
-        'truncate font-medium text-foreground',
-        inCard ? 'text-[0.8125rem]' : 'text-[0.75rem]'
-      ]}
-    >
+    <div class="truncate text-[0.8125rem] font-medium text-foreground">
       {entry.name}
     </div>
-    <div class={inCard ? 'text-[0.75rem] text-dimmed' : 'text-[0.6875rem] text-dimmed'}>
+    <div class="text-[0.75rem] text-dimmed">
       {work === 'design'
         ? 'Design'
         : work === 'video'

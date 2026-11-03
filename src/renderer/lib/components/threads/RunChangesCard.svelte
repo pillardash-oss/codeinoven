@@ -394,7 +394,7 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
 
         {#if cited.length > 0}
           <div
-            class="flex items-center gap-2 border-t border-border bg-elevated px-3 py-[0.4375rem] text-[0.625rem] tracking-[0.08em] text-dimmed uppercase"
+            class="flex items-center gap-2 border-t border-border bg-elevated px-3 py-2 text-[0.625rem] tracking-[0.08em] text-dimmed uppercase"
           >
             Report
             <span class="tracking-normal text-muted">{cited.length}</span>
