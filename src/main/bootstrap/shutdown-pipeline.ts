@@ -108,6 +108,15 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.followUpService?.dispose()
+    // A wake armed moments before the quit must reach the file, or the next
+    // launch has no idea the user was promised one.
+    await state.followUpService?.flush()
+  } catch (error) {
+    Logger.error('Follow-up scheduler cleanup failed during shutdown:', error)
+  }
+
+  try {
     state.cioCleanup?.stop()
   } catch (error) {
     Logger.error('CIO Cleanup cleanup failed during shutdown:', error)

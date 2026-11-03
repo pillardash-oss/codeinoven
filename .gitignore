@@ -45,3 +45,14 @@ Thumbs.db
 /build/entitlements.mac.webauthn.plist
 *.provisionprofile
 *.mobileprovision
+
+# The hosted services keep their own toolchains. A SvelteKit build, an Android
+# Gradle output and an Xcode DerivedData folder are all reproducible, and the
+# native projects' source of truth is the checked-in project file, not its build.
+/services/mobile/build/
+/services/mobile/.svelte-kit/
+/services/mobile/ios/App/Pods/
+/services/mobile/ios/App/build/
+/services/mobile/android/.gradle/
+/services/mobile/android/app/build/
+/services/backend/build/

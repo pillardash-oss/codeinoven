@@ -29,6 +29,7 @@ import { createAppControlExecutor } from '../../app-control/app-control-executor
 import { currentWorkRoot } from '../../design/work-roots-state'
 import type {
   BrowserUtilityExecutor,
+  FollowUpExecutor,
   UtilitySuggestionContext,
   UtilityResultAttribution,
   UtilityTurnBudgetContext,
@@ -54,6 +55,11 @@ export class ChatEngineUtilities {
         executor ? (input, context) => executor('open', input, context) : undefined
       )
     )
+  }
+
+  /** Register the app-owned follow-up capability's three operations. */
+  setFollowUpExecutor(executor: FollowUpExecutor | null): void {
+    this.host.state.utilityOrchestration.setFollowUpExecutor(executor)
   }
 
   /**

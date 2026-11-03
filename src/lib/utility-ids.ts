@@ -67,6 +67,17 @@ export const APP_ARTIFACT_UTILITY_ID = 'cio:artifact'
 export const APP_CITE_UTILITY_ID = 'cio:cite-report'
 
 /**
+ * App-owned follow-up capability.
+ *
+ * Work that is blocked until another party's clock reaches a time (a closed
+ * support desk, an emailed ticket, a promised callback) used to end with the
+ * agent handing the wait to the user. This capability is how the agent agrees a
+ * time with the user and asks the app to wake the same thread then, with its
+ * browser pages still open.
+ */
+export const APP_FOLLOW_UP_UTILITY_ID = 'cio:follow-up'
+
+/**
  * App-owned knowledge a user may switch off.
  *
  * `cio:adb` is advice: an agent applies that playbook with its own shell, so a

@@ -243,6 +243,19 @@ export type DesignCapabilityExecutor = (
 ) => Promise<unknown>
 
 /**
+ * Runs one gateway invocation of the app-owned follow-up capability.
+ *
+ * The app supplies it because the clock, the persistence and the resume are the
+ * app's: the agent decides that a wake is worth scheduling and writes what it
+ * should do, and never gets to reach any thread but the one it is running in.
+ */
+export type FollowUpExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
  * Runs one gateway invocation of the app-owned video capability for the turn
  * that made it. The two operations have different owners: `preview` composes the
  * loopback directory preview with the in-app browser, and `capture` adds the
@@ -536,6 +549,8 @@ export class UtilityOrchestrationService {
   imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   artifactExecutor: DesignCapabilityExecutor | null = null
   browserExecutor: BrowserUtilityExecutor | null = null
+  /** App-owned follow-up capability: schedules and cancels this thread's wakes. */
+  followUpExecutor: FollowUpExecutor | null = null
   designPreviewExecutor: DesignCapabilityExecutor | null = null
   designAssignmentExecutor: DesignCapabilityExecutor | null = null
   designMediaExecutor: DesignCapabilityExecutor | null = null
@@ -600,6 +615,9 @@ export class UtilityOrchestrationService {
   }
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     return this.units['executors'].setBrowserExecutor(executor)
+  }
+  setFollowUpExecutor(executor: FollowUpExecutor | null): void {
+    return this.units['executors'].setFollowUpExecutor(executor)
   }
   setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['executors'].setDesignPreviewExecutor(executor)

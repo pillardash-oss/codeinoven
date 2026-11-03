@@ -31,6 +31,7 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
     threadDeletion,
     threadManager,
     branchBackfillDeps,
+    cancelThreadFollowUps,
     waitForThreadReady
   } = ctx
 
@@ -340,6 +341,8 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('thread:delete', (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
+    // A wake armed on this thread has nowhere to go once it is gone.
+    cancelThreadFollowUps?.(validThreadId)
     threadDeletion.begin(
       validProjectId,
       validThreadId,

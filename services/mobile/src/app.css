@@ -1,0 +1,2151 @@
+/* CodeInOven mobile.
+   Type is the app's own: Oven Box, bundled from resources/fonts/oven, with the
+   same 200 to 800 range the desktop loads. The base weight is 200, which is what
+   makes the interface read as this product rather than as a generic mobile list.
+   The tokens below mirror src/renderer/app.css, which stays the source of truth,
+   and every rule reads them by name so a palette change lands in one place. */
+@font-face {
+  font-family: 'Oven Box';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('/fonts/oven-box.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Oven Mono';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('/fonts/oven-mono.woff2') format('woff2');
+}
+
+:root {
+  --color-app: #f7f6f2;
+  --color-surface: #ffffff;
+  --color-elevated: #f0efea;
+  --color-overlay: #e8e7e2;
+  --color-foreground: #081825;
+  --color-muted: #4a5568;
+  --color-dimmed: #8b95a5;
+  --color-border: #e2e1dc;
+  --color-border-strong: #c8c7c2;
+  --color-accent: #d4af37;
+  --color-primary: #081825;
+  --color-on-primary: #f7f6f2;
+  --color-success: #0f7a37;
+  --color-warning: #9a5b06;
+  --color-danger: #c02626;
+  --color-info: #2563eb;
+  --color-thread-spec: #6d28d9;
+  --ink-meta: #5f6672;
+
+  --font:
+    'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
+    ui-monospace, monospace;
+  --font-weight-base: 200;
+
+  --gutter: 1.25rem;
+  --mark: 2.25rem;
+  --row-inset: calc(var(--gutter) + var(--mark) + 0.875rem);
+}
+
+html.dark {
+  --color-app: #0b0b0d;
+  --color-surface: #141417;
+  --color-elevated: #1c1c20;
+  --color-overlay: #08080a;
+  --color-foreground: #f5f4f0;
+  --color-muted: #9d9da6;
+  --color-dimmed: #5f5f68;
+  --color-border: #27272c;
+  --color-border-strong: #3b3b42;
+  --color-primary: #f5f4f0;
+  --color-on-primary: #0b0b0d;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-info: #7ba3d4;
+  --color-thread-spec: #a78bfa;
+  --ink-meta: #9d9da6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --color-app: #0b0b0d;
+    --color-surface: #141417;
+    --color-elevated: #1c1c20;
+    --color-overlay: #08080a;
+    --color-foreground: #f5f4f0;
+    --color-muted: #9d9da6;
+    --color-dimmed: #5f5f68;
+    --color-border: #27272c;
+    --color-border-strong: #3b3b42;
+    --color-primary: #f5f4f0;
+    --color-on-primary: #0b0b0d;
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-info: #7ba3d4;
+    --color-thread-spec: #a78bfa;
+    --ink-meta: #9d9da6;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-app);
+  overscroll-behavior: none;
+  color: var(--color-foreground);
+  font-family: var(--font);
+  /* The app's base weight is light; chrome earns its weight back one step at a
+     time. This single value is most of why the desktop reads calm. */
+  font-weight: var(--font-weight-base);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    'calt' 0,
+    'liga' 0,
+    'dlig' 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The brand draws no soft corners: a control is square to 2px and never round. */
+:where(button, input, textarea, select, [role='dialog']) {
+  border-radius: 2px;
+}
+
+/* Focus is the app's rule, a 1px foreground outline offset by 2px, not a ring. */
+:where(button, a, [role='radio'], [role='switch']):focus-visible {
+  outline: 1px solid var(--color-foreground);
+  outline-offset: 2px;
+}
+
+:where(input, textarea):focus,
+:where(input, textarea):focus-visible {
+  outline: none;
+}
+
+/* The shell. A phone is the whole viewport, so the one thing the prototype drew
+   as a frame is the app itself: full height, no border, safe areas respected. */
+.app {
+  position: relative;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-app);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Header
+   The bar is one row of equal-height boxes: a 44px control, a title block, and a
+   44px control. Everything centres on that row, so the title and the icons share
+   one optical line instead of the title sitting high on its own leading. */
+
+.bar {
+  flex: none;
+  padding: 0.5rem var(--gutter) 0.5rem calc(var(--gutter) - 0.5rem);
+  background: var(--color-app);
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+}
+
+/* The title is the only thing in a header that may give way: the controls beside
+   it are fixed hit targets, so they never shrink and the text truncates. */
+.bar-title {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0.5rem;
+}
+
+.bar h1 {
+  margin: 0;
+  font-size: 1.625rem;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar h1 .count {
+  margin-left: 0.5rem;
+  font-size: 1rem;
+  font-weight: 200;
+  color: var(--ink-meta);
+  letter-spacing: 0;
+  /* The count rides the title's baseline; without this the 1rem figure hangs a
+     pixel low against the 1.625rem setting beside it. */
+  vertical-align: 0.0625rem;
+}
+
+/* The actions own the trailing gutter: the last icon's box ends where the row's
+   content does, and the rule under the bar appears only once the list has moved. */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: none;
+  margin-right: -0.5rem;
+}
+
+.bar::after {
+  content: '';
+  display: block;
+  height: 1px;
+  background: transparent;
+  transition: background 160ms ease-out;
+}
+
+.app[data-scrolled='true'] .bar::after {
+  background: var(--color-border);
+}
+
+.bar.talk::after {
+  background: var(--color-border);
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition: color 120ms ease-out;
+}
+
+.icon-btn:hover {
+  color: var(--color-foreground);
+}
+
+.icon-btn svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* The app's rail and header icons are drawn at 20px; a state mark is 14. */
+.tmark svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.strip-head .mark > svg,
+.mark > svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* Filters are three quiet words with a gold underline on the current one. */
+
+.tabs {
+  flex: none;
+  display: flex;
+  gap: 1.25rem;
+  padding: 0 var(--gutter) 0 calc(var(--gutter) - 0.625rem);
+  background: var(--color-app);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  position: relative;
+  flex: none;
+  padding: 0.6875rem 0.625rem 0.8125rem;
+  margin: 0 -0.625rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink-meta);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms ease-out;
+  font-weight: 200;
+}
+
+.tab:hover {
+  color: var(--color-muted);
+}
+
+.tab[aria-pressed='true'] {
+  color: var(--color-foreground);
+  font-weight: 400;
+}
+
+.tab[aria-pressed='true']::after {
+  content: '';
+  position: absolute;
+  left: 0.625rem;
+  right: 0.625rem;
+  bottom: 0.375rem;
+  height: 2px;
+  background: var(--color-accent);
+}
+
+/* List */
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 0.5rem;
+}
+
+.section {
+  padding-top: 0;
+}
+
+/* A list whose grouping is carried by the tabs has no heading to separate its
+   runs, so the runs sit directly under one another with only the row rule
+   between them. */
+.list.flat-sections .section:first-child {
+  padding-top: 0.25rem;
+}
+
+.section + .section .row:first-child::before {
+  left: var(--gutter);
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 var(--gutter) 0.25rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  font-weight: 400;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  width: 100%;
+  padding: 0.75rem var(--gutter);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+
+.row + .row::before {
+  content: '';
+  position: absolute;
+  left: var(--row-inset);
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.row:hover,
+.row:active {
+  background: var(--color-elevated);
+}
+
+.row[hidden],
+.section[hidden] {
+  display: none;
+}
+
+/* A real project mark, drawn from the project's own asset. A project with no
+   icon falls back to its initials on a wash of its own colour, which is the
+   same rule the desktop follows. */
+.mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--mark);
+  height: var(--mark);
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--tint, var(--color-muted));
+  background: color-mix(in srgb, var(--tint, var(--color-muted)) 12%, transparent);
+  overflow: hidden;
+}
+
+.mark > svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  display: block;
+}
+
+.mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* A project that has a real icon keeps no wash behind it: the wash is the
+   fallback for initials, and a tint under a logo muddies its colour. */
+.mark.plain {
+  background: transparent;
+}
+
+.mark.gold {
+  --tint: #8a6d1f;
+}
+.mark.blue {
+  --tint: #1d4ed8;
+}
+.mark.green {
+  --tint: #0f7a37;
+}
+.mark.red {
+  --tint: #b91c1c;
+}
+.mark.violet {
+  --tint: #6d28d9;
+}
+.mark.slate {
+  --tint: #556070;
+}
+.mark.amber {
+  --tint: #9a5b06;
+}
+.mark.rose {
+  --tint: #b02a4a;
+}
+.mark.orange {
+  --tint: #b45309;
+}
+
+html.dark .mark.gold {
+  --tint: #d4af37;
+}
+html.dark .mark.blue {
+  --tint: #7ba3d4;
+}
+html.dark .mark.green {
+  --tint: #34d399;
+}
+html.dark .mark.red {
+  --tint: #f87171;
+}
+html.dark .mark.violet {
+  --tint: #a78bfa;
+}
+html.dark .mark.slate {
+  --tint: #9d9da6;
+}
+html.dark .mark.amber {
+  --tint: #fbbf24;
+}
+html.dark .mark.rose {
+  --tint: #fb7185;
+}
+html.dark .mark.orange {
+  --tint: #fb923c;
+}
+
+.body-cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.row-title {
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: -0.012em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-line {
+  display: block;
+  margin-top: 0.125rem;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 200;
+}
+
+.row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.3125rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  white-space: nowrap;
+  overflow: hidden;
+  font-weight: 200;
+}
+
+/* A state dot and its count read as one token. */
+.cluster {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.cluster > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.age {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+  font-weight: 200;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: none;
+  font-weight: 200;
+}
+
+.dot {
+  flex: none;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  background: var(--color-dimmed);
+}
+
+.dot[data-tone='working'] {
+  background: var(--color-info);
+}
+.dot[data-tone='needs'] {
+  background: var(--color-accent);
+}
+.dot[data-tone='error'] {
+  background: var(--color-danger);
+}
+.dot[data-tone='spec'] {
+  background: var(--color-thread-spec);
+}
+.dot[data-tone='done'] {
+  background: var(--color-success);
+}
+
+.detail {
+  display: none;
+  padding: 0 var(--gutter) 0.75rem var(--row-inset);
+}
+
+.detail[data-open='true'] {
+  display: block;
+}
+
+.run {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4375rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+.run + .run {
+  border-top: 1px solid var(--color-border);
+}
+
+.run span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run em {
+  flex: none;
+  font-style: normal;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+}
+
+.empty {
+  padding: 3rem var(--gutter);
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+}
+
+.empty[hidden] {
+  display: none;
+}
+
+/* Bottom navigation */
+
+.nav {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  padding: 0.5rem 0 calc(0.5rem + env(safe-area-inset-bottom, 0));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-app);
+}
+
+.navitem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1875rem;
+  padding: 0.375rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-meta);
+  font: inherit;
+  font-size: 0.6875rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 120ms ease-out;
+  font-weight: 200;
+}
+
+.navitem svg {
+  width: 1.375rem;
+  height: 1.375rem;
+}
+
+.navitem[aria-current='page'] {
+  color: var(--color-foreground);
+  font-weight: 400;
+}
+
+.navitem:hover {
+  color: var(--color-muted);
+}
+
+.icon-btn:focus-visible,
+.tab:focus-visible,
+.row:focus-visible,
+.navitem:focus-visible {
+  outline: 2px solid var(--color-foreground);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+  }
+}
+
+/* ---- Conversation ----
+   A phone reads short lines, so the transcript carries the words and everything
+   that is not a sentence collapses into one line that expands on demand: a run,
+   a change set, a task list. Nothing gets its own boxed card above the composer
+   unless the run is actually held on it. */
+
+/* The header carries three things and nothing else: the way to the drawer, what
+   thread you are in, and what it is doing. */
+.bar.talk {
+  padding: 0.5rem 0.5rem 0.5rem 0.5rem;
+}
+
+.bar.talk::after {
+  margin-top: 0.5rem;
+  margin-left: 0.25rem;
+  margin-right: 0.25rem;
+}
+
+.menu-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition: color 120ms ease-out;
+}
+
+.menu-btn:hover {
+  color: var(--color-foreground);
+}
+
+.menu-btn svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.talk-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-self: stretch;
+  padding-left: 0.75rem;
+}
+
+/* The action square's 20px glyph lands on the composer's right edge, so the
+   header and the box below it share one vertical line. */
+.bar.talk .icon-btn {
+  margin-right: 0;
+}
+
+.talk-id h1 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talk-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.125rem 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+}
+
+/* The model name is a reading, not a sentence: a chip on the meta line. */
+.talk-meta .mono {
+  padding: 0.0625rem 0.25rem;
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+}
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1rem var(--gutter) 1.5rem;
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* What you said reads as a quote, not as a bubble: it is the one thing on the
+   screen that is not the assistant talking. */
+.turn-user {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-left: 2px solid var(--color-foreground);
+  background: var(--color-surface);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.answer {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.answer p {
+  margin: 0 0 0.625rem;
+}
+
+.answer p:last-child {
+  margin-bottom: 0;
+}
+
+.answer code {
+  font-size: 0.875em;
+  background: var(--color-elevated);
+  padding: 0.0625rem 0.25rem;
+}
+
+/* One line that says what happened, expandable in place. The caret points down
+   when open and up when folded, so it never reads as "go to". */
+.trace-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms ease-out;
+}
+
+.trace-btn:hover {
+  color: var(--color-foreground);
+}
+
+.trace-btn b {
+  font-weight: 500;
+  color: var(--color-foreground);
+}
+
+.trace-btn .add {
+  margin-left: auto;
+  color: var(--color-success);
+  font-variant-numeric: tabular-nums;
+}
+
+.trace-btn .del {
+  color: var(--color-danger);
+  font-variant-numeric: tabular-nums;
+}
+
+.trace-btn .ico {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.trace-btn > svg:last-child {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-left: auto;
+  color: var(--ink-meta);
+  transition: transform 140ms ease-out;
+}
+
+.trace-btn .add + svg:last-child {
+  margin-left: 0;
+}
+
+.trace-btn[aria-expanded='true'] > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.trace-steps {
+  padding-left: 0.875rem;
+  border-left: 1px solid var(--color-border);
+}
+
+.trace-steps[hidden] {
+  display: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3125rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+.step b {
+  flex: none;
+  font-weight: 500;
+  color: var(--color-foreground);
+}
+
+.step svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--color-success);
+}
+
+.step:last-child svg {
+  color: var(--color-dimmed);
+}
+
+.step span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A set of links to what the run produced: name, icon, and the way in. */
+.links {
+  border-top: 1px solid var(--color-border);
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0 0.125rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-foreground);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.link:hover {
+  background: var(--color-elevated);
+}
+
+.link svg {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-muted);
+}
+
+.link span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link .to {
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--ink-meta);
+}
+
+/* Composer */
+
+.composer-box {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+.queue-wrap + .composer-box {
+  border-top: 0;
+}
+
+.composer-box textarea {
+  display: block;
+  width: 100%;
+  min-height: 2.75rem;
+  overflow-y: hidden;
+  padding: 0.6875rem 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  resize: none;
+  outline: none;
+}
+
+.composer-box textarea::placeholder {
+  color: var(--ink-meta);
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.75rem;
+}
+
+.composer-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 0;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  cursor: pointer;
+}
+
+.send svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* ---- Cards ----
+   Three placements, exactly as the desktop has them:
+   replace  the card takes the composer's place while the run is held on it
+   top      the card stacks on the composer's top edge and folds
+   body     the card is part of the reading flow
+   Every one of them folds from its head, at the far right. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-dimmed);
+  background: var(--color-surface);
+}
+
+/* A card holding the composer has a foreground edge: the run cannot proceed. */
+.card.replace {
+  border-left-color: var(--color-foreground);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* A card that only says one thing keeps its head and nothing else, so the
+   composer can carry a queue without a second panel on the screen. */
+.card-head .lead {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-head-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.card-head h2 {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-head .sub {
+  display: block;
+  margin-top: 0.0625rem;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 200;
+}
+
+/* The fold control: a 44px square at the far right of the head. The chevron
+   points down when open and up when folded, so it never reads as "next". */
+.fold {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: -0.25rem -0.25rem -0.25rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.fold:hover {
+  color: var(--color-foreground);
+}
+
+.fold svg {
+  width: 1rem;
+  height: 1rem;
+  transition: transform 140ms ease-out;
+}
+
+.fold[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.card-body {
+  padding: 0.75rem;
+}
+
+.card-body p {
+  margin: 0 0 0.625rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+
+.card-body p:last-child {
+  margin-bottom: 0;
+}
+
+.card[data-folded='true'] .card-body,
+.card[data-folded='true'] .card-foot,
+.card[data-folded='true'] .lines,
+.card[data-folded='true'] .field,
+.card[data-folded='true'] .note,
+.card[data-folded='true'] .mono-block,
+.card[data-folded='true'] .choice {
+  display: none;
+}
+
+.card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.card-foot .right {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.btn {
+  min-height: 2.75rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.btn:hover {
+  background: var(--color-elevated);
+}
+
+.btn.primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 500;
+}
+
+.btn.quiet {
+  border-color: transparent;
+  color: var(--color-muted);
+}
+
+.btn:focus-visible,
+.fold:focus-visible,
+.trace-btn:focus-visible,
+.choice:focus-visible,
+.send:focus-visible {
+  outline: 2px solid var(--color-foreground);
+  outline-offset: 2px;
+}
+
+/* The composer slot. A replace card sits in it instead of the box, and stack
+   cards sit on its top edge, so the two are one column with one join. */
+.slot {
+  flex: none;
+  background: var(--color-app);
+  padding: 0 var(--gutter) calc(0.5rem + env(safe-area-inset-bottom, 0));
+}
+
+/* The queued message is the smallest thing that can still be a tap target: one
+   line, the count, and the caret. It sits on the composer's top edge so the two
+   read as one object rather than two panels. */
+.queue {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 0.25rem 0 0.375rem;
+  border: 1px solid var(--color-border-strong);
+  border-bottom: 0;
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.queue:hover {
+  background: var(--color-overlay);
+}
+
+.queue .lead {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue .lead b {
+  font-weight: 500;
+}
+
+.queue .lead span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-muted);
+}
+
+.queue svg:last-child {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--ink-meta);
+  transition: transform 140ms ease-out;
+}
+
+.queue[aria-expanded='true'] svg:last-child {
+  transform: rotate(180deg);
+}
+
+/* What the strip opens into: the message itself, then the three things a held
+   message can do, in the app's order with the falsy action on the left. */
+.queue-body {
+  display: none;
+  border: 1px solid var(--color-border-strong);
+  border-top: 1px solid var(--color-border);
+  border-bottom: 0;
+  background: var(--color-surface);
+}
+
+.queue-wrap[data-open='true'] .queue-body {
+  display: block;
+}
+
+.queue-body p {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--color-foreground);
+}
+
+.queue-acts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.queue-acts .right {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.mono-block {
+  margin: 0.625rem 0.75rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--color-elevated);
+  font-size: 0.8125rem;
+  color: var(--color-foreground);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.card-body .mono-block {
+  margin: 0;
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.75rem;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.choice:hover {
+  background: var(--color-elevated);
+}
+
+.choice .ring {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.1875rem;
+  border: 1px solid var(--color-border-strong);
+}
+
+.choice[aria-checked='true'] .ring {
+  border: 5px solid var(--color-foreground);
+}
+
+.choice .note {
+  display: block;
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+.field {
+  display: block;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.field span {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+}
+
+.field input,
+.field textarea {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-app);
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.field input:focus,
+.field textarea:focus {
+  border-color: var(--color-foreground);
+}
+
+.lines {
+  padding: 0.25rem 0.75rem 0.5rem;
+}
+
+.trace-steps.diff .line-row {
+  padding: 0.3125rem 0;
+}
+
+.trace-steps.diff .line-row + .line-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.line-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.375rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+  font-weight: 200;
+}
+
+.line-row + .line-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.line-row .path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line-row .stat-add {
+  flex: none;
+  color: var(--color-success);
+  font-variant-numeric: tabular-nums;
+}
+
+.line-row .stat-del {
+  flex: none;
+  color: var(--color-danger);
+  font-variant-numeric: tabular-nums;
+}
+
+.line-row .tick {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--color-success);
+}
+
+.line-row.done .path {
+  text-decoration: line-through;
+  text-decoration-color: var(--color-border-strong);
+  color: var(--ink-meta);
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0 0.75rem 0.75rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--color-elevated);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--color-muted);
+}
+
+.note svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: 0.125rem;
+  color: var(--color-success);
+}
+
+/* A reading at the far right of a card head, before the fold. */
+.chip {
+  flex: none;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--color-border-strong);
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chip.warn {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.marker {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.25rem 0;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+}
+
+.marker::before,
+.marker::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* ---- Project strips ----
+   The threads list is grouped into one foldable strip per project, exactly as
+   the desktop sidebar does it: the strip carries the project's mark and name,
+   its activity cluster, and its own controls, which are fixed rather than
+   revealed on hover because a phone has no hover. */
+
+.strip {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.strip + .strip {
+  padding-top: 0.25rem;
+}
+
+.strip-head ~ .strip-body {
+  padding-bottom: 0.5rem;
+}
+
+.strip-head {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  min-height: 4.25rem;
+  padding: 0.375rem 0.375rem 0.375rem var(--gutter);
+}
+
+.strip-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  flex: 1;
+  min-height: 3.5rem;
+  padding: 0.5rem 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.strip-toggle:hover {
+  color: var(--color-foreground);
+}
+
+.strip-caret {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--ink-meta);
+  transition: transform 140ms ease-out;
+}
+
+.strip[data-open='false'] .strip-caret {
+  transform: rotate(-90deg);
+}
+
+.strip-name {
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strip-count {
+  flex: none;
+  margin-left: auto;
+  padding-left: 1rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The activity cluster: one dot and a capped count per state, in the desktop's
+   order, so a strip says what is inside it without being opened. */
+.strip-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.125rem;
+  margin-left: 0.25rem;
+}
+
+.strip-actions .icon-btn {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+/* The strip head's own row is taller than one control, so its action sits
+   centred and never blocks the toggle beside it. */
+.strip-head .icon-btn {
+  margin-right: -0.5rem;
+}
+
+.strip-body[hidden] {
+  display: none;
+}
+
+/* Folds are animated, not toggled. The body keeps its box and collapses it, so
+   the strip below moves up instead of jumping, and a phone with reduced motion
+   asked for gets the jump it asked for. 40rem clears the tallest strip the list
+   draws (four threads and the link to the rest). */
+.strip-body {
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  transition:
+    max-height 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.strip[data-open='true'] .strip-body {
+  max-height: 40rem;
+  opacity: 1;
+}
+
+/* A list arrives rather than appearing: one short rise, no layout work. */
+.list > * {
+  animation: list-in 160ms cubic-bezier(0.215, 0.61, 0.355, 1) both;
+}
+
+.tabs.inbox {
+  animation: tabs-in 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+/* A row that enters a filtered list fades up in its own place. Rows already on
+   screen are not re-animated, because each is keyed by its thread id. */
+.list a.row {
+  animation: row-in 120ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+@keyframes list-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tabs-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A thread row inside a strip sits under the project name, so its own mark is
+   the thread's state, not the project's icon: the strip already said the project. */
+.strip .row {
+  padding-left: calc(var(--gutter) + 1.375rem);
+}
+
+.strip .row + .row::before {
+  left: calc(var(--gutter) + 1.375rem);
+}
+
+/* Thread state mark, drawn above its rail: the desktop's own vocabulary, so the
+   pen means a draft and the triangle means it is parked on you. */
+.tmark {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  width: 1rem;
+  padding-top: 0.125rem;
+}
+
+.tmark svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+}
+
+.tmark i {
+  flex: 1;
+  width: 0;
+  border-left: 1px dashed currentColor;
+  opacity: 0.5;
+}
+
+.tmark[data-rail='none'] i {
+  display: none;
+}
+
+/* ---- The inbox sheet ----
+   Long pressing the inbox icon opens it. It lists the statuses in the order the
+   list draws them, each with a Switch for visibility and a grip to move it. */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 24, 37, 0.3);
+  z-index: 20;
+  animation: scrim-in 220ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.scrim.closing {
+  animation: scrim-out 160ms cubic-bezier(0.215, 0.61, 0.355, 1) forwards;
+}
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 21;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border-strong);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  animation: sheet-in 220ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.sheet.closing {
+  animation: sheet-out 180ms cubic-bezier(0.215, 0.61, 0.355, 1) forwards;
+}
+
+.sheet-grab {
+  width: 2rem;
+  height: 2px;
+  margin: 0.5rem auto 0.25rem;
+  background: var(--color-border-strong);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem var(--gutter) 0.25rem;
+}
+
+.sheet-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.sheet-head button {
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  min-height: 2.75rem;
+  padding: 0 0.25rem;
+  cursor: pointer;
+}
+
+.sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 3rem;
+  padding: 0 var(--gutter);
+  border-top: 1px solid var(--color-border);
+}
+
+.sheet-row .tmark {
+  width: 1rem;
+  align-self: center;
+}
+
+.sheet-row .tmark i {
+  display: none;
+}
+
+.sheet-row .name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.sheet-row .grip {
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--color-dimmed);
+  cursor: grab;
+}
+
+.sheet-row .grip svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* The switch, shaped like the app's own: a track with a travelling knob. */
+.sw {
+  flex: none;
+  position: relative;
+  width: 2.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-elevated);
+  cursor: pointer;
+  padding: 0;
+}
+
+.sw::after {
+  content: '';
+  position: absolute;
+  top: 0.1875rem;
+  left: 0.1875rem;
+  width: 1rem;
+  height: 1rem;
+  background: var(--color-muted);
+  transition:
+    transform 140ms ease-out,
+    background 140ms ease-out;
+}
+
+.sw[aria-checked='true'] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.sw[aria-checked='true']::after {
+  transform: translateX(1rem);
+  background: var(--color-on-primary);
+}
+
+.sw:focus-visible {
+  outline: 2px solid var(--color-foreground);
+  outline-offset: 2px;
+}
+
+/* ---- The drawer ----
+   A phone has no room beside the reading column, so the sidebar is a sheet that
+   comes up from the bottom: projects with their threads, the current one
+   marked, and the way to the inbox at the top. One row is one line, because the
+   job of the drawer is to move, not to describe. */
+
+.drawer .sheet-head {
+  padding-bottom: 0.5rem;
+}
+
+.drawer .sheet-head .n {
+  margin-left: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.dline {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0 var(--gutter);
+  color: var(--color-foreground);
+  font-size: 0.9375rem;
+  text-decoration: none;
+}
+
+.dline:hover {
+  background: var(--color-elevated);
+}
+
+.dline svg {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+  color: var(--color-muted);
+}
+
+.dline .n {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 0.5rem;
+}
+
+/* A strip inside the drawer is a project and its threads. The head is the
+   project, the rows are its threads, and only the current thread is marked. */
+.drawer .strip {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.strip + .strip {
+  padding-top: 0.25rem;
+}
+
+.strip-head ~ .strip-body {
+  padding-bottom: 0.5rem;
+}
+
+.drawer .strip-head {
+  min-height: 2.75rem;
+}
+
+.drawer .strip-toggle {
+  min-height: 2.75rem;
+  gap: 0.625rem;
+}
+
+.drawer .strip-name {
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+/* The count sits with the name so the caret owns the far edge, which is where a
+   fold control belongs and where the thumb reaches for it. */
+.drawer .strip-toggle .strip-caret {
+  margin-left: auto;
+}
+
+.drawer .strip-toggle[aria-expanded='false'] .strip-caret {
+  transform: rotate(-90deg);
+}
+
+.drawer .strip .strip-body {
+  padding-bottom: 0.25rem;
+}
+
+.drow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.75rem;
+  /* A thread title lines up under the project's name, not under its mark, so the
+     drawer reads as one column with one indent. */
+  padding: 0 var(--gutter) 0 calc(var(--gutter) + 2.125rem);
+  color: var(--color-muted);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.drow:hover {
+  background: var(--color-elevated);
+}
+
+.drow .dt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drow .dm {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The thread you are in: foreground text and the accent rail, and nothing else
+   moves, so the drawer does not jump when it opens on a thread. */
+.drow[aria-current='page'] {
+  color: var(--color-foreground);
+  font-weight: 500;
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.drow[aria-current='page'] .dt {
+  color: var(--color-foreground);
+}
+
+/* ---- Threads: the default flat list, and the inbox tabs ----
+
+   The default list is every thread from every project in one run, ordered by
+   status first and last activity second, so the thing that needs a person is at
+   the top whatever project it belongs to. Each row carries its project's icon,
+   because there is no project heading above it to say which project it is. */
+
+.bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0 -0.5rem 0 0;
+}
+
+.bar-actions .icon-btn[aria-pressed='true'] {
+  color: var(--color-foreground);
+}
+
+/* Inbox mode brings the status tabs. They scroll, because seven statuses do not
+   fit a phone, and the one that is showing keeps itself in view. */
+.tabs.inbox {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tabs[hidden],
+.tab[hidden] {
+  display: none;
+}
+
+.row.flat {
+  align-items: flex-start;
+}
+
+.row.flat .mark {
+  margin-top: 0.0625rem;
+}
+
+/* The project's name sits under the thread title, so a flat list never loses
+   which project a thread belongs to. */
+.row-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  min-width: 0;
+  font-weight: 200;
+}
+
+.row-project span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A group lead in inbox mode, so a run of threads has a name over it. */
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem var(--gutter) 0.25rem;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+.group-head svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.group-head .n {
+  margin-left: auto;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The product name, in the official wordmark treatment: Oven Mono at 800 with
+   the app's own tracking. It is the one place that face is used. */
+.wordmark {
+  font-family: 'Oven Mono', ui-monospace, monospace;
+  font-weight: 800;
+  font-synthesis: none;
+  letter-spacing: -0.095em;
+}
+
+/* In a strip head the identity owns the free space and the reading sits beside
+   the controls, so the head reads left to right as name, then state, then what
+   can be done about it. */
+.strip-head {
+  gap: 0.75rem;
+}
+
+.strip-head .cluster {
+  flex: none;
+  gap: 0.625rem;
+  margin-left: auto;
+}
+
+.strip-head .strip-actions {
+  margin-left: 0.75rem;
+}
+
+/* Utilities
+   A screen-reader-only label, and the two row states the ported sheet did not
+   need because the prototype always had real data. */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.row-title.unread {
+  font-weight: 500;
+}
+
+/* A compact row sits inside a project strip, where the project is already named
+   above it, so the row's own padding tightens by one step. */
+.row.compact {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* Motion is the app's, not the prototype's: one set of rates, on transform and
+   opacity only, and nothing at all for a device that asks for less. */
+@media (prefers-reduced-motion: reduce) {
+  .scrim,
+  .scrim.closing,
+  .sheet,
+  .sheet.closing,
+  .drawer,
+  .drawer.closing,
+  .strip-body,
+  .row,
+  .tabs.inbox,
+  .list > * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

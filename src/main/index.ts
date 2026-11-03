@@ -599,6 +599,19 @@ function quitAppDirectly(): void {
   app.quit()
 }
 
+/**
+ * How many times one window silently rebuilds its renderer before the stop is
+ * treated as unrecoverable.
+ *
+ * A single stop is a recoverable accident (a `kill`, a scripted stop of a process
+ * tree, the OS ending a helper): the workspace comes back from its durable stores
+ * in a second or two. A renderer that keeps dying is a real failure, and that is
+ * what the recovery dialog exists for.
+ */
+const RENDERER_RECOVERY_LIMIT = 2
+/** The window these rebuilds are counted in; a stop long after the last one is a new accident. */
+const RENDERER_RECOVERY_WINDOW_MS = 60_000
+
 /** Create the window, or bring the existing one forward. */
 function openMainWindow(): void {
   const existing = state.mainWindow
@@ -696,6 +709,15 @@ function createWindow(): BrowserWindow {
       })
     }
   })
+  // A renderer that dies while this window is meant to be on screen used to leave
+  // the window standing over an empty page: `killed` with the SIGTERM exit code
+  // was read as "somebody ended it politely", so nothing rebuilt it and the
+  // workspace stayed blank until the app was restarted. The polite-stop judgment
+  // is about WHO ended it, and that is not the same question as whether the
+  // window still needs a renderer. The stamp records how often this window has
+  // rebuilt itself, so a renderer that keeps dying reaches the recovery dialog
+  // instead of reloading forever.
+  const rendererRecoveries: number[] = []
   window.webContents.on('render-process-gone', (_event, details) => {
     if (state.quitCleanupStarted) return
     // A renderer that left on its own, or one that was asked to stop, did not
@@ -709,18 +731,61 @@ function createWindow(): BrowserWindow {
     // dialog then held the dying process until something killed it.
     const stopped =
       details.reason === 'clean-exit' || (details.reason === 'killed' && details.exitCode === 15)
-    if (stopped) {
+    if (!stopped) {
+      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+        state,
+        database,
+        storage
+      })
+      return
+    }
+    // A window that is on its way out has no page to rebuild: parking tears the
+    // window down, and a quit or an update install is already taking the app
+    // with it. Those stops are exactly the ones the polite-stop judgment was
+    // written for.
+    const windowGone =
+      state.quitConfirmed ||
+      state.quitForUpdate ||
+      state.parkingForBackground ||
+      window.isDestroyed() ||
+      window.webContents.isDestroyed()
+    if (windowGone) {
       Logger.dev('Workspace renderer was stopped; the app is not asking for recovery', {
         reason: details.reason,
         exitCode: details.exitCode
       })
       return
     }
-    void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
-      state,
-      database,
-      storage
+    const now = Date.now()
+    while (
+      rendererRecoveries.length > 0 &&
+      now - (rendererRecoveries[0] ?? 0) > RENDERER_RECOVERY_WINDOW_MS
+    ) {
+      rendererRecoveries.shift()
+    }
+    rendererRecoveries.push(now)
+    if (rendererRecoveries.length > RENDERER_RECOVERY_LIMIT) {
+      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+        state,
+        database,
+        storage
+      })
+      return
+    }
+    // The page is gone but the window is not, so the workspace is rebuilt in
+    // place: the same window, a fresh renderer, and every piece of state that
+    // matters comes back from the app's durable stores. Reloading on the next
+    // tick leaves Chromium's own teardown of the dead renderer to finish first.
+    Logger.info('Rebuilding the workspace renderer after an unrequested stop', {
+      reason: details.reason,
+      exitCode: details.exitCode,
+      attempt: rendererRecoveries.length
     })
+    setTimeout(() => {
+      if (state.quitCleanupStarted || window.isDestroyed()) return
+      if (window.webContents.isDestroyed()) return
+      window.webContents.reload()
+    }, 0)
   })
   const floatingPanels = new NativeFloatingPanelWindow(window)
 

@@ -14,8 +14,10 @@ import {
   APP_ARTIFACT_UTILITY_ID,
   APP_CITE_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
+  APP_FOLLOW_UP_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
+import { FOLLOW_UP_OPERATIONS } from '../../../lib/follow-up'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
@@ -469,6 +471,12 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         tools: CITE_OPERATIONS
       }
     }
+    if (resolved.utility.id === APP_FOLLOW_UP_UTILITY_ID) {
+      return {
+        instructions: (resolved.utility.config as { instructions: string }).instructions,
+        tools: FOLLOW_UP_OPERATIONS
+      }
+    }
     if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
       return {
         instructions: (resolved.utility.config as { instructions: string }).instructions,
@@ -733,6 +741,13 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
           ? undefined
           : requiredString(body, 'markdown', ASSISTANT_REPORT_BODY_LIMIT)
       result = await saveReport(title, markdown)
+    } else if (resolved.utility.id === APP_FOLLOW_UP_UTILITY_ID) {
+      const executor = this.host.followUpExecutor
+      if (!executor) throw new Error('Scheduled follow-ups are unavailable on this turn')
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
     } else if (resolved.utility.id === APP_CITE_UTILITY_ID) {
       if (operation !== 'cite_report') {
         throw new Error('The cited-work capability exposes cite_report only')

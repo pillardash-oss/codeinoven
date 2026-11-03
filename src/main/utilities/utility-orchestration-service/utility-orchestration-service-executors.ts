@@ -9,6 +9,7 @@ import type {
   CuaOperationEvent,
   DesignCapabilityExecutor,
   EngineeringToolExecutor,
+  FollowUpExecutor,
   McpSignInExecutor,
   OrchestrationExecutor,
   PawnToolExecutor,
@@ -28,6 +29,15 @@ export class UtilityOrchestrationServiceExecutors {
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     this.host.browserExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio:follow-up` capability, which
+   * wakes the thread the agent is running in at a time it agreed with the user.
+   * The app supplies it because it owns the clock, the stored wake and the resume.
+   */
+  setFollowUpExecutor(executor: FollowUpExecutor | null): void {
+    this.host.followUpExecutor = executor
   }
 
   /**
