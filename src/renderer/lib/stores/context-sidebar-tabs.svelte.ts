@@ -761,7 +761,7 @@ export class SidebarTabContexts {
    * project so reaching for the panel twice never leaves two pickers behind, and
    * picking a target turns this tab into the tab that mirrors it.
    */
-  openDisplayChooser(projectId: string, threadId: string): void {
+  openDisplayChooser(projectId: string, threadId: string): string {
     const context = this.ensureProjectContext(projectId, threadId)
     const chooserId = `display:${projectId}:chooser`
     const existing = context.tabs.find((tab) => tab.id === chooserId)
@@ -771,10 +771,11 @@ export class SidebarTabContexts {
     if (existing?.kind === 'display' && existing.sourceId === null) {
       existing.threadId = threadId
       this.focusInProjectContext(context, chooserId)
-      return
+      return chooserId
     }
+    const id = existing ? `display:${projectId}:${crypto.randomUUID()}` : chooserId
     this.openProject(context, {
-      id: existing ? `display:${projectId}:${crypto.randomUUID()}` : chooserId,
+      id,
       kind: 'display',
       title: 'Choose a target',
       projectId,
@@ -782,6 +783,7 @@ export class SidebarTabContexts {
       sourceKind: null,
       sourceId: null
     })
+    return id
   }
 
   /**

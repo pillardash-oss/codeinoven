@@ -1,7 +1,7 @@
 <script lang="ts">
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
+  import DisplayPanel from '$lib/components/display/DisplayPanel.svelte'
   import DisplaySourceIcon from '$lib/components/display/DisplaySourceIcon.svelte'
-  import DisplayStage from '$lib/components/display/DisplayStage.svelte'
   import { contextSidebarState, type DisplayContextTab } from '$lib/stores/context-sidebar.svelte'
 
   /**
@@ -49,8 +49,10 @@
       <DisplaySourceIcon kind={tab?.sourceKind ?? null} size={12} class="shrink-0" />
     {/snippet}
     {#if activeTab}
+      <!-- The dock's own body, so a tab that is still choosing a target shows the
+           chooser here too instead of waiting for a frame it has no source for. -->
       {#key activeTab.id}
-        <DisplayStage tab={activeTab} />
+        <DisplayPanel tab={activeTab} />
       {/key}
     {/if}
   </FullscreenPanelDialog>

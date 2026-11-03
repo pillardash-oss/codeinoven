@@ -877,10 +877,7 @@
     <WorkspaceFullscreenDisplay
       tabId={board.openThreadFromSwitcher.displayFullscreenTabId}
       onTabIdChange={(id) => (board.openThreadFromSwitcher.displayFullscreenTabId = id)}
-      onNewTarget={() => {
-        board.openThreadFromSwitcher.openDisplayChooser()
-        return contextSidebarState.sidebarActiveTabId
-      }}
+      onNewTarget={() => board.openThreadFromSwitcher.openDisplayChooser()}
       onCloseTab={(id) => board.openThreadFromSwitcher.closeFullscreenTab('display', id)}
     />
   {/await}

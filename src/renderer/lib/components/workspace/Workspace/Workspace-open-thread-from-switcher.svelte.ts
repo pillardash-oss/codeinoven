@@ -549,11 +549,12 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
    *  opening one closes the other kind instead of leaving two full screen dialogs
    *  stacked, where the lower one's suppression block would blank the browser's
    *  native view. */
-  /** Open another display tab, which starts as the target chooser. */
-  openDisplayChooser(): void {
+  /** Open another display tab, which starts as the target chooser. Returns the tab
+   *  so a fullscreen surface can switch to it. */
+  openDisplayChooser(): string | null {
     const thread = this.selectedThread
-    if (!thread) return
-    contextSidebarState.openDisplayChooser(thread.projectId, thread.id)
+    if (!thread) return null
+    return contextSidebarState.openDisplayChooser(thread.projectId, thread.id)
   }
 
   openTabFullscreen(tabId: string): void {

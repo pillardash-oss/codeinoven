@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { contextSidebarState, type DisplayContextTab } from '$lib/stores/context-sidebar.svelte'
   import { displayPanel } from '$lib/stores/display-panel.svelte'
-  import type { DisplaySourceDescriptor } from '$shared/ipc/display'
+  import type { DisplaySourceDescriptor, DisplaySourceKind } from '$shared/ipc/display'
   import DisplaySourceIcon from './DisplaySourceIcon.svelte'
 
   /**
@@ -13,6 +13,11 @@
    * booted, or screen recording switched off. Picking a target turns this tab into
    * the tab that mirrors it, so the picker is the tab's own home rather than a
    * modal in front of one.
+   *
+   * The list is the cloud deployment panel's own list: a section header carrying
+   * the kind's mark and its count, then one divided row per target with a name and
+   * a supporting line. No second heading, no expanded label, nothing that repeats
+   * the tab's own name.
    */
 
   interface Props {
@@ -32,8 +37,8 @@
   function refresh(): void {
     refreshing = true
     displayPanel.refreshAll()
-    // The spinners are per section; this only keeps the button from looking dead
-    // for the moment before the first listing answers.
+    // The loading state is per section; this only keeps the control from looking
+    // dead in the moment before the first listing answers.
     setTimeout(() => (refreshing = false), 400)
   }
 
@@ -46,7 +51,7 @@
   }
 
   /** What an empty list means for each kind, in the user's terms. */
-  function emptyCopy(kind: DisplaySourceDescriptor['kind']): string {
+  function emptyCopy(kind: DisplaySourceKind): string {
     if (kind === 'android') return 'No Android target is connected.'
     if (kind === 'ios') return 'No simulator is booted.'
     if (kind === 'desktop-screen') return 'No screen is available.'
@@ -58,48 +63,45 @@
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#each displayPanel.sections as section (section.kind)}
       {@const sources = section.listing?.sources ?? []}
-      <section class="border-b border-border last:border-b-0" aria-label={section.label}>
-        <div class="flex items-baseline gap-2 px-3 pt-2.5 pb-1">
-          <p
-            class="min-w-0 flex-1 truncate text-[0.5625rem] font-semibold tracking-[0.14em] text-dimmed uppercase"
-          >
+      <section class="border-b border-border" aria-label={section.label}>
+        <div class="flex items-center gap-1.5 bg-surface px-3 py-1.5">
+          <DisplaySourceIcon kind={section.kind} size={10} class="shrink-0 text-dimmed" />
+          <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
             {section.label}
-          </p>
+          </h3>
           {#if section.loading}
-            <span class="text-[0.5625rem] text-dimmed" role="status">Looking</span>
-          {:else if sources.length > 0}
-            <span class="text-[0.5625rem] text-dimmed">{sources.length}</span>
+            <span class="ml-auto text-[0.5625rem] text-dimmed" role="status">Looking</span>
+          {:else}
+            <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{sources.length}</span>
           {/if}
         </div>
 
-        {#if section.loading && sources.length === 0}
-          <p class="px-3 pb-2.5 text-[0.625rem] text-dimmed">Looking for targets…</p>
-        {:else if section.listing?.problem}
-          <p class="px-3 pb-2.5 text-[0.625rem] leading-relaxed text-warning">
+        {#if section.listing?.problem}
+          <p
+            class="border-t border-border px-3 py-1.5 text-[0.5625rem] leading-relaxed text-warning"
+          >
             {section.listing.problem}
           </p>
         {:else if sources.length === 0}
-          <p class="px-3 pb-2.5 text-[0.625rem] text-dimmed">{emptyCopy(section.kind)}</p>
+          <p class="border-t border-border px-3 py-1.5 text-[0.5625rem] text-dimmed">
+            {section.loading ? 'Looking for targets…' : emptyCopy(section.kind)}
+          </p>
         {:else}
-          <div class="pb-1.5">
+          <div class="divide-y divide-border">
             {#each sources as source (source.sourceId)}
               <button
                 type="button"
-                class="group flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
-                title={`Mirror ${source.label}`}
+                class="flex w-full items-center px-3 py-2 text-left transition-colors hover:bg-elevated"
+                title="Mirror {source.label}"
+                aria-label="Mirror {source.label}"
                 onclick={() => pick(source)}
               >
-                <span
-                  class="flex h-8 w-8 shrink-0 items-center justify-center border border-border bg-app text-muted transition-colors group-hover:border-primary group-hover:text-foreground"
-                >
-                  <DisplaySourceIcon kind={source.kind} size={17} />
-                </span>
-                <span class="flex min-w-0 flex-1 flex-col">
-                  <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                    >{source.label}</span
-                  >
+                <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span class="truncate text-[0.6875rem] font-medium text-foreground">
+                    {source.label}
+                  </span>
                   {#if source.detail}
-                    <span class="truncate text-[0.625rem] text-dimmed">{source.detail}</span>
+                    <span class="truncate text-[0.5625rem] text-dimmed">{source.detail}</span>
                   {/if}
                 </span>
               </button>
@@ -110,13 +112,10 @@
     {/each}
   </div>
 
-  <div class="flex shrink-0 items-center justify-between gap-2 border-t border-border px-3 py-1.5">
-    <p class="min-w-0 truncate text-[0.625rem] text-dimmed">
-      {anyLoading ? 'Looking for targets…' : 'Targets that are already running'}
-    </p>
+  <div class="flex shrink-0 items-center justify-end border-t border-border px-2 py-1">
     <button
       type="button"
-      class="shrink-0 px-2 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-60"
+      class="cursor-pointer px-2 py-0.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-60"
       aria-label="List targets again"
       title="List targets again"
       disabled={anyLoading || refreshing}

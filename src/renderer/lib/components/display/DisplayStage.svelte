@@ -78,7 +78,9 @@
     const handle = stage
     if (!handle || !kind || !sourceId) return
     const tabId = tab.id
-    displayPanel.start(tabId, kind, sourceId)
+    // The session this mount owns: a cleanup must never stop the capture that a
+    // replacement stage (the dock's, on the way back from fullscreen) just began.
+    const sessionId = displayPanel.start(tabId, kind, sourceId)
     displayPanel.setVisibleTab(tabId)
     const report = (): void => {
       const rect = handle.getBoundingClientRect()
@@ -91,8 +93,8 @@
     observer.observe(handle)
     return () => {
       observer.disconnect()
-      displayPanel.setVisibleTab(null)
-      displayPanel.stop(tabId)
+      displayPanel.releaseVisibleTab(tabId)
+      displayPanel.stop(tabId, sessionId)
     }
   })
 </script>

@@ -118,7 +118,7 @@ class DisplayPanelState {
    * tab (`applyDisplayTarget`) must not leave the previous device's capture
    * running behind the new picture.
    */
-  start(tabId: string, kind: DisplaySourceKind, sourceId: string): void {
+  start(tabId: string, kind: DisplaySourceKind, sourceId: string): string {
     this.stop(tabId)
     const session: DisplaySession = {
       tabId,
@@ -139,12 +139,21 @@ class DisplayPanelState {
       session.detail = error instanceof Error ? error.message : String(error)
       logRendererError('The display session could not start', error)
     })
+    return session.sessionId
   }
 
-  /** Stop a tab's capture and forget it. */
-  stop(tabId: string): void {
+  /**
+   * Stop a tab's capture and forget it.
+   *
+   * `sessionId` is the session the caller started. Returning from fullscreen
+   * mounts the dock's stage before the fullscreen one is torn down, so a cleanup
+   * that stopped by tab id alone would kill the frame that had just been asked
+   * for. A cleanup only ever stops its own session.
+   */
+  stop(tabId: string, sessionId?: string): void {
     const session = this.sessions[tabId]
     if (!session) return
+    if (sessionId !== undefined && session.sessionId !== sessionId) return
     const next = { ...this.sessions }
     delete next[tabId]
     this.sessions = next
@@ -161,6 +170,12 @@ class DisplayPanelState {
     this.visibleTabId = tabId
     if (previous && previous !== tabId) this.pushDemand(previous, false)
     if (tabId) this.pushDemand(tabId, true)
+  }
+
+  /** Give up the visible slot, but only if this caller still holds it: the stage
+   *  that is being unmounted can outlive the one that replaced it. */
+  releaseVisibleTab(tabId: string): void {
+    if (this.visibleTabId === tabId) this.setVisibleTab(null)
   }
 
   /**
