@@ -10,8 +10,7 @@
     llamaCppServerAddress,
     nextFreeLlamaCppPort,
     type LlamaCppRuntimeStatus,
-    type LlamaCppServerEntry,
-    type LlamaCppServerGroup
+    type LlamaCppServerEntry
   } from '$shared/llama-cpp'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -83,13 +82,6 @@
 
   function openEdit(entry: LlamaCppServerEntry): void {
     editing = entry
-    modalKey++
-    modalOpen = true
-  }
-
-  /** Add another model to a server that already exists on this address. */
-  function addModelTo(group: LlamaCppServerGroup): void {
-    editing = { ...newEntry(), host: group.host, port: group.port }
     modalKey++
     modalOpen = true
   }
@@ -184,27 +176,6 @@
       <div class="@container space-y-5">
         {#each groups as group (group.address)}
           <section class="space-y-2">
-            <div
-              class="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-1"
-            >
-              <p class="flex min-w-0 items-center gap-2 text-xs">
-                <span class="truncate font-mono text-muted" title={group.address}
-                  >{group.address}</span
-                >
-                <span class="shrink-0 text-dimmed"
-                  >{group.entries.length}
-                  {group.entries.length === 1 ? 'model' : 'models'}</span
-                >
-              </p>
-              <button
-                type="button"
-                class="shrink-0 px-1 py-0.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                title="Add another model to the server on {group.address}"
-                onclick={() => addModelTo(group)}
-              >
-                Add model
-              </button>
-            </div>
             {#each group.entries as entry (entry.id)}
               <LocalAiServerCard
                 {entry}

@@ -59,16 +59,17 @@
   }
 </script>
 
-<div class="max-w-xl space-y-3">
+<div class="space-y-3">
   <section class="border bg-surface">
     <header class="border-b px-3 py-2">
       <h2 class="text-xs font-semibold">Model memory</h2>
-      <p class="mt-0.5 text-xs text-dimmed">
-        A loaded model stays resident until this window passes without a use.
-      </p>
     </header>
     <div class="flex items-center justify-between gap-3 px-3 py-3">
-      <label class="text-xs text-foreground" for="local-ai-unload-window">
+      <label
+        class="text-xs text-foreground"
+        for="local-ai-unload-window"
+        title="A loaded model stays resident until this much idle time passes"
+      >
         Unload an idle model after
       </label>
       <select
@@ -84,7 +85,9 @@
       </select>
     </div>
     <div class="flex items-center justify-between gap-3 border-t px-3 py-3">
-      <p class="text-xs text-dimmed">Free the memory now instead of waiting for the window.</p>
+      <p class="text-xs text-dimmed" title="Free the memory now instead of waiting for the window">
+        Free the memory now
+      </p>
       <button
         type="button"
         class="shrink-0 border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
@@ -96,11 +99,6 @@
       </button>
     </div>
   </section>
-
-  <p class="text-xs text-dimmed">
-    Both engines share this one window, because the same model serves speech cleanup and search.
-    More local AI settings will land here.
-  </p>
 </div>
 
 <ConfirmDialog
