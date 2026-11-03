@@ -477,7 +477,11 @@
     {:else if tab.kind === 'terminal'}
       <CioTerminal size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'display'}
-      <DisplaySourceIcon kind={tab.sourceKind} size={ICON_SIZE.row} class="shrink-0" />
+      {#if tab.iconUrl}
+        <img src={tab.iconUrl} alt="" class="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
+      {:else}
+        <DisplaySourceIcon kind={tab.sourceKind} size={ICON_SIZE.row} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'actions'}
       <CioActions size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'browser'}

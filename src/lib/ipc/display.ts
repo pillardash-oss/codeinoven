@@ -39,8 +39,17 @@ export interface DisplaySourceDescriptor {
   sourceId: string
   /** What the user picks: "Pixel 8 · emulator-5554". */
   label: string
-  /** Supporting line: the device state, the runtime, or the app a window belongs to. */
+  /** Supporting line: the device state, the runtime, or the screen's role. */
   detail?: string
+  /**
+   * The mark the target itself wears, as a small data URL.
+   *
+   * A window belongs to an application, and the application's own icon is what
+   * tells two Finder windows from a Mail window at a glance. The platform hands
+   * it over with the window, so the row and the tab wear it instead of a generic
+   * window outline.
+   */
+  iconUrl?: string
 }
 
 /**

@@ -202,6 +202,8 @@ export interface DisplayContextTab {
   sourceKind: DisplaySourceKind | null
   /** The target's own identity (adb serial, simulator udid, capture id). */
   sourceId: string | null
+  /** The mark the target wears when it has one (a window's application icon). */
+  iconUrl: string | null
 }
 
 export interface NotificationContextTab {

@@ -23,7 +23,7 @@ import {
   type ThreadNoteContextTab
 } from './context-sidebar-types'
 import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
-import type { DisplaySourceKind } from '$shared/ipc/display'
+import type { DisplayTarget } from './context-sidebar-tabs.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 
 export type {
@@ -902,11 +902,7 @@ class ContextSidebarState {
     return this.tabContexts.openDisplayChooser(projectId, threadId)
   }
 
-  openDisplayTarget(
-    projectId: string,
-    threadId: string,
-    target: { kind: DisplaySourceKind; sourceId: string; label: string }
-  ): void {
+  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
     this.tabContexts.openDisplayTarget(projectId, threadId, target)
   }
 
@@ -914,7 +910,7 @@ class ContextSidebarState {
     projectId: string,
     threadId: string,
     tabId: string,
-    target: { kind: DisplaySourceKind; sourceId: string; label: string }
+    target: DisplayTarget
   ): void {
     this.tabContexts.applyDisplayTarget(projectId, threadId, tabId, target)
   }

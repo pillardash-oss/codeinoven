@@ -46,7 +46,8 @@
     contextSidebarState.applyDisplayTarget(tab.projectId, tab.threadId, tab.id, {
       kind: source.kind,
       sourceId: source.sourceId,
-      label: source.label
+      label: source.label,
+      ...(source.iconUrl ? { iconUrl: source.iconUrl } : {})
     })
   }
 
@@ -91,11 +92,24 @@
             {#each sources as source (source.sourceId)}
               <button
                 type="button"
-                class="flex w-full items-center px-3 py-2 text-left transition-colors hover:bg-elevated"
+                class="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-elevated"
                 title="Mirror {source.label}"
                 aria-label="Mirror {source.label}"
                 onclick={() => pick(source)}
               >
+                <!-- A window wears the icon of the application it belongs to, the
+                     way the dock does for a running app. A screen keeps the kind's
+                     own mark, because no application owns it. -->
+                {#if source.iconUrl}
+                  <img
+                    src={source.iconUrl}
+                    alt=""
+                    class="h-4 w-4 shrink-0 object-contain"
+                    aria-hidden="true"
+                  />
+                {:else}
+                  <DisplaySourceIcon kind={source.kind} size={13} class="shrink-0 text-dimmed" />
+                {/if}
                 <span class="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span class="truncate text-[0.6875rem] font-medium text-foreground">
                     {source.label}

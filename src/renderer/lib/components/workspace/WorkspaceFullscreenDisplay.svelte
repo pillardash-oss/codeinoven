@@ -46,7 +46,11 @@
   >
     {#snippet tabIcon({ id }: { id: string })}
       {@const tab = displayTabs.find((candidate) => candidate.id === id)}
-      <DisplaySourceIcon kind={tab?.sourceKind ?? null} size={12} class="shrink-0" />
+      {#if tab?.iconUrl}
+        <img src={tab.iconUrl} alt="" class="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
+      {:else}
+        <DisplaySourceIcon kind={tab?.sourceKind ?? null} size={12} class="shrink-0" />
+      {/if}
     {/snippet}
     {#if activeTab}
       <!-- The dock's own body, so a tab that is still choosing a target shows the

@@ -1,6 +1,7 @@
 import {
   BrowserWindow,
   desktopCapturer,
+  screen,
   systemPreferences,
   type DesktopCapturerSource,
   type NativeImage
@@ -29,6 +30,8 @@ import type { DisplayCapture } from './display-capture'
 
 /** Sources used for discovery; no thumbnails, because a listing draws none. */
 const NO_THUMBNAIL = { width: 0, height: 0 }
+/** Side of the app icon a listing hands to the renderer. */
+const APP_ICON_SIZE = 32
 /** One enumeration is not free; a hung capture must not hold a session forever. */
 const DESKTOP_CAPTURE_TIMEOUT_MS = 5_000
 
@@ -87,7 +90,10 @@ export async function listDesktopSources(
       desktopCapturer.getSources({
         types: kind === 'desktop-screen' ? ['screen'] : ['window'],
         thumbnailSize: NO_THUMBNAIL,
-        fetchWindowIcons: false
+        // Only a listing shows a window's app icon, and reading it is part of the
+        // same enumeration, so the picker pays for it once and the capture loop
+        // never does.
+        fetchWindowIcons: kind === 'desktop-window'
       }),
       DESKTOP_CAPTURE_TIMEOUT_MS
     )
@@ -104,14 +110,66 @@ export async function listDesktopSources(
     // A window with no title is a helper surface (a tooltip, a menu, a shadow
     // window); mirroring one is never what the user meant.
     .filter((source) => source.name.trim().length > 0 && !ownTitles.has(source.name))
-    // The section already says whether these are screens or windows, so a detail
-    // line repeating it would only take a row from the name.
-    .map((source): DisplaySourceDescriptor => ({
-      kind,
-      sourceId: source.id,
-      label: source.name
-    }))
+    .map((source): DisplaySourceDescriptor =>
+      kind === 'desktop-screen' ? screenDescriptor(source, kind) : windowDescriptor(source, kind)
+    )
   return { kind, sources, permission }
+}
+
+/**
+ * One screen, named by its place and its role.
+ *
+ * The platform calls a screen "Entire screen" (or nothing at all on some
+ * multi-display setups), which says nothing when there are three of them. Its
+ * display id is what ties the capture source to the display the system already
+ * knows, so the row can say which screen it is and whether it is the primary one.
+ */
+function screenDescriptor(
+  source: DesktopCapturerSource,
+  kind: DisplaySourceKind
+): DisplaySourceDescriptor {
+  const displays = screen.getAllDisplays()
+  const primaryId = screen.getPrimaryDisplay().id
+  const index = displays.findIndex((display) => String(display.id) === source.display_id)
+  const display = index >= 0 ? displays[index] : null
+  const isPrimary = display ? display.id === primaryId : displays.length <= 1
+  return {
+    kind,
+    sourceId: source.id,
+    label: index >= 0 ? `Screen ${index + 1}` : source.name,
+    detail: isPrimary
+      ? 'Primary screen'
+      : display
+        ? `${display.size.width}×${display.size.height}`
+        : undefined
+  }
+}
+
+/**
+ * One window, wearing its application's own icon.
+ *
+ * The platform returns the owning app's icon alongside the window, which is the
+ * only thing that distinguishes two Finder windows from a Mail one without
+ * reading titles. It is a data URL because the renderer draws it directly.
+ */
+function windowDescriptor(
+  source: DesktopCapturerSource,
+  kind: DisplaySourceKind
+): DisplaySourceDescriptor {
+  const iconUrl = appIconDataUrl(source)
+  return {
+    kind,
+    sourceId: source.id,
+    label: source.name,
+    ...(iconUrl ? { iconUrl } : {})
+  }
+}
+
+function appIconDataUrl(source: DesktopCapturerSource): string | null {
+  const icon = source.appIcon
+  if (!icon || icon.isEmpty()) return null
+  const resized = icon.resize({ width: APP_ICON_SIZE, height: APP_ICON_SIZE, quality: 'good' })
+  return resized.toDataURL()
 }
 
 /** A live framebuffer reader for one screen or window. */

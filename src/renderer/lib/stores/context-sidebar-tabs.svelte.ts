@@ -2,6 +2,15 @@ import { feature } from '$lib/feature-registry'
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
 import type { DisplaySourceKind } from '$shared/ipc/display'
+
+/** A picked target, on its way to becoming a display tab. */
+export interface DisplayTarget {
+  kind: DisplaySourceKind
+  sourceId: string
+  label: string
+  /** The target's own mark, when the platform gave one (a window's app icon). */
+  iconUrl?: string
+}
 import { agentRuns } from './agent-runs.svelte'
 import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
@@ -781,7 +790,8 @@ export class SidebarTabContexts {
       projectId,
       threadId,
       sourceKind: null,
-      sourceId: null
+      sourceId: null,
+      iconUrl: null
     })
     return id
   }
@@ -798,7 +808,7 @@ export class SidebarTabContexts {
     projectId: string,
     threadId: string,
     tabId: string,
-    target: { kind: DisplaySourceKind; sourceId: string; label: string }
+    target: DisplayTarget
   ): void {
     const context = this.ensureProjectContext(projectId, threadId)
     const duplicate = context.tabs.find(
@@ -813,6 +823,7 @@ export class SidebarTabContexts {
       tab.title = target.label
       tab.sourceKind = target.kind
       tab.sourceId = target.sourceId
+      tab.iconUrl = target.iconUrl ?? tab.iconUrl
       tab.threadId = threadId
       context.tabs = [...context.tabs]
     }
@@ -825,11 +836,7 @@ export class SidebarTabContexts {
 
   /** Mirror one target immediately, in a fresh tab. Used when the picker is not
    *  in front (a target that is already open simply takes focus). */
-  openDisplayTarget(
-    projectId: string,
-    threadId: string,
-    target: { kind: DisplaySourceKind; sourceId: string; label: string }
-  ): void {
+  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
     const context = this.ensureProjectContext(projectId, threadId)
     const existing = context.tabs.find(
       (tab) =>
@@ -847,7 +854,8 @@ export class SidebarTabContexts {
       projectId,
       threadId,
       sourceKind: target.kind,
-      sourceId: target.sourceId
+      sourceId: target.sourceId,
+      iconUrl: target.iconUrl ?? null
     })
   }
 
