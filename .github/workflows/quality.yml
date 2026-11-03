@@ -50,8 +50,15 @@ jobs:
   # cannot live in .github/actions/setup. The promotion validation used to be its
   # own job on the same ubuntu image with the same checkout and the same Bun
   # setup; folding it here removes a dispatch with nothing to do on ordinary PRs.
+  # The job id is `policy`, but its DISPLAY NAME is pinned: the `Protect nightly
+  # promotion` and `Protect stable promotion` branch rulesets require the status
+  # context `Release promotion policy` by name. Renaming this job silently blocks
+  # every promotion PR forever, because a required context that never reports is
+  # never green (it is not "missing", it is unreported, and auto-merge parks the
+  # PR as BLOCKED even with every other check green). If the name must change, the
+  # ruleset has to change in the same breath.
   policy:
-    name: Suite scope and release policy
+    name: Release promotion policy
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:

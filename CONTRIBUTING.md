@@ -121,6 +121,13 @@ Three rules keep that from drifting again:
 - **The promotion-skip rule lives in the `policy` job** of `quality.yml`,
   because a composite action cannot set a job-level `if`. Give a heavy job
   `needs: [policy]` and `if: needs.policy.outputs.skip != 'true'`.
+- **Two status contexts are pinned by branch protection and must never be
+  renamed.** The classic protection on `dev` and `nightly` requires
+  `Release verification`, and the promotion rulesets require
+  `Release promotion policy`. A rename does not produce a red check, it produces
+  no check at all, and auto-merge then parks every promotion PR as `BLOCKED`
+  with the whole suite green. Change the ruleset in the same pull request, or
+  leave the name alone.
 
 `scripts/ci-local.ts` mirrors these stages locally, so `bun run ci:local` runs
 the host-appropriate set before you push.
