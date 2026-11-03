@@ -26,7 +26,7 @@ export const SCOPE_CAPABILITY_SEARCH_QUERY = 'worktree'
  * activated anything.
  */
 export const SCOPE_CAPABILITY_SUMMARY =
-  'Create and manage app-owned Git worktree scopes for the active project: fork an isolated checkout for a feature, list and inspect scopes, sync a worktree with the project main branch in either direction, read and finish conflicts, repair, adopt, archive, rename, and (with confirmation) detach or delete. Every checkout it creates appears on the scope board with its branch, health and threads, and the calling thread can move into it. Use it only when the user explicitly asks to work in a separate worktree, never on your own initiative. Never run raw `git worktree add`: a raw worktree stays invisible to the app.'
+  'Create and manage app-owned Git worktree scopes for the active project: fork an isolated checkout for a feature or give an existing scope its own checkout, list and inspect scopes, sync a worktree with the project main branch in either direction, read and finish conflicts, repair, adopt, archive, rename, and (with confirmation) detach or delete. Every checkout it creates appears on the scope board with its branch, health and threads, and the calling thread can move into it. Use it only when the user explicitly asks to work in a separate worktree, never on your own initiative. Never run raw `git worktree add`: a raw worktree stays invisible to the app.'
 
 /**
  * The capability contract, returned by activation and by the post-compaction
@@ -41,14 +41,14 @@ Call it through the gateway invoke tool: utility_id "cio:scope", operation = one
 Only create a worktree when the user explicitly asked you to work in a separate one. Never create one on your own initiative, and never run \`git worktree add\`: a raw worktree is invisible to the app (no scope-board entry, no health check, no environment or setup handling, no sync or lifecycle tooling), so the user cannot see or manage it.
 
 Fields every action accepts:
-- scope: target scope by id or display name. Omit to target the scope the calling thread is in.
+- scope: target scope by id or display name. Omit to target the scope the calling thread is in. For create it names an existing project-rooted scope to give the worktree to, instead of forking a new scope.
 - confirm: destructive actions only (see below).
 
 Read actions:
 - list, status, conflicts, source_info, detect_adoptable (sourcePath).
 
 Write actions:
-- create: title, baseBranch?, runSetup?, environmentMode? (copy|symlink), setupCommands? ([{executable, args}]), attachThread?. Forks the project checkout's current branch unless baseBranch names another, follows the project's worktree defaults, and moves this thread into the new scope unless attachThread is false.
+- create: title, baseBranch?, runSetup?, environmentMode? (copy|symlink), setupCommands? ([{executable, args}]), attachThread?, scope?. Without scope it creates a new scope named title, forks the project checkout's current branch unless baseBranch names another, follows the project's worktree defaults, and moves this thread into the new scope unless attachThread is false. With scope it gives that existing project-rooted scope its managed worktree and creates no new scope, so a thread that already works in a scope can continue in a worktree without leaving the board row it belongs to; title is then optional and defaults to the scope name. The Default scope cannot become a worktree, and a scope that already has one must be repaired, synced or detached first.
 - rename (name), pin, unpin, archive, restore.
 - adopt (sourcePath, runSetup?): adopt an existing Git worktree checkout as a managed scope.
 - repair, retry_setup: fix an unhealthy checkout, or re-run its setup commands.
