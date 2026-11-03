@@ -1324,9 +1324,19 @@ nothing. It then publishes one app-owned row under the answer. The row is an
 asked to render travels on, so it is not part of the turn, never becomes the
 turn's closing statement, and never displaces the answer. Each entry is a typed
 `cited` part (name, path, file or folder, last modification time) and
-`CitedEntryCard.svelte` draws it: the file or folder glyph, its name, `Modified`
-on the 12-hour clock, and a right-anchored **Open file** or **Open folder** action
-that reveals the entry through the same citation reveal a clicked path uses.
+`CitedEntryCard.svelte` draws it: the glyph for what it is, its name, `Modified`
+on the 12-hour clock, and one right-anchored action.
+
+The action follows the entry, because a design is not a folder to browse. A file
+opens in the file viewer and a folder in the file tree; a cited folder inside the
+project's own design or video root is marked as work at resolve time
+(`citedWorkKind` in `src/lib/cited-work.ts`, against `currentWorkRoots`) and its
+action is **Open design** or **Open composition**, which calls `design:open` for
+the thread the card is drawn in. That one call serves the folder (a preview server
+is minted only when the design has none), opens it in the browser (a tab already
+showing that design is reused rather than stacked) and reveals it, because
+clicking the card is the user asking to see the work. A folder whose work can no
+longer be served falls back to the file tree instead of failing silently.
 
 The filed report joins that row automatically, and only it: its path is app-owned
 (the app picks the file name and writes it after the turn ends), so the run cannot

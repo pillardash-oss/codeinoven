@@ -3,8 +3,10 @@ import { resolve } from 'node:path'
 import {
   CITE_ENTRY_LIMIT,
   citedEntryName,
+  citedWorkKind,
   normalizeCitedPath,
-  type CitedEntry
+  type CitedEntry,
+  type CitedWorkKind
 } from '../../lib/cited-work'
 import { isInsideProject } from '../preview/served-folder'
 
@@ -20,7 +22,9 @@ import { isInsideProject } from '../preview/served-folder'
  */
 export async function resolveCitedEntries(
   root: string,
-  paths: readonly string[]
+  paths: readonly string[],
+  /** The project's own design and video folders, project-relative. */
+  workRoots?: { design: string; video: string }
 ): Promise<CitedEntry[]> {
   const entries: CitedEntry[] = []
   const seen = new Set<string>()
@@ -34,11 +38,15 @@ export async function resolveCitedEntries(
     const stats = await lstat(absolute).catch(() => null)
     if (!stats || stats.isSymbolicLink()) continue
     if (!stats.isFile() && !stats.isDirectory()) continue
+    const kind = stats.isDirectory() ? 'directory' : 'file'
+    const work: CitedWorkKind | undefined =
+      kind === 'directory' && workRoots ? citedWorkKind(normalized, workRoots) : undefined
     entries.push({
       name: citedEntryName(normalized),
       path: normalized,
-      kind: stats.isDirectory() ? 'directory' : 'file',
-      modifiedAt: stats.mtimeMs
+      kind,
+      modifiedAt: stats.mtimeMs,
+      ...(work ? { work } : {})
     })
   }
   return entries

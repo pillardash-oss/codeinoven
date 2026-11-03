@@ -363,9 +363,11 @@
                     name: part.name,
                     path: part.path,
                     kind: part.kind,
-                    modifiedAt: part.modifiedAt
+                    modifiedAt: part.modifiedAt,
+                    ...(part.work ? { work: part.work } : {})
                   }}
                   projectId={board.handleAgentEvent.thread.projectId}
+                  threadId={board.handleAgentEvent.thread.id}
                 />
               {/if}
             {/each}

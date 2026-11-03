@@ -1,6 +1,7 @@
 import { Logger } from '../../system/logger'
 import { broadcastThreadMessagesChanged } from '../thread-events'
 import { resolveCitedEntries } from '../cited-entries-service'
+import { currentWorkRoots } from '../../design/work-roots-state'
 import { CITE_ENTRY_LIMIT, normalizeCitedPath, type CitedEntry } from '../../../lib/cited-work'
 import { assistantReportIsTerminal } from '../../../lib/assistant-reports'
 import { citedWorkMessageId } from '../../../lib/published-messages'
@@ -41,7 +42,9 @@ export class ChatEngineCitations {
       .map((path) => normalizeCitedPath(path))
       .filter((path): path is string => path !== null)
     const root = await this.workspaceRoot(thread)
-    const resolved = root ? await resolveCitedEntries(root, requested) : []
+    const resolved = root
+      ? await resolveCitedEntries(root, requested, this.workRootsFor(thread))
+      : []
     const resolvedPaths = new Set(resolved.map((entry) => entry.path))
     const missing = requested.filter((path) => !resolvedPaths.has(path))
 
@@ -91,9 +94,10 @@ export class ChatEngineCitations {
     try {
       const root = await this.workspaceRoot(thread)
       if (!root) return
-      const entries = await resolveCitedEntries(root, declared)
+      const workRoots = this.workRootsFor(thread)
+      const entries = await resolveCitedEntries(root, declared, workRoots)
       if (filed) {
-        const [filedEntry] = await resolveCitedEntries(root, [filed.citation])
+        const [filedEntry] = await resolveCitedEntries(root, [filed.citation], workRoots)
         if (filedEntry) {
           const already = entries.some((entry) => entry.path === filedEntry.path)
           if (!already) entries.unshift({ ...filedEntry, name: filed.title })
@@ -125,7 +129,8 @@ export class ChatEngineCitations {
         name: entry.name,
         path: entry.path,
         kind: entry.kind,
-        modifiedAt: entry.modifiedAt
+        modifiedAt: entry.modifiedAt,
+        ...(entry.work ? { work: entry.work } : {})
       })),
       createdAt: at,
       completedAt: at
@@ -136,6 +141,22 @@ export class ChatEngineCitations {
     // what makes a cached thread re-read its tail, which is the only path an
     // app-published row has into a view that is already on screen.
     broadcastThreadMessagesChanged(thread.projectId, thread.id)
+  }
+
+  /**
+   * The project's design and video folders, or nothing for a conversation whose
+   * cited paths are relative to its own workspace rather than to the project.
+   *
+   * Only a project thread's paths mean the same thing to the design service,
+   * which resolves a cited folder against the project root. Classifying a chat's
+   * `designs` folder as the project's design work would open a served page for a
+   * path the project does not hold.
+   */
+  private workRootsFor(thread: Thread): { design: string; video: string } | undefined {
+    if (conversationWorkspaceDirectory(thread.projectId, thread.id, thread.assistantId)) {
+      return undefined
+    }
+    return currentWorkRoots(thread.projectId)
   }
 
   /** The directory a thread's cited paths resolve against, or null when it has none. */

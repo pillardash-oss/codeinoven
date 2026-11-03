@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
   import type { CitedEntry } from '$shared/cited-work'
   import { revealCitationFile } from '$lib/reveal-file'
@@ -11,16 +12,43 @@
     entry: CitedEntry
     /** The conversation whose workspace the entry lives in. */
     projectId?: string | null
+    /** The thread the card is drawn in, which is where a served design opens. */
+    threadId?: string | null
   }
 
-  let { entry, projectId = null }: Props = $props()
+  let { entry, projectId = null, threadId = null }: Props = $props()
 
   const modifiedAt = $derived(formatDateTimeCompact(entry.modifiedAt))
   const isFolder = $derived(entry.kind === 'directory')
+  /** Authored work is served and shown, never browsed as a folder of files. */
+  const work = $derived(entry.work ?? null)
+  const label = $derived(
+    work === 'design'
+      ? 'Open design'
+      : work === 'video'
+        ? 'Open composition'
+        : isFolder
+          ? 'Open folder'
+          : 'Open file'
+  )
 
-  function openEntry(): void {
+  async function openEntry(): Promise<void> {
     if (!projectId) return
-    void revealCitationFile(projectId, entry.path)
+    if (!work || !threadId) {
+      void revealCitationFile(projectId, entry.path)
+      return
+    }
+    try {
+      // One call does all three steps the app owns: serve the folder (a server is
+      // minted only when this folder has none), open it in the browser (an
+      // existing tab for this design is reused, not stacked), and reveal it,
+      // because clicking the card is the user asking to see the work.
+      await invoke('design:open', projectId, threadId, entry.path, null, true, work)
+    } catch {
+      // A folder that is no longer a servable design still belongs to the reader:
+      // revealing it is better than a button that reports nothing.
+      void revealCitationFile(projectId, entry.path)
+    }
   }
 </script>
 
@@ -33,14 +61,20 @@
   <div class="min-w-0 flex-1">
     <div class="truncate text-[0.8125rem] font-medium text-foreground">{entry.name}</div>
     <div class="text-[0.75rem] text-dimmed">
-      {isFolder ? 'Folder' : 'File'} · Modified {modifiedAt}
+      {work === 'design'
+        ? 'Design'
+        : work === 'video'
+          ? 'Composition'
+          : isFolder
+            ? 'Folder'
+            : 'File'} · Modified {modifiedAt}
     </div>
   </div>
   <CardButton
-    label={isFolder ? 'Open folder' : 'Open file'}
-    title={`Open ${entry.name}`}
+    {label}
+    title={work ? `${label}: ${entry.name}` : `Open ${entry.name}`}
     variant="secondary"
     size="sm"
-    onclick={openEntry}
+    onclick={() => void openEntry()}
   />
 </div>

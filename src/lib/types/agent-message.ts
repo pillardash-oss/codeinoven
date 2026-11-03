@@ -294,6 +294,11 @@ export type AgentPart =
       kind: 'file' | 'directory'
       /** Last modification time of the entry on disk. */
       modifiedAt: number
+      /**
+       * The authored work this folder is, when it is one: a design or a
+       * composition opens served in the browser rather than as a file tree.
+       */
+      work?: 'design' | 'video'
     }
 
 /** A generated image that can be previewed from a conversation or its context sidebar. */
