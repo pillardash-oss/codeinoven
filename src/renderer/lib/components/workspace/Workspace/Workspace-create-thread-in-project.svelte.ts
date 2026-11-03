@@ -19,6 +19,11 @@ import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadSettings } from '$lib/stores/thread-settings.svelte'
 import { findEmptyNewThread, threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import {
+  loadLifecycleIntent,
+  loadProjectLifecycleIntent,
+  saveLifecycleIntent
+} from '$lib/stores/lifecycle-intent'
+import {
   inheritEngineeringLifecycle,
   persistInheritedThreadSettings,
   settingsForNewAssistantTask,
@@ -549,6 +554,32 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     }
   }
 
+  /**
+   * Give a brand-new project thread the mode the user last staged in this
+   * project.
+   *
+   * The staged Toolbox selection is stored per thread id, so a thread created
+   * where no same-project thread is open used to arrive neutral even though the
+   * user had just staged Brainstorm or PRD and created the thread to use it: the
+   * first message then ran as a plain conversation, no Brainstorm workflow
+   * existed, and the agent wrote its own markdown instead of the app-owned
+   * document. Staging it (never applying it) keeps the switches visible and
+   * tappable before the send, which is where a staged selection is committed.
+   *
+   * Inheritance from a source thread already lands on the lifecycle row, so an
+   * intent that is already staged for this thread is left untouched.
+   */
+  private stageProjectEngineeringIntent(projectId: string, threadId: string): void {
+    // The assistant space is never an Engineering workspace, and neither is a
+    // chat: modes are offered on project threads only.
+    if (projectId === ASSISTANT_SPACE_ID || projectId === INBOX_PROJECT_ID) return
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) return
+    if (loadLifecycleIntent(projectId, threadId)) return
+    const remembered = loadProjectLifecycleIntent(projectId)
+    if (!remembered) return
+    saveLifecycleIntent(projectId, threadId, remembered)
+  }
+
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async createThreadInProject(
     project: Project,
@@ -671,6 +702,10 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         // Empty-state creation (no existing thread open): the reused blank
         // thread still counts as the fresh thread this moment created.
         if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
+        // Staged before the view mounts, so the thread view's one restore reads it.
+        if (!(activeThread && activeThread.projectId === project.id)) {
+          this.stageProjectEngineeringIntent(project.id, thread.id)
+        }
         workspaceState.openThread(thread, project)
         if (scopeBucketId) {
           scopeState.updateThread(thread)
@@ -729,6 +764,11 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (requestedBucketId) scopeState.showSidebarForThread(thread as any, requestedBucketId)
     }
+    // Open instantly: a mode the user staged in this project travels with the
+    // new thread, so its very first message is not silently a plain chat. The
+    // staged intent is restored by the thread view on mount, before the send
+    // that commits it.
+    this.stageProjectEngineeringIntent(project.id, optimisticId)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
     // Empty-state creation (no existing thread was open): this new thread gets
