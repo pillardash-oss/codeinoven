@@ -535,6 +535,8 @@ export interface AppConfig {
    * dropped instead of failing the start.
    */
   llamaCppServers?: import('../llama-cpp').LlamaCppServerEntry[]
+  /** Local inference servers the user runs for a runtime the app does not spawn. */
+  localAiEndpoints?: import('../llama-cpp').LocalAiEndpoint[]
   /**
    * How long a local model the app loads stays resident after its last use. One
    * window for every local inference server the app owns, because the same
@@ -627,6 +629,7 @@ export type AppConfigPatch = Partial<
     | 'inAppNotificationSound'
     | 'sound'
     | 'llamaCppServers'
+    | 'localAiEndpoints'
     | 'llamaCppUnload'
     | 'cioCleanupRetentionDays'
     | 'cioCleanupExcludedCategories'

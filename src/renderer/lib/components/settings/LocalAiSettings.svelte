@@ -96,7 +96,7 @@
   {:else if tab === 'settings'}
     <LocalAiSettingsTab {config} {settingsReady} {updateConfig} />
   {:else if worker}
-    <LocalAiWorkerTab runtime={worker} />
+    <LocalAiWorkerTab runtime={worker} {config} {settingsReady} {updateConfig} />
   {:else}
     <p class="text-sm text-muted">
       {detecting ? 'Detecting runtimes…' : 'This runtime is not available.'}
