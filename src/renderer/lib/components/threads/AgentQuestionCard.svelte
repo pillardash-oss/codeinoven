@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioClipboardList from '@pdslng/cio-icon/CioClipboardList.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioPaperclip from '@pdslng/cio-icon/CioPaperclip.svelte'
   import CioSend from '@pdslng/cio-icon/CioSend.svelte'
   import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
@@ -33,6 +34,7 @@
   import type {
     AgentQuestion,
     AgentQuestionOption,
+    AgentQuestionVisual,
     PendingAgentQuestionRequest,
     ProviderCatalog,
     ThreadSettings
@@ -40,6 +42,8 @@
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
   import AgentCardChatActions from './AgentCardChatActions.svelte'
   import AgentQuestionInstructionModal from './AgentQuestionInstructionModal.svelte'
+  import QuestionVisualModal from './QuestionVisualModal.svelte'
+  import { questionVisualSource } from './question-visual-source'
   import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
@@ -113,6 +117,15 @@
   let folded = $state(false)
   /** The option whose instruction the user opened for copying, or null. */
   let instructionOption = $state<AgentQuestionOption | null>(null)
+  /**
+   * The picture the user opened with the eye button.
+   *
+   * A question about something that does not exist yet cannot be answered from
+   * words alone, so the agent attaches the smallest picture of what it means and
+   * this holds the one the user asked to see: the question's own visual, or the
+   * visual attached to one option.
+   */
+  let visualTarget = $state<{ title: string; visual: AgentQuestionVisual } | null>(null)
   // svelte-ignore state_referenced_locally
   let interactedIndexes = new SvelteSet(request.interactedQuestionIndexes)
   let syncedServerState = $state('')
@@ -131,6 +144,12 @@
   }
 
   let question = $derived(request.questions[currentIndex])
+  // The conversation a question's relative picture path resolves inside. The
+  // card's speech scope already names it, so a visual is mounted exactly where
+  // the transcript's own artifacts are.
+  let threadIdForPreview = $derived(
+    scope.kind === 'global' ? null : (scope.threadId ?? request.threadId)
+  )
   let total = $derived(request.questions.length)
   let currentAnswers = $derived(answers[currentIndex] ?? [])
   let currentCustomAnswer = $derived(customAnswers[currentIndex] ?? '')
@@ -449,6 +468,22 @@
     instructionOption = option
   }
 
+  /** Opens the picture attached to the question or to one of its options. */
+  function openVisual(visual: AgentQuestionVisual | undefined, label: string): void {
+    if (working || !visual) return
+    visualTarget = { title: label, visual }
+  }
+
+  // The question's own visual, and the visual of any option that carries one.
+  // A question about alternatives usually shows each alternative separately, so
+  // both forms are offered through the same eye glyph.
+  const questionVisualTitle = $derived(
+    question.visual?.caption ?? `What ${question.header ?? 'this question'} means`
+  )
+  const visualSource = $derived(
+    questionVisualSource(visualTarget?.visual, projectId, threadIdForPreview)
+  )
+
   function openQuestionChat(
     onOpen: ((requestId: string, question: AgentQuestion) => void) | undefined
   ): void {
@@ -501,6 +536,9 @@
   >
     {#snippet actions()}
       <AgentCardChatActions
+        onVisual={question.visual
+          ? () => openVisual(question.visual, questionVisualTitle)
+          : undefined}
         onExplain={onExplain ? () => openQuestionChat(onExplain) : undefined}
         onQuickChat={onQuickChat ? () => openQuestionChat(onQuickChat) : undefined}
         subject="question"
@@ -557,6 +595,19 @@
                 onclick={() => toggleOption(option.label)}
               >
                 {#snippet trailing()}
+                  {#if option.visual}
+                    <button
+                      type="button"
+                      class="flex w-10 shrink-0 items-center justify-center border-l border-border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={working}
+                      onclick={() =>
+                        openVisual(option.visual, option.visual?.caption ?? option.label)}
+                      title={`Show the visual for ${option.label}`}
+                      aria-label={`Show the visual for ${option.label}`}
+                    >
+                      <CioEye size={14} />
+                    </button>
+                  {/if}
                   {#if option.instruction}
                     <button
                       type="button"
@@ -729,6 +780,13 @@
     optionLabel={instructionOption?.label ?? ''}
     instruction={instructionOption?.instruction ?? ''}
     onClose={() => (instructionOption = null)}
+  />
+
+  <QuestionVisualModal
+    open={visualTarget !== null}
+    title={visualTarget?.title ?? 'Visual'}
+    source={visualSource}
+    onClose={() => (visualTarget = null)}
   />
 </section>
 

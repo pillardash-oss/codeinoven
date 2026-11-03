@@ -17,6 +17,35 @@ import type {
   UsagePricingProvenance
 } from './usage'
 
+/**
+ * A visual the agent drew to make a question or one of its options judgeable.
+ *
+ * A question about something that does not exist yet (a new mark on a card, a
+ * layout, a flow) cannot be answered from words alone: the user is asked to
+ * choose between things they cannot see. The agent therefore attaches the
+ * smallest picture that shows what it means, and the card offers it behind one
+ * eye button.
+ *
+ * Exactly one of the fields is set, in this precedence order:
+ *
+ *  - `html`   a self-contained HTML document (no scripts, inline styles only)
+ *  - `svg`    raw SVG markup drawn as an image
+ *  - `image`  markup that renders as an image, e.g. an agent-generated picture
+ *  - `mermaid` a Mermaid diagram, for an agent that can draw nothing else
+ */
+export interface AgentQuestionVisual {
+  /** Self-contained HTML drawn in a sandboxed frame. */
+  html?: string
+  /** Raw SVG markup, rendered as a themed image. */
+  svg?: string
+  /** An image the agent generated or a picture reference it named. */
+  image?: string
+  /** Mermaid source, rendered by the app's own diagram renderer. */
+  mermaid?: string
+  /** One short line naming what the picture shows. */
+  caption?: string
+}
+
 /** A selectable option within an agent question. */
 export interface AgentQuestionOption {
   label: string
@@ -29,6 +58,11 @@ export interface AgentQuestionOption {
   instruction?: string
   /** Explicit provider recommendation, or inferred from a “(Recommended)” label. */
   recommended?: boolean
+  /**
+   * A picture of what picking this option produces, shown behind the option's
+   * eye button. Never sent back to the agent.
+   */
+  visual?: AgentQuestionVisual
 }
 
 /**
@@ -117,6 +151,11 @@ export interface AgentQuestion {
   multiple?: boolean
   /** Allow the user to type a custom answer (default: true). */
   custom?: boolean
+  /**
+   * A picture of what the whole question is about, shown behind the card's eye
+   * button. Options carry their own when the choice is between alternatives.
+   */
+  visual?: AgentQuestionVisual
   /** The question asks the user to share files; offer composer-style file attachment. */
   fileRequest?: boolean
   /** The question asks for a secret value; render a password input instead of options. */

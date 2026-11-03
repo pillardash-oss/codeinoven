@@ -19,8 +19,21 @@ interface CodexQuestionOptionSchema {
     label: { type: 'string'; minLength: number }
     description: { type: 'string'; minLength: number }
     instruction: { type: 'string'; minLength: number }
+    visual: CodexQuestionVisualSchema
   }
   required: ['label', 'description']
+}
+
+interface CodexQuestionVisualSchema {
+  type: 'object'
+  additionalProperties: false
+  properties: {
+    html: { type: 'string'; minLength: number }
+    svg: { type: 'string'; minLength: number }
+    image: { type: 'string'; minLength: number }
+    mermaid: { type: 'string'; minLength: number }
+    caption: { type: 'string'; minLength: number }
+  }
 }
 
 interface CodexQuestionItemSchema {
@@ -35,6 +48,7 @@ interface CodexQuestionItemSchema {
       maxItems: number
       items: CodexQuestionOptionSchema
     }
+    visual: CodexQuestionVisualSchema
     multiple: { type: 'boolean' }
   }
   required: ['question', 'header', 'options']
@@ -59,6 +73,46 @@ export interface CodexQuestionToolSpec {
   description: string
   inputSchema: CodexQuestionToolSchema
 }
+
+/**
+ * The picture an agent may attach to a question or to one of its options.
+ *
+ * Exactly one medium is set. HTML and SVG are authored in place, an image is a
+ * raster the agent generated, and Mermaid is the fallback for a model that can
+ * draw nothing else. The card draws whichever arrived behind one eye button.
+ */
+const CODEX_QUESTION_VISUAL_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    html: {
+      type: 'string',
+      minLength: 1,
+      description:
+        'A self-contained HTML document (inline styles only, no scripts) drawing what this question or option means.'
+    },
+    svg: {
+      type: 'string',
+      minLength: 1,
+      description: 'Raw SVG markup drawing what this question or option means.'
+    },
+    image: {
+      type: 'string',
+      minLength: 1,
+      description: 'A generated picture: a data URL, an http(s) URL, or a path inside the project.'
+    },
+    mermaid: {
+      type: 'string',
+      minLength: 1,
+      description: 'A Mermaid diagram, when the point is a flow or a relationship.'
+    },
+    caption: {
+      type: 'string',
+      minLength: 1,
+      description: 'One short line naming what the picture shows.'
+    }
+  }
+} as const
 
 export const CODEX_QUESTION_TOOL: CodexQuestionToolSpec = {
   name: CODEX_QUESTION_TOOL_NAME,
@@ -88,11 +142,13 @@ export const CODEX_QUESTION_TOOL: CodexQuestionToolSpec = {
                 properties: {
                   label: { type: 'string', minLength: 1 },
                   description: { type: 'string', minLength: 1 },
-                  instruction: { type: 'string', minLength: 1 }
+                  instruction: { type: 'string', minLength: 1 },
+                  visual: CODEX_QUESTION_VISUAL_SCHEMA
                 },
                 required: ['label', 'description']
               }
             },
+            visual: CODEX_QUESTION_VISUAL_SCHEMA,
             multiple: { type: 'boolean' }
           },
           required: ['question', 'header', 'options']
@@ -125,7 +181,7 @@ export function codexQuestionTool(maxQuestions: number): CodexQuestionToolSpec {
   }
 }
 export const CODEX_QUESTION_INSTRUCTION =
-  "The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode. When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card."
+  "The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode. When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card. When the decision is about something that does not exist yet (a new mark, layout, flow or screen), or words alone would leave the user guessing between choices they cannot picture, attach the smallest picture that shows what you mean: `visual.html` for a temporary HTML mockup, `visual.image` for a picture you generated, `visual.svg` for a drawing, or `visual.mermaid` for a flow. Attach it to the question when it applies to the whole choice, or to an option when it shows what that option produces, and one eye button in the card opens it. Keep it simple: enough to make the decision, nothing more."
 
 export function utilityKey(value: string): string {
   return (
