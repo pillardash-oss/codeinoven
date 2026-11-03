@@ -2,6 +2,7 @@ import { DEFAULT_APP_FONT_FAMILY } from '$shared/app-fonts'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
 import { DEFAULT_BROWSER_SEARCH_ENGINE_ID } from '$shared/browser-search-engines'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
+import { DEFAULT_LOCAL_AI_UNLOAD_OPTION } from '$shared/llama-cpp'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
 import {
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
@@ -66,6 +67,7 @@ export const defaultConfig: AppConfig = {
   backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE_ID,
+  llamaCppUnload: DEFAULT_LOCAL_AI_UNLOAD_OPTION,
   browserCustomSearchEngines: [],
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
