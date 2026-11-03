@@ -15,6 +15,7 @@ import {
   isLlamaCppHostValid,
   isLlamaCppPortValid,
   llamaCppPtyId,
+  localAiModelCopy,
   type LlamaCppLogStream
 } from '../../lib/llama-cpp'
 import { detectLlamaCppRuntime, probeLlamaCppServer, stopLlamaCppServer } from './llama-cpp-service'
@@ -97,17 +98,27 @@ export function registerLlamaCppIpc(
     return probeLlamaCppServer(`http://${host}:${port}`)
   })
 
-  ipcMain.handle('llamaCpp:pickModel', async () => {
+  ipcMain.handle('llamaCpp:pickModel', async (_event, runtime: unknown) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
     if (win && !win.isFocused()) win.focus()
-    const options: Electron.OpenDialogOptions = {
-      title: 'Choose a GGUF model',
-      properties: ['openFile'],
-      filters: [
-        { name: 'GGUF models', extensions: ['gguf'] },
-        { name: 'All Files', extensions: ['*'] }
-      ]
-    }
+    // An MLX or Core ML model is a folder, not a single file; a GGUF model is one
+    // file. The dialog the user sees says which, so a wrong choice is obvious
+    // before they pick it.
+    const copy = localAiModelCopy(runtime === 'mlx' || runtime === 'coreml' ? runtime : 'llama.cpp')
+    // An MLX or Core ML model is a folder of weights; a GGUF model is a single
+    // file. The dialog names and filters what this engine actually loads, so a
+    // wrong choice is obvious before the user picks it.
+    const options: Electron.OpenDialogOptions =
+      runtime === 'mlx' || runtime === 'coreml'
+        ? { title: copy.pickTitle, properties: ['openDirectory'] }
+        : {
+            title: copy.pickTitle,
+            properties: ['openFile'],
+            filters: [
+              { name: 'GGUF models', extensions: ['gguf'] },
+              { name: 'All Files', extensions: ['*'] }
+            ]
+          }
     const result = win
       ? await dialog.showOpenDialog(win, options)
       : await dialog.showOpenDialog(options)

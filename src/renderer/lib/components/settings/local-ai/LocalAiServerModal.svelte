@@ -17,6 +17,7 @@
     isLlamaCppPortValid,
     llamaCppEntryProblem,
     llamaCppModelLabel,
+    localAiModelCopy,
     parseHuggingFaceModelReference,
     type LlamaCppServerEntry,
     type LocalAiRuntimeId
@@ -134,25 +135,29 @@
     buildLlamaServerArgs(draft).length > 0 ? describeLlamaServerCommand(draft) : ''
   )
 
-  const sourceChoices: Array<{
-    id: 'local' | 'huggingface'
-    title: string
-    hint: string
-    icon: typeof CioFolder
-  }> = [
-    {
-      id: 'local',
-      title: 'Local GGUF file',
-      hint: 'A file already on this machine, referenced where it lives.',
-      icon: CioFolder
-    },
-    {
-      id: 'huggingface',
-      title: 'Hugging Face',
-      hint: 'llama.cpp downloads the model on the first start.',
-      icon: CioDownload
-    }
-  ]
+  /** What this engine calls its model, so no tab tells an MLX user about GGUF. */
+  const copy = $derived(localAiModelCopy(runtime))
+
+  const sourceChoices = $derived(
+    [
+      {
+        id: 'local' as const,
+        title: copy.localTitle,
+        hint: copy.localHint,
+        icon: CioFolder
+      },
+      ...(copy.huggingFace
+        ? [
+            {
+              id: 'huggingface' as const,
+              title: 'Hugging Face',
+              hint: 'Fetched when the server first loads it.',
+              icon: CioDownload
+            }
+          ]
+        : [])
+    ].filter((choice) => choice.id !== 'huggingface' || copy.huggingFace)
+  )
 
   async function chooseSource(next: 'local' | 'huggingface'): Promise<void> {
     if (source === next) return
@@ -165,7 +170,7 @@
   }
 
   async function pickFile(): Promise<void> {
-    const path = await invoke('llamaCpp:pickModel')
+    const path = await invoke('llamaCpp:pickModel', runtime)
     if (!path) return
     modelPath = path
     if (!name.trim() || name.trim() === 'Local server') {
@@ -374,8 +379,8 @@
               <input
                 class={`${monoFieldClass} min-w-0 flex-1`}
                 bind:value={modelPath}
-                placeholder="/path/to/model.gguf"
-                aria-label="Path of the GGUF model"
+                placeholder={copy.localPlaceholder}
+                aria-label={copy.localTitle}
               />
               <button
                 type="button"
@@ -393,15 +398,15 @@
                 class={monoFieldClass}
                 {@attach captureReference}
                 bind:value={modelReference}
-                placeholder="LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M"
+                placeholder={copy.referencePlaceholder}
               />
             </label>
             {#if parsedReference}
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                llama.cpp downloads <span class="font-mono"
+                The server fetches <span class="font-mono"
                   >{formatHuggingFaceModelReference(parsedReference)}</span
                 >
-                on the first start.
+                when it first loads the model.
               </p>
             {:else if modelReference.trim().length > 0}
               <p class="text-[0.6875rem] text-danger">
@@ -410,8 +415,8 @@
               </p>
             {:else}
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                Paste <span class="font-mono">LiquidAI/LFM2.5-2.6B-GGUF</span>, a quant
-                <span class="font-mono">owner/repo:Q5_K_M</span>, or a specific file URL.
+                Paste <span class="font-mono">{copy.referencePlaceholder}</span>, or a specific file
+                URL.
               </p>
             {/if}
           {/if}

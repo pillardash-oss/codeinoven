@@ -365,12 +365,68 @@ export function groupLlamaCppServers(
  * start whichever one they want. Starting one while another is bound there asks
  * before the running model is stopped, so this validation must not refuse it.
  */
+/** How one engine's model is named in the editor and on the row. */
+export interface LocalAiModelCopy {
+  /** What the local source is called, e.g. "Local GGUF file". */
+  localTitle: string
+  localHint: string
+  localPlaceholder: string
+  /** Placeholder for the Hugging Face reference, when the engine takes one. */
+  referencePlaceholder: string
+  /** Whether this engine can pull a model from a Hugging Face reference. */
+  huggingFace: boolean
+  /** Pick dialog title, so the OS dialog names the right thing. */
+  pickTitle: string
+}
+
+/**
+ * The words one engine's model uses.
+ *
+ * An MLX server loads a model folder of safetensors, and a Core ML server loads a
+ * compiled `.mlpackage`; neither has anything to do with GGUF, and saying so in
+ * the editor is how a user ends up pointing an engine at a file it cannot read.
+ */
+export function localAiModelCopy(runtime: LocalAiRuntimeId): LocalAiModelCopy {
+  if (runtime === 'mlx') {
+    return {
+      localTitle: 'Local MLX model',
+      localHint: 'A model folder holding the weights and the tokenizer.',
+      localPlaceholder: '/path/to/mlx-model',
+      referencePlaceholder: 'mlx-community/Qwen3-4B-4bit',
+      huggingFace: true,
+      pickTitle: 'Choose an MLX model folder'
+    }
+  }
+  if (runtime === 'coreml') {
+    return {
+      localTitle: 'Local Core ML model',
+      localHint: 'A compiled .mlpackage or .mlmodelc folder.',
+      localPlaceholder: '/path/to/Model.mlpackage',
+      referencePlaceholder: '',
+      huggingFace: false,
+      pickTitle: 'Choose a Core ML model'
+    }
+  }
+  return {
+    localTitle: 'Local GGUF file',
+    localHint: 'A file already on this machine, referenced where it lives.',
+    localPlaceholder: '/path/to/model.gguf',
+    referencePlaceholder: 'LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M',
+    huggingFace: true,
+    pickTitle: 'Choose a GGUF model'
+  }
+}
+
 export function llamaCppEntryProblem(entry: LlamaCppServerEntry): string | null {
   const name = entry.name.trim()
   if (name.length === 0) return 'Give the server a name'
   if (name.length > LLAMA_CPP_NAME_MAX_LENGTH) return 'The name is too long'
-  if (llamaCppModelSource(entry) === null)
-    return 'Choose a local .gguf file or a Hugging Face reference'
+  if (llamaCppModelSource(entry) === null) {
+    const copy = localAiModelCopy(entry.runtime)
+    return copy.huggingFace
+      ? 'Choose a local model or a Hugging Face reference'
+      : `Choose a ${copy.localTitle.toLowerCase()}`
+  }
   if (!isLlamaCppHostValid(entry.host)) return 'Enter a host such as 127.0.0.1'
   if (!isLlamaCppPortValid(entry.port)) return 'Enter a port between 1 and 65535'
   if (entry.extraFlags.length > LLAMA_CPP_FLAGS_MAX_LENGTH) return 'The extra flags are too long'

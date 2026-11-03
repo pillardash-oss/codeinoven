@@ -17,6 +17,7 @@ import type {
   LlamaCppLogStream,
   LlamaCppProbeResult,
   LlamaCppRuntimeStatus,
+  LocalAiRuntimeId,
   LocalAiRuntimeSummary,
   LocalAiUnloadResult
 } from '../llama-cpp'
@@ -69,7 +70,7 @@ export const invokeAppContract = {
   /** Follow a row's log, either over its live PTY or by reading its log file. */
   'llamaCpp:logStream': {} as Contract<[entryId: string, follow: boolean], LlamaCppLogStream>,
   /** Pick a local `.gguf` file; the row references it where it lives. */
-  'llamaCpp:pickModel': {} as Contract<[], string | null>,
+  'llamaCpp:pickModel': {} as Contract<[runtime?: LocalAiRuntimeId], string | null>,
   'dialog:pickFolder': {} as Contract<[], string | null>,
   'dialog:pickCloneDestination': {} as Contract<[], string | null>,
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,
