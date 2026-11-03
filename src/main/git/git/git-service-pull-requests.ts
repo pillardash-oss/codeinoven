@@ -1,4 +1,15 @@
-import type { GitStatus, PrComposeInput, PullRequestCompare } from '../../../lib/types'
+import type {
+  GitStatus,
+  PrComposeInput,
+  PrResolveOptions,
+  PullRequestCompare
+} from '../../../lib/types'
+import { Logger } from '../../system/logger'
+import {
+  clearPrResolveSession,
+  readPrResolveSession,
+  writePrResolveSession
+} from '../pr-resolve-session'
 import type { GitServiceCore } from './git-service-core'
 import type { PullRequestComposeContext } from './git-service-pull-request'
 import {
@@ -60,10 +71,7 @@ export class GitServicePullRequests {
    * refreshed status (with `conflicted` paths and `conflictState: 'merge'`) is
    * returned for the renderer to hand over to the conflict-resolution UI.
    */
-  async preparePrResolve(
-    projectPath: string,
-    options: { remote: string; pullNumber: number; baseBranch: string }
-  ): Promise<GitStatus> {
+  async preparePrResolve(projectPath: string, options: PrResolveOptions): Promise<GitStatus> {
     return this.core.enqueue(projectPath, async () => {
       const directory = await this.core.repo(projectPath)
       const git = this.core.client(directory)
@@ -89,6 +97,19 @@ export class GitServicePullRequests {
           await git.merge([baseRef]).catch(() => {})
         })
       )
+      // Record the session where the finish step can find it again: the panel
+      // used to hold this in renderer memory, so a reload in between turned
+      // Complete merge into a plain commit that never reached the PR.
+      // A record that cannot be written must not fail a checkout that already
+      // succeeded: the panel then shows the honest commit-only completion instead
+      // of reporting a prepare that did happen as an error.
+      await writePrResolveSession(directory, {
+        ...options,
+        branch: localBranch,
+        createdAt: Date.now()
+      }).catch((error: unknown) => {
+        Logger.dev('Could not record the PR conflict-resolution session', error)
+      })
       return this.core.readStatus(directory)
     })
   }
@@ -106,17 +127,20 @@ export class GitServicePullRequests {
    */
   async finishPrResolve(
     projectPath: string,
-    options: {
-      remote: string
-      pullNumber: number
-      headBranch: string
-      returnBranch: string
-      token?: string
-    }
+    options: PrResolveOptions & { token?: string }
   ): Promise<GitStatus> {
     return this.core.enqueue(projectPath, async () => {
       const directory = await this.core.repo(projectPath)
       const localBranch = `pr-${options.pullNumber}`
+      // The recorded session is the truth for where this resolution goes: it was
+      // written for exactly this checkout and this pull request, so a stale
+      // renderer payload can never push a resolution to the wrong branch.
+      const recorded = await readPrResolveSession(directory, localBranch)
+      const session = recorded ?? {
+        ...options,
+        branch: localBranch,
+        createdAt: 0
+      }
       // The push publishes to the PR's head branch, so it takes the remote lane;
       // checking the original branch back out and dropping the temporary one are
       // local writes and stay on this lane.
@@ -125,14 +149,17 @@ export class GitServicePullRequests {
           const pushClient = options.token
             ? this.core.withAuthHeader(directory, options.token)
             : this.core.client(directory)
-          await pushClient.push([options.remote, `${localBranch}:${options.headBranch}`])
+          await pushClient.push([session.remote, `${localBranch}:${session.headBranch}`])
         })
       )
       await this.core.wrapError(projectPath, 'mutation', async () => {
         const git = this.core.client(directory)
-        await git.checkout(options.returnBranch)
+        await git.checkout(session.returnBranch)
         await git.deleteLocalBranch(localBranch, true)
       })
+      // The branch is gone, so the session is finished: nothing may keep offering
+      // to push a resolution that has already been published.
+      await clearPrResolveSession(directory, options.pullNumber)
       return this.core.readStatus(directory)
     })
   }

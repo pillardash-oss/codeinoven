@@ -57,7 +57,7 @@ import {
   type PrCommentKind,
   type PrMinimizeReason,
   type PrReactionContent,
-  type PrResolveOptions,
+  type PrResolveSession,
   type PrState,
   type Project,
   type PullRequestBundle,
@@ -447,11 +447,11 @@ export class GitState {
     this.local.conflictsMode = value
   }
 
-  get prResolveSession(): (PrResolveOptions & { projectId: string }) | null {
+  get prResolveSession(): (PrResolveSession & { projectId: string }) | null {
     return this.local.prResolveSession
   }
 
-  set prResolveSession(value: (PrResolveOptions & { projectId: string }) | null) {
+  set prResolveSession(value: (PrResolveSession & { projectId: string }) | null) {
     this.local.prResolveSession = value
   }
   remoteIssueFor(projectId: string, scopeBucketId?: string): GitRemoteIssue | null {

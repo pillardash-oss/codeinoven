@@ -10,7 +10,8 @@ import type {
   GitFileChange,
   GitFileStatus,
   GitStatus,
-  MergeSummary
+  MergeSummary,
+  PrResolveSession
 } from '../../../lib/types'
 import { parseWorktreePorcelain } from '../scope-worktree/scope-worktree-porcelain'
 
@@ -115,7 +116,8 @@ export async function detectConflictState(
 export function mapStatus(
   directory: string,
   status: StatusResult,
-  conflictState: 'merge' | 'rebase' | 'none'
+  conflictState: 'merge' | 'rebase' | 'none',
+  prResolveSession: PrResolveSession | null
 ): GitStatus {
   const conflicted = status.conflicted
   const changes: GitFileChange[] = []
@@ -186,7 +188,8 @@ export function mapStatus(
     untrackedChanges,
     conflicted,
     ahead: status.ahead ?? 0,
-    behind: status.behind ?? 0
+    behind: status.behind ?? 0,
+    prResolveSession
   }
 }
 

@@ -662,9 +662,9 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
 
   /**
    * The temporary `pr-<n>` branch a PR conflict resolution is staged on, while
-   * its session is still open. `preparePrResolve` records the session and the
-   * store drops it once the branch is gone, so this names the branch the finish
-   * step still has to delete.
+   * its session is still open. Main records the session beside the pull request
+   * and reports it on every status read, so this survives a reload, and the
+   * branch the finish step still has to push from and delete.
    */
   prResolveBranch = $derived(
     gitState.prResolveSession ? `pr-${gitState.prResolveSession.pullNumber}` : null
@@ -690,6 +690,18 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
   prResolvePending = $derived(this.prResolveBranch !== null && this.conflicted.length === 0)
 
   mergeAwaitsCompletion = $derived(this.mergePending || this.prResolvePending)
+
+  /**
+   * A merge is pending on a temporary `pr-<n>` branch, but no recorded PR session
+   * was found for it. Then completing the merge only writes the commit in this
+   * checkout: nothing is pushed, and the pull request keeps its conflicts. The
+   * panel says so instead of implying the resolution will be published.
+   */
+  prResolveLost = $derived(
+    this.mergePending &&
+      this.prResolveBranch === null &&
+      /^pr-\d+$/u.test(this.status?.branch ?? '')
+  )
 
   /** Complete-merge modal state: optional title/description, defaults auto-generated. */
   completeMergeOpen = $state(false)
@@ -725,10 +737,20 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
   async confirmCompleteMerge(): Promise<void> {
     if (this.root.confirmAcceptAllConflicts.completeMergeBusy || !this.mergeAwaitsCompletion) return
     const temporaryBranch = this.prResolveBranch
+    const lostSessionBranch = this.prResolveLost ? (this.status?.branch ?? null) : null
     if (this.mergePending) {
       await gitState.commit(this.root.props.projectId, this.mergeCommitMessage())
       if (gitState.error) return
-      if (!temporaryBranch) toast.success('Merge committed')
+      // A local merge is done once committed. A `pr-<n>` branch with no recorded
+      // session is not: the commit stays here, so say where it stops instead of
+      // letting it read as a published resolution.
+      if (!temporaryBranch) {
+        toast.success(
+          lostSessionBranch
+            ? `Merge committed on ${lostSessionBranch}; push it to update the pull request`
+            : 'Merge committed'
+        )
+      }
     }
     if (temporaryBranch) {
       const finished = await gitState.finishPrResolve(this.root.props.projectId)

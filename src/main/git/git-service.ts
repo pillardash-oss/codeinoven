@@ -21,7 +21,8 @@ import type {
   GitSyncSummary,
   MergeSummary,
   PullRequestCompare,
-  PrComposeInput
+  PrComposeInput,
+  PrResolveOptions
 } from '../../lib/types'
 import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
 import { GitServiceBranches } from './git/git-service-branches'
@@ -382,22 +383,13 @@ export class GitService {
     return this.mergeRebase.rebaseAction(projectPath, action)
   }
 
-  async preparePrResolve(
-    projectPath: string,
-    options: { remote: string; pullNumber: number; baseBranch: string }
-  ): Promise<GitStatus> {
+  async preparePrResolve(projectPath: string, options: PrResolveOptions): Promise<GitStatus> {
     return this.pullRequests.preparePrResolve(projectPath, options)
   }
 
   async finishPrResolve(
     projectPath: string,
-    options: {
-      remote: string
-      pullNumber: number
-      headBranch: string
-      returnBranch: string
-      token?: string
-    }
+    options: PrResolveOptions & { token?: string }
   ): Promise<GitStatus> {
     return this.pullRequests.finishPrResolve(projectPath, options)
   }

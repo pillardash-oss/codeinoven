@@ -533,6 +533,7 @@
     mergeAwaitsCompletion={board.loadRepoState.mergeAwaitsCompletion}
     mergePending={board.loadRepoState.mergePending}
     prResolveBranch={board.loadRepoState.prResolveBranch}
+    prResolveLost={board.loadRepoState.prResolveLost}
     completeMergeBusy={board.confirmAcceptAllConflicts.completeMergeBusy}
     pushRecoverMode={board.loadRepoState.pushRecoverMode}
     localBranches={board.confirmAcceptAllConflicts.localBranches}

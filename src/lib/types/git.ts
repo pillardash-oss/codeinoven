@@ -81,6 +81,12 @@ export interface GitStatus {
   ahead: number
   /** Commits the local branch is behind its upstream by. */
   behind: number
+  /**
+   * The prepared PR conflict-resolution session this checkout holds, when HEAD is
+   * its temporary `pr-<n>` branch. It is recorded on disk, so a reloaded or
+   * restarted panel still knows to push the resolution back to the pull request.
+   */
+  prResolveSession: PrResolveSession | null
 }
 
 /** One local or remote-tracking branch ref. */
@@ -470,6 +476,24 @@ export interface PrResolveOptions {
   headBranch: string
   /** The branch the user was on before the temporary `pr-<n>` branch was checked out. */
   returnBranch: string
+}
+
+/**
+ * A prepared PR conflict-resolution session: the pull request's head checked out
+ * locally as `pr-<number>` with the base merged in. Recorded when the panel
+ * prepares the checkout so the finish step no longer depends on renderer memory.
+ */
+export interface PrResolveSession {
+  /** Remote to fetch from and push the resolution back to (e.g. `origin`). */
+  remote: string
+  pullNumber: number
+  baseBranch: string
+  headBranch: string
+  returnBranch: string
+  /** The temporary local branch holding the resolution (`pr-<number>`). */
+  branch: string
+  /** Epoch ms the session was prepared. */
+  createdAt: number
 }
 
 /** Merge method accepted by provider merge endpoints. */
