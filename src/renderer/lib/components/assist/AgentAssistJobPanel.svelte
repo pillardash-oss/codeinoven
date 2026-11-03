@@ -9,15 +9,16 @@
   }
   let { job }: Props = $props()
   const steps = $derived.by((): JobStepView[] => {
-    const stages = job.delivery === 'draft' ? ASSIST_STEPS.slice(0, 4) : ASSIST_STEPS
+    // A reviewed brief's preparation ends at the prompt. Once that prompt is
+    // sent the job is a live run, so it reports the same steps as one that was
+    // sent immediately.
+    const reviewing = job.delivery === 'draft' && !job.started
+    const stages = reviewing ? ASSIST_STEPS.slice(0, 4) : ASSIST_STEPS
     const active = stages.findIndex((step) => step.id === job.stage)
     return [
       ...stages.map((step, index): JobStepView => ({
         id: step.id,
-        label:
-          job.delivery === 'draft' && step.id === 'dispatch'
-            ? 'Opening the prompt for review'
-            : step.label,
+        label: reviewing && step.id === 'dispatch' ? 'Opening the prompt for review' : step.label,
         state:
           job.status === 'succeeded' || index < active
             ? 'complete'
@@ -55,7 +56,9 @@
   {steps}
   error={job.error}
   note={job.status === 'running'
-    ? 'You can keep working. Progress continues here and in the thread.'
+    ? job.awaitingSend
+      ? 'Edit and send the prompt in the thread. This panel follows the run from there.'
+      : 'You can keep working. Progress continues here and in the thread.'
     : job.status === 'failed' && !job.threadId
       ? 'The handoff stopped before a thread was ready. Start a new assistance request to try again.'
       : job.delivery === 'draft'

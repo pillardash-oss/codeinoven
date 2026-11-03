@@ -377,6 +377,9 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
       () => {
         this.selectedPullRequest = null
         this.activeTab = 'changes'
+      },
+      (threadId) => {
+        this.root.loadRepoState.agentConflictThreadId = threadId
       }
     )
   }

@@ -404,7 +404,9 @@ export async function preparePrConflictSession(
  * The confirmed handoff first prepares the working tree and then builds the
  * thread on exactly that checkout, so the agent can never resolve markers in a
  * different directory from the one the panel prepared. The agent never pushes;
- * the user finishes with Complete merge.
+ * the user finishes with Complete merge. `onThread` receives the thread as soon
+ * as it exists, so the panel that started this can reopen it while the agent
+ * works and after it stops.
  */
 export async function resolvePrConflictsWithAgent(
   projectId: string,
@@ -412,7 +414,8 @@ export async function resolvePrConflictsWithAgent(
   scopeBucketId: string,
   remote: string,
   returnBranch: string,
-  onPrepared: () => void
+  onPrepared: () => void,
+  onThread?: (threadId: string) => void
 ): Promise<void> {
   agentAssist.open({
     projectId,
@@ -421,6 +424,7 @@ export async function resolvePrConflictsWithAgent(
       'The agent resolves the conflict markers in the prepared checkout, then stops for your review.',
     scopeBucketId,
     scopeLocked: true,
+    onThread,
     prepare: async ({ project, settings }) => {
       const prepared = await preparePrConflictSession(projectId, pr, remote, returnBranch)
       if (!prepared)
@@ -443,12 +447,14 @@ export async function resolvePrConflictsWithAgent(
  * Resolve whatever integration is in progress with the agent's help. The
  * conflicts are already in the working tree (a pull, a merge or a rebase), so
  * this only has to hand the agent the brief. The thread opens in
- * `scopeBucketId`, which is the checkout the conflicted working tree belongs to.
+ * `scopeBucketId`, which is the checkout the conflicted working tree belongs to,
+ * and `onThread` reports it back so the panel can reopen it later.
  */
 export async function resolveCurrentConflictsWithAgent(
   projectId: string,
   scopeBucketId: string,
-  branchLabel: string
+  branchLabel: string,
+  onThread?: (threadId: string) => void
 ): Promise<void> {
   agentAssist.open({
     projectId,
@@ -457,6 +463,7 @@ export async function resolveCurrentConflictsWithAgent(
       'The agent resolves the conflict markers in this checkout, then stops for your review.',
     scopeBucketId,
     scopeLocked: true,
+    onThread,
     prepare: async ({ project, settings }) =>
       prepareConflictHandoff({
         projectId,

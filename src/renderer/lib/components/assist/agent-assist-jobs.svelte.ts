@@ -21,6 +21,14 @@ export interface AgentAssistJob {
   error: string | null
   minimized: boolean
   started: boolean
+  /**
+   * True while this job's thread holds a brief the user has not sent yet.
+   *
+   * A reviewed prompt is the same handoff as one sent immediately, only later:
+   * the thread exists, the job is attached to it, and it starts streaming the
+   * moment that prompt becomes a turn.
+   */
+  awaitingSend: boolean
   tools: JobStepView[]
 }
 
@@ -32,9 +40,35 @@ export const ASSIST_STEPS = [
   { id: 'agent', label: 'Agent working' }
 ] as const
 
+/**
+ * How long a reviewed brief keeps its job attached to its thread.
+ *
+ * The prompt is the user's to send, and the job is what streams the run once
+ * they do. Ten minutes covers reading and rewording a brief without leaving a
+ * listener armed for a prompt that will not be sent today.
+ */
+const PROMPT_WAIT_MS = 10 * 60 * 1000
+
+/**
+ * Thread statuses that mean the agent has picked the brief up and is working.
+ *
+ * Read only by a job that is waiting for its reviewed prompt to be sent, so a
+ * fresh thread (`created`) or one that never ran says nothing and the wait
+ * continues.
+ */
+const RUNNING_THREAD_STATUSES = new Set<string>([
+  'planning',
+  'executing',
+  'spec',
+  'awaiting_approval',
+  'working-paused'
+])
+
 class AgentAssistJobs {
   jobs = $state<AgentAssistJob[]>([])
   private listeners: Array<() => void> = []
+  /** Waiting jobs by id: their reviewed brief has not been sent yet. */
+  private promptWaits = new Map<string, ReturnType<typeof setTimeout>>()
 
   start(
     request: AgentAssistRequest,
@@ -53,6 +87,7 @@ class AgentAssistJobs {
       error: null,
       minimized: false,
       started: false,
+      awaitingSend: false,
       tools: []
     }
     const retained = new Set(
@@ -74,7 +109,9 @@ class AgentAssistJobs {
       })
     })
       .then(() => {
-        if (delivery === 'draft') this.finish(job.id, 'succeeded')
+        // A reviewed brief has started no run yet: the job stays on the thread
+        // that now holds the prompt and begins streaming the moment it is sent.
+        if (delivery === 'draft') this.awaitSend(job.id)
       })
       .catch((error: unknown) => {
         this.finish(
@@ -93,7 +130,54 @@ class AgentAssistJobs {
     this.patch(id, { minimized: false })
   }
   close(id: string): void {
+    this.clearPromptWait(id)
     this.jobs = this.jobs.filter((job) => job.id !== id || job.status === 'running')
+  }
+
+  /**
+   * Keep a reviewed brief's job on its thread until that brief is sent.
+   *
+   * The thread already exists and opens with the prompt in the composer, so
+   * this is the same job in another state rather than a finished one: it stops
+   * preparing and starts watching for the turn the user is about to start. The
+   * wait is bounded, so a prompt that is never sent releases its listener
+   * instead of keeping the panel armed for the rest of the session.
+   */
+  private awaitSend(id: string): void {
+    this.patch(id, {
+      stage: 'dispatch',
+      detail: 'Prompt ready. Send it in the thread.',
+      awaitingSend: true
+    })
+    this.clearPromptWait(id)
+    this.promptWaits.set(
+      id,
+      setTimeout(() => this.finish(id, 'succeeded'), PROMPT_WAIT_MS)
+    )
+  }
+
+  private clearPromptWait(id: string): void {
+    const timer = this.promptWaits.get(id)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.promptWaits.delete(id)
+  }
+
+  /** The reviewed brief became a turn: this job is a live run again. */
+  private beginRun(id: string, detail: string): void {
+    this.clearPromptWait(id)
+    this.patch(id, { stage: 'agent', started: true, awaitingSend: false, detail })
+  }
+
+  /** The prompt was sent and the run behind it failed or was stopped. */
+  private startFailed(id: string, status: 'failed' | 'interrupted'): void {
+    this.finish(
+      id,
+      'failed',
+      status === 'interrupted'
+        ? 'The agent was stopped.'
+        : 'The agent run failed. Open the thread for details.'
+    )
   }
 
   private patch(id: string, patch: Partial<AgentAssistJob>): void {
@@ -103,6 +187,7 @@ class AgentAssistJobs {
   }
 
   private finish(id: string, status: JobStatus, error: string | null = null): void {
+    this.clearPromptWait(id)
     this.patch(id, {
       status,
       error,
@@ -123,11 +208,22 @@ class AgentAssistJobs {
         const job = this.jobs.find(
           (entry) =>
             entry.status === 'running' &&
-            entry.started &&
             entry.projectId === thread.projectId &&
             entry.threadId === thread.id
         )
         if (!job) return
+        // A thread in one of these states is running the brief this job handed
+        // it, so a reviewed prompt stops waiting and is followed exactly like
+        // one that was sent immediately. A failure is followed the same way.
+        if (job.awaitingSend) {
+          if (RUNNING_THREAD_STATUSES.has(thread.status)) {
+            this.beginRun(job.id, 'Starting the agent')
+          } else if (thread.status === 'failed' || thread.status === 'interrupted') {
+            this.startFailed(job.id, thread.status)
+            return
+          }
+        }
+        if (!job.started) return
         if (thread.status === 'failed' || thread.status === 'interrupted') {
           this.finish(
             job.id,
@@ -170,11 +266,13 @@ class AgentAssistJobs {
     const job = this.jobs.find(
       (entry) =>
         entry.status === 'running' &&
-        entry.delivery === 'immediate' &&
         entry.projectId === target.projectId &&
         entry.threadId === target.conversationId
     )
     if (!job || (job.stage !== 'dispatch' && job.stage !== 'agent')) return
+    // Any turn this thread runs belongs to this job, whether the app sent the
+    // brief or the user did after reviewing it.
+    if (job.awaitingSend) this.beginRun(job.id, 'Starting the agent')
     if (event.type === 'session.error') {
       this.finish(job.id, 'failed', event.error ?? 'The agent stopped with an error.')
     } else if (

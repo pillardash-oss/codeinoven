@@ -96,14 +96,15 @@ function reportStartFailure(
  * until this decides what to do with it. `immediate` sends the brief the moment
  * the thread exists, `draft` leaves the same brief in the composer for the user
  * to adjust. Both open the thread, so the user watches the run they started
- * with the model, thinking level, permissions, Oven and scope they confirmed.
+ * with the model, thinking level, permissions, Oven and scope they confirmed,
+ * and both resolve with that thread's id so the caller keeps following it.
  */
 export async function runAgentAssist(
   request: AgentAssistRequest,
   selection: AgentAssistSelection,
   delivery: AgentAssistDelivery,
   onProgress: (progress: AgentAssistProgress) => void = () => undefined
-): Promise<void> {
+): Promise<string> {
   const project = await invoke('project:get', request.projectId)
   if (!project) throw new Error('This project is no longer available')
   // The reader's place when they confirmed the handoff: the prepared thread only
@@ -130,6 +131,10 @@ export async function runAgentAssist(
       settings: selection.settings,
       project
     })
+    // The thread exists from here on, so the surface that raised this request
+    // gets its id before anything is opened or sent: the initiator and the
+    // progress job both follow the same thread, whichever delivery was picked.
+    request.onThread?.(prepared.threadId)
     onProgress({
       stage: 'dispatch',
       detail: delivery === 'draft' ? 'Opening the prompt' : 'Starting the agent',
@@ -157,32 +162,39 @@ export async function runAgentAssist(
         origin !== null && current.projectId === origin.projectId && current.id === origin.threadId
       )
     })
-    if (delivery === 'immediate') {
-      try {
-        // The confirmed configuration travels with the message: the turn runs
-        // (and the thread's row is written) with the model, Oven and
-        // permissions the user picked, never with whatever a row read returns.
-        await sendThreadMessageHeadless(request.projectId, prepared.threadId, {
-          text: prepared.text,
-          attachments: prepared.attachments ?? [],
-          settings: selection.settings
-        })
-      } catch (error) {
-        // A submit-time failure (an unreachable Oven, a provider that refused
-        // the session) is reported in the thread itself, as the card the user
-        // can act on and retry. Propagate it to the background job too, so a
-        // refused start never looks like a successful review.
-        reportStartFailure(request.projectId, prepared.threadId, selection, error)
-        throw error
-      }
+    if (delivery === 'draft') {
+      // The brief is waiting in the composer, so the run has not started yet and
+      // the job stays on this thread until the user sends it (or its wait ends).
+      onProgress({
+        stage: 'dispatch',
+        detail: 'Prompt ready. Send it in the thread.',
+        threadId: prepared.threadId
+      })
+      return prepared.threadId
+    }
+    try {
+      // The confirmed configuration travels with the message: the turn runs
+      // (and the thread's row is written) with the model, Oven and
+      // permissions the user picked, never with whatever a row read returns.
+      await sendThreadMessageHeadless(request.projectId, prepared.threadId, {
+        text: prepared.text,
+        attachments: prepared.attachments ?? [],
+        settings: selection.settings
+      })
+    } catch (error) {
+      // A submit-time failure (an unreachable Oven, a provider that refused
+      // the session) is reported in the thread itself, as the card the user
+      // can act on and retry. Propagate it to the background job too, so a
+      // refused start never looks like a successful review.
+      reportStartFailure(request.projectId, prepared.threadId, selection, error)
+      throw error
     }
     return prepared.threadId
   }
 
   if (selection.scopeBucketId) {
     onProgress({ stage: 'scope', detail: 'Using the selected checkout' })
-    await prepare(selection.scopeBucketId)
-    return
+    return prepare(selection.scopeBucketId)
   }
 
   const checkout = request.newCheckout
@@ -213,7 +225,7 @@ export async function runAgentAssist(
   } finally {
     dispose()
   }
-  await prepare(bucket.id)
+  return prepare(bucket.id)
 }
 
 export { openAssistThread }

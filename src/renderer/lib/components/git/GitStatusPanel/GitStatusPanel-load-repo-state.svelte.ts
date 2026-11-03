@@ -1,4 +1,5 @@
 import { openInBrowser } from '$lib/open-in-browser'
+import { reportError } from '$lib/stores/app-errors.svelte'
 import {
   invalidateRepositoryPreflight,
   loadRepositoryPreflight
@@ -6,7 +7,10 @@ import {
 import { appConfigState } from '$lib/stores/app-config.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { cacheHasDeployments } from '$lib/git-deployments-cache'
-import { resolveCurrentConflictsWithAgent } from '../git-status-panel-agent-actions'
+import {
+  openAgentThread,
+  resolveCurrentConflictsWithAgent
+} from '../git-status-panel-agent-actions'
 import type { GitCommitInfo, GitFileChange, GitPullStrategy } from '$shared/types'
 import { toast } from 'svelte-sonner'
 import { GitStatusPanelBranchesController } from '../GitStatusPanel/git-status-panel-branches-controller.svelte'
@@ -73,6 +77,15 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
 
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
   pushRecoverMode = $state<'merge' | 'rebase' | null>(null)
+
+  /**
+   * The thread this panel's conflict handoff minted, if any.
+   *
+   * The resolved thread is the initiator's record of the run it started: the
+   * conflicted row reopens it instead of leaving the user with a conversation
+   * they can only find by searching their thread list.
+   */
+  agentConflictThreadId = $state<string | null>(null)
 
   commitHistory = $state<GitCommitInfo[]>([])
 
@@ -224,7 +237,19 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
     await resolveCurrentConflictsWithAgent(
       this.root.props.projectId,
       this.root.props.scopeBucketId,
-      this.status?.branch ?? 'this worktree'
+      this.status?.branch ?? 'this worktree',
+      (threadId) => {
+        this.agentConflictThreadId = threadId
+      }
+    )
+  }
+
+  /** Reopen the thread the last conflict handoff from this panel minted. */
+  openAgentConflictThread(): void {
+    const threadId = this.agentConflictThreadId
+    if (!threadId) return
+    void openAgentThread(this.root.props.projectId, threadId).catch((error: unknown) =>
+      reportError(error, 'Could not open the conflict resolution thread.')
     )
   }
 
