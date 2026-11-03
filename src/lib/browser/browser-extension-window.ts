@@ -18,6 +18,17 @@ export const BROWSER_EXTENSION_HOSTED_WINDOW_ID = 2147483646
 export const BROWSER_EXTENSION_HOSTED_TAB_ID = 2147483645
 
 /**
+ * The tab id a worker sends when it cannot name the page a request belongs to.
+ *
+ * A worker is shared by every page of a jar and holds one notion of the tab it acts
+ * for, which is empty whenever the page it runs beside is not the one on screen.
+ * Naming no tab is therefore an answer the app has to accept: it places the request
+ * beside the jar's page on screen, where the user is looking, instead of a window the
+ * extension asked for being dropped because the worker could not say which.
+ */
+export const BROWSER_EXTENSION_UNNAMED_TAB_ID = -1
+
+/**
  * The query parameter an extension uses to name the one window it acts in.
  *
  * Bitwarden opens its passkey prompt as a popout   `?uilocation=popout&

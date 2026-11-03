@@ -1978,9 +1978,14 @@
     }
   }
 
-  const routePopupWindowRequest = (kind, url) => {
-    const tabId = tabActivity.activeTabId
-    if (typeof tabId !== 'number' || !Number.isFinite(tabId) || tabId < 0) return false
+  // The tab id a request carries when the app, not the worker, is the side that
+  // knows which page it belongs to. A worker shared by a whole jar has one notion
+  // of "the tab I act for", and a jar whose page is not the one on screen leaves it
+  // with none at all: the app answers with the page the user is on.
+  const UNNAMED_TAB_ID = -1
+  const routePopupWindowRequest = (kind, url, tabId = tabActivity.activeTabId) => {
+    if (typeof tabId !== 'number' || !Number.isFinite(tabId)) return false
+    if (tabId < 0 && tabId !== UNNAMED_TAB_ID) return false
     const request = { seq: ++actionPopupRequestSeq, tabId, kind }
     if (typeof url === 'string') request.url = url
     actionPopupRequests.push(request)
@@ -2009,7 +2014,12 @@
   const routeRequestWhenTabKnown = async (kind, url) => {
     if (routePopupWindowRequest(kind, url)) return true
     await waitForTabReplay()
-    return routePopupWindowRequest(kind, url)
+    if (routePopupWindowRequest(kind, url)) return true
+    // The fallback matters more than the exact tab: an extension window that is
+    // never asked for is a prompt the page waits on forever, and the app can place
+    // it beside the page the user is actually on. It only reaches a runtime with no
+    // windows at all if this is skipped.
+    return routePopupWindowRequest(kind, url, UNNAMED_TAB_ID)
   }
 
   const hostedWindow = (id, focused) => ({

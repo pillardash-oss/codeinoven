@@ -112,6 +112,17 @@ export class BrowserExtensionServicePanels {
     for (const request of requests) {
       if (request.seq <= lastSeen) continue
       newest = Math.max(newest, request.seq)
+      // What the extension actually asked for, recorded before anything decides
+      // whether it can be shown: a prompt that never appears and a prompt the app
+      // refused look identical from the page's side, and this is the one place that
+      // tells them apart.
+      Logger.dev('Extension asked the browser for a popup surface:', {
+        extensionId,
+        kind: request.kind,
+        url: request.url ?? null,
+        extensionTabId: request.tabId,
+        jar: browserPartitionFor(state.projectId, state.boxId)
+      })
       this.host.host.openPopup({
         projectId: state.projectId,
         boxId: state.boxId,
