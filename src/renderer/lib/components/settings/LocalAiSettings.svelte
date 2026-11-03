@@ -31,7 +31,27 @@
     { id: 'settings', label: 'Settings', title: 'Model memory and unload behaviour' }
   ]
 
-  const worker = $derived(workerRuntimes.find((entry) => entry.id === tab) ?? null)
+  /**
+   * MLX and Core ML are Apple Silicon engines that ship as bundled workers, so a
+   * machine that cannot run them does not get a tab for them at all. Until the
+   * detection answers, only the always-present tabs are listed, so no tab
+   * appears and then disappears.
+   */
+  const visibleTabs = $derived(
+    TABS.filter(
+      (entry) =>
+        entry.id === 'llama' ||
+        entry.id === 'settings' ||
+        workerRuntimes.some((worker) => worker.id === entry.id && worker.available)
+    )
+  )
+
+  /** The selected tab, or the first one that still exists after a detection. */
+  const activeTab = $derived(
+    visibleTabs.some((entry) => entry.id === tab) ? tab : ('llama' as LocalAiTab)
+  )
+
+  const worker = $derived(workerRuntimes.find((entry) => entry.id === activeTab) ?? null)
 
   async function detect(): Promise<void> {
     detecting = true
@@ -66,14 +86,14 @@
     role="tablist"
     aria-label="Local AI tabs"
   >
-    {#each TABS as entry (entry.id)}
+    {#each visibleTabs as entry (entry.id)}
       <button
         type="button"
-        class="px-3 py-1.5 text-xs font-medium transition-colors {tab === entry.id
+        class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === entry.id
           ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         role="tab"
-        aria-selected={tab === entry.id}
+        aria-selected={activeTab === entry.id}
         title={entry.title}
         onclick={() => (tab = entry.id)}
       >
@@ -82,7 +102,7 @@
     {/each}
   </div>
 
-  {#if tab === 'llama'}
+  {#if activeTab === 'llama'}
     <LocalAiLlamaTab
       {runtime}
       {detecting}
@@ -93,7 +113,7 @@
       {settingsReady}
       {updateConfig}
     />
-  {:else if tab === 'settings'}
+  {:else if activeTab === 'settings'}
     <LocalAiSettingsTab {config} {settingsReady} {updateConfig} />
   {:else if worker}
     <LocalAiWorkerTab runtime={worker} {config} {settingsReady} {updateConfig} />
