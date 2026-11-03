@@ -254,6 +254,9 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           emptyLabel: this.root.onKeydown.threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
+          statusNote: this.root.onKeydown.threadSearch.rankingByMeaning
+            ? 'Ranking by meaning…'
+            : '',
           // The Threads view's own mark, so the screen wears the glyph the rail,
           // the overview and the palette home row already use for this family.
           headerIcon: CioThreads,
@@ -277,6 +280,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           emptyLabel: this.chatSearch.loading
             ? 'Searching chats…'
             : 'Type at least two characters to search chats',
+          statusNote: this.chatSearch.rankingByMeaning ? 'Ranking by meaning…' : '',
           headerIcon: CONTENT_FAMILY_ICONS.chats,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
@@ -295,6 +299,9 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           emptyLabel: this.root.onKeydown.assistantSearch.loading
             ? 'Searching assistant tasks…'
             : 'Type at least two characters to search assistant tasks and assistants',
+          statusNote: this.root.onKeydown.assistantSearch.rankingByMeaning
+            ? 'Ranking by meaning…'
+            : '',
           headerIcon: CONTENT_FAMILY_ICONS.assistant,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',

@@ -55,6 +55,10 @@
     title?: string
     placeholder?: string
     emptyLabel?: string
+    /** A live one-line status shown in the footer, e.g. a ranking that is still
+     *  in flight. Empty by default, so a palette without one renders exactly as
+     *  before. */
+    statusNote?: string
     initialQuery?: string
     maxResults?: number
     closeOnSelect?: boolean
@@ -86,6 +90,7 @@
     title = 'Commands',
     placeholder = 'Search actions…',
     emptyLabel = 'No matching actions',
+    statusNote = '',
     initialQuery = '',
     maxResults = 60,
     closeOnSelect = true,
@@ -476,6 +481,11 @@
           </button>
         {/if}
         <span class="tabular-nums">{visibleActions.length} actions</span>
+        {#if statusNote}
+          <span class="min-w-0 truncate border-l border-border-strong pl-2" role="status">
+            {statusNote}
+          </span>
+        {/if}
       </span>
       {#if filter}
         <MultiSelectPicker
