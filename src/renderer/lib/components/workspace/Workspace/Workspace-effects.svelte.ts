@@ -14,6 +14,7 @@ import { loadBrowser } from '$lib/stores/browser-access.svelte'
 import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
 import { projectWorkState } from '$lib/stores/project-work.svelte'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
@@ -659,6 +660,24 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
         }
         void invoke('browser:destroyThread', projectId, threadId)
         if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+      })
+    })
+
+    $effect(() => {
+      // A project deletion runs in the main process without holding any window
+      // on it, so this is where every window learns what happened: the row it
+      // greyed leaves the sidebar on `deleted`, and comes back on `failed` with
+      // the reason instead of sitting greyed forever.
+      return subscribe('project:deletion', (event) => {
+        projectDeletionState.applyEvent(event)
+        if (event.status === 'deleted') {
+          this.root.openThreadFromSwitcher.applyProjectDeleted(event.projectId)
+        } else if (event.status === 'failed') {
+          this.root.openThreadFromSwitcher.applyProjectDeletionFailed(
+            event.projectId,
+            event.error ?? 'The deletion did not finish.'
+          )
+        }
       })
     })
 

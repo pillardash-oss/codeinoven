@@ -137,6 +137,13 @@ export const IPC_EVENT_CONTRACT = {
   'taskManager:processesChanged': [] as [],
   'agent:temporaryChatExpired': [] as unknown as [temporaryChatId: string],
   'thread:deleted': [] as unknown as [projectId: string, threadId: string],
+  /**
+   * One stage of a project deletion running in the background: started,
+   * per-phase progress, finished, or failed. The row stays greyed and inert
+   * while this says `started`/`progress`, leaves the sidebar on `deleted`, and
+   * comes back on `failed`.
+   */
+  'project:deletion': [] as unknown as [event: import('../project-deletion').ProjectDeletionEvent],
   /** Live thread snapshot push so sidebar indicators react without polling. */
   'thread:updated': [] as unknown as [thread: Thread],
   /**

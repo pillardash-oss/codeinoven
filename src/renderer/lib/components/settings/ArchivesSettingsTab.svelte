@@ -68,11 +68,22 @@
   async function remove(): Promise<void> {
     const entry = pendingDelete
     if (!entry) return
-    busy = true
     error = ''
+    if (entry.kind === 'project') {
+      // A project deletion runs in the main process's own queue and answers at
+      // once, so this dialog closes instead of blocking the settings page. The
+      // `project:deletion` event reloads the list when the project is really gone.
+      pendingDelete = null
+      try {
+        await invoke('project:delete', entry.id)
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : 'Could not delete this project'
+      }
+      return
+    }
+    busy = true
     try {
-      if (entry.kind === 'project') await invoke('project:delete', entry.id)
-      else if (entry.kind === 'assistant') await invoke('assistant:delete', entry.id)
+      if (entry.kind === 'assistant') await invoke('assistant:delete', entry.id)
       else if (entry.projectId) await invoke('thread:delete', entry.projectId, entry.id)
       pendingDelete = null
       await load(tab)
@@ -85,9 +96,18 @@
 
   onMount(() => {
     void load(tab)
-    return subscribe('archive:changed', () => {
+    const stopArchives = subscribe('archive:changed', () => {
       void load(tab)
     })
+    const stopProjectDeletion = subscribe('project:deletion', (event) => {
+      if (event.status !== 'deleted' && event.status !== 'failed') return
+      void load(tab)
+      if (event.status === 'failed') error = event.error ?? 'Could not delete this project'
+    })
+    return () => {
+      stopArchives()
+      stopProjectDeletion()
+    }
   })
 </script>
 

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { APP_NAME } from '$shared/brand'
@@ -44,24 +43,17 @@
       type="button"
       class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
       title="Cancel"
-      disabled={dialogs.deletingProjectId !== null}
       onclick={dialogs.closeRemoveModal}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="inline-flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Remove this project and its threads from {APP_NAME}"
-      disabled={dialogs.deletingProjectId !== null}
       onclick={() => void dialogs.confirmRemoveProject()}
     >
-      {#if dialogs.deletingProjectId !== null}
-        <CioSpinner size={14} class="animate-spin" />
-        Removing…
-      {:else}
-        Remove
-      {/if}
+      Remove
     </button>
   {/snippet}
 </Modal>
@@ -81,24 +73,17 @@
       type="button"
       class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
       title="Go back to the previous step"
-      disabled={dialogs.deletingProjectId !== null}
       onclick={dialogs.cancelRemoveFinalConfirm}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="inline-flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Delete this project from {APP_NAME} and erase its folder from your device"
-      disabled={dialogs.deletingProjectId !== null}
       onclick={() => void dialogs.confirmRemoveWithFolder()}
     >
-      {#if dialogs.deletingProjectId !== null}
-        <CioSpinner size={14} class="animate-spin" />
-        Deleting…
-      {:else}
-        Delete Project and Folder
-      {/if}
+      Delete Project and Folder
     </button>
   {/snippet}
 </Modal>

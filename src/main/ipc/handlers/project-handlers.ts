@@ -3,8 +3,8 @@ import { dialog } from '../../system/file-dialogs'
 import { app, shell, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, rm, stat } from 'fs/promises'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
+import { mkdir, stat } from 'fs/promises'
+import { basename, dirname, isAbsolute, join } from 'path'
 import { atomicWrite, getConfigRoot } from '../../../lib/utils'
 import { posixDirname } from '../../../lib/paths'
 import { Logger } from '../../system/logger'
@@ -13,8 +13,17 @@ import { openWithService } from '../../system/open-with-service'
 import { broadcastAutoAnswersChanged } from '../../scheduler/assistant-events'
 import { sendToRenderer } from '../renderer-delivery'
 import { ScopeToolService } from '../../workspaces/scope-tool-service'
-import { removeProjectBrowserProfiles } from '../../browser/browser-service/browser-profile-store'
 import { forgetProjectJarOnDisk } from '../../browser/extensions/browser-extension-registry'
+import { broadcastProjectDeletion } from '../../workspaces/project-deletion-events'
+import {
+  ProjectDeletionQueue,
+  type ProjectDeletionJob
+} from '../../workspaces/project-deletion-queue'
+import {
+  deleteProjectCascade,
+  type ProjectDeletionDeps
+} from '../../workspaces/project-deletion-service'
+import { DatabaseSpaceReclaimer } from '../../database/database-space-reclaimer'
 import type { ScopeToolServiceOptions } from '../../workspaces/scope-tool-service'
 import { AssignmentWorkerScopeService } from '../../workspaces/assignment-worker-scope-service'
 import {
@@ -35,7 +44,7 @@ import {
   validateSourcePath,
   validateWorktreeDefaults
 } from '../ipc-validation'
-import { requireString, validateStringArray } from './shared'
+import { requireString, validateStringArray, isRecord } from './shared'
 import { mapInBatches } from '../../../lib/bounded-work'
 import { writeFilePathsToClipboard } from '../../system/file-clipboard'
 import { EDITOR_IDS } from './config-helpers'
@@ -621,114 +630,53 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       return project
     }
   )
-  ipcMain.handle(
-    'project:delete',
-    async (_, projectId: string, deleteOptions?: { deleteFolder?: boolean }) => {
-      // Optional folder erasure runs FIRST and gates the CodeInOven-side
-      // removal: if the filesystem delete fails, nothing below executes and
-      // the project stays fully intact in CodeInOven (the renderer restores
-      // it). Only after the folder is gone does the app data removal begin.
-      if (deleteOptions?.deleteFolder === true) {
-        const project = await projectManager.getProject(projectId)
-        if (!project?.path || !isAbsolute(project.path)) {
-          throw new Error('This project has no local folder on disk to delete')
-        }
-        const target = resolve(project.path)
-        const homeDir = resolve(app.getPath('home'))
-        const configRoot = resolve(getConfigRoot())
-        const managedClonesRoot = resolve(join(configRoot, 'projects-gh'))
-        const isInside = (child: string, parent: string): boolean => child.startsWith(parent + sep)
-        // Refuse obviously dangerous targets: the filesystem root, the home
-        // directory (or any ancestor of it), and anything inside the app
-        // config root. This makes an accidental catastrophic rm impossible.
-        // The one exception is a project folder strictly inside the managed
-        // `projects-gh/` clones directory: those clones are app-owned project
-        // folders the user registered, so erasing one on removal is legitimate
-        // (the clones root itself stays protected so sibling clones survive).
-        const isManagedClone = isInside(target, managedClonesRoot)
-        if (
-          target === sep ||
-          target === homeDir ||
-          isInside(homeDir, target) ||
-          target === configRoot ||
-          (isInside(target, configRoot) && !isManagedClone)
-        ) {
-          throw new Error('Refusing to delete a protected directory')
-        }
-        // `force` treats an already-missing folder as deleted; real failures
-        // (permissions, path is a file, ...) still throw and abort below.
-        await rm(target, { recursive: true, force: true })
-      }
-      // Never orphan a registered managed worktree silently: refuse deletion
-      // until every managed association in this project is detached/removed
-      // through the guarded lifecycle (dirty and unpushed work is protected).
-      const board = scopeManager.getBoard(projectId)
-      const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
-      if (managedBuckets.length > 0) {
-        throw new Error(
-          `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
-        )
-      }
-      // The project's browser goes with the project, before its threads are torn
-      // down: the browser service owns the live tabs and the session that holds
-      // the profile open, and a profile can be gigabytes of cache that nothing
-      // could reach once the project row is gone. A launch with no browser (no
-      // window yet) still removes the profiles; that is all there is to do.
-      const browser = options.browser?.() ?? null
-      if (browser) await browser.forgetProject(projectId)
-      else {
-        await removeProjectBrowserProfiles(projectId)
-        // Its extensions are installed for that project's own browser jar, so they
-        // go with it. A live browser would have done this itself; with none to ask,
-        // the registry file is what the next launch loads, so it is corrected here.
-        await forgetProjectJarOnDisk(storage, projectId).catch((error: unknown) => {
-          Logger.dev('A deleted project left its extensions behind:', error)
-        })
-      }
-      // Delete every thread through the same path as `thread:delete` (session
-      // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
-      // project deletion can never fall behind that logic or leave orphans.
-      await threadManager.deleteAllThreadsInProject(projectId)
-      await projectManager.deleteProject(projectId)
-      // Project-scoped rows that no foreign key covers go with the project.
-      // Left behind, they keep the deleted project id alive in board scans,
-      // design history, work-folder lists and grading queues, which is how a
-      // deleted project resurfaces in the UI and gets written to again.
-      scopeManager.forgetProject(projectId)
-      options.designService?.()?.forgetProject(projectId)
-      void rankingSnapshotRepo.clearProjectViaWorker(projectId).then((purged) => {
-        if (!purged.ok) {
-          Logger.dev('Project ranking snapshots were not fully purged', {
-            projectId,
-            deleted: purged.deleted,
-            error: purged.error ?? ''
-          })
-        }
-      })
-      projectFilesService.disposeProject(projectId)
-      // Remove app-owned scratch data keyed by this project id (spec-context
-      // attachments, any leftover per-thread directories) that isn't tied to
-      // an individual thread and so isn't covered by the per-thread cleanup
-      // above. Best-effort: the DB rows are already gone either way.
-      await rm(join(getConfigRoot(), 'projects', projectId), {
-        recursive: true,
-        force: true
-      }).catch(() => {})
-      // Mass deletion just freed potentially thousands of pages. Reclaim the
-      // file space off-main via the maintenance worker   this also converts
-      // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
-      // incremental vacuums work. Fire-and-forget: the IPC result must not wait
-      // on an O(database-size) operation, and a concurrent WAL transaction may
-      // make VACUUM fail (fine to retry next time).
-      void database.fullVacuum().then((result) => {
-        if (result.ok && (result.freedPages ?? 0) > 0) {
-          Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
-        } else if (!result.ok) {
-          Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
-        }
-      })
+  // Every project deletion goes through one sequential queue: twenty accepted
+  // requests must never become twenty concurrent database writers and filesystem
+  // walks, which is exactly what froze the app. The reclaimer is its opposite
+  // half, handing the freed pages back in bounded steps once the queue is idle.
+  // Read through a closure: the queue is declared just below, and the reclaimer
+  // only ever asks its busy state after both exist.
+  const spaceReclaimer = new DatabaseSpaceReclaimer({
+    incrementalVacuum: (pages) => database.incrementalVacuum(pages),
+    isBusy: () => !deletionQueue.isIdle
+  })
+  const deletionDeps: ProjectDeletionDeps = {
+    projectManager,
+    threadManager,
+    scopeManager,
+    projectFilesService,
+    rankingSnapshotRepo,
+    browser: () => options.browser?.() ?? null,
+    designService: options.designService,
+    forgetProjectJar: (projectId) => forgetProjectJarOnDisk(storage, projectId),
+    onFreedSpace: () => spaceReclaimer.noteFreedSpace()
+  }
+  const deletionQueue = new ProjectDeletionQueue(async (job) => {
+    broadcastProjectDeletion({ projectId: job.projectId, status: 'started' })
+    try {
+      await deleteProjectCascade(deletionDeps, job, broadcastProjectDeletion)
+      broadcastProjectDeletion({ projectId: job.projectId, status: 'deleted' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      Logger.error('Project deletion failed', { projectId: job.projectId, error: message })
+      broadcastProjectDeletion({ projectId: job.projectId, status: 'failed', error: message })
     }
-  )
+  })
+  ipcMain.handle('project:delete', (_, projectId: unknown, deleteOptions?: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    // Optional folder erasure runs FIRST inside the cascade and gates every
+    // other step: if the filesystem delete fails, the project stays fully intact
+    // in CodeInOven and the renderer puts its row back.
+    const deleteFolder =
+      isRecord(deleteOptions) && deleteOptions.deleteFolder !== undefined
+        ? validateBoolean(deleteOptions.deleteFolder, 'Delete folder')
+        : false
+    const job: ProjectDeletionJob = { projectId: validProjectId, deleteFolder }
+    // Answer at once. The renderer greyed the row before it asked and follows
+    // the rest on the `project:deletion` event, so no window ever waits on
+    // seconds of filesystem and database work.
+    void deletionQueue.enqueue(job)
+  })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
       projectManager.getIconDataUrl(projectId)
