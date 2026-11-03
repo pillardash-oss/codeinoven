@@ -753,14 +753,47 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
       }
     }
     if (temporaryBranch) {
+      // The finish step clears the session, so the pull request it belongs to is
+      // read before the push.
+      const pullNumber = gitState.prResolveSession?.pullNumber ?? null
       const finished = await gitState.finishPrResolve(this.root.props.projectId)
       if (!finished) return
-      toast.success(`Resolution pushed to the pull request; ${temporaryBranch} removed`)
+      const merged = pullNumber === null ? false : await this.mergeResolvedPullRequest(pullNumber)
+      toast.success(
+        merged
+          ? `Resolution pushed to pull request #${pullNumber} and merged`
+          : pullNumber === null
+            ? `Resolution pushed to the pull request; ${temporaryBranch} removed`
+            : `Resolution pushed to pull request #${pullNumber}; merge it from the pull request view`
+      )
     }
     this.completeMergeOpen = false
     this.mergeTitle = ''
     this.mergeDescription = ''
     void this.root.handlePrListAction.refreshStatus()
+  }
+
+  /**
+   * Merge the pull request whose resolution was just pushed.
+   *
+   * Completing a PR conflict resolution is the user's whole intent: they resolved
+   * the conflicts in order to get the pull request merged, so stopping at a pushed
+   * branch left them to finish the same flow by hand in the pull request view.
+   * The merge uses the configured default method and GitHub's own rules, so a
+   * protected branch or a failing required check is refused and reported instead
+   * of being forced. Answers whether the pull request actually merged.
+   */
+  private async mergeResolvedPullRequest(pullNumber: number): Promise<boolean> {
+    const identity = this.root.handlePrListAction.githubIdentity
+    if (!identity) return false
+    const merged = await gitState.mergePullRequest(
+      this.root.props.projectId,
+      identity.owner,
+      identity.repo,
+      pullNumber,
+      appConfigState.defaultMergeMethod
+    )
+    return merged !== null
   }
 
   atRiskFiles = $derived(this.changes.length > 0 ? this.changes.map((change) => change.path) : [])

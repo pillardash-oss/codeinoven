@@ -466,9 +466,10 @@
       {:else if mergePending}
         <p class="text-[0.6875rem] leading-relaxed text-muted">
           Every conflict is resolved and staged. Completing the merge commits it{#if prResolveBranch},
-            pushes the resolution back to the pull request, restores your previous branch, and
-            deletes the temporary <span class="font-mono text-foreground">{prResolveBranch}</span> branch{/if}.
-          Add a message below, or leave it empty to generate one.
+            pushes the resolution back to the pull request, merges that pull request, restores your
+            previous branch, and deletes the temporary <span class="font-mono text-foreground"
+              >{prResolveBranch}</span
+            > branch{/if}. Add a message below, or leave it empty to generate one.
         </p>
         <input
           class="h-8 w-full border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
@@ -485,8 +486,8 @@
         <p class="text-[0.6875rem] leading-relaxed text-muted">
           The resolution is committed on the temporary <span class="font-mono text-foreground"
             >{prResolveBranch}</span
-          > branch. Completing the merge pushes it back to the pull request, restores your previous branch,
-          and deletes that temporary branch.
+          > branch. Completing the merge pushes it back to the pull request, merges that pull request,
+          restores your previous branch, and deletes that temporary branch.
         </p>
       {/if}
     </div>
@@ -532,8 +533,8 @@
       title={prResolveLost
         ? `Commit the resolved files. This ${status?.branch} branch has no pull request session, so nothing will be pushed`
         : mergePending
-          ? `Commit the resolved files to complete the merge${prResolveBranch ? `, then push the resolution to the pull request and delete ${prResolveBranch}` : ''}`
-          : `Push the resolution to the pull request, restore your previous branch, and delete ${prResolveBranch}`}
+          ? `Commit the resolved files to complete the merge${prResolveBranch ? `, push the resolution to the pull request, and merge it` : ''}`
+          : `Push the resolution to the pull request, merge it, restore your previous branch, and delete ${prResolveBranch}`}
       disabled={completeMergeBusy}
       onclick={openCompleteMerge}
     >

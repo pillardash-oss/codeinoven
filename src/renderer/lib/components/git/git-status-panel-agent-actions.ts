@@ -404,7 +404,8 @@ export async function preparePrConflictSession(
  * The confirmed handoff first prepares the working tree and then builds the
  * thread on exactly that checkout, so the agent can never resolve markers in a
  * different directory from the one the panel prepared. The agent never pushes;
- * the user finishes with Complete merge. `onThread` receives the thread as soon
+ * the user finishes with Complete merge, which publishes and merges the pull
+ * request. `onThread` receives the thread as soon
  * as it exists, so the panel that started this can reopen it while the agent
  * works and after it stops.
  */
