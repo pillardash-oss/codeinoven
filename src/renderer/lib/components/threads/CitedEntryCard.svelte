@@ -1,80 +1,24 @@
 <script lang="ts">
-  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
-  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
-  import { invoke } from '$lib/ipc.svelte'
-  import { formatDateTimeCompact } from '$shared/date-time-format'
   import type { CitedEntry } from '$shared/cited-work'
-  import { revealCitationFile } from '$lib/reveal-file'
-  import CardButton from '../shared/CardButton.svelte'
+  import CitedEntryRow from './CitedEntryRow.svelte'
 
   interface Props {
-    /** One thing the settled turn left behind. */
-    entry: CitedEntry
-    /** The conversation whose workspace the entry lives in. */
+    /** The work the settled turn cited, one row each. */
+    entries: CitedEntry[]
+    /** The conversation whose workspace the entries live in. */
     projectId?: string | null
     /** The thread the card is drawn in, which is where a served design opens. */
     threadId?: string | null
   }
 
-  let { entry, projectId = null, threadId = null }: Props = $props()
-
-  const modifiedAt = $derived(formatDateTimeCompact(entry.modifiedAt))
-  const isFolder = $derived(entry.kind === 'directory')
-  /** Authored work is served and shown, never browsed as a folder of files. */
-  const work = $derived(entry.work ?? null)
-  const label = $derived(
-    work === 'design'
-      ? 'Open design'
-      : work === 'video'
-        ? 'Open composition'
-        : isFolder
-          ? 'Open folder'
-          : 'Open file'
-  )
-
-  async function openEntry(): Promise<void> {
-    if (!projectId) return
-    if (!work || !threadId) {
-      void revealCitationFile(projectId, entry.path)
-      return
-    }
-    try {
-      // One call does all three steps the app owns: serve the folder (a server is
-      // minted only when this folder has none), open it in the browser (an
-      // existing tab for this design is reused, not stacked), and reveal it,
-      // because clicking the card is the user asking to see the work.
-      await invoke('design:open', projectId, threadId, entry.path, null, true, work)
-    } catch {
-      // A folder that is no longer a servable design still belongs to the reader:
-      // revealing it is better than a button that reports nothing.
-      void revealCitationFile(projectId, entry.path)
-    }
-  }
+  let { entries, projectId = null, threadId = null }: Props = $props()
 </script>
 
-<div class="flex min-w-0 items-center gap-3 border border-border bg-surface px-3 py-2">
-  {#if isFolder}
-    <CioFolder size={16} strokeWidth={1.6} class="shrink-0 text-muted" />
-  {:else}
-    <CioFileText size={16} strokeWidth={1.6} class="shrink-0 text-muted" />
-  {/if}
-  <div class="min-w-0 flex-1">
-    <div class="truncate text-[0.8125rem] font-medium text-foreground">{entry.name}</div>
-    <div class="text-[0.75rem] text-dimmed">
-      {work === 'design'
-        ? 'Design'
-        : work === 'video'
-          ? 'Composition'
-          : isFolder
-            ? 'Folder'
-            : 'File'} · Modified {modifiedAt}
-    </div>
-  </div>
-  <CardButton
-    {label}
-    title={work ? `${label}: ${entry.name}` : `Open ${entry.name}`}
-    variant="secondary"
-    size="sm"
-    onclick={() => void openEntry()}
-  />
+<!-- The turn cited work of its own and left no file changes behind, so the cards
+are the whole of what it produced: one bordered surface, one row per entry. A
+turn that also changed files shows these rows inside its changes card instead. -->
+<div class="min-w-0 border border-border bg-surface">
+  {#each entries as entry (entry.path)}
+    <CitedEntryRow {entry} {projectId} {threadId} />
+  {/each}
 </div>

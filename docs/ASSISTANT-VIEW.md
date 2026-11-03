@@ -1327,6 +1327,11 @@ turn's closing statement, and never displaces the answer. Each entry is a typed
 `CitedEntryCard.svelte` draws it: the glyph for what it is, its name, `Modified`
 on the 12-hour clock, and one right-anchored action.
 
+A turn that also changed files draws these rows inside its changes card
+(`RunChangesCard.svelte`), under a **Report** rule, so one turn's outcome is one
+surface instead of two cards describing the same turn; the folded card still says
+what the report holds. A turn that only cited work keeps a card of its own.
+
 The action follows the entry, because a design is not a folder to browse. A file
 opens in the file viewer and a folder in the file tree; a cited folder inside the
 project's own design or video root is marked as work at resolve time
