@@ -50,6 +50,7 @@ import { listDesignScreens } from './design-screens'
 import { readScreenCanvasState, readScreenCanvas, screenCanvasScreen } from './screen-canvas-page'
 import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
 import { openDesignPreview } from './design-preview-session'
+import { PreviewTargetRegistry } from './preview-target-registry'
 import {
   currentWorkRoot,
   currentWorkRoots,
@@ -285,6 +286,15 @@ export class DesignService {
   private readonly screenShots = new Map<string, DesignScreenShot>()
   /** The sweep in flight per thread, so starting another one supersedes the first. */
   private readonly screenSweeps = new Map<string, number>()
+  /**
+   * Which tab and which preview server each screen, canvas and live preview was
+   * given, remembered across a restart.
+   *
+   * Owned here because this service is what opens a design for the user: the
+   * board, the capability's preview and every capture go through `serveWork`, so
+   * one record keeps a screen's tab and its folder's port from drifting apart.
+   */
+  private readonly previewTargets = new PreviewTargetRegistry()
 
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
@@ -511,6 +521,9 @@ export class DesignService {
           projectScope: !scope.appOwned,
           onRelocated: (moves) => {
             this.followRelocatedFolders(projectId, details.kind, moves)
+            // A moved folder is a new directory, so the tab and port remembered
+            // for every screen under the old name are stale by definition.
+            for (const move of moves) void this.previewTargets.forgetFolder(projectId, move.from)
             this.options.onWorkRelocated?.(projectId, moves)
           },
           list: async () => (await this.projectWork(projectId, threadId))[details.kind],
@@ -745,6 +758,7 @@ export class DesignService {
     // Dropping the generation is what stops a sweep still in flight for this
     // thread: its next screen finds a generation that is no longer its own.
     this.screenSweeps.delete(threadId)
+    void this.releasePreviewTargets(this.previewTargets.forgetThread(threadId))
   }
 
   /**
@@ -925,6 +939,25 @@ export class DesignService {
     this.history.forgetProject(projectId)
     for (const key of [...this.screenShots.keys()]) {
       if (key.startsWith(`${projectId}|`)) this.screenShots.delete(key)
+    }
+    void this.releasePreviewTargets(this.previewTargets.forgetProject(projectId))
+  }
+
+  /**
+   * Stop the preview servers nothing names any more.
+   *
+   * A server belongs to a folder and outlives any one screen, so forgetting a
+   * screen never stops it. What the registry answers here is only the folders no
+   * remaining record names, which is a session that has ended: the project or
+   * the thread that was looking at them is gone, so the port and the watcher
+   * behind it go with it rather than waiting for the least-recently-used sweep.
+   */
+  private async releasePreviewTargets(abandoned: Promise<string[]>): Promise<void> {
+    const roots = await abandoned.catch(() => [])
+    for (const root of roots) {
+      await this.options.previews.close(root).catch((error: unknown) => {
+        Logger.dev('A preview server left behind could not be stopped:', error)
+      })
     }
   }
 
@@ -1430,7 +1463,6 @@ export class DesignService {
      */
     posterSeconds?: number
   }): Promise<ServedWork> {
-    const deps = { previews: this.options.previews, browser: this.options.browser }
     const target = {
       projectPath: input.projectPath,
       projectId: input.projectId,
@@ -1444,14 +1476,24 @@ export class DesignService {
     }
     const result =
       input.kind === 'video'
-        ? await openVideoPreview(deps, {
-            ...target,
-            mode: input.tab === 'board' ? ('board' as const) : ('thread' as const)
-          })
-        : await openDesignPreview(deps, {
-            ...target,
-            tab: input.tab === 'screen' ? ('screen' as const) : ('thread' as const)
-          })
+        ? await openVideoPreview(
+            { previews: this.options.previews, browser: this.options.browser },
+            {
+              ...target,
+              mode: input.tab === 'board' ? ('board' as const) : ('thread' as const)
+            }
+          )
+        : await openDesignPreview(
+            {
+              previews: this.options.previews,
+              browser: this.options.browser,
+              targets: this.previewTargets
+            },
+            {
+              ...target,
+              tab: input.tab === 'screen' ? ('screen' as const) : ('thread' as const)
+            }
+          )
     return {
       directory: result.directory,
       entry: result.entry,
