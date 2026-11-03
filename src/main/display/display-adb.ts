@@ -2,7 +2,11 @@ import { accessSync, constants as fsConstants } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { NativeImage } from 'electron'
-import type { DisplaySourceDescriptor, DisplaySourceListing } from '../../lib/ipc/display'
+import type {
+  DisplayControlAction,
+  DisplaySourceDescriptor,
+  DisplaySourceListing
+} from '../../lib/ipc/display'
 import { type DisplayCapture, decodeDisplayImage } from './display-capture'
 import { captureCommand, captureText } from './display-exec'
 
@@ -122,6 +126,22 @@ export async function listAndroidSources(): Promise<DisplaySourceListing> {
   return { kind: 'android', sources }
 }
 
+/**
+ * The hardware keys adb can inject, by the panel's own action names.
+ *
+ * These are the Linux input key codes Android's `input keyevent` takes, not a
+ * screen coordinate: pressing HOME goes home whatever the app is showing, which
+ * is why the rail can offer a device's buttons over a channel this thin.
+ */
+const ANDROID_KEY_CODES: Partial<Record<DisplayControlAction, number>> = {
+  home: 3,
+  back: 4,
+  recents: 187,
+  'volume-up': 24,
+  'volume-down': 25,
+  power: 26
+}
+
 /** A live framebuffer reader for one adb target. */
 export class AndroidDisplayCapture implements DisplayCapture {
   readonly kind = 'android' as const
@@ -151,6 +171,18 @@ export class AndroidDisplayCapture implements DisplayCapture {
     } finally {
       this.cancelled = null
     }
+  }
+
+  async control(action: DisplayControlAction): Promise<void> {
+    const keyCode = ANDROID_KEY_CODES[action]
+    if (keyCode === undefined) {
+      throw new Error(`An Android target has no "${action}" control`)
+    }
+    await captureCommand(
+      this.adb,
+      ['-s', this.sourceId, 'shell', 'input', 'keyevent', String(keyCode)],
+      ADB_CAPTURE_TIMEOUT_MS
+    ).promise
   }
 
   dispose(): void {

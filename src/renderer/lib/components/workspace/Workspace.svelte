@@ -423,7 +423,7 @@
       active: board.switcherPanelTabs.dockKindActive('display'),
       onSelect: () =>
         board.switcherPanelTabs.toggleDockPanel('display', () =>
-          contextSidebarState.openDisplay(selectedThread.projectId, selectedThread.id)
+          contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
         )
     })
 
@@ -678,6 +678,7 @@
             gitPanelVisible={board.openThreadFromSwitcher.gitPanelVisible}
             terminalFullscreenTabId={board.openThreadFromSwitcher.terminalFullscreenTabId}
             browserFullscreenTabId={board.openThreadFromSwitcher.browserFullscreenTabId}
+            displayFullscreenTabId={board.openThreadFromSwitcher.displayFullscreenTabId}
             {activeProject}
             {selectedThread}
             projectIcons={board.createThreadInProject.projectIcons}
@@ -734,6 +735,7 @@
                 contextSidebarState.setTerminalPlacement(placement)}
               onNewTerminal={board.openThreadFromSwitcher.openNewTerminal}
               onNewBrowser={() => board.openThreadFromSwitcher.openNewBrowserTab()}
+              onNewDisplay={board.openThreadFromSwitcher.openDisplayChooser}
               onTabContextMenu={(id, event) =>
                 void board.switcherPanelTabs.browser.openTabMenu(
                   id,
@@ -783,6 +785,7 @@
               contextSidebarState.setTerminalPlacement(placement)}
             onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
             onNewTerminal={board.openThreadFromSwitcher.openNewTerminal}
+            onNewDisplay={board.openThreadFromSwitcher.openDisplayChooser}
           />
         </div>
       {/if}
@@ -866,6 +869,19 @@
       onTabIdChange={(id) => (board.openThreadFromSwitcher.terminalFullscreenTabId = id)}
       onNewTerminal={board.openThreadFromSwitcher.openNewTerminal}
       onCloseTab={(id) => board.openThreadFromSwitcher.closeFullscreenTab('terminal', id)}
+    />
+  {/await}
+{/if}
+{#if board.openThreadFromSwitcher.displayFullscreenTabId}
+  {#await import('./WorkspaceFullscreenDisplay.svelte') then { default: WorkspaceFullscreenDisplay }}
+    <WorkspaceFullscreenDisplay
+      tabId={board.openThreadFromSwitcher.displayFullscreenTabId}
+      onTabIdChange={(id) => (board.openThreadFromSwitcher.displayFullscreenTabId = id)}
+      onNewTarget={() => {
+        board.openThreadFromSwitcher.openDisplayChooser()
+        return contextSidebarState.sidebarActiveTabId
+      }}
+      onCloseTab={(id) => board.openThreadFromSwitcher.closeFullscreenTab('display', id)}
     />
   {/await}
 {/if}

@@ -2,7 +2,11 @@ import { app, type NativeImage } from 'electron'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { DisplaySourceDescriptor, DisplaySourceListing } from '../../lib/ipc/display'
+import type {
+  DisplayControlAction,
+  DisplaySourceDescriptor,
+  DisplaySourceListing
+} from '../../lib/ipc/display'
 import { type DisplayCapture, decodeDisplayImage } from './display-capture'
 import { captureCommand, captureText } from './display-exec'
 
@@ -149,6 +153,30 @@ export class IosDisplayCapture implements DisplayCapture {
     } finally {
       this.cancelled = null
     }
+  }
+
+  /**
+   * A simulator answers for its own appearance and nothing else.
+   *
+   * There is no home, volume or power key to inject through simctl, and driving
+   * the Simulator app's menus would be a different, fragile channel, so the rail
+   * offers what the platform really exposes instead of a key that does nothing.
+   */
+  async control(action: DisplayControlAction): Promise<void> {
+    if (action !== 'appearance') {
+      throw new Error(`A simulator has no "${action}" control`)
+    }
+    const current = await captureText(
+      SIMCTL,
+      ['simctl', 'ui', this.sourceId, 'appearance'],
+      SIMCTL_CAPTURE_TIMEOUT_MS
+    )
+    const next = current.trim() === 'dark' ? 'light' : 'dark'
+    await captureCommand(
+      SIMCTL,
+      ['simctl', 'ui', this.sourceId, 'appearance', next],
+      SIMCTL_CAPTURE_TIMEOUT_MS
+    ).promise
   }
 
   dispose(): void {

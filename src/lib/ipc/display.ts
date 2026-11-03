@@ -117,6 +117,39 @@ export interface DisplayCaptureState {
   detail?: string
 }
 
+/**
+ * A control the panel can press on the target itself.
+ *
+ * A phone preview without its buttons is a picture, and the point of this panel
+ * is to let a person work the device the agent is on without reaching for it (an
+ * emulator with no window has nothing to reach for). The set is per kind, because
+ * it says what the platform can actually do: adb injects hardware key events, and
+ * a booted simulator answers only for its own appearance.
+ */
+export type DisplayControlAction =
+  'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'appearance'
+
+/** What each kind can be asked to do, in the order the rail lists it. */
+export const DISPLAY_CONTROLS_BY_KIND: Record<DisplaySourceKind, readonly DisplayControlAction[]> =
+  {
+    android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'power'],
+    ios: ['appearance'],
+    'desktop-screen': [],
+    'desktop-window': []
+  }
+
+export function isDisplayControlAction(value: unknown): value is DisplayControlAction {
+  return (
+    value === 'home' ||
+    value === 'back' ||
+    value === 'recents' ||
+    value === 'volume-up' ||
+    value === 'volume-down' ||
+    value === 'power' ||
+    value === 'appearance'
+  )
+}
+
 export const invokeDisplayContract = {
   /**
    * Enumerate one kind's targets.
@@ -131,5 +164,11 @@ export const invokeDisplayContract = {
   /** Report the stage's size and whether it is on screen at all. */
   'display:demand': {} as Contract<[sessionId: string, demand: DisplayFrameDemand], void>,
   /** Stop mirroring and release the target. Safe to call for an unknown session. */
-  'display:stop': {} as Contract<[sessionId: string], void>
+  'display:stop': {} as Contract<[sessionId: string], void>,
+  /**
+   * Press one of the target's own buttons. Refused for an action the target's
+   * kind does not advertise in `DISPLAY_CONTROLS_BY_KIND`, so the UI and the
+   * boundary agree without a second copy of the rule.
+   */
+  'display:control': {} as Contract<[sessionId: string, action: DisplayControlAction], void>
 }

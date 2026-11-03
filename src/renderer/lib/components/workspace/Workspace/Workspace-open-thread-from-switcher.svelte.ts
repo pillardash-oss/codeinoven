@@ -495,10 +495,24 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
 
   browserFullscreenTabId = $state<string | null>(null)
 
+  /** The display tab shown fullscreen, if any. A phone-sized preview is exactly
+   *  what a dock-width panel cannot show, so the panel owns the same surface the
+   *  terminal and browser do. */
+  displayFullscreenTabId = $state<string | null>(null)
+
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
    *  unless it was the last tab of that kind. */
-  closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
+  closeFullscreenTab(kind: 'terminal' | 'browser' | 'display', tabId: string): void {
     this.closeContextTab(tabId)
+    if (kind === 'display') {
+      // The fullscreen surface needs a tab to show, so it follows the last one
+      // left of its own kind instead of pointing at the tab that just closed.
+      const remaining = contextSidebarState.tabs.filter(
+        (tab) => tab.kind === 'display' && tab.id !== tabId
+      )
+      this.displayFullscreenTabId = remaining.at(-1)?.id ?? null
+      return
+    }
     if (kind === 'terminal') {
       // Nothing left of that kind: the surface has no tab to show, so the record
       // has to go with it rather than point at the tab that just closed.
@@ -535,15 +549,29 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
    *  opening one closes the other kind instead of leaving two full screen dialogs
    *  stacked, where the lower one's suppression block would blank the browser's
    *  native view. */
+  /** Open another display tab, which starts as the target chooser. */
+  openDisplayChooser(): void {
+    const thread = this.selectedThread
+    if (!thread) return
+    contextSidebarState.openDisplayChooser(thread.projectId, thread.id)
+  }
+
   openTabFullscreen(tabId: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
     if (tab?.kind === 'browser') {
       this.root.switcherPanelTabs.browserFullscreenThreadId = this.selectedThread?.id ?? null
       this.browserFullscreenTabId = tabId
       this.terminalFullscreenTabId = null
+      this.displayFullscreenTabId = null
     }
     if (tab?.kind === 'terminal') {
       this.terminalFullscreenTabId = tabId
+      this.browserFullscreenTabId = null
+      this.displayFullscreenTabId = null
+    }
+    if (tab?.kind === 'display') {
+      this.displayFullscreenTabId = tabId
+      this.terminalFullscreenTabId = null
       this.browserFullscreenTabId = null
     }
   }
@@ -583,6 +611,9 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
       this.terminalFullscreenTabId = null
     }
     contextSidebarState.close(id)
+    if (tab.kind === 'display' && this.displayFullscreenTabId === tab.id) {
+      this.displayFullscreenTabId = null
+    }
     if (tab.kind === 'browser' && this.browserFullscreenTabId === tab.id) {
       this.browserFullscreenTabId = contextSidebarState.activeBrowserTabId
     }

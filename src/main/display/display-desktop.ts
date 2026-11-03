@@ -104,11 +104,12 @@ export async function listDesktopSources(
     // A window with no title is a helper surface (a tooltip, a menu, a shadow
     // window); mirroring one is never what the user meant.
     .filter((source) => source.name.trim().length > 0 && !ownTitles.has(source.name))
+    // The section already says whether these are screens or windows, so a detail
+    // line repeating it would only take a row from the name.
     .map((source): DisplaySourceDescriptor => ({
       kind,
       sourceId: source.id,
-      label: source.name,
-      detail: kind === 'desktop-screen' ? 'Entire screen' : 'Window'
+      label: source.name
     }))
   return { kind, sources, permission }
 }

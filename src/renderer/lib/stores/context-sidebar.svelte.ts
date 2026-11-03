@@ -23,6 +23,7 @@ import {
   type ThreadNoteContextTab
 } from './context-sidebar-types'
 import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
+import type { DisplaySourceKind } from '$shared/ipc/display'
 import { notificationPanelState } from './notification-panel.svelte'
 
 export type {
@@ -41,6 +42,7 @@ export type {
   CoordinatorContextTab,
   DebuggerContextTab,
   DiffContextTab,
+  DisplayContextTab,
   FilesContextTab,
   GitContextTab,
   MemoryContextTab,
@@ -894,8 +896,25 @@ class ContextSidebarState {
     this.tabContexts.openCloudDeployments(projectId, threadId)
   }
 
-  openDisplay(projectId: string, threadId: string): void {
-    this.tabContexts.openDisplay(projectId, threadId)
+  openDisplayChooser(projectId: string, threadId: string): void {
+    this.tabContexts.openDisplayChooser(projectId, threadId)
+  }
+
+  openDisplayTarget(
+    projectId: string,
+    threadId: string,
+    target: { kind: DisplaySourceKind; sourceId: string; label: string }
+  ): void {
+    this.tabContexts.openDisplayTarget(projectId, threadId, target)
+  }
+
+  applyDisplayTarget(
+    projectId: string,
+    threadId: string,
+    tabId: string,
+    target: { kind: DisplaySourceKind; sourceId: string; label: string }
+  ): void {
+    this.tabContexts.applyDisplayTarget(projectId, threadId, tabId, target)
   }
 
   /**

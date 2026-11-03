@@ -1,9 +1,12 @@
 import { BrowserWindow } from 'electron'
 import {
+  DISPLAY_CONTROLS_BY_KIND,
   DISPLAY_SOURCE_KINDS,
+  isDisplayControlAction,
   isDisplaySourceKind,
   type DisplayCapturePhase,
   type DisplayCaptureState,
+  type DisplayControlAction,
   type DisplayFrame,
   type DisplayFrameDemand,
   type DisplaySessionRequest,
@@ -52,6 +55,9 @@ const IDLE_POLL_MS = 600
 const MIN_CAPTURE_GAP_MS = 250
 /** First wait after a failure, doubled per consecutive failure. */
 const RETRY_BASE_MS = 500
+/** A frame whose decode plus encode costs more than this is reported, so the
+ *  cost stays a measured number instead of a guess. */
+const SLOW_ENCODE_MS = 60
 /** Ceiling for the backoff, so a device that comes back is noticed within seconds. */
 const MAX_RETRY_MS = 8_000
 /** Failures before a session calls itself failed rather than retrying. */
@@ -71,6 +77,8 @@ interface DisplaySession {
   phase: DisplayCapturePhase
   /** Detail shown for the last failure, cleared by the next good frame. */
   detail: string | null
+  /** Frames delivered by this session, so the first one's cost is reported once. */
+  frames: number
   disposed: boolean
   /** True while one `grab` is in flight, so a tick can never stack frames. */
   busy: boolean
@@ -101,6 +109,9 @@ export class DisplayService {
     ipcMain.handle('display:stop', (_event, sessionId: unknown) => {
       this.stop(requireSessionId(sessionId))
     })
+    ipcMain.handle('display:control', (_event, sessionId: unknown, action: unknown) =>
+      this.control(requireSessionId(sessionId), requireControl(action))
+    )
   }
 
   /** Every target one kind can offer right now. Read-only and never cached. */
@@ -137,6 +148,7 @@ export class DisplayService {
       failures: 0,
       phase: 'starting',
       detail: null,
+      frames: 0,
       disposed: false,
       busy: false
     }
@@ -164,6 +176,22 @@ export class DisplayService {
     // Coming back from a pause is the one case that should not wait for the idle
     // tick: the user just looked at the tab again.
     if (demand.visible && wasPaused) this.schedule(session, 0)
+  }
+
+  /**
+   * Press one of the target's own buttons.
+   *
+   * Refused for an action the target's kind does not advertise, so the rail and
+   * this boundary read the same list instead of two copies that can drift.
+   */
+  async control(sessionId: string, action: DisplayControlAction): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('That display session is no longer open')
+    if (!DISPLAY_CONTROLS_BY_KIND[session.kind].includes(action)) {
+      throw new Error(`A ${session.kind} target has no "${action}" control`)
+    }
+    if (!session.capture.control) throw new Error('This target cannot be controlled')
+    await session.capture.control(action)
   }
 
   /** Stop one session and forget it. Safe for an id that is already gone. */
@@ -252,9 +280,22 @@ export class DisplayService {
     }
     const startedAt = Date.now()
     try {
+      const grabStartedAt = Date.now()
       const image = await session.capture.grab(session.demand.maxDimension)
       if (session.disposed) return
+      const encodeStartedAt = Date.now()
       const encoded = image ? encodeDisplayFrame(image, session.demand.maxDimension) : null
+      // Decoding a full-resolution device PNG and encoding a JPEG are the only
+      // work this panel does on the main process, so their cost is reported
+      // rather than assumed: a frame that decodes slowly is the signal that a
+      // source needs to capture smaller, not a number to guess at.
+      const encodeMs = Date.now() - encodeStartedAt
+      session.frames += 1
+      if (encodeMs > SLOW_ENCODE_MS || session.frames === 1) {
+        Logger.dev(
+          `Display frame for ${session.kind} took ${encodeMs} ms to decode and encode at ${session.demand.maxDimension}px (capture ${encodeStartedAt - grabStartedAt} ms)`
+        )
+      }
       if (!encoded) throw new Error('the target returned nothing to paint')
       session.failures = 0
       session.detail = null
@@ -326,6 +367,11 @@ function requireKind(value: unknown): DisplaySourceKind {
   if (!isDisplaySourceKind(value)) {
     throw new TypeError(`A display source must be one of ${DISPLAY_SOURCE_KINDS.join(', ')}`)
   }
+  return value
+}
+
+function requireControl(value: unknown): DisplayControlAction {
+  if (!isDisplayControlAction(value)) throw new TypeError('That display control is not known')
   return value
 }
 

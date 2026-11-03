@@ -50,6 +50,9 @@
     gitPanelVisible: boolean
     terminalFullscreenTabId: string | null
     browserFullscreenTabId: string | null
+    /** The display tab currently shown full screen, so the dock does not mirror
+     *  the same target twice. */
+    displayFullscreenTabId: string | null
     activeProject: Project | null
     selectedThread?: Thread | null
     projectIcons: SvelteMap<string, string>
@@ -76,6 +79,7 @@
     gitPanelVisible,
     terminalFullscreenTabId,
     browserFullscreenTabId,
+    displayFullscreenTabId,
     activeProject,
     selectedThread = null,
     projectIcons,
@@ -488,13 +492,19 @@
             {@render panelLoadFailed(PANEL_KEYS.cloudDeployment, 'Cloud deployment', error)}
           {/await}
         {:else if activeContextTab.kind === 'display'}
-          {#await loadCachedPanelModule(PANEL_KEYS.display, () => import('../display/DisplayPanel.svelte'))}
-            {@render panelLoading('Display')}
-          {:then { default: DisplayPanel }}
-            <DisplayPanel />
-          {:catch error}
-            {@render panelLoadFailed(PANEL_KEYS.display, 'Display', error)}
-          {/await}
+          {#if displayFullscreenTabId === activeContextTab.id}
+            <div class="flex h-full items-center justify-center text-[0.6875rem] text-muted">
+              Display is open in fullscreen
+            </div>
+          {:else}
+            {#await loadCachedPanelModule(PANEL_KEYS.display, () => import('../display/DisplayPanel.svelte'))}
+              {@render panelLoading('Display')}
+            {:then { default: DisplayPanel }}
+              <DisplayPanel tab={activeContextTab} />
+            {:catch error}
+              {@render panelLoadFailed(PANEL_KEYS.display, 'Display', error)}
+            {/await}
+          {/if}
         {:else if activeContextTab.kind === 'temporary-chat'}
           {#await loadCachedPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
             {@render panelLoading('Chat')}

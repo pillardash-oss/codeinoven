@@ -1,5 +1,5 @@
 import { nativeImage, type NativeImage } from 'electron'
-import type { DisplaySourceKind } from '../../lib/ipc/display'
+import type { DisplayControlAction, DisplaySourceKind } from '../../lib/ipc/display'
 
 /**
  * One mirrorable target, as the display service drives it.
@@ -15,6 +15,14 @@ export interface DisplayCapture {
   readonly sourceId: string
   /** Name the task manager shows for this session's row. */
   readonly label: string
+  /**
+   * Press one of the target's own buttons.
+   *
+   * Only the targets that answer for hardware keys implement it, and only for the
+   * actions their kind advertises in `DISPLAY_CONTROLS_BY_KIND`: a screen has no
+   * home button, and offering one would be a lie in the rail.
+   */
+  control?(action: DisplayControlAction): Promise<void>
   /** One frame at the target's own resolution, or null when there is nothing to paint.
    *  Downscaling and encoding are the service's job, so every adapter hands back
    *  the same thing: pixels. `maxDimension` is offered to an adapter that can
