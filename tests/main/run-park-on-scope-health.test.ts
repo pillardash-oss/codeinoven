@@ -20,7 +20,6 @@ import { ASSISTANT_SPACE_ID } from '../../src/lib/types'
  */
 
 const TASK_ID = 'task1'
-const RUN_ID = 'run1'
 const PROJECT_ID = 'project1'
 const SCOPE_ID = 'worktree-1'
 

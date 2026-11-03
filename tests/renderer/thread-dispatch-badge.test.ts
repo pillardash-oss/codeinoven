@@ -16,7 +16,7 @@ function thread(origin?: ThreadDispatchOrigin, extra: Partial<Thread> = {}): Thr
     providerId: 'pi',
     title: 'A dispatched thread',
     titleSource: 'manual',
-    status: 'working',
+    status: 'executing',
     pinned: false,
     archived: false,
     read: true,
