@@ -468,6 +468,16 @@ export class ChatEngine {
   /** The workstation tools' implementation and the dispatches awaiting a report. */
   public orchestration: OrchestrationRuntime | null = null
 
+  /**
+   * Read the HEAD commit of one checkout, for a run's starting point.
+   *
+   * A narrow port rather than a Git dependency: the engine records where a run
+   * begins (so its receipt has a range) but never reads history itself, and the
+   * service that owns Git is wired in where Git already lives. Absent leaves a
+   * run with no base, which its receipt reports as `no-base` instead of guessing.
+   */
+  gitHeadCommit?: (projectPath: string) => Promise<string | null>
+
   constructor(
     public storage: StorageEngine,
     public database: Database,

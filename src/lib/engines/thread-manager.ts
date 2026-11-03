@@ -944,6 +944,24 @@ export class ThreadManager {
     })
   }
 
+  /**
+   * Record the commit a run started from, once.
+   *
+   * Idempotent by design: a resumed run keeps the base of the attempt that
+   * actually did the work, so the receipt never loses what already happened.
+   */
+  async setRunBase(
+    projectId: string,
+    threadId: string,
+    base: NonNullable<Thread['runBase']>
+  ): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    if (existing.runBase) return existing
+    const updated: Thread = { ...existing, runBase: base, updatedAt: Date.now() }
+    await this.threadRepo.upsertViaWorker(updated)
+    return updated
+  }
+
   /** Set the git branch associated with this thread. */
   async setBranch(projectId: string, threadId: string, branch: string): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
