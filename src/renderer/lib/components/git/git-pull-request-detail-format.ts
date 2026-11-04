@@ -2,7 +2,7 @@ import CioBan from '@pdslng/cio-icon/CioBan.svelte'
 import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
 import CioClose from '@pdslng/cio-icon/CioClose.svelte'
 import CioDot from '@pdslng/cio-icon/CioDot.svelte'
-import CioMinusCircle from '$lib/components/icons/cio/CioMinusCircle.svelte'
+import CioMinusCircle from '@pdslng/cio-icon/CioMinusCircle.svelte'
 import type {
   PrAuthorAssociation,
   PrCommentKind,

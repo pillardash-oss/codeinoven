@@ -10,7 +10,7 @@
   import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
-  import CioMinusCircle from '$lib/components/icons/cio/CioMinusCircle.svelte'
+  import CioMinusCircle from '@pdslng/cio-icon/CioMinusCircle.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'

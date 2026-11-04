@@ -1,8 +1,8 @@
 import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
 import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
 import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+import CioMinusCircle from '@pdslng/cio-icon/CioMinusCircle.svelte'
 import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
-import CioMinusCircle from '$lib/components/icons/cio/CioMinusCircle.svelte'
 /**
  * How a deployment or workflow run state reads at a glance.
  *
