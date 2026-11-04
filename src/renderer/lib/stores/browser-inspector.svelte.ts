@@ -159,8 +159,14 @@ already have come and gone, which is why the list is watched rather than read
    * extra question per tab per session, on the first time it is looked at.
    */
   private readonly activeRead = new TabFlags()
-  /** Reads in flight, so one tab is never asked about twice at once. */
-  private readonly reading = new TabFlags()
+  /**
+   * Reads in flight, so one tab is never asked about twice at once.
+   *
+   * The promise is kept rather than a plain flag because a caller that needs an
+   * answer from after now has to wait for the question already sent, and a flag
+   * could only tell it to give up.
+   */
+  private readonly reading = new Map<string, Promise<void>>()
 
   /**
    * Whether {@link start} has wired the session. Inspection is a browser-only
@@ -346,16 +352,21 @@ already have come and gone, which is why the list is watched rather than read
       if (tab.kind !== 'browser') continue
       open.add(tab.id)
       if (this.designs.has(tab.id)) continue
-      if (this.reading.has(tab.id)) continue
       // The page the reader is actually looking at is asked again once, even if
       // its state was already read: the design mark may have been published
       // before this session existed, and no later broadcast would carry it.
+      //
+      // Checked before the read already in flight is, because that read may have
+      // been asked before the tab was shown: moving the pointer away from it
+      // would let a question that came back too early stand in for this one and
+      // the re-read would be lost with the reader already looking at the page.
       if (tab.id === activeId) {
         if (this.activeRead.has(tab.id)) continue
         this.activeRead.add(tab.id)
-        void this.readPageState(tab.id)
+        void this.readPageStateAgain(tab.id)
         continue
       }
+      if (this.reading.has(tab.id)) continue
       if (this.statesRead.has(tab.id)) continue
       void this.readPageState(tab.id)
     }
@@ -372,9 +383,35 @@ already have come and gone, which is why the list is watched rather than read
    * than waited for: that report is a broadcast, and a listener that starts after
    * the page loaded never receives it.
    */
-  private async readPageState(tabId: string): Promise<void> {
-    if (this.reading.has(tabId)) return
-    this.reading.add(tabId)
+  private readPageState(tabId: string): Promise<void> {
+    const inFlight = this.reading.get(tabId)
+    // One question per tab at a time, and the answer on its way is the answer to
+    // this one: asking again would only put two reports of the same page in
+    // flight against each other.
+    if (inFlight) return inFlight
+    const read: Promise<void> = this.fetchPageState(tabId).finally(() => {
+      if (this.reading.get(tabId) === read) this.reading.delete(tabId)
+    })
+    this.reading.set(tabId, read)
+    return read
+  }
+
+  /**
+   * Ask again, once whatever read is already in flight for the tab lands.
+   *
+   * For the callers that need a report from *now*: the page the reader just
+   * showed, or the page a comment is about to be pinned to. The question in
+   * flight may predate either, so it is awaited and then the page is asked about
+   * again, which keeps one tab to one question at a time without spending the
+   * re-read on an answer that came back too early to count.
+   */
+  private readPageStateAgain(tabId: string): Promise<void> {
+    const inFlight = this.reading.get(tabId)
+    return inFlight ? inFlight.then(() => this.readPageState(tabId)) : this.readPageState(tabId)
+  }
+
+  /** The question {@link readPageState} deduplicates and {@link reading} tracks. */
+  private async fetchPageState(tabId: string): Promise<void> {
     try {
       const state = await invoke('browser:pageState', tabId)
       // No report means main has no page for this tab yet, which is the answer a
@@ -385,8 +422,6 @@ already have come and gone, which is why the list is watched rather than read
       this.notePageState(state.tabId, state.design)
     } catch (failure: unknown) {
       logRendererError("A browser tab's page state could not be read.", failure)
-    } finally {
-      this.reading.delete(tabId)
     }
   }
 
