@@ -12,6 +12,7 @@ import {
 } from './browser-shortcuts'
 import { MAX_ZOOM_LEVEL, ZOOM_STEP } from './browser-validation'
 import { liveContents, liveWindowContents } from './browser-view-contents'
+import { navigatePageHistory } from './browser-history-navigation'
 import { designScreenEntryFromUrl } from '../../../lib/design/screens'
 import type { BrowserService } from '../browser-service'
 
@@ -325,9 +326,9 @@ export class BrowserServiceKeyboard {
     const isFocusedPage = tab.view.webContents.isFocused()
     if (!isFocusedToolbar && !isFocusedPage) return false
 
-    const history = tab.view.webContents.navigationHistory
-    if (direction === 'back' && history.canGoBack()) history.goBack()
-    if (direction === 'forward' && history.canGoForward()) history.goForward()
+    // The same traversal a page's own swipe gesture takes, so focus handling is
+    // stated once for every surface that walks a page's history.
+    navigatePageHistory(tab.view.webContents, direction)
     return true
   }
 

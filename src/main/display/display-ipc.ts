@@ -2,13 +2,20 @@ import type { BrowserWindow } from 'electron'
 import {
   DISPLAY_SOURCE_KINDS,
   isDisplayControlAction,
+  isDisplayInputGesture,
   isDisplaySourceKind,
+  type DisplayInputGesture,
   type DisplaySourceKind
 } from '../../lib/ipc/display'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
-import { DisplayPresence } from './display-presence'
+import {
+  openInputPermissionSettings,
+  readInputPermission,
+  requestInputPermission
+} from './display-input-permission'
+import { bindDisplayEventSink, displayRequests } from './display-requests'
 import { bindDisplayWindow, displayService } from './display-runtime'
 
 /**
@@ -19,27 +26,30 @@ import { bindDisplayWindow, displayService } from './display-runtime'
  * adapters) only on first use. Nothing in this file imports one of those, so the
  * cost of having the panel at all is a handful of handler rows.
  *
- * Presence is the other half: the panel has no rail item until an agent starts or
- * attaches to a display target, so this boundary also owns the one watch that
- * decides when that happened.
+ * Presence is the other half, and it is agent-initiated rather than detected: the
+ * `ext_simulation` tool tells this boundary which device to mirror, and the app
+ * never scans for a device on its own.
  */
 export interface DisplayIpcDeps {
   window: () => BrowserWindow | null
-  /** Every process the agent process service tracks right now. */
-  listAgentProcesses: () => Promise<{ command: string; threadId?: string | null }[]>
 }
 
 export function registerDisplayIpc(deps: DisplayIpcDeps): void {
   bindDisplayWindow(deps.window)
 
-  const announce = (): void => {
+  const send = (
+    channel: 'display:available' | 'display:activity' | 'display:target',
+    payload: unknown
+  ): void => {
     const window = deps.window()
     if (!window || window.isDestroyed()) return
-    sendToRenderer(window.webContents, 'display:available', true)
+    sendToRenderer(window.webContents, channel, payload)
   }
-  const presence = new DisplayPresence({
-    listAgentProcesses: deps.listAgentProcesses,
-    onAvailable: announce
+
+  bindDisplayEventSink({
+    target: (offer) => send('display:target', offer),
+    activity: (activity) => send('display:activity', activity),
+    available: () => send('display:available', true)
   })
 
   ipcMain.handle('display:listSources', async (_event, kind: unknown) => {
@@ -62,10 +72,33 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     const service = await displayService()
     await service.control(requireSessionId(sessionId), requireControl(action))
   })
-  ipcMain.handle('display:presence', () => presence.state)
-  ipcMain.handle('display:noteAgentWorking', (_event, working: unknown) => {
-    if (typeof working !== 'boolean') throw new TypeError('Agent working state must be a boolean')
-    presence.setAgentWorking(working)
+  ipcMain.handle('display:input', async (_event, sessionId: unknown, gesture: unknown) => {
+    const service = await displayService()
+    await service.input(requireSessionId(sessionId), requireGesture(gesture))
+  })
+  // Reading costs a settings query and nothing else, so the panel may ask on every
+  // simulator it opens instead of remembering an answer that can go stale.
+  ipcMain.handle('display:inputPermission', () => readInputPermission())
+  ipcMain.handle('display:requestInputPermission', () => requestInputPermission())
+  ipcMain.handle('display:openInputSettings', () => openInputPermissionSettings())
+  ipcMain.handle('display:presence', () => displayRequests.state())
+  ipcMain.handle('display:notePanel', (_event, mirrored: unknown) => {
+    if (mirrored === null) {
+      displayRequests.noteMirrored(null, null)
+      return
+    }
+    if (typeof mirrored !== 'object' || mirrored === null) {
+      throw new TypeError('A mirrored target must be an object or null')
+    }
+    const target = mirrored as { kind?: unknown; sourceId?: unknown; threadId?: unknown }
+    const kind = requireKind(target.kind)
+    if (typeof target.sourceId !== 'string' || target.sourceId.length === 0) {
+      throw new TypeError('A mirrored target must name its source')
+    }
+    displayRequests.noteMirrored(
+      `${kind}:${target.sourceId}`,
+      typeof target.threadId === 'string' && target.threadId.length > 0 ? target.threadId : null
+    )
   })
 
   Logger.dev('Display panel registered: capture modules load on first use')
@@ -102,6 +135,11 @@ function requireDemand(value: unknown): { maxDimension: number; visible: boolean
 
 function requireControl(value: unknown) {
   if (!isDisplayControlAction(value)) throw new TypeError('That display control is not known')
+  return value
+}
+
+function requireGesture(value: unknown): DisplayInputGesture {
+  if (!isDisplayInputGesture(value)) throw new TypeError('That display gesture is not known')
   return value
 }
 

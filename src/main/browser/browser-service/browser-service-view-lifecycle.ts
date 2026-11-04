@@ -147,16 +147,19 @@ export class BrowserServiceViewLifecycle {
   /**
    * The viewport a tab is laid out at while it is parked offscreen.
    *
-   * The newest of the two records wins, because the newest one is the size
-   * something actually asked the page to be: an agent's explicit request, or the
-   * frame the user was reading the tab at. A tab that was never displayed and
-   * never asked for a viewport is mounted at `DEFAULT_PARKED_VIEWPORT`.
+   * An agent's explicit request holds until the agent changes it, even across the
+   * times the user looks at the tab and leaves it again. That is the point of the
+   * request: a page whose real layout only exists at desktop widths (a store
+   * console and its gallery, for instance) must keep rendering that layout while
+   * the agent works on it offscreen, and the width of the panel the user happened
+   * to read it in is not a size anything chose for the agent. A tab nothing asked
+   * about still follows the frame it was last displayed at, and one never displayed
+   * is mounted at `DEFAULT_PARKED_VIEWPORT`.
    */
   parkedViewportFor(tab: BrowserTab): BrowserViewport {
-    const requested = tab.requestedViewport
-    const displayed = tab.displayedViewport
-    if (displayed && (!requested || requested.at <= displayed.at)) return displayed.viewport
-    return requested?.viewport ?? DEFAULT_PARKED_VIEWPORT
+    return (
+      tab.requestedViewport?.viewport ?? tab.displayedViewport?.viewport ?? DEFAULT_PARKED_VIEWPORT
+    )
   }
 
   /**

@@ -41,6 +41,7 @@ import {
   type UserMessageSummary,
   isOrchestrationChildThread,
   isAssistantSetupThread,
+  usesThreadWorkspaceMount,
   ASSISTANT_SPACE_ID
 } from '../types'
 import {
@@ -516,6 +517,12 @@ export class ThreadManager {
     thread: Thread
   ): Promise<void> {
     if (!this.scopeRoots || !scopeBucketId) return
+    // A conversation container mounts its own app-storage workspace
+    // (`chats-cwd/`, `assistant-cwd/`, `browser-cwd/`) and owns no repository
+    // scope, so no bucket on it can ever name a checkout. Resolving one made a
+    // create in the assistant space fail closed after the row was already
+    // announced, and the thread was deleted seconds after it appeared.
+    if (usesThreadWorkspaceMount(projectId)) return
     const resolved = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
     if (resolved) thread.workingDirectory = resolved
   }

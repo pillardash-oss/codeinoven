@@ -124,6 +124,7 @@
   out:slide={dismissSlide()}
   class={cardFrameClass('replace', 'overflow-hidden')}
   aria-label="Permission requested"
+  data-voice-trigger-root
 >
   <!-- The card that takes the composer's place while the agent waits for a
      decision: what it wants to do, the risk it carries, and the three answers. -->

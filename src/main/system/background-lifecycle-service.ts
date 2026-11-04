@@ -866,7 +866,14 @@ export class BackgroundLifecycleService {
     if (this.stopped) return
     const window = this.deps.state.mainWindow
     const hasWindow = window !== null && !window.isDestroyed() && window.isVisible()
-    if (this.backgroundEnabled && (!hasWindow || this.tray === null)) this.armActivationPoll()
+    // Only a process whose window has actually closed has anything to poll
+    // for. Before the first window exists there is no parked request and no
+    // residency to decide, and a 2 s interval there only ran synchronous
+    // directory and database reads under the app's startup. A visible window is
+    // the user already being here, and opening it reconciles the icon, so the
+    // watcher alone stays armed for both.
+    const windowless = !hasWindow && this.windowlessSince !== null
+    if (this.backgroundEnabled && windowless) this.armActivationPoll()
     else this.clearActivationPoll()
   }
 

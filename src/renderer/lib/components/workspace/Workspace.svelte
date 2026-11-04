@@ -20,7 +20,6 @@
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { displayAvailability } from '$lib/stores/display-availability.svelte'
   import { captureActivities } from '$shared/media-activity'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
@@ -413,10 +412,12 @@
           ]
         : authoredWork
 
-    // The display panel has no rail item by default: it is a view of work an agent
-    // started (an emulator it launched, a simulator it booted, a window it is
-    // driving), so the control appears only once that has happened. Leaving a
-    // preview open keeps it there for as long as the tab lives.
+    // The display panel is not a tool to browse to: it exists because an agent
+    // started or attached to a device (an emulator it launched, a simulator it
+    // booted, a phone it drives over adb, wired or wireless). So the item appears
+    // once that has happened, and an open tab keeps it there for as long as the
+    // tab lives. Nothing here loads a capture until a device is actually being
+    // worked on.
     const showsDisplay =
       displayAvailability.available ||
       contextSidebarState.tabs.some((tab) => tab.kind === 'display')
@@ -472,7 +473,10 @@
           board.switcherPanelTabs.browser.menuOpen = false
           board.switcherPanelTabs.toggleDockPanel('browser', board.state.focusBrowser)
         },
-        onContextMenu: board.switcherPanelTabs.browser.openContextMenu
+        // Wrapped rather than passed by reference: the controller's handler reads
+        // `this`, and the dock calls whatever it was given without a receiver, so a
+        // bare method reference threw before it could open the menu.
+        onContextMenu: (event: MouseEvent) => board.switcherPanelTabs.browser.openContextMenu(event)
       })
     }
 
@@ -535,15 +539,39 @@
   })
 
   /**
-   * Tell main when an agent is working.
+   * Open the device the agent asked to mirror, on the thread the person is
+   * standing in.
    *
-   * That flag is the whole gate on the display presence watch: while nothing runs,
-   * the app never reads the process table looking for a device. One boolean per
-   * transition, so a busy badge changing costs nothing.
+   * The offer comes from `ext_simulation`, which the agent calls with the device it
+   * is working on, so the panel appears on that device rather than on the last one
+   * opened. Focusing a tab already mirroring it is what makes an agent that moves
+   * between devices follow it here.
    */
   $effect(() => {
-    const working = [...agentRuns.runs.values()].some((run) => run.busy)
-    displayAvailability.noteAgentWorking(working)
+    const offer = displayAvailability.pendingTarget
+    const thread = selectedThread
+    if (!offer || !thread) return
+    contextSidebarState.openDisplayTarget(thread.projectId, thread.id, offer.target)
+    displayAvailability.clearPendingTarget(offer.at)
+  })
+
+  /**
+   * Report what the panel is mirroring, and on which thread, so the watch stops
+   * looking for a device and that thread's row says its screen is on display.
+   */
+  $effect(() => {
+    const mirrored = contextSidebarState.tabs.find(
+      (candidate) => candidate.kind === 'display' && candidate.sourceKind && candidate.sourceId
+    )
+    displayAvailability.notePanelTarget(
+      mirrored?.kind === 'display' && mirrored.sourceKind && mirrored.sourceId
+        ? {
+            kind: mirrored.sourceKind,
+            sourceId: mirrored.sourceId,
+            threadId: mirrored.threadId
+          }
+        : null
+    )
   })
 
   /**

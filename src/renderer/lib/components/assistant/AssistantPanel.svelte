@@ -1,23 +1,11 @@
 <script lang="ts">
-  import CioActions from '@pdslng/cio-icon/CioActions.svelte'
-  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioBan from '@pdslng/cio-icon/CioBan.svelte'
-  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
-  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
-  import AssistantIcon, {
-    type AssistantIconMark
-  } from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
-  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
-  import Switch from '$lib/components/ui/Switch.svelte'
-  import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import AssistantKnowledgeHistory from './AssistantKnowledgeHistory.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { getAssistantIcon } from '$lib/assistant-icons'
   import { appConfigState } from '$lib/stores/app-config.svelte'
@@ -34,51 +22,32 @@
     describeRelativeTime,
     describeSchedule,
     assistantAgentsComplete,
-    assistantKnowledgeComplete,
     assistantIsScheduled,
-    assistantIsUnnamed,
+    assistantKnowledgeComplete,
     type AgentCapabilityCatalog,
     type BackgroundRun,
     type MissedRun,
     type Assistant,
     type AssistantAgents,
     type AssistantConnection,
-    type AssistantDeliveryChannel,
-    type AssistantImpact,
-    type AssistantTimeliness,
     type Thread,
+    type UpdateAssistantInput,
     type UtilityCatalog
   } from '$shared/types'
   import {
     isExternalDeliveryChannel,
     assistantDeliveryChannelLabel,
     assistantDeliveryLabel,
-    assistantPriorityLabel,
-    ASSISTANT_DELIVERY_OPTIONS,
-    ASSISTANT_IMPACT_OPTIONS,
-    ASSISTANT_TIMELINESS_OPTIONS
+    assistantPriorityLabel
   } from '$shared/assistant-reporting'
   import {
-    ASSISTANT_PERSONALITY_HEADING,
-    ASSISTANT_PERSONALITY_SECTION_TITLE
-  } from '$shared/assistant-personality'
-  import {
-    backgroundRunOutcomeLabel,
-    backgroundRunReasonText,
-    backgroundRunTone,
-    isPersonalitySection,
-    knowledgeSectionSummary,
+    assistantKnowledgeSections,
     parseKnowledgeSections,
-    previewRuns,
-    readKnowledgePersonality,
     resolveConnections,
     serializeKnowledgeSections,
     withKnowledgePersonality,
-    missedRunReasonText,
-    TASK_RUN_PREVIEW,
     type ConnectionSetupRequest,
-    type ConnectionView,
-    type KnowledgeSection
+    type ConnectionView
   } from './assistant-view'
   import {
     buildConnectionLibrary,
@@ -86,13 +55,17 @@
     type ConnectionLibraryEntry
   } from './connection-library'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
-  import CardFoot from '$lib/components/shared/CardFoot.svelte'
-  import CardButton from '$lib/components/shared/CardButton.svelte'
+  import AssistantWakesSection from '$lib/components/assistant/AssistantWakesSection.svelte'
+  import { followUpsState } from '$lib/stores/follow-ups.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
   import AssistantAgentPicker from './AssistantAgentPicker.svelte'
   import AssistantExecutionPicker from './AssistantExecutionPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
+  import AssistantOverviewTab from './assistant-panel/AssistantOverviewTab.svelte'
+  import AssistantBehaviourTab from './assistant-panel/AssistantBehaviourTab.svelte'
+  import AssistantScheduleTab from './assistant-panel/AssistantScheduleTab.svelte'
+  import AssistantReportingTab from './assistant-panel/AssistantReportingTab.svelte'
+  import AssistantIssuesTab from './assistant-panel/AssistantIssuesTab.svelte'
   import UtilityEditorModal, {
     type UtilityEditorTarget
   } from '$lib/components/settings/UtilityEditorModal.svelte'
@@ -134,9 +107,18 @@
     onAdoptTask
   }: Props = $props()
 
+  /**
+   * The strip, in reading order: what the assistant is and how it works first,
+   * then the three things that used to be stacked at the bottom of its behaviour
+   * card (when it runs, where its output goes, and what it is waiting on), then
+   * what it uses and, last, what needs the user.
+   */
   const TABS: ReadonlyArray<{ id: AssistantPanelTab; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'assistant', label: 'Assistant' },
+    { id: 'behaviour', label: 'Behaviour' },
+    { id: 'schedule', label: 'Schedule' },
+    { id: 'reporting', label: 'Reporting' },
+    { id: 'wakes', label: 'Wakes' },
     { id: 'connections', label: 'Connections' },
     { id: 'agents', label: 'Agents' },
     { id: 'issues', label: 'Issues' }
@@ -195,6 +177,10 @@
 
   let fullscreen = $state(false)
 
+  /**
+   * A task with no assistant has no behaviour, clock, reporting, wakes or models
+   * to show, so it keeps only the two sections that still apply to it.
+   */
   const visibleTabs = $derived(
     assistant ? TABS : TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
   )
@@ -218,53 +204,12 @@
   )
 
   /**
-   * The count a tab carries, or null when it has nothing worth counting. A zero
-   * is noise on a tab label, so every empty section reads as a bare label instead
-   * of a badge that says nothing.
+   * The clock, as every surface in the panel reads it: whether one exists, and the
+   * line naming it. It sits here rather than in the schedule tab because the header
+   * and the All tab both state it.
    */
-  function tabCount(id: AssistantPanelTab): number | null {
-    if (id === 'connections') return connectionViews.length || null
-    if (id === 'agents') {
-      return assistant ? 1 + (assistant.agents?.fallbacks.length ?? 0) : null
-    }
-    if (id === 'issues') return issueCount || null
-    return null
-  }
-
-  // ─── Assistant content ──────────────────────────────────────────────────────
-
-  /** Every row of the behavior card: the personality first, then what it knows. */
-  const PERSONALITY_SECTION_ID = 'personality'
-  /** The authored sections, without the personality, which is always shown first. */
-  const authoredSections = $derived(
-    assistant ? parseKnowledgeSections(assistant.knowledge) : ([] as KnowledgeSection[])
-  )
-  const sections = $derived<KnowledgeSection[]>([
-    {
-      id: PERSONALITY_SECTION_ID,
-      heading: ASSISTANT_PERSONALITY_HEADING,
-      title: ASSISTANT_PERSONALITY_SECTION_TITLE,
-      body: assistant ? readKnowledgePersonality(assistant.knowledge) : ''
-    },
-    ...authoredSections.filter((section) => !isPersonalitySection(section))
-  ])
-
-  /** The one-line summary a folded section shows in place of its body. */
-  const sectionSummary = knowledgeSectionSummary
-  const knowledgeComplete = $derived(assistant ? assistantKnowledgeComplete(assistant) : false)
-  const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
-  /** Whether this assistant runs on a clock at all; drives the schedule copy. */
   const scheduled = $derived(assistant ? assistantIsScheduled(assistant) : true)
-  /**
-   * Whether a clock actually exists, which is what the countdown rows are about.
-   * An assistant whose flag is on but whose schedule was never agreed has nothing to
-   * show, so the section offers the conversation instead of empty rows.
-   */
   const scheduleAgreed = $derived(Boolean(assistant?.schedule))
-  /**
-   * The schedule line everywhere in the panel: what the user named the clock,
-   * then the cadence the assistant agreed, or "runs on demand" when it has none.
-   */
   const scheduleLabel = $derived.by(() => {
     if (!scheduled) return 'Runs on demand'
     const cadence = describeSchedule(assistant?.schedule ?? null)
@@ -272,64 +217,31 @@
     return named ? `${named} · ${cadence}` : cadence
   })
 
-  const collapsed = new SvelteSet<string>()
-  /** The user turned the clock on: the panel holds that intent until the agent agrees it. */
-  let scheduleRequest = $state(false)
-  /** The confirmation that stands between the user and dropping the clock. */
-  let scheduleOffConfirm = $state(false)
-  let scheduleOffBusy = $state(false)
-  /**
-   * The assistant's name, for copy that would otherwise repeat "this assistant".
-   * An assistant that has not been named yet (the create-by-chat flow starts with
-   * no name at all) is described by what it is rather than by a placeholder.
-   */
-  const assistantLabel = $derived(
-    assistant && !assistantIsUnnamed(assistant) ? assistant.name : 'your new assistant'
+  /** The behaviour's size, for the All tab's table of contents. */
+  const sectionCount = $derived(
+    assistant ? assistantKnowledgeSections(assistant.knowledge).length : 0
   )
-  let editingId = $state<string | null>(null)
-  let editDraft = $state('')
-  /** Whether the instruction history is up, showing every saved version. */
-  let knowledgeHistoryOpen = $state(false)
+  const knowledgeComplete = $derived(assistant ? assistantKnowledgeComplete(assistant) : false)
+  const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
+  const agentCount = $derived(1 + (assistant?.agents?.fallbacks.length ?? 0))
 
-  function toggleSection(id: string): void {
-    if (collapsed.has(id)) collapsed.delete(id)
-    else collapsed.add(id)
-  }
-
-  function startEdit(section: KnowledgeSection): void {
-    editingId = section.id
-    editDraft = section.body
-    collapsed.delete(section.id)
-  }
-
-  function cancelEdit(): void {
-    editingId = null
-    editDraft = ''
-  }
-
-  async function saveSection(sectionId: string): Promise<void> {
-    if (!assistant) return
-    const body = editDraft.trim()
-    editingId = null
-    // The personality is written into the knowledge as its own section; every other
-    // row rewrites the section it was opened from, in the document's own order. The
-    // whole parsed document is rewritten, not the filtered rows, so a save can never
-    // drop the personality section it did not edit.
-    const knowledge =
-      sectionId === PERSONALITY_SECTION_ID
-        ? withKnowledgePersonality(assistant.knowledge, body)
-        : serializeKnowledgeSections(
-            parseKnowledgeSections(assistant.knowledge).map((section) =>
-              section.id === sectionId ? { ...section, body } : section
-            )
-          )
-    await persistAssistant({ knowledge }, 'Could not save the assistant behavior')
+  /**
+   * The count a tab carries, or null when it has nothing worth counting. A zero
+   * is noise on a tab label, so every empty section reads as a bare label instead
+   * of a badge that says nothing.
+   */
+  function tabCount(id: AssistantPanelTab): number | null {
+    if (id === 'connections') return connectionViews.length || null
+    if (id === 'agents') return assistant ? agentCount : null
+    if (id === 'wakes') return wakes.length || null
+    if (id === 'issues') return issueCount || null
+    return null
   }
 
   // ─── Persistence ──────────────────────────────────────────────────────────
 
   async function persistAssistant(
-    patch: Parameters<typeof assistants.updateAssistant>[1],
+    patch: UpdateAssistantInput,
     failureMessage: string
   ): Promise<void> {
     if (!assistant) return
@@ -348,149 +260,32 @@
     )
   }
 
-  /**
-   * Turn the assistant's clock on or off.
-   *
-   * On is never written here. The panel knows nothing about the cadence or the
-   * times, and a schedule nobody agreed fires at hours the user never chose, so the
-   * switch only records that they want one and hands them the button that agrees it
-   * with the agent. Off is written, but only after a confirmation, because it drops
-   * the clock and its name and putting them back means agreeing a new one with the
-   * agent.
-   */
-  function setScheduledSwitch(next: boolean): void {
-    if (next) {
-      if (!scheduled) scheduleRequest = true
-      return
-    }
-    if (scheduleRequest) {
-      scheduleRequest = false
-      return
-    }
-    if (scheduled) scheduleOffConfirm = true
-  }
-
-  /** Hand the clock to the agent: it asks for the name, the cadence and the times. */
-  async function scheduleWithAgent(): Promise<void> {
-    const target = assistant
-    if (!target) return
-    const thread = knowledgeThread
-    if (!thread) {
-      toast.error('This assistant has no behavior thread to schedule in')
-      return
-    }
-    scheduleRequest = false
-    openKnowledgeTask()
-    try {
-      await invoke('assistant:scheduleWithAgent', target.id)
-    } catch (error) {
-      reportError(error, 'Could not start the schedule with your assistant')
-    }
-  }
-
-  /** Drop the clock, once the user has been told what dropping it costs. */
-  async function confirmScheduleOff(): Promise<void> {
-    if (!assistant) return
-    scheduleOffBusy = true
-    try {
-      await persistAssistant({ scheduled: false }, 'Could not turn the schedule off')
-      scheduleOffConfirm = false
-    } finally {
-      scheduleOffBusy = false
-    }
-  }
-
-  /** Commit the name the user gives the assistant's clock. Typed, so it writes on blur. */
-  function commitScheduleName(raw: string): void {
-    if (!assistant) return
-    const name = raw.trim()
-    if (name === (assistant.scheduleName ?? '')) return
-    void persistAssistant({ scheduleName: name || null }, 'Could not save the schedule name')
-  }
-
   function setAgents(agents: AssistantAgents): void {
     void persistAssistant({ agents }, 'Could not save the assistant models')
   }
 
+  /**
+   * Write one behaviour section back into the knowledge document.
+   *
+   * The personality is written as its own section; every other row rewrites the
+   * section it was opened from, in the document's own order. The whole parsed
+   * document is rewritten, not the filtered rows, so a save can never drop the
+   * personality section it did not edit.
+   */
+  async function saveSection(sectionId: string, body: string): Promise<void> {
+    if (!assistant) return
+    const knowledge =
+      sectionId === 'personality'
+        ? withKnowledgePersonality(assistant.knowledge, body)
+        : serializeKnowledgeSections(
+            parseKnowledgeSections(assistant.knowledge).map((section) =>
+              section.id === sectionId ? { ...section, body } : section
+            )
+          )
+    await persistAssistant({ knowledge }, 'Could not save the assistant behavior')
+  }
+
   // ─── Reporting: where the output goes, and how urgent it is ────────────────
-
-  /** The delivery channels, with a hint saying whether the choice needs a connection. */
-  const deliveryChoices = ASSISTANT_DELIVERY_OPTIONS.map((option) => ({
-    id: option.id,
-    label: option.label,
-    hint: option.external
-      ? 'Needs a connection this assistant must have'
-      : 'A normal thread notification inside CodeInOven'
-  }))
-
-  /**
-   * Pick the delivery channel. The destination and any note are carried over, so
-   * switching channel does not silently discard what the user already told the
-   * agent; the in-app channel drops the destination because it has none.
-   */
-  function setDeliveryChannel(channel: AssistantDeliveryChannel): void {
-    if (!assistant) return
-    const current = assistant.delivery
-    const target = current?.target?.trim()
-    void persistAssistant(
-      {
-        delivery: {
-          channel,
-          ...(target && channel !== 'in-app' ? { target } : {}),
-          ...(current?.note ? { note: current.note } : {})
-        }
-      },
-      'Could not save the delivery channel'
-    )
-  }
-
-  /** Commit the typed destination. The input is uncontrolled, so this is the only write. */
-  function commitDeliveryTarget(raw: string): void {
-    if (!assistant) return
-    const delivery = assistant.delivery
-    if (!delivery || delivery.channel === 'in-app') return
-    const target = raw.trim()
-    if (target === (delivery.target ?? '')) return
-    void persistAssistant(
-      {
-        delivery: {
-          channel: delivery.channel,
-          ...(target ? { target } : {}),
-          ...(delivery.note ? { note: delivery.note } : {})
-        }
-      },
-      'Could not save the delivery destination'
-    )
-  }
-
-  function clearDelivery(): void {
-    void persistAssistant({ delivery: null }, 'Could not clear the delivery channel')
-  }
-
-  /**
-   * Set one priority bracket, keeping the other. When the assistant has no
-   * priority yet the other bracket starts from the middle of its scale, and the
-   * panel immediately shows the pair that was actually saved.
-   */
-  function setPriorityTimeliness(timeliness: AssistantTimeliness): void {
-    if (!assistant) return
-    void persistAssistant(
-      { priority: { timeliness, impact: assistant.priority?.impact ?? 'team' } },
-      'Could not save the priority'
-    )
-  }
-
-  function setPriorityImpact(impact: AssistantImpact): void {
-    if (!assistant) return
-    void persistAssistant(
-      { priority: { timeliness: assistant.priority?.timeliness ?? 'today', impact } },
-      'Could not save the priority'
-    )
-  }
-
-  function clearPriority(): void {
-    void persistAssistant({ priority: null }, 'Could not clear the priority')
-  }
 
   const connectionViews = $derived(
     resolveConnections(assistant?.connections ?? [], catalog, capabilities)
@@ -628,7 +423,7 @@
     })
   }
 
-  // ─── Issues ───────────────────────────────────────────────────────────────
+  // ─── Wakes ────────────────────────────────────────────────────────────────
 
   /**
    * Every thread this panel reports on. A run inherits its task's `assistantId`,
@@ -639,6 +434,11 @@
     if (!assistant) return task ? [task] : []
     return scopeState.allScopeThreads.filter((thread) => thread.assistantId === assistant.id)
   })
+
+  /** Wakes armed on this assistant's own threads, newest first as the store holds them. */
+  const wakes = $derived(followUpsState.forThreads(assistantTasks.map((entry) => entry.id)))
+
+  // ─── Issues ───────────────────────────────────────────────────────────────
 
   const missedRuns = $derived(
     assistant ? assistants.missedForAssistant(assistant.id) : assistants.missedForTask(threadId)
@@ -654,16 +454,6 @@
       ? assistants.backgroundForAssistant(assistant.id)
       : assistants.backgroundForTask(threadId)
   )
-
-  let showAllBackgroundRuns = $state(false)
-
-  /** The task a run recorded, resolved from the live thread list when it survives. */
-  function runTaskTitle(run: BackgroundRun): string {
-    return (
-      scopeState.allScopeThreads.find((thread) => thread.id === run.taskId)?.title ??
-      'Assistant run'
-    )
-  }
 
   /** The run's own thread when it still exists; null once it was deleted. */
   function runThreadFor(run: BackgroundRun): Thread | null {
@@ -706,9 +496,9 @@
   const issueCount = $derived(missedRuns.length + runIssues.length)
 
   /**
-   * The panel's sections as the full screen strip's tabs. The strip carries no
-   * badge slot, so the Issues tab puts its count in the title rather than
-   * reserving a second one next to the inline header's badge.
+   * The panel's tabs as the full screen strip's tabs. The strip carries no badge
+   * slot, so the Issues tab puts its count in the title rather than reserving a
+   * second one next to the inline header's badge.
    */
   const fullscreenTabs = $derived(
     visibleTabs.map((entry) => ({
@@ -755,7 +545,7 @@
   )
   /**
    * How a slot missed while the app was closed is recovered. Read from the live
-   * setting, so the Schedule card states the policy the scheduler actually follows
+   * setting, so the Schedule tab states the policy the scheduler actually follows
    * instead of a sentence that can drift from it.
    */
   const missedRunPolicyLabel = $derived(
@@ -839,9 +629,9 @@
   }
 
   /**
-   * Open the assistant's authoring thread from the empty state's "Open the task"
-   * action. A hidden thread is revealed first: a hidden row never reaches the
-   * sidebar, so opening it without revealing would land the user nowhere.
+   * Open the assistant's authoring thread. A hidden thread is revealed first: a
+   * hidden row never reaches the sidebar, so opening it without revealing would
+   * land the user nowhere.
    */
   function openKnowledgeTask(): void {
     const thread = knowledgeThread
@@ -904,7 +694,7 @@
   {#if assistant}
     <!--
       The panel opens as a document about one assistant, so its own name, its
-      clock and its state sit above the sections rather than inside one tab.
+      clock and its state sit above the tabs rather than inside one of them.
       The status pill is the pause control: the panel has no room for a separate
       row of it, and the state is the one thing that belongs at the top.
     -->
@@ -991,78 +781,6 @@
   </div>
 {/snippet}
 
-{#snippet glanceRow(args: {
-  title: string
-  detail: string
-  target: AssistantPanelTab
-  icon: AssistantIconMark
-  warn?: boolean
-})}
-  <!--
-    The All tab is a table of contents, not a second copy of every section, so
-    each line is one door: what the section holds and a way in. The warn line
-    wears the missed-run ink on its left edge, which is the only colour an
-    assistant surface spends on a problem.
-  -->
-  <button
-    type="button"
-    class="flex w-full items-center gap-2.5 border border-border border-l-2 bg-surface px-2.5 py-2 text-left transition-colors hover:bg-elevated"
-    style={args.warn
-      ? 'border-left-color: var(--color-missed)'
-      : 'border-left-color: var(--color-border)'}
-    title="Open {args.title}"
-    aria-label="Open the {args.title} section"
-    onclick={() => (panelTab = args.target)}
-  >
-    <span class="flex h-7 w-7 shrink-0 items-center justify-center bg-elevated text-foreground">
-      <AssistantIcon mark={args.icon} size={16} />
-    </span>
-    <span class="flex min-w-0 flex-1 flex-col gap-0.5">
-      <span class="text-[0.75rem] font-semibold text-foreground">{args.title}</span>
-      <span class="text-[0.625rem] leading-relaxed text-muted">{args.detail}</span>
-    </span>
-    <span class="shrink-0 text-[0.5625rem] tracking-wide text-dimmed uppercase">Open</span>
-  </button>
-{/snippet}
-
-{#snippet assistantEmptyState()}
-  <div
-    class="flex flex-col items-center gap-2.5 border border-border bg-surface px-4 py-8 text-center"
-  >
-    <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
-      <AssistantIcon mark="knowledge" size={24} class="text-dimmed" />
-    </span>
-    <p class="text-[0.8125rem] font-semibold text-foreground">Nothing yet</p>
-    <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Tell {assistantLabel} what you want in its thread. Tell it the goal, the steps, and when it should
-      run. The plan you agree on shows up here.
-    </p>
-    {#if knowledgeThread}
-      <button
-        type="button"
-        class="mt-1 border border-border px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open this assistant's behavior thread"
-        aria-label="Open this assistant's behavior thread"
-        onclick={openKnowledgeTask}
-      >
-        Open the task
-      </button>
-    {/if}
-  </div>
-  {#if gettingStartedCheckpoint}
-    <div class="flex flex-col gap-1.5 border border-border bg-surface p-2.5">
-      <p class="text-[0.8125rem] font-semibold text-foreground">Agreed so far</p>
-      <p class="text-[0.6875rem] leading-relaxed text-muted">
-        What you and the agent have agreed for this assistant so far. It is not saved until you
-        confirm the recap.
-      </p>
-      <div class="text-[0.6875rem] text-muted">
-        <DeferredMarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
-      </div>
-    </div>
-  {/if}
-{/snippet}
-
 {#snippet noAssistantState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
     <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
@@ -1085,497 +803,87 @@
   </div>
 {/snippet}
 
-{#snippet backgroundRunRowBody(run: BackgroundRun, thread: Thread | null)}
-  <span class="mt-0.5 shrink-0">
-    <StatusBadge
-      tone={backgroundRunTone(run.outcome)}
-      title={backgroundRunOutcomeLabel(run.outcome)}
-    />
-  </span>
-  <span class="min-w-0 flex-1">
-    <span class="flex items-center gap-1.5">
-      <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{runTaskTitle(run)}</span
-      >
-      <span class="shrink-0 text-[0.625rem] text-muted">
-        {backgroundRunOutcomeLabel(run.outcome)}
-      </span>
-    </span>
-    <span class="mt-0.5 block text-[0.625rem] text-dimmed">
-      {backgroundRunReasonText(run.reason)} · {formatDateTime(run.startedAt)}
-    </span>
-    {#if run.outcome === 'failed' && run.errorSummary}
-      <span class="mt-0.5 block text-[0.625rem] text-danger">{run.errorSummary}</span>
-    {/if}
-    {#if run.autoAnswered > 0}
-      <span class="mt-0.5 block text-[0.625rem] text-dimmed">
-        {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered automatically
-      </span>
-    {/if}
-    {#if !thread}
-      <span class="mt-0.5 block text-[0.625rem] text-dimmed italic">
-        Run thread deleted. Kept as evidence.
-      </span>
-    {/if}
-  </span>
-{/snippet}
-
 {#snippet panelContent()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if activeTab === 'all'}
-      <div class="flex flex-col gap-3 p-3">
-        {#if assistant}
-          {#if scheduled}
-            <div class="flex flex-col border border-border bg-surface">
-              <dl class="flex flex-wrap gap-x-5 gap-y-2 p-3">
-                <div class="flex flex-col gap-0.5">
-                  <dt
-                    class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
-                    title="The last time a run was dispatched"
-                  >
-                    Last run
-                  </dt>
-                  <dd class="text-[0.75rem] text-foreground">{lastRunLabel}</dd>
-                </div>
-                <div class="flex flex-col gap-0.5">
-                  <dt
-                    class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
-                    title="The last time a run finished successfully"
-                  >
-                    Last success
-                  </dt>
-                  <dd class="text-[0.75rem] text-foreground">{lastSuccessLabel}</dd>
-                </div>
-                <div class="flex flex-col gap-0.5">
-                  <dt
-                    class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
-                    title="The next time this assistant is due to run"
-                  >
-                    Next run
-                  </dt>
-                  <dd class="text-[0.75rem] text-foreground">{nextRunLabel}</dd>
-                </div>
-              </dl>
-              <CardFoot>
-                {#snippet left()}
-                  <p class="text-[0.6875rem] leading-relaxed text-muted">
-                    {knowledgeComplete
-                      ? 'Run a task now without waiting for the schedule.'
-                      : 'Save the assistant instructions first.'}
-                  </p>
-                {/snippet}
-                {#snippet right()}
-                  <CardButton
-                    label="Run now"
-                    title="Run a task now, even while the assistant is paused"
-                    icon={CioUndo}
-                    variant="primary"
-                    loading={running}
-                    disabled={running || !knowledgeComplete}
-                    onclick={() => void runNow()}
-                  />
-                {/snippet}
-              </CardFoot>
-            </div>
-          {/if}
-
-          <ul class="flex flex-col gap-2">
-            <li>
-              {@render glanceRow({
-                title: 'Assistant',
-                icon: 'knowledge',
-                detail: knowledgeComplete
-                  ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
-                  : 'No behavior yet. Describe the assistant to the agent in its task.',
-                target: 'assistant',
-                warn: !knowledgeComplete
-              })}
-            </li>
-            <li>
-              {@render glanceRow({
-                title: 'Connections',
-                icon: 'connection',
-                detail:
-                  connectionViews.length === 0
-                    ? 'No connections yet.'
-                    : connectionProblems === 0
-                      ? `${connectionViews.length} connected and ready.`
-                      : `${connectionProblems} of ${connectionViews.length} need setup.`,
-                target: 'connections',
-                warn: connectionProblems > 0
-              })}
-            </li>
-            <li>
-              {@render glanceRow({
-                title: 'Agents',
-                icon: 'agent',
-                detail: agentsComplete
-                  ? `${1 + (assistant.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
-                  : 'No model set. Add a primary and fallbacks on the Agents tab.',
-                target: 'agents',
-                warn: !agentsComplete
-              })}
-            </li>
-            <li>
-              {@render glanceRow({
-                title: 'Reporting',
-                icon: 'assistant',
-                detail: reportingBrief,
-                target: 'assistant',
-                warn: !deliveryReady
-              })}
-            </li>
-            {#if scheduled || issueCount > 0}
-              <li>
-                {@render glanceRow({
-                  title: 'Issues',
-                  icon: 'run',
-                  detail:
-                    issueCount === 0
-                      ? 'Nothing needs attention.'
-                      : `${missedRuns.length} missed · ${runIssues.length} run issue${runIssues.length === 1 ? '' : 's'}.`,
-                  target: 'issues',
-                  warn: issueCount > 0
-                })}
-              </li>
-            {/if}
-          </ul>
-        {:else}
-          {@render noAssistantState()}
-        {/if}
-      </div>
-    {:else if activeTab === 'assistant'}
+      {#if assistant}
+        <AssistantOverviewTab
+          {scheduled}
+          {lastRunLabel}
+          {lastSuccessLabel}
+          {nextRunLabel}
+          {running}
+          {knowledgeComplete}
+          {sectionCount}
+          {scheduleLabel}
+          {wakes}
+          connectionCount={connectionViews.length}
+          {connectionProblems}
+          {agentsComplete}
+          {agentCount}
+          {reportingBrief}
+          {deliveryReady}
+          missedCount={missedRuns.length}
+          runIssueCount={runIssues.length}
+          onRunNow={() => void runNow()}
+          onSelect={(tab) => (panelTab = tab)}
+        />
+      {:else}
+        {@render noAssistantState()}
+      {/if}
+    {:else if activeTab === 'behaviour'}
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap pl-3">
-          {#if !knowledgeComplete}
-            {@render assistantEmptyState()}
-          {:else}
-            <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-              <div class="flex items-center justify-between gap-2">
-                <h2 class="text-[0.875rem] font-semibold text-foreground">Assistant behavior</h2>
-                <div class="flex items-center gap-1.5">
-                  <span class="text-[0.625rem] text-dimmed"
-                    >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
-                  >
-                  <button
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Review earlier versions of these instructions"
-                    aria-label="Review earlier versions of these instructions"
-                    onclick={() => (knowledgeHistoryOpen = true)}
-                  >
-                    <CioUndo size={12} strokeWidth={1.8} />
-                  </button>
-                </div>
-              </div>
+        <AssistantBehaviourTab
+          {assistant}
+          {knowledgeThread}
+          checkpoint={gettingStartedCheckpoint}
+          onOpenKnowledgeThread={openKnowledgeTask}
+          onSave={saveSection}
+        />
+      {/if}
+    {:else if activeTab === 'schedule'}
+      {#if !assistant}
+        {@render noAssistantState()}
+      {:else}
+        <AssistantScheduleTab
+          {assistant}
+          {scheduled}
+          {scheduleAgreed}
+          {scheduleLabel}
+          {nextRunLabel}
+          {nextRunRelative}
+          {missedRunPolicyLabel}
+          hasKnowledgeThread={knowledgeThread !== null}
+          onOpenKnowledgeThread={openKnowledgeTask}
+          onPersist={persistAssistant}
+        />
+      {/if}
+    {:else if activeTab === 'reporting'}
+      {#if !assistant}
+        {@render noAssistantState()}
+      {:else}
+        <AssistantReportingTab {assistant} {deliveryReady} onPersist={persistAssistant} />
+      {/if}
+    {:else if activeTab === 'wakes'}
+      {#if !assistant}
+        {@render noAssistantState()}
+      {:else}
+        <div class="flex flex-col gap-2 p-3">
+          <!-- The wakes an assistant's threads have armed on themselves. A wake
+               belongs to a thread, so the section resolves the assistant's own
+               threads first and then asks the app which of them are armed. -->
+          <AssistantWakesSection {assistant} onOpenThread={onOpenTask} />
+          {#if wakes.length === 0}
+            <div class="flex flex-col gap-1.5 border border-border bg-surface p-2.5">
+              <p class="text-[0.8125rem] font-semibold text-foreground">No wake is armed</p>
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                The instructions this assistant follows on every run. Personality is how it behaves
-                and sounds, and the sections under it are what it does. The agent follows them
-                literally, so anything not written here does not happen.
+                A thread arms one itself when it has to wait for an answer, so it can pick the work
+                up again without you watching it. They appear here to hold or stop.
               </p>
-              <ol class="flex flex-col gap-2">
-                {#each sections as section (section.id)}
-                  {@const folded = collapsed.has(section.id) && editingId !== section.id}
-                  <li class="border-t border-border first:border-t-0">
-                    <!--
-                      While this section is being edited its header sticks to the top of
-                      the panel and carries the actions, so Save and Cancel are always
-                      under the pointer instead of at the end of a long document the user
-                      would have to scroll back down to reach.
-                    -->
-                    <div
-                      class="flex items-center gap-1.5 px-2.5 py-1.5 {editingId === section.id
-                        ? 'sticky top-0 z-10 border-b border-border bg-surface'
-                        : ''}"
-                    >
-                      <button
-                        type="button"
-                        class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                        aria-expanded={!folded}
-                        title={folded ? `Expand ${section.title}` : `Fold ${section.title}`}
-                        onclick={() => toggleSection(section.id)}
-                      >
-                        <CioForward
-                          size={12}
-                          strokeWidth={1.8}
-                          class="shrink-0 text-dimmed transition-transform duration-150 {folded
-                            ? ''
-                            : 'rotate-90'}"
-                        />
-                        <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
-                          {section.title}
-                        </span>
-                      </button>
-                      {#if editingId === section.id}
-                        <div class="flex shrink-0 items-center gap-1.5">
-                          <button
-                            type="button"
-                            class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                            title="Discard these changes"
-                            onclick={cancelEdit}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                            title="Save {section.title}"
-                            onclick={() => void saveSection(section.id)}
-                          >
-                            Save
-                          </button>
-                        </div>
-                      {:else}
-                        <button
-                          type="button"
-                          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                          title="Edit {section.title}"
-                          aria-label="Edit {section.title}"
-                          onclick={() => startEdit(section)}
-                        >
-                          <CioPencil size={12} strokeWidth={1.8} />
-                        </button>
-                      {/if}
-                    </div>
-
-                    {#if editingId === section.id}
-                      <div class="border-t border-border p-2">
-                        <!-- The editor grows with its content (no `max-h` cap) so a long
-                       section keeps the same tall box the read view showed instead
-                       of collapsing into a short scroll pane on edit. The panel's
-                       content already scrolls, so an overlong body is still safe. -->
-                        <RichMarkdownEditor
-                          id="assistant-section-{section.id}"
-                          value={editDraft}
-                          onValueChange={(value) => (editDraft = value)}
-                          placeholder="Write this section in Markdown…"
-                          ariaLabel="Edit {section.title}"
-                          autofocus
-                          onSubmit={() => void saveSection(section.id)}
-                          containerClass="border border-border bg-surface"
-                          class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
-                        />
-                      </div>
-                    {:else if !folded}
-                      <div class="border-t border-border px-2.5 py-2">
-                        <DeferredMarkdownView text={section.body} class="text-[0.75rem]" />
-                      </div>
-                    {:else if sectionSummary(section)}
-                      <!-- A folded section keeps one line of its own prose, so folding
-                     hides detail without hiding what the section is about. -->
-                      <p class="border-t border-border px-2.5 py-1.5 text-[0.6875rem] text-dimmed">
-                        {sectionSummary(section)}
-                      </p>
-                    {/if}
-                  </li>
-                {/each}
-              </ol>
             </div>
           {/if}
-
-          <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-            <!--
-              The switch sits on the section's own title, so nothing here repeats
-              what the heading already says. The clock is a decision, not a readout:
-              it is agreed with the agent during setup, and the panel is where the
-              user turns it on or off afterwards, exactly like the reporting rows
-              below. Turning it off drops the schedule outright, so turning it back
-              on makes the assistant agree a fresh one instead of silently restoring
-              a cadence nobody remembers.
-            -->
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
-              <Switch
-                checked={scheduled || scheduleRequest}
-                onchange={setScheduledSwitch}
-                aria-label="Run this assistant on a schedule"
-                title={scheduled
-                  ? 'Runs on the clock it agreed with you'
-                  : scheduleRequest
-                    ? 'Waiting for the clock it will agree with you'
-                    : 'Runs only when you ask'}
-              />
-            </div>
-            {#if !scheduleAgreed && (scheduleRequest || scheduled)}
-              <div class="flex flex-col gap-2 border-t border-border py-2">
-                <p class="text-[0.6875rem] leading-relaxed text-muted">
-                  A clock is agreed, not typed: {assistantLabel} has to ask what you want to call it,
-                  how often it runs, and at what times. Nothing is scheduled until you save what it proposes.
-                </p>
-                <div class="flex justify-end">
-                  <button
-                    type="button"
-                    class="bg-primary px-2.5 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                    title="Agree this assistant's schedule with it"
-                    onclick={() => void scheduleWithAgent()}
-                  >
-                    Schedule with {assistantLabel}
-                  </button>
-                </div>
-              </div>
-            {/if}
-            {#if scheduleAgreed}
-              <div class="flex items-center justify-between gap-3 border-t border-border py-1.5">
-                <label class="shrink-0 text-[0.75rem] text-muted" for="assistant-schedule-name"
-                  >Schedule name</label
-                >
-                <input
-                  id="assistant-schedule-name"
-                  type="text"
-                  class="min-w-0 flex-1 border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
-                  placeholder={assistant.name}
-                  title="What you call this assistant's clock"
-                  aria-label="Schedule name"
-                  value={assistant.scheduleName ?? ''}
-                  onchange={(event: Event) =>
-                    commitScheduleName((event.currentTarget as HTMLInputElement).value)}
-                />
-              </div>
-              <!-- The countdown is only worth its space when there is a clock to
-                   count down to, so these three rows appear with the schedule and
-                   not before it. -->
-              <dl class="flex flex-col">
-                <div
-                  class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"
-                >
-                  <dt class="text-[0.75rem] text-muted">Runs</dt>
-                  <dd class="text-right text-[0.75rem] text-foreground">{scheduleLabel}</dd>
-                </div>
-                <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
-                  <dt class="text-[0.75rem] text-muted">Next run</dt>
-                  <dd class="text-right text-[0.75rem] text-foreground">
-                    {nextRunLabel}
-                    {#if nextRunRelative && nextRunRelative !== 'now'}
-                      <span class="ml-1 text-dimmed">{nextRunRelative}</span>
-                    {/if}
-                  </dd>
-                </div>
-                <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
-                  <dt class="text-[0.75rem] text-muted">If a run is missed</dt>
-                  <dd class="text-right text-[0.75rem] text-foreground">{missedRunPolicyLabel}</dd>
-                </div>
-              </dl>
-            {/if}
-          </div>
-
-          <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-            <div class="flex items-center gap-1.5">
-              <h2 class="text-[0.875rem] font-semibold text-foreground">Reporting</h2>
-              {#if !deliveryReady}
-                <span
-                  class="flex items-center"
-                  style="color: var(--color-warning)"
-                  role="img"
-                  aria-label="The delivery channel needs a connection"
-                  title="The delivery channel needs a connection"
-                >
-                  <CioAttention size={11} strokeWidth={2} />
-                </span>
-              {/if}
-            </div>
-            <p class="text-[0.6875rem] leading-relaxed text-muted">
-              Where this assistant's output goes, and how urgent it is. Agree it with the agent, or
-              set it here.
-            </p>
-            <div class="flex flex-col">
-              <div
-                class="flex items-center justify-between gap-3 border-t border-border py-2 first:border-t-0"
-              >
-                <span class="shrink-0 text-[0.75rem] text-muted">Deliver to</span>
-                <div class="flex min-w-0 flex-1 items-center gap-1">
-                  <EnumSelect
-                    options={deliveryChoices}
-                    value={assistant.delivery?.channel ?? null}
-                    onChange={setDeliveryChannel}
-                    placeholder="Delivery channel"
-                    ariaLabel="Delivery channel"
-                    title="Where this assistant's output is delivered"
-                    class="flex-1"
-                  />
-                  {#if assistant.delivery}
-                    <button
-                      type="button"
-                      class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Clear the delivery channel"
-                      aria-label="Clear the delivery channel"
-                      onclick={clearDelivery}
-                    >
-                      Clear
-                    </button>
-                  {/if}
-                </div>
-              </div>
-
-              {#if assistant.delivery && assistant.delivery.channel !== 'in-app'}
-                <div class="border-t border-border py-2">
-                  <input
-                    type="text"
-                    class="w-full border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
-                    placeholder="Destination: a chat, a channel, an address"
-                    aria-label="Delivery destination"
-                    title="The concrete destination, for example #eng-alerts"
-                    value={assistant.delivery.target ?? ''}
-                    onblur={(event) => commitDeliveryTarget(event.currentTarget.value)}
-                    onkeydown={(event) => {
-                      if (event.key === 'Enter') event.currentTarget.blur()
-                    }}
-                  />
-                </div>
-              {/if}
-
-              {#if assistant.delivery && !deliveryReady}
-                <p
-                  class="border-t border-border py-2 text-[0.625rem] leading-relaxed"
-                  style="color: var(--color-warning)"
-                >
-                  {assistantDeliveryChannelLabel(assistant.delivery.channel)} is not connected yet. Add
-                  it on the Connections tab; until then runs deliver in CodeInOven.
-                </p>
-              {/if}
-
-              <div class="flex items-center justify-between gap-3 border-t border-border py-2">
-                <span class="shrink-0 text-[0.75rem] text-muted">Timeliness</span>
-                <div class="flex min-w-0 flex-1 items-center gap-1">
-                  <EnumSelect
-                    options={ASSISTANT_TIMELINESS_OPTIONS}
-                    value={assistant.priority?.timeliness ?? null}
-                    onChange={setPriorityTimeliness}
-                    placeholder="Timeliness"
-                    ariaLabel="Time-based priority"
-                    title="How soon this assistant's output matters"
-                    class="flex-1"
-                  />
-                </div>
-              </div>
-
-              <div class="flex items-center justify-between gap-3 border-t border-border py-2">
-                <span class="shrink-0 text-[0.75rem] text-muted">Impact</span>
-                <div class="flex min-w-0 flex-1 items-center gap-1">
-                  <EnumSelect
-                    options={ASSISTANT_IMPACT_OPTIONS}
-                    value={assistant.priority?.impact ?? null}
-                    onChange={setPriorityImpact}
-                    placeholder="Impact"
-                    ariaLabel="Scope-based priority"
-                    title="How far this assistant's output reaches"
-                    class="flex-1"
-                  />
-                  {#if assistant.priority}
-                    <button
-                      type="button"
-                      class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Clear the priority"
-                      aria-label="Clear the priority"
-                      onclick={clearPriority}
-                    >
-                      Clear
-                    </button>
-                  {/if}
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       {/if}
     {:else if activeTab === 'connections'}
@@ -1634,137 +942,15 @@
         </div>
       {/if}
     {:else}
-      <div class="flex flex-col gap-3 pl-3">
-        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-          <h2 class="text-[0.875rem] font-semibold text-foreground">Missed runs</h2>
-          {#if missedRuns.length === 0}
-            <p class="text-[0.6875rem] text-dimmed">No scheduled run has been missed.</p>
-          {:else}
-            <div class="flex flex-col gap-2">
-              {#each missedRuns as run (run.id)}
-                <div class="flex flex-col gap-1.5 bg-elevated p-2.5">
-                  <div class="flex items-center gap-2">
-                    <CioAttention size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
-                    <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
-                      {run.title}
-                    </span>
-                  </div>
-                  <p class="text-[0.625rem] text-dimmed">
-                    Was due {formatDateTime(run.dueAt)}. {missedRunReasonText(run.reason)}
-                  </p>
-                  <div class="flex justify-end gap-1.5">
-                    <button
-                      type="button"
-                      class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Dismiss this missed run"
-                      aria-label="Dismiss the missed run {run.title}"
-                      onclick={() => void dismissRun(run.id)}
-                    >
-                      Dismiss
-                    </button>
-                    {#if scheduled}
-                      <button
-                        type="button"
-                        class="flex items-center gap-1 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                        title="Run this missed sweep now"
-                        aria-label="Run the missed run {run.title} now"
-                        onclick={() => void runMissedNow(run)}
-                      >
-                        <CioUndo size={12} strokeWidth={1.8} />
-                        Run now
-                      </button>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-          <h2 class="text-[0.875rem] font-semibold text-foreground">Run problems</h2>
-          {#if runIssues.length === 0}
-            <p class="text-[0.6875rem] text-dimmed">
-              No waiting runs, rate limits, failures or interruptions.
-            </p>
-          {:else}
-            <div class="flex flex-col">
-              {#each runIssues as issue (issue.id)}
-                <button
-                  type="button"
-                  class="flex items-start gap-2 border-t border-border py-2 text-left transition-colors first:border-t-0 hover:bg-elevated"
-                  title="Open {issue.task.title}"
-                  aria-label="Open {issue.task.title}"
-                  onclick={() => onOpenTask(issue.task)}
-                >
-                  <span class="mt-0.5 shrink-0" style="color: var(--color-warning)">
-                    {#if issue.kind === 'Rate limited'}
-                      <CioActions size={13} strokeWidth={1.8} />
-                    {:else if issue.kind === 'Interrupted'}
-                      <CioBan size={13} strokeWidth={1.8} />
-                    {:else}
-                      <CioAttention size={13} strokeWidth={1.8} />
-                    {/if}
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="flex items-center gap-1.5">
-                      <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
-                        {issue.task.title}
-                      </span>
-                      <span class="shrink-0 text-[0.625rem] text-muted">{issue.kind}</span>
-                    </span>
-                    <span class="mt-0.5 block text-[0.625rem] text-dimmed">{issue.detail}</span>
-                  </span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
-          <h2 class="text-[0.875rem] font-semibold text-foreground">Run history</h2>
-          {#if backgroundRuns.length === 0}
-            <p class="text-[0.6875rem] text-dimmed">No unattended runs recorded yet.</p>
-          {:else}
-            <div class="flex flex-col">
-              {#each previewRuns(backgroundRuns, showAllBackgroundRuns) as run (run.runThreadId)}
-                {@const thread = runThreadFor(run)}
-                {#if thread}
-                  <button
-                    type="button"
-                    class="flex items-start gap-2 border-t border-border py-2 text-left transition-colors first:border-t-0 hover:bg-elevated"
-                    title="Open this run"
-                    aria-label="Open unattended run for {runTaskTitle(run)}"
-                    onclick={() => onOpenTask(thread)}
-                  >
-                    {@render backgroundRunRowBody(run, thread)}
-                  </button>
-                {:else}
-                  <div
-                    class="flex items-start gap-2 border-t border-border py-2 first:border-t-0"
-                    title="The run's thread was deleted; this record is the evidence it ran"
-                  >
-                    {@render backgroundRunRowBody(run, null)}
-                  </div>
-                {/if}
-              {/each}
-              {#if backgroundRuns.length > TASK_RUN_PREVIEW}
-                <button
-                  type="button"
-                  class="self-start border-t border-border px-2 py-1 text-[0.6875rem] text-muted transition-colors first:border-t-0 hover:bg-elevated hover:text-foreground"
-                  title={showAllBackgroundRuns ? 'Show fewer runs' : 'Show every recorded run'}
-                  aria-label={showAllBackgroundRuns
-                    ? 'Show fewer runs'
-                    : `Show all ${backgroundRuns.length} runs`}
-                  onclick={() => (showAllBackgroundRuns = !showAllBackgroundRuns)}
-                >
-                  {showAllBackgroundRuns ? 'Show fewer' : `Show all ${backgroundRuns.length}`}
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      </div>
+      <AssistantIssuesTab
+        {scheduled}
+        {missedRuns}
+        {runIssues}
+        {backgroundRuns}
+        {onOpenTask}
+        onDismissMissed={(id) => void dismissRun(id)}
+        onRunMissedNow={(run) => void runMissedNow(run)}
+      />
     {/if}
   </div>
 {/snippet}
@@ -1821,9 +1007,9 @@
   <!--
     The full screen render reuses the app's full screen surface, so it shares the
     draggable title bar, the traffic-light inset and the canonical minimize with
-    the browser, terminal and pull request reader. The panel's own sections are
-    the strip's tabs, which is why this surface passes neither `onNew` nor
-    `onCloseTab`: a section is switched, not opened or closed.
+    the browser, terminal and pull request reader. The panel's own tabs are the
+    strip's tabs, which is why this surface passes neither `onNew` nor `onCloseTab`:
+    a section is switched, not opened or closed.
   -->
   <FullscreenPanelDialog
     tabs={fullscreenTabs}
@@ -1860,20 +1046,6 @@
 {/if}
 
 <ConfirmDialog
-  open={scheduleOffConfirm}
-  title="Turn the schedule off"
-  confirmLabel="Turn it off"
-  busy={scheduleOffBusy}
-  onCancel={() => (scheduleOffConfirm = false)}
-  onConfirm={confirmScheduleOff}
->
-  <p>
-    Turning the schedule off drops the clock and its name. {assistantLabel} will only run when you ask,
-    and putting it back on a clock means agreeing a new one with it.
-  </p>
-</ConfirmDialog>
-
-<ConfirmDialog
   open={connectionRemoveTarget !== null}
   title="Remove connection"
   confirmLabel="Remove connection"
@@ -1886,15 +1058,3 @@
     The agent will no longer use it when this assistant runs.
   </p>
 </ConfirmDialog>
-
-<!-- The instructions are replaced whole on every save, so the versions behind the
-     current one are the only way back from a save that lost the page. This opens
-     beside the panel rather than inside its sections: it is a reading surface for
-     the document, not another section of it. -->
-{#if knowledgeHistoryOpen && assistant}
-  <AssistantKnowledgeHistory
-    assistantId={assistant.id}
-    assistantName={assistantIsUnnamed(assistant) ? 'your assistant' : assistant.name}
-    onClose={() => (knowledgeHistoryOpen = false)}
-  />
-{/if}

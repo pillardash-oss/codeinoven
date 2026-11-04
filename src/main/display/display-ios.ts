@@ -1,14 +1,24 @@
-import { app, type NativeImage } from 'electron'
+import { app } from 'electron'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   DisplayControlAction,
+  DisplayInputGesture,
   DisplaySourceDescriptor,
   DisplaySourceListing
 } from '../../lib/ipc/display'
-import { type DisplayCapture, decodeDisplayImage } from './display-capture'
+import { type CapturedFrame, type DisplayCapture, pngFrame } from './display-capture'
 import { captureCommand, captureText } from './display-exec'
+import {
+  findSimulatorWindow,
+  measureSimulatorSurface,
+  postGestureToSurface,
+  pressSimulatorElement,
+  simulatorInputHelper,
+  stepSimulatorVolume,
+  type SimulatorWindow
+} from './display-simulator-input'
 
 /**
  * Booted iOS Simulators.
@@ -79,6 +89,26 @@ function parseBooted(output: string): BootedSimulator[] {
   return booted
 }
 
+/** The device's own name, which is what its window is titled. */
+function readDeviceName(output: string, udid: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(output)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const devices = (parsed as { devices?: unknown }).devices
+  if (typeof devices !== 'object' || devices === null) return null
+  for (const value of Object.values(devices as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue
+    for (const entry of value as SimctlDevice[]) {
+      if (entry.udid === udid && typeof entry.name === 'string') return entry.name
+    }
+  }
+  return null
+}
+
 /** Every booted iOS Simulator this machine can mirror right now. */
 export async function listIosSources(): Promise<DisplaySourceListing> {
   if (process.platform !== 'darwin') {
@@ -126,13 +156,23 @@ export class IosDisplayCapture implements DisplayCapture {
   private disposed = false
   /** Screen-capture scratch for this session, created on the first frame. */
   private directory: Promise<string | null> | null = null
+  /** The device's own name, which is what its window is titled. */
+  private name: string | null = null
+  private nameRequest: Promise<string> | null = null
 
   constructor(
     readonly sourceId: string,
     readonly label: string
   ) {}
 
-  async grab(_maxDimension: number): Promise<NativeImage | null> {
+  /** Why a simulator cannot be touched, when its client is missing. */
+  get inputProblem(): string | undefined {
+    return process.platform === 'darwin'
+      ? undefined
+      : 'Working a simulator window is only possible on macOS.'
+  }
+
+  async grab(_maxDimension: number): Promise<CapturedFrame | null> {
     if (this.disposed) return null
     const directory = await this.ensureDirectory()
     if (!directory) return null
@@ -149,34 +189,116 @@ export class IosDisplayCapture implements DisplayCapture {
       await command.promise
       if (this.disposed) return null
       const bytes = await readFile(file)
-      return decodeDisplayImage(bytes)
+      // The simulator wrote a PNG; those bytes are the frame. No decode, no
+      // re-encode, nothing rebuilt from pixels on this thread.
+      return pngFrame(bytes)
     } finally {
       this.cancelled = null
     }
   }
 
   /**
-   * A simulator answers for its own appearance and nothing else.
+   * A simulator's own buttons, and nothing invented.
    *
-   * There is no home, volume or power key to inject through simctl, and driving
-   * the Simulator app's menus would be a different, fragile channel, so the rail
-   * offers what the platform really exposes instead of a key that does nothing.
+   * Every button here is pressed the way a hand presses it: Home and Lock are
+   * Device Hub's own controls, and back is the system edge swipe. Appearance is the
+   * one control `simctl` owns, and volume is this Mac's output volume because that
+   * is the volume a simulator plays at. Nothing in the rail is a button that does
+   * nothing.
    */
   async control(action: DisplayControlAction): Promise<void> {
-    if (action !== 'appearance') {
-      throw new Error(`A simulator has no "${action}" control`)
+    if (action === 'appearance') {
+      const current = await captureText(
+        SIMCTL,
+        ['simctl', 'ui', this.sourceId, 'appearance'],
+        SIMCTL_CAPTURE_TIMEOUT_MS
+      )
+      const next = current.trim() === 'dark' ? 'light' : 'dark'
+      await captureCommand(
+        SIMCTL,
+        ['simctl', 'ui', this.sourceId, 'appearance', next],
+        SIMCTL_CAPTURE_TIMEOUT_MS
+      ).promise
+      return
     }
-    const current = await captureText(
-      SIMCTL,
-      ['simctl', 'ui', this.sourceId, 'appearance'],
-      SIMCTL_CAPTURE_TIMEOUT_MS
-    )
-    const next = current.trim() === 'dark' ? 'light' : 'dark'
-    await captureCommand(
-      SIMCTL,
-      ['simctl', 'ui', this.sourceId, 'appearance', next],
-      SIMCTL_CAPTURE_TIMEOUT_MS
-    ).promise
+    if (action === 'volume-up' || action === 'volume-down') {
+      await stepSimulatorVolume(action === 'volume-up' ? 'up' : 'down')
+      return
+    }
+    if (action === 'back' || action === 'home' || action === 'power') {
+      const window = await this.window()
+      if (!window) throw new Error(`Open ${await this.deviceName()} in Device Hub to work it`)
+      if (action === 'home') {
+        // Device Hub's own Home button is the device's home button, so pressing it
+        // is the same act as pressing the one on the phone.
+        await pressSimulatorElement(window, 'Home')
+        return
+      }
+      if (action === 'power') {
+        // The side button, which locks a lit screen and wakes a dark one.
+        await pressSimulatorElement(window, 'Lock')
+        return
+      }
+      const surface = await measureSimulatorSurface(window)
+      if (!surface) throw new Error('The device screen could not be located in its window')
+      // iOS has no back button: the system affordance is a drag from the left edge,
+      // so the rail presses where a thumb would.
+      await postGestureToSurface(surface, {
+        type: 'swipe',
+        fromX: 0.004,
+        fromY: 0.5,
+        toX: 0.7,
+        toY: 0.5,
+        durationMs: 250
+      })
+      return
+    }
+    throw new Error(`A simulator has no "${action}" control`)
+  }
+
+  /**
+   * Work the device the way a hand would, through its own window.
+   *
+   * The simulator is an application on this Mac, so a tap is a click at the place
+   * the person pointed at and a swipe is a drag. Where that place is comes from the
+   * window's accessibility tree, never from a guess: the device's screen is a node
+   * with an exact frame, and the panel's fractions are mapped onto it.
+   */
+  async input(gesture: DisplayInputGesture): Promise<void> {
+    if (!(await simulatorInputHelper())) {
+      throw new Error('This machine cannot post input into an application window')
+    }
+    const window = await this.window()
+    if (!window) throw new Error(`Open ${await this.deviceName()} in Device Hub to work it`)
+    const surface = await measureSimulatorSurface(window)
+    if (!surface) throw new Error('The device screen could not be located in its window')
+    await postGestureToSurface(surface, gesture)
+  }
+
+  /** The window showing this device, found by the name the window carries. */
+  private async window(): Promise<SimulatorWindow | null> {
+    return findSimulatorWindow(await this.deviceName())
+  }
+
+  /** The device's own name, which is what its window is titled. */
+  private deviceName(): Promise<string> {
+    if (this.name) return Promise.resolve(this.name)
+    if (!this.nameRequest) {
+      const udid = this.sourceId
+      this.nameRequest = captureText(
+        SIMCTL,
+        ['simctl', 'list', 'devices', '-j'],
+        SIMCTL_LIST_TIMEOUT_MS
+      )
+        .then((output) => readDeviceName(output, udid))
+        .catch(() => null)
+        .then((name) => {
+          this.name = name ?? 'this simulator'
+          this.nameRequest = null
+          return this.name
+        })
+    }
+    return this.nameRequest
   }
 
   dispose(): void {

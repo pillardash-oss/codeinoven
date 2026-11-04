@@ -1,5 +1,6 @@
 /// <reference types="electron-vite/node" />
 import createEvidenceWorker from './video-evidence-worker.ts?nodeWorker'
+import { trackQuitWorker } from '../system/quit-worker-sweep'
 export interface VideoSourceEvidence {
   sha256: string
   files: { path: string; sha256: string; bytes: number }[]
@@ -20,7 +21,7 @@ function runEvidenceWorker(
 ): Promise<VideoSourceEvidence> {
   signal.throwIfAborted()
   return new Promise((resolve, reject) => {
-    const worker = createEvidenceWorker({ workerData: request })
+    const worker = trackQuitWorker(createEvidenceWorker({ workerData: request }))
     let settled = false
     const finish = (error?: Error, result?: VideoSourceEvidence): void => {
       if (settled) return

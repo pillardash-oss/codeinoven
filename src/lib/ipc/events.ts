@@ -44,7 +44,12 @@ import type {
   ThreadClickedPayload
 } from './notifications'
 import type { UpdaterStatus } from './updater'
-import type { DisplayCaptureState, DisplayFrame } from './display'
+import type {
+  DisplayCaptureState,
+  DisplayFrame,
+  DisplayTargetOffer,
+  DisplayThreadActivity
+} from './display'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
   BrowserOverlayAck,
@@ -177,6 +182,8 @@ export const IPC_EVENT_CONTRACT = {
   ],
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [] as unknown as [projectId: string, threadId: string, hasNote: boolean],
+  /** The armed set of agent-scheduled thread wakes changed. */
+  'followUps:changed': [] as unknown as [notices: import('../follow-up').FollowUpNotice[]],
   /**
    * Threads another live CodeInOven instance is running right now, pushed
    * whenever that set changes. A second window has no harness for those turns
@@ -190,6 +197,17 @@ export const IPC_EVENT_CONTRACT = {
    * design board changes the work folders and Settings is open behind it.
    */
   'config:changed': [] as unknown as [config: import('../types').AppConfig],
+  /**
+   * A project's actions were written by someone other than the panel showing
+   * them: another window, or an agent driving `projectActions:*` through app
+   * control. The full ordered list travels, because a save can also land one
+   * entry at a chosen position and a reader that only re-read the file would
+   * still be guessing when to do it.
+   */
+  'projectActions:changed': [] as unknown as [
+    projectId: string,
+    actions: import('../project-actions').ProjectAction[]
+  ],
   /** Assistants changed (created, updated, deleted, reordered). */
   'assistant:changed': [] as unknown as [assistants: import('../types').Assistant[]],
   /**
@@ -351,6 +369,14 @@ export const IPC_EVENT_CONTRACT = {
   'display:captureState': [] as unknown as [state: DisplayCaptureState],
   /** An agent started or attached to a display target, so the rail item appears. */
   'display:available': [] as unknown as [available: boolean],
+  /** A thread started or stopped driving a display target, for its row's mark. */
+  'display:activity': [] as unknown as [activity: DisplayThreadActivity],
+  /**
+   * A device the panel should mirror: a simulator or emulator that just came up,
+   * or one an agent moved to. The renderer opens (or focuses) that target's tab, so
+   * the panel shows the device being worked on rather than the last one opened.
+   */
+  'display:target': [] as unknown as [offer: DisplayTargetOffer],
   /**
    * Progress of an in-app Cua Driver update. The update itself answers over
    * `computerUse:updateCua`; this stream carries the installer's milestones so a

@@ -28,7 +28,8 @@ function isFollowUp(value: unknown): value is FollowUp {
     typeof record['createdAt'] === 'number' &&
     typeof record['prompt'] === 'string' &&
     typeof record['note'] === 'string' &&
-    typeof record['deferred'] === 'number'
+    typeof record['deferred'] === 'number' &&
+    (record['pausedAt'] === undefined || typeof record['pausedAt'] === 'number')
   )
 }
 
@@ -77,13 +78,40 @@ export class FollowUpStore {
     return this.followUps.size > 0
   }
 
-  /** When the next wake is due, or null when nothing is armed. */
+  /**
+   * When the next wake is due, or null when nothing can come due.
+   *
+   * A paused wake keeps its row and its time but is not on the clock: it is the
+   * one thing in this store the app must not wake a thread for.
+   */
   nextDueAt(): number | null {
     let soonest: number | null = null
     for (const followUp of this.followUps.values()) {
+      if (followUp.pausedAt !== undefined) continue
       if (soonest === null || followUp.dueAt < soonest) soonest = followUp.dueAt
     }
     return soonest
+  }
+
+  /** Hold one wake: it keeps its time and stops coming due. */
+  pause(id: string, at: number): FollowUp | null {
+    const existing = this.followUps.get(id)
+    if (!existing || existing.pausedAt !== undefined) return existing ?? null
+    const paused: FollowUp = { ...existing, pausedAt: at }
+    this.followUps.set(id, paused)
+    this.persist()
+    return paused
+  }
+
+  /** Release a held wake, with the time it was armed for. */
+  resume(id: string): FollowUp | null {
+    const existing = this.followUps.get(id)
+    if (!existing || existing.pausedAt === undefined) return existing ?? null
+    const resumed: FollowUp = { ...existing }
+    delete resumed.pausedAt
+    this.followUps.set(id, resumed)
+    this.persist()
+    return resumed
   }
 
   /**

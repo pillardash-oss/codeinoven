@@ -182,7 +182,7 @@
   }
   $effect(synchronizePageFrame)
 
-  let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
+  let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect, surface))
   /**
    * Whether this row is watching a picture the reader can see.
    *
@@ -251,16 +251,19 @@
    * the comment already written.
    */
   const designComment = $derived.by(() => {
-    const editing = browserInspector.editingFor(tabId)
-    if (!editing) return null
-    const reference = responseReferencesState
-      .forThread(tabProjectId, tabThreadId)
-      .find((candidate) => candidate.id === editing.referenceId)
-    if (!reference) return null
+    const open = browserInspector.commentFor(tabId)
+    if (!open) return null
+    const { reference } = open
     const named = (reference.text.split('\n')[0] ?? '').replace(/^Design element:\s*/u, '')
     return {
       referenceId: reference.id,
-      anchor: editing.anchor,
+      anchor: open.anchor,
+      reference,
+      // The conversation the tab belongs right now, which is the one the pick
+      // wrote its reference into. A panel whose tab snapshot predates a
+      // re-scope still edits the reference it is actually showing.
+      projectId: open.projectId,
+      threadId: open.threadId,
       elementName: named || reference.label,
       comment: reference.comment ?? ''
     }
@@ -487,7 +490,7 @@
     // Ask the store directly instead of reading the template's `panelVisible`
     // derived: this also runs from ResizeObserver/rAF continuations, after the
     // effect that owns a component derived may have been torn down.
-    if (!browserVisibility.isVisible(tabId, bounds)) return
+    if (!browserVisibility.isVisible(tabId, bounds, surface)) return
     if (!bounds) return
     // A tab showing the error card has no page to place. The attachment is not
     // applied on that edge, but the resize observer and the sidebar's entry
@@ -517,7 +520,7 @@
       // it. Re-asking the store keeps the decision authoritative at the moment
       // the attach lands. A redundant hide is a no-op in the main process when
       // this tab is not the one attached.
-      if (!browserVisibility.isVisible(tabId, contentBounds())) {
+      if (!browserVisibility.isVisible(tabId, contentBounds(), surface)) {
         browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
       }
     } catch {
@@ -582,22 +585,37 @@
 
   /** Persist the in-progress text, so a closed bubble cannot discard a draft. */
   function draftDesignComment(referenceId: string, comment: string): void {
-    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
+    const open = designComment
+    responseReferencesState.updateCommentDraft(
+      open?.projectId ?? tabProjectId,
+      open?.threadId ?? tabThreadId,
+      referenceId,
+      comment
+    )
   }
 
   /** Land the comment on the element it was written for, and close the bubble. */
   function commitDesignComment(referenceId: string, comment: string): void {
-    responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
+    const open = designComment
+    responseReferencesState.updateComment(
+      open?.projectId ?? tabProjectId,
+      open?.threadId ?? tabThreadId,
+      referenceId,
+      comment
+    )
     browserInspector.closeComment(tabId)
   }
 
   /** Detach the element, and the comment it carries, from the conversation. */
   function removeDesignComment(referenceId: string): void {
+    const open = designComment
+    const projectId = open?.projectId ?? tabProjectId
+    const threadId = open?.threadId ?? tabThreadId
     responseReferencesState.setForThread(
-      tabProjectId,
-      tabThreadId,
+      projectId,
+      threadId,
       responseReferencesState
-        .forThread(tabProjectId, tabThreadId)
+        .forThread(projectId, threadId)
         .filter((reference) => reference.id !== referenceId)
     )
     browserInspector.closeComment(tabId)
@@ -615,16 +633,12 @@
   function openDesignElementChat(mode: 'elaborate' | 'quick'): void {
     const open = designComment
     if (!open) return
-    const reference = responseReferencesState
-      .forThread(tabProjectId, tabThreadId)
-      .find((candidate) => candidate.id === open.referenceId)
-    if (!reference) return
     openAnnotationChat({
-      projectId: tabProjectId,
-      threadId: tabThreadId,
+      projectId: open.projectId,
+      threadId: open.threadId,
       mode,
-      selection: reference.text,
-      context: designElementChatContext(reference.directory, reference.designEntry)
+      selection: open.reference.text,
+      context: designElementChatContext(open.reference.directory, open.reference.designEntry)
     })
     browserInspector.closeComment(tabId)
   }
@@ -638,6 +652,11 @@
     // Claim the native view for this tab while this panel is mounted. The claim
     // is released with the component, so a destroyed panel can never keep the view.
     const releaseBrowserClaim = browserVisibility.claimTab(tabId, surface)
+    // A placement that ran before this claim was refused by the gate, so the claim
+    // itself asks for the page to be placed again. Without this the page waited for
+    // the next resize, and a tab switched to in the full screen browser kept the
+    // rectangle the sidebar had given it.
+    void tick().then(() => showAtCurrentBounds().catch(() => {}))
     // Downloads outlive the run that started them, so the project's records are
     // read back when the panel appears: the badge and the menu are how a download
     // the app stopped on its way out becomes visible again rather than silent.
@@ -1020,7 +1039,7 @@
   -->
   <DesignElementCommentPopover
     hostId={`design-comment-${surface}-${tabId}`}
-    comment={panelVisible && browserVisibility.ownsSurface(tabId, surface) ? designComment : null}
+    comment={panelVisible ? designComment : null}
     targetId={`design-comment-${tabId}-${designComment?.referenceId ?? 'none'}`}
     scope={{ kind: 'project', projectId: tabProjectId }}
     onDraftChange={draftDesignComment}

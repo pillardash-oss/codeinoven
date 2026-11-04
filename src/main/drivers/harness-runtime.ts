@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { access, mkdir } from 'node:fs/promises'
 import { delimiter, join, resolve, win32 } from 'node:path'
 import type { HarnessExecutionTarget } from '../../lib/types'
@@ -62,18 +62,37 @@ export function bundledPiVendorDir(): string | undefined {
   return existsSync(vendor) ? vendor : undefined
 }
 
+/**
+ * Version of the bundled Pi harness, read from the file the harness build writes
+ * beside it.
+ *
+ * Asking the bundle itself (a `--version` child) meant spawning a whole Electron
+ * run-as-node process that had to parse the entire harness bundle just to print
+ * one line. On a low-end machine that probe was the heaviest thing the Harnesses
+ * page did, and it ran even though the answer is a constant shipped with the app.
+ */
+function bundledPiVersion(): string | undefined {
+  try {
+    const value = readFileSync(join(appResourcesRoot(), 'harnesses/pi/.version'), 'utf8').trim()
+    return value.length > 0 ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** The bundled Pi runtime, spawned via Electron's own embedded Node. */
 function bundledPiRuntime(command: string, entry: BundledPiEntry = 'rpc'): HarnessRuntime | null {
   if (command !== 'pi') return null
   const resolvedPath = bundledPiEntryPath(entry)
-  return resolvedPath
-    ? {
-        command,
-        executable: process.execPath,
-        resolvedPath,
-        target: { kind: 'bundled' }
-      }
-    : null
+  if (!resolvedPath) return null
+  const version = bundledPiVersion()
+  return {
+    command,
+    executable: process.execPath,
+    resolvedPath,
+    target: { kind: 'bundled' },
+    ...(version ? { version } : {})
+  }
 }
 
 /**
@@ -141,6 +160,12 @@ export interface HarnessRuntime {
   executable: string
   resolvedPath: string
   target: HarnessExecutionTarget
+  /**
+   * Version the runtime reports without being asked. Only the bundled Pi has one
+   * (the app ships it, so the build already knows), which is what lets a probe
+   * answer for it without spawning the harness at all.
+   */
+  version?: string
 }
 
 export interface PreparedHarnessInvocation {

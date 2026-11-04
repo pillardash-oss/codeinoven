@@ -196,11 +196,21 @@ export function registerSpeechIpc(
       return service.beginCapture(scope(rawScope), boundedString(rawMimeType, 'MIME type', 128))
     })
   )
-  ipcMain.handle('speech:beginNativeCapture', (event, rawScope: unknown) =>
+  ipcMain.handle('speech:beginNativeCapture', (event, rawScope: unknown, rawPressedAt: unknown) =>
     speechResult(() => {
       watchCaptureOwner(event.sender)
-      return service.beginNativeCapture(scope(rawScope))
+      return service.beginNativeCapture(
+        scope(rawScope),
+        typeof rawPressedAt === 'number' && Number.isFinite(rawPressedAt) ? rawPressedAt : undefined
+      )
     })
+  )
+  // Opening the microphone ahead of the press. Nothing here starts a capture: it
+  // only lets the device open while the pointer is on the mic, so the press does
+  // not lose its first words to CoreAudio startup.
+  ipcMain.handle('speech:armNativeCapture', () => speechResult(() => service.armNativeCapture()))
+  ipcMain.handle('speech:disarmNativeCapture', () =>
+    speechResult(() => service.disarmNativeCapture())
   )
   // The microphone prompt is issued here, from the recording gesture, never
   // from launch.
@@ -545,6 +555,8 @@ export function registerSpeechIpc(
       'speech:getCatalog',
       'speech:beginCapture',
       'speech:beginNativeCapture',
+      'speech:armNativeCapture',
+      'speech:disarmNativeCapture',
       'speech:ensureMicrophoneAccess',
       'speech:recordPermissionFailure',
       'speech:appendCapture',

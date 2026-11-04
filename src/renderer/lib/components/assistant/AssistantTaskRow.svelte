@@ -15,6 +15,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
   import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
+  import ThreadFollowUpMark from '$lib/components/threads/ThreadFollowUpMark.svelte'
   import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
   import {
     threadUsesEngineeringTooling,
@@ -482,6 +483,7 @@
         >
           {foreignTransfer?.error ?? parkLine ?? runLine}
         </span>
+        <ThreadFollowUpMark threadId={task.id} />
         <ThreadNoteMark threadId={task.id} />
         <AuthoredWorkMarks kinds={authoredWorkKinds} />
         <MediaActivityTrail activities={media ?? threadMediaActivity(task.id)} label={task.title} />

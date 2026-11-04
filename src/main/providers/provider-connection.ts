@@ -214,6 +214,14 @@ export class ProviderConnectionService {
       const runtime = runtimes.get(command)
       if (!runtime) continue
       resolved ??= runtime
+      // A bundled runtime already knows its own version from the build that
+      // shipped it. Probing it would spawn a whole Electron run-as-node process
+      // to parse the harness bundle for one line, which is the single most
+      // expensive part of opening Harnesses on a weak machine.
+      if (runtime.target.kind === 'bundled' && runtime.version) {
+        candidates.push({ version: runtime.version, value: runtime })
+        continue
+      }
       const versionResult = await probeHarnessRuntime(runtime, def.versionArgs)
       if (!versionResult.ok) {
         failures.push(`${command}: ${versionResult.reason}`)

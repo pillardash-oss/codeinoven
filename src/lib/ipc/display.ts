@@ -92,20 +92,31 @@ export interface DisplaySessionRequest {
  *
  * Both fields exist to keep an idle panel free: `visible` pauses capture
  * without tearing the session down (switching tabs, collapsing the dock, or
- * hiding the window all send false), and `maxDimension` is what the capture is
- * downscaled to, quantized by the renderer so a pixel of layout jitter does not
- * re-encode every frame at a new size.
+ * hiding the window all send false), and `maxDimension` is the size a source that
+ * *can* capture small is asked for (the desktop one), quantized by the renderer so
+ * a pixel of layout jitter does not ask for a new size every frame. A device is
+ * never re-encoded to fit it: its PNG is painted at whatever the browser scales it
+ * to.
  */
 export interface DisplayFrameDemand {
   maxDimension: number
   visible: boolean
 }
 
-/** One captured frame, already downscaled and JPEG-encoded. */
+/**
+ * One captured frame, exactly as the target encoded it.
+ *
+ * `bytes` is the target's own file (a device PNG), never a re-encode: the main
+ * process reads it and forwards it, so no frame is ever decoded, resized, encoded
+ * or turned into text on the main thread. The renderer paints it from a blob URL
+ * and lets the browser do the scaling.
+ */
 export interface DisplayFrame {
   sessionId: string
   tabId: string
-  dataUrl: string
+  bytes: Uint8Array<ArrayBuffer>
+  /** What those bytes are, so the renderer can hand them to a blob untouched. */
+  mime: string
   width: number
   height: number
   timestamp: number
@@ -124,6 +135,103 @@ export interface DisplayCaptureState {
   phase: DisplayCapturePhase
   /** Human sentence for `retrying` and `failed`; absent while healthy. */
   detail?: string
+  /** True when this target accepts touch and typing from the panel. */
+  input: boolean
+  /** Why this target cannot be worked from the panel, when it cannot. */
+  inputProblem?: string
+}
+
+/**
+ * One act of touch, in fractions of the target's own screen.
+ *
+ * Fractions and not pixels: the panel paints a downscaled JPEG and never learns
+ * the device's resolution, while the adapter that owns the device knows exactly
+ * what to multiply by. A tap at `0.5, 0.5` is the middle of any screen, which is
+ * the only coordinate both sides agree on without a second round trip.
+ */
+export type DisplayInputGesture =
+  | { type: 'tap'; x: number; y: number }
+  | { type: 'long-press'; x: number; y: number }
+  | { type: 'swipe'; fromX: number; fromY: number; toX: number; toY: number; durationMs: number }
+  | { type: 'text'; text: string }
+  | { type: 'key'; key: DisplayInputKey }
+
+/** The keys the panel can press on a target beyond letters and digits. */
+export type DisplayInputKey =
+  'enter' | 'backspace' | 'tab' | 'escape' | 'up' | 'down' | 'left' | 'right'
+
+const DISPLAY_INPUT_KEYS: readonly DisplayInputKey[] = [
+  'enter',
+  'backspace',
+  'tab',
+  'escape',
+  'up',
+  'down',
+  'left',
+  'right'
+]
+
+/** Longest text one gesture may carry, so a paste cannot become a device flood. */
+const DISPLAY_INPUT_TEXT_LIMIT = 256
+
+/** Whether a gesture is inside the contract, checked at the IPC boundary. */
+export function isDisplayInputGesture(value: unknown): value is DisplayInputGesture {
+  if (typeof value !== 'object' || value === null) return false
+  const gesture = value as Record<string, unknown>
+  const fraction = (entry: unknown): entry is number =>
+    typeof entry === 'number' && Number.isFinite(entry) && entry >= 0 && entry <= 1
+  switch (gesture.type) {
+    case 'tap':
+    case 'long-press':
+      return fraction(gesture.x) && fraction(gesture.y)
+    case 'swipe':
+      return (
+        fraction(gesture.fromX) &&
+        fraction(gesture.fromY) &&
+        fraction(gesture.toX) &&
+        fraction(gesture.toY) &&
+        typeof gesture.durationMs === 'number' &&
+        Number.isFinite(gesture.durationMs) &&
+        gesture.durationMs >= 0 &&
+        gesture.durationMs <= 3000
+      )
+    case 'text':
+      return (
+        typeof gesture.text === 'string' &&
+        gesture.text.length > 0 &&
+        gesture.text.length <= DISPLAY_INPUT_TEXT_LIMIT
+      )
+    case 'key':
+      return (
+        typeof gesture.key === 'string' &&
+        (DISPLAY_INPUT_KEYS as readonly string[]).includes(gesture.key)
+      )
+    default:
+      return false
+  }
+}
+
+/**
+ * Whether this machine lets the app work another application's window.
+ *
+ * Working a simulator means posting real clicks and keystrokes at its window,
+ * which every desktop OS gates behind a grant: macOS asks for it once in System
+ * Settings, Windows and Linux do not ask at all. The answer is read on demand,
+ * never cached beyond a request, because a person who grants it while the panel
+ * is open must see the panel come alive without restarting the app.
+ */
+export interface DisplayInputPermission {
+  granted: boolean
+  /** The platform the answer came from, so the walkthrough can speak its language. */
+  platform: 'darwin' | 'win32' | 'linux' | 'other'
+  /** Whether the app itself can raise the system prompt for this grant. */
+  canPrompt: boolean
+  /** What the person must do, in order. Empty once granted. */
+  steps: string[]
+  /** What the operating system calls this pane, in its own words. */
+  settingsName?: string
+  /** A deep link that opens exactly that pane, when the platform has one. */
+  settingsUrl?: string
 }
 
 /**
@@ -132,8 +240,10 @@ export interface DisplayCaptureState {
  * A phone preview without its buttons is a picture, and the point of this panel
  * is to let a person work the device the agent is on without reaching for it (an
  * emulator with no window has nothing to reach for). The set is per kind, because
- * it says what the platform can actually do: adb injects hardware key events, and
- * a booted simulator answers only for its own appearance.
+ * it says what the platform can actually do: adb injects a full hardware key set,
+ * and a booted simulator takes the buttons it really has (home, the side button,
+ * volume) plus its left-edge back gesture. Siri is not on that list: a simulator
+ * exposes no way to summon it, so a rail entry would be a button that does nothing.
  */
 export type DisplayControlAction =
   'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'appearance'
@@ -142,7 +252,11 @@ export type DisplayControlAction =
 export const DISPLAY_CONTROLS_BY_KIND: Record<DisplaySourceKind, readonly DisplayControlAction[]> =
   {
     android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'power'],
-    ios: ['appearance'],
+    // The simulator's own buttons, in the order a hand finds them. `back` is the
+    // system edge swipe, `power` the side button (lock and wake), volume is the
+    // output volume the simulator plays through, and `appearance` is the light/dark
+    // switch, which only `simctl` can make.
+    ios: ['home', 'back', 'power', 'volume-up', 'volume-down', 'appearance'],
     'desktop-screen': [],
     'desktop-window': []
   }
@@ -172,6 +286,44 @@ export interface DisplayAvailability {
   available: boolean
   /** When the app first saw an agent start or attach to a display target. */
   since?: number
+  /** Threads currently wearing the "driving a display target" mark. */
+  threads: string[]
+}
+
+/**
+ * One thread started or stopped using a display target.
+ *
+ * Pushed so a thread row can wear the same kind of mark computer use gets while it
+ * is happening, instead of the user having to open the panel to find out.
+ */
+export interface DisplayThreadActivity {
+  threadId: string
+  active: boolean
+  /** When this state began, so the row's indicator slot can order it. */
+  at: number
+}
+
+/** One target the panel should mirror, pushed when a device shows up. */
+export interface DisplayTargetOffer {
+  target: DisplaySourceDescriptor
+  /** The thread whose work started it, when an agent started it. */
+  threadId?: string
+  at: number
+}
+
+/** The device one display tab is mirroring, as the watch needs to know it. */
+export interface DisplayPanelTarget {
+  kind: DisplaySourceKind
+  sourceId: string
+  /**
+   * The thread that owns the tab doing the mirroring.
+   *
+   * A person can open the panel themselves and pick a device, which is a mirror
+   * no agent asked for, and that thread's row still has to say its screen is on
+   * display: otherwise the one row that could explain where the device is looks
+   * as idle as every other row.
+   */
+  threadId: string | null
 }
 
 export const invokeDisplayContract = {
@@ -195,13 +347,37 @@ export const invokeDisplayContract = {
    * boundary agree without a second copy of the rule.
    */
   'display:control': {} as Contract<[sessionId: string, action: DisplayControlAction], void>,
+  /**
+   * Work the target's own screen: tap, press, swipe, type.
+   *
+   * Refused for a session whose capture reports `input: false`, so a target that
+   * cannot be touched says so once and the panel never fires into nothing.
+   */
+  'display:input': {} as Contract<[sessionId: string, gesture: DisplayInputGesture], void>,
+  /**
+   * Read whether this machine lets the app post input into another window.
+   *
+   * Asked before the panel offers control of a simulator, so a target that would
+   * silently ignore every tap says what is missing instead.
+   */
+  'display:inputPermission': {} as Contract<[], DisplayInputPermission>,
+  /**
+   * Ask the operating system for that grant, and report what it answered.
+   *
+   * This is the app raising the system's own prompt, never a simulated one: on
+   * macOS it is the sheet that offers the settings pane, and a platform without
+   * such a prompt simply answers with its current state.
+   */
+  'display:requestInputPermission': {} as Contract<[], DisplayInputPermission>,
+  /** Open the settings pane that owns this grant, when the platform has one. */
+  'display:openInputSettings': {} as Contract<[], void>,
   /** Read the presence flag. One call restores the rail item after a reload. */
   'display:presence': {} as Contract<[], DisplayAvailability>,
   /**
-   * Tell main that an agent is working right now, or stopped.
+   * Report the target the panel is mirroring, or null when it shows none.
    *
-   * Presence costs one process-table read, so it only ever runs while this is
-   * true: an idle app never looks for a device.
+   * This is what stops the watch: while a device is on screen there is nothing to
+   * find, and the offer that put it there must never be repeated.
    */
-  'display:noteAgentWorking': {} as Contract<[working: boolean], void>
+  'display:notePanel': {} as Contract<[mirrored: DisplayPanelTarget | null], void>
 }

@@ -129,6 +129,13 @@
   }
 </script>
 
+<!--
+  A blank tab's palette is drawn over the app's own empty state, not over a
+  native page. There is nothing to dim, and the full-window backdrop blur the
+  shared palette draws is a second GPU-composited layer: on a low-end machine
+  that was the first hitch of opening a new tab. A palette over a real page
+  keeps the scrim, because there it separates the panel from the page.
+-->
 <Modal
   open
   title="Open an address"
@@ -137,6 +144,8 @@
   size="lg"
   chrome={false}
   {onClose}
+  scrim={initialValue !== ''}
+  blocksBrowserView={initialValue !== ''}
   contentClass="max-h-[min(26rem,65vh)] overflow-y-auto p-1.5"
   claimInitialFocus={() => {
     if (!addressInput) return false

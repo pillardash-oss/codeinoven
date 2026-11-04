@@ -18,11 +18,16 @@ const CODE_LANG_CLASS =
   'code-lang-indicator font-mono text-[0.625rem] uppercase tracking-wide text-dimmed outline-none'
 const CODE_CONTENT_CLASS =
   'overflow-x-auto p-3 font-mono text-xs leading-relaxed text-foreground outline-none'
+const CODE_ACTION_GROUP_CLASS = 'flex items-center gap-0.5'
 const CODE_DELETE_BUTTON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>'
-const CODE_DELETE_BUTTON_CLASS =
+const CODE_SELECT_BUTTON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M20 16v2a2 2 0 0 1-2 2h-2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M8 9.5h8"></path><path d="M8 14.5h8"></path></svg>'
+const CODE_ACTION_BUTTON_CLASS =
   'grid h-5 w-5 place-items-center text-dimmed opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-surface hover:text-foreground focus:opacity-100 focus:outline-none'
-const CODE_DELETE_BUTTON_HTML = `<button type="button" data-editor-codeblock-delete="true" title="Delete code block" aria-label="Delete code block" class="${CODE_DELETE_BUTTON_CLASS}">${CODE_DELETE_BUTTON_SVG}</button>`
+const CODE_SELECT_BUTTON_HTML = `<button type="button" data-editor-codeblock-select="true" title="Select code block" aria-label="Select code block" class="${CODE_ACTION_BUTTON_CLASS}">${CODE_SELECT_BUTTON_SVG}</button>`
+const CODE_DELETE_BUTTON_HTML = `<button type="button" data-editor-codeblock-delete="true" title="Delete code block" aria-label="Delete code block" class="${CODE_ACTION_BUTTON_CLASS}">${CODE_DELETE_BUTTON_SVG}</button>`
+const CODE_ACTION_GROUP_HTML = `<div class="${CODE_ACTION_GROUP_CLASS}">${CODE_SELECT_BUTTON_HTML}${CODE_DELETE_BUTTON_HTML}</div>`
 
 function escapeHtml(value: string): string {
   return value
@@ -273,7 +278,7 @@ function renderInline(
 
 function renderCodeBlockHTML(language: string, content: string): string {
   const escapedContent = escapeHtml(content) || '<br>'
-  return `<div class="${CODE_BLOCK_CLASS}" contenteditable="false" data-editor-codeblock="true"><div class="${CODE_HEADER_CLASS}"><span contenteditable="true" role="textbox" aria-label="Language" class="${CODE_LANG_CLASS}">${escapeHtml(language)}</span>${CODE_DELETE_BUTTON_HTML}</div><pre class="${CODE_CONTENT_CLASS}"><code contenteditable="true" class="outline-none" data-language="${escapeHtml(language)}">${escapedContent}</code></pre></div>`
+  return `<div class="${CODE_BLOCK_CLASS}" contenteditable="false" data-editor-codeblock="true"><div class="${CODE_HEADER_CLASS}"><span contenteditable="true" role="textbox" aria-label="Language" class="${CODE_LANG_CLASS}">${escapeHtml(language)}</span>${CODE_ACTION_GROUP_HTML}</div><pre class="${CODE_CONTENT_CLASS}"><code contenteditable="true" class="outline-none" data-language="${escapeHtml(language)}">${escapedContent}</code></pre></div>`
 }
 
 export function renderRichMarkdown(
@@ -1194,7 +1199,7 @@ function createCodeBlockElement(language: string): HTMLElement {
   langSpan.textContent = language || 'text'
 
   header.append(langSpan)
-  header.insertAdjacentHTML('beforeend', CODE_DELETE_BUTTON_HTML)
+  header.insertAdjacentHTML('beforeend', CODE_ACTION_GROUP_HTML)
 
   const pre = document.createElement('pre')
   pre.className = CODE_CONTENT_CLASS

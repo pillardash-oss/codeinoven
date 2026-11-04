@@ -52,7 +52,7 @@ describe('reporting while the assistant is still being set up', () => {
           projectId: 'assistant',
           threadId: 'setup-thread',
           assistantId: assistant.id,
-          panelTab: 'assistant',
+          panelTab: 'reporting',
           navigate: () => undefined,
           onOpenTask: () => undefined,
           onSetupConnection: () => undefined

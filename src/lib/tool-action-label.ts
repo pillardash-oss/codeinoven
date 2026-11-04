@@ -16,6 +16,7 @@ import type { AgentPart } from './types'
 export const TOOL_ACTION_PATTERNS: Array<{ match: RegExp; label: string }> = [
   { match: /todo/i, label: 'updated the task list' },
   { match: /task|spawn.?agent|subagent|agent.?status/i, label: 'delegated to a sub-agent' },
+  { match: /skill/i, label: 'used a skill' },
   { match: /websearch|web.?search|search.?web/i, label: 'searched the web' },
   { match: /webfetch|fetch|browse|curl/i, label: 'fetched a URL' },
   { match: /bash|shell|exec|terminal|command/i, label: 'ran a shell command' },
@@ -166,6 +167,61 @@ function shortToolLabel(tool: string): string | undefined {
 }
 
 /**
+ * Tool names that load a skill's instructions into the agent's context.
+ *
+ * Every harness spells the call differently (`skill` on opencode, `Skill` on
+ * Claude Code, `load_skill` and friends elsewhere) and it is always the same
+ * act, so no harness's spelling may reach the trace as itself.
+ */
+const SKILL_TOOL_NAME =
+  /^(?:skills?|useskill|loadskill|readskill|invokeskill|activateskill|skilltool|skillread|dispatcheskill)$/u
+
+/** True when a call loaded a skill's instructions. */
+export function isSkillToolName(tool: string): boolean {
+  return SKILL_TOOL_NAME.test(bareToolName(tool))
+}
+
+/** Input fields a skill call names the skill it loaded in. */
+const SKILL_NAME_INPUT_KEYS = [
+  'name',
+  'skill',
+  'id',
+  'skill_name',
+  'skill_id',
+  'skillName',
+  'skillId'
+]
+
+/** The skill's own header, echoed in the text a harness returns to the model. */
+const SKILL_OUTPUT_NAME = /<skill_content\s+name="([^"]{1,120})"/u
+const SKILL_OUTPUT_HEADING = /^#\s*Skill:\s*([\w.-]{1,120})/mu
+
+/** How much of a result can carry a skill's header. */
+const SKILL_OUTPUT_HEADER_CHARS = 400
+
+/**
+ * The skill a call loaded, from the call's input and then from its result.
+ *
+ * The input is read first, because that is the skill the model chose. opencode
+ * clears a tool call's input once the call settles and keeps only the loaded
+ * skill's text, so the name is recovered from that text's own header rather than
+ * letting the row fall back to the raw tool name the moment the call completes.
+ */
+function skillName(input: Record<string, unknown>, output: string | undefined): string | undefined {
+  for (const key of SKILL_NAME_INPUT_KEYS) {
+    const value = input[key]
+    if (typeof value !== 'string') continue
+    const name = value.trim()
+    if (!name || isOpaqueId(name)) continue
+    return name
+  }
+  const header = output?.slice(0, SKILL_OUTPUT_HEADER_CHARS)
+  if (!header) return undefined
+  const named = header.match(SKILL_OUTPUT_NAME)?.[1] ?? header.match(SKILL_OUTPUT_HEADING)?.[1]
+  return named?.trim() || undefined
+}
+
+/**
  * The app-tool key a call names, if it names one.
  *
  * A harness may nest the app's own tools under a namespace (`utilities__cio_util_use`
@@ -206,6 +262,32 @@ export function withActionSummarySchema(
 /** True for a value that names nothing a reader can use (an opaque row id). */
 export function isOpaqueId(value: string): boolean {
   return /^[0-9a-f]{16,}$/iu.test(value.trim())
+}
+
+/** A value reduced to what it says, so two spellings of one text can be compared. */
+function comparableText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/gu, '')
+}
+
+/**
+ * True when a harness title merely restates one of the call's own arguments.
+ *
+ * Codex fills a shell call's `title` with the command itself, so treating that
+ * title as the call's label printed the command as the row's headline (and, with
+ * the subject beside it, twice) while the action never got named. A title that
+ * says nothing beyond an argument is that argument, never a label.
+ */
+export function toolTitleRestatesInput(title: string, input: Record<string, unknown>): boolean {
+  const stated = comparableText(title)
+  if (stated.length < 3) return false
+  for (const value of Object.values(input)) {
+    const text = typeof value === 'string' ? value : JSON.stringify(value)
+    if (!text) continue
+    const candidate = comparableText(text)
+    if (candidate.length < 3) continue
+    if (candidate.startsWith(stated) || stated.startsWith(candidate)) return true
+  }
+  return false
 }
 
 /** Turn an identifier into words: `svelte-autofixer` reads as "Svelte Autofixer". */
@@ -291,6 +373,9 @@ export interface ToolActionLabelSource {
   input?: Record<string, unknown>
   /** Label the harness or the model already attached to the call. */
   title?: string
+  /** The result the call produced, when the name of the skill it loaded is
+   *  only recoverable from that result. */
+  output?: string
   /** True when the call ran model-written code or was made from inside it. */
   codeMode?: boolean
 }
@@ -301,14 +386,17 @@ export interface ToolActionLabelSource {
  *
  * The chain is: the app's own vocabulary, then the model's own words when the
  * harness exposes them, then the harness-agnostic action patterns. A harness
- * title or provider label always wins upstream (see `toolActionLabelForPart`),
- * and code mode keeps its own wording, because a call a script made can carry
- * any inner tool name and the row says more by naming the script than by
- * repeating a nested name.
+ * title wins upstream (see `toolActionLabelForPart`) unless it only restates an
+ * argument, and code mode keeps its own wording, because a call a script made
+ * can carry any inner tool name and the row says more by naming the script than
+ * by repeating a nested name.
  */
 export function toolActionLabel(source: ToolActionLabelSource): string | undefined {
-  if (source.title?.trim()) return undefined
   const input = source.input ?? {}
+  // A harness title wins when it labels the call. When it only restates an
+  // argument, it is the row's subject and the action still has to be named.
+  const title = source.title?.trim()
+  if (title && !toolTitleRestatesInput(title, input)) return undefined
   // The action summary is the model saying what this call is for, in the words a
   // reader wants, so it outranks every name-shaped guess below it.
   const summary = actionSummaryLabel(input)
@@ -331,6 +419,12 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
     return capitalizeActionPhrase(APP_TOOL_ACTIONS[appKey])
   }
   if (source.codeMode === true) return undefined
+  // A skill call is the agent loading instructions for how to do the work, and
+  // the skill's own name is the only label that says which work it loaded for.
+  if (isSkillToolName(source.tool)) {
+    const skill = skillName(input, source.output)
+    return skill ? `Used the ${humanizeName(skill)} skill` : 'Used a skill'
+  }
   // Two interaction shapes keep their own words wherever they come from: a
   // harness's question tool and a harness's task-list tool are the same act
   // whichever name the harness gave them.
@@ -363,6 +457,7 @@ export function toolActionLabelForPart(
     tool: part.tool,
     input: part.state.input,
     title: part.state.title,
+    output: part.state.output,
     codeMode: part.codeMode
   })
   return label ? { ...part, actionLabel: label } : part

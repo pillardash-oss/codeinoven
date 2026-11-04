@@ -1,14 +1,16 @@
-import { nativeImage, type NativeImage } from 'electron'
-import type { DisplayControlAction, DisplaySourceKind } from '../../lib/ipc/display'
+import type {
+  DisplayControlAction,
+  DisplayInputGesture,
+  DisplaySourceKind
+} from '../../lib/ipc/display'
 
 /**
  * One mirrorable target, as the display service drives it.
  *
- * Every adapter answers the same two questions: what am I, and give me one
- * frame at most `maxDimension` pixels on its longest edge. Nothing in the
- * contract says "run adb here" or "read this file": a frame is whatever the
- * adapter can produce, which is what lets a future remote-Oven preview become
- * another adapter instead of a second panel.
+ * Every adapter answers the same two questions: what am I, and give me one frame.
+ * Nothing in the contract says "run adb here" or "read this file": a frame is
+ * whatever encoded image the adapter can produce, which is what lets a future
+ * remote-Oven preview become another adapter instead of a second panel.
  */
 export interface DisplayCapture {
   readonly kind: DisplaySourceKind
@@ -23,14 +25,42 @@ export interface DisplayCapture {
    * home button, and offering one would be a lie in the rail.
    */
   control?(action: DisplayControlAction): Promise<void>
-  /** One frame at the target's own resolution, or null when there is nothing to paint.
-   *  Downscaling and encoding are the service's job, so every adapter hands back
-   *  the same thing: pixels. `maxDimension` is offered to an adapter that can
-   *  capture small in the first place (the desktop one asks Electron for a
-   *  thumbnail at that size); the rest ignore it. */
-  grab(maxDimension: number): Promise<NativeImage | null>
+  /**
+   * Work the target's own screen.
+   *
+   * The same channel that presses a hardware key, carried one step further: a
+   * tap, a drag, a typed word. Only a target that can be touched implements it,
+   * and the service checks that before it forwards anything.
+   */
+  input?(gesture: DisplayInputGesture): Promise<void>
+  /** Why `input` is missing, phrased for the panel. Absent when input works. */
+  readonly inputProblem?: string
+  /**
+   * One encoded frame, or null when there is nothing to paint.
+   *
+   * An adapter hands back bytes it did not produce if it can: a device's own PNG
+   * travels from the device to the renderer untouched, and only a source whose
+   * pixels exist nowhere except inside this process (the desktop) encodes them, in
+   * a worker. `maxDimension` is a hint for a source that can capture small in the
+   * first place, and nothing more.
+   */
+  grab(maxDimension: number): Promise<CapturedFrame | null>
   /** Release whatever the adapter holds. Never throws. */
   dispose(): void
+}
+
+/**
+ * One frame as it leaves an adapter: encoded bytes plus what they are and how big
+ * the picture inside them is.
+ *
+ * The size comes from the image's own header, not from decoding it, so nothing on
+ * this path ever builds a pixel buffer on the main thread.
+ */
+export interface CapturedFrame {
+  bytes: Uint8Array<ArrayBuffer>
+  mime: string
+  width: number
+  height: number
 }
 
 /**
@@ -38,21 +68,19 @@ export interface DisplayCapture {
  *
  * The floor keeps a collapsed dock from asking for a thumbnail no one can read;
  * the ceiling is the point past which a still frame buys no visible fidelity for
- * the decode and the bytes it costs. The dock can be dragged to 1600 CSS px, so
- * 1280 device pixels is the honest headroom for a 2x display.
+ * the bytes it costs. The dock can be dragged to 1600 CSS px, so 1280 device
+ * pixels is the honest headroom for a 2x display.
  */
 export const DISPLAY_MIN_DIMENSION = 160
 export const DISPLAY_MAX_DIMENSION = 1280
-/** Quantization step for the demand, so layout jitter never re-encodes a frame. */
+/** Quantization step for the demand, so layout jitter never asks for a new size. */
 export const DISPLAY_DEMAND_STEP = 64
-/** JPEG quality: a preview, not an export. */
-const DISPLAY_JPEG_QUALITY = 82
 
 /**
  * Round a reported demand to a stable step inside the hard bounds.
  *
  * A stage that reports 641 px and then 645 px in the same second is the same
- * preview; quantizing means the encoder and the transport see one size.
+ * preview; quantizing means the transport sees one size.
  */
 export function quantizeDemand(requested: number): number {
   if (!Number.isFinite(requested) || requested <= 0) return DISPLAY_MIN_DIMENSION
@@ -61,49 +89,39 @@ export function quantizeDemand(requested: number): number {
   return Math.min(DISPLAY_MAX_DIMENSION, Math.max(DISPLAY_MIN_DIMENSION, stepped))
 }
 
-/** A frame's pixels and its encoded form, ready to cross the process boundary. */
-export interface EncodedDisplayFrame {
-  dataUrl: string
-  width: number
-  height: number
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const
+/** Offset of the IHDR payload: signature (8) plus its length (4) and type (4). */
+const PNG_HEADER_OFFSET = 16
+
+/**
+ * The same bytes, typed as the plain owned buffer that goes across the boundary.
+ *
+ * A `Buffer` is a view that may point into a shared pool, so its buffer type is the
+ * wide one. Everything an adapter hands on is a normal array-backed view already:
+ * this says so without copying, and copies only in the case that should never occur.
+ */
+export function ownedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (bytes.buffer instanceof ArrayBuffer) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  }
+  return Uint8Array.from(bytes)
 }
 
 /**
- * Downscale one captured image to the demand and encode it as JPEG.
+ * Wrap a PNG the target produced, reading its size from the IHDR header.
  *
- * The resize happens before the encode, so a 4K screen or a 1080x2400 phone PNG
- * is never handed to the renderer at native size. The same rule the computer-use
- * preview uses applies here: pay for the pixels the stage paints, nothing more.
+ * Two integer reads, no decode: this is the whole of the main process's involvement
+ * with a device frame, which is what keeps a 1080x2400 phone's picture free to
+ * mirror. Anything that is not a PNG is refused rather than guessed at.
  */
-export function encodeDisplayFrame(
-  image: NativeImage,
-  maxDimension: number
-): EncodedDisplayFrame | null {
-  if (image.isEmpty()) return null
-  const source = image.getSize()
-  if (source.width <= 0 || source.height <= 0) return null
-  const scale = Math.min(1, maxDimension / Math.max(source.width, source.height))
-  const resized =
-    scale < 1
-      ? image.resize({
-          width: Math.max(1, Math.round(source.width * scale)),
-          height: Math.max(1, Math.round(source.height * scale)),
-          quality: 'good'
-        })
-      : image
-  const size = resized.getSize()
-  const encoded = resized.toJPEG(DISPLAY_JPEG_QUALITY)
-  if (encoded.byteLength === 0) return null
-  return {
-    dataUrl: `data:image/jpeg;base64,${encoded.toString('base64')}`,
-    width: size.width,
-    height: size.height
+export function pngFrame(bytes: Uint8Array): CapturedFrame | null {
+  if (bytes.byteLength < PNG_HEADER_OFFSET + 8) return null
+  for (const [index, value] of PNG_SIGNATURE.entries()) {
+    if (bytes[index] !== value) return null
   }
-}
-
-/** Decode encoded bytes (PNG from `screencap`/`simctl`) into a native image. */
-export function decodeDisplayImage(bytes: Buffer): NativeImage | null {
-  if (bytes.byteLength === 0) return null
-  const image = nativeImage.createFromBuffer(bytes)
-  return image.isEmpty() ? null : image
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const width = view.getUint32(PNG_HEADER_OFFSET)
+  const height = view.getUint32(PNG_HEADER_OFFSET + 4)
+  if (width <= 0 || height <= 0) return null
+  return { bytes: ownedBytes(bytes), mime: 'image/png', width, height }
 }

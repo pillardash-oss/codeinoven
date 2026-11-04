@@ -359,7 +359,11 @@ class BrowserVisibilityState {
    * This is the whole decision: a caller never has to combine blocks,
    * placement and overlay occlusion itself.
    */
-  hideReasonFor(tabId: string, bounds: BrowserViewBounds | null): BrowserHideReason | null {
+  hideReasonFor(
+    tabId: string,
+    bounds: BrowserViewBounds | null,
+    caller?: BrowserSurface
+  ): BrowserHideReason | null {
     const surface = this.owningSurface
     for (const reason of this.blocks.values()) {
       // `workspace-inactive` reports that the workspace shell is hidden because
@@ -375,6 +379,12 @@ class BrowserVisibilityState {
       return reason
     }
     if (surface === null) return 'not-placed'
+    // The surface asking must be the one that owns the view. A sidebar panel stays
+    // mounted behind the full screen dialog and behind the Browser view, and without
+    // this check its own placement landed while the full screen surface was still
+    // claiming: the page then kept the sidebar's rectangle inside the full screen
+    // window, drawn as a panel-shaped column on one side.
+    if (caller !== undefined && caller !== surface) return 'owned-elsewhere'
     if (this.claimedTab(surface) !== tabId) return 'owned-elsewhere'
     return this.isCovered(bounds) ? 'covered-by-overlay' : null
   }
@@ -411,8 +421,8 @@ class BrowserVisibilityState {
   }
 
   /** Whether the native view for `tabId` may be displayed at `bounds`. */
-  isVisible(tabId: string, bounds: BrowserViewBounds | null): boolean {
-    return this.hideReasonFor(tabId, bounds) === null
+  isVisible(tabId: string, bounds: BrowserViewBounds | null, caller?: BrowserSurface): boolean {
+    return this.hideReasonFor(tabId, bounds, caller) === null
   }
 
   /**

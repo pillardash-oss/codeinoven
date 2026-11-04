@@ -16,13 +16,17 @@
     "native:add:android": "cap add android",
     "native:sync": "bun run build && cap sync",
     "native:ios": "cap open ios",
-    "native:android": "cap open android"
+    "native:android": "cap open android",
+    "dev:android": "bash scripts/mobile-dev.sh",
+    "dev:backend": "bash scripts/backend-dev.sh",
+    "dev:app": "bash scripts/android-app.sh"
   },
   "dependencies": {
     "@capacitor/app": "8.0.1",
     "@capacitor/browser": "8.0.3",
     "@capacitor/core": "^8.6.0",
     "@capacitor/preferences": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.0",
     "@pdslng/cio-icon": "^0.1.1",
     "bits-ui": "^2.20.3"
   },

@@ -13,8 +13,10 @@
   import { ovens } from '$lib/stores/ovens.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { followUpsState } from '$lib/stores/follow-ups.svelte'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
-  import { formatDateTime } from '$shared/date-time-format'
+  import { formatDateTime, formatDateTimeWithWeekday } from '$shared/date-time-format'
+  import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import type { Thread } from '$shared/types'
 
@@ -71,6 +73,20 @@
   let remoteOriginUrl = $derived(project ? (projectRemotes.get(project.id) ?? null) : null)
 
   let scopeBucket = $derived(threadScopeBucket(thread))
+
+  /** Wakes this thread has armed, soonest first. The row badges the soonest one;
+   *  the card is where the schedule behind that badge is readable. */
+  let followUps = $derived(followUpsState.list(thread.id))
+
+  /** How long until a wake fires, in the app's shared ticking clock, so the card
+   *  never states a countdown that was true when it opened. */
+  function untilLabel(dueAt: number): string {
+    const minutes = Math.max(0, Math.round((dueAt - relativeTimeClock.now) / 60_000))
+    if (minutes < 60) return `in ${minutes} min`
+    const hours = Math.round(minutes / 60)
+    if (hours < 48) return `in ${hours} h`
+    return `in ${Math.round(hours / 24)} d`
+  }
 
   /** Oven the thread runs on, or null when it runs on this computer. */
   let oven = $derived(
@@ -210,6 +226,22 @@
     <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
     <dd class="text-muted">{formatDateTime(thread.updatedAt)}</dd>
   </div>
+  {#each followUps as followUp (followUp.id)}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Wakes</dt>
+      <dd class="flex min-w-0 items-center gap-1 text-info">
+        <CioClock size={11} class="shrink-0" aria-hidden="true" />
+        <span class="min-w-0 break-words">{formatDateTimeWithWeekday(followUp.dueAt)}</span>
+        <span class="shrink-0 text-dimmed">
+          {followUp.paused ? 'on hold' : untilLabel(followUp.dueAt)}
+        </span>
+      </dd>
+    </div>
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">For</dt>
+      <dd class="min-w-0 break-words text-muted">{followUp.note}</dd>
+    </div>
+  {/each}
   {#if isForeignRun}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>

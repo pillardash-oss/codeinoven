@@ -13,10 +13,12 @@ weight 200, 2px corners, hairline rules, and the handcrafted icon set from
 | Screen | Read and write |
 | --- | --- |
 | Sign-in | Google and GitHub through the system browser, email and password as the fallback |
-| Projects | Every project as a foldable strip, its threads inside it, and the activity cluster above them |
-| Threads | All threads in one run ordered by what needs the user first, with inbox grouping by status |
-| Conversation | One thread's transcript, a composer that queues a prompt for an Oven, and a drawer of thread facts |
-| Account | The account, this device, the device list with revocation, appearance, and sign out |
+| Threads | Every thread of the project in scope, pinned first, each row carrying its project's mark |
+| Projects | A sheet from the dock that scopes the thread list to one project |
+| Chats | The chats panel; this service does not carry chats yet, and the screen says so |
+| New thread | A name and a project, created through `POST /v1/threads`, then opened |
+| Conversation | One thread's transcript, the composer that queues a prompt, and a drawer of thread facts |
+| Settings | The account, this device, the device list with revocation, appearance, and sign out |
 
 Deliberately absent, because the desktop keeps them: a terminal, a file tree, the
 spec studio, diff review, design and video work, multi-Oven orchestration, model
@@ -24,16 +26,45 @@ selection, and skill or MCP editing.
 
 ## Running it
 
-The backend has to be running first. From the repository root:
+One command runs both ends: it creates the database when it is missing, builds and
+starts the service, waits until it answers, then boots the emulator, builds the web
+bundle with the API origin baked in, installs the APK and launches it. Ctrl+C stops
+the service.
+
+```sh
+bun run services:mobile:android             # backend + emulator + install + launch
+bun run services:mobile:android -- --seed   # seed the demo account and content first
+bun run services:mobile:android -- --port 8090  # move both ends when 8081 is taken
+bun run services:mobile:android -- --backend-only
+```
+
+The same command is `bun run dev:android` inside `services/mobile`. It refuses to
+start when the port already has a listener, because a second service on that port
+answers some requests and drops the rest, which reads as a broken app.
+
+### Two terminals, two logs
+
+The Actions panel carries the same two ends separately, so each keeps its own log:
+**Mobile · Backend** runs `backend-dev.sh` in the foreground, **Mobile · Android App**
+runs `android-app.sh`. Start the backend, then the app. On the command line:
+
+```sh
+bun run services:mobile:backend             # terminal 1: the service and its log
+bun run services:mobile:app                 # terminal 2: build, install, launch
+bun run services:mobile:backend -- --seed   # seed the demo account and content first
+bun run services:mobile:app -- --port 8090  # follow a service moved off 8081
+```
+
+For the browser instead of the phone:
 
 ```sh
 bun run services:db:setup      # once
 bun run services:backend:dev   # terminal 1
-bun run services:mobile:dev    # terminal 2
+cd services/mobile && bun run dev   # terminal 2, http://127.0.0.1:5174
 ```
 
-The dev server is at `http://127.0.0.1:5174` and proxies `/api/*` to the backend,
-so the browser build and the native build ask for the same paths.
+The dev server proxies `/api/*` to the backend, so the browser build and the
+native build ask for the same paths.
 
 Sign in with Google, GitHub, or the seeded demo account
 (`bun run services:backend:seed` prints it).

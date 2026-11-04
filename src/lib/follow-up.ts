@@ -56,7 +56,46 @@ export interface FollowUp {
   note: string
   /** Deferrals already spent because the thread was mid-turn. */
   deferred: number
+  /**
+   * When the user put this wake on hold, if they did.
+   *
+   * A paused wake keeps its place and its time: it simply never falls due while
+   * it is held, so resuming restores the schedule the user agreed to instead of
+   * making them agree a new one.
+   */
+  pausedAt?: number
 }
+
+/**
+ * What a renderer needs to badge a row and describe the wake on hover.
+ *
+ * Deliberately not the whole record: the instruction is the agent's own business
+ * and can be long, and no surface needs it to say "this thread wakes at 09:10".
+ */
+export interface FollowUpNotice {
+  id: string
+  projectId: string
+  threadId: string
+  dueAt: number
+  note: string
+  /** Whether the user is holding this wake, which the row and panel both report. */
+  paused: boolean
+}
+
+/** Reduce one armed wake to what the renderer reads. */
+export function followUpNotice(followUp: FollowUp): FollowUpNotice {
+  return {
+    id: followUp.id,
+    projectId: followUp.projectId,
+    threadId: followUp.threadId,
+    dueAt: followUp.dueAt,
+    note: followUp.note,
+    paused: followUp.pausedAt !== undefined
+  }
+}
+
+/** The three things a user may do to an armed wake from the panel that lists it. */
+export type FollowUpAction = 'pause' | 'resume' | 'cancel'
 
 /** What the capability accepts when an agent schedules one. */
 export interface FollowUpRequest {

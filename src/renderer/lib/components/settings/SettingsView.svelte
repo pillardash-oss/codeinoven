@@ -71,7 +71,6 @@
   import CommandPalette from '../actions/CommandPalette.svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
-  import ProvidersView from '../providers/ProvidersView.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Modal from '../ui/Modal.svelte'
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
@@ -1498,7 +1497,16 @@
           })}
       />
     {:else if section === 'harnesses'}
-      <ProvidersView />
+      <!--
+        Its own chunk, fetched when the section is first opened. The harness
+        surface carries the accounts, base-URL, auxiliary-agent and V2 catalog
+        panels, which together pull about 2 MB of modules that no other
+        settings page needs; importing it here statically made every page in
+        Settings pay for Harnesses before it could paint.
+      -->
+      {#await import('../providers/ProvidersView.svelte') then { default: ProvidersView }}
+        <ProvidersView />
+      {/await}
     {:else if section === 'utilities'}
       <!--
         Every utilities page stays mounted once visited: the active one is painted,

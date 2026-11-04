@@ -39,6 +39,7 @@ import {
 } from '../chat/thread-events'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
 import { instanceEventBus } from '../system/instance-event-bus'
+import { instanceRegistry } from '../system/instance-registry'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -215,12 +216,13 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
-  // This independent prerequisite must not hold the feature graph, a first
-  // message, or terminal creation behind a download/extraction promise.
-  if (process.platform === 'win32')
-    void import('../drivers/windows-git-runtime')
-      .then(({ startWindowsGitPreparation }) => startWindowsGitPreparation())
-      .catch((error: unknown) => Logger.error('Windows Git startup preparation failed', error))
+  // Windows Git preparation is deliberately NOT started at boot. Its first
+  // step is a GitHub lookup, then a ~50 MB PortableGit download and extract,
+  // and a fresh install with no projects needs none of it. On a low-end
+  // machine that began under the first paint and competed with everything the
+  // user was trying to do. The interactive paths that actually need Git start
+  // it through `prepareWindowsGitRuntime` (terminal launch, harness spawn,
+  // Oven SSH), so it is prepared when it is about to be used.
   const [
     { registerIpcHandlers },
     { ProjectManager },
@@ -257,7 +259,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { broadcastCioCleanupProgress, broadcastCioCleanupState },
     { FollowUpService },
     { FollowUpStore },
-    { createFollowUpExecutor }
+    { createFollowUpExecutor },
+    { broadcastFollowUpsChanged }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -289,7 +292,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../cio-cleanup/cio-cleanup-events'),
     import('../follow-ups/follow-up-service'),
     import('../follow-ups/follow-up-store'),
-    import('../follow-ups/follow-up-executor')
+    import('../follow-ups/follow-up-executor'),
+    import('../follow-ups/follow-up-ipc')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -608,6 +612,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       (pid, command, cwd) =>
         state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
     )
+    // The capture gate needs the audio-to-LLM setting to know whether the user
+    // has a mic at all, so the recorder is never primed behind a hidden mic.
+    speechService.setDictationSettingSource(async () => {
+      const current = await storage.getConfig()
+      return current.sound.voiceRecordingEnabled
+    })
     await speechService.initialize()
     state.speechService = speechService
     state.unregisterSpeechIpc = registerSpeechIpc(
@@ -889,16 +899,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // the first frame someone asks for. What is registered here is the thin IPC
   // boundary plus the presence watch that decides when the panel exists at all.
   const { registerDisplayIpc } = await import('../display/display-ipc')
-  registerDisplayIpc({
-    window: () => state.mainWindow,
-    listAgentProcesses: async () => {
-      const processes = await state.chatEngine?.state.agentProcesses.listAll()
-      return (processes ?? []).map((process) => ({
-        command: process.command,
-        threadId: process.threadId
-      }))
-    }
-  })
+  registerDisplayIpc({ window: () => state.mainWindow })
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
       studio: videoStudio.execute,
@@ -1026,6 +1027,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   {
     const { registerCustomVendorIpc } = await import('../providers/custom-vendor-ipc')
     registerCustomVendorIpc(storage)
+  }
+  // The armed set of thread wakes, readable before the scheduler that owns it is
+  // built: a row badge asks once, then follows `followUps:changed`.
+  {
+    const { registerFollowUpHandlers } = await import('../follow-ups/follow-up-ipc')
+    registerFollowUpHandlers(() => state.followUpService)
   }
   await (async () => {
     const [
@@ -1273,6 +1280,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // wake is pending, resuming the thread it was scheduled on.
       const followUps = new FollowUpService({
         store: new FollowUpStore(storage),
+        // Exactly one live instance wakes a thread, the same rule the assistant
+        // scheduler follows. Without it two open windows fired one wake twice.
+        isOwner: () => instanceRegistry.isIncumbentInstance(),
         findThread: (threadId) => {
           const thread = new ThreadRepo(database).get(threadId)
           if (!thread) return null
@@ -1305,7 +1315,24 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       })
       state.followUpService = followUps
       state.chatEngine?.setFollowUpExecutor(createFollowUpExecutor(followUps))
+      // The row badge reads the armed set, so every change to it is pushed
+      // instead of polled, and a window opened later reads the same set once.
+      followUps.attachChangeListener(() => broadcastFollowUpsChanged(followUps))
       await followUps.start()
+      // The schedule moves with the user, not with the process: when another
+      // instance becomes the main instance this clock stands down, and when this
+      // one takes it back the wakes it was holding come due here.
+      state.stopFollowUpOwnershipListener = instanceRegistry.onOwnershipChanged(() => {
+        if (instanceRegistry.isIncumbentInstance()) {
+          void followUps
+            .takeOver()
+            .catch((error) => Logger.error('Follow-up take-over failed:', error))
+        } else {
+          followUps.standDown()
+        }
+        broadcastFollowUpsChanged(followUps)
+      })
+      broadcastFollowUpsChanged(followUps)
     } catch (error) {
       Logger.error('Follow-up scheduler startup failed (non-fatal):', error)
     }

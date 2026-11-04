@@ -122,7 +122,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
+      'Open an http(s) URL in a browser tab owned by this project and thread, inside the box (cookie jar) this conversation\u2019s thread browser is using, so a session the user signed in there is the one the page runs in. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -141,7 +141,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'viewport',
     description:
-      'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again.',
+      'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again. The page the user is on is laid out at the width of their browser panel while they watch it, which is narrow, so a console or gallery whose desktop layout only exists at desktop widths (a store console and its screenshot editor, for example) is incomplete there until you set a desktop viewport: that size then holds for as long as the tab is offscreen, however wide or narrow the user had it, until you change it.',
     inputSchema: {
       type: 'object',
       properties: {

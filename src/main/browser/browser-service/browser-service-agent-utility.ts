@@ -276,7 +276,7 @@ export class BrowserServiceAgentUtility {
         viewport,
         applied: 'displayed',
         detail:
-          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport applies the next time the tab is parked, unless the user displays it at a size of their own after this request.'
+          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport holds until you change it, and it is the size the page renders at the next time the tab is offscreen, however the user had it on screen.'
       }
     }
     if (operation === 'navigate') {

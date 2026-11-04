@@ -21,6 +21,7 @@ import {
 } from './browser-client-hints'
 import type { BrowserService } from '../browser-service'
 import { liveWindowContents } from './browser-view-contents'
+import { pageHasUserActivation } from './browser-user-activation'
 
 /**
  * The Electron session (the cookie jar) one project's box browses in.
@@ -121,56 +122,27 @@ export class BrowserServiceSessions {
         callback(false)
         return
       }
-      const id = crypto.randomUUID()
       const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
       const mediaTypes = Array.isArray(rawMediaTypes)
         ? rawMediaTypes.filter((value): value is string => typeof value === 'string')
         : []
-      const request: BrowserPermissionRequest = {
-        id,
-        tabId: owner.id,
-        projectId: owner.tab.projectId,
-        origin,
-        permission,
-        mediaTypes
-      }
-      // Electron calls this handler for every request even when the check
-      // handler already answered, so the remembered decision is the gate here:
-      // a remembered "Don't allow" refuses silently, and a decision that
-      // already covers the request grants silently instead of prompting the
-      // user for a permission they have given before. The partition is this
-      // closure's, so a box answers from its own jar's decisions.
-      const outcome = rememberedPermissionOutcome(
-        permissionGrantKeys(request),
-        this.host.permissionGrants.get(partition),
-        this.host.permissionDenies.get(partition)
-      )
-      if (outcome === 'deny') {
-        callback(false)
+      // A camera or microphone request is only a request a person made. A page
+      // that asks on load   with no click, key press or tap in its document   is
+      // asking passively, so it is refused silently instead of putting a device
+      // prompt on screen the user never triggered. The answer is the same for a
+      // request the ledgers already remember, so this runs before the prompt
+      // path rather than around it.
+      if (permission === 'media' && mediaTypes.length > 0) {
+        void pageHasUserActivation(contents).then((activated) => {
+          if (!activated || contents.isDestroyed()) {
+            callback(false)
+            return
+          }
+          this.raisePermissionRequest(owner, origin, permission, mediaTypes, partition, callback)
+        })
         return
       }
-      if (outcome === 'grant') {
-        callback(true)
-        return
-      }
-      const timer = setTimeout(
-        () => this.host.resolvePermission(id, permissionResolutions.dismiss),
-        PERMISSION_TIMEOUT_MS
-      )
-      this.host.pendingPermissions.set(id, {
-        request,
-        callback,
-        timer,
-        partition,
-        systemAccessDenied: false
-      })
-      // Nothing in this instance's ledgers covers the request, but the durable
-      // memory is shared with every other running instance: re-read it before
-      // asking, and answer from it when the decision is already there. The
-      // pending entry (and its timeout) is live while that read is in flight, so
-      // a slow or failed read still ends in the prompt on screen instead of a
-      // stranded request.
-      void this.host.promptFromDurableMemory(id)
+      this.raisePermissionRequest(owner, origin, permission, mediaTypes, partition, callback)
     })
     // Screen sharing needs its own handler on Electron: `getDisplayMedia`
     // rejects with `NotSupportedError` when a session never answers it. The
@@ -220,7 +192,11 @@ export class BrowserServiceSessions {
     browserSession.webRequest.onBeforeSendHeaders(
       { urls: ['http://*/*', 'https://*/*'] },
       (details, done) => {
-        const rewritten = coherentClientHintHeaders(details.requestHeaders, process.versions.chrome)
+        const rewritten = coherentClientHintHeaders(
+          details.requestHeaders,
+          process.versions.chrome,
+          process.platform
+        )
         done({
           requestHeaders: rewritten === null ? details.requestHeaders : toStringHeaders(rewritten)
         })
@@ -233,6 +209,74 @@ export class BrowserServiceSessions {
     })
     this.host.configuredSessions.add(partition)
     return browserSession
+  }
+
+  /**
+   * Put a page's permission request on the prompt card, or answer it from a
+   * decision the ledgers already hold.
+   *
+   * Split out of the session handler so the media path can first ask whether a
+   * person caused the request, without duplicating the remembered-decision gate
+   * or the pending queue that every other permission shares.
+   */
+  private raisePermissionRequest(
+    owner: NonNullable<ReturnType<SessionsHost['tabForContents']>>,
+    origin: string,
+    permission: string,
+    mediaTypes: readonly string[],
+    partition: string,
+    callback: (granted: boolean) => void
+  ): void {
+    if (!liveWindowContents(this.host.window)) {
+      callback(false)
+      return
+    }
+    const id = crypto.randomUUID()
+    const request: BrowserPermissionRequest = {
+      id,
+      tabId: owner.id,
+      projectId: owner.tab.projectId,
+      origin,
+      permission,
+      mediaTypes: [...mediaTypes]
+    }
+    // Electron calls this handler for every request even when the check
+    // handler already answered, so the remembered decision is the gate here:
+    // a remembered "Don't allow" refuses silently, and a decision that
+    // already covers the request grants silently instead of prompting the
+    // user for a permission they have given before. The partition is this
+    // closure's, so a box answers from its own jar's decisions.
+    const outcome = rememberedPermissionOutcome(
+      permissionGrantKeys(request),
+      this.host.permissionGrants.get(partition),
+      this.host.permissionDenies.get(partition)
+    )
+    if (outcome === 'deny') {
+      callback(false)
+      return
+    }
+    if (outcome === 'grant') {
+      callback(true)
+      return
+    }
+    const timer = setTimeout(
+      () => this.host.resolvePermission(id, permissionResolutions.dismiss),
+      PERMISSION_TIMEOUT_MS
+    )
+    this.host.pendingPermissions.set(id, {
+      request,
+      callback,
+      timer,
+      partition,
+      systemAccessDenied: false
+    })
+    // Nothing in this instance's ledgers covers the request, but the durable
+    // memory is shared with every other running instance: re-read it before
+    // asking, and answer from it when the decision is already there. The
+    // pending entry (and its timeout) is live while that read is in flight, so
+    // a slow or failed read still ends in the prompt on screen instead of a
+    // stranded request.
+    void this.host.promptFromDurableMemory(id)
   }
 
   /**

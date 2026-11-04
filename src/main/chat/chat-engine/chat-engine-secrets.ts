@@ -15,7 +15,11 @@ import {
 } from '../../../lib/secret-request'
 import type { AgentSecretSubmission } from '../../../lib/types'
 import type { PendingQuestionInfo } from './chat-engine-types'
-import { SECRET_ANSWER_PLACEHOLDER, validateSecretSubmissions } from './chat-engine-pure'
+import {
+  PARTIAL_SECRET_ANSWER_MARKER,
+  SECRET_ANSWER_PLACEHOLDER,
+  validateSecretSubmissions
+} from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine secrets: one concern, moved verbatim from the composition root. */
@@ -46,6 +50,70 @@ export class ChatEngineSecrets {
       requestId
     )
     const submissions = validateSecretSubmissions(secrets, pending.request.questions)
+    await this.settleSecretSubmissions(pending, submissions)
+  }
+
+  /**
+   * Settle a secret card whose deadline passed, keeping the entries the user had
+   * already filled in.
+   *
+   * Nothing can invent a secret, so an abandoned card still closes. But what the
+   * user typed before stepping away is their own input, and dropping it would
+   * make them fill the same card in from scratch: the filled entries are stored
+   * exactly as a submitted card would store them, and the rest are reported to
+   * the agent as unresolved instead of asked for again. The drafts themselves
+   * are still dropped with the request, so no value outlives the card. Answers
+   * `false` when nothing had been filled, which leaves the card to expire.
+   */
+  async settleExpiredSecretDrafts(pending: PendingQuestionInfo): Promise<boolean> {
+    if (this.host.pendingQuestions.get(pending.request.requestId) !== pending) return false
+    const drafts = pending.request.secretDrafts ?? []
+    const submissions: AgentSecretSubmission[] = []
+    for (const [index, question] of pending.request.questions.entries()) {
+      const secretId = question.secretId
+      const draft = drafts[index]
+      if (!secretId || !draft) continue
+      if (draft.alternativeMode) {
+        const alternative = (draft.alternative ?? '').trim()
+        if (alternative) submissions.push({ secretId, alternative })
+        continue
+      }
+      // Sent as it was typed: whitespace can be part of a value.
+      if ((draft.value ?? '').length > 0) submissions.push({ secretId, value: draft.value ?? '' })
+    }
+    if (submissions.length === 0) return false
+    const filledIndexes = new Set(
+      submissions.map((submission) =>
+        pending.request.questions.findIndex((question) => question.secretId === submission.secretId)
+      )
+    )
+    // The record says the deadline closed the card, and which entries had already
+    // been filled, without ever writing a value into durable state.
+    const markers = pending.request.questions.map((_, index) =>
+      filledIndexes.has(index) ? [PARTIAL_SECRET_ANSWER_MARKER] : []
+    )
+    this.host.units['misc'].reportAutoAnswer({
+      id: pending.request.requestId,
+      kind: 'secret',
+      outcome: 'expired',
+      projectId: pending.request.projectId,
+      threadId: pending.request.threadId,
+      entries: this.host.units['misc'].autoAnswerEntries(pending.request.questions, markers),
+      at: Date.now()
+    })
+    await this.settleSecretSubmissions(pending, submissions)
+    return true
+  }
+
+  /**
+   * The one path from answered entries to vault state: store what was supplied,
+   * report reused and unresolved names, and settle the gateway call waiting on
+   * the card with variable names instead of values.
+   */
+  private async settleSecretSubmissions(
+    pending: PendingQuestionInfo,
+    submissions: AgentSecretSubmission[]
+  ): Promise<void> {
     const stored: AgentStoredSecret[] = []
     const unresolved: string[] = []
     const instructions: string[] = []
@@ -65,7 +133,7 @@ export class ChatEngineSecrets {
             value: submission.value,
             label,
             ...(utilityId ? { utilityId } : {}),
-            threadId
+            threadId: pending.request.threadId
           })
         )
         continue
@@ -85,7 +153,7 @@ export class ChatEngineSecrets {
         secretId: submission.secretId,
         environmentVariable,
         label,
-        threadId,
+        threadId: pending.request.threadId,
         ...(utilityId ? { utilityId } : {}),
         candidateNames: alternativeSecretNames(instruction)
       })

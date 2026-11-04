@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { registerAppControlRevalidation } from '$lib/app-control/app-control-revalidation'
 import { providerStore } from '$lib/stores/providers.svelte'
 import { getIconSvgDataUrl } from '$lib/project-svg-icons'
 import { getCustomSvgDataUrl } from '$shared/custom-svg-tint'
@@ -54,6 +55,11 @@ class OvenIdentityStore {
         this.#pending = null
       })
     return this.#pending
+  }
+
+  /** Whether this window already holds a registry read. */
+  get hasState(): boolean {
+    return this.#state !== null
   }
 
   /** Re-read the registry, e.g. after an Oven was added, renamed, or removed. */
@@ -184,3 +190,12 @@ export function ovenMarkUrl(oven: Oven): string | null {
 }
 
 export const ovens = new OvenIdentityStore()
+
+// An Oven added, renamed or removed through app control never touched this
+// store's own methods, so Settings would keep the registry it read before.
+registerAppControlRevalidation({
+  channels: ['oven:'],
+  refresh: () => {
+    if (ovens.hasState) void ovens.refresh()
+  }
+})

@@ -16,6 +16,11 @@ export interface VoiceTriggerHost {
   readonly element: () => HTMLElement | null
   /** Same path as clicking the mic button (start/stop/retry/blocked all handled). */
   readonly activate: () => void
+  /**
+   * Optional early warning that the shortcut is about to fire (its first tap).
+   * Opening the microphone here means the press itself has nothing left to pay.
+   */
+  readonly arm?: () => void
 }
 
 interface RegisteredHost extends VoiceTriggerHost {
@@ -24,10 +29,11 @@ interface RegisteredHost extends VoiceTriggerHost {
 
 const hosts = new Set<RegisteredHost>()
 
-/** Hosts are compared lexicographically: focused input first, then most
- *  recently interacted-with surface, then explicit priority. Registration
- *  order breaks remaining ties, so comparisons must be strict to keep the
- *  earliest-mounted host winning. */
+/** Hosts are compared lexicographically: focused input first (the innermost
+ *  focused region when one scope nests in another), then most recently
+ *  interacted-with surface, then explicit priority. Registration order breaks
+ *  remaining ties, so comparisons must be strict to keep the earliest-mounted
+ *  host winning. */
 function beats(candidate: RegisteredHost, incumbent: RegisteredHost | null): boolean {
   if (incumbent === null) return true
   const candidateScope = hostScope(candidate)
@@ -35,6 +41,13 @@ function beats(candidate: RegisteredHost, incumbent: RegisteredHost | null): boo
   const candidateHasFocus = focusedWithin(candidateScope)
   const incumbentHasFocus = focusedWithin(incumbentScope)
   if (candidateHasFocus !== incumbentHasFocus) return candidateHasFocus
+  // Both scopes hold the caret when one is nested in the other (a card rendered
+  // inside a composer region). The deeper scope is the surface actually being
+  // used, so it outranks the container that merely surrounds it.
+  if (candidateHasFocus && incumbentHasFocus && candidateScope && incumbentScope) {
+    if (candidateScope.contains(incumbentScope)) return false
+    if (incumbentScope.contains(candidateScope)) return true
+  }
   if (candidate.lastInteractionAt !== incumbent.lastInteractionAt) {
     return candidate.lastInteractionAt > incumbent.lastInteractionAt
   }
@@ -171,6 +184,37 @@ export function registerVoiceTriggerHost(host: VoiceTriggerHost): () => void {
   }
 }
 
+/** The mic input the shortcut should drive: the most preferred one that is
+ *  genuinely on view right now. */
+function preferredHost(): RegisteredHost | null {
+  let best: RegisteredHost | null = null
+  for (const host of hosts) {
+    if (!host.eligible()) continue
+    const element = host.element()
+    if (!element || !element.isConnected || !visibleOnView(element)) continue
+    if (beats(host, best)) best = host
+  }
+  return best
+}
+
+/**
+ * Open the microphone while the shortcut is still forming.
+ *
+ * A double-tap binding is pressed twice, and the first tap is a perfect early
+ * warning: opening the input device then means the second tap starts the take
+ * on a microphone that is already running, so no word is lost to device
+ * startup. The same call runs for a single-chord binding, where the keydown
+ * itself is the press.
+ */
+export function armPreferredVoiceHost(): void {
+  const state = speechController.state.state
+  if (state !== 'idle' && state !== 'failed') return
+  const host = preferredHost()
+  if (!host) return
+  if (host.arm) host.arm()
+  else speechController.armCapture()
+}
+
 /** Runs the mic action of whichever input is on view; toggles off the current
  *  recording when one is already running. */
 export function triggerPreferredVoiceHost(): void {
@@ -188,13 +232,7 @@ export function triggerPreferredVoiceHost(): void {
     return
   }
 
-  let best: RegisteredHost | null = null
-  for (const host of hosts) {
-    if (!host.eligible()) continue
-    const element = host.element()
-    if (!element || !element.isConnected || !visibleOnView(element)) continue
-    if (beats(host, best)) best = host
-  }
+  const best = preferredHost()
   if (best) {
     best.activate()
     return

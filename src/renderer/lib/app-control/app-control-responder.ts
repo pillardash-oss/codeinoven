@@ -5,6 +5,7 @@ import {
   registerAppControlBuiltins,
   runAppControlAction
 } from './app-control-actions'
+import { revalidateAppControlRecords } from './app-control-revalidation'
 
 /**
  * The renderer's half of the app-control bridge.
@@ -55,6 +56,10 @@ async function answer(request: AppControlRequest): Promise<void> {
   let response: AppControlResponse
   try {
     response = { requestId: request.requestId, ok: true, result: await perform(request) }
+    // A channel call from outside the panel writes in main, so no store method
+    // ran and the panel showing that record still holds what it read when it
+    // mounted. Ask the stores that cache it to re-read it.
+    if (request.target.kind === 'channel') revalidateAppControlRecords(request.target.channel)
   } catch (error) {
     response = {
       requestId: request.requestId,

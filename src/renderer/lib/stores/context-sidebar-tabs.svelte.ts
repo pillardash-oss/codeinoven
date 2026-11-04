@@ -802,7 +802,9 @@ export class SidebarTabContexts {
    * A target already open in another tab is focused instead of mirrored twice,
    * because two captures of one device are two child processes for one picture.
    * The chooser tab becomes that target's tab in place, so a person who picked
-   * from the picker keeps the tab they were standing on.
+   * from the picker keeps the tab they were standing on, unless that target is
+   * already mirrored, in which case the chooser is the tab that goes: leaving it
+   * retargeted would put a second mirror of the same device beside the first.
    */
   applyDisplayTarget(
     projectId: string,
@@ -818,6 +820,11 @@ export class SidebarTabContexts {
         tab.sourceId === target.sourceId &&
         tab.sourceKind === target.kind
     )
+    if (duplicate) {
+      context.tabs = context.tabs.filter((candidate) => candidate.id !== tabId)
+      this.focusInProjectContext(context, duplicate.id)
+      return
+    }
     const tab = context.tabs.find((candidate) => candidate.id === tabId)
     if (tab?.kind === 'display') {
       tab.title = target.label
@@ -826,10 +833,6 @@ export class SidebarTabContexts {
       tab.iconUrl = target.iconUrl ?? tab.iconUrl
       tab.threadId = threadId
       context.tabs = [...context.tabs]
-    }
-    if (duplicate) {
-      this.focusInProjectContext(context, duplicate.id)
-      return
     }
     this.focusInProjectContext(context, tabId)
   }

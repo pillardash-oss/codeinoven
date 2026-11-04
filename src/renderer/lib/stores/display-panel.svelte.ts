@@ -3,6 +3,8 @@ import type {
   DisplayCaptureState,
   DisplayControlAction,
   DisplayFrame,
+  DisplayInputGesture,
+  DisplayInputPermission,
   DisplaySourceKind,
   DisplaySourceListing
 } from '$shared/ipc/display'
@@ -30,9 +32,20 @@ export interface DisplaySession {
   /** Minted per mounted stage, so a stale session can never be mistaken for a new one. */
   sessionId: string
   frame: DisplayFrame | null
+  /**
+   * The frame as a URL the browser paints directly.
+   *
+   * Built from the target's own PNG bytes and revoked the moment it is replaced: no
+   * base64, no re-encode, and no growing list of live blobs behind a moving picture.
+   */
+  url: string | null
   phase: DisplayCapturePhase
   /** Sentence shown while retrying or failed; cleared by the next good frame. */
   detail: string | null
+  /** True when the target accepts taps and typing from the panel. */
+  input: boolean
+  /** Why it does not, when it does not. */
+  inputProblem: string | null
 }
 
 export interface DisplaySourceSection {
@@ -55,6 +68,16 @@ class DisplayPanelState {
   sessions = $state<Record<string, DisplaySession>>({})
   listings = $state<Partial<Record<DisplaySourceKind, DisplaySourceListing>>>({})
   loadingKinds = $state<Partial<Record<DisplaySourceKind, boolean>>>({})
+  /**
+   * Whether this machine lets the app post input into another window.
+   *
+   * Read when a simulator is targeted, never at boot: a person who never mirrors a
+   * device should not meet a permission prompt for it. Null means nobody has asked
+   * yet, which is different from "asked and refused".
+   */
+  inputPermission = $state<DisplayInputPermission | null>(null)
+  /** True while the system prompt for that grant is being raised. */
+  requestingPermission = $state(false)
   /** The tab whose stage the dock is showing, so demand can be scoped to it. */
   visibleTabId = $state<string | null>(null)
 
@@ -86,7 +109,11 @@ class DisplayPanelState {
       subscribe('display:frame', (frame: DisplayFrame) => {
         const session = this.sessions[frame.tabId]
         if (!session || session.sessionId !== frame.sessionId) return
+        const url = URL.createObjectURL(new Blob([frame.bytes], { type: frame.mime }))
+        const previous = session.url
         session.frame = frame
+        session.url = url
+        if (previous) URL.revokeObjectURL(previous)
       })
     )
     this.cleanups.push(
@@ -95,6 +122,8 @@ class DisplayPanelState {
           if (session.sessionId !== state.sessionId) continue
           session.phase = state.phase
           session.detail = state.detail ?? null
+          session.input = state.input
+          session.inputProblem = state.inputProblem ?? null
           return
         }
       })
@@ -124,8 +153,11 @@ class DisplayPanelState {
       tabId,
       sessionId: crypto.randomUUID(),
       frame: null,
+      url: null,
       phase: 'starting',
-      detail: null
+      detail: null,
+      input: false,
+      inputProblem: null
     }
     this.demands.delete(tabId)
     this.sessions = { ...this.sessions, [tabId]: session }
@@ -154,6 +186,7 @@ class DisplayPanelState {
     const session = this.sessions[tabId]
     if (!session) return
     if (sessionId !== undefined && session.sessionId !== sessionId) return
+    if (session.url) URL.revokeObjectURL(session.url)
     const next = { ...this.sessions }
     delete next[tabId]
     this.sessions = next
@@ -186,13 +219,77 @@ class DisplayPanelState {
     this.pushDemand(tabId, this.visibleTabId === tabId, maxDimension)
   }
 
-  /** Press one of the target's own buttons. */
-  control(tabId: string, action: DisplayControlAction): void {
-    const session = this.sessions[tabId]
-    if (!session) return
-    void invoke('display:control', session.sessionId, action).catch((error: unknown) =>
-      logRendererError(`The display control "${action}" failed`, error)
+  /**
+   * Read the input grant for this machine.
+   *
+   * Never cached: a person who turns it on while the panel is open must see the
+   * panel come alive on the next check, and a stale "yes" is the one answer that
+   * would make every tap silently do nothing.
+   */
+  async checkInputPermission(): Promise<DisplayInputPermission | null> {
+    try {
+      const permission = await invoke('display:inputPermission')
+      this.inputPermission = permission
+      return permission
+    } catch (error: unknown) {
+      logRendererError('The input permission could not be read', error)
+      return null
+    }
+  }
+
+  /** Raise the system's own prompt for that grant, then keep what it answered. */
+  async requestInputPermission(): Promise<DisplayInputPermission | null> {
+    if (this.requestingPermission) return this.inputPermission
+    this.requestingPermission = true
+    try {
+      const permission = await invoke('display:requestInputPermission')
+      this.inputPermission = permission
+      return permission
+    } catch (error: unknown) {
+      logRendererError('The input permission could not be requested', error)
+      return null
+    } finally {
+      this.requestingPermission = false
+    }
+  }
+
+  /** Open the settings pane that owns the grant, where the platform has one. */
+  openInputSettings(): void {
+    void invoke('display:openInputSettings').catch((error: unknown) =>
+      logRendererError('The permission settings could not be opened', error)
     )
+  }
+
+  /** Press one of the target's own buttons. Rejects with the target's reason when
+   *  it refuses, so the panel can say it instead of leaving a dead button. */
+  async control(tabId: string, action: DisplayControlAction): Promise<void> {
+    const session = this.sessions[tabId]
+    if (!session) throw new Error('This display tab is not mirroring anything')
+    try {
+      await invoke('display:control', session.sessionId, action)
+    } catch (error: unknown) {
+      logRendererError(`The display control "${action}" failed`, error)
+      throw error
+    }
+  }
+
+  /**
+   * Send one gesture to the target's screen, and reject with the reason when the
+   * target refuses it.
+   *
+   * The stage fires gestures and reads the frame that comes back rather than
+   * waiting for one of them, but a target that cannot be touched at all is an
+   * answer the person is owed straight away.
+   */
+  async sendInput(tabId: string, gesture: DisplayInputGesture): Promise<void> {
+    const session = this.sessions[tabId]
+    if (!session) throw new Error('This display tab is not mirroring anything')
+    try {
+      await invoke('display:input', session.sessionId, gesture)
+    } catch (error: unknown) {
+      logRendererError(`The display gesture "${gesture.type}" failed`, error)
+      throw error
+    }
   }
 
   /** Discover one kind's targets. Never on a timer: the picker asks. */

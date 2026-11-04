@@ -5,6 +5,9 @@ private struct Request: Decodable {
     let id: String
     let operation: String
     let outputPath: String?
+    /// The instant the user pressed record, as a wall clock both processes
+    /// share. Only preroll audio captured at or after it belongs to the take.
+    let since: Double?
 }
 
 private struct Response: Encodable {
@@ -19,8 +22,7 @@ private struct Response: Encodable {
     /// this with the elapsed recording time, so a take the microphone stopped
     /// feeding can never be handed on as a complete transcript again.
     let framesWritten: Int?
-    /// How many times the engine had to be rebuilt mid-take, plus one when the
-    /// final rebuild failed and the take lost its microphone for good.
+    /// How many times the engine had to be rebuilt mid-take.
     let engineRestarts: Int?
     /// Set when the take is known to be short: a lost microphone or a file that
     /// refused writes.
@@ -42,17 +44,37 @@ private func describe(_ error: Error) -> String {
     return "\(nsError.localizedDescription) [\(nsError.domain) \(nsError.code)]"
 }
 
-/// One microphone recording.
+/// One converted chunk of audio waiting for a take's file to be opened.
+private struct PrerollChunk {
+    let capturedAt: Date
+    let data: Data
+    let frames: Int
+}
+
+/// One microphone recorder.
 ///
-/// The output file lives for the whole take while the engine, its converter and
-/// its tap are disposable: a device switch, a tap that stops delivering buffers
-/// or a file that starts failing all rebuild the capture *into the same file*
-/// instead of ending the take. A take is only ever truncated if the microphone
-/// cannot be brought back at all, and that is reported to the host.
+/// Three things decide whether a take loses its opening words, and all of them
+/// live here:
 ///
-/// Threading: engine lifecycle (start, stop, rebuild) runs on `controlQueue`;
-/// audio buffers are converted and written on `writeQueue`. The handful of
-/// values both queues touch are read and written under `state`.
+/// - **Boot priming.** Opening CoreAudio's input device costs 150-800 ms on a
+///   cold process and seconds when the process itself is still loading. The
+///   worker is spawned and *primed* at launch: an engine, its tap and its device
+///   object are built and started once, then stopped with everything retained.
+///   Every later start is just `engine.start()` (tens of milliseconds), so the
+///   first press of a session behaves like the twentieth.
+/// - **Gesture arming.** The renderer arms the recorder on the gesture that
+///   precedes a take (pointer down on a mic, the shortcut's first tap). The
+///   device is already running then, and what it hears goes into a small
+///   in-memory ring. Pressing record only opens the file, flushes the ring from
+///   the instant of the press and keeps appending.
+/// - **A dying feed.** The take's file outlives the engine: a configuration
+///   change or a tap that stops delivering buffers rebuilds the engine, its
+///   converter and its tap into the same take instead of ending the audio.
+///
+/// Threading: engine lifecycle (prime, arm, start, stop, rebuild) runs on
+/// `controlQueue`; buffers are converted and written on `writeQueue`. The preroll
+/// ring is owned by `writeQueue` alone; the flags both queues read are guarded by
+/// `state`.
 private final class CaptureSession {
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -61,41 +83,149 @@ private final class CaptureSession {
         interleaved: false
     )!
 
-    /// Serialises every lifecycle change. The worker's main thread blocks on
-    /// stdin, so engine work can never run there.
     private let controlQueue = DispatchQueue(label: "com.pillardash.codeinoven.speech-capture.control")
     private let writeQueue = DispatchQueue(label: "com.pillardash.codeinoven.speech-capture.write")
-    /// Guards the values the audio thread's writes read while the control queue
-    /// replaces them, plus the write statistics the watchdog reads.
+    /// Guards the values the audio thread's write reads while the control queue
+    /// replaces them, plus the statistics the watchdog reads.
     private let state = NSLock()
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private var file: AVAudioFile?
     private var generation = 0
+    private var tapInstalled = false
+    private var tapFormat: AVAudioFormat?
     private var configurationObserver: NSObjectProtocol?
     private var stallTimer: DispatchSourceTimer?
+    private var armIdleTimer: DispatchSourceTimer?
     private var recording = false
+    private var armed = false
     private var framesWritten = 0
     private var lastFrameAt = Date()
     private var engineRestarts = 0
     private var writeFailures = 0
     private var lastWriteFailure: String?
+    /// Written only on `writeQueue`.
+    private var preroll: [PrerollChunk] = []
+    private var prerollFrames = 0
+    /// Retained for the process lifetime so their handlers keep firing.
+    private var signalSources: [DispatchSourceSignal] = []
 
     /// No buffer for this long while a take is live means the tap is dead: a
     /// device change CoreAudio never announced, a stalled HAL, or an engine
     /// that stopped its input unit. Well above the 2048-frame tap cadence
     /// (~43 ms), so ordinary scheduling delays cannot trip it.
     private let stallInterval: TimeInterval = 2.5
+    /// How much audio an armed recorder keeps before the oldest is dropped. A
+    /// press path that takes longer than this is already lost in other ways.
+    private let prerollLimitFrames = 8 * 16_000
+    /// An armed microphone that is never pressed releases the device again.
+    private let armIdleTimeout: TimeInterval = 20
 
-    func start(outputPath: String) throws {
+    /// The process is ready for its first recording.
+    func ping() {
+        // Spawning the worker is all this needs to do; the host calls it so a
+        // press never pays process launch.
+    }
+
+    ///
+    /// Refuse to die politely in the middle of a take.
+    ///
+    /// A take lost 35 of its 44 seconds because something outside this process
+    /// sent SIGTERM nine seconds in. The worker holds the only copy of that audio
+    /// and no signal handler can hand it to anyone, so a termination request that
+    /// arrives while a take is live is logged and ignored: the take finishes, and
+    /// only then does a signal end the process. The host is the one caller that
+    /// may need the worker gone sooner, and it escalates to SIGKILL on its own
+    /// failed-stop path.
+    func installSignalHandling() {
+        for value in [SIGTERM, SIGINT, SIGHUP] {
+            // The handler below is the only thing allowed to act on these: with
+            // the default disposition in place the process would be gone before
+            // a source could run.
+            signal(value, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: value, queue: controlQueue)
+            source.setEventHandler { [weak self] in self?.handleTerminationSignal(value) }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+    private func handleTerminationSignal(_ value: Int32) {
+        if recording || armed {
+            log("ignored signal \(value) while a take is live")
+            return
+        }
+        log("exiting on signal \(value)")
+        exit(0)
+    }
+
+    /// Pay the expensive part of a capture at launch, not on the first press.
+    ///
+    /// Builds the engine, installs the tap, starts the device so CoreAudio
+    /// resolves it once, then stops it again. Everything stays retained, so the
+    /// microphone is released (no indicator) while the next start costs tens of
+    /// milliseconds instead of hundreds.
+    func warm() {
+        controlQueue.sync {
+            guard !self.recording, !self.armed else { return }
+            do {
+                try self.ensureEngineLocked()
+            } catch {
+                log("priming the microphone failed: \(describe(error))")
+                return
+            }
+            self.engine?.stop()
+            self.state.lock()
+            self.converter = nil
+            self.state.unlock()
+            log("microphone primed; a press only has to start the engine")
+        }
+    }
+
+    /// Open the microphone ahead of the press and buffer what it hears.
+    func arm() {
+        controlQueue.sync {
+            guard !self.recording, !self.armed else { return }
+            self.state.lock()
+            self.armed = true
+            self.lastFrameAt = Date()
+            self.state.unlock()
+            do {
+                try self.ensureEngineLocked()
+            } catch {
+                self.state.lock()
+                self.armed = false
+                self.state.unlock()
+                log("arming the microphone failed: \(describe(error))")
+                return
+            }
+            self.startArmIdleTimerLocked()
+        }
+    }
+
+    /// Release the microphone of an arm the user never pressed.
+    func disarm() {
+        controlQueue.sync {
+            guard !self.recording, self.armed else { return }
+            self.state.lock()
+            self.armed = false
+            self.state.unlock()
+            self.stopEngineLocked()
+            self.clearPrerollLocked()
+            self.armIdleTimer?.cancel()
+            self.armIdleTimer = nil
+        }
+    }
+
+    func start(outputPath: String, since: Date?) throws {
         var failure: Error?
         controlQueue.sync {
-            self.stopLocked()
+            if self.recording { self.endTakeLocked() }
             do {
-                try self.beginLocked(outputPath: outputPath)
+                try self.beginLocked(outputPath: outputPath, since: since)
             } catch {
-                self.stopLocked()
+                self.fullStopLocked()
                 failure = error
             }
         }
@@ -106,7 +236,7 @@ private final class CaptureSession {
     func stop() -> (frames: Int, restarts: Int, warning: String?) {
         var result: (frames: Int, restarts: Int, warning: String?) = (0, 0, nil)
         controlQueue.sync {
-            self.stopLocked()
+            self.fullStopLocked()
             self.state.lock()
             result = (self.framesWritten, self.engineRestarts, self.captureWarningLocked())
             self.state.unlock()
@@ -114,21 +244,9 @@ private final class CaptureSession {
         return result
     }
 
-    /// One-shot CoreAudio/HAL warmup. Builds and prepares a throwaway engine so
-    /// the first real start does not pay audio-unit initialization latency.
-    /// The engine is intentionally discarded afterwards: every real start
-    /// creates a fresh engine bound to the current default input device, so a
-    /// warmup can never pin a stale microphone.
-    func warm() {
-        let engine = AVAudioEngine()
-        let inputFormat = engine.inputNode.outputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else { return }
-        _ = AVAudioConverter(from: inputFormat, to: targetFormat)
-        engine.prepare()
-    }
-
-    /// One attempt: open the take's file, then bind an engine and tap to it.
-    private func beginLocked(outputPath: String) throws {
+    /// Open the take's file, then bind the microphone to it: an already armed
+    /// engine hands over its buffered opening, a primed one only starts.
+    private func beginLocked(outputPath: String, since: Date?) throws {
         let file = try AVAudioFile(
             forWriting: URL(fileURLWithPath: outputPath),
             settings: [
@@ -143,32 +261,63 @@ private final class CaptureSession {
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
-        state.lock()
+        self.state.lock()
         self.file = file
         self.framesWritten = 0
         self.engineRestarts = 0
         self.writeFailures = 0
         self.lastWriteFailure = nil
-        self.lastFrameAt = Date()
         self.state.unlock()
-        recording = true
-        startStallWatchdogLocked()
-        // Two attempts at the first engine too: a device switch between the
-        // warmup and the start, or a HAL object invalidated under us, fails the
-        // first `start` with CoreAudio's unspecified error ('what'). Rebuilding
-        // binds to the current default device and recovers the common case
-        // instead of degrading the whole recording to the browser path.
+        self.armIdleTimer?.cancel()
+        self.armIdleTimer = nil
+
+        // An armed engine is already running and already buffering: use it as it
+        // is rather than paying the device open again, unless it stopped feeding
+        // buffers while it waited. Anything else marks itself armed first, so the
+        // audio the device delivers while it starts is buffered, not dropped.
+        let reuseArmedEngine =
+            self.armed && (self.engine?.isRunning ?? false) && !self.engineIsStale()
+        if !reuseArmedEngine {
+            self.state.lock()
+            self.armed = true
+            self.state.unlock()
+            try startEngineLockedWithRetry()
+        }
+        // Queue order is what makes the handover exact: every buffer converted
+        // while armed lands in the ring first, the ring is flushed into the file
+        // here, and only then does the next buffer go straight to the file.
+        let captureSince = since ?? Date.distantPast
+        writeQueue.sync {
+            self.flushPrerollLocked(into: file, since: captureSince)
+            self.state.lock()
+            self.recording = true
+            self.armed = false
+            self.lastFrameAt = Date()
+            self.state.unlock()
+        }
+        self.startStallWatchdogLocked()
+    }
+
+    private func engineIsStale() -> Bool {
+        state.lock()
+        defer { state.unlock() }
+        return Date().timeIntervalSince(lastFrameAt) > 2
+    }
+
+    private func startEngineLockedWithRetry() throws {
+        // Two attempts: a device switch between priming and the press, or a HAL
+        // object invalidated under us, fails the first start with CoreAudio's
+        // unspecified error ('what'). Rebuilding binds to the current default
+        // device and recovers the common case instead of losing the take.
         var lastError: Error?
         for attempt in 0..<2 {
             do {
-                try startEngineLocked()
+                try ensureEngineLocked()
                 return
             } catch {
                 lastError = error
                 log("start attempt \(attempt + 1) failed: \(describe(error))")
-                stopEngineLocked()
-                // Only a CoreAudio/HAL failure is worth rebuilding for. A bad
-                // output path or an unusable format fails the same way twice.
+                teardownLocked()
                 if (error as NSError).domain != "com.apple.coreaudio.avfaudio" { break }
             }
         }
@@ -180,13 +329,19 @@ private final class CaptureSession {
             )
     }
 
-    /// Bind a fresh engine, converter and tap to the open output file.
-    private func startEngineLocked() throws {
-        let engine = AVAudioEngine()
+    /// Make sure a running engine and tap exist for the current input device.
+    ///
+    /// Everything installed here is retained across takes: the engine object,
+    /// the tap and the CoreAudio device object. That is what makes a later start
+    /// tens of milliseconds instead of a fresh device open.
+    private func ensureEngineLocked() throws {
+        let boundAt = Date()
+        let engine = self.engine ?? AVAudioEngine()
+        self.engine = engine
         let inputNode = engine.inputNode
-        // The tap is installed with the node's OUTPUT format. `inputFormat` is
-        // the hardware format, which CoreAudio rejects at tap time once the
-        // default device has moved, and that rejection is the 'what' failure.
+        // The tap is installed with the node's OUTPUT format. The hardware
+        // format is what CoreAudio rejects at tap time once the default device
+        // has moved, and that rejection is the 'what' failure.
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
             throw NSError(
@@ -194,6 +349,15 @@ private final class CaptureSession {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "The selected microphone has no usable input format."]
             )
+        }
+        // A device that moved while the engine was idle leaves the installed tap
+        // bound to the old format. Rebuild from a fresh engine in that case.
+        if tapInstalled, let tapFormat,
+           tapFormat.sampleRate != inputFormat.sampleRate || tapFormat.channelCount != inputFormat.channelCount {
+            log("the input device changed from \(tapFormat.sampleRate) Hz to \(inputFormat.sampleRate) Hz; rebuilding the microphone")
+            teardownLocked()
+            try ensureEngineLocked()
+            return
         }
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw NSError(
@@ -205,108 +369,139 @@ private final class CaptureSession {
         if inputFormat.channelCount > 1 {
             converter.channelMap = [NSNumber(value: 0)]
         }
-
         state.lock()
-        generation += 1
-        let currentGeneration = generation
         self.converter = converter
         self.lastFrameAt = Date()
         state.unlock()
 
-        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-            guard let copy = self.clone(buffer) else { return }
-            self.writeQueue.async { [weak self] in
-                self?.write(copy, generation: currentGeneration)
+        if !tapInstalled {
+            state.lock()
+            generation += 1
+            let currentGeneration = generation
+            state.unlock()
+            inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
+                guard let self else { return }
+                guard let copy = self.clone(buffer) else { return }
+                self.writeQueue.async { [weak self] in
+                    self?.write(copy, generation: currentGeneration)
+                }
             }
+            tapInstalled = true
+            tapFormat = inputFormat
         }
-        engine.prepare()
-        try engine.start()
-
-        self.engine = engine
+        if !engine.isRunning {
+            engine.prepare()
+            try engine.start()
+        }
         // A device switch mid-recording stops the engine and its tap. CoreAudio
-        // announces it, and the take now survives it: the engine is rebuilt and
-        // keeps writing into the file this recording already owns.
-        configurationObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: nil
-        ) { [weak self] _ in
-            guard let self else { return }
-            log("audio engine configuration changed mid-recording")
-            self.controlQueue.async {
-                self.recoverLocked(reason: "the audio device configuration changed")
+        // announces it, and the take survives it: the engine is rebuilt and keeps
+        // writing into the file this recording already owns.
+        if configurationObserver == nil {
+            configurationObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: engine,
+                queue: nil
+            ) { [weak self] _ in
+                guard let self else { return }
+                log("audio engine configuration changed")
+                self.controlQueue.async {
+                    self.recoverLocked(reason: "the audio device configuration changed")
+                }
             }
         }
-        log("recording started at \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch")
+        log("microphone live at \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch (\(Int(Date().timeIntervalSince(boundAt) * 1000)) ms)")
     }
 
-    /// The whole take is over: no microphone, no watchdog, file closed.
-    private func stopLocked() {
+    /// The take is over: no microphone, no watchdog, file closed and flushed.
+    /// The engine, tap and device stay retained for the next take.
+    private func fullStopLocked() {
+        if recording { endTakeLocked() } else { stopEngineLocked() }
+        state.lock()
         recording = false
+        armed = false
+        state.unlock()
+        clearPrerollLocked()
         stallTimer?.cancel()
         stallTimer = nil
-        stopEngineLocked()
-        // Releasing the file is what flushes its final header. Every queued
-        // write has already landed (see `stopEngineLocked`).
+        armIdleTimer?.cancel()
+        armIdleTimer = nil
         state.lock()
         self.file = nil
         state.unlock()
     }
 
-    /// Drop the engine and tap, without touching the file the take writes to.
+    /// End the current take, keeping the engine, tap and device warm.
+    private func endTakeLocked() {
+        // The engine is stopped first and the queued writes are drained while
+        // `recording` is still true, so the take's tail lands in its file.
+        stopEngineLocked()
+        writeQueue.sync {}
+        state.lock()
+        recording = false
+        file = nil
+        state.unlock()
+        stallTimer?.cancel()
+        stallTimer = nil
+    }
+
     private func stopEngineLocked() {
+        writeQueue.sync {}
+        engine?.stop()
+    }
+
+    /// Drop the engine, tap and converter. Only a rebuild needs this: everything
+    /// else keeps them so the next start is cheap.
+    private func teardownLocked() {
         if let observer = configurationObserver {
             NotificationCenter.default.removeObserver(observer)
             configurationObserver = nil
         }
         if let engine {
-            engine.inputNode.removeTap(onBus: 0)
+            if tapInstalled { engine.inputNode.removeTap(onBus: 0) }
             engine.stop()
         }
-        engine = nil
-        // Everything the tap queued before it was removed must land in the file
-        // before the converter it uses is released.
+        tapInstalled = false
+        tapFormat = nil
         writeQueue.sync {}
         state.lock()
         generation += 1
         converter = nil
         state.unlock()
+        engine = nil
     }
 
     /// Rebuild the microphone into the file this take is already writing to.
     private func recoverLocked(reason: String) {
-        guard recording, stateHasOpenFile() else { return }
-        stopEngineLocked()
-        engineRestarts += 1
-        log("rebuilding the capture engine: \(reason) (rebuild \(engineRestarts))")
+        let live = recording || armed
+        guard live, engine != nil else { return }
+        teardownLocked()
+        if recording {
+            engineRestarts += 1
+            log("rebuilding the capture engine: \(reason) (rebuild \(engineRestarts))")
+        }
         for attempt in 0..<2 {
             do {
-                try startEngineLocked()
+                try ensureEngineLocked()
                 return
             } catch {
                 log("rebuild attempt \(attempt + 1) failed: \(describe(error))")
-                stopEngineLocked()
+                teardownLocked()
             }
         }
-        state.lock()
-        writeFailures += 1
-        lastWriteFailure = "the microphone could not be reopened after \(reason)"
-        state.unlock()
+        if recording {
+            state.lock()
+            writeFailures += 1
+            lastWriteFailure = "the microphone could not be reopened after \(reason)"
+            state.unlock()
+        }
         log("the microphone could not be reopened; this take no longer receives audio")
-    }
-
-    private func stateHasOpenFile() -> Bool {
-        state.lock()
-        defer { state.unlock() }
-        return file != nil
     }
 
     /// Watches the tap, not the clock: a take that stops receiving buffers is a
     /// take that is silently losing audio, and rebuilding the engine is what
     /// keeps the rest of it.
     private func startStallWatchdogLocked() {
-        guard stallTimer == nil else { return }
+        stallTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: controlQueue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
@@ -321,13 +516,31 @@ private final class CaptureSession {
         timer.resume()
     }
 
+    private func startArmIdleTimerLocked() {
+        armIdleTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: controlQueue)
+        timer.schedule(deadline: .now() + armIdleTimeout)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.armed, !self.recording else { return }
+            self.state.lock()
+            self.armed = false
+            self.state.unlock()
+            self.stopEngineLocked()
+            self.clearPrerollLocked()
+            log("microphone released after an arm that was never pressed")
+        }
+        armIdleTimer = timer
+        timer.resume()
+    }
+
     private func write(_ input: AVAudioPCMBuffer, generation: Int) {
         state.lock()
         let isCurrent = generation == self.generation
+        let recording = self.recording
+        let armed = self.armed
         let converter = self.converter
-        let file = self.file
         state.unlock()
-        guard isCurrent, let converter, let file else { return }
+        guard isCurrent, let converter, recording || armed else { return }
 
         let ratio = targetFormat.sampleRate / input.format.sampleRate
         let capacity = AVAudioFrameCount(max(1, (Double(input.frameLength) * ratio).rounded(.up) + 32))
@@ -352,6 +565,14 @@ private final class CaptureSession {
             if status == .error { recordWriteFailure("audio conversion stopped with an error") }
             return
         }
+        guard recording else {
+            appendPrerollLocked(output)
+            return
+        }
+        state.lock()
+        let file = self.file
+        state.unlock()
+        guard let file else { return }
         do {
             try file.write(from: output)
             state.lock()
@@ -361,6 +582,63 @@ private final class CaptureSession {
         } catch {
             recordWriteFailure("the recording file refused a write: \(describe(error))")
         }
+    }
+
+    /// Runs on `writeQueue` only.
+    private func appendPrerollLocked(_ output: AVAudioPCMBuffer) {
+        guard let channel = output.floatChannelData?[0] else { return }
+        let frames = Int(output.frameLength)
+        let data = Data(bytes: channel, count: frames * MemoryLayout<Float>.size)
+        preroll.append(PrerollChunk(capturedAt: Date(), data: data, frames: frames))
+        prerollFrames += frames
+        while prerollFrames > prerollLimitFrames, let oldest = preroll.first {
+            prerollFrames -= oldest.frames
+            preroll.removeFirst()
+        }
+    }
+
+    /// Runs on `writeQueue` only, inside the handover that starts a take.
+    private func flushPrerollLocked(into file: AVAudioFile, since: Date) {
+        let kept = preroll.filter { $0.capturedAt >= since }
+        preroll.removeAll()
+        prerollFrames = 0
+        guard !kept.isEmpty else { return }
+        var written = 0
+        for chunk in kept {
+            guard let buffer = self.buffer(from: chunk) else { continue }
+            do {
+                try file.write(from: buffer)
+                written += chunk.frames
+            } catch {
+                recordWriteFailure("the recording file refused a preroll write: \(describe(error))")
+                break
+            }
+        }
+        guard written > 0 else { return }
+        state.lock()
+        framesWritten += written
+        lastFrameAt = Date()
+        state.unlock()
+        log("recovered \(written * 1000 / 16_000) ms buffered before the press")
+    }
+
+    private func clearPrerollLocked() {
+        preroll.removeAll()
+        prerollFrames = 0
+    }
+
+    private func buffer(from chunk: PrerollChunk) -> AVAudioPCMBuffer? {
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: targetFormat,
+            frameCapacity: AVAudioFrameCount(chunk.frames)
+        ) else { return nil }
+        buffer.frameLength = AVAudioFrameCount(chunk.frames)
+        guard let channel = buffer.floatChannelData?[0] else { return nil }
+        chunk.data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            channel.update(from: base.assumingMemoryBound(to: Float.self), count: chunk.frames)
+        }
+        return buffer
     }
 
     private func recordWriteFailure(_ detail: String) {
@@ -416,63 +694,86 @@ private func emit(_ response: Response) {
     FileHandle.standardOutput.write(Data([0x0A]))
 }
 
+private func failure(_ id: String, _ error: Error) -> Response {
+    let nsError = error as NSError
+    log("operation failed: \(describe(error))")
+    return Response(
+        id: id,
+        ok: false,
+        error: describe(error),
+        errorDomain: nsError.domain,
+        errorCode: nsError.code,
+        framesWritten: nil,
+        engineRestarts: nil,
+        captureWarning: nil
+    )
+}
+
+private func success(_ id: String) -> Response {
+    Response(
+        id: id,
+        ok: true,
+        error: nil,
+        errorDomain: nil,
+        errorCode: nil,
+        framesWritten: nil,
+        engineRestarts: nil,
+        captureWarning: nil
+    )
+}
+
 private func handle(_ request: Request) -> Response {
-    do {
-        switch request.operation {
-        case "start":
-            guard let outputPath = request.outputPath, !outputPath.isEmpty else {
-                throw NSError(domain: "SpeechCaptureWorker", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing recording output path."])
-            }
-            try capture.start(outputPath: outputPath)
-            return Response(
-                id: request.id,
-                ok: true,
-                error: nil,
-                errorDomain: nil,
-                errorCode: nil,
-                framesWritten: nil,
-                engineRestarts: nil,
-                captureWarning: nil
+    switch request.operation {
+    case "ping":
+        capture.ping()
+        return success(request.id)
+    case "prepare":
+        capture.warm()
+        return success(request.id)
+    case "arm":
+        capture.arm()
+        return success(request.id)
+    case "disarm":
+        capture.disarm()
+        return success(request.id)
+    case "start":
+        guard let outputPath = request.outputPath, !outputPath.isEmpty else {
+            return failure(
+                request.id,
+                NSError(
+                    domain: "SpeechCaptureWorker",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Missing recording output path."]
+                )
             )
-        case "prepare":
-            capture.warm()
-            return Response(
-                id: request.id,
-                ok: true,
-                error: nil,
-                errorDomain: nil,
-                errorCode: nil,
-                framesWritten: nil,
-                engineRestarts: nil,
-                captureWarning: nil
-            )
-        case "stop":
-            let finished = capture.stop()
-            return Response(
-                id: request.id,
-                ok: true,
-                error: nil,
-                errorDomain: nil,
-                errorCode: nil,
-                framesWritten: finished.frames,
-                engineRestarts: finished.restarts,
-                captureWarning: finished.warning
-            )
-        default:
-            throw NSError(domain: "SpeechCaptureWorker", code: 4, userInfo: [NSLocalizedDescriptionKey: "Unsupported capture operation."])
         }
-    } catch {
-        let nsError = error as NSError
-        log("operation \(request.operation) failed: \(describe(error))")
+        let since = request.since.map { Date(timeIntervalSince1970: $0 / 1000) }
+        do {
+            try capture.start(outputPath: outputPath, since: since)
+        } catch {
+            return failure(request.id, error)
+        }
+        return success(request.id)
+    case "stop":
+        let finished = capture.stop()
         return Response(
             id: request.id,
-            ok: false,
-            error: describe(error),
-            errorDomain: nsError.domain,
-            errorCode: nsError.code,
-            framesWritten: nil,
-            engineRestarts: nil,
-            captureWarning: nil
+            ok: true,
+            error: nil,
+            errorDomain: nil,
+            errorCode: nil,
+            framesWritten: finished.frames,
+            engineRestarts: finished.restarts,
+            captureWarning: finished.warning
+        )
+    default:
+        return failure(
+            request.id,
+            NSError(
+                domain: "SpeechCaptureWorker",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Unsupported capture operation."]
+            )
         )
     }
 }
@@ -480,6 +781,7 @@ private func handle(_ request: Request) -> Response {
 @main
 private enum SpeechCaptureWorker {
     static func main() {
+        capture.installSignalHandling()
         while let line = readLine(strippingNewline: true) {
             guard let data = line.data(using: .utf8), let request = try? decoder.decode(Request.self, from: data) else {
                 continue

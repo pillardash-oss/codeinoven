@@ -193,6 +193,24 @@ export interface AgentQuestionRequest {
   metadata?: Record<string, unknown>
 }
 
+/**
+ * One entry of a secret card the user is filling in.
+ *
+ * A card with several secrets is filled over minutes, often with a trip to
+ * another thread or another app in between, so what has been typed so far is
+ * held for the request instead of inside the mounted card. The draft lives only
+ * while the request is pending: it is dropped the moment the request settles, so
+ * a value never outlives the answer it belongs to.
+ */
+export interface AgentSecretDraft {
+  /** The pasted value, kept out of the transcript and never persisted. */
+  value?: string
+  /** An instruction that reuses a value the device already holds. */
+  alternative?: string
+  /** The entry is answered with an instruction instead of a pasted value. */
+  alternativeMode?: boolean
+}
+
 /** Authoritative pending request metadata owned by the main process. */
 export interface PendingAgentQuestionRequest extends AgentQuestionRequest {
   projectId: string
@@ -201,6 +219,12 @@ export interface PendingAgentQuestionRequest extends AgentQuestionRequest {
   activeQuestionIndex: number
   answers: string[][]
   interactedQuestionIndexes: number[]
+  /**
+   * Progress of a secret card, aligned with `questions`. Held only while the
+   * request is pending and cleared with it, and never written to `answers` so
+   * a value can never reach the transcript, the provider, or a durable record.
+   */
+  secretDrafts?: AgentSecretDraft[]
   expiresAt?: number
 }
 

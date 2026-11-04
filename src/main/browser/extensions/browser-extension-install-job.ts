@@ -11,6 +11,7 @@
 /// <reference types="electron-vite/node" />
 import type { Worker } from 'node:worker_threads'
 import createInstallWorker from './browser-extension-install-worker.ts?nodeWorker'
+import { trackQuitWorker } from '../../system/quit-worker-sweep'
 import type { BrowserExtensionProgress } from '../../../lib/ipc/browser'
 import type {
   ExtensionPrepareMessage,
@@ -46,10 +47,12 @@ export function prepareExtensionSource(
   onProgress: (progress: ExtensionPrepareProgress) => void
 ): Promise<ExtensionPrepareResult> {
   return new Promise<ExtensionPrepareResult>((resolve, reject) => {
-    const worker: Worker = createInstallWorker({
-      name: 'codeinoven-extension-install',
-      workerData: request
-    })
+    const worker: Worker = trackQuitWorker(
+      createInstallWorker({
+        name: 'codeinoven-extension-install',
+        workerData: request
+      })
+    )
     let settled = false
     const finish = (settle: () => void): void => {
       if (settled) return

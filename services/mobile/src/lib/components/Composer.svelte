@@ -24,7 +24,6 @@
   /** A plain node reference: the box is measured imperatively, never rendered from. */
   let box: HTMLTextAreaElement | null = null
 
-  let count = $derived(text.length)
   let canSend = $derived(text.trim().length > 0 && !sending)
 
   /** Height follows the content; the sheet's max-height is what caps the growth. */
@@ -89,7 +88,6 @@
 
   <div class="composer-foot">
     <span class="composer-meta">
-      <span>{count} {count === 1 ? 'character' : 'characters'}</span>
       {#if error}
         <span class="composer-error" title={error}>{error}</span>
       {/if}

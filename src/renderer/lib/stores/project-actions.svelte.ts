@@ -1,4 +1,4 @@
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import type { ProjectAction, ProjectActionInput } from '$shared/project-actions'
 import { SvelteMap } from 'svelte/reactivity'
 
@@ -21,6 +21,12 @@ export interface ProjectActionRun {
 class ProjectActionsState {
   actionsByProject = new SvelteMap<string, ProjectAction[]>()
   runs = new SvelteMap<string, ProjectActionRun>()
+  /** Bumped per project by every `projectActions:changed` push.
+   *
+   *  Not reactive on purpose: it exists only so a list read that was already in
+   *  flight when main pushed a newer one cannot land afterwards and hide the
+   *  change the user was just shown. */
+  private revisions = new Map<string, number>()
   /** How tall each action's expanded inline output is, in CSS pixels, keyed by
    *  action id. Kept beside the runs rather than inside one so a user's chosen
    *  height survives a rerun of the same action. An absent entry means the
@@ -28,6 +34,20 @@ class ProjectActionsState {
   expandedHeights = new SvelteMap<string, number>()
   private loading = new Map<string, Promise<void>>()
   private exitSubscriptions = new Map<string, () => void>()
+
+  constructor() {
+    if (typeof window === 'undefined') return
+    // The panel is not the only writer: an agent driving `projectActions:*`
+    // through app control, and a second window, both write the same file. Main
+    // pushes the resulting list so the panel showing it stays true instead of
+    // waiting for a remount that may never come.
+    // Guarded: this runs at module import, so a bridge that has not caught up
+    // with a freshly added channel must not take the store down with it.
+    subscribeGuarded('projectActions:changed', (projectId, actions) => {
+      this.revisions.set(projectId, (this.revisions.get(projectId) ?? 0) + 1)
+      this.actionsByProject.set(projectId, actions)
+    })
+  }
 
   actions(projectId: string): ProjectAction[] {
     return this.actionsByProject.get(projectId) ?? []
@@ -50,8 +70,11 @@ class ProjectActionsState {
     if (this.actionsByProject.has(projectId)) return
     const pending = this.loading.get(projectId)
     if (pending) return pending
+    const revision = this.revisions.get(projectId) ?? 0
     const request = invoke('projectActions:list', projectId)
       .then((actions) => {
+        // A push that arrived while this read was in flight is newer.
+        if ((this.revisions.get(projectId) ?? 0) !== revision) return
         this.actionsByProject.set(projectId, actions)
       })
       .finally(() => this.loading.delete(projectId))
@@ -66,7 +89,8 @@ class ProjectActionsState {
   ): Promise<void> {
     const saved = await invoke('projectActions:save', projectId, actionId, input, insertAfterId)
     const current = this.actions(projectId)
-    if (actionId) {
+    // Editing, or a create whose broadcast already landed, is an in-place swap.
+    if (current.some((action) => action.id === saved.id)) {
       this.replace(projectId, saved)
       return
     }

@@ -1409,12 +1409,13 @@ app.on('before-quit', (event) => {
     }
   }
 
-  void runShutdownPipeline({ state, windowStateService, database }).finally(() => {
-    // The pipeline has finished every disposal step; the quit it was guarding
-    // can no longer hang here, so its watchdog is done. The single armed timer
-    // from `armQuitFailsafe` is the one this clears   there used to be a second
-    // one assigned beside this pipeline, which nothing could ever clear.
-    disarmQuitFailsafe(state)
+  // Nothing disarms the timer on this path, on purpose. A pipeline that
+  // completes re-arms it as the teardown watchdog, which only the process
+  // exiting clears; a pipeline that throws never reached that handover, so the
+  // deadline armed before it stays the one that converges on exit. Clearing it
+  // here is what used to leave a stalled exit with no deadline at all.
+  void runShutdownPipeline({ state, windowStateService, database }).catch((error: unknown) => {
+    Logger.error('Shutdown pipeline failed', error)
   })
 })
 

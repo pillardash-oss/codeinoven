@@ -14,9 +14,11 @@ export const invokeSpeechContract = {
     import('../speech/types').SpeechResult<import('../speech/types').SpeechCaptureSessionInfo>
   >,
   'speech:beginNativeCapture': {} as Contract<
-    [scope: import('../speech/types').SpeechScope],
+    [scope: import('../speech/types').SpeechScope, pressedAt?: number],
     import('../speech/types').SpeechResult<import('../speech/types').SpeechCaptureSessionInfo>
   >,
+  'speech:armNativeCapture': {} as Contract<[], import('../speech/types').SpeechResult<void>>,
+  'speech:disarmNativeCapture': {} as Contract<[], import('../speech/types').SpeechResult<void>>,
   'speech:ensureMicrophoneAccess': {} as Contract<
     [],
     import('../speech/types').SpeechResult<import('../speech/types').SpeechMicrophoneAccess>

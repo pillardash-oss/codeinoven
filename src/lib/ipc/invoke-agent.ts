@@ -7,6 +7,7 @@ import type {
   AgentModelSelection,
   AgentRunningProcess,
   AgentSecretSubmission,
+  AgentSecretDraft,
   AgentSessionStatus,
   AgentToolCatalog,
   AssignmentPlan,
@@ -251,6 +252,17 @@ export const invokeAgentContract = {
     ],
     PendingAgentQuestionRequest | null
   >,
+  'agent:updateSecretDraft': {} as Contract<
+    [
+      projectId: string,
+      threadId: string,
+      requestId: string,
+      questionIndex: number,
+      draft: AgentSecretDraft,
+      nextQuestionIndex?: number
+    ],
+    PendingAgentQuestionRequest | null
+  >,
   'agent:userActivity': {} as Contract<[], void>,
   'agent:listPermissions': {} as Contract<
     [projectId: string, threadId: string],
@@ -475,6 +487,13 @@ export const invokeAgentContract = {
   'note:delete': {} as Contract<[projectId: string, threadId: string], void>,
   /** Thread ids that currently have a note (renderer presence sync). */
   'note:list': {} as Contract<[], string[]>,
+  /** Pending agent-scheduled wakes, so a thread row can badge its scheduled state. */
+  'followUps:list': {} as Contract<[], import('../follow-up').FollowUpNotice[]>,
+  /** Pause, resume or cancel one armed wake from the panel that lists it. */
+  'followUps:update': {} as Contract<
+    [id: string, action: import('../follow-up').FollowUpAction],
+    void
+  >,
   /** List sticky note tab metadata without loading every body into memory. */
   'sticky-note:list': {} as Contract<[], StickyNoteSummary[]>,
   'sticky-note:get': {} as Contract<[id: string], StickyNote | null>,
