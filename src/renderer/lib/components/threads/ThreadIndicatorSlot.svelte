@@ -19,7 +19,7 @@
 </script>
 
 {#if indicator === 'display'}
-  <DisplayIndicator label="Agent driving a display target" />
+  <DisplayIndicator label="Agent mirroring a device" />
 {:else if indicator === 'recording'}
   <RecordingIndicator label="Listening" />
 {:else if indicator === 'speaking'}

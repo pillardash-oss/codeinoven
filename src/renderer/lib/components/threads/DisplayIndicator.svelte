@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioPhone from '$lib/components/icons/cio/CioPhone.svelte'
 
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
@@ -12,12 +12,13 @@
 
 <!-- Shares the thread row's indicator slot with computer use and the speech
      actions, so it is sized to the same 14px box and carries the accent colour
-     that marks "an agent is driving something". -->
+     that marks "an agent is driving something". A handset rather than a monitor:
+     the monitor already means "runs on this computer" two slots away. -->
 <span
   class="flex h-3.5 w-3.5 shrink-0 items-center justify-center"
   role="status"
   aria-label={label}
   title={label}
 >
-  <CioDisplay {size} strokeWidth={2.5} class="text-accent" aria-hidden="true" />
+  <CioPhone {size} strokeWidth={2.5} class="text-accent" aria-hidden="true" />
 </span>
