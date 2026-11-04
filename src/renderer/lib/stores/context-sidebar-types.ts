@@ -351,8 +351,13 @@ export interface CoordinatorContextTab {
   threadId: string
 }
 
-/** Sections of the assistant knowledge panel, in strip order. */
-export type AssistantPanelTab = 'all' | 'assistant' | 'connections' | 'agents' | 'issues'
+/**
+ * Sections of the assistant knowledge panel, in strip order. Each is its own tab
+ * rather than a card stacked at the bottom of another one, so nothing the user
+ * switches to the panel for is buried under a scroll.
+ */
+export type AssistantPanelTab =
+  'all' | 'behaviour' | 'schedule' | 'reporting' | 'wakes' | 'connections' | 'agents' | 'issues'
 
 /**
  * Assistant View's knowledge panel, docked into the context sidebar. There is
