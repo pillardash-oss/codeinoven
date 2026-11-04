@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { registerAppControlRevalidation } from '$lib/app-control/app-control-revalidation'
 import type {
   CloudDeploymentAccountRegistry,
   CloudDeploymentConfig,
@@ -42,6 +43,12 @@ class CloudAccountsState {
       this.loading = false
       this.loaded = true
     }
+  }
+
+  /** Re-read the account registry only if this window already holds it. */
+  async reloadIfLoaded(): Promise<void> {
+    if (!this.loaded) return
+    await this.load()
   }
 
   async createAccount(
@@ -155,3 +162,11 @@ class CloudAccountsState {
 }
 
 export const cloudAccountsState = new CloudAccountsState()
+
+// Accounts created, edited or removed through app control wrote the registry in
+// main without going through this store, so every panel listing accounts would
+// keep showing the set it read when it mounted.
+registerAppControlRevalidation({
+  channels: ['cloudDeploy:'],
+  refresh: () => cloudAccountsState.reloadIfLoaded()
+})

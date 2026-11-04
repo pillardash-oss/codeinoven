@@ -2,6 +2,7 @@
 
 import type { HeartbeatConfig } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
+import { registerAppControlRevalidation } from '$lib/app-control/app-control-revalidation'
 
 export type HeartbeatCreateInput = Omit<HeartbeatConfig, 'id' | 'lastRun'>
 export type HeartbeatPatchInput = Partial<Omit<HeartbeatConfig, 'id'>>
@@ -16,12 +17,21 @@ class HeartbeatStore {
   loading = $state(false)
   saving = $state(false)
   error = $state('')
+  /** Whether the list has been read in this window, so a revalidation knows
+   *  there is an on-screen list to correct. */
+  private loaded = false
+
+  /** Whether this window already holds a read of the schedule. */
+  get loadedOnce(): boolean {
+    return this.loaded
+  }
 
   async load(): Promise<void> {
     this.loading = true
     this.error = ''
     try {
       this.heartbeats = await invoke('heartbeat:list')
+      this.loaded = true
     } catch (loadError) {
       this.error = loadError instanceof Error ? loadError.message : 'Failed to load heartbeats.'
     } finally {
@@ -73,3 +83,14 @@ class HeartbeatStore {
 }
 
 export const heartbeatStore = new HeartbeatStore()
+
+// A ping created, edited, paused or deleted through app control wrote the
+// schedule in main without going through this store, so the Routines panel kept
+// the schedule it read on mount.
+registerAppControlRevalidation({
+  channels: ['heartbeat:'],
+  refresh: async () => {
+    if (!heartbeatStore.loadedOnce) return
+    await heartbeatStore.load()
+  }
+})

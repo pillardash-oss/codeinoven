@@ -1,4 +1,6 @@
 import { syncWindowControls } from '$lib/window-controls'
+import { invoke } from '$lib/ipc.svelte'
+import { registerAppControlRevalidation } from '$lib/app-control/app-control-revalidation'
 import { APP_FONT_OPTIONS } from '$shared/app-fonts'
 import {
   DEFAULT_CONTRAST_LEVEL,
@@ -229,6 +231,17 @@ export const appConfigState = {
     applyAppearance()
   }
 }
+
+// Several channels write the persisted config from main without broadcasting
+// `config:changed` (the preferred editor, worker names, CIO prompts), and an
+// app-control call to any of them runs no store method here. Re-reading the one
+// record behind them all keeps every appearance and switch panel true.
+registerAppControlRevalidation({
+  channels: ['config:', 'editors:', 'workerNames:', 'cioPrompts:', 'computerUse:'],
+  refresh: async () => {
+    appConfigState.sync(await invoke('config:get'))
+  }
+})
 
 /** Options for the Appearance font-family picker. */
 export const FONT_FAMILY_OPTIONS = APP_FONT_OPTIONS

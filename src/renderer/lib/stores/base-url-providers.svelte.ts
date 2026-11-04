@@ -14,6 +14,7 @@ import type {
 } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+import { registerAppControlRevalidation } from '$lib/app-control/app-control-revalidation'
 
 /** Keep a large custom-provider catalog from monopolizing a renderer turn. */
 const CATALOG_SYNC_BATCH_SIZE = 8
@@ -31,6 +32,9 @@ class BaseUrlProviderStore {
   loading = $state(false)
   saving = $state(false)
   error = $state('')
+  /** Whether a full list read has completed in this window, so a revalidation
+   *  knows these records are actually on screen somewhere. */
+  private loaded = false
 
   /** Fetch every stored provider. Safe to call repeatedly. */
   async load(): Promise<void> {
@@ -38,6 +42,7 @@ class BaseUrlProviderStore {
     this.error = ''
     try {
       this.providers = await invoke('baseUrlProviders:list')
+      this.loaded = true
       for (const [index, provider] of this.providers.entries()) {
         providerCatalog.upsertCustomProvider(provider)
         if ((index + 1) % CATALOG_SYNC_BATCH_SIZE === 0 && index < this.providers.length - 1) {
@@ -49,6 +54,12 @@ class BaseUrlProviderStore {
     } finally {
       this.loading = false
     }
+  }
+
+  /** Re-read the providers only if this window already holds them. */
+  async reloadIfLoaded(): Promise<void> {
+    if (!this.loaded) return
+    await this.load()
   }
 
   /** Create a new provider. Returns the persisted provider on success. */
@@ -141,3 +152,11 @@ class BaseUrlProviderStore {
 }
 
 export const baseUrlProviderStore = new BaseUrlProviderStore()
+
+// A provider added, edited or deleted through app control wrote the record in
+// main without going through this store, so the Providers panel keeps the list
+// it read on mount and its models stay out of the catalog.
+registerAppControlRevalidation({
+  channels: ['baseUrlProviders:'],
+  refresh: () => baseUrlProviderStore.reloadIfLoaded()
+})
