@@ -47,6 +47,11 @@ interface GeneratedImport {
   raw?: string
 }
 
+/** Escape a value inserted inside the single-quoted path literals above. */
+function singleQuotedStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1).replaceAll("'", "\\'")
+}
+
 export interface CioCoreToolsExtensionOptions {
   /** Present exclusively for the app-bundled Pi runtime. */
   sensitiveFilePolicyPath?: string
@@ -237,23 +242,17 @@ __CIO_STRIP_BUILTINS__  })
   __cioCompactionExtension()(pi)
 }
 `
-      .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
-      .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
-      .replace('__CIO_HISTORY_RECAP_PATH__', JSON.stringify(options.historyRecapPath).slice(1, -1))
-      .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
-      .replace(
-        '__CIO_OVERSIZED_FLAG_PATH__',
-        JSON.stringify(options.oversizedFlagPath).slice(1, -1)
-      )
-      .replace('__CIO_STOP_FLAG_PATH__', JSON.stringify(options.stopFlagPath).slice(1, -1))
+      .replace('__HANDOFF_PATH__', singleQuotedStringContent(options.gatewayHandoffPath))
+      .replace('__CIO_SYSTEM_PROMPT_PATH__', singleQuotedStringContent(options.systemPromptPath))
+      .replace('__CIO_HISTORY_RECAP_PATH__', singleQuotedStringContent(options.historyRecapPath))
+      .replace('__CIO_ALLOWED_TOOLS_PATH__', singleQuotedStringContent(options.allowedToolsPath))
+      .replace('__CIO_OVERSIZED_FLAG_PATH__', singleQuotedStringContent(options.oversizedFlagPath))
+      .replace('__CIO_STOP_FLAG_PATH__', singleQuotedStringContent(options.stopFlagPath))
       .replace(
         '__CIO_COMPACTION_CONTEXT_PATH__',
-        JSON.stringify(options.compactionContextPath).slice(1, -1)
+        singleQuotedStringContent(options.compactionContextPath)
       )
-      .replace(
-        '__CIO_SUBAGENT_WATCH_PATH__',
-        JSON.stringify(options.subagentWatchPath).slice(1, -1)
-      )
+      .replace('__CIO_SUBAGENT_WATCH_PATH__', singleQuotedStringContent(options.subagentWatchPath))
       // Inserted as a complete JSON string literal (its own quotes included),
       // so a path with a quote in it cannot break the generated source.
       .replace('__CIO_SESSION_CWD__', () => JSON.stringify(options.sessionCwd))
