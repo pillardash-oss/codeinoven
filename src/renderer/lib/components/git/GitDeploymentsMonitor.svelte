@@ -11,6 +11,7 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
+  import CioMinusCircle from '$lib/components/icons/cio/CioMinusCircle.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import GitDeploymentDetail from './GitDeploymentDetail.svelte'
@@ -551,6 +552,8 @@
                 <CioClock size={13} class="mt-0.5 shrink-0 text-warning" />
               {:else if run.conclusion === 'success'}
                 <CioCheckCircle size={13} class="mt-0.5 shrink-0 text-success" />
+              {:else if run.conclusion === 'cancelled'}
+                <CioMinusCircle size={13} class="mt-0.5 shrink-0 text-dimmed" />
               {:else if run.conclusion === 'skipped'}
                 <CioMinus size={13} class="mt-0.5 shrink-0 text-dimmed" />
               {:else}

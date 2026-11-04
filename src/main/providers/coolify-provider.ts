@@ -509,13 +509,17 @@ const BUILDING_DEPLOYMENT_STATUSES = new Set([
 /** Deployment states Coolify reports when a deployment completed successfully. */
 const SUCCESS_DEPLOYMENT_STATUSES = new Set(['finished', 'success', 'completed', 'done'])
 
-/** Deployment states Coolify reports when a deployment failed, timed out, or was cancelled. */
-const FAILED_DEPLOYMENT_STATUSES = new Set([
-  'failed',
-  'error',
-  'timeout',
-  'timed_out',
+/** Deployment states Coolify reports when a deployment failed or timed out. */
+const FAILED_DEPLOYMENT_STATUSES = new Set(['failed', 'error', 'timeout', 'timed_out'])
+
+/**
+ * Deployment states Coolify reports when a deployment was stopped before it
+ * finished. A cancellation is reported as its own outcome, never as a failure:
+ * the run did not break, somebody ended it.
+ */
+const CANCELLED_DEPLOYMENT_STATUSES = new Set([
   'cancelled',
+  'canceled',
   'cancelled-by-user',
   'cancelled-by-something'
 ])
@@ -554,6 +558,7 @@ function mapDeploymentStatus(raw: string | null): CloudDeploymentStatus {
   const value = (raw ?? '').toLowerCase()
   if (BUILDING_DEPLOYMENT_STATUSES.has(value)) return 'building'
   if (SUCCESS_DEPLOYMENT_STATUSES.has(value)) return 'success'
+  if (CANCELLED_DEPLOYMENT_STATUSES.has(value)) return 'cancelled'
   if (FAILED_DEPLOYMENT_STATUSES.has(value)) return 'failed'
   return 'unknown'
 }

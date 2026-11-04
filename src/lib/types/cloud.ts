@@ -25,8 +25,12 @@ export const CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS: readonly CloudDeploymentPro
 ]
 
 /** Latest build/run state of a cloud deployment container. Shared vocabulary for
- *  both a container's runtime state and its last deployment result. */
-export type CloudDeploymentStatus = 'building' | 'success' | 'failed' | 'unknown'
+ *  both a container's runtime state and its last deployment result.
+ *
+ * `cancelled` is its own outcome, not a kind of `failed`: a deployment somebody
+ * stopped says nothing about the build being broken, so it must never be drawn
+ * with the failure mark or counted in the failed bucket. */
+export type CloudDeploymentStatus = 'building' | 'success' | 'failed' | 'cancelled' | 'unknown'
 
 /**
  * One deployment/build record for a cloud deployment container. The detail view
