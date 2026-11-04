@@ -320,12 +320,5 @@ export const invokeDisplayContract = {
    * find, and the offer that put it there must never be repeated.
    */
   'display:notePanel': {} as Contract<[mirrored: DisplayPanelTarget | null], void>,
-  /**
-   * Report the threads agents are working in right now.
-   *
-   * Presence costs one device probe plus one process-table read, so it only ever
-   * runs while this is non-empty: an idle app never looks for a device. The ids
-   * are also what attributes a target to a thread row.
-   */
-  'display:noteWorkingThreads': {} as Contract<[threadIds: string[]], void>
+
 }

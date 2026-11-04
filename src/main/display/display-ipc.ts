@@ -10,10 +10,8 @@ import {
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
-import type { DisplayThreadActivity } from '../../lib/ipc/display'
-import { DisplayPresence } from './display-presence'
+import { bindDisplayEventSink, displayRequests } from './display-requests'
 import { bindDisplayWindow, displayService } from './display-runtime'
-import { detectDisplayTargets } from './display-targets'
 
 /**
  * The display panel's renderer boundary, registered at boot and almost empty.
@@ -23,14 +21,12 @@ import { detectDisplayTargets } from './display-targets'
  * adapters) only on first use. Nothing in this file imports one of those, so the
  * cost of having the panel at all is a handful of handler rows.
  *
- * Presence is the other half: the panel has no rail item until an agent starts or
- * attaches to a display target, so this boundary also owns the one watch that
- * decides when that happened.
+ * Presence is the other half, and it is agent-initiated rather than detected: the
+ * `ext_simulation` tool tells this boundary which device to mirror, and the app
+ * never scans for a device on its own.
  */
 export interface DisplayIpcDeps {
   window: () => BrowserWindow | null
-  /** Every process the agent process service tracks right now. */
-  listAgentProcesses: () => Promise<{ command: string; threadId?: string | null }[]>
 }
 
 export function registerDisplayIpc(deps: DisplayIpcDeps): void {
@@ -45,44 +41,10 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     sendToRenderer(window.webContents, channel, payload)
   }
 
-  /**
-   * Hand the renderer the device that should take the panel.
-   *
-   * The watch only knows target keys, which are cheap and stable, while the panel
-   * needs a label and a mark. The listing that answers that is the same one the
-   * picker uses, so this resolves the descriptor from the device itself instead
-   * of inventing one.
-   */
-  const announceTarget = async (key: string, threadId?: string): Promise<void> => {
-    const [kind, sourceId] = key.split(':', 2)
-    if (!isDisplaySourceKind(kind) || !sourceId) return
-    try {
-      const listing = await (await displayService()).listSources(kind)
-      const target = listing.sources.find((source) => source.sourceId === sourceId)
-      if (!target) return
-      send('display:target', {
-        target,
-        ...(threadId ? { threadId } : {}),
-        at: Date.now()
-      })
-    } catch (error) {
-      Logger.dev(`Display target ${key} could not be resolved:`, error)
-    }
-  }
-
-  const presence = new DisplayPresence({
-    listAgentProcesses: deps.listAgentProcesses,
-    detectTargets: detectDisplayTargets,
-    onAvailable: () => send('display:available', true),
-    onActivity: (threadId, active, at) => {
-      const activity: DisplayThreadActivity = { threadId, active, at }
-      send('display:activity', activity)
-    },
-    onTargetAppeared: (key, threadId) => void announceTarget(key, threadId),
-    isWindowOnScreen: () => {
-      const window = deps.window()
-      return Boolean(window && !window.isDestroyed() && window.isVisible() && !window.isMinimized())
-    }
+  bindDisplayEventSink({
+    target: (offer) => send('display:target', offer),
+    activity: (activity) => send('display:activity', activity),
+    available: () => send('display:available', true)
   })
 
   ipcMain.handle('display:listSources', async (_event, kind: unknown) => {
@@ -109,16 +71,10 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     const service = await displayService()
     await service.input(requireSessionId(sessionId), requireGesture(gesture))
   })
-  ipcMain.handle('display:presence', () => presence.state)
-  ipcMain.handle('display:noteWorkingThreads', (_event, threadIds: unknown) => {
-    if (!Array.isArray(threadIds) || threadIds.some((id) => typeof id !== 'string')) {
-      throw new TypeError('Working threads must be a list of thread ids')
-    }
-    presence.setWorkingThreads(threadIds as string[])
-  })
+  ipcMain.handle('display:presence', () => displayRequests.state())
   ipcMain.handle('display:notePanel', (_event, mirrored: unknown) => {
     if (mirrored === null) {
-      presence.setPanelTarget(null)
+      displayRequests.noteMirrored(null)
       return
     }
     if (typeof mirrored !== 'object' || mirrored === null) {
@@ -129,7 +85,7 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     if (typeof target.sourceId !== 'string' || target.sourceId.length === 0) {
       throw new TypeError('A mirrored target must name its source')
     }
-    presence.setPanelTarget(`${kind}:${target.sourceId}`)
+    displayRequests.noteMirrored(`${kind}:${target.sourceId}`)
   })
 
   Logger.dev('Display panel registered: capture modules load on first use')

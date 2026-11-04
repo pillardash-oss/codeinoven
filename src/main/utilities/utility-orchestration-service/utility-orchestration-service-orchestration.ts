@@ -40,6 +40,7 @@ import {
   type EngineeringToolOperation
 } from '../../../lib/engineering-tools'
 import { PAWN_AGENT_TOOL_NAME } from '../../../lib/pawn-tools'
+import { EXT_SIMULATION_TOOL_NAME } from '../../../lib/simulation-tools'
 import { NO_EXPERTS, type EffectiveExperts } from '../../../lib/experts'
 import { currentWorkRoot, currentWorkRoots } from '../../design/work-roots-state'
 import { gatewayStructuredResult } from '../../../lib/image-payload'
@@ -196,6 +197,8 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.engineering(state, input, 'assignment')
       case PAWN_AGENT_TOOL_NAME:
         return (state, input) => this.pawn(state, input)
+      case EXT_SIMULATION_TOOL_NAME:
+        return (state, input) => this.simulation(state, input)
       default:
         return null
     }
@@ -244,6 +247,30 @@ export class UtilityOrchestrationServiceOrchestration {
       projectPath: state.request.projectPath,
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
+    })
+  }
+
+  /**
+   * Put the device this turn is working on in front of the user.
+   *
+   * The call is a notification, never device control: the panel is told which
+   * target to mirror and how to name it in the answer, and the agent keeps driving
+   * the device with its own tools. The display module is imported here rather than
+   * at the top so a session that never mirrors anything never loads a capture
+   * adapter.
+   */
+  async simulation(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const platform = input.platform
+    if (platform !== 'android' && platform !== 'ios') {
+      throw new Error('ext_simulation needs platform "android" or "ios"')
+    }
+    const device = typeof input.device === 'string' ? input.device.trim() : ''
+    const { displayRequests } = await import('../../display/display-requests')
+    if (input.close === true) return displayRequests.release(state.request.threadId)
+    return displayRequests.request({
+      platform,
+      ...(device.length > 0 ? { device } : {}),
+      threadId: state.request.threadId
     })
   }
 

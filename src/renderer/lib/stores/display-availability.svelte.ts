@@ -34,8 +34,6 @@ class DisplayAvailabilityState {
 
   private cleanups: Array<() => void> = []
   private started = false
-  /** Last working-thread list reported, so a busy badge changing costs no round trip. */
-  private reportedThreads: string | null = null
   /** Last mirrored target reported, for the same reason. Undefined until the
    *  first report, so a launch with no panel still arms the watch. */
   private reportedPanelTarget: string | null | undefined = undefined
@@ -91,25 +89,11 @@ class DisplayAvailabilityState {
   }
 
   /**
-   * Report the threads an agent is working in.
-   *
-   * Presence costs one device probe plus one process-table read, so main only
-   * looks while this is non-empty. An idle app never scans for a device.
-   */
-  noteWorkingThreads(threadIds: readonly string[]): void {
-    const key = [...threadIds].sort().join(',')
-    if (this.reportedThreads === key) return
-    this.reportedThreads = key
-    void invoke('display:noteWorkingThreads', [...threadIds]).catch((error: unknown) =>
-      logRendererError('The agent working threads could not be reported', error)
-    )
-  }
-
-  /**
    * Tell main which device the panel is mirroring, and whether it is showing one.
    *
-   * While it shows one the watch can stop looking; when the tab closes, the watch
-   * arms again so the next device that comes up opens the panel.
+   * A repeat request for the same device is then a no-op instead of a stream
+   * restart, and closing the panel clears the thread marks that claimed an agent
+   * was driving something.
    */
   notePanelTarget(mirrored: DisplayPanelTarget | null): void {
     const key = mirrored ? `${mirrored.kind}:${mirrored.sourceId}` : null

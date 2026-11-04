@@ -20,7 +20,6 @@
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { displayAvailability } from '$lib/stores/display-availability.svelte'
   import { captureActivities } from '$shared/media-activity'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
@@ -540,26 +539,13 @@
   })
 
   /**
-   * Tell main when an agent is working.
+   * Open the device the agent asked to mirror, on the thread the person is
+   * standing in.
    *
-   * That flag is the whole gate on the display presence watch: while nothing runs,
-   * the app never reads the process table looking for a device. One boolean per
-   * transition, so a busy badge changing costs nothing.
-   */
-  $effect(() => {
-    const working = [...agentRuns.runs.entries()]
-      .filter(([, run]) => run.busy)
-      .map(([threadId]) => threadId)
-    displayAvailability.noteWorkingThreads(working)
-  })
-
-  /**
-   * Open the device the watch found, on the thread the person is standing in.
-   *
-   * The offer is the whole point of the watch: a simulator or emulator that comes
-   * up takes the panel by itself, so monitoring (and working the mirrored screen)
-   * starts without hunting for a rail item first. Focusing a tab already mirroring
-   * that device is what makes an agent moving between devices follow it here.
+   * The offer comes from `ext_simulation`, which the agent calls with the device it
+   * is working on, so the panel appears on that device rather than on the last one
+   * opened. Focusing a tab already mirroring it is what makes an agent that moves
+   * between devices follow it here.
    */
   $effect(() => {
     const offer = displayAvailability.pendingTarget

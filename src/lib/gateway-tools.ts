@@ -2,6 +2,7 @@ import { UTILITY_KIND_VALUES } from './types'
 import { ORCHESTRATION_TOOLS } from './orchestration-tools'
 import { APP_CONTROL_TOOLS } from './app-control-tools'
 import { ENGINEERING_TOOLS } from './engineering-tools'
+import { EXT_SIMULATION_TOOLS } from './simulation-tools'
 import { PAWN_TOOLS } from './pawn-tools'
 
 /** Stable app-owned gateway tool names. */
@@ -196,6 +197,7 @@ const UTILITY_BUNDLE_INPUT_SCHEMA: Record<string, unknown> = {
 export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   ...ORCHESTRATION_TOOLS,
   ...APP_CONTROL_TOOLS,
+  ...EXT_SIMULATION_TOOLS,
   ...ENGINEERING_TOOLS,
   ...PAWN_TOOLS,
   {

@@ -898,16 +898,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // the first frame someone asks for. What is registered here is the thin IPC
   // boundary plus the presence watch that decides when the panel exists at all.
   const { registerDisplayIpc } = await import('../display/display-ipc')
-  registerDisplayIpc({
-    window: () => state.mainWindow,
-    listAgentProcesses: async () => {
-      const processes = await state.chatEngine?.state.agentProcesses.listAll()
-      return (processes ?? []).map((process) => ({
-        command: process.command,
-        threadId: process.threadId
-      }))
-    }
-  })
+  registerDisplayIpc({ window: () => state.mainWindow })
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
       studio: videoStudio.execute,
