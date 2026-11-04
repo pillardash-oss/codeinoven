@@ -39,6 +39,7 @@ import {
 } from '../chat/thread-events'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
 import { instanceEventBus } from '../system/instance-event-bus'
+import { instanceRegistry } from '../system/instance-registry'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -1279,6 +1280,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // wake is pending, resuming the thread it was scheduled on.
       const followUps = new FollowUpService({
         store: new FollowUpStore(storage),
+        // Exactly one live instance wakes a thread, the same rule the assistant
+        // scheduler follows. Without it two open windows fired one wake twice.
+        isOwner: () => instanceRegistry.isIncumbentInstance(),
         findThread: (threadId) => {
           const thread = new ThreadRepo(database).get(threadId)
           if (!thread) return null
@@ -1315,6 +1319,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // instead of polled, and a window opened later reads the same set once.
       followUps.attachChangeListener(() => broadcastFollowUpsChanged(followUps))
       await followUps.start()
+      // The schedule moves with the user, not with the process: when another
+      // instance becomes the main instance this clock stands down, and when this
+      // one takes it back the wakes it was holding come due here.
+      state.stopFollowUpOwnershipListener = instanceRegistry.onOwnershipChanged(() => {
+        if (instanceRegistry.isIncumbentInstance()) {
+          void followUps
+            .takeOver()
+            .catch((error) => Logger.error('Follow-up take-over failed:', error))
+        } else {
+          followUps.standDown()
+        }
+        broadcastFollowUpsChanged(followUps)
+      })
       broadcastFollowUpsChanged(followUps)
     } catch (error) {
       Logger.error('Follow-up scheduler startup failed (non-fatal):', error)

@@ -37,9 +37,13 @@ function isFollowUpAction(value: unknown): value is FollowUpAction {
 }
 
 export function registerFollowUpHandlers(getService: () => FollowUpService | null): void {
-  ipcMain.handle('followUps:list', () => {
+  ipcMain.handle('followUps:list', async () => {
     const service = getService()
-    return service ? followUpNotices(service) : []
+    if (!service) return []
+    // The file is shared by every instance, so the panel reads it rather than a
+    // copy that only the owner keeps fresh.
+    await service.refresh()
+    return followUpNotices(service)
   })
   /**
    * Control one armed wake by id.
@@ -49,7 +53,7 @@ export function registerFollowUpHandlers(getService: () => FollowUpService | nul
    * by definition includes threads that are not on screen. The id is the whole
    * authority, and the service refuses an id it does not hold.
    */
-  ipcMain.handle('followUps:update', (_, rawId: unknown, rawAction: unknown) => {
+  ipcMain.handle('followUps:update', async (_, rawId: unknown, rawAction: unknown) => {
     if (typeof rawId !== 'string' || rawId.trim().length === 0) {
       throw new TypeError('A follow-up id is required')
     }
@@ -58,6 +62,9 @@ export function registerFollowUpHandlers(getService: () => FollowUpService | nul
     }
     const service = getService()
     if (!service) throw new Error('Scheduled wakes are unavailable right now')
+    // A window that is not the owner holds a stale copy: the action must be
+    // applied to the file's truth, not to whatever this process last saw.
+    await service.refresh()
     const id = rawId.trim()
     const found =
       rawAction === 'pause'

@@ -109,6 +109,8 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.stopFollowUpOwnershipListener?.()
+    state.stopFollowUpOwnershipListener = null
     state.followUpService?.dispose()
     // A wake armed moments before the quit must reach the file, or the next
     // launch has no idea the user was promised one.

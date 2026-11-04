@@ -116,6 +116,8 @@ export interface BootstrapState {
    * a wake is pending, that resumes the same thread at the time the user agreed.
    */
   followUpService: FollowUpService | null
+  /** Unsubscribes the follow-up clock from cross-instance ownership changes. */
+  stopFollowUpOwnershipListener: (() => void) | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
   backgroundRunLedger: BackgroundRunLedger | null
   /** Durable record of gates the app resolved without the user (attention rail). */
@@ -211,6 +213,7 @@ export function createBootstrapState(): BootstrapState {
     assistantManager: null,
     assistantScheduler: null,
     followUpService: null,
+    stopFollowUpOwnershipListener: null,
     backgroundRunLedger: null,
     autoAnswerStore: null,
     cleanShutdownStore: null,

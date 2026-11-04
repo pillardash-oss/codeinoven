@@ -16,8 +16,13 @@ import type { FollowUpStore } from './follow-up-store'
  * own store. A timer armed for nine hours is wrong after a sleep, a clock change
  * or a laptop that was closed: waking early to look again costs nothing, because
  * a tick that finds nothing due simply re-arms.
+ *
+ * It is also the lateness bound for a wake another instance armed: the store is
+ * shared on disk, so a wake written by a secondary is picked up by the owner on
+ * its next slice, and a minute is short enough that the time the user agreed to
+ * is still the time the thread wakes.
  */
-const TIMER_SLICE_MS = 5 * 60 * 1000
+const TIMER_SLICE_MS = 60 * 1000
 
 /** The thread facts a wake needs, resolved by the app that owns thread rows. */
 export interface FollowUpThread {
@@ -29,6 +34,15 @@ export interface FollowUpThread {
 
 export interface FollowUpServiceDeps {
   store: FollowUpStore
+  /**
+   * Whether this process owns the scheduled work of the config root.
+   *
+   * Exactly one live instance may wake a thread, the same rule the assistant
+   * scheduler follows: a wake that ran in every window started the same turn
+   * twice, which is what two open instances did to one thread before this gate
+   * existed.
+   */
+  isOwner: () => boolean
   /** Read a thread row, or null when it no longer exists. */
   findThread: (threadId: string) => FollowUpThread | null
   /** Resume a thread with an internal turn, the same way the app resumes its own. */
@@ -58,6 +72,7 @@ export class FollowUpService {
   private timer: ReturnType<typeof setTimeout> | null = null
   private tickChain: Promise<void> = Promise.resolve()
   private disposed = false
+  private loaded = false
   /** Called after anything that changes the armed set, so a watcher can repaint. */
   private changeListener: (() => void) | null = null
 
@@ -82,11 +97,47 @@ export class FollowUpService {
 
   /** Load the persisted wakes and arm the clock. Called once after paint. */
   async start(): Promise<void> {
-    if (!this.deps.store.isLoaded()) await this.deps.store.load()
+    await this.refresh()
     this.arm()
     if (this.deps.store.hasAnyPending()) {
-      Logger.info('Follow-ups restored', { pending: this.deps.store.list().length })
+      Logger.info('Follow-ups restored', {
+        pending: this.deps.store.list().length,
+        owner: this.deps.isOwner()
+      })
     }
+  }
+
+  /**
+   * Re-read the store from disk.
+   *
+   * The file is shared by every instance of the config root, so an in-memory copy
+   * is only ever a cache: a wake armed, held or cancelled in another window is
+   * invisible until this runs. The tick calls it before deciding anything due,
+   * and the panel's own read calls it so the list is the same list everywhere.
+   */
+  async refresh(): Promise<void> {
+    await this.deps.store.load()
+    this.loaded = true
+  }
+
+  /**
+   * Take the schedule over: the registry just made this process the owner, so the
+   * wakes another instance was holding must come due here, now.
+   */
+  async takeOver(): Promise<void> {
+    if (this.disposed || !this.deps.isOwner()) return
+    await this.tick()
+    this.arm()
+  }
+
+  /** Stand down: another instance owns the schedule, so this one holds no clock. */
+  standDown(): void {
+    this.clearTimer()
+  }
+
+  /** Whether this instance is the one allowed to wake threads right now. */
+  ownsSchedule(): boolean {
+    return this.deps.isOwner()
   }
 
   /** Stop the clock. Pending wakes stay on disk for the next launch. */
@@ -125,7 +176,7 @@ export class FollowUpService {
       threadId: string
     }
   ): Promise<FollowUp> {
-    if (!this.deps.store.isLoaded()) await this.deps.store.load()
+    if (!this.loaded) await this.refresh()
     const now = this.now()
     const dueAt = Math.round(input.dueAt)
     if (!Number.isFinite(dueAt)) throw new Error('dueAt must be a valid time in milliseconds')
@@ -211,6 +262,13 @@ export class FollowUpService {
 
   private async runTick(): Promise<void> {
     if (this.disposed) return
+    // The owner is the only process that wakes a thread, which is what keeps two
+    // open windows from starting the same turn twice.
+    if (!this.deps.isOwner()) {
+      this.clearTimer()
+      return
+    }
+    await this.refresh()
     const now = this.now()
     // A held wake is deliberately not due, however far its clock has run: that is
     // the whole promise the pause control makes.
@@ -297,6 +355,7 @@ export class FollowUpService {
   private arm(): void {
     this.clearTimer()
     if (this.disposed) return
+    if (!this.deps.isOwner()) return
     const next = this.deps.store.nextDueAt()
     if (next === null) return
     const delay = Math.min(Math.max(next - this.now(), 0), TIMER_SLICE_MS)
