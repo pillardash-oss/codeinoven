@@ -425,6 +425,7 @@
       priority: triggerPriority,
       eligible: () => !hidden && !disabled,
       element: () => buttonEl,
+      arm: () => speechController.armCapture(),
       activate: () => void activate()
     })
   })
@@ -447,18 +448,6 @@
       // target still captures its value and caret before the click is handled.
       event.preventDefault()
       prepareTarget()
-    }}
-    onpointerenter={() => {
-      // Hovering the mic opens it early. Nothing is kept from before the press:
-      // the recorder only hands over the audio it captured after `pressedAt`.
-      if (!disabled && action === 'start') speechController.armCapture()
-    }}
-    onpointerleave={() => {
-      // The pointer is gone and no take is starting: release the microphone.
-      // A take that is already recording keeps its own microphone, and the
-      // controller refuses the release in that case.
-      pressedAt = null
-      speechController.disarmCapture()
     }}
     onkeydown={(event) => {
       if (event.key === 'Enter' || event.key === ' ') prepareTarget()

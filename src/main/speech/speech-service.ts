@@ -254,19 +254,36 @@ export class SpeechService {
     void this.nativeCapture.ping().catch((error) => {
       Logger.dev('Native speech capture could not be started ahead of time:', error)
     })
-    // Warm the native capture worker so the first recording after a launch does
-    // not pay process and audio-unit init. The warmup opens CoreAudio's input
-    // path, which is exactly what makes macOS show its microphone prompt, so it
-    // is gated on a decision that already exists: a user who has recorded before
-    // starts instantly, while a fresh install is left untouched until the first
-    // recording asks for access. It is skipped entirely while a sibling instance
-    // is recording, because opening the input device from a second process can
-    // make the device renegotiate under that live capture.
+    // Wait for the boot to settle before opening the microphone once. Priming
+    // builds the engine, installs the tap and resolves the device at launch, so
+    // the first press of the session costs tens of milliseconds like every other
+    // one; it is a one-off warmup and must not compete with the boot itself.
     if (microphoneAccessGranted() && !(await this.storage.anotherInstanceIsRecording())) {
+      this.scheduleCaptureWarmup()
+    }
+  }
+
+  private captureWarmupTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * Prime the native microphone once the application has rendered and booted.
+   *
+   * The microphone stays released until the user actually records (the engine is
+   * started once and stopped again, with the device object retained), so this is
+   * invisible apart from a brief device open. Warming here rather than on the
+   * first press is what makes a shortcut recording start on the press: a
+   * shortcut never hovers a mic, so a gesture-driven warmup cannot help it.
+   */
+  private scheduleCaptureWarmup(delayMs = 1_500): void {
+    if (this.captureWarmupTimer) clearTimeout(this.captureWarmupTimer)
+    this.captureWarmupTimer = setTimeout(() => {
+      this.captureWarmupTimer = null
+      if (this.openCaptures.size > 0) return
+      if (!microphoneAccessGranted()) return
       void this.nativeCapture.warm().catch((error) => {
         Logger.dev('Native speech capture warmup failed (non-fatal):', error)
       })
-    }
+    }, delayMs)
   }
 
   /**
@@ -524,7 +541,11 @@ export class SpeechService {
 
   async failNativeCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
     await this.nativeCapture.stop(sessionId).catch(() => undefined)
-    return this.failCapture(sessionId, message)
+    const attempt = await this.failCapture(sessionId, message)
+    // A failed take can leave the recorder dead or cold. Prime it again so the
+    // retry starts on a microphone that is already open.
+    if (microphoneAccessGranted()) this.scheduleCaptureWarmup(500)
+    return attempt
   }
 
   async markAttemptFailure(attemptId: string, message: string): Promise<SpeechRecordingAttempt> {
@@ -1392,6 +1413,10 @@ export class SpeechService {
   }
 
   async dispose(): Promise<void> {
+    if (this.captureWarmupTimer) {
+      clearTimeout(this.captureWarmupTimer)
+      this.captureWarmupTimer = null
+    }
     this.eviction.dispose()
     this.downloader.abortAll()
     const activeNativeSession = this.nativeCapture.activeSessionId
