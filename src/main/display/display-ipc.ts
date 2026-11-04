@@ -10,6 +10,11 @@ import {
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
+import {
+  openInputPermissionSettings,
+  readInputPermission,
+  requestInputPermission
+} from './display-input-permission'
 import { bindDisplayEventSink, displayRequests } from './display-requests'
 import { bindDisplayWindow, displayService } from './display-runtime'
 
@@ -71,6 +76,11 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     const service = await displayService()
     await service.input(requireSessionId(sessionId), requireGesture(gesture))
   })
+  // Reading costs a settings query and nothing else, so the panel may ask on every
+  // simulator it opens instead of remembering an answer that can go stale.
+  ipcMain.handle('display:inputPermission', () => readInputPermission())
+  ipcMain.handle('display:requestInputPermission', () => requestInputPermission())
+  ipcMain.handle('display:openInputSettings', () => openInputPermissionSettings())
   ipcMain.handle('display:presence', () => displayRequests.state())
   ipcMain.handle('display:notePanel', (_event, mirrored: unknown) => {
     if (mirrored === null) {

@@ -212,6 +212,29 @@ export function isDisplayInputGesture(value: unknown): value is DisplayInputGest
 }
 
 /**
+ * Whether this machine lets the app work another application's window.
+ *
+ * Working a simulator means posting real clicks and keystrokes at its window,
+ * which every desktop OS gates behind a grant: macOS asks for it once in System
+ * Settings, Windows and Linux do not ask at all. The answer is read on demand,
+ * never cached beyond a request, because a person who grants it while the panel
+ * is open must see the panel come alive without restarting the app.
+ */
+export interface DisplayInputPermission {
+  granted: boolean
+  /** The platform the answer came from, so the walkthrough can speak its language. */
+  platform: 'darwin' | 'win32' | 'linux' | 'other'
+  /** Whether the app itself can raise the system prompt for this grant. */
+  canPrompt: boolean
+  /** What the person must do, in order. Empty once granted. */
+  steps: string[]
+  /** What the operating system calls this pane, in its own words. */
+  settingsName?: string
+  /** A deep link that opens exactly that pane, when the platform has one. */
+  settingsUrl?: string
+}
+
+/**
  * A control the panel can press on the target itself.
  *
  * A phone preview without its buttons is a picture, and the point of this panel
@@ -322,6 +345,23 @@ export const invokeDisplayContract = {
    * cannot be touched says so once and the panel never fires into nothing.
    */
   'display:input': {} as Contract<[sessionId: string, gesture: DisplayInputGesture], void>,
+  /**
+   * Read whether this machine lets the app post input into another window.
+   *
+   * Asked before the panel offers control of a simulator, so a target that would
+   * silently ignore every tap says what is missing instead.
+   */
+  'display:inputPermission': {} as Contract<[], DisplayInputPermission>,
+  /**
+   * Ask the operating system for that grant, and report what it answered.
+   *
+   * This is the app raising the system's own prompt, never a simulated one: on
+   * macOS it is the sheet that offers the settings pane, and a platform without
+   * such a prompt simply answers with its current state.
+   */
+  'display:requestInputPermission': {} as Contract<[], DisplayInputPermission>,
+  /** Open the settings pane that owns this grant, when the platform has one. */
+  'display:openInputSettings': {} as Contract<[], void>,
   /** Read the presence flag. One call restores the rail item after a reload. */
   'display:presence': {} as Contract<[], DisplayAvailability>,
   /**

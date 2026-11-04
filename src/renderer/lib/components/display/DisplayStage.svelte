@@ -73,6 +73,8 @@
   let controlling = $state(false)
   /** A sentence shown when the user asks for control this target cannot offer. */
   let notice = $state<string | null>(null)
+  /** True while the walkthrough for a missing system grant is on screen. */
+  let walkthrough = $state(false)
 
   const kind = $derived(tab.sourceKind)
   const sourceId = $derived(tab.sourceId)
@@ -90,6 +92,14 @@
   const touchable = $derived(controls.length > 0)
   const inputReady = $derived(session?.input === true)
   const inputProblem = $derived(session?.inputProblem ?? 'This target cannot be controlled yet.')
+  /**
+   * Whether working this target means posting input into another application's
+   * window, which is the only case an operating-system grant can block. Android
+   * takes its gestures over adb, so it never asks.
+   */
+  const postsIntoWindow = $derived(kind === 'ios')
+  const permission = $derived(displayPanel.inputPermission)
+  const permissionMissing = $derived(postsIntoWindow && permission !== null && !permission.granted)
 
   const touch = new StageTouch((gesture) => displayPanel.sendInput(tab.id, gesture))
 
@@ -126,8 +136,44 @@
     displayPanel.reportStageSize(tab.id, Math.round(longest * (window.devicePixelRatio || 1)))
   })
 
+  /**
+   * Ask for what the target needs before handing over the pointer.
+   *
+   * A simulator is worked by clicking and typing in its window, so the operating
+   * system has to allow it first. Reading the grant costs one query; when it is
+   * missing the walkthrough says exactly which pane to open, and nothing is
+   * offered until it is there, because a control toggle that silently does nothing
+   * is worse than an explanation.
+   */
+  async function ensurePermission(): Promise<boolean> {
+    const answer = await displayPanel.checkInputPermission()
+    if (answer && !answer.granted) {
+      walkthrough = true
+      return false
+    }
+    return true
+  }
+
+  /** Ask again, and close the walkthrough the moment the grant is there. */
+  async function recheckPermission(): Promise<void> {
+    const answer = await displayPanel.requestInputPermission()
+    if (answer?.granted) walkthrough = false
+  }
+
+  /** Send the person to the pane that owns the grant, and record the request. */
+  function openPermissionSettings(): void {
+    displayPanel.openInputSettings()
+    void displayPanel.requestInputPermission()
+  }
+
   function toggleControl(): void {
     if (!inputReady) {
+      if (postsIntoWindow) {
+        void ensurePermission().then((allowed) => {
+          if (allowed) notice = inputProblem
+        })
+        return
+      }
       notice = inputProblem
       return
     }
@@ -164,6 +210,14 @@
       areaSize = { width, height }
     }
     measure()
+    // The grant is checked when a simulator is targeted rather than at boot: a
+    // person who never mirrors a device never meets the prompt, and one who has it
+    // already never sees the walkthrough.
+    if (kind === 'ios') {
+      void displayPanel.checkInputPermission().then((answer) => {
+        if (answer && !answer.granted) walkthrough = true
+      })
+    }
     const observer = new ResizeObserver(measure)
     observer.observe(handle)
     return () => {
@@ -252,6 +306,59 @@
         </p>
       </div>
     {/if}
+
+    {#if walkthrough}
+      <div
+        class="absolute inset-0 z-10 flex items-center justify-center bg-app/85 p-3"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Allow CodeInOven to control the Simulator"
+      >
+        <div class="w-full min-w-0 max-w-[18rem] border border-border bg-surface p-2.5">
+          <p class="text-xs font-medium text-foreground">
+            Allow CodeInOven to control the Simulator
+          </p>
+          <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
+            Working a simulator means clicking and typing in its window, which this machine asks
+            about once.
+          </p>
+          <ol class="mt-2 space-y-1">
+            {#each permission?.steps ?? [] as step, index (step)}
+              <li class="flex min-w-0 gap-1.5 text-[0.625rem] leading-relaxed text-muted">
+                <span class="shrink-0 tabular-nums text-dimmed">{index + 1}.</span>
+                <span>{step}</span>
+              </li>
+            {/each}
+          </ol>
+          <div class="mt-2.5 flex flex-wrap items-center justify-between gap-1.5">
+            <button
+              type="button"
+              class="cursor-pointer px-2 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              onclick={() => (walkthrough = false)}
+            >
+              Not now
+            </button>
+            <div class="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                class="cursor-pointer px-2 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                onclick={() => void recheckPermission()}
+              >
+                Check again
+              </button>
+              <button
+                type="button"
+                class="cursor-pointer bg-primary px-2 py-0.5 text-[0.5625rem] font-medium text-on-primary transition-opacity hover:opacity-90"
+                title="Open System Settings on the Accessibility pane"
+                onclick={openPermissionSettings}
+              >
+                Open Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    {/if}
   </div>
 
   <div
@@ -290,17 +397,19 @@
         type="button"
         class="flex h-7 w-7 items-center justify-center transition-colors {controlling
           ? 'bg-elevated text-foreground'
-          : inputReady
+          : inputReady || permissionMissing
             ? 'text-dimmed hover:bg-elevated hover:text-foreground'
             : 'text-dimmed/50'}"
         aria-pressed={controlling}
-        aria-disabled={!inputReady}
+        aria-disabled={!inputReady && !permissionMissing}
         aria-label={controlling ? 'Stop controlling the screen' : 'Control the screen'}
         title={controlling
           ? 'Stop controlling the screen'
           : inputReady
             ? 'Control the screen: tap, drag and type'
-            : inputProblem}
+            : permissionMissing
+              ? 'This machine needs permission before the panel can work the device'
+              : inputProblem}
         onclick={toggleControl}
       >
         <CioCursor size={13} />

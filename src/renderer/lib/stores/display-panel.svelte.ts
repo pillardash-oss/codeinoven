@@ -4,6 +4,7 @@ import type {
   DisplayControlAction,
   DisplayFrame,
   DisplayInputGesture,
+  DisplayInputPermission,
   DisplaySourceKind,
   DisplaySourceListing
 } from '$shared/ipc/display'
@@ -67,6 +68,16 @@ class DisplayPanelState {
   sessions = $state<Record<string, DisplaySession>>({})
   listings = $state<Partial<Record<DisplaySourceKind, DisplaySourceListing>>>({})
   loadingKinds = $state<Partial<Record<DisplaySourceKind, boolean>>>({})
+  /**
+   * Whether this machine lets the app post input into another window.
+   *
+   * Read when a simulator is targeted, never at boot: a person who never mirrors a
+   * device should not meet a permission prompt for it. Null means nobody has asked
+   * yet, which is different from "asked and refused".
+   */
+  inputPermission = $state<DisplayInputPermission | null>(null)
+  /** True while the system prompt for that grant is being raised. */
+  requestingPermission = $state(false)
   /** The tab whose stage the dock is showing, so demand can be scoped to it. */
   visibleTabId = $state<string | null>(null)
 
@@ -206,6 +217,47 @@ class DisplayPanelState {
    */
   reportStageSize(tabId: string, maxDimension: number): void {
     this.pushDemand(tabId, this.visibleTabId === tabId, maxDimension)
+  }
+
+  /**
+   * Read the input grant for this machine.
+   *
+   * Never cached: a person who turns it on while the panel is open must see the
+   * panel come alive on the next check, and a stale "yes" is the one answer that
+   * would make every tap silently do nothing.
+   */
+  async checkInputPermission(): Promise<DisplayInputPermission | null> {
+    try {
+      const permission = await invoke('display:inputPermission')
+      this.inputPermission = permission
+      return permission
+    } catch (error: unknown) {
+      logRendererError('The input permission could not be read', error)
+      return null
+    }
+  }
+
+  /** Raise the system's own prompt for that grant, then keep what it answered. */
+  async requestInputPermission(): Promise<DisplayInputPermission | null> {
+    if (this.requestingPermission) return this.inputPermission
+    this.requestingPermission = true
+    try {
+      const permission = await invoke('display:requestInputPermission')
+      this.inputPermission = permission
+      return permission
+    } catch (error: unknown) {
+      logRendererError('The input permission could not be requested', error)
+      return null
+    } finally {
+      this.requestingPermission = false
+    }
+  }
+
+  /** Open the settings pane that owns the grant, where the platform has one. */
+  openInputSettings(): void {
+    void invoke('display:openInputSettings').catch((error: unknown) =>
+      logRendererError('The permission settings could not be opened', error)
+    )
   }
 
   /** Press one of the target's own buttons. */
