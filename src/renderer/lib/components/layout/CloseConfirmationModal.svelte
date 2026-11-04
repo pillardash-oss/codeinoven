@@ -94,8 +94,8 @@
   let closeSentence = $derived.by(() => {
     if (isPark) {
       return closeCosts.length === 0
-        ? 'Close the window now?'
-        : `Close the window now? ${closeCosts}.`
+        ? ''
+        : closeCosts
     }
     return closeCosts.length === 0
       ? 'Are you sure you want to close?'
