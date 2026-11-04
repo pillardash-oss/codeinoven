@@ -608,6 +608,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       (pid, command, cwd) =>
         state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
     )
+    // The capture gate needs the audio-to-LLM setting to know whether the user
+    // has a mic at all, so the recorder is never primed behind a hidden mic.
+    speechService.setDictationSettingSource(async () => {
+      const current = await storage.getConfig()
+      return current.sound.voiceRecordingEnabled
+    })
     await speechService.initialize()
     state.speechService = speechService
     state.unregisterSpeechIpc = registerSpeechIpc(

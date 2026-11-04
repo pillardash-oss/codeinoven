@@ -264,6 +264,18 @@ export class SpeechService {
   }
 
   private captureWarmupTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Reads the `voiceRecordingEnabled` setting, the second way a user can have a
+   * mic on screen (the first is an installed ASR model). Wired by the boot
+   * sequence and only read when deciding whether the microphone may be opened
+   * ahead of a press.
+   */
+  private dictationSettingEnabled: (() => Promise<boolean>) | null = null
+
+  /** Let the capture gate see the audio-to-LLM setting. */
+  setDictationSettingSource(source: () => Promise<boolean>): void {
+    this.dictationSettingEnabled = source
+  }
 
   /**
    * Prime the native microphone once the application has rendered and booted.
@@ -280,9 +292,15 @@ export class SpeechService {
       this.captureWarmupTimer = null
       if (this.openCaptures.size > 0) return
       if (!microphoneAccessGranted()) return
-      void this.nativeCapture.warm().catch((error) => {
-        Logger.dev('Native speech capture warmup failed (non-fatal):', error)
-      })
+      void (async () => {
+        // Gate the warmup exactly like the mic control it exists for: a user
+        // with no usable model and the audio-to-LLM setting off has no mic on
+        // screen, and the microphone must not open for them.
+        if (!(await this.dictationAvailable())) return
+        await this.nativeCapture.warm().catch((error) => {
+          Logger.dev('Native speech capture warmup failed (non-fatal):', error)
+        })
+      })()
     }, delayMs)
   }
 
@@ -428,10 +446,36 @@ export class SpeechService {
   async armNativeCapture(): Promise<void> {
     if (this.openCaptures.size > 0) return
     if (!microphoneAccessGranted()) return
-    // Opening the input device from a second process can make a sibling's live
-    // capture renegotiate, so an armed mic never fights another instance's take.
+    // The same gate that decides whether a mic is shown at all: a hidden mic
+    // never opens the microphone.
+    if (!(await this.dictationAvailable())) return
     if (await this.storage.anotherInstanceIsRecording()) return
     await this.nativeCapture.arm()
+  }
+
+  /**
+   * Whether this user can record at all, by the same rule the renderer uses to
+   * show a mic control: an installed, available speech-to-text model, or the
+   * audio-to-LLM setting.
+   *
+   * The microphone is a privacy surface, so nothing on the capture side may open
+   * it for a user who has no mic on screen.
+   */
+  private async dictationAvailable(): Promise<boolean> {
+    if (this.hasInstalledAsrArtifact()) return true
+    if (!this.dictationSettingEnabled) return false
+    return this.dictationSettingEnabled().catch(() => false)
+  }
+
+  /** Mirrors the renderer's `hasInstalledAsr`: an ASR model that can be used. */
+  private hasInstalledAsrArtifact(): boolean {
+    const catalog = this.catalog
+    return this.installed.artifacts.some((artifact) => {
+      if (!artifact.available) return false
+      if (artifact.capability) return artifact.capability === 'asr'
+      const entry = catalog?.artifacts.find((item) => item.id === artifact.artifactId)
+      return entry?.capability === 'asr' && entry.qualification.status !== 'retired'
+    })
   }
 
   /** Release an armed microphone that was never pressed. */
@@ -1080,6 +1124,11 @@ export class SpeechService {
       existing.available = true
       if (capability) existing.capability = capability
       await this.persistInstalledIndex()
+      // The mic appears as soon as an ASR model is usable, so the recorder is
+      // primed for it now rather than on the first press.
+      if (existing.capability === 'asr' && microphoneAccessGranted()) {
+        this.scheduleCaptureWarmup(0)
+      }
       this.emit({ kind: 'history', attemptId: existing.artifactId, stage: 'completed' })
       return structuredClone(existing)
     }
@@ -1095,6 +1144,7 @@ export class SpeechService {
     }
     this.installed.artifacts.push(artifact)
     await this.persistInstalledIndex()
+    if (capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
     this.emit({ kind: 'history', attemptId: artifact.artifactId, stage: 'completed' })
     return structuredClone(artifact)
   }
@@ -1754,6 +1804,9 @@ export class SpeechService {
       capability: artifact.capability
     })
     await this.persistInstalledIndex()
+    // A model that just became usable is the moment the mic appears for a user
+    // who had none, so this is when the recorder is primed for it.
+    if (artifact.capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
   }
 
   private installedIndexPath(): string {
