@@ -84,18 +84,21 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
   ipcMain.handle('display:presence', () => displayRequests.state())
   ipcMain.handle('display:notePanel', (_event, mirrored: unknown) => {
     if (mirrored === null) {
-      displayRequests.noteMirrored(null)
+      displayRequests.noteMirrored(null, null)
       return
     }
     if (typeof mirrored !== 'object' || mirrored === null) {
       throw new TypeError('A mirrored target must be an object or null')
     }
-    const target = mirrored as { kind?: unknown; sourceId?: unknown }
+    const target = mirrored as { kind?: unknown; sourceId?: unknown; threadId?: unknown }
     const kind = requireKind(target.kind)
     if (typeof target.sourceId !== 'string' || target.sourceId.length === 0) {
       throw new TypeError('A mirrored target must name its source')
     }
-    displayRequests.noteMirrored(`${kind}:${target.sourceId}`)
+    displayRequests.noteMirrored(
+      `${kind}:${target.sourceId}`,
+      typeof target.threadId === 'string' && target.threadId.length > 0 ? target.threadId : null
+    )
   })
 
   Logger.dev('Display panel registered: capture modules load on first use')

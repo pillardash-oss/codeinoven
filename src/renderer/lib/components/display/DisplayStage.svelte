@@ -7,7 +7,6 @@
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
-  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import type { Component } from 'svelte'
   import type { DisplayContextTab } from '$lib/stores/context-sidebar.svelte'
@@ -59,7 +58,6 @@
     'volume-up': { action: 'volume-up', label: 'Volume up', icon: CioVolumeUp },
     'volume-down': { action: 'volume-down', label: 'Volume down', icon: CioVolumeDown },
     power: { action: 'power', label: 'Power', icon: CioLock },
-    siri: { action: 'siri', label: 'Siri', icon: CioSparkles },
     appearance: { action: 'appearance', label: 'Switch light and dark', icon: CioMoon }
   }
 
@@ -101,7 +99,14 @@
   const permission = $derived(displayPanel.inputPermission)
   const permissionMissing = $derived(postsIntoWindow && permission !== null && !permission.granted)
 
-  const touch = new StageTouch((gesture) => displayPanel.sendInput(tab.id, gesture))
+  const touch = new StageTouch((gesture) => {
+    // The mark on the picture is the receipt for a gesture that landed; one the
+    // target refuses is said in the strip, because a tap that vanishes looks
+    // exactly like a tap on a slow device.
+    displayPanel.sendInput(tab.id, gesture).catch((error: unknown) => {
+      notice = error instanceof Error ? error.message : String(error)
+    })
+  })
 
   /**
    * The picture's own box, fitted to the stage.
@@ -164,6 +169,22 @@
   function openPermissionSettings(): void {
     displayPanel.openInputSettings()
     void displayPanel.requestInputPermission()
+  }
+
+  /**
+   * Press one of the target's own buttons, and say so when it refuses.
+   *
+   * A rail button that appears to do nothing is indistinguishable from a broken
+   * one, so a refused press puts the target's own reason in the strip under the
+   * picture instead of only in the log.
+   */
+  async function pressControl(action: DisplayControlAction): Promise<void> {
+    notice = null
+    try {
+      await displayPanel.control(tab.id, action)
+    } catch (error: unknown) {
+      notice = error instanceof Error ? error.message : String(error)
+    }
   }
 
   function toggleControl(): void {
@@ -423,7 +444,7 @@
           class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={control.label}
           title={control.label}
-          onclick={() => displayPanel.control(tab.id, control.action)}
+          onclick={() => void pressControl(control.action)}
         >
           <control.icon size={13} />
         </button>

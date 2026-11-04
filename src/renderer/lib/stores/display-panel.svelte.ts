@@ -260,28 +260,36 @@ class DisplayPanelState {
     )
   }
 
-  /** Press one of the target's own buttons. */
-  control(tabId: string, action: DisplayControlAction): void {
+  /** Press one of the target's own buttons. Rejects with the target's reason when
+   *  it refuses, so the panel can say it instead of leaving a dead button. */
+  async control(tabId: string, action: DisplayControlAction): Promise<void> {
     const session = this.sessions[tabId]
-    if (!session) return
-    void invoke('display:control', session.sessionId, action).catch((error: unknown) =>
+    if (!session) throw new Error('This display tab is not mirroring anything')
+    try {
+      await invoke('display:control', session.sessionId, action)
+    } catch (error: unknown) {
       logRendererError(`The display control "${action}" failed`, error)
-    )
+      throw error
+    }
   }
 
   /**
-   * Work the target's screen: a tap, a drag, a typed word.
+   * Send one gesture to the target's screen, and reject with the reason when the
+   * target refuses it.
    *
-   * Fire and forget, like a finger: the frame that comes back is the receipt, so
-   * a gesture that fails says so in the log rather than in a dialog in front of
-   * the picture the user is watching.
+   * The stage fires gestures and reads the frame that comes back rather than
+   * waiting for one of them, but a target that cannot be touched at all is an
+   * answer the person is owed straight away.
    */
-  sendInput(tabId: string, gesture: DisplayInputGesture): void {
+  async sendInput(tabId: string, gesture: DisplayInputGesture): Promise<void> {
     const session = this.sessions[tabId]
-    if (!session) return
-    void invoke('display:input', session.sessionId, gesture).catch((error: unknown) =>
+    if (!session) throw new Error('This display tab is not mirroring anything')
+    try {
+      await invoke('display:input', session.sessionId, gesture)
+    } catch (error: unknown) {
       logRendererError(`The display gesture "${gesture.type}" failed`, error)
-    )
+      throw error
+    }
   }
 
   /** Discover one kind's targets. Never on a timer: the picker asks. */

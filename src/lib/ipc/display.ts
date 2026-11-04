@@ -242,20 +242,21 @@ export interface DisplayInputPermission {
  * emulator with no window has nothing to reach for). The set is per kind, because
  * it says what the platform can actually do: adb injects a full hardware key set,
  * and a booted simulator takes the buttons it really has (home, the side button,
- * Siri) plus its left-edge back gesture. Volume is not on the simulator's channel
- * at all, so the rail does not pretend otherwise.
+ * volume) plus its left-edge back gesture. Siri is not on that list: a simulator
+ * exposes no way to summon it, so a rail entry would be a button that does nothing.
  */
 export type DisplayControlAction =
-  'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'siri' | 'appearance'
+  'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'appearance'
 
 /** What each kind can be asked to do, in the order the rail lists it. */
 export const DISPLAY_CONTROLS_BY_KIND: Record<DisplaySourceKind, readonly DisplayControlAction[]> =
   {
     android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'power'],
     // The simulator's own buttons, in the order a hand finds them. `back` is the
-    // system edge swipe, `power` the side button (lock and wake), and `appearance`
-    // the light/dark switch, which only `simctl` can make.
-    ios: ['home', 'back', 'power', 'siri', 'appearance'],
+    // system edge swipe, `power` the side button (lock and wake), volume is the
+    // output volume the simulator plays through, and `appearance` is the light/dark
+    // switch, which only `simctl` can make.
+    ios: ['home', 'back', 'power', 'volume-up', 'volume-down', 'appearance'],
     'desktop-screen': [],
     'desktop-window': []
   }
@@ -268,7 +269,6 @@ export function isDisplayControlAction(value: unknown): value is DisplayControlA
     value === 'volume-up' ||
     value === 'volume-down' ||
     value === 'power' ||
-    value === 'siri' ||
     value === 'appearance'
   )
 }
@@ -315,6 +315,15 @@ export interface DisplayTargetOffer {
 export interface DisplayPanelTarget {
   kind: DisplaySourceKind
   sourceId: string
+  /**
+   * The thread that owns the tab doing the mirroring.
+   *
+   * A person can open the panel themselves and pick a device, which is a mirror
+   * no agent asked for, and that thread's row still has to say its screen is on
+   * display: otherwise the one row that could explain where the device is looks
+   * as idle as every other row.
+   */
+  threadId: string | null
 }
 
 export const invokeDisplayContract = {
