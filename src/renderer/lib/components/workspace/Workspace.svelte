@@ -413,22 +413,29 @@
           ]
         : authoredWork
 
-    // The display panel is a tool a person reaches for, not only a view of work an
-    // agent started: booting your own simulator and mirroring it is the same panel.
-    // So the item is always in the rail, and an agent's activity adds the thread
-    // mark and the busy badge rather than the entry itself.
-    coordination.push({
-      id: 'display',
-      label: board.switcherPanelTabs.dockKindActive('display')
-        ? `Hide ${feature('display').name}`
-        : `Show ${feature('display').name}`,
-      icon: feature('display').icon,
-      active: board.switcherPanelTabs.dockKindActive('display'),
-      onSelect: () =>
-        board.switcherPanelTabs.toggleDockPanel('display', () =>
-          contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
-        )
-    })
+    // The display panel is not a tool to browse to: it exists because an agent
+    // started or attached to a device (an emulator it launched, a simulator it
+    // booted, a phone it drives over adb, wired or wireless). So the item appears
+    // once that has happened, and an open tab keeps it there for as long as the
+    // tab lives. Nothing here loads a capture until a device is actually being
+    // worked on.
+    const showsDisplay =
+      displayAvailability.available ||
+      contextSidebarState.tabs.some((tab) => tab.kind === 'display')
+    if (showsDisplay) {
+      coordination.push({
+        id: 'display',
+        label: board.switcherPanelTabs.dockKindActive('display')
+          ? `Hide ${feature('display').name}`
+          : `Show ${feature('display').name}`,
+        icon: feature('display').icon,
+        active: board.switcherPanelTabs.dockKindActive('display'),
+        onSelect: () =>
+          board.switcherPanelTabs.toggleDockPanel('display', () =>
+            contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
+          )
+      })
+    }
 
     // Browser tabs keep their own hairline-separated group: they are live pages,
     // not a written aside, so they do not ride with history.

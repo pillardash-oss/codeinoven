@@ -24,6 +24,8 @@ interface AdbTarget {
   serial: string
   state: string
   model: string | null
+  /** True when the device is on the cable rather than on the network. */
+  usb: boolean
 }
 
 /** Parse the `adb devices -l` table into the targets worth offering. */
@@ -41,7 +43,8 @@ function parseAdbDevices(output: string): AdbTarget[] {
     targets.push({
       serial,
       state,
-      model: modelProperty ? modelProperty.slice('model:'.length).replace(/_/gu, ' ') : null
+      model: modelProperty ? modelProperty.slice('model:'.length).replace(/_/gu, ' ') : null,
+      usb: properties.some((entry) => entry.startsWith('usb:'))
     })
   }
   return targets
@@ -70,7 +73,14 @@ export async function listAndroidSources(): Promise<DisplaySourceListing> {
   const sources = parseAdbDevices(output).map((target): DisplaySourceDescriptor => {
     const emulator = target.serial.startsWith('emulator-')
     const name = target.model ?? (emulator ? 'Android emulator' : target.serial)
-    const state = target.state === 'device' ? (emulator ? 'Emulator' : 'Connected') : target.state
+    // A phone on the cable and a phone on the network are the same target with a
+    // different way in, and the way in is worth saying: a wireless device drops
+    // when it leaves the network, a cabled one does not.
+    const link = target.usb ? 'USB' : target.serial.includes(':') ? 'Wireless' : null
+    const state =
+      target.state === 'device'
+        ? [emulator ? 'Emulator' : 'Connected', link].filter(Boolean).join(' · ')
+        : target.state
     return {
       kind: 'android',
       sourceId: target.serial,
