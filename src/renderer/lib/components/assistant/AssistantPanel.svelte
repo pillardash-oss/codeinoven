@@ -29,7 +29,7 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { formatDateTime } from '$shared/date-time-format'
+  import { formatDateTime, formatDateTimeWithWeekday } from '$shared/date-time-format'
   import {
     describeRelativeTime,
     describeSchedule,
@@ -88,6 +88,7 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import AssistantWakesSection from '$lib/components/assistant/AssistantWakesSection.svelte'
+  import { followUpsState } from '$lib/stores/follow-ups.svelte'
   import CardFoot from '$lib/components/shared/CardFoot.svelte'
   import CardButton from '$lib/components/shared/CardButton.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
@@ -641,6 +642,15 @@
     return scopeState.allScopeThreads.filter((thread) => thread.assistantId === assistant.id)
   })
 
+  /**
+   * Wakes armed on this assistant's threads.
+   *
+   * The panel opens on the All tab, so the wakes are also reachable from its
+   * table of contents: a section that only existed inside the Assistant tab is a
+   * section the user would never find.
+   */
+  const wakes = $derived(followUpsState.forThreads(assistantTasks.map((entry) => entry.id)))
+
   const missedRuns = $derived(
     assistant ? assistants.missedForAssistant(assistant.id) : assistants.missedForTask(threadId)
   )
@@ -1191,6 +1201,16 @@
                 warn: !knowledgeComplete
               })}
             </li>
+            {#if wakes.length > 0}
+              <li>
+                {@render glanceRow({
+                  title: 'Scheduled wakes',
+                  icon: 'run',
+                  detail: `${wakes.length} ${wakes.length === 1 ? 'thread wakes' : 'threads wake'} itself · next ${formatDateTimeWithWeekday(wakes[0].dueAt)}${wakes[0].paused ? ' (on hold)' : ''}.`,
+                  target: 'assistant'
+                })}
+              </li>
+            {/if}
             <li>
               {@render glanceRow({
                 title: 'Connections',
