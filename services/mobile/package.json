@@ -17,7 +17,9 @@
     "native:sync": "bun run build && cap sync",
     "native:ios": "cap open ios",
     "native:android": "cap open android",
-    "dev:android": "bash scripts/mobile-dev.sh"
+    "dev:android": "bash scripts/mobile-dev.sh",
+    "dev:backend": "bash scripts/backend-dev.sh",
+    "dev:app": "bash scripts/android-app.sh"
   },
   "dependencies": {
     "@capacitor/app": "8.0.1",

@@ -42,6 +42,19 @@ The same command is `bun run dev:android` inside `services/mobile`. It refuses t
 start when the port already has a listener, because a second service on that port
 answers some requests and drops the rest, which reads as a broken app.
 
+### Two terminals, two logs
+
+The Actions panel carries the same two ends separately, so each keeps its own log:
+**Mobile · Backend** runs `backend-dev.sh` in the foreground, **Mobile · Android App**
+runs `android-app.sh`. Start the backend, then the app. On the command line:
+
+```sh
+bun run services:mobile:backend             # terminal 1: the service and its log
+bun run services:mobile:app                 # terminal 2: build, install, launch
+bun run services:mobile:backend -- --seed   # seed the demo account and content first
+bun run services:mobile:app -- --port 8090  # follow a service moved off 8081
+```
+
 For the browser instead of the phone:
 
 ```sh
