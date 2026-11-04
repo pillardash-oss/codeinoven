@@ -108,6 +108,8 @@ private final class CaptureSession {
     /// Written only on `writeQueue`.
     private var preroll: [PrerollChunk] = []
     private var prerollFrames = 0
+    /// Retained for the process lifetime so their handlers keep firing.
+    private var signalSources: [DispatchSourceSignal] = []
 
     /// No buffer for this long while a take is live means the tap is dead: a
     /// device change CoreAudio never announced, a stalled HAL, or an engine
@@ -124,6 +126,38 @@ private final class CaptureSession {
     func ping() {
         // Spawning the worker is all this needs to do; the host calls it so a
         // press never pays process launch.
+    }
+
+    ///
+    /// Refuse to die politely in the middle of a take.
+    ///
+    /// A take lost 35 of its 44 seconds because something outside this process
+    /// sent SIGTERM nine seconds in. The worker holds the only copy of that audio
+    /// and no signal handler can hand it to anyone, so a termination request that
+    /// arrives while a take is live is logged and ignored: the take finishes, and
+    /// only then does a signal end the process. The host is the one caller that
+    /// may need the worker gone sooner, and it escalates to SIGKILL on its own
+    /// failed-stop path.
+    func installSignalHandling() {
+        for value in [SIGTERM, SIGINT, SIGHUP] {
+            // The handler below is the only thing allowed to act on these: with
+            // the default disposition in place the process would be gone before
+            // a source could run.
+            signal(value, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: value, queue: controlQueue)
+            source.setEventHandler { [weak self] in self?.handleTerminationSignal(value) }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+    private func handleTerminationSignal(_ value: Int32) {
+        if recording || armed {
+            log("ignored signal \(value) while a take is live")
+            return
+        }
+        log("exiting on signal \(value)")
+        exit(0)
     }
 
     /// Pay the expensive part of a capture at launch, not on the first press.
@@ -747,6 +781,7 @@ private func handle(_ request: Request) -> Response {
 @main
 private enum SpeechCaptureWorker {
     static func main() {
+        capture.installSignalHandling()
         while let line = readLine(strippingNewline: true) {
             guard let data = line.data(using: .utf8), let request = try? decoder.decode(Request.self, from: data) else {
                 continue

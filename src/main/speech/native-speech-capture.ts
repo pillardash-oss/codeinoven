@@ -231,7 +231,10 @@ export class NativeSpeechCapture {
       this.currentSessionId = null
     }
     if (this.process) {
-      this.process.kill()
+      // The take is already settled by the caller, so nothing here needs a
+      // graceful exit: the worker refuses polite signals during a take, which is
+      // exactly right for a recording and wrong for a shutdown.
+      this.process.kill('SIGKILL')
       this.process = null
     }
     for (const [id, pending] of this.pending) {
@@ -289,7 +292,17 @@ export class NativeSpeechCapture {
     this.buffered = ''
     this.currentSessionId = null
     this.failPending(reason)
-    if (child && !child.killed) child.kill()
+    if (!child || child.killed) return
+    // The worker ignores a polite signal while a take is live, because that is
+    // what stops an external termination request from truncating a recording.
+    // This path is the host recovering from a wedged recorder, where a take is
+    // no longer usable, so the polite signal gets a short chance and then the
+    // process is killed outright.
+    child.kill('SIGTERM')
+    const escalate = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    }, 750)
+    escalate.unref()
   }
 
   private recordStderr(chunk: string): void {
