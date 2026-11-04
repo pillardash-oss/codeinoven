@@ -43,6 +43,20 @@ export interface DesignHistoryPoint {
   current: boolean
 }
 
+/** One screen the folder's timeline has touched, and the points that touched it. */
+export interface DesignHistoryScreen {
+  /** Screen name shown to the user. */
+  name: string
+  /** Path inside the folder, with forward slashes. */
+  path: string
+  /** Points that added, changed or removed it. */
+  changeCount: number
+  /** Whether the newest point still holds it. */
+  present: boolean
+  /** Newest point that changed it, which is where its own line ends. */
+  lastChangedRevision: number | null
+}
+
 /** One point on a single page's own line through the folder's history. */
 export interface DesignHistoryPagePoint {
   revision: number
@@ -81,6 +95,15 @@ export interface DesignHistoryCapabilityResult {
   omittedOlderRevisions: number
   /** Points oldest first, newest last. */
   revisions: DesignHistoryPoint[]
+  /**
+   * Every screen the timeline has touched, each with its own line.
+   *
+   * A design is iterated a screen at a time, and the board shows each screen's
+   * own undo and redo beside the folder's. This is that fact, so an agent knows a
+   * single screen can be rewound alone and which points changed it; `page` then
+   * reads that screen's full line.
+   */
+  screens: DesignHistoryScreen[]
   page?: DesignPageHistoryCapability
   /** How to rewind, or why there is nothing to rewind to. */
   note: string
@@ -127,6 +150,20 @@ function pagePointOf(page: DesignPageHistoryState): DesignPageHistoryCapability 
   }
 }
 
+function screensOf(state: DesignHistoryState): DesignHistoryScreen[] {
+  const lastChanged = new Map<string, number>()
+  for (const revision of state.revisions) {
+    for (const path of revision.changedPaths) lastChanged.set(path, revision.sequence)
+  }
+  return state.files.map((file) => ({
+    name: file.name,
+    path: file.path,
+    changeCount: file.changeCount,
+    present: file.present,
+    lastChangedRevision: lastChanged.get(file.path) ?? null
+  }))
+}
+
 function noteFor(state: DesignHistoryState, page?: DesignPageHistoryState): string {
   if (state.gitBacked) {
     return 'Git already tracks this folder, so the app keeps no timeline of its own. Read the folder history with Git and rewind with Git, never with this operation.'
@@ -138,7 +175,7 @@ function noteFor(state: DesignHistoryState, page?: DesignPageHistoryState): stri
     state.cursorIndex >= 0 ? `The folder sits at revision ${state.cursorIndex + 1}.` : ''
   const pageNote = page
     ? ' Restoring with page rewrites only that page, so every other screen stays where it is.'
-    : ''
+    : ' Every screen also has its own line: screens lists them, page reads one of them, and restoring with page rewinds that screen alone.'
   return `${[current, `Rewind with restore, passing the revision number or the revisionId you want back. It records the current state first, so the rewind is itself undoable.${pageNote}`].filter(Boolean).join(' ')}`
 }
 
@@ -158,6 +195,7 @@ export function summarizeDesignHistory(
     totalRevisions: points.length,
     omittedOlderRevisions: points.length - kept.length,
     revisions: kept,
+    screens: screensOf(state),
     note: noteFor(state, page)
   }
   if (page) result.page = pagePointOf(page)

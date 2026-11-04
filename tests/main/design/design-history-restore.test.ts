@@ -125,4 +125,69 @@ describe('DesignService design history capability', () => {
     expect(restored.restored.revisionId).toBe(revisionId)
     expect(readFileSync(screenPath(), 'utf-8')).toContain('First')
   })
+
+  it('rewinds one screen alone, and lists the screens the timeline touched', async () => {
+    const aboutPath = join(projectPath, '.cio', 'designs', 'hero', 'about.html')
+    writeFileSync(screenPath(), '<h1>Hero v1</h1>', 'utf-8')
+    writeFileSync(aboutPath, '<h1>About v1</h1>', 'utf-8')
+    const first = await service.historyCapability(projectId, threadId, {})
+    const heroPoint = first.screens.find((screen) => screen.path === 'index.html')
+    expect(heroPoint).toMatchObject({ present: true, lastChangedRevision: 1 })
+
+    writeFileSync(screenPath(), '<h1>Hero broken</h1>', 'utf-8')
+    writeFileSync(aboutPath, '<h1>About v2</h1>', 'utf-8')
+    await service.historyCapability(projectId, threadId, {})
+
+    const page = await service.historyCapability(projectId, threadId, { page: 'index.html' })
+    expect(page.page?.path).toBe('index.html')
+    expect(page.page?.revisions.length).toBeGreaterThanOrEqual(2)
+
+    await service.restoreCapability(projectId, threadId, {
+      revision: page.page?.revisions[0]?.revision ?? 1,
+      page: 'index.html'
+    })
+    expect(readFileSync(screenPath(), 'utf-8')).toContain('Hero v1')
+    // The other screen was not part of that rewind.
+    expect(readFileSync(aboutPath, 'utf-8')).toContain('About v2')
+  })
+
+  it('answers the same two operations for a composition folder', async () => {
+    const videoThreadId = 'thread-video'
+    new ThreadRepo(database as Database).upsert({
+      id: videoThreadId,
+      projectId,
+      providerId: 'openai',
+      title: 'Opening composition',
+      titleSource: 'auto',
+      status: 'created',
+      pinned: false,
+      archived: false,
+      read: true,
+      authoredWorkKind: 'video',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivity: Date.now(),
+      workingDirectory: projectPath
+    })
+    const compositionPath = join(projectPath, '.cio', 'videos', 'opening', 'index.html')
+    mkdirSync(join(projectPath, '.cio', 'videos', 'opening'), { recursive: true })
+    writeFileSync(compositionPath, '<main>opening v1</main>', 'utf-8')
+    service.recordPreview({
+      projectId,
+      threadId: videoThreadId,
+      directory: '.cio/videos/opening',
+      entry: 'index.html',
+      kind: 'video'
+    })
+
+    const first = await service.historyCapability(projectId, videoThreadId, {})
+    expect(first.directory).toBe('.cio/videos/opening')
+    expect(first.totalRevisions).toBe(1)
+
+    writeFileSync(compositionPath, '<main>opening wrecked</main>', 'utf-8')
+    await service.historyCapability(projectId, videoThreadId, {})
+    const restored = await service.restoreCapability(projectId, videoThreadId, { revision: 1 })
+    expect(restored.restored.revision).toBe(1)
+    expect(readFileSync(compositionPath, 'utf-8')).toContain('opening v1')
+  })
 })

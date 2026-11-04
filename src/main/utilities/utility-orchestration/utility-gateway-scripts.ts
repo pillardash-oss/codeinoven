@@ -794,6 +794,52 @@ export function videoUtilityTools(roots: WorkRoots): McpTool[] {
     generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {
+      name: 'history',
+      description:
+        "Read a composition folder's timeline: the points it has held, what each one changed, which point the folder sits at now, and each file's own line. Read it before rewinding, and whenever the user asks what changed or wants a scene back. Reading captures whatever is on disk, so the current state is a point to return to before you overwrite it.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative composition folder. Defaults to the composition this thread is working in, or ${videoRoot} when the thread has none.`
+          },
+          page: {
+            type: 'string',
+            description:
+              "Optional file entry relative to that folder, such as index.html or composition.json, to read that file's own line through the history rather than the whole folder's."
+          }
+        },
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'restore',
+      description:
+        'Rewind a composition folder, or one file of it, to a point its own history already holds: the same Undo the board offers the user. Use it when your own edit wrecked a scene and the timeline holds the version that worked, instead of rewriting it from memory. The state you are about to overwrite is captured first, so a rewind is itself undoable. Say which point you restored.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative composition folder. Defaults to the composition this thread is working in, or ${videoRoot} when the thread has none.`
+          },
+          revision: {
+            type: ['number', 'string'],
+            description:
+              'The point to return to: the revision number or the revisionId the history operation returned.'
+          },
+          page: {
+            type: 'string',
+            description:
+              'Optional file entry relative to that folder. When set, only that file is rewritten and every other file stays where it is.'
+          }
+        },
+        required: ['revision'],
+        additionalProperties: false
+      }
+    },
+    {
       name: 'preview',
       description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab, where the composition runs and is watched. The tab refreshes itself shortly after a file changes, so preview again only when you move to a different folder. Aim it at the folder holding the composition's index.html.`,
       inputSchema: {

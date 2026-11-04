@@ -18,7 +18,12 @@ function revision(sequence: number): DesignRevisionSummary {
     ...(sequence === 3 ? { label: 'Hero title updated', checkpointEntry: 'index.html' } : {}),
     createdAt: sequence * 1_000,
     changedFiles: 1,
-    changedPaths: [`page-${sequence}.html`],
+    changedPaths:
+      sequence === 2
+        ? ['index.html', 'about.html']
+        : sequence === 3
+          ? ['index.html']
+          : ['index.html'],
     fileCount: sequence,
     totalBytes: sequence * 100
   }
@@ -90,6 +95,34 @@ describe('summarizeDesignHistory', () => {
     const fresh = summarizeDesignHistory(stateOf(0, -1))
     expect(fresh.currentRevision).toBeNull()
     expect(fresh.note).toContain('no history yet')
+  })
+
+  it('lists every screen the timeline touched with its own line', () => {
+    const summary = summarizeDesignHistory({
+      ...stateOf(3, 2),
+      files: [
+        { name: 'index.html', path: 'index.html', changeCount: 3, present: true },
+        { name: 'about.html', path: 'about.html', changeCount: 1, present: false }
+      ]
+    })
+
+    expect(summary.screens).toEqual([
+      {
+        name: 'index.html',
+        path: 'index.html',
+        changeCount: 3,
+        present: true,
+        lastChangedRevision: 3
+      },
+      {
+        name: 'about.html',
+        path: 'about.html',
+        changeCount: 1,
+        present: false,
+        lastChangedRevision: 2
+      }
+    ])
+    expect(summary.note).toContain('Every screen also has its own line')
   })
 
   it("carries one page's own line when the caller named that page", () => {

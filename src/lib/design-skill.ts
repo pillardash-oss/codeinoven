@@ -121,7 +121,7 @@ ${authoredWorkCheckpointGuidance('design')}
 
 ## Going back
 
-The folder keeps its own timeline. Operation \`history\` reads the points it holds: what each one changed, which point the folder sits at now, the number to pass back, and, when you name a \`page\`, that screen's own line through it. Operation \`restore\` moves the folder to one of those points, and \`restore\` with \`page\` moves only that screen and leaves every other screen where it is.
+The folder keeps its own timeline. Operation \`history\` reads the points it holds: what each one changed, which point the folder sits at now, the number to pass back, every screen the folder has touched with the points that changed it, and, when you name a \`page\`, that screen's own line through the history. A screen's line is real work of its own: one screen can be rewound without moving the rest. Operation \`restore\` moves the folder to one of those points, and \`restore\` with \`page\` rewrites only that screen and leaves every other screen where it is.
 
 Reach for it when your own work went wrong: an edit that broke a layout, a file you removed and meant to keep, a direction the user rejected. Read \`history\` first, restore the point that worked, then continue from there. Restoring captures the state you are leaving before it writes, so the rewind is a step of its own and the board's Undo shows it.
 

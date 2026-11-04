@@ -89,6 +89,14 @@ The request decides it, not habit: a film someone will work on is a composition,
 
 ${authoredWorkCheckpointGuidance('video')}
 
+## Going back
+
+The folder keeps its own timeline, and each file in it has its own line. Operation \`history\` reads the points the folder has held, what each one changed, which point it sits at now, the files the timeline touched, and, when you name a \`page\`, that file's own line. Operation \`restore\` moves the folder to one of those points, and \`restore\` with \`page\` rewrites only that file and leaves every other file where it is: the composition's markup, its manifest and its styles can each go back alone.
+
+Reach for it when your own edit wrecked something that worked: a scene that was timed correctly, a caption that was placed right, a manifest you broke. Read \`history\` first, restore the point that held it, then continue. Restoring captures the state you are leaving before it writes, so the rewind is a step of its own and the board's Undo shows it.
+
+Say which point you restored and what came back. Never rebuild an old version from memory while the timeline holds it, and never rewind over a change the user made themselves without telling them. When Git already tracks the folder the app keeps no timeline of its own, and both operations say so.
+
 ## Preview first, export on request
 
 The default deliverable is the editable composition and its live preview. Keep changes in the source, preview them, capture frames and grade the current revision. Do not call \`export\` automatically when creating a video, finishing a scene, passing critique or wrapping up a turn. A request to make or improve a video does not by itself request an MP4.

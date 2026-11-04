@@ -825,6 +825,8 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         ['preview', this.host.videoPreviewExecutor],
         ['critique', this.host.videoPreviewExecutor],
         ['checkpoint', this.host.videoPreviewExecutor],
+        ['history', this.host.videoPreviewExecutor],
+        ['restore', this.host.videoPreviewExecutor],
         ['generate', this.host.mediaGenerationExecutor],
         ...[
           'probe',

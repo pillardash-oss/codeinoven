@@ -911,6 +911,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       database,
       checkpoint: (projectId, threadId, input) =>
         designService.checkpoint(projectId, threadId, input, 'video'),
+      history: (projectId, threadId, input) =>
+        designService.historyCapability(projectId, threadId, input),
+      restore: (projectId, threadId, input) =>
+        designService.restoreCapability(projectId, threadId, input),
       browser: () => state.browserService,
       record: (input) => designService.recordPreview(input)
     })
