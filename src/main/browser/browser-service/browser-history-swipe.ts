@@ -1,10 +1,17 @@
 import type { WebContents } from 'electron'
 import { Logger } from '../../system/logger'
-
-type HistoryDirection = 'back' | 'forward'
+import {
+  classifyHistoryGesture,
+  readHistoryGestureFacts,
+  type HistoryDirection,
+  type HistoryGestureFacts
+} from './browser-history-gesture'
+import { navigatePageHistory } from './browser-history-navigation'
 
 interface SwipeDocument {
   cooldownUntil: number
+  /** The last gesture main acted on, so its final report is not a second one. */
+  lastGesture: number | null
 }
 
 // Weak ownership lets a destroyed page release its observer without a timer or
@@ -12,138 +19,162 @@ interface SwipeDocument {
 const documents = new WeakMap<WebContents, SwipeDocument>()
 const SWIPE_WORLD_ID = 1001
 const NAVIGATION_COOLDOWN_MS = 800
+/** The global the page-side reporter is taken from, inside the isolated world. */
+const RELAY_GLOBAL = '__cioHistorySwipeRelay'
+/** Reports a page may hold while main answers the one before them. */
+const MAX_QUEUED_REPORTS = 8
+/** How long the page waits for a gesture to go quiet before reporting it. */
+const GESTURE_TAIL_MS = 120
+/** A gap this long starts a different gesture, never a continuation. */
+const GESTURE_GAP_MS = 320
+/** Travel worth reporting. The real bar is the service's, applied to the facts. */
+const REPORTABLE_TRAVEL_PX = 40
+/** Detent-sized jump: one notch of a mouse wheel, in pixels. */
+const WHEEL_DETENT_PIXELS = 28
+/** How far apart two detents of the same wheel turn can arrive. */
+const WHEEL_DETENT_GAP_MS = 32
 
 /**
- * Runs wholly in the page renderer's isolated world, with no app API exposed.
+ * The page-side reporter, installed once per document in an isolated world.
  *
- * Only a trackpad swipe walks history. A mouse wheel, and above all the tilt
- * wheel on a Logitech M720, must keep panning the page instead.
+ * It decides nothing. It measures one gesture, hands the facts to main, and goes
+ * back to measuring. Every rule about what those facts mean lives in
+ * `browser-history-gesture.ts`, which is what stops a mouse wheel and a trackpad
+ * from being told apart by two different pieces of code.
  *
- * A wheel and a trackpad cannot be told apart by the shape of a single event:
- * Logitech's smooth scrolling turns one detent into a stream of small variable
- * deltas that looks exactly like a fine trackpad scroll, which is why a
- * shape-only guess walked history on every tilt. macOS does report one fact
- * that no wheel can produce, the inertia of a scroll whose fingers have lifted,
- * and Blink exposes it as `WheelEvent.momentum`. On macOS that inertia is the
- * only proof accepted here: a gesture may accumulate travel while the fingers
- * are down, but it becomes a history swipe only once the same gesture reports
- * momentum. Windows and Linux have no momentum phase at all, so there a
- * tick-based wheel is recognised by its detents instead.
- *
- * The platform is passed in rather than sniffed: main already knows it, and a
- * page this script runs in cannot be trusted to describe itself.
+ * The one rule the page does own is when it is worth asking, because only the
+ * page knows that a gesture is still moving: it asks as the travel grows past
+ * each step while the OS reports the inertia of a lifted finger (a mouse never
+ * sends one), and once more when the stream goes quiet. Main recognises every
+ * report of one gesture by the gesture's own number, so asking early costs a
+ * question and never a second navigation.
  */
-function waitForHistorySwipe(cooldownUntil: number, platform: string): Promise<HistoryDirection> {
-  const host = window as Window & {
-    __cioHistorySwipe?: (until: number) => Promise<HistoryDirection>
-  }
-  if (host.__cioHistorySwipe) return host.__cioHistorySwipe(cooldownUntil)
-
-  /** Horizontal travel that makes a gesture a swipe rather than a wobble. */
-  const threshold = 140
-  const idleMs = 280
-  const maximumDurationMs = 1800
-  /** A swipe is horizontal; a page panning vertically is never taken for one. */
-  const horizontalRatio = 2
-  /**
-   * macOS is the platform whose scroll events carry the inertia that proves a
-   * trackpad. Everywhere else the shape of a tick-based wheel is the evidence.
-   */
-  const inertiaProvesTrackpad = platform === 'darwin'
-  /** One detent of a mouse wheel, reported as a single jump of this size or more. */
-  const wheelDetentPixels = 28
-  /** How far apart two detents of the same wheel turn can arrive. */
-  const wheelDetentGapMs = 32
-  /** Detents in one gesture that make the gesture a wheel, not a swipe. */
-  const wheelDetentsBeforeWheel = 2
-  /** Frames a real swipe spends covering the distance a wheel covers in a few. */
-  const minimumSwipeEvents = 4
-  let resolveSwipe: ((direction: HistoryDirection) => void) | null = null
-  let notBefore = cooldownUntil
-  let lastAt = 0
-  let startedAt = 0
-  let horizontal = 0
-  let vertical = 0
-  let wheelEvents = 0
-  let wheelDetents = 0
-  let lastMagnitude = 0
-  let blocked = false
-  let completed = false
-
-  function reset(): void {
-    lastAt = 0
-    startedAt = 0
-    horizontal = 0
-    vertical = 0
-    wheelEvents = 0
-    wheelDetents = 0
-    lastMagnitude = 0
-    blocked = false
-    completed = false
-  }
-
-  /** Only the event's bounded ancestor chain is inspected, once per gesture. */
-  function pageOwnsGesture(path: EventTarget[], deltaX: number): boolean {
-    if (document.contentType.startsWith('image/')) return true
-    if (path.length > 32) return true
-    for (const target of path) {
-      if (!(target instanceof Element)) continue
-      // Image viewers and drawing surfaces can pan without a DOM scrollbar.
-      if (target.matches('canvas, svg, img, video, input, textarea, [contenteditable="true"]')) {
-        return true
+export function historySwipeInstallScript(): string {
+  return String.raw`(() => {
+  try {
+    if (globalThis[${JSON.stringify(RELAY_GLOBAL)}]) return true;
+    const state = {
+      waiters: [],
+      queued: [],
+      gesture: 0,
+      reportedAt: 0,
+      lastAt: 0,
+      horizontal: 0,
+      vertical: 0,
+      momentum: false,
+      wheelDetents: 0,
+      events: 0,
+      pageOwns: false,
+      blocked: false,
+      lastMagnitude: 0,
+      tail: 0
+    };
+    const clearTail = () => {
+      if (state.tail) {
+        clearTimeout(state.tail);
+        state.tail = 0;
       }
-      const style = getComputedStyle(target)
-      if (style.overscrollBehaviorX === 'contain' || style.overscrollBehaviorX === 'none') {
-        return true
+    };
+    const facts = () => ({
+      gesture: state.gesture,
+      horizontal: state.horizontal,
+      vertical: state.vertical,
+      momentum: state.momentum,
+      wheelDetents: state.wheelDetents,
+      events: state.events,
+      pageOwns: state.pageOwns
+    });
+    const deliver = (value) => {
+      const resolve = state.waiters.shift();
+      if (resolve) resolve(value);
+      else if (state.queued.length < ${MAX_QUEUED_REPORTS}) state.queued.push(value);
+    };
+    const reset = () => {
+      clearTail();
+      state.reportedAt = 0;
+      state.lastAt = 0;
+      state.horizontal = 0;
+      state.vertical = 0;
+      state.momentum = false;
+      state.wheelDetents = 0;
+      state.events = 0;
+      state.pageOwns = false;
+      state.blocked = false;
+      state.lastMagnitude = 0;
+    };
+    /** The gestures that mattered, once the stream has gone quiet. */
+    const finish = () => {
+      clearTail();
+      const value = state.blocked ? null : facts();
+      reset();
+      if (value && Math.abs(value.horizontal) >= ${REPORTABLE_TRAVEL_PX}) deliver(value);
+    };
+    const scheduleTail = () => {
+      clearTail();
+      state.tail = setTimeout(() => {
+        state.tail = 0;
+        finish();
+      }, ${GESTURE_TAIL_MS});
+    };
+    /** Only the event's bounded ancestor chain is inspected, once per gesture. */
+    const pageOwnsGesture = (path, deltaX) => {
+      if (document.contentType.startsWith('image/')) return true;
+      if (path.length > 32) return true;
+      for (const target of path) {
+        if (!(target instanceof Element)) continue;
+        // Image viewers and drawing surfaces can pan without a DOM scrollbar.
+        if (target.matches('canvas, svg, img, video, input, textarea, [contenteditable="true"]')) {
+          return true;
+        }
+        const style = getComputedStyle(target);
+        if (style.overscrollBehaviorX === 'contain' || style.overscrollBehaviorX === 'none') {
+          return true;
+        }
+        const remaining = target.scrollWidth - target.clientWidth;
+        const scrollingRoot = target === document.scrollingElement;
+        if (
+          remaining <= 2 ||
+          (!scrollingRoot && !['auto', 'scroll', 'hidden'].includes(style.overflowX))
+        ) {
+          continue;
+        }
+        // RTL scrollLeft can be negative. Either endpoint remains a possible
+        // browser gesture, but a gesture that starts as a pan stays a pan.
+        const left = target.scrollLeft;
+        const minimum = style.direction === 'rtl' ? -remaining : 0;
+        const maximum = style.direction === 'rtl' ? 0 : remaining;
+        if ((deltaX < 0 && left > minimum + 1) || (deltaX > 0 && left < maximum - 1)) {
+          return true;
+        }
       }
-      const remaining = target.scrollWidth - target.clientWidth
-      const scrollingRoot = target === document.scrollingElement
-      if (
-        remaining <= 2 ||
-        (!scrollingRoot && !['auto', 'scroll', 'hidden'].includes(style.overflowX))
-      ) {
-        continue
-      }
-      // RTL scrollLeft can be negative. Either endpoint remains a possible
-      // browser gesture, but a gesture that starts as a pan stays a pan.
-      const left = target.scrollLeft
-      const minimum = style.direction === 'rtl' ? -remaining : 0
-      const maximum = style.direction === 'rtl' ? 0 : remaining
-      if ((deltaX < 0 && left > minimum + 1) || (deltaX > 0 && left < maximum - 1)) {
-        return true
-      }
-    }
-    return false
-  }
-
-  window.addEventListener(
-    'wheel',
-    (event: WheelEvent & { momentum?: boolean }) => {
-      if (!event.isTrusted) return
-      const path = event.composedPath()
+      return false;
+    };
+    window.addEventListener('wheel', (event) => {
+      if (!event.isTrusted) return;
+      const path = event.composedPath();
       // Let the site's handlers finish first, including handlers registered
       // after this observer. A prevented wheel belongs to the page.
       queueMicrotask(() => {
-        const now = Date.now()
-        const gap = lastAt === 0 ? Number.POSITIVE_INFINITY : now - lastAt
-        if (now - lastAt > idleMs) reset()
-        const first = lastAt === 0
-        lastAt = now
+        const now = Date.now();
+        const gap = state.lastAt === 0 ? Number.POSITIVE_INFINITY : now - state.lastAt;
+        if (state.lastAt !== 0 && gap > ${GESTURE_GAP_MS}) reset();
+        const first = state.lastAt === 0;
+        state.lastAt = now;
         if (first) {
-          startedAt = now
-          blocked = pageOwnsGesture(path, event.deltaX)
+          state.gesture += 1;
+          state.pageOwns = pageOwnsGesture(path, event.deltaX);
         }
-        wheelEvents += 1
-        // Wheel identity, only used where the platform has no momentum phase.
+        state.events += 1;
         // A wheel reports either one large jump per detent or a steady repeat of
         // the same step, and its detents cannot repeat faster than the wheel is
         // physically turned. A trackpad instead reports varied steps of a few
-        // pixels, packed far closer together than that.
-        const magnitude = Math.abs(event.deltaX)
-        const detentStep = magnitude >= 1 && magnitude === lastMagnitude
-        lastMagnitude = magnitude
-        if (gap >= wheelDetentGapMs && (magnitude >= wheelDetentPixels || detentStep)) {
-          wheelDetents += 1
+        // pixels, packed far closer together than that. This is measured here,
+        // and weighed where the rules live.
+        const magnitude = Math.abs(event.deltaX);
+        const detentStep = magnitude >= 1 && magnitude === state.lastMagnitude;
+        state.lastMagnitude = magnitude;
+        if (gap >= ${WHEEL_DETENT_GAP_MS} && (magnitude >= ${WHEEL_DETENT_PIXELS} || detentStep)) {
+          state.wheelDetents += 1;
         }
         if (
           event.defaultPrevented ||
@@ -156,71 +187,74 @@ function waitForHistorySwipe(cooldownUntil: number, platform: string): Promise<H
           !Number.isFinite(event.deltaX) ||
           !Number.isFinite(event.deltaY)
         ) {
-          blocked = true
+          state.blocked = true;
+          scheduleTail();
+          return;
         }
-        if (blocked || completed || now < notBefore) return
-        if (now - startedAt > maximumDurationMs) {
-          blocked = true
-          return
+        // Reversing a swipe cancels it; distance is never accumulated across two
+        // opposing motions. Small trackpad jitter is ignored.
+        if (Math.abs(event.deltaX) > 1 && state.horizontal * event.deltaX < 0) {
+          state.blocked = true;
+          scheduleTail();
+          return;
         }
-        // The gesture is a wheel turning, already recognised by two detents. It
-        // keeps that identity until the wheel goes idle, so a long tilt can never
-        // accumulate its way into a history navigation.
-        if (!inertiaProvesTrackpad && wheelDetents >= wheelDetentsBeforeWheel) {
-          blocked = true
-          return
+        state.horizontal += event.deltaX;
+        state.vertical += Math.abs(event.deltaY);
+        if (state.vertical > 24 && state.vertical > Math.abs(state.horizontal)) {
+          state.blocked = true;
+          scheduleTail();
+          return;
         }
-        // Reversing a swipe cancels it; distance is never accumulated across
-        // two opposing motions. Small trackpad jitter is ignored.
-        if (Math.abs(event.deltaX) > 1 && horizontal * event.deltaX < 0) {
-          blocked = true
-          return
+        if (event.momentum === true) state.momentum = true;
+        // Inertia is worth asking about at once: it is the moment the fingers
+        // lifted. Asking again every step of travel keeps the answer current
+        // without needing the end of the gesture, which can be a long glide.
+        if (
+          state.momentum &&
+          Math.abs(state.horizontal) >= state.reportedAt + ${REPORTABLE_TRAVEL_PX}
+        ) {
+          state.reportedAt = Math.abs(state.horizontal);
+          deliver(facts());
         }
-        horizontal += event.deltaX
-        vertical += Math.abs(event.deltaY)
-        if (vertical > 24 && vertical > Math.abs(horizontal)) {
-          blocked = true
-          return
-        }
-        // On macOS nothing resolves while the fingers are still on the trackpad:
-        // a wheel tilting sideways is one continuous non-inertial stream too, and
-        // the inertia of a lifted scroll is the one thing it can never send.
-        if (inertiaProvesTrackpad && event.momentum !== true) return
-        if (Math.abs(horizontal) < threshold) return
-        if (Math.abs(horizontal) < vertical * horizontalRatio) return
-        // A wheel covers this distance in a few jumps while a swipe spends a dozen
-        // or more frames on it, so a threshold reached by a handful of events is
-        // the last guard against a smooth-scrolling wheel counting as a swipe.
-        if (!inertiaProvesTrackpad && wheelEvents < minimumSwipeEvents) {
-          blocked = true
-          return
-        }
-        if (!resolveSwipe) return
-        completed = true
-        const resolve = resolveSwipe
-        resolveSwipe = null
-        resolve(horizontal < 0 ? 'back' : 'forward')
-      })
-    },
-    { passive: true }
-  )
-  window.addEventListener('blur', reset)
-  window.addEventListener('pagehide', reset)
-  host.__cioHistorySwipe = (until) => {
-    notBefore = until
-    return new Promise((resolve) => {
-      resolveSwipe = resolve
-    })
+        scheduleTail();
+      });
+    }, { passive: true });
+    window.addEventListener('blur', reset);
+    window.addEventListener('pagehide', reset);
+    Object.defineProperty(globalThis, ${JSON.stringify(RELAY_GLOBAL)}, {
+      value: {
+        wait: () => new Promise((resolve) => {
+          if (state.queued.length > 0) {
+            resolve(state.queued.shift());
+            return;
+          }
+          state.waiters.push(resolve);
+        })
+      },
+      configurable: true,
+      enumerable: false,
+      writable: false
+    });
+    return true;
+  } catch (error) {
+    // A page that froze the globals this installs into: main abandons it.
+    return false;
   }
-  return host.__cioHistorySwipe(cooldownUntil)
+})()`
+}
+
+/** The evaluation that returns the next gesture the page measured. */
+export function historySwipeWaitScript(): string {
+  return `(() => { const relay = globalThis[${JSON.stringify(RELAY_GLOBAL)}]; return relay ? relay.wait() : null; })()`
 }
 
 /**
- * Install on every main-frame document, for global and conversation tabs alike.
+ * Install the reporter on every main-frame document, for global, conversation
+ * and popup pages alike, and answer its reports.
  *
- * The platform is a parameter rather than a read of `process.platform` on the
- * spot so the one decision that depends on it, whether a scroll can prove a
- * trackpad, is stated at the call and testable without faking the host.
+ * Main owns the verdict (`classifyHistoryGesture`) and the traversal
+ * (`navigatePageHistory`), so this gesture, a mouse side button and the browser's
+ * own Back control all take the same route through one service.
  */
 export function installBrowserHistorySwipe(
   contents: WebContents,
@@ -229,36 +263,53 @@ export function installBrowserHistorySwipe(
   if (contents.isDestroyed()) return
   const previous = documents.get(contents)
   const state: SwipeDocument = {
-    cooldownUntil: previous?.cooldownUntil ?? 0
+    cooldownUntil: previous?.cooldownUntil ?? 0,
+    lastGesture: null
   }
   documents.set(contents, state)
 
   const arm = (): void => {
     if (contents.isDestroyed() || documents.get(contents) !== state) return
-    const code = `(${waitForHistorySwipe.toString()})(${state.cooldownUntil}, ${JSON.stringify(platform)})`
     void contents
-      .executeJavaScriptInIsolatedWorld(SWIPE_WORLD_ID, [{ code }])
-      .then((direction: unknown) => {
+      .executeJavaScriptInIsolatedWorld(SWIPE_WORLD_ID, [{ code: historySwipeInstallScript() }])
+      .then((installed: unknown) => {
+        if (installed !== true) throw new Error('history gesture reporter refused to install')
+        return contents.executeJavaScriptInIsolatedWorld(SWIPE_WORLD_ID, [
+          { code: historySwipeWaitScript() }
+        ])
+      })
+      .then((report: unknown) => {
         if (contents.isDestroyed() || documents.get(contents) !== state) return
-        if (direction !== 'back' && direction !== 'forward') return
-        state.cooldownUntil = Date.now() + NAVIGATION_COOLDOWN_MS
-        const history = contents.navigationHistory
-        const canNavigate = direction === 'back' ? history.canGoBack() : history.canGoForward()
-        if (canNavigate) {
-          // Native history traversal can hand focus back to the app renderer.
-          // Keep the page that received this gesture focused so the next swipe
-          // reaches it too. A parked page's late result must not steal focus.
-          const wasFocused = contents.isFocused()
-          if (direction === 'back') history.goBack()
-          else history.goForward()
-          if (wasFocused && !contents.isDestroyed()) contents.focus()
-        }
+        applyGestureReport(contents, state, report, platform)
         arm()
       })
       .catch((error: unknown) => {
         if (contents.isDestroyed() || documents.get(contents) !== state) return
-        Logger.dev('Browser history swipe observer ended:', error)
+        // A document swap rejects the outstanding wait routinely, and the
+        // `dom-ready` that follows installs the reporter again for the new
+        // document.
+        Logger.dev('Browser history gesture reporter ended:', error)
       })
   }
   arm()
+}
+
+function applyGestureReport(
+  contents: WebContents,
+  state: SwipeDocument,
+  report: unknown,
+  platform: NodeJS.Platform
+): void {
+  const facts: HistoryGestureFacts | null = readHistoryGestureFacts(report)
+  if (!facts) return
+  // The page reports a swipe twice: the moment the fingers lift, and again when
+  // the gesture goes quiet. One gesture walks history at most once.
+  if (state.lastGesture === facts.gesture) return
+  const direction: HistoryDirection | null = classifyHistoryGesture(facts, platform)
+  if (!direction) return
+  const now = Date.now()
+  if (now < state.cooldownUntil) return
+  state.cooldownUntil = now + NAVIGATION_COOLDOWN_MS
+  state.lastGesture = facts.gesture
+  navigatePageHistory(contents, direction)
 }
