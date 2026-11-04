@@ -141,7 +141,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'viewport',
     description:
-      'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again. The page the user is on is laid out at the width of their browser panel, which is narrow, and a console or gallery whose desktop layout only exists at desktop widths (a store console and its screenshot editor, for example) is therefore incomplete on page \u201cuser\u201d: work on that at a page you opened, which is laid out at 1280x800 unless you set this.',
+      'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again. The page the user is on is laid out at the width of their browser panel while they watch it, which is narrow, so a console or gallery whose desktop layout only exists at desktop widths (a store console and its screenshot editor, for example) is incomplete there until you set a desktop viewport: that size then holds for as long as the tab is offscreen, however wide or narrow the user had it, until you change it.',
     inputSchema: {
       type: 'object',
       properties: {
