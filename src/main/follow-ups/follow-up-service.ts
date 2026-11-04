@@ -164,6 +164,25 @@ export class FollowUpService {
     return removed
   }
 
+  /**
+   * Hold one wake. The row keeps its schedule and the time it was armed for, and
+   * nothing is lost if the user changes their mind.
+   */
+  pause(id: string): FollowUp | null {
+    const paused = this.deps.store.pause(id, this.now())
+    this.arm()
+    this.changed()
+    return paused
+  }
+
+  /** Release a held wake. If its time already passed, it comes due on the next tick. */
+  resume(id: string): FollowUp | null {
+    const resumed = this.deps.store.resume(id)
+    this.arm()
+    this.changed()
+    return resumed
+  }
+
   /** Cancel every wake armed on a thread, which is what deleting it does. */
   cancelForThread(threadId: string): number {
     const removed = this.deps.store.removeForThread(threadId)
@@ -193,7 +212,11 @@ export class FollowUpService {
   private async runTick(): Promise<void> {
     if (this.disposed) return
     const now = this.now()
-    const due = this.deps.store.list().filter((followUp) => followUp.dueAt <= now)
+    // A held wake is deliberately not due, however far its clock has run: that is
+    // the whole promise the pause control makes.
+    const due = this.deps.store
+      .list()
+      .filter((followUp) => followUp.pausedAt === undefined && followUp.dueAt <= now)
     for (const followUp of due) await this.fire(followUp)
     this.arm()
     if (due.length > 0) this.changed()

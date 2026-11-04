@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron'
-import { followUpNotice, type FollowUpNotice } from '../../lib/follow-up'
+import { followUpNotice, type FollowUpAction, type FollowUpNotice } from '../../lib/follow-up'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { FollowUpService } from './follow-up-service'
@@ -32,9 +32,40 @@ export function broadcastFollowUpsChanged(service: FollowUpService): void {
  * paint, and a window that asks in that gap must get an honest empty list instead
  * of "no handler registered".
  */
+function isFollowUpAction(value: unknown): value is FollowUpAction {
+  return value === 'pause' || value === 'resume' || value === 'cancel'
+}
+
 export function registerFollowUpHandlers(getService: () => FollowUpService | null): void {
   ipcMain.handle('followUps:list', () => {
     const service = getService()
     return service ? followUpNotices(service) : []
+  })
+  /**
+   * Control one armed wake by id.
+   *
+   * This is the user's own surface, so unlike the agent capability it is not
+   * scoped to a calling thread: the panel lists every wake of an assistant, which
+   * by definition includes threads that are not on screen. The id is the whole
+   * authority, and the service refuses an id it does not hold.
+   */
+  ipcMain.handle('followUps:update', (_, rawId: unknown, rawAction: unknown) => {
+    if (typeof rawId !== 'string' || rawId.trim().length === 0) {
+      throw new TypeError('A follow-up id is required')
+    }
+    if (!isFollowUpAction(rawAction)) {
+      throw new TypeError('A follow-up action must be pause, resume or cancel')
+    }
+    const service = getService()
+    if (!service) throw new Error('Scheduled wakes are unavailable right now')
+    const id = rawId.trim()
+    const found =
+      rawAction === 'pause'
+        ? service.pause(id)
+        : rawAction === 'resume'
+          ? service.resume(id)
+          : service.cancel(id)
+    if (!found) throw new Error('That wake is no longer armed')
+    broadcastFollowUpsChanged(service)
   })
 }

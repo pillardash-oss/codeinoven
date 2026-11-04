@@ -8,7 +8,7 @@
  */
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import type { FollowUpNotice } from '$shared/follow-up'
+import type { FollowUpAction, FollowUpNotice } from '$shared/follow-up'
 
 class FollowUpsState {
   /** Armed wakes per thread id. Thread ids are globally unique, so the map is
@@ -16,11 +16,17 @@ class FollowUpsState {
   private byThread = new SvelteMap<string, FollowUpNotice[]>()
   private initialized = false
 
-  /** The soonest wake armed on a thread, or null when it has none. */
+  /**
+   * The wake that speaks for a thread: the soonest one that is actually on the
+   * clock. A held wake only speaks for the thread when it is the only one left,
+   * because the row still has to admit the thread is scheduled at all.
+   */
   next(threadId: string): FollowUpNotice | null {
     const entries = this.byThread.get(threadId)
     if (!entries || entries.length === 0) return null
-    return entries.reduce((soonest, entry) => (entry.dueAt < soonest.dueAt ? entry : soonest))
+    const active = entries.filter((entry) => !entry.paused)
+    const candidates = active.length > 0 ? active : entries
+    return candidates.reduce((soonest, entry) => (entry.dueAt < soonest.dueAt ? entry : soonest))
   }
 
   /** Every wake armed on a thread, soonest first. */
@@ -30,6 +36,41 @@ class FollowUpsState {
 
   has(threadId: string): boolean {
     return this.byThread.has(threadId)
+  }
+
+  /** Every armed wake of the threads a surface names, soonest first. */
+  forThreads(threadIds: Iterable<string>): FollowUpNotice[] {
+    const notices: FollowUpNotice[] = []
+    for (const threadId of threadIds) notices.push(...(this.byThread.get(threadId) ?? []))
+    return notices.sort((a, b) => a.dueAt - b.dueAt)
+  }
+
+  /**
+   * Control one armed wake. The change lands optimistically in the local set so
+   * the row responds at the click, and the app's own broadcast replaces the whole
+   * set with the truth once the write is through.
+   */
+  async update(id: string, action: FollowUpAction): Promise<void> {
+    this.applyLocal(id, action)
+    await invoke('followUps:update', id, action)
+  }
+
+  private applyLocal(id: string, action: FollowUpAction): void {
+    for (const [threadId, entries] of this.byThread) {
+      const notice = entries.find((entry) => entry.id === id)
+      if (!notice) continue
+      if (action === 'cancel') {
+        const remaining = entries.filter((entry) => entry.id !== id)
+        if (remaining.length === 0) this.byThread.delete(threadId)
+        else this.byThread.set(threadId, remaining)
+        return
+      }
+      this.byThread.set(
+        threadId,
+        entries.map((entry) => (entry.id === id ? { ...entry, paused: action === 'pause' } : entry))
+      )
+      return
+    }
   }
 
   /** Load the armed set and follow it live. Idempotent. */

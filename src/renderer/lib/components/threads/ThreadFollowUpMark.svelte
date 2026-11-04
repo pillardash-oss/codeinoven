@@ -24,13 +24,18 @@
 
   const label = $derived(
     soonest
-      ? `Scheduled wake ${formatDateTimeWithWeekday(soonest.dueAt)}: ${soonest.note}`
+      ? `${soonest.paused ? 'Scheduled wake on hold' : 'Scheduled wake'} ${formatDateTimeWithWeekday(soonest.dueAt)}: ${soonest.note}`
       : 'Scheduled wake'
   )
 </script>
 
 {#if soonest}
-  <span class="flex shrink-0 items-center text-info" title={label} role="img" aria-label={label}>
+  <span
+    class="flex shrink-0 items-center {soonest.paused ? 'text-dimmed' : 'text-info'}"
+    title={label}
+    role="img"
+    aria-label={label}
+  >
     <CioClock {size} />
   </span>
 {/if}

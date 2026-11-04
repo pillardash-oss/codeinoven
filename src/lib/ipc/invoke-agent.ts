@@ -489,6 +489,11 @@ export const invokeAgentContract = {
   'note:list': {} as Contract<[], string[]>,
   /** Pending agent-scheduled wakes, so a thread row can badge its scheduled state. */
   'followUps:list': {} as Contract<[], import('../follow-up').FollowUpNotice[]>,
+  /** Pause, resume or cancel one armed wake from the panel that lists it. */
+  'followUps:update': {} as Contract<
+    [id: string, action: import('../follow-up').FollowUpAction],
+    void
+  >,
   /** List sticky note tab metadata without loading every body into memory. */
   'sticky-note:list': {} as Contract<[], StickyNoteSummary[]>,
   'sticky-note:get': {} as Contract<[id: string], StickyNote | null>,

@@ -232,7 +232,9 @@
       <dd class="flex min-w-0 items-center gap-1 text-info">
         <CioClock size={11} class="shrink-0" aria-hidden="true" />
         <span class="min-w-0 break-words">{formatDateTimeWithWeekday(followUp.dueAt)}</span>
-        <span class="shrink-0 text-dimmed">{untilLabel(followUp.dueAt)}</span>
+        <span class="shrink-0 text-dimmed">
+          {followUp.paused ? 'on hold' : untilLabel(followUp.dueAt)}
+        </span>
       </dd>
     </div>
     <div class="flex gap-2">

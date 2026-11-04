@@ -87,6 +87,7 @@
   } from './connection-library'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import AssistantWakesSection from '$lib/components/assistant/AssistantWakesSection.svelte'
   import CardFoot from '$lib/components/shared/CardFoot.svelte'
   import CardButton from '$lib/components/shared/CardButton.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
@@ -1576,6 +1577,10 @@
               </div>
             </div>
           </div>
+          <!-- Wakes an assistant's threads have armed on themselves. Placed under
+               the behaviour card because that is where the user reads how it works,
+               and this is the one part of that behaviour that runs on a clock. -->
+          <AssistantWakesSection {assistant} onOpenThread={onOpenTask} />
         </div>
       {/if}
     {:else if activeTab === 'connections'}
