@@ -1634,7 +1634,8 @@ export function buildThreadSearchSql(
   raw: string,
   options: ThreadSearchOptions = {},
   useSearchMeta = false,
-  messageQuery?: string
+  messageQuery?: string,
+  snippetTokens = 64
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
   const trimmed = raw.trim()
@@ -1659,7 +1660,7 @@ export function buildThreadSearchSql(
         FROM (
           SELECT m.rowid AS msg_rowid, m.thread_id AS msg_thread_id, m.role AS role,
                  m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank,
-                 snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text
+                 snippet(agent_messages_fts, 0, '', '', ' … ', ?) AS snippet_text
           FROM agent_messages_fts
           JOIN agent_message_search_meta m ON m.rowid = agent_messages_fts.rowid
           JOIN threads st ON st.id = m.thread_id
@@ -1672,11 +1673,11 @@ export function buildThreadSearchSql(
         ) meta
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
-          params: [ftsQuery, ...metaScope.params, messageLimit]
+          params: [snippetTokens, ftsQuery, ...metaScope.params, messageLimit]
         }
       : {
           sql: `SELECT t.*, am.role AS match_role,
-              snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text,
+              snippet(agent_messages_fts, 0, '', '', ' … ', ?) AS snippet_text,
               am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
         FROM agent_messages_fts
         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
@@ -1686,7 +1687,7 @@ export function buildThreadSearchSql(
           AND am.visibility = 'conversation'
           AND ${legacyScope.sql}
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-          params: [ftsQuery, ...legacyScope.params]
+          params: [snippetTokens, ftsQuery, ...legacyScope.params]
         }
     : null
   return { title, fts, limit }
