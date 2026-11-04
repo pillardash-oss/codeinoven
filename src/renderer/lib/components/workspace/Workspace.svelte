@@ -472,7 +472,10 @@
           board.switcherPanelTabs.browser.menuOpen = false
           board.switcherPanelTabs.toggleDockPanel('browser', board.state.focusBrowser)
         },
-        onContextMenu: board.switcherPanelTabs.browser.openContextMenu
+        // Wrapped rather than passed by reference: the controller's handler reads
+        // `this`, and the dock calls whatever it was given without a receiver, so a
+        // bare method reference threw before it could open the menu.
+        onContextMenu: (event: MouseEvent) => board.switcherPanelTabs.browser.openContextMenu(event)
       })
     }
 
