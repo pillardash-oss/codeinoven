@@ -94,6 +94,7 @@ import type {
   ProviderCatalog,
   ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
+  AgentSecretDraft,
   AgentUtilitySuggestionEntry,
   AgentMcpSignInTarget,
   SpecGenerationRequest,
@@ -631,6 +632,23 @@ export class ChatEngine {
       requestId,
       questionIndex,
       answers,
+      nextQuestionIndex
+    )
+  }
+  async updateSecretDraft(
+    projectId: string,
+    threadId: string,
+    requestId: string,
+    questionIndex: number,
+    draft: AgentSecretDraft,
+    nextQuestionIndex?: number
+  ): Promise<PendingAgentQuestionRequest | null> {
+    return this.units['questions-ask'].updateSecretDraft(
+      projectId,
+      threadId,
+      requestId,
+      questionIndex,
+      draft,
       nextQuestionIndex
     )
   }

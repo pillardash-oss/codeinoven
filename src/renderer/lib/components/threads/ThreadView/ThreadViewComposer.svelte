@@ -579,6 +579,7 @@
                 onExplain={board.sources.handleQuestionExplain}
                 onQuickChat={board.sources.handleQuestionQuickChat}
                 onPause={board.composerScope.handleSecretPause}
+                onDraft={board.composerScope.handleSecretDraft}
               />
             {:else}
               <AgentQuestionCard

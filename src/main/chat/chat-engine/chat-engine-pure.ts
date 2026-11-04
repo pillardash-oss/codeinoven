@@ -974,6 +974,12 @@ export function isSecretQuestion(question: AgentQuestion): boolean {
 export const SECRET_ANSWER_PLACEHOLDER = '[secret set]'
 
 /**
+ * What the decision rail records for a secret entry the user had already filled
+ * in when the card expired. It names the fact, never the value.
+ */
+export const PARTIAL_SECRET_ANSWER_MARKER = 'Provided before the deadline'
+
+/**
  * Validate a `cio_ask_secret` submission against its pending request. Every
  * secret question must be answered exactly once, either with a non-empty value
  * or with a non-empty alternative instruction, and no submission may name an

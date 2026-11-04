@@ -39,6 +39,7 @@ import type {
   AgentPart,
   AgentProviderIssue,
   AgentSecretSubmission,
+  AgentSecretDraft,
   PermissionRequest,
   ProjectFileEntry,
   CapturableSpecContextType,
@@ -769,6 +770,38 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.pendingQuestionRequests.filter(
         (request) => request.requestId !== requestId
       )
+  }
+
+  /**
+   * Persist one entry of a secret card the user is filling in.
+   *
+   * The values typed so far belong to the pending request, so leaving the thread
+   * and coming back resumes the card instead of an empty one, and the main
+   * process drops the draft the moment the request settles. When the request is
+   * already gone the card is closed here rather than reporting a save failure.
+   */
+  async handleSecretDraft(
+    requestId: string,
+    questionIndex: number,
+    draft: AgentSecretDraft,
+    nextQuestionIndex?: number
+  ): Promise<void> {
+    const updated = await invoke(
+      'agent:updateSecretDraft',
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.handleAgentEvent.thread.id,
+      requestId,
+      questionIndex,
+      draft,
+      nextQuestionIndex
+    )
+    if (!updated) {
+      this.root.sources.resolvedQuestionRequestIds.add(requestId)
+      this.root.handleAgentEvent.pendingQuestionRequests =
+        this.root.handleAgentEvent.pendingQuestionRequests.filter(
+          (request) => request.requestId !== requestId
+        )
+    }
   }
 
   /**

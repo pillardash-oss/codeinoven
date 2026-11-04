@@ -7,6 +7,7 @@ import type {
   AgentModelSelection,
   AgentRunningProcess,
   AgentSecretSubmission,
+  AgentSecretDraft,
   AgentSessionStatus,
   AgentToolCatalog,
   AssignmentPlan,
@@ -247,6 +248,17 @@ export const invokeAgentContract = {
       requestId: string,
       questionIndex: number,
       answers: string[],
+      nextQuestionIndex?: number
+    ],
+    PendingAgentQuestionRequest | null
+  >,
+  'agent:updateSecretDraft': {} as Contract<
+    [
+      projectId: string,
+      threadId: string,
+      requestId: string,
+      questionIndex: number,
+      draft: AgentSecretDraft,
       nextQuestionIndex?: number
     ],
     PendingAgentQuestionRequest | null

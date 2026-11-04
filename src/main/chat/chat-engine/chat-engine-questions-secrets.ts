@@ -1,3 +1,4 @@
+import { Logger } from '../../system/logger'
 import type { PendingQuestionInfo } from './chat-engine-types'
 import type { ChatEngine } from '../chat-engine'
 
@@ -7,14 +8,33 @@ export class ChatEngineQuestionsSecrets {
 
   /**
    * Close an abandoned secret card and settle the gateway call waiting on it.
-   * Nothing can answer a secret on the user's behalf, so the only correct
-   * outcome for an expired card is a dismissal the agent can react to: leaving
-   * the call open would strand the harness turn on a card nobody will fill in.
+   *
+   * The entries the user had already filled in are their own input, so they are
+   * stored rather than dropped and the rest are reported as unresolved; only a
+   * card with nothing filled closes unanswered. Leaving the call open would
+   * strand the harness turn on a card nobody will fill in, so either way the
+   * request is settled when the deadline passes.
    */
   expireSecretQuestion(pending: PendingQuestionInfo): void {
     if (this.host.pendingQuestions.get(pending.request.requestId) !== pending) return
     pending.timer = undefined
     pending.resumeSecretAfterSettlement = true
+    void this.host.units['secrets']
+      .settleExpiredSecretDrafts(pending)
+      .then((settled) => {
+        if (settled) return
+        this.expireUnansweredSecretQuestion(pending)
+      })
+      .catch((error: unknown) => {
+        // The card stays pending with a fresh window and retries its own
+        // expiry, so a failed vault write never silently loses the draft.
+        Logger.error('Expired secret draft settlement failed:', error)
+      })
+  }
+
+  /** Close a secret card the user never filled in at all. */
+  private expireUnansweredSecretQuestion(pending: PendingQuestionInfo): void {
+    if (this.host.pendingQuestions.get(pending.request.requestId) !== pending) return
     this.host.units['misc'].reportAutoAnswer({
       id: pending.request.requestId,
       kind: 'secret',

@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import { onDestroy } from 'svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { fly, slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'
@@ -27,6 +28,7 @@
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type {
     AgentQuestion,
+    AgentSecretDraft,
     AgentSecretSubmission,
     PendingAgentQuestionRequest
   } from '$shared/types'
@@ -48,21 +50,45 @@
      * so the card can retry on the next interaction.
      */
     onPause?: (requestId: string, questionIndex: number) => Promise<void>
+    /**
+     * Persists the draft of one entry: what has been typed so far, and which
+     * entry the card was on. Best-effort, so a save that loses a race with the
+     * request settling never blocks the card.
+     */
+    onDraft?: (
+      requestId: string,
+      questionIndex: number,
+      draft: AgentSecretDraft,
+      nextQuestionIndex?: number
+    ) => Promise<void>
   }
 
-  let { request, onSubmit, onDismiss, scope, onExplain, onQuickChat, onPause }: Props = $props()
+  let { request, onSubmit, onDismiss, scope, onExplain, onQuickChat, onPause, onDraft }: Props =
+    $props()
 
   // The parent keys this component by request id, so these drafts belong to one
-  // authoritative pending request for the lifetime of the component.
-  let currentIndex = $state(0)
+  // authoritative pending request. What the user already filled in is held by
+  // that request rather than by this component, so leaving the thread and
+  // coming back resumes the same card instead of an empty one; the main process
+  // drops it the moment the request settles.
   // svelte-ignore state_referenced_locally
-  let values = $state<string[]>(request.questions.map(() => ''))
+  let currentIndex = $state(
+    Math.min(Math.max(request.activeQuestionIndex, 0), Math.max(request.questions.length - 1, 0))
+  )
+  // svelte-ignore state_referenced_locally
+  let values = $state<string[]>(
+    request.questions.map((_, index) => request.secretDrafts?.[index]?.value ?? '')
+  )
   // Each secret is answered on its own: a value, or an instruction that lets the
   // main process reuse one the device already holds. One card can mix the two.
   // svelte-ignore state_referenced_locally
-  let alternatives = $state<string[]>(request.questions.map(() => ''))
+  let alternatives = $state<string[]>(
+    request.questions.map((_, index) => request.secretDrafts?.[index]?.alternative ?? '')
+  )
   // svelte-ignore state_referenced_locally
-  let alternativeModes = $state<boolean[]>(request.questions.map(() => false))
+  let alternativeModes = $state<boolean[]>(
+    request.questions.map((_, index) => request.secretDrafts?.[index]?.alternativeMode === true)
+  )
   let revealedIndex = $state<number | null>(null)
   let working = $state(false)
   let actionError = $state('')
@@ -146,6 +172,7 @@
    * that window in turn.
    */
   let pausedDeadline: number | null = null
+  let draftSaveTimer: ReturnType<typeof setTimeout> | undefined
 
   /**
    * Hold the countdown the moment the user starts working on the card: a value
@@ -163,12 +190,68 @@
   }
 
   /**
+   * What one entry holds right now, in the shape the main process keeps for a
+   * pending secret card: the branch on screen, and the text in it.
+   */
+  function draftOf(index: number): AgentSecretDraft {
+    if (alternativeModes[index]) {
+      return { alternative: alternatives[index] ?? '', alternativeMode: true }
+    }
+    return { value: values[index] ?? '' }
+  }
+
+  /**
+   * Write one entry's draft to the request, together with the entry that is on
+   * screen, so a card that comes back opens on the secret the user was filling
+   * in. Best-effort: a save that loses the race with a settling request is
+   * irrelevant, because the request and its draft are gone together.
+   */
+  function saveDraft(index: number, nextQuestionIndex?: number): void {
+    if (draftSaveTimer !== undefined) {
+      clearTimeout(draftSaveTimer)
+      draftSaveTimer = undefined
+    }
+    if (!onDraft || working) return
+    void onDraft(request.requestId, index, draftOf(index), nextQuestionIndex).catch(() => {})
+  }
+
+  /** Save the entry being typed into once the user pauses, not per keystroke. */
+  function scheduleDraftSave(): void {
+    if (draftSaveTimer !== undefined) clearTimeout(draftSaveTimer)
+    const index = currentIndex
+    draftSaveTimer = setTimeout(() => saveDraft(index), 400)
+  }
+
+  /** Typing or pasting a value: hold the countdown and keep the draft. */
+  function handleValueInput(): void {
+    pauseCountdown()
+    scheduleDraftSave()
+  }
+
+  /** Writing an instruction instead: the same two things apply. */
+  function handleAlternativeInput(): void {
+    pauseCountdown()
+    scheduleDraftSave()
+  }
+
+  onDestroy(() => {
+    // Leaving the thread unmounts the card; the draft has to be on the request
+    // before this component is gone, or the user starts over on their return.
+    if (draftSaveTimer === undefined) return
+    clearTimeout(draftSaveTimer)
+    draftSaveTimer = undefined
+    if (!onDraft || working) return
+    void onDraft(request.requestId, currentIndex, draftOf(currentIndex)).catch(() => {})
+  })
+
+  /**
    * Switch the current entry between a pasted value and an instruction. The
    * countdown is held either way: both are the user working on the card.
    */
   function toggleAlternativeMode(): void {
     pauseCountdown()
     alternativeModes[currentIndex] = !alternativeModes[currentIndex]
+    saveDraft(currentIndex)
   }
 
   /**
@@ -191,9 +274,13 @@
     // Reading through the secrets is the user working on the card, so the
     // countdown is held while they step rather than expiring under their hands.
     pauseCountdown()
+    const previousIndex = currentIndex
     const direction: StepDirection = index > currentIndex ? 1 : -1
     if (entryBody) playEntryStep(entryBody, direction)
     currentIndex = index
+    // The entry just left is saved together with the new position, so coming
+    // back to the thread resumes both the values and the secret on screen.
+    saveDraft(previousIndex, index)
   }
 
   /**
@@ -249,7 +336,8 @@
       if (alternativeModes[index]) {
         secrets.push({ secretId, alternative: (alternatives[index] ?? '').trim() })
       } else {
-        secrets.push({ secretId, value: (values[index] ?? '').trim() })
+        // Sent exactly as typed: whitespace can be part of a secret value.
+        secrets.push({ secretId, value: values[index] ?? '' })
       }
     }
     working = true
@@ -344,7 +432,7 @@
                   autofocus
                   disabled={working}
                   placeholder="Say what the agent should use instead, or name the variable you already provided…"
-                  onValueChange={pauseCountdown}
+                  onValueChange={handleAlternativeInput}
                   class="min-h-20 w-full resize-y overflow-y-auto  border bg-elevated px-3.5 pt-3 pb-2 text-sm leading-5 text-foreground outline-none transition-colors focus:border-primary disabled:opacity-50"
                   containerClass="min-w-0 flex-1"
                   ariaLabel="Alternative instruction"
@@ -396,7 +484,7 @@
                   disabled={working}
                   placeholder="Paste the value"
                   bind:value={values[currentIndex]}
-                  oninput={pauseCountdown}
+                  oninput={handleValueInput}
                   onkeydown={handleValueKeydown}
                 />
                 <div class="absolute top-1/2 right-1 -translate-y-1/2">

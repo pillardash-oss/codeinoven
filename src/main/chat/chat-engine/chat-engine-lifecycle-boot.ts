@@ -20,6 +20,7 @@ import type {
   PromptReference,
   ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
+  AgentSecretDraft,
   SpecGenerationRequest,
   SpecActionIntent,
   UserMessagePresentation,
@@ -592,6 +593,26 @@ export class ChatEngineLifecycleBoot {
           requestId,
           questionIndex,
           answers,
+          nextQuestionIndex
+        )
+    )
+    ipcMain.handle(
+      'agent:updateSecretDraft',
+      (
+        _,
+        projectId: string,
+        threadId: string,
+        requestId: string,
+        questionIndex: number,
+        draft: AgentSecretDraft,
+        nextQuestionIndex?: number
+      ) =>
+        this.host.updateSecretDraft(
+          projectId,
+          threadId,
+          requestId,
+          questionIndex,
+          draft,
           nextQuestionIndex
         )
     )
