@@ -16,6 +16,9 @@ import {
 } from '../../../../lib/core-tools'
 
 export function piCoreToolsInteractiveSource(questionCap: number): string {
+  const visualGuideline = JSON.stringify(
+    "When the decision is about something that does not exist yet (a new mark, layout, flow or screen), create the picture yourself, copy it inline and put it in the visual field of the option it describes, and the card shows it behind that option's eye button: html for a temporary mockup, svg for a drawing, image for a picture you generated, or mermaid for a flow. Never put a visual on the question itself: the picture belongs to an alternative the user is choosing between. Keep it simple, and copy the parts inline rather than pointing at a file so the picture survives the app data root. An option may carry both a picture and a walkthrough, and the card shows both buttons side by side."
+  )
   return `  pi.registerTool({
     name: '${CIO_ASK_USER_TOOL_NAME}',
     label: 'Ask the user a question',
@@ -27,7 +30,7 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
       'Ask one to ${questionCap} short questions at a time. Put the recommended option first and add (Recommended) to its label.',
       'Keep option labels short. Put context and tradeoffs in each option description, not in the question text.',
       'When an option asks the user to run or paste something to produce the answer, put that exact text in the instruction field of the option instead of the description, so the user can copy it from the answer card without transcribing it. Never place a command, script, or multi-step procedure in the description.',
-      'When the decision is about something that does not exist yet (a new mark, layout, flow or screen), create the picture yourself, copy it inline and put it in the visual field of the option it describes, and the card shows it behind that option's eye button: html for a temporary mockup, svg for a drawing, image for a picture you generated, or mermaid for a flow. Never put a visual on the question itself: the picture belongs to an alternative the user is choosing between. Keep it simple, and copy the parts inline rather than pointing at a file so the picture survives the app data root. An option may carry both a picture and a walkthrough, and the card shows both buttons side by side.',
+      ${visualGuideline},
       'Custom answers are always available; do not add an Other option.'
     ],
     parameters: Type.Object({
