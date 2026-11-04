@@ -23,6 +23,7 @@
     "@capacitor/browser": "8.0.3",
     "@capacitor/core": "^8.6.0",
     "@capacitor/preferences": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.0",
     "@pdslng/cio-icon": "^0.1.1",
     "bits-ui": "^2.20.3"
   },

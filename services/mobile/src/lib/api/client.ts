@@ -234,6 +234,9 @@ export const api = {
 
   thread: (id: string) => data<Thread>(`/v1/threads/${id}`),
 
+  createThread: (input: { projectId: string; title: string }) =>
+    data<Thread>('/v1/threads', { method: 'POST', body: input }),
+
   messages: (threadId: string, input: { limit?: number; cursor?: string | null } = {}) =>
     page<Message>(`/v1/threads/${threadId}/messages${query(input)}`),
 

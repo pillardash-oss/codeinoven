@@ -12,9 +12,53 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <link rel="icon" href="/codeinoven-mark.svg" />
+    <script>
+      // Paint the saved scheme before the first frame: the app's theme is a class
+      // on the document, and a dark phone that opens light reads as a bug.
+      try {
+        var saved = localStorage.getItem('cio.mobile.theme')
+        if (saved === 'dark') document.documentElement.classList.add('dark')
+        if (saved === 'light') document.documentElement.classList.add('light')
+        document.documentElement.style.colorScheme =
+          saved === 'dark' ? 'dark' : saved === 'light' ? 'light' : 'light dark'
+      } catch (error) {}
+    </script>
+    <style>
+      /* The frame the app draws before its first screen exists. It is the brand
+         mark on the app's own ground, so a slow open is a held breath rather
+         than an empty white page. The script removes it once the shell mounts. */
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 0.75rem;
+        background: #f7f6f2;
+        color: #081825;
+      }
+      #boot p {
+        margin: 0;
+        font:
+          400 0.875rem/1.2 ui-monospace,
+          monospace;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      @media (prefers-color-scheme: dark) {
+        #boot {
+          background: #0b0b0d;
+          color: #f5f4f0;
+        }
+      }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="off">
+    <div id="boot" aria-hidden="true">
+      <img src="/codeinoven-mark.svg" alt="" width="56" height="56" />
+      <p>CodeInOven</p>
+    </div>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>

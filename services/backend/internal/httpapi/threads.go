@@ -4,8 +4,18 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/pillardash-oss/codeinoven/services/backend/internal/auth"
 	"github.com/pillardash-oss/codeinoven/services/backend/internal/store"
 )
+
+// maxThreadTitleBytes is the longest title the phone may start a thread with.
+const maxThreadTitleBytes = 200
+
+// createThreadRequest is the POST /v1/threads body.
+type createThreadRequest struct {
+	ProjectID string `json:"projectId"`
+	Title     string `json:"title"`
+}
 
 // handleListThreads serves GET /v1/threads.
 //
@@ -94,6 +104,54 @@ func parseStateFilter(raw string) ([]string, error) {
 }
 
 // handleGetThread serves GET /v1/threads/{id}.
+// handleCreateThread serves POST /v1/threads.
+//
+// A phone starts a thread in a project it is already looking at, so the request
+// is the project and a title and nothing else: the owner of this service is the
+// desktop that will pick the work up.
+func (s *Server) handleCreateThread(w http.ResponseWriter, r *http.Request) {
+	authCtx, ok := authFrom(r.Context())
+	if !ok {
+		writeError(w, s.log, unauthorized())
+		return
+	}
+
+	var req createThreadRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	projectID := strings.TrimSpace(req.ProjectID)
+	if projectID == "" {
+		writeError(w, s.log, badRequest("projectId is required"))
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		writeError(w, s.log, badRequest("title is required"))
+		return
+	}
+	if len(title) > maxThreadTitleBytes {
+		writeError(w, s.log, badRequest("title must be at most 200 bytes"))
+		return
+	}
+
+	if _, err := s.store.ProjectByID(r.Context(), authCtx.Store.SchemaName, projectID); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+
+	thread, err := s.store.CreateThread(
+		r.Context(), authCtx.Store.SchemaName,
+		auth.NewID(auth.PrefixThread), projectID, title,
+	)
+	if err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+	writeData(w, http.StatusCreated, thread)
+}
+
 func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 	authCtx, ok := authFrom(r.Context())
 	if !ok {

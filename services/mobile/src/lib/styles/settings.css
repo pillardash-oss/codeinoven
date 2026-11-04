@@ -1,0 +1,169 @@
+/* Settings: a setting is a row, and a choice of three is one segmented control.
+
+   The scheme is a single choice out of Light, Dark and the system's own, so it is
+   one control. Two switches could disagree with each other, and a phone that is
+   told to follow the system cannot also be told to be always dark. */
+
+.set-head {
+  margin: 0;
+  padding: 1.25rem var(--gutter) 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-dimmed);
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem var(--gutter);
+  border-top: 1px solid var(--color-border);
+}
+
+.set-row .body-cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.set-row .row-title {
+  font-size: 0.9375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-row .row-line {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seg {
+  display: flex;
+  flex: none;
+  border: 1px solid var(--color-border-strong);
+}
+
+.seg button {
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.seg button + button {
+  border-left: 1px solid var(--color-border-strong);
+}
+
+.seg button[aria-pressed='true'] {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.set-note {
+  margin: 0;
+  padding: 0.5rem var(--gutter) 0;
+  font-size: 0.75rem;
+  color: var(--color-danger);
+}
+
+.set-foot {
+  margin: 0;
+  padding: 1.5rem var(--gutter) 2rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  line-height: 1.5;
+}
+
+.icon-plate {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  background: var(--color-elevated);
+  color: var(--color-muted);
+}
+
+.identity-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--mark);
+  height: var(--mark);
+  object-fit: cover;
+  background: var(--color-elevated);
+  color: var(--color-muted);
+  font-size: 0.75rem;
+}
+
+.field-row {
+  align-items: stretch;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+}
+
+.field input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.9375rem;
+}
+
+.actions-row {
+  justify-content: space-between;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem 0.5rem 0.25rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-elevated);
+}
+
+.confirm span {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.warn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--color-warning);
+}
+
+.btn.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}

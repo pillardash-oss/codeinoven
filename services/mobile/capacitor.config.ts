@@ -21,6 +21,25 @@ const config: CapacitorConfig = {
     contentInset: 'never',
     scrollEnabled: false
   },
+  plugins: {
+    /**
+     * The shell draws under the system bars. The design's overlay is a full
+     * screen of dimming, and an app inset by the status bar can only dim down to
+     * it: the scrim would stop at the notification panel, which reads as a bug.
+     * With the bars overlaid, the insets arrive as CSS variables (SystemBars
+     * `css` mode) and the panels pad their own content away from them.
+     */
+    StatusBar: {
+      overlaysWebView: true,
+      style: 'LIGHT'
+    },
+    SystemBars: {
+      // The activity owns the insets (see MainActivity): Capacitor pads the
+      // WebView on WebView versions before Chromium 140, and a padded WebView
+      // cannot dim the system bars behind a sheet.
+      insetsHandling: 'disable'
+    }
+  },
   android: {
     /**
      * The shell is served from `https://localhost`, so a build pointed at a plain

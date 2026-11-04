@@ -88,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/projects/{id}", s.requireSession(http.HandlerFunc(s.handleGetProject)))
 	mux.Handle("GET /v1/assistants", s.requireSession(http.HandlerFunc(s.handleListAssistants)))
 	mux.Handle("GET /v1/threads", s.requireSession(http.HandlerFunc(s.handleListThreads)))
+	mux.Handle("POST /v1/threads", s.requireSession(http.HandlerFunc(s.handleCreateThread)))
 	mux.Handle("GET /v1/threads/{id}", s.requireSession(http.HandlerFunc(s.handleGetThread)))
 	mux.Handle("GET /v1/threads/{id}/messages", s.requireSession(http.HandlerFunc(s.handleListMessages)))
 	mux.Handle("POST /v1/threads/{id}/prompts", s.requireSession(http.HandlerFunc(s.handleCreatePrompt)))

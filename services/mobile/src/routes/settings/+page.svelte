@@ -7,11 +7,12 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
-  import AppBar from '#lib/components/AppBar.svelte'
+  import PanelBar from '#lib/components/PanelBar.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge } from '#lib/api/status'
   import type { Device, DevicePlatform } from '#lib/api/types'
   import { session } from '#lib/stores/session.svelte'
+  import { syncSystemBars } from '#lib/system-bars'
 
   /**
    * Settings. The phone answers three questions here and nothing else: how it
@@ -100,6 +101,9 @@
     root.classList.remove('dark', 'light')
     if (choice === 'dark') root.classList.add('dark')
     if (choice === 'light') root.classList.add('light')
+    // The platform draws form controls and scrollbars from this, and the system
+    // bars read it through syncSystemBars.
+    root.style.colorScheme = choice === 'system' ? 'light dark' : choice
   }
 
   function setTheme(choice: ThemeChoice): void {
@@ -110,6 +114,7 @@
       // A phone with no storage still changes for this session.
     }
     applyTheme(choice)
+    void syncSystemBars()
   }
 
   /* ---- Identity ---- */
@@ -189,7 +194,7 @@
   })
 </script>
 
-<AppBar title="Settings">
+<PanelBar title="Settings">
   {#snippet actions()}
     <button
       class="icon-btn"
@@ -201,7 +206,7 @@
       <CioRefresh size={20} />
     </button>
   {/snippet}
-</AppBar>
+</PanelBar>
 
 <div class="list settings">
   <p class="set-head">Appearance</p>

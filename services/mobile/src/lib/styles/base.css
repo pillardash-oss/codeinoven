@@ -1,0 +1,327 @@
+/* CodeInOven mobile: tokens and the primitives every screen shares.
+   Type is the app's own: Oven Box, bundled from resources/fonts/oven, with the
+   same 200 to 800 range the desktop loads. The base weight is 200, which is what
+   makes the interface read as this product rather than as a generic mobile list.
+   The tokens mirror src/renderer/app.css, which stays the source of truth, and
+   every rule reads them by name so a palette change lands in one place. */
+@font-face {
+  font-family: 'Oven Box';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('/fonts/oven-box.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Oven Mono';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('/fonts/oven-mono.woff2') format('woff2');
+}
+
+:root {
+  --color-app: #f7f6f2;
+  --color-surface: #ffffff;
+  --color-elevated: #f0efea;
+  --color-overlay: #e8e7e2;
+  --color-foreground: #081825;
+  --color-muted: #4a5568;
+  --color-dimmed: #8b95a5;
+  --color-border: #e2e1dc;
+  --color-border-strong: #c8c7c2;
+  --color-accent: #d4af37;
+  --color-primary: #081825;
+  --color-on-primary: #f7f6f2;
+  --color-success: #0f7a37;
+  --color-warning: #9a5b06;
+  --color-danger: #c02626;
+  --color-info: #2563eb;
+  --color-thread-spec: #6d28d9;
+  --ink-meta: #5f6672;
+
+  --font:
+    'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
+    ui-monospace, monospace;
+  --font-weight-base: 200;
+
+  --gutter: 1.25rem;
+  --mark: 2.25rem;
+}
+
+html.dark {
+  --color-app: #0b0b0d;
+  --color-surface: #141417;
+  --color-elevated: #1c1c20;
+  --color-overlay: #08080a;
+  --color-foreground: #f5f4f0;
+  --color-muted: #9d9da6;
+  --color-dimmed: #5f5f68;
+  --color-border: #27272c;
+  --color-border-strong: #3b3b42;
+  --color-primary: #f5f4f0;
+  --color-on-primary: #0b0b0d;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-info: #7ba3d4;
+  --color-thread-spec: #a78bfa;
+  --ink-meta: #9d9da6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --color-app: #0b0b0d;
+    --color-surface: #141417;
+    --color-elevated: #1c1c20;
+    --color-overlay: #08080a;
+    --color-foreground: #f5f4f0;
+    --color-muted: #9d9da6;
+    --color-dimmed: #5f5f68;
+    --color-border: #27272c;
+    --color-border-strong: #3b3b42;
+    --color-primary: #f5f4f0;
+    --color-on-primary: #0b0b0d;
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-info: #7ba3d4;
+    --color-thread-spec: #a78bfa;
+    --ink-meta: #9d9da6;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-app);
+  overscroll-behavior: none;
+  color: var(--color-foreground);
+  font-family: var(--font);
+  /* The app's base weight is light; chrome earns its weight back one step at a
+     time. This single value is most of why the desktop reads calm. */
+  font-weight: var(--font-weight-base);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    'calt' 0,
+    'liga' 0,
+    'dlig' 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The brand draws no soft corners: a control is square to 2px and never round. */
+:where(button, input, textarea, select, [role='dialog']) {
+  border-radius: 2px;
+}
+
+/* Focus is the app's rule, a 1px foreground outline offset by 2px, not a ring. */
+:where(button, a, [role='radio'], [role='switch']):focus-visible {
+  outline: 1px solid var(--color-foreground);
+  outline-offset: 2px;
+}
+
+:where(input, textarea):focus,
+:where(input, textarea):focus-visible {
+  outline: none;
+}
+
+/* One dot is a state, never an ornament: a square, because the brand draws no
+   soft corners, filled from the tone the status names. */
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  background: currentColor;
+}
+
+/* A project's mark: its own asset when it has one, otherwise its initials on a
+   wash of its own colour, which is the rule the desktop follows. */
+.mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--mark);
+  height: var(--mark);
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--tint, var(--color-muted));
+  background: color-mix(in srgb, var(--tint, var(--color-muted)) 12%, transparent);
+  overflow: hidden;
+}
+
+.mark > svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  display: block;
+}
+
+.mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* A project that has a real icon keeps no wash behind it: the wash is the
+   fallback for initials, and a tint under a logo muddies its colour. */
+.mark.plain {
+  background: transparent;
+}
+
+.mark.gold {
+  --tint: #8a6d1f;
+}
+
+.mark.blue {
+  --tint: #1d4ed8;
+}
+
+.mark.green {
+  --tint: #0f7a37;
+}
+
+.mark.red {
+  --tint: #b91c1c;
+}
+
+.mark.violet {
+  --tint: #6d28d9;
+}
+
+.mark.slate {
+  --tint: #556070;
+}
+
+.mark.amber {
+  --tint: #9a5b06;
+}
+
+.mark.rose {
+  --tint: #be123c;
+}
+
+.mark.orange {
+  --tint: #c2410c;
+}
+
+.btn {
+  min-height: 2.75rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.btn:hover {
+  background: var(--color-elevated);
+}
+
+.btn.primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 500;
+}
+
+.btn.quiet {
+  border-color: transparent;
+  color: var(--color-muted);
+}
+
+.btn:disabled {
+  color: var(--color-dimmed);
+  cursor: default;
+}
+
+.btn:focus-visible,
+.send:focus-visible,
+.dockitem:focus-visible,
+.thread-row:focus-visible {
+  outline: 2px solid var(--color-foreground);
+  outline-offset: -2px;
+}
+
+/* A list with nothing in it says so in one quiet line. */
+.empty {
+  padding: 3rem var(--gutter);
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The one entrance: a list, a row or a menu rises a quarter of a rem. */
+@keyframes list-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}
+
+/* A card is the sign-in screen's paper: a bordered surface with a foot that
+   carries its two controls. Settings and the panels are lists, not cards. */
+.card {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.card-foot .right {
+  display: flex;
+  gap: 0.375rem;
+}
+
+/* A one-line reading under a control: quiet, and never a second paragraph. */
+.note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}

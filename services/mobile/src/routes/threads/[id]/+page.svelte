@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import { page } from '$app/state'
-  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import Composer from '#lib/components/Composer.svelte'
+  import PanelBar from '#lib/components/PanelBar.svelte'
   import Sheet from '#lib/components/Sheet.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
@@ -229,18 +229,13 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="talk-page">
-  <header class="bar talk">
-    <div class="bar-row">
-      <a class="menu-btn" href="/threads" aria-label="Back to threads" title="Back to threads">
-        <CioBack size={20} />
-      </a>
-      <div class="talk-id">
-        <h1>{title}</h1>
-        <p class="talk-meta">
-          <i class="dot" style:background={statusTone}></i>
-          <span>{meta}</span>
-        </p>
-      </div>
+  <PanelBar
+    {title}
+    subtitle={meta}
+    tone={statusTone}
+    back={{ href: '/threads', label: 'Back to threads' }}
+  >
+    {#snippet actions()}
       <button
         class="icon-btn"
         type="button"
@@ -250,8 +245,8 @@
       >
         <CioEllipsis size={20} />
       </button>
-    </div>
-  </header>
+    {/snippet}
+  </PanelBar>
 
   {#if loading}
     <div class="chat" aria-busy="true" aria-label="Reading the thread">
@@ -283,6 +278,7 @@
           <p class="turn-user" in:arrive>{row.message.body}</p>
         {:else}
           <article class="turn" in:arrive>
+            <p class="who">Oven</p>
             <div class="answer">
               {#each paragraphs(row.message.body) as paragraph, index (index)}
                 <p>{paragraph}</p>

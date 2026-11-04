@@ -380,6 +380,31 @@ func (s *Store) ListThreads(
 	return out, more, nil
 }
 
+// CreateThread inserts one thread that nobody has worked on yet and returns it
+// as the list would read it. The project must exist: a thread without one has no
+// sidebar to sit under, so a foreign-key failure is the caller's error to report.
+func (s *Store) CreateThread(
+	ctx context.Context, schemaName, threadID, projectID, title string,
+) (Thread, error) {
+	var thread Thread
+	err := s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO threads (id, project_id, title) VALUES ($1, $2, $3)`,
+			threadID, projectID, title,
+		); err != nil {
+			return err
+		}
+		var err error
+		thread, err = scanThread(tx.QueryRow(ctx,
+			`SELECT `+threadColumns+` FROM threads t WHERE t.id = $1`, threadID))
+		return err
+	})
+	if err != nil {
+		return Thread{}, err
+	}
+	return thread, nil
+}
+
 // ThreadByID returns one thread.
 func (s *Store) ThreadByID(ctx context.Context, schemaName, threadID string) (Thread, error) {
 	var thread Thread

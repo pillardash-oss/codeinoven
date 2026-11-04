@@ -1,212 +1,55 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import CioInbox from '@pdslng/cio-icon/CioInbox.svelte'
+  import { invalidateAll } from '$app/navigation'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
-  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
-  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import { api, ApiError } from '#lib/api/client'
-  import {
-    INBOX_GROUPS,
-    STATUS_WEIGHT,
-    statusSkin,
-    toneColor,
-    type InboxGroup
-  } from '#lib/api/status'
-  import type { Project, Thread, ThreadStatus } from '#lib/api/types'
-  import AppBar from '#lib/components/AppBar.svelte'
-  import FamilyTitle from '#lib/components/FamilyTitle.svelte'
-  import Sheet from '#lib/components/Sheet.svelte'
-  import Switch from '#lib/components/Switch.svelte'
+  import PanelBar from '#lib/components/PanelBar.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
-  import { page } from '$app/state'
+  import type { PageData } from './$types'
 
   /**
-   * Threads. The default view is every thread from every project in one run,
-   * ordered by what needs the user first and then by recency, with each row
-   * carrying its project's mark because no heading above it says which project
-   * it belongs to. Inbox turns that one run into the status groups.
+   * The thread panel: every thread of the project in scope, newest and most
+   * urgent first, grouped only by which ones are pinned. The dock's project
+   * sheet chooses the scope; this screen never grows a second list.
+   *
+   * A long project is drawn as it is scrolled, because a hundred and twenty rows
+   * laid out at once is a stall on a phone, not a list.
    */
 
-  let threads = $state<Thread[]>([])
-  let projects = $state<Project[]>([])
-  let loading = $state(true)
-  let error = $state<string | null>(null)
-  let inbox = $state(false)
-  let group = $state<InboxGroup | 'all'>('all')
+  const PAGE = 40
 
-  /**
-   * The inbox's groups. A short press turns grouping on; a long press opens the
-   * panel that decides which groups exist and in what order, and the tabs draw
-   * exactly what that panel says.
-   */
-  const INBOX_KEY = 'cio.mobile.inbox.groups'
-  interface GroupRow {
-    id: InboxGroup
-    enabled: boolean
-  }
+  let { data }: { data: PageData } = $props()
 
-  let groupRows = $state<GroupRow[]>(INBOX_GROUPS.map((entry) => ({ id: entry.id, enabled: true })))
-  let drawerOpen = $state(false)
-  let press: ReturnType<typeof setTimeout> | undefined
-  let longPressed = false
   let searchOpen = $state(false)
   let query = $state('')
-  /** Focus the filter as soon as it appears, for the same reason as Projects. */
+  let shown = $state(PAGE)
+
   function focusOnMount(node: HTMLInputElement): void {
     node.focus()
   }
 
-  let projectFilter = $derived(page.url.searchParams.get('project'))
+  let scope = $derived(data.projects.find((project) => project.id === data.project) ?? null)
 
-  async function load(): Promise<void> {
-    loading = true
-    error = null
-    try {
-      const [threadPage, projectPage] = await Promise.all([
-        api.threads({ limit: 200, project: projectFilter ?? undefined }),
-        api.projects({ sort: 'activity', limit: 100 })
-      ])
-      threads = threadPage.items
-      projects = projectPage.items
-    } catch (cause) {
-      error =
-        cause instanceof ApiError
-          ? cause.message
-          : 'Threads could not be loaded. Check that the service is running.'
-    } finally {
-      loading = false
-    }
-  }
-
-  onMount(() => {
-    groupRows = readGroups()
-    void load()
-  })
-
-  function readGroups(): GroupRow[] {
-    const fallback = INBOX_GROUPS.map((entry) => ({ id: entry.id, enabled: true }))
-    try {
-      const raw = globalThis.localStorage?.getItem(INBOX_KEY)
-      if (!raw) return fallback
-      const parsed: unknown = JSON.parse(raw)
-      if (!Array.isArray(parsed)) return fallback
-      const known = new Set(INBOX_GROUPS.map((entry) => entry.id))
-      const rows: GroupRow[] = []
-      for (const item of parsed) {
-        if (typeof item !== 'object' || item === null) continue
-        const candidate = item as { id?: unknown; enabled?: unknown }
-        if (typeof candidate.id !== 'string' || !known.has(candidate.id as InboxGroup)) continue
-        rows.push({ id: candidate.id as InboxGroup, enabled: candidate.enabled !== false })
-      }
-      for (const entry of INBOX_GROUPS) {
-        if (!rows.some((row) => row.id === entry.id)) rows.push({ id: entry.id, enabled: true })
-      }
-      return rows
-    } catch {
-      return fallback
-    }
-  }
-
-  function writeGroups(): void {
-    try {
-      globalThis.localStorage?.setItem(INBOX_KEY, JSON.stringify(groupRows))
-    } catch {
-      // A phone with no storage still groups; it just forgets the arrangement.
-    }
-  }
-
-  function toggleGroup(id: InboxGroup, enabled: boolean): void {
-    groupRows = groupRows.map((row) => (row.id === id ? { ...row, enabled } : row))
-    if (!enabled && group === id) setGroup('all')
-    writeGroups()
-  }
-
-  function moveGroup(id: InboxGroup, direction: -1 | 1): void {
-    const index = groupRows.findIndex((row) => row.id === id)
-    const target = index + direction
-    if (index < 0 || target < 0 || target >= groupRows.length) return
-    const next = [...groupRows]
-    const [moved] = next.splice(index, 1)
-    if (!moved) return
-    next.splice(target, 0, moved)
-    groupRows = next
-    writeGroups()
-  }
-
-  let activeGroups = $derived(
-    groupRows
-      .filter((row) => row.enabled)
-      .map((row) => INBOX_GROUPS.find((entry) => entry.id === row.id))
-      .filter((entry): entry is (typeof INBOX_GROUPS)[number] => entry !== undefined)
+  let filtered = $derived(
+    query.trim()
+      ? data.threads.filter((thread) => {
+          const needle = query.trim().toLowerCase()
+          return (
+            thread.title.toLowerCase().includes(needle) ||
+            (scope?.name ?? '').toLowerCase().includes(needle)
+          )
+        })
+      : data.threads
   )
 
-  function beginPress(): void {
-    longPressed = false
-    press = setTimeout(() => {
-      longPressed = true
-      drawerOpen = true
-    }, 450)
+  let pinned = $derived(filtered.filter((thread) => thread.pinned))
+  let recent = $derived(filtered.filter((thread) => !thread.pinned))
+
+  function projectOf(id: string) {
+    return data.projects.find((project) => project.id === id) ?? null
   }
 
-  function endPress(): void {
-    if (press) clearTimeout(press)
-    press = undefined
-  }
-
-  function pressInbox(): void {
-    if (longPressed) {
-      longPressed = false
-      return
-    }
-    toggleInbox()
-  }
-
-  function projectOf(id: string): Project | null {
-    return projects.find((project) => project.id === id) ?? null
-  }
-
-  let visible = $derived.by(() => {
-    const needle = query.trim().toLowerCase()
-    return threads
-      .filter((thread) => {
-        if (needle && !thread.title.toLowerCase().includes(needle)) return false
-        if (group === 'all') return true
-        if (group === 'unread') return !thread.read
-        return statusSkin(thread.status).group === group
-      })
-      .sort((a, b) => {
-        const weight = statusWeight(a.status) - statusWeight(b.status)
-        if (weight !== 0) return weight
-        return b.lastActivity - a.lastActivity
-      })
-  })
-
-  let scopeName = $derived(
-    projectFilter ? (projectOf(projectFilter)?.name ?? 'Project') : 'Threads'
-  )
-
-  /**
-   * A list of a hundred and twenty rows drawn at once is a stall on a phone, so
-   * the list grows in pages as it scrolls. The rows already on screen keep their
-   * identity, which is what makes the filter's arrivals cheap.
-   */
-  const PAGE = 40
-  let shown = $state(PAGE)
-
-  function grow(node: HTMLElement): () => void {
-    const listen = (): void => {
-      if (node.scrollTop + node.clientHeight < node.scrollHeight - 320) return
-      if (shown >= visible.length) return
-      shown = Math.min(visible.length, shown + PAGE)
-    }
-    node.addEventListener('scroll', listen, { passive: true })
-    return () => node.removeEventListener('scroll', listen)
-  }
-
-  /** Any change of filter starts the list again at the first page. */
-  function setGroup(next: InboxGroup | 'all'): void {
-    group = next
-    shown = PAGE
+  function toggleSearch(): void {
+    searchOpen = !searchOpen
+    if (!searchOpen) query = ''
   }
 
   function search(event: Event): void {
@@ -216,35 +59,27 @@
     shown = PAGE
   }
 
-  function statusWeight(status: ThreadStatus): number {
-    return STATUS_WEIGHT[status] ?? 99
+  /** The list grows as it is read rather than all at once. */
+  function grow(node: HTMLElement): () => void {
+    const listen = (): void => {
+      if (node.scrollTop + node.clientHeight < node.scrollHeight - 320) return
+      if (shown >= filtered.length) return
+      shown = Math.min(filtered.length, shown + PAGE)
+    }
+    node.addEventListener('scroll', listen, { passive: true })
+    return () => node.removeEventListener('scroll', listen)
   }
 
-  function countFor(id: InboxGroup): number {
-    if (id === 'unread') return threads.filter((thread) => !thread.read).length
-    return threads.filter((thread) => statusSkin(thread.status).group === id).length
-  }
-
-  function toggleSearch(): void {
-    searchOpen = !searchOpen
-    if (!searchOpen) query = ''
-  }
-
-  function toggleInbox(): void {
-    inbox = !inbox
-    if (!inbox) setGroup('all')
+  function reload(): void {
+    void invalidateAll()
   }
 </script>
 
-<AppBar title={scopeName} count={visible.length}>
-  {#snippet titleSlot()}
-    <FamilyTitle
-      current="threads"
-      count={visible.length}
-      projects={projects.length}
-      threads={threads.length}
-    />
-  {/snippet}
+<PanelBar
+  title={scope ? scope.name : 'Threads'}
+  subtitle={scope ? `${data.threads.length} threads in this project` : null}
+  count={scope ? null : data.threads.length}
+>
   {#snippet actions()}
     <button
       class="icon-btn"
@@ -256,31 +91,8 @@
     >
       <CioSearch size={20} />
     </button>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Inbox: group threads by status"
-      title="Inbox: group threads by status"
-      aria-pressed={inbox}
-      onpointerdown={beginPress}
-      onpointerup={endPress}
-      onpointerleave={endPress}
-      onpointercancel={endPress}
-      onclick={pressInbox}
-    >
-      <CioInbox size={20} />
-    </button>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Refresh threads"
-      title="Refresh threads"
-      onclick={load}
-    >
-      <CioRefresh size={20} />
-    </button>
   {/snippet}
-</AppBar>
+</PanelBar>
 
 {#if searchOpen}
   <div class="search-row">
@@ -296,144 +108,31 @@
   </div>
 {/if}
 
-{#if inbox}
-  <div class="tabs inbox" role="group" aria-label="Group threads by status">
-    <button
-      class="tab"
-      type="button"
-      aria-pressed={group === 'all'}
-      onclick={() => setGroup('all')}
-    >
-      All
-    </button>
-    {#each activeGroups as entry (entry.id)}
-      <button
-        class="tab"
-        type="button"
-        aria-pressed={group === entry.id}
-        style:color={entry.tone ? toneColor(entry.tone) : undefined}
-        onclick={() => setGroup(entry.id)}
-      >
-        {entry.label}
-        {#if countFor(entry.id) > 0}<span class="tab-count">{countFor(entry.id)}</span>{/if}
-      </button>
-    {/each}
-  </div>
-{/if}
-
-<Sheet open={drawerOpen} onclose={() => (drawerOpen = false)} label="Inbox groups">
-  <div class="sheet-grab"></div>
-  <div class="sheet-head">
-    <h2>Inbox</h2>
-    <button type="button" onclick={() => (drawerOpen = false)}>Done</button>
-  </div>
-  {#each groupRows as row (row.id)}
-    {@const entry = INBOX_GROUPS.find((item) => item.id === row.id)}
-    <div class="sheet-row">
-      <i
-        class="dot"
-        data-tone={row.id}
-        style:color={entry?.tone ? toneColor(entry.tone) : undefined}
-      ></i>
-      <span class="name">{entry?.label ?? row.id}</span>
-      <button
-        class="grip"
-        type="button"
-        aria-label="Move {entry?.label ?? row.id} up"
-        title="Move {entry?.label ?? row.id} up"
-        disabled={groupRows[0]?.id === row.id}
-        onclick={() => moveGroup(row.id, -1)}
-      >
-        <CioChevronDown size={16} class="flip" />
-      </button>
-      <button
-        class="grip"
-        type="button"
-        aria-label="Move {entry?.label ?? row.id} down"
-        title="Move {entry?.label ?? row.id} down"
-        disabled={groupRows[groupRows.length - 1]?.id === row.id}
-        onclick={() => moveGroup(row.id, 1)}
-      >
-        <CioChevronDown size={16} />
-      </button>
-      <Switch
-        checked={row.enabled}
-        label="Show {entry?.label ?? row.id} in the inbox"
-        onchange={(on) => toggleGroup(row.id, on)}
-      />
-    </div>
-  {/each}
-</Sheet>
-
 <div class="list" {@attach grow}>
-  {#if loading}
-    {#each [0, 1, 2, 3, 4] as row (row)}
-      <div class="skeleton-row" aria-hidden="true"><span></span></div>
-    {/each}
-  {:else if error}
-    <p class="empty">{error}</p>
+  {#if data.error}
+    <p class="empty">{data.error}</p>
     <div class="retry-row">
-      <button class="btn" type="button" onclick={load}>Retry</button>
+      <button class="btn" type="button" onclick={reload}>Retry</button>
     </div>
-  {:else if visible.length === 0}
+  {:else if filtered.length === 0}
     <p class="empty">
-      {query || group !== 'all' ? 'No thread matches this filter' : 'No threads yet'}
+      {query ? 'No thread matches that name' : 'No threads in this project yet.'}
     </p>
   {:else}
-    {#each visible.slice(0, shown) as thread (thread.id)}
-      <ThreadRow {thread} project={projectOf(thread.projectId)} showProject />
+    {#if pinned.length > 0}
+      <p class="section-label">Pinned</p>
+      {#each pinned as thread (thread.id)}
+        <ThreadRow {thread} project={projectOf(thread.projectId)} />
+      {/each}
+    {/if}
+
+    <p class="section-label">{pinned.length > 0 ? 'Recent' : 'All threads'}</p>
+    {#each recent.slice(0, Math.max(0, shown - pinned.length)) as thread (thread.id)}
+      <ThreadRow {thread} project={projectOf(thread.projectId)} />
     {/each}
+
+    {#if filtered.length > shown}
+      <p class="list-foot">Showing {shown} of {filtered.length}</p>
+    {/if}
   {/if}
 </div>
-
-<style>
-  .search-row {
-    flex: none;
-    padding: 0 var(--gutter) 0.5rem;
-  }
-
-  .search-row input {
-    width: 100%;
-    padding: 0.625rem 0.75rem;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-foreground);
-    font: inherit;
-    font-size: 0.9375rem;
-  }
-
-  /* The reorder controls are the same glyph twice, one of them turned over, so
-     the panel has one drawing per direction instead of two. */
-  :global(.flip) {
-    transform: rotate(180deg);
-  }
-
-  .sheet-row .dot {
-    flex: none;
-    width: 0.5rem;
-    height: 0.5rem;
-    background: currentColor;
-  }
-
-  .tab-count {
-    margin-left: 0.3125rem;
-    font-size: 0.75rem;
-    color: var(--ink-meta);
-  }
-
-  .skeleton-row {
-    padding: 0.875rem var(--gutter);
-  }
-
-  .skeleton-row span {
-    display: block;
-    height: 2.25rem;
-    background: var(--color-elevated);
-  }
-
-  .retry-row {
-    display: flex;
-    justify-content: flex-end;
-    padding: 0 var(--gutter) 1rem;
-  }
-</style>

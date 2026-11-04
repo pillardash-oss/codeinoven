@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge } from '#lib/api/status'
   import type { Assistant } from '#lib/api/types'
-  import AppBar from '#lib/components/AppBar.svelte'
   import Mark from '#lib/components/Mark.svelte'
+  import PanelBar from '#lib/components/PanelBar.svelte'
   import { fold } from '#lib/motion'
 
   /**
@@ -14,8 +13,9 @@
    * scheduling and editing stay on the desktop, because that is where the work
    * they run on lives.
    *
-   * Scheduled assistants fold open with their facts, and a manual one is a plain
-   * row because there is no schedule to explain.
+   * Scheduled ones come first, because a run that starts itself is the one that
+   * matters, and a scheduled assistant folds open to what it does and how much it
+   * has produced.
    */
 
   type Filter = 'all' | 'scheduled' | 'manual'
@@ -52,23 +52,22 @@
     })
   )
 
-  /** The scheduled ones first: a run that starts itself is the one that matters. */
   let groups = $derived([
     {
       id: 'scheduled',
+      label: 'Scheduled',
       rows: visible
         .filter((assistant) => assistant.scheduled)
         .sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
     },
     {
       id: 'manual',
+      label: 'On demand',
       rows: visible
         .filter((assistant) => !assistant.scheduled)
         .sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
     }
   ])
-
-  let pausedCount = $derived(assistants.filter((assistant) => assistant.paused).length)
 
   function subtitle(assistant: Assistant): string {
     const origin = assistant.scheduled
@@ -83,19 +82,7 @@
   }
 </script>
 
-<AppBar title="Assistant" count={assistants.length}>
-  {#snippet actions()}
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="Refresh assistants"
-      title="Refresh assistants"
-      onclick={load}
-    >
-      <CioRefresh size={20} />
-    </button>
-  {/snippet}
-</AppBar>
+<PanelBar title="Assistant" count={assistants.length} />
 
 <div class="tabs" role="group" aria-label="Filter assistants">
   <button
@@ -120,11 +107,11 @@
     aria-pressed={filter === 'manual'}
     onclick={() => (filter = 'manual')}
   >
-    Manual
+    On demand
   </button>
 </div>
 
-<div class="list flat-sections">
+<div class="list">
   {#if loading}
     {#each [0, 1, 2] as row (row)}
       <div class="skeleton-row" aria-hidden="true"><span></span></div>
@@ -135,140 +122,57 @@
   {:else if visible.length === 0}
     <p class="empty">No assistant matches this filter</p>
   {:else}
-    {#each groups as list (list.id)}
-      {#if list.rows.length > 0}
-        <section class="section">
-          {#each list.rows as assistant (assistant.id)}
-            {@const open = opened[assistant.id] === true}
-            <div class="assistant-row">
-              <button
-                class="row flat"
-                type="button"
-                aria-expanded={assistant.scheduled ? open : undefined}
-                onclick={() => (assistant.scheduled ? toggle(assistant.id) : undefined)}
-              >
-                <Mark project={assistant} size={28} />
-                <span class="body-cell">
-                  <span class="row-title">{assistant.name}</span>
-                  <span class="row-line">{subtitle(assistant)}</span>
-                  <span class="row-meta">
-                    <span
-                      class="state"
-                      style:color={assistant.paused ? 'var(--color-warning)' : undefined}
-                    >
-                      <i class="dot" data-tone={assistant.paused ? 'needs' : 'done'}></i>
-                      {assistant.paused ? 'paused' : 'ready'}
-                    </span>
-                    {#if assistant.scheduled && assistant.scheduleName}
-                      <span>{assistant.scheduleName}</span>
-                    {:else}
-                      <span>on demand</span>
-                    {/if}
-                    {#if assistant.lastRunAt}
-                      <span>{formatAge(assistant.lastRunAt)}</span>
-                    {/if}
-                  </span>
-                </span>
-                {#if assistant.scheduled}
-                  <CioChevronDown class="chev" size={16} />
-                {/if}
-              </button>
-
-              {#if assistant.scheduled && open}
-                <div class="detail" data-open="true" transition:fold>
-                  <p class="run"><span>{assistant.description}</span></p>
-                  <p class="run">
-                    <span>Work produced</span>
-                    <em
-                      >{assistant.threadCount === 1
-                        ? '1 thread'
-                        : `${assistant.threadCount} threads`}</em
-                    >
-                  </p>
-                  <p class="run">
-                    <span>Last run</span>
-                    <em>{assistant.lastRunAt ? formatAge(assistant.lastRunAt) : 'never'}</em>
-                  </p>
-                </div>
+    {#each groups as group (group.id)}
+      {#if group.rows.length > 0}
+        <p class="section-label">{group.label}</p>
+        {#each group.rows as assistant (assistant.id)}
+          {@const open = opened[assistant.id] === true}
+          <div class="assistant-row">
+            <button
+              class="thread-row"
+              type="button"
+              aria-expanded={assistant.scheduled ? open : undefined}
+              onclick={() => (assistant.scheduled ? toggle(assistant.id) : undefined)}
+            >
+              <span class="thread-mark">
+                <Mark project={assistant} size={24} />
+              </span>
+              <span class="thread-cell">
+                <span class="thread-name">{assistant.name}</span>
+                <span class="thread-meta">{subtitle(assistant)}</span>
+              </span>
+              <span class="thread-age">
+                {assistant.lastRunAt ? formatAge(assistant.lastRunAt) : ''}
+              </span>
+              {#if assistant.scheduled}
+                <CioChevronDown class="chev" size={16} />
               {/if}
-            </div>
-          {/each}
-        </section>
+            </button>
+
+            {#if assistant.scheduled && open}
+              <div class="detail" transition:fold>
+                <p class="run"><span>{assistant.description}</span></p>
+                <p class="run">
+                  <span>Work produced</span>
+                  <em
+                    >{assistant.threadCount === 1
+                      ? '1 thread'
+                      : `${assistant.threadCount} threads`}</em
+                  >
+                </p>
+                <p class="run">
+                  <span>Last run</span>
+                  <em>{assistant.lastRunAt ? formatAge(assistant.lastRunAt) : 'never'}</em>
+                </p>
+                <p class="run">
+                  <span>State</span>
+                  <em>{assistant.paused ? 'paused' : 'ready'}</em>
+                </p>
+              </div>
+            {/if}
+          </div>
+        {/each}
       {/if}
     {/each}
   {/if}
 </div>
-
-{#if pausedCount > 0}
-  <p class="list-foot">{pausedCount} paused</p>
-{/if}
-
-<style>
-  .assistant-row .row {
-    width: 100%;
-    border: 0;
-    background: transparent;
-    text-align: left;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .assistant-row :global(.chev) {
-    flex: none;
-    color: var(--color-muted);
-    transition: transform 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
-  }
-
-  .assistant-row .row[aria-expanded='true'] :global(.chev) {
-    transform: rotate(180deg);
-  }
-
-  .skeleton-row {
-    padding: 0.875rem var(--gutter);
-  }
-
-  .skeleton-row span {
-    display: block;
-    height: 2.25rem;
-    background: linear-gradient(
-      90deg,
-      var(--color-elevated) 0%,
-      var(--color-surface) 50%,
-      var(--color-elevated) 100%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.4s linear infinite;
-  }
-
-  .retry-row {
-    display: flex;
-    justify-content: flex-end;
-    padding: 0 var(--gutter) 1rem;
-  }
-
-  .list-foot {
-    flex: none;
-    margin: 0;
-    padding: 0.75rem var(--gutter) 1rem;
-    color: var(--ink-meta);
-    font-size: 0.75rem;
-  }
-
-  @keyframes shimmer {
-    from {
-      background-position: 200% 0;
-    }
-    to {
-      background-position: -200% 0;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .skeleton-row span,
-    .assistant-row :global(.chev) {
-      animation: none;
-      transition: none;
-    }
-  }
-</style>
