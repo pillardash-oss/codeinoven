@@ -190,6 +190,17 @@ export const IPC_EVENT_CONTRACT = {
    * design board changes the work folders and Settings is open behind it.
    */
   'config:changed': [] as unknown as [config: import('../types').AppConfig],
+  /**
+   * A project's actions were written by someone other than the panel showing
+   * them: another window, or an agent driving `projectActions:*` through app
+   * control. The full ordered list travels, because a save can also land one
+   * entry at a chosen position and a reader that only re-read the file would
+   * still be guessing when to do it.
+   */
+  'projectActions:changed': [] as unknown as [
+    projectId: string,
+    actions: import('../project-actions').ProjectAction[]
+  ],
   /** Assistants changed (created, updated, deleted, reordered). */
   'assistant:changed': [] as unknown as [assistants: import('../types').Assistant[]],
   /**
