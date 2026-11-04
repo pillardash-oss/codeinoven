@@ -81,8 +81,7 @@
     coordinatorHasActiveDelegates,
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
-    isOrchestrationChildThread,
-    isThreadBusy
+    isOrchestrationChildThread
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import { dispatchBadgeFor } from './thread-dispatch-badge'
@@ -420,24 +419,15 @@
     | 'approval'
     | 'error'
 
-  /** Threads with any unsent composer content read as "todo" (filled gray dot).
-   *  Live dictation counts too: from the first mic press through transcription
-   *  the user is drafting with their voice, so the row must read as draft
-   *  before the transcript ever reaches the composer. */
-  let isDraft = $derived(
-    rendererRecovery.hasDraftContent(thread.projectId, thread.id) ||
-      speechController.isCapturingThread(thread.id)
-  )
-
   /** Whether the user is typing into this thread's composer right now.
    *
-   *  Deliberately narrower than `isDraft`: that one also reports a message
-   *  already queued, and the two must stay apart or the row could not tell
-   *  "waiting to send" from "typing now" -- which is the whole reason the
-   *  secondary slot can say which of the two happened last. Live dictation counts
-   *  too: from the first mic press through transcription the user is drafting with
-   *  their voice, so the row reads draft before the transcript reaches the
-   *  composer. */
+   *  Deliberately narrower than "has any unsent content": it reports a composer
+   *  the user has actually touched, not a message waiting behind the thread's own
+   *  run, and the two must stay apart or the row could not tell "waiting to send"
+   *  from "typing now" -- which is the whole reason the secondary slot can say
+   *  which of the two happened last. Live dictation counts too: from the first mic
+   *  press through transcription the user is drafting with their voice, so the row
+   *  reads draft before the transcript reaches the composer. */
   let isTyping = $derived(
     rendererRecovery.hasTypedContent(thread.projectId, thread.id) ||
       speechController.isCapturingThread(thread.id)
@@ -496,9 +486,15 @@
   /** Another CodeInOven instance owns this thread's in-flight turn, so its live
    *  output and its stop control are there rather than here. */
   let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
-  let isBusyIndicator = $derived(
-    isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
-  )
+  /** Whether the row wears the working mark on its own account.
+   *
+   *  The persisted status is deliberately not a second source here. `isWorking`
+   *  already falls back to it before any live session has settled the run, and
+   *  from the moment a session settles, the live flag is the authority: reading
+   *  the status again let a stale `planning`/`executing` row keep spinning on the
+   *  sidebar while the header, the rail and the scope strips  every surface on
+   *  the shared rule  had already read the thread as idle. */
+  let isBusyIndicator = $derived(isWorking || isRetryPaused)
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
   /** The thread's agent is driving the computer right now   window-scoped or
    *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */

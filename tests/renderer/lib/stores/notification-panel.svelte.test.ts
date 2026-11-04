@@ -465,6 +465,7 @@ describe('routing a temporary chat notification', () => {
     expect(panel.unreadRailSummary('chats')).toBeNull()
     expect(panel.unreadRailSummary('projects')).toEqual({
       count: 1,
+      threadIds: ['thread-1'],
       label: '1 unread project',
       colors: ['var(--color-chat-success)']
     })
@@ -477,6 +478,18 @@ describe('routing a temporary chat notification', () => {
       'var(--color-chat-success)',
       'var(--color-success)'
     ])
+  })
+
+  it('counts one unread thread however many notices it raised', () => {
+    // One thread raises its own completion and a side chat's response: the row
+    // is one unread thread, so the rail must not read two.
+    panel.add(payload('turn'))
+    panel.add(temporaryChat('side'))
+    expect(panel.unreadRailSummary('projects')).toMatchObject({
+      count: 1,
+      threadIds: ['thread-1'],
+      label: '1 unread project'
+    })
   })
 
   it('reads a failed side chat as an error, not as a side-chat response', () => {

@@ -65,7 +65,18 @@ export interface InAppNotification {
 }
 
 export interface UnreadRailSummary {
+  /** Distinct threads behind the summary, never the number of notices. */
   count: number
+  /**
+   * Ids of the unread threads, newest first.
+   *
+   * The rail also counts the unread threads it holds in memory, and one thread
+   * can be unread in both sources (its own completed run and a side chat's
+   * response) or in neither. The ids are what let the rail count the union once
+   * per thread instead of taking a maximum of two counts that measure different
+   * things.
+   */
+  threadIds: string[]
   label: string
   /** All distinct unread accents, in the same order and colours as the bell. */
   colors: string[]
@@ -438,7 +449,13 @@ class NotificationPanelState {
 
   /** Completed-but-unread notifications grouped for the primary view rail.
    *  Attention, errors, specs, and missed runs belong to their activity/status
-   *  indicators, not the unread-completion dot. */
+   *  indicators, not the unread-completion dot.
+   *
+   *  The count is the number of distinct threads, not the number of notices: a
+   *  thread raises one notice for its own settled turn and one for a side chat
+   *  that answered on it, and the rail must still read one unread thread. The
+   *  accents are deduped by colour rather than by thread, because one thread can
+   *  legitimately carry two of them. */
   unreadRailSummary(family: 'projects' | 'chats' | 'assistant'): UnreadRailSummary | null {
     const entries = this._notifications.filter((notification) => {
       if (notification.kind !== 'completed' && notification.kind !== 'chat-completed') {
@@ -449,7 +466,8 @@ class NotificationPanelState {
       if (family === 'chats') return this.isChat(notification)
       return this.isAssistant(notification)
     })
-    const count = entries.length
+    const threadIds = [...new Set(entries.map((entry) => entry.threadId))]
+    const count = threadIds.length
     if (count === 0) return null
 
     // The dots list the accents actually waiting on the family, deduped and in
@@ -467,6 +485,7 @@ class NotificationPanelState {
       family === 'projects' ? 'project' : family === 'chats' ? 'chat' : 'assistant'
     return {
       count,
+      threadIds,
       label: `${count} unread ${familyLabel}${count === 1 ? '' : 's'}`,
       colors
     }
