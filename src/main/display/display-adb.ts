@@ -1,4 +1,3 @@
-import type { NativeImage } from 'electron'
 import type {
   DisplayControlAction,
   DisplayInputGesture,
@@ -6,7 +5,7 @@ import type {
   DisplaySourceDescriptor,
   DisplaySourceListing
 } from '../../lib/ipc/display'
-import { type DisplayCapture, decodeDisplayImage } from './display-capture'
+import { type CapturedFrame, type DisplayCapture, pngFrame } from './display-capture'
 import { resolveAdb } from './display-adb-paths'
 import { captureCommand, captureText } from './display-exec'
 
@@ -181,7 +180,7 @@ export class AndroidDisplayCapture implements DisplayCapture {
     private readonly adb: string
   ) {}
 
-  async grab(_maxDimension: number): Promise<NativeImage | null> {
+  async grab(_maxDimension: number): Promise<CapturedFrame | null> {
     if (this.disposed) return null
     // `exec-out` is what keeps a PNG from being mangled by the device shell's
     // line endings; the bytes arrive exactly as `screencap` wrote them.
@@ -194,7 +193,9 @@ export class AndroidDisplayCapture implements DisplayCapture {
     try {
       const bytes = await command.promise
       if (this.disposed) return null
-      return decodeDisplayImage(bytes)
+      // `screencap` already wrote a PNG, so the device's own bytes are the frame:
+      // nothing here decodes, resizes or re-encodes them.
+      return pngFrame(bytes)
     } finally {
       this.cancelled = null
     }

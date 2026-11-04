@@ -31,6 +31,13 @@ export interface DisplaySession {
   /** Minted per mounted stage, so a stale session can never be mistaken for a new one. */
   sessionId: string
   frame: DisplayFrame | null
+  /**
+   * The frame as a URL the browser paints directly.
+   *
+   * Built from the target's own PNG bytes and revoked the moment it is replaced: no
+   * base64, no re-encode, and no growing list of live blobs behind a moving picture.
+   */
+  url: string | null
   phase: DisplayCapturePhase
   /** Sentence shown while retrying or failed; cleared by the next good frame. */
   detail: string | null
@@ -91,7 +98,11 @@ class DisplayPanelState {
       subscribe('display:frame', (frame: DisplayFrame) => {
         const session = this.sessions[frame.tabId]
         if (!session || session.sessionId !== frame.sessionId) return
+        const url = URL.createObjectURL(new Blob([frame.bytes], { type: frame.mime }))
+        const previous = session.url
         session.frame = frame
+        session.url = url
+        if (previous) URL.revokeObjectURL(previous)
       })
     )
     this.cleanups.push(
@@ -131,6 +142,7 @@ class DisplayPanelState {
       tabId,
       sessionId: crypto.randomUUID(),
       frame: null,
+      url: null,
       phase: 'starting',
       detail: null,
       input: false,
@@ -163,6 +175,7 @@ class DisplayPanelState {
     const session = this.sessions[tabId]
     if (!session) return
     if (sessionId !== undefined && session.sessionId !== sessionId) return
+    if (session.url) URL.revokeObjectURL(session.url)
     const next = { ...this.sessions }
     delete next[tabId]
     this.sessions = next

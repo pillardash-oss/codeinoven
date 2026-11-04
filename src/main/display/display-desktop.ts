@@ -3,8 +3,7 @@ import {
   desktopCapturer,
   screen,
   systemPreferences,
-  type DesktopCapturerSource,
-  type NativeImage
+  type DesktopCapturerSource
 } from 'electron'
 import type {
   DisplayPermissionState,
@@ -12,7 +11,9 @@ import type {
   DisplaySourceKind,
   DisplaySourceListing
 } from '../../lib/ipc/display'
-import type { DisplayCapture } from './display-capture'
+import type { CapturedFrame, DisplayCapture } from './display-capture'
+import { ownedBytes } from './display-capture'
+import { retainPngEncoder, type OffMainPngEncoder } from './display-png'
 
 /**
  * The desktop: an entire screen, or one window.
@@ -175,6 +176,8 @@ function appIconDataUrl(source: DesktopCapturerSource): string | null {
 /** A live framebuffer reader for one screen or window. */
 export class DesktopDisplayCapture implements DisplayCapture {
   private disposed = false
+  /** The PNG for each frame is built in a worker, never on the main thread. */
+  private readonly encoder: OffMainPngEncoder = retainPngEncoder()
 
   constructor(
     readonly kind: Extract<DisplaySourceKind, 'desktop-screen' | 'desktop-window'>,
@@ -182,7 +185,7 @@ export class DesktopDisplayCapture implements DisplayCapture {
     readonly label: string
   ) {}
 
-  async grab(maxDimension: number): Promise<NativeImage | null> {
+  async grab(maxDimension: number): Promise<CapturedFrame | null> {
     if (this.disposed) return null
     const sources = await withTimeout(
       desktopCapturer.getSources({
@@ -199,11 +202,18 @@ export class DesktopDisplayCapture implements DisplayCapture {
     // A closed window or an unplugged screen is a normal end of life for a tab:
     // the stage keeps its last frame and the session reports that it stopped.
     if (!source || source.thumbnail.isEmpty()) return null
-    return source.thumbnail
+    const size = source.thumbnail.getSize()
+    if (size.width <= 0 || size.height <= 0) return null
+    // The platform already gave us pixels at the demand's size, so there is no
+    // resize left to do: only the encode, and that happens off this thread.
+    const png = await this.encoder.encode(source.thumbnail.toBitmap(), size.width, size.height)
+    if (this.disposed) return null
+    return { bytes: ownedBytes(png), mime: 'image/png', width: size.width, height: size.height }
   }
 
   dispose(): void {
     this.disposed = true
+    this.encoder.release()
   }
 }
 

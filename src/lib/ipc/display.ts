@@ -92,20 +92,31 @@ export interface DisplaySessionRequest {
  *
  * Both fields exist to keep an idle panel free: `visible` pauses capture
  * without tearing the session down (switching tabs, collapsing the dock, or
- * hiding the window all send false), and `maxDimension` is what the capture is
- * downscaled to, quantized by the renderer so a pixel of layout jitter does not
- * re-encode every frame at a new size.
+ * hiding the window all send false), and `maxDimension` is the size a source that
+ * *can* capture small is asked for (the desktop one), quantized by the renderer so
+ * a pixel of layout jitter does not ask for a new size every frame. A device is
+ * never re-encoded to fit it: its PNG is painted at whatever the browser scales it
+ * to.
  */
 export interface DisplayFrameDemand {
   maxDimension: number
   visible: boolean
 }
 
-/** One captured frame, already downscaled and JPEG-encoded. */
+/**
+ * One captured frame, exactly as the target encoded it.
+ *
+ * `bytes` is the target's own file (a device PNG), never a re-encode: the main
+ * process reads it and forwards it, so no frame is ever decoded, resized, encoded
+ * or turned into text on the main thread. The renderer paints it from a blob URL
+ * and lets the browser do the scaling.
+ */
 export interface DisplayFrame {
   sessionId: string
   tabId: string
-  dataUrl: string
+  bytes: Uint8Array<ArrayBuffer>
+  /** What those bytes are, so the renderer can hand them to a blob untouched. */
+  mime: string
   width: number
   height: number
   timestamp: number
@@ -319,6 +330,5 @@ export const invokeDisplayContract = {
    * This is what stops the watch: while a device is on screen there is nothing to
    * find, and the offer that put it there must never be repeated.
    */
-  'display:notePanel': {} as Contract<[mirrored: DisplayPanelTarget | null], void>,
-
+  'display:notePanel': {} as Contract<[mirrored: DisplayPanelTarget | null], void>
 }

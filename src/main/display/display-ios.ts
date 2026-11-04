@@ -1,4 +1,4 @@
-import { app, type NativeImage } from 'electron'
+import { app } from 'electron'
 import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
@@ -10,7 +10,7 @@ import type {
   DisplaySourceDescriptor,
   DisplaySourceListing
 } from '../../lib/ipc/display'
-import { type DisplayCapture, decodeDisplayImage } from './display-capture'
+import { type CapturedFrame, type DisplayCapture, pngFrame } from './display-capture'
 import { captureCommand, captureText } from './display-exec'
 
 /**
@@ -220,7 +220,7 @@ export class IosDisplayCapture implements DisplayCapture {
       : 'Tapping a simulator needs the idb client (fb-idb). Preview only.'
   }
 
-  async grab(_maxDimension: number): Promise<NativeImage | null> {
+  async grab(_maxDimension: number): Promise<CapturedFrame | null> {
     if (this.disposed) return null
     const directory = await this.ensureDirectory()
     if (!directory) return null
@@ -237,7 +237,9 @@ export class IosDisplayCapture implements DisplayCapture {
       await command.promise
       if (this.disposed) return null
       const bytes = await readFile(file)
-      return decodeDisplayImage(bytes)
+      // The simulator wrote a PNG; those bytes are the frame. No decode, no
+      // re-encode, nothing rebuilt from pixels on this thread.
+      return pngFrame(bytes)
     } finally {
       this.cancelled = null
     }

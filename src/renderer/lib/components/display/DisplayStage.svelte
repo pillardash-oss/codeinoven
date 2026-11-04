@@ -78,6 +78,8 @@
   const sourceId = $derived(tab.sourceId)
   const session = $derived(displayPanel.sessionFor(tab.id))
   const frame = $derived(session?.frame ?? null)
+  /** The frame's own URL, painted straight from the target's PNG bytes. */
+  const url = $derived(session?.url ?? null)
   const status = $derived(
     session?.phase === 'failed' || session?.phase === 'retrying' ? session.phase : null
   )
@@ -175,7 +177,7 @@
 
 <div class="relative flex h-full min-h-0 bg-app">
   <div class="relative flex min-w-0 flex-1 overflow-auto" bind:this={area}>
-    {#if frame && box}
+    {#if frame && box && url}
       <button
         type="button"
         class="relative m-auto block shrink-0 select-none p-0 {controlling
@@ -208,7 +210,7 @@
         }}
       >
         <img
-          src={frame.dataUrl}
+          src={url}
           alt={`Live preview of ${tab.title}`}
           class="block h-full w-full outline-none"
           draggable="false"

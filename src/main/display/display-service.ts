@@ -16,7 +16,7 @@ import { appServiceRegistry } from '../system/app-service-registry'
 import { Logger } from '../system/logger'
 import { listAndroidSources, AndroidDisplayCapture } from './display-adb'
 import { resolveAdb } from './display-adb-paths'
-import { encodeDisplayFrame, quantizeDemand, type DisplayCapture } from './display-capture'
+import { quantizeDemand, type DisplayCapture } from './display-capture'
 import { DesktopDisplayCapture, listDesktopSources } from './display-desktop'
 import { IosDisplayCapture, listIosSources } from './display-ios'
 
@@ -30,8 +30,9 @@ import { IosDisplayCapture, listIosSources } from './display-ios'
  * exist for as long as its tab does.
  *
  * Cadence is chosen per source kind from what a frame actually costs: a device
- * screenshot is a child process plus a PNG decode (roughly 2 frames a second is
- * the honest ceiling), while a desktop capture is a window enumeration.
+ * screenshot is one child process and a socket read (a couple of frames a second
+ * is the honest ceiling), while a desktop capture is a window enumeration plus an
+ * encode in a worker.
  */
 export interface DisplayServiceDeps {
   /** The window the frames are for. Null before the window exists, or after it closed. */
@@ -53,9 +54,9 @@ const IDLE_POLL_MS = 600
 const MIN_CAPTURE_GAP_MS = 250
 /** First wait after a failure, doubled per consecutive failure. */
 const RETRY_BASE_MS = 500
-/** A frame whose decode plus encode costs more than this is reported, so the
- *  cost stays a measured number instead of a guess. */
-const SLOW_ENCODE_MS = 60
+/** A frame whose capture took longer than this is reported, so the source's cost
+ *  stays a measured number instead of a guess. */
+const SLOW_CAPTURE_MS = 250
 /** Ceiling for the backoff, so a device that comes back is noticed within seconds. */
 const MAX_RETRY_MS = 8_000
 /** Failures before a session calls itself failed rather than retrying. */
@@ -285,29 +286,27 @@ export class DisplayService {
       const grabStartedAt = Date.now()
       const image = await session.capture.grab(session.demand.maxDimension)
       if (session.disposed) return
-      const encodeStartedAt = Date.now()
-      const encoded = image ? encodeDisplayFrame(image, session.demand.maxDimension) : null
-      // Decoding a full-resolution device PNG and encoding a JPEG are the only
-      // work this panel does on the main process, so their cost is reported
-      // rather than assumed: a frame that decodes slowly is the signal that a
-      // source needs to capture smaller, not a number to guess at.
-      const encodeMs = Date.now() - encodeStartedAt
+      // A frame costs a capture and nothing else: the bytes the target produced are
+      // the bytes the renderer paints, so there is no decode, resize, encode or
+      // base64 conversion in this process to report on.
+      const captureMs = Date.now() - grabStartedAt
       session.frames += 1
-      if (encodeMs > SLOW_ENCODE_MS || session.frames === 1) {
+      if (captureMs > SLOW_CAPTURE_MS || session.frames === 1) {
         Logger.dev(
-          `Display frame for ${session.kind} took ${encodeMs} ms to decode and encode at ${session.demand.maxDimension}px (capture ${encodeStartedAt - grabStartedAt} ms)`
+          `Display capture for ${session.kind} took ${captureMs} ms at ${session.demand.maxDimension}px (${image ? `${image.width}x${image.height} ${image.mime}` : 'nothing'})`
         )
       }
-      if (!encoded) throw new Error('the target returned nothing to paint')
+      if (!image) throw new Error('the target returned nothing to paint')
       session.failures = 0
       session.detail = null
       this.setPhase(session, 'live')
       const frame: DisplayFrame = {
         sessionId: session.id,
         tabId: session.tabId,
-        dataUrl: encoded.dataUrl,
-        width: encoded.width,
-        height: encoded.height,
+        bytes: image.bytes,
+        mime: image.mime,
+        width: image.width,
+        height: image.height,
         timestamp: Date.now()
       }
       this.send('display:frame', frame, window)
