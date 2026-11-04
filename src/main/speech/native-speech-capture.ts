@@ -1,9 +1,21 @@
-import { access } from 'node:fs/promises'
+import { access, rename, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { Logger } from '../system/logger'
+import { resolveFfmpegPath } from './ffmpeg-path'
+
+/**
+ * How many times a take may be resumed after its recorder process dies.
+ *
+ * A recorder that keeps dying (a crashing CoreAudio, a supervisor that kills
+ * everything it sees) must not spawn processes forever, so the take is resumed
+ * a bounded number of times and then settled as short with an explanation.
+ */
+const CAPTURE_RESUME_LIMIT = 3
+/** Delay before re-opening the microphone into a continuation segment. */
+const CAPTURE_RESUME_DELAY_MS = 150
 
 interface NativeCaptureRequest {
   id: string
@@ -48,6 +60,54 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>
 }
 
+/**
+ * Concatenate a take's segments into one CAF through the bundled decoder.
+ *
+ * The concat demuxer resolves relative entries against the list file, so the
+ * caller writes absolute paths; the format is pinned to the recorder's own LPCM
+ * so the result is the same shape every other part of speech already reads.
+ */
+function runFfmpegMerge(ffmpeg: string, listPath: string, outputPath: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      ffmpeg,
+      [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-y',
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        listPath,
+        '-c:a',
+        'pcm_f32le',
+        '-ar',
+        '16000',
+        '-ac',
+        '1',
+        '-f',
+        'caf',
+        outputPath
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'] }
+    )
+    let failure = ''
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
+      if (failure.length < 2_000) failure += chunk
+    })
+    child.once('error', reject)
+    child.once('exit', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(failure.trim() || `Audio merge exited with code ${code ?? 'unknown'}.`))
+    })
+  })
+}
+
 /** Main-process adapter for the macOS lossless PCM capture worker. */
 export class NativeSpeechCapture {
   private process: ChildProcessWithoutNullStreams | null = null
@@ -72,6 +132,19 @@ export class NativeSpeechCapture {
    * is remembered here so the stop can say what really happened.
    */
   private lostSession: { sessionId: string; reason: string } | null = null
+  /**
+   * Every file this take's audio lives in, oldest first.
+   *
+   * One take is one file until its recorder process dies. Then the rest of the
+   * take is captured into a continuation segment and the segments are merged
+   * into the take's original path on the way out, so a recorder that is killed
+   * costs a few hundred milliseconds instead of everything after the kill.
+   */
+  private segments: string[] = []
+  private resumeAttempts = 0
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null
+  /** Set when this take lost its recorder and continued in another segment. */
+  private recovered = false
 
   constructor(private readonly executablePath: string) {}
 
@@ -147,6 +220,10 @@ export class NativeSpeechCapture {
       await this.stop(this.currentSessionId).catch(() => undefined)
     }
     this.lostSession = null
+    this.segments = [outputPath]
+    this.resumeAttempts = 0
+    this.recovered = false
+    this.clearResumeTimer()
     try {
       await this.request({
         id: randomUUID(),
@@ -167,9 +244,10 @@ export class NativeSpeechCapture {
   async stop(sessionId: string): Promise<NativeCaptureReport> {
     const empty: NativeCaptureReport = { framesWritten: null, engineRestarts: 0, warning: null }
     if (this.currentSessionId !== sessionId) return empty
-    // The worker died during this take: its file is whatever it managed to
-    // write, and a fresh worker has nothing to say about it. Reporting that
-    // honestly is what stops a short take being handed on as a whole one.
+    this.clearResumeTimer()
+    // A resume that never came back leaves the take in its last written segment.
+    // Reporting that honestly is what stops a short take being handed on as a
+    // whole one.
     if (this.lostSession?.sessionId === sessionId) {
       const report: NativeCaptureReport = {
         framesWritten: null,
@@ -178,6 +256,7 @@ export class NativeSpeechCapture {
       }
       this.lostSession = null
       this.currentSessionId = null
+      await this.mergeSegments()
       return report
     }
     try {
@@ -199,8 +278,13 @@ export class NativeSpeechCapture {
           engineRestarts: response.engineRestarts ?? 0
         })
       }
+      // A take that continued in another segment has no single frame count. Its
+      // merged file does, so the service measures what was captured from the
+      // merged bytes instead.
+      const continued = this.recovered
+      await this.mergeSegments()
       return {
-        framesWritten,
+        framesWritten: continued ? null : framesWritten,
         engineRestarts: response.engineRestarts ?? 0,
         warning: response.captureWarning ?? null
       }
@@ -226,6 +310,7 @@ export class NativeSpeechCapture {
   }
 
   async dispose(): Promise<void> {
+    this.clearResumeTimer()
     if (this.currentSessionId) {
       await this.request({ id: randomUUID(), operation: 'stop' }).catch(() => undefined)
       this.currentSessionId = null
@@ -273,6 +358,9 @@ export class NativeSpeechCapture {
           reason: 'the microphone recorder stopped before the take ended'
         }
         Logger.error('Native microphone recorder stopped during a recording.', { sessionId })
+        // Do not let the kill end the recording: re-open the microphone into a
+        // continuation segment and merge the parts when the take ends.
+        this.scheduleResume(sessionId)
       }
       this.failPending(new Error(detail))
     })
@@ -291,6 +379,7 @@ export class NativeSpeechCapture {
     this.process = null
     this.buffered = ''
     this.currentSessionId = null
+    this.clearResumeTimer()
     this.failPending(reason)
     if (!child || child.killed) return
     // The worker ignores a polite signal while a take is live, because that is
@@ -303,6 +392,91 @@ export class NativeSpeechCapture {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     }, 750)
     escalate.unref()
+  }
+
+  /**
+   * Keep a take alive after its recorder process died.
+   *
+   * The recorder holds the only copy of the audio it was capturing, so a process
+   * death used to end the take wherever it happened. A fresh worker is started
+   * into a continuation segment instead, and the segments are merged into the
+   * take's own file on the way out. What is lost is the gap between the death and
+   * the resume, not the rest of the recording.
+   */
+  private scheduleResume(sessionId: string): void {
+    if (this.resumeTimer || this.resumeAttempts >= CAPTURE_RESUME_LIMIT) return
+    if (this.segments.length === 0) return
+    this.resumeAttempts += 1
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null
+      if (this.currentSessionId !== sessionId) return
+      const segmentPath = `${this.segments[0]}.${this.segments.length + 1}`
+      void this.request({ id: randomUUID(), operation: 'start', outputPath: segmentPath })
+        .then(() => {
+          if (this.currentSessionId !== sessionId) return
+          this.segments.push(segmentPath)
+          this.lostSession = null
+          this.recovered = true
+          Logger.info('Native speech capture resumed after its recorder stopped', {
+            sessionId,
+            segment: this.segments.length
+          })
+        })
+        .catch((error: unknown) => {
+          Logger.error('Native speech capture could not resume the take', error)
+          this.scheduleResume(sessionId)
+        })
+    }, CAPTURE_RESUME_DELAY_MS)
+    this.resumeTimer.unref?.()
+  }
+
+  private clearResumeTimer(): void {
+    if (!this.resumeTimer) return
+    clearTimeout(this.resumeTimer)
+    this.resumeTimer = null
+  }
+
+  /**
+   * Fold a take's continuation segments back into the file the take started in.
+   *
+   * Every segment is the same LPCM format, so the bundled decoder concatenates
+   * them without a re-encode decision to make. A merge that fails leaves the
+   * first segment in place, which is exactly the behaviour before continuation
+   * segments existed.
+   */
+  private async mergeSegments(): Promise<void> {
+    const [primary, ...continuations] = this.segments
+    if (!primary || continuations.length === 0) {
+      this.segments = primary ? [primary] : []
+      return
+    }
+    const listPath = `${primary}.segments.txt`
+    const mergedPath = `${primary}.merged`
+    let merged = false
+    try {
+      const ffmpeg = await resolveFfmpegPath()
+      const listing = this.segments
+        .map((path) => `file '${path.replaceAll("'", "'\\''")}'`)
+        .join('\n')
+      await writeFile(listPath, `${listing}\n`, { encoding: 'utf8', mode: 0o600 })
+      await runFfmpegMerge(ffmpeg, listPath, mergedPath)
+      await rename(mergedPath, primary)
+      merged = true
+      Logger.info('Native speech capture merged its continuation segments', {
+        segments: this.segments.length
+      })
+    } catch (error) {
+      Logger.error('Native speech capture could not merge its segments', error)
+    } finally {
+      await rm(listPath, { force: true }).catch(() => undefined)
+      await rm(mergedPath, { force: true }).catch(() => undefined)
+      if (merged) {
+        this.segments = [primary]
+        for (const path of continuations) await rm(path, { force: true }).catch(() => undefined)
+      }
+      // A failed merge keeps the continuation segments on disk: reporting a short
+      // take is recoverable, destroying audio the user spoke is not.
+    }
   }
 
   private recordStderr(chunk: string): void {
