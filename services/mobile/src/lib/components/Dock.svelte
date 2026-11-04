@@ -5,71 +5,39 @@
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
   import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
+  import { readWorkView, workViewHref } from '#lib/work-view'
 
   /**
    * The dock is navigation, and the project and the threads it contains are one
-   * destination: a phone has no second column, so one square switches between the
-   * list of threads and the list of projects instead of spending two squares on
-   * the same work.
+   * destination: a phone has no second column, so one square opens the work list
+   * instead of spending two squares on the same work. That square opens whichever
+   * reading of the list was used last, and which reading that is gets chosen in
+   * the list's own header, never here.
    */
-  interface Props {
-    projectsOpen: boolean
-    onprojects: () => void
-  }
-
-  let { projectsOpen, onprojects }: Props = $props()
-
   let path = $derived(page.url.pathname)
-  let onWork = $derived(path === '/' || path === '/threads')
+  let onWork = $derived(path === '/' || path === '/threads' || path === '/projects')
+  let onProjects = $derived(path === '/projects')
   let onChats = $derived(path.startsWith('/chats'))
   let onAssistant = $derived(path.startsWith('/assistant'))
-  let menuOpen = $state(false)
 
-  function chooseProjects(): void {
-    menuOpen = false
-    onprojects()
-  }
-
-  function chooseThreads(): void {
-    menuOpen = false
-    void goto('/threads')
+  async function openWork(): Promise<void> {
+    await goto(workViewHref(await readWorkView()))
   }
 </script>
-
-<svelte:window
-  onpointerdown={(event) => {
-    const target = event.target
-    if (target instanceof Element && target.closest('.dock, .dockmenu')) return
-    menuOpen = false
-  }}
-/>
-
-{#if menuOpen}
-  <div class="dockmenu" role="menu" aria-label="Project or threads">
-    <button class="dockmenu-item" type="button" role="menuitem" onclick={chooseThreads}>
-      <CioThreads size={16} />
-      <span>Threads</span>
-      {#if onWork}<span class="here">✓</span>{/if}
-    </button>
-    <button class="dockmenu-item" type="button" role="menuitem" onclick={chooseProjects}>
-      <CioProjects size={16} />
-      <span>Projects</span>
-      {#if projectsOpen}<span class="here">✓</span>{/if}
-    </button>
-  </div>
-{/if}
 
 <nav class="dock" aria-label="Panels">
   <button
     class="dockitem"
     type="button"
-    aria-expanded={menuOpen}
-    aria-haspopup="menu"
-    aria-label={onWork ? undefined : 'Projects and threads'}
-    title={onWork ? undefined : 'Projects and threads'}
-    onclick={() => (menuOpen = !menuOpen)}
+    aria-current={onWork ? 'page' : undefined}
+    aria-label={onWork ? undefined : 'Threads and projects'}
+    title={onWork ? undefined : 'Threads and projects'}
+    onclick={() => void openWork()}
   >
-    {#if onWork}
+    {#if onProjects}
+      <CioProjects size={18} />
+      <span>Projects</span>
+    {:else if onWork}
       <CioThreads size={18} />
       <span>Threads</span>
     {:else}

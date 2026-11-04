@@ -277,13 +277,15 @@ func (s *Store) ProjectByID(ctx context.Context, schemaName, projectID string) (
 
 // threadColumns is the scan order for Thread.
 const threadColumns = `t.id, t.project_id, t.title, t.status, t.read, t.pinned, t.archived,
-	t.drafting, t.last_error, t.message_count, t.last_message_preview, t.last_activity,
-	t.created_at, t.updated_at,
+	t.drafting, t.model, t.harness, t.last_error, t.message_count, t.last_message_preview,
+	t.last_activity, t.created_at, t.updated_at,
 	(EXTRACT(EPOCH FROM t.last_activity) * 1000)::bigint AS activity_ms`
 
 func scanThread(row pgx.Row) (Thread, error) {
 	var (
 		thread    Thread
+		model     *string
+		harness   *string
 		lastError *string
 		preview   *string
 		activity  time.Time
@@ -292,12 +294,14 @@ func scanThread(row pgx.Row) (Thread, error) {
 	)
 	err := row.Scan(
 		&thread.ID, &thread.ProjectID, &thread.Title, &thread.Status, &thread.Read,
-		&thread.Pinned, &thread.Archived, &thread.Drafting, &lastError, &thread.MessageCount,
-		&preview, &activity, &created, &updated, &thread.ActivityMillis,
+		&thread.Pinned, &thread.Archived, &thread.Drafting, &model, &harness, &lastError,
+		&thread.MessageCount, &preview, &activity, &created, &updated, &thread.ActivityMillis,
 	)
 	if err != nil {
 		return Thread{}, mapNoRows(err)
 	}
+	thread.Model = model
+	thread.Harness = harness
 	thread.LastError = lastError
 	thread.LastMessagePreview = preview
 	thread.LastActivity = FromTime(activity)

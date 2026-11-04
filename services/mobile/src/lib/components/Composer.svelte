@@ -2,6 +2,8 @@
   import { tick } from 'svelte'
   import CioSend from '@pdslng/cio-icon/CioSend.svelte'
   import { api, ApiError } from '#lib/api/client'
+  import { statusSkin, toneColor } from '#lib/api/status'
+  import type { Project, Thread } from '#lib/api/types'
 
   /**
    * The composer is the only place a phone writes to the Oven. It grows to six
@@ -9,14 +11,22 @@
    * Cmd+Enter and Ctrl+Enter send, because that is the app's primary action
    * key; a plain Enter inserts a newline, because a touch keyboard has no
    * modifier to press and a half written prompt must not leave the box.
+   *
+   * Under the box it states what the message is being written into, the same
+   * reading the desktop composer's shoe gives: the thread's own state and the
+   * model and harness that will answer it.
    */
   interface Props {
     threadId: string
+    /** The thread being written into; carried for its state, model and harness. */
+    thread?: Thread | null
+    /** The project the thread belongs to, used when the thread names no model. */
+    project?: Project | null
     /** Called once the service has accepted the prompt, so the page can queue it. */
     onqueued: (turn: { clientId: string; body: string }) => void
   }
 
-  let { threadId, onqueued }: Props = $props()
+  let { threadId, thread = null, project = null, onqueued }: Props = $props()
 
   let text = $state('')
   let sending = $state(false)
@@ -25,6 +35,21 @@
   let box: HTMLTextAreaElement | null = null
 
   let canSend = $derived(text.trim().length > 0 && !sending)
+
+  let skin = $derived(statusSkin(thread?.status ?? 'created'))
+  let detailTone = $derived(toneColor(skin.tone))
+  /**
+   * Model and harness name what answers, which is what the desktop states too.
+   * A thread whose service payload carries neither still says where it lives
+   * rather than leaving the line empty.
+   */
+  let detailLabel = $derived.by(() => {
+    const parts = [thread?.model, thread?.harness].filter(
+      (part): part is string => typeof part === 'string' && part.length > 0
+    )
+    if (parts.length > 0) return parts.join(' · ')
+    return project?.name ?? skin.label
+  })
 
   /** Height follows the content; the sheet's max-height is what caps the growth. */
   function fit(): void {
@@ -90,6 +115,9 @@
     <span class="composer-meta">
       {#if error}
         <span class="composer-error" title={error}>{error}</span>
+      {:else if thread}
+        <i class="dot" style:background={detailTone} aria-hidden="true"></i>
+        <span class="composer-where" title={detailLabel}>{detailLabel}</span>
       {/if}
     </span>
     <button
@@ -116,6 +144,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--color-danger);
+  }
+
+  /* The model and harness line stays one line: a long model name is cut, never
+     wrapped into a second row under the box. */
+  .composer-where {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-muted);
   }
 
   .send:disabled {

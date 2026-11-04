@@ -106,12 +106,12 @@ func run() error {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO threads (
 					id, project_id, title, status, read, pinned, archived, drafting,
-					last_error, last_message_preview, message_count, last_activity,
-					created_at, updated_at
-				) VALUES ($1,$2,$3,$4,$5,$6,false,false,$7,$8,$9,$10,$11,$10)`,
+					model, harness, last_error, last_message_preview, message_count,
+					last_activity, created_at, updated_at
+				) VALUES ($1,$2,$3,$4,$5,$6,false,false,$7,$8,$9,$10,$11,$12,$13,$12)`,
 				thread.id, thread.projectID, thread.title, thread.status, thread.read,
-				thread.pinned, thread.lastError, thread.preview, len(thread.messages),
-				thread.activity, thread.createdAt,
+				thread.pinned, thread.model, thread.harness, thread.lastError, thread.preview,
+				len(thread.messages), thread.activity, thread.createdAt,
 			); err != nil {
 				return fmt.Errorf("insert thread %s: %w", thread.title, err)
 			}
@@ -226,11 +226,31 @@ type seedThread struct {
 	status    string
 	read      bool
 	pinned    bool
+	model     string
+	harness   string
 	lastError *string
 	preview   *string
 	createdAt time.Time
 	activity  time.Time
 	messages  []seedMessage
+}
+
+// seedIdentity is the harness and model a demo thread runs on.
+type seedIdentity struct {
+	model   string
+	harness string
+}
+
+// threadIdentities are the pairs a demo thread reports to the mobile composer.
+// They are written as pairs, not as two independent cycles, so every thread
+// shows a combination that actually exists while the list still reads varied.
+var threadIdentities = []seedIdentity{
+	{model: "flash", harness: "pi"},
+	{model: "opus", harness: "claude-code"},
+	{model: "gpt-5.6-codex", harness: "codex"},
+	{model: "sonnet", harness: "opencode"},
+	{model: "flash", harness: "pi"},
+	{model: "gemini-3.5-flash", harness: "antigravity"},
 }
 
 // buildProjects returns the six projects the demo account owns.
@@ -329,6 +349,8 @@ func buildThreads(projects []seedProject, now time.Time) []seedThread {
 				status:    statusCycle[index%len(statusCycle)],
 				read:      i%3 == 0,
 				pinned:    i%11 == 5,
+				model:     threadIdentities[index%len(threadIdentities)].model,
+				harness:   threadIdentities[index%len(threadIdentities)].harness,
 				createdAt: created,
 				activity:  activity,
 			}

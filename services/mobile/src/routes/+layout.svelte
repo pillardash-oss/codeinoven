@@ -6,7 +6,6 @@
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import Dock from '#lib/components/Dock.svelte'
   import NewThreadSheet from '#lib/components/NewThreadSheet.svelte'
-  import ProjectSheet from '#lib/components/ProjectSheet.svelte'
   import { syncSystemBars } from '#lib/system-bars'
   import '../app.css'
 
@@ -22,9 +21,7 @@
 
   let { children }: { children: Snippet } = $props()
 
-  let projectSheetOpen = $state(false)
   /** Mounted on first use, so no screen asks for the project list it does not need. */
-  let projectSheetReady = $state(false)
   let newThreadOpen = $state(false)
   let newThreadReady = $state(false)
 
@@ -48,13 +45,7 @@
   {@render children()}
   {#if showDock}
     <div class="bottombar">
-      <Dock
-        projectsOpen={projectSheetOpen}
-        onprojects={() => {
-          projectSheetReady = true
-          projectSheetOpen = !projectSheetOpen
-        }}
-      />
+      <Dock />
       <button
         class="fab"
         type="button"
@@ -70,10 +61,6 @@
     </div>
   {/if}
 </div>
-
-{#if showDock && projectSheetReady}
-  <ProjectSheet open={projectSheetOpen} onclose={() => (projectSheetOpen = false)} />
-{/if}
 
 {#if newThreadReady}
   <NewThreadSheet open={newThreadOpen} onclose={() => (newThreadOpen = false)} />

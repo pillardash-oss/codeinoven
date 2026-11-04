@@ -16,10 +16,21 @@
     count?: number | null
     /** A back control replaces the title's leading padding, as the design draws it. */
     back?: { href: string; label: string } | null
+    /** A title that is itself a control (the threads and projects switcher); it
+     *  replaces the plain heading so the caret and the menu sit inside it. */
+    titleControl?: Snippet
     actions?: Snippet
   }
 
-  let { title, subtitle = null, tone = null, count = null, back = null, actions }: Props = $props()
+  let {
+    title,
+    subtitle = null,
+    tone = null,
+    count = null,
+    back = null,
+    titleControl,
+    actions
+  }: Props = $props()
 
   /** The person signed in: the account square, at the far right of the head. */
   let initials = $derived(initialsOf(session.user?.name ?? null, session.user?.email ?? ''))
@@ -43,10 +54,14 @@
       </a>
     {/if}
     <div class={back ? 'talk-id' : 'bar-title'}>
-      <h1>
-        {title}
-        {#if count !== null && count !== undefined}<span class="count">{count}</span>{/if}
-      </h1>
+      {#if titleControl}
+        {@render titleControl()}
+      {:else}
+        <h1>
+          {title}
+          {#if count !== null && count !== undefined}<span class="count">{count}</span>{/if}
+        </h1>
+      {/if}
       {#if subtitle}
         <p class="bar-sub">
           {#if tone}<i class="dot" style:background={tone} aria-hidden="true"></i>{/if}

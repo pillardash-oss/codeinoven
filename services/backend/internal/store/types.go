@@ -141,7 +141,8 @@ type Project struct {
 	CreatedMillis  int64 `json:"-"`
 }
 
-// Thread is one conversation.
+// Thread is one conversation. Model and Harness are the identity the thread
+// runs on and are nullable: an unstarted thread has no run to name.
 type Thread struct {
 	ID                 string  `json:"id"`
 	ProjectID          string  `json:"projectId"`
@@ -151,6 +152,8 @@ type Thread struct {
 	Pinned             bool    `json:"pinned"`
 	Archived           bool    `json:"archived"`
 	Drafting           bool    `json:"drafting"`
+	Model              *string `json:"model"`
+	Harness            *string `json:"harness"`
 	LastError          *string `json:"lastError"`
 	MessageCount       int     `json:"messageCount"`
 	LastMessagePreview *string `json:"lastMessagePreview"`
