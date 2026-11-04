@@ -542,8 +542,10 @@
    * transition, so a busy badge changing costs nothing.
    */
   $effect(() => {
-    const working = [...agentRuns.runs.values()].some((run) => run.busy)
-    displayAvailability.noteAgentWorking(working)
+    const working = [...agentRuns.runs.entries()]
+      .filter(([, run]) => run.busy)
+      .map(([threadId]) => threadId)
+    displayAvailability.noteWorkingThreads(working)
   })
 
   /**

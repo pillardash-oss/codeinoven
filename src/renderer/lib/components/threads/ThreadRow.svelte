@@ -60,6 +60,7 @@
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
+  import { displayAvailability } from '$lib/stores/display-availability.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -501,6 +502,9 @@
   /** The thread's agent is driving the computer right now   window-scoped or
    *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */
   let isUsingComputerUse = $derived(pipState.isThreadUsingComputerUse(thread.id))
+  /** The thread's agent is driving a display target (an emulator, a simulator, a
+   *  mirrored screen) right now. Shares the same indicator slot. */
+  let isUsingDisplay = $derived(displayAvailability.isThreadUsingDisplay(thread.id))
   /** When a browser tab owned by this thread started playing sound, or null while
    *  the thread's browser is silent. Shares the recorder's indicator slot. */
   let browserAudioAt = $derived(browserAudio.threadAudioStartedAt(thread.id))
@@ -549,6 +553,7 @@
             : 'transcribing'
       )
     }
+    if (isUsingDisplay) live.push('display')
     if (isUsingComputerUse) live.push('computer-use')
     if (browserAudioAt !== null) live.push('browser-audio')
     for (const kind of browserAudio.activitiesForThread(thread.id)) {

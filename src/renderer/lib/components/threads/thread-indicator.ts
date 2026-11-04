@@ -22,6 +22,10 @@ import { isOrchestrationChildThread, type Thread } from '$shared/types'
  * transient action is the more urgent fact, and the Engineering mark returns
  * the moment the slot is free.
  *
+ * `display` is an agent driving a display target (an emulator, a simulator, a
+ * screen it is mirroring), reported by the display panel's presence watch while
+ * that thread's turn runs. It competes on the same "last action wins" rule.
+ *
  * `orchestrator` is the durable workstation mark: this thread started work in
  * another project with `cio_orchestrate_dispatch`. It is a fact about the thread
  * that asked, not about the run, so it appears on every thread kind   a project
@@ -29,6 +33,7 @@ import { isOrchestrationChildThread, type Thread } from '$shared/types'
  * same reason the Engineering mark does.
  */
 export type ThreadIndicator =
+  | 'display'
   | 'recording'
   | 'speaking'
   | 'transcribing'

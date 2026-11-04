@@ -44,7 +44,7 @@ import type {
   ThreadClickedPayload
 } from './notifications'
 import type { UpdaterStatus } from './updater'
-import type { DisplayCaptureState, DisplayFrame } from './display'
+import type { DisplayCaptureState, DisplayFrame, DisplayThreadActivity } from './display'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
   BrowserOverlayAck,
@@ -351,6 +351,8 @@ export const IPC_EVENT_CONTRACT = {
   'display:captureState': [] as unknown as [state: DisplayCaptureState],
   /** An agent started or attached to a display target, so the rail item appears. */
   'display:available': [] as unknown as [available: boolean],
+  /** A thread started or stopped driving a display target, for its row's mark. */
+  'display:activity': [] as unknown as [activity: DisplayThreadActivity],
   /**
    * Progress of an in-app Cua Driver update. The update itself answers over
    * `computerUse:updateCua`; this stream carries the installer's milestones so a

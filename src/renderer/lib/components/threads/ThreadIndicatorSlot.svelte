@@ -5,6 +5,7 @@
   import VoiceSendIndicator from '$lib/components/speech/VoiceSendIndicator.svelte'
   import WaveBars from '$lib/components/speech/WaveBars.svelte'
   import ComputerUseIndicator from './ComputerUseIndicator.svelte'
+  import DisplayIndicator from './DisplayIndicator.svelte'
   import EngineeringIndicator from './EngineeringIndicator.svelte'
   import OrchestrationIndicator from './OrchestrationIndicator.svelte'
   import type { ThreadIndicator } from './thread-indicator'
@@ -17,7 +18,9 @@
   let { indicator }: Props = $props()
 </script>
 
-{#if indicator === 'recording'}
+{#if indicator === 'display'}
+  <DisplayIndicator label="Agent driving a display target" />
+{:else if indicator === 'recording'}
   <RecordingIndicator label="Listening" />
 {:else if indicator === 'speaking'}
   <SpeakingIndicator label="Playing audio" />

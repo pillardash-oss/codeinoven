@@ -8,8 +8,10 @@ import {
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
+import type { DisplayThreadActivity } from '../../lib/ipc/display'
 import { DisplayPresence } from './display-presence'
 import { bindDisplayWindow, displayService } from './display-runtime'
+import { detectDisplayTargets } from './display-targets'
 
 /**
  * The display panel's renderer boundary, registered at boot and almost empty.
@@ -32,14 +34,19 @@ export interface DisplayIpcDeps {
 export function registerDisplayIpc(deps: DisplayIpcDeps): void {
   bindDisplayWindow(deps.window)
 
-  const announce = (): void => {
+  const send = (channel: 'display:available' | 'display:activity', payload: unknown): void => {
     const window = deps.window()
     if (!window || window.isDestroyed()) return
-    sendToRenderer(window.webContents, 'display:available', true)
+    sendToRenderer(window.webContents, channel, payload)
   }
   const presence = new DisplayPresence({
     listAgentProcesses: deps.listAgentProcesses,
-    onAvailable: announce
+    detectTargets: detectDisplayTargets,
+    onAvailable: () => send('display:available', true),
+    onActivity: (threadId, active, at) => {
+      const activity: DisplayThreadActivity = { threadId, active, at }
+      send('display:activity', activity)
+    }
   })
 
   ipcMain.handle('display:listSources', async (_event, kind: unknown) => {
@@ -63,9 +70,11 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     await service.control(requireSessionId(sessionId), requireControl(action))
   })
   ipcMain.handle('display:presence', () => presence.state)
-  ipcMain.handle('display:noteAgentWorking', (_event, working: unknown) => {
-    if (typeof working !== 'boolean') throw new TypeError('Agent working state must be a boolean')
-    presence.setAgentWorking(working)
+  ipcMain.handle('display:noteWorkingThreads', (_event, threadIds: unknown) => {
+    if (!Array.isArray(threadIds) || threadIds.some((id) => typeof id !== 'string')) {
+      throw new TypeError('Working threads must be a list of thread ids')
+    }
+    presence.setWorkingThreads(threadIds as string[])
   })
 
   Logger.dev('Display panel registered: capture modules load on first use')

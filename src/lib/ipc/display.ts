@@ -172,6 +172,21 @@ export interface DisplayAvailability {
   available: boolean
   /** When the app first saw an agent start or attach to a display target. */
   since?: number
+  /** Threads currently wearing the "driving a display target" mark. */
+  threads: string[]
+}
+
+/**
+ * One thread started or stopped using a display target.
+ *
+ * Pushed so a thread row can wear the same kind of mark computer use gets while it
+ * is happening, instead of the user having to open the panel to find out.
+ */
+export interface DisplayThreadActivity {
+  threadId: string
+  active: boolean
+  /** When this state began, so the row's indicator slot can order it. */
+  at: number
 }
 
 export const invokeDisplayContract = {
@@ -198,10 +213,11 @@ export const invokeDisplayContract = {
   /** Read the presence flag. One call restores the rail item after a reload. */
   'display:presence': {} as Contract<[], DisplayAvailability>,
   /**
-   * Tell main that an agent is working right now, or stopped.
+   * Report the threads agents are working in right now.
    *
-   * Presence costs one process-table read, so it only ever runs while this is
-   * true: an idle app never looks for a device.
+   * Presence costs one device probe plus one process-table read, so it only ever
+   * runs while this is non-empty: an idle app never looks for a device. The ids
+   * are also what attributes a target to a thread row.
    */
-  'display:noteAgentWorking': {} as Contract<[working: boolean], void>
+  'display:noteWorkingThreads': {} as Contract<[threadIds: string[]], void>
 }
