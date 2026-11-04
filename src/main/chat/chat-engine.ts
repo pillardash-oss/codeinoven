@@ -116,6 +116,7 @@ import type {
   AssistantAgents
 } from '../../lib/types'
 import { ModelPricingService } from '../providers/model-pricing-service'
+import { isQuestionAnswerRecord } from '../../lib/question-answers'
 import type {
   AutoAnswerReport,
   PendingQuestionInfo,
@@ -241,6 +242,11 @@ export function pawnThinkingOverride(value: unknown): ThinkingLevel | undefined 
 
 export function isTurnBoundaryPrompt(message: AgentMessage): boolean {
   if (message.origin === 'orchestrator') return false
+  // The app's record of an answered question resumes the provider turn that
+  // asked it, so it must not move the working trace's boundary either. Reading
+  // it as a boundary closed the turn the reader was watching and started a
+  // second trace under the answer.
+  if (isQuestionAnswerRecord(message)) return false
   return !(
     message.parts.length > 0 &&
     message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')

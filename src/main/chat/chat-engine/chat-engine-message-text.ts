@@ -1,4 +1,5 @@
 import { MEMORY_EXTRACTION_LIMITS } from '../memory-service'
+import { QUESTION_ANSWER_MESSAGE_PREFIX } from '../../../lib/question-answers'
 import { isTodoToolPart } from '../../../lib/agent-todos'
 import { patternActionPhrase } from '../../../lib/tool-action-label'
 import type { HarnessDriver } from '../../drivers/driver.interface'
@@ -16,7 +17,8 @@ import {
 } from '../../../lib/prompt-budget'
 import type { MermaidValidationFailure } from '../mermaid-output-validator'
 
-export const QUESTION_ANSWER_MESSAGE_PREFIX = 'question-answer-'
+// Re-exported so every importer keeps one source for the prefix.
+export { QUESTION_ANSWER_MESSAGE_PREFIX }
 
 export const BRAINSTORM_DECISION_LEDGER_MAX_CHARACTERS = 120_000
 

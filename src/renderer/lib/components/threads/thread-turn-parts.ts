@@ -1,5 +1,6 @@
 import { mergeSubagentParts } from '$lib/working-trace-parts'
 import { isTodoToolPart } from '$lib/agent-todos'
+import { isQuestionAnswerRecord } from '$shared/question-answers'
 import { checkpointForTurn } from '$lib/threads/checkpoint-matching'
 import type {
   AgentMessage,
@@ -45,10 +46,17 @@ export function isActivityOnlyUserMessage(message: AgentMessage): boolean {
  * keeps one trace instead of splitting into a new one under the message.
  *
  * Unlike `isActivityOnlyUserMessage`, a transparent steer still renders: it is
- * the user's own message, it just does not move the turn boundary.
+ * the user's own message, it just does not move the turn boundary. The app's
+ * record of an answered question is transparent to grouping for the same
+ * reason: the answer resumes the turn that asked, so it must not close it and
+ * open a second trace under the message.
  */
 export function isTurnTransparentUserMessage(message: AgentMessage): boolean {
-  return isActivityOnlyUserMessage(message) || message.turnTransparent === true
+  return (
+    isActivityOnlyUserMessage(message) ||
+    message.turnTransparent === true ||
+    isQuestionAnswerRecord(message)
+  )
 }
 
 /**

@@ -239,7 +239,9 @@
     const body = traceBodyEl
     if (!root || !body) return false
     const oldest = body.firstElementChild
-    if (!oldest) return false
+    // A trace with nothing mounted is already at the top of what it shows: it
+    // has to pull its first page before it has a sentinel to measure.
+    if (!oldest) return isOpen
     const offset = oldest.getBoundingClientRect().top - root.getBoundingClientRect().top
     return offset >= traceHeaderHeight - 4 && offset <= traceHeaderHeight + TRACE_TOP_REACH
   }
@@ -305,7 +307,10 @@
     const root = scrollRoot
     const body = traceBodyEl
     if (!root || !body) return
-    if (root.scrollHeight - root.clientHeight > 1) return
+    // Only a trace that already shows something waits for the transcript to
+    // be scrolled: an empty trace has nothing to read, so it must pull its
+    // first page even when the rest of the transcript already scrolls.
+    if (visibleParts.length > 0 && root.scrollHeight - root.clientHeight > 1) return
     // A trace scrolled out of view above the reader is not filled: nobody is
     // reading it, and it would pull pages for a turn that is not on screen.
     if (body.getBoundingClientRect().top >= root.getBoundingClientRect().bottom) return
