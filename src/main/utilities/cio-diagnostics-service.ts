@@ -1,9 +1,10 @@
 import type { Statement } from 'better-sqlite3'
 import type { Database } from '../database/database'
-import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
+import { AgentMessageRepo, partsToSearchText } from '../database/repositories/agent-message-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { AgentMessage, Thread } from '../../lib/types'
+import { toolActionLabelForPart } from '../../lib/tool-action-label'
 import {
   ERROR_LOG_FILE,
   LOGS_DIRECTORY,
@@ -27,6 +28,8 @@ const MAX_MESSAGE_TEXT_LENGTH = 4_000
 const MAX_LOG_ENTRY_LENGTH = 2_000
 const MAX_LOG_ENTRIES = 200
 const MAX_MESSAGES = 120
+/** Whole-page text budget, so one long thread cannot flood a model's context. */
+const MAX_PAGE_TEXT_LENGTH = 60_000
 const MAX_THREAD_LIST_RESULTS = 20
 const MAX_QUERY_ROWS = 200
 const MAX_QUERY_VALUE_LENGTH = 2_000
@@ -54,6 +57,53 @@ const READABLE_PRAGMAS = new Set([
 
 /** SQL functions that SQLite still classifies as read-only but that touch the host. */
 const DENIED_SQL_FUNCTIONS = /\b(load_extension|readfile|writefile|fts3_tokenizer)\s*\(/iu
+
+/**
+ * One message's body the way an agent reads it back out of the history.
+ *
+ * A harness streams its prose as `reasoning` parts and drives a turn through
+ * tool calls, so a long pi or Claude Code thread persists very few `text` parts.
+ * Reading those alone answered a page of forty rows with a single line, and
+ * often nothing at all, which is why an agent could not actually read another
+ * thread's history. The prose comes from the same flattening the FTS index
+ * stores (`partsToSearchText`), so text, reasoning, interview answers,
+ * presentation prompts and sub-agent reports all read back, and each tool call
+ * contributes the one-line action label the trace already shows instead of its
+ * raw name or payload.
+ */
+function diagnosticMessageText(message: AgentMessage): string {
+  const chunks: string[] = []
+  for (const part of message.parts) {
+    if (part.type === 'tool') {
+      const label = part.actionLabel ?? toolActionLabelForPart(part).actionLabel
+      if (label) chunks.push(`[Action] ${label}`)
+      continue
+    }
+    const text = partsToSearchText([part]).trim()
+    if (text) chunks.push(text)
+  }
+  return chunks.join('\n')
+}
+
+/**
+ * Trim a page to the whole-page budget, dropping the oldest messages first.
+ *
+ * Prose a harness streamed as reasoning is far bulkier than the final answers a
+ * text-only read used to return, so the newest page is bounded by content and
+ * not only by row count. At least the newest message is always kept.
+ */
+function boundMessagePage(messages: readonly DiagnosticMessage[]): DiagnosticMessage[] {
+  let total = 0
+  let start = messages.length
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    const size = message.text.length + (message.error?.length ?? 0)
+    if (start < messages.length && total + size > MAX_PAGE_TEXT_LENGTH) break
+    total += size
+    start = index
+  }
+  return messages.slice(start)
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -370,9 +420,10 @@ export class CioDiagnosticsService {
     const thread = await this.threadRepo.getViaWorker(threadId)
     if (!thread) return []
     const page = this.messageRepo.loadPageByThread(threadId, undefined, boundedLimit)
-    return page.messages
+    const messages = page.messages
       .map((message) => this.toDiagnosticMessage(message))
       .filter((message): message is DiagnosticMessage => message !== null)
+    return boundMessagePage(messages)
   }
 
   /**
@@ -564,14 +615,7 @@ export class CioDiagnosticsService {
   }
 
   private toDiagnosticMessage(message: AgentMessage): DiagnosticMessage | null {
-    const text = message.parts
-      .filter(
-        (part): part is Extract<AgentMessage['parts'][number], { type: 'text' }> =>
-          part.type === 'text'
-      )
-      .map((part) => part.text)
-      .join('\n')
-      .slice(0, MAX_MESSAGE_TEXT_LENGTH)
+    const text = diagnosticMessageText(message).slice(0, MAX_MESSAGE_TEXT_LENGTH)
     if (!text.trim() && !message.error) return null
     const result: DiagnosticMessage = {
       id: message.id,

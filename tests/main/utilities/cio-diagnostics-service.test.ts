@@ -153,6 +153,44 @@ describe('CioDiagnosticsService', () => {
     expect(await service.loadThreadMessages('missing-thread', 10)).toEqual([])
   })
 
+  it('reads prose a harness persisted as reasoning and tool parts', async () => {
+    // pi and Claude Code stream prose as reasoning parts and drive the turn
+    // through tool calls, so a page built from text parts alone came back empty
+    // and an agent could not read another thread's history at all.
+    const { service, db } = await createServiceWithDb()
+    new AgentMessageRepo(db).upsert(
+      {
+        id: 'msg-3',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'reasoning',
+            id: 'p3',
+            messageID: 'msg-3',
+            text: 'The checkout form posts before it validates the card.'
+          },
+          {
+            type: 'tool',
+            id: 'p4',
+            messageID: 'msg-3',
+            callID: 'call-1',
+            tool: 'bash',
+            state: {
+              status: 'completed',
+              input: { command: 'bun test tests/checkout.test.ts' },
+              output: '1 passed'
+            }
+          }
+        ],
+        createdAt: 3_000
+      },
+      'thread-1'
+    )
+    const messages = await service.loadThreadMessages('thread-1', 10)
+    expect(messages.at(-1)?.text).toContain('posts before it validates the card')
+    expect(messages.at(-1)?.text).toContain('[Action]')
+  })
+
   it('reads bounded redacted entries from an allow-listed log file', async () => {
     const dayDirectory = join(configRoot, 'logs', logDayName())
     mkdirSync(dayDirectory, { recursive: true })
