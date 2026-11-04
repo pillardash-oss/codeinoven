@@ -66,6 +66,11 @@ cd services/mobile && bun run dev   # terminal 2, http://127.0.0.1:5174
 The dev server proxies `/api/*` to the backend, so the browser build and the
 native build ask for the same paths.
 
+The Android build needs a JDK 21 or newer. `android-emulator-dev.sh` resolves one
+itself (Android Studio's JBR, then `java_home`, then `CIO_JAVA_HOME`) and prints
+which it chose, because a shell profile that pins an older `JAVA_HOME` makes Gradle
+fail with `invalid source release: 21`.
+
 Sign in with Google, GitHub, or the seeded demo account
 (`bun run services:backend:seed` prints it).
 

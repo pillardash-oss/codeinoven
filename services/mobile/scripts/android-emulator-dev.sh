@@ -17,6 +17,59 @@ export ANDROID_HOME="$SDK"
 export ANDROID_SDK_ROOT="$SDK"
 export PATH="$SDK/platform-tools:$SDK/emulator:$SDK/cmdline-tools/latest/bin:$PATH"
 
+# This project compiles against Java 21, and Android Gradle hard-fails with
+# "invalid source release: 21" on an older JDK. A shell profile that pins
+# JAVA_HOME to an old JDK is common (jdk-17 here), and an action terminal sources
+# that profile, so the build must not trust the inherited JAVA_HOME: it picks a
+# JDK that can actually compile.
+MIN_JAVA_MAJOR=21
+
+java_major() {
+  "$1/bin/javac" -version 2>&1 | sed -E 's/^javac ([0-9]+).*/\1/'
+}
+
+usable_java_home() {
+  local home="$1"
+  local major
+  [ -n "$home" ] || return 1
+  [ -x "$home/bin/javac" ] || return 1
+  major="$(java_major "$home")"
+  [ "${major:-0}" -ge "$MIN_JAVA_MAJOR" ] || return 1
+  printf '%s\n' "$home"
+}
+
+resolve_java_home() {
+  local candidates=("${CIO_JAVA_HOME:-}" "/Applications/Android Studio.app/Contents/jbr/Contents/Home")
+  if [ -x /usr/libexec/java_home ]; then
+    candidates+=(
+      "$(/usr/libexec/java_home -v "$MIN_JAVA_MAJOR" 2>/dev/null || true)"
+      "$(/usr/libexec/java_home 2>/dev/null || true)"
+    )
+    if [ -d /Library/Java/JavaVirtualMachines ]; then
+      local home
+      for home in /Library/Java/JavaVirtualMachines/*/Contents/Home; do
+        candidates+=("$home")
+      done
+    fi
+  fi
+  candidates+=("${JAVA_HOME:-}")
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if usable_java_home "$candidate"; then return 0; fi
+  done
+  return 1
+}
+
+if resolved_java_home="$(resolve_java_home)"; then
+  if [ -n "${JAVA_HOME:-}" ] && [ "$JAVA_HOME" != "$resolved_java_home" ]; then
+    echo "ignoring JAVA_HOME=$JAVA_HOME: it cannot compile Java $MIN_JAVA_MAJOR"
+  fi
+  export JAVA_HOME="$resolved_java_home"
+else
+  echo "no JDK $MIN_JAVA_MAJOR or newer was found: install one, or point CIO_JAVA_HOME at it" >&2
+  exit 1
+fi
+
 AVD="cio_mobile"
 API_BASE="http://10.0.2.2:8081"
 IMAGE="system-images;android-35;google_apis_playstore;arm64-v8a"
@@ -78,6 +131,7 @@ fi
 #    call to the backend as mixed content.
 if [ "$BUILD" = true ]; then
   export VITE_API_BASE="$API_BASE"
+  echo "java        $(java_major "$JAVA_HOME") at $JAVA_HOME"
   bun run build
   bunx cap sync android
   (cd android && ./gradlew assembleDebug)
