@@ -833,6 +833,13 @@ export class ChatEngineTurnsSendPrompt {
       if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
         throw new Error(`${driver.name} does not expose native active-turn steering`)
       }
+      // The user is speaking again, so this session is no longer one they
+      // stopped. A stop-and-resend (an account switch mid-turn) latches the
+      // session as user-aborted, and only a full dispatch used to clear that
+      // latch; delivering the message as a steer left every event of the turn
+      // it joined discarded, so a retry read as delivered while nothing it
+      // produced ever reached the thread.
+      this.host.state.userAbortedSessions.delete(sessionId)
       const outboundIds =
         this.host.state.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
