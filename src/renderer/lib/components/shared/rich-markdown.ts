@@ -3,6 +3,7 @@ import {
   isInsideUnclosedInlineCode,
   isQuotedMentionPosition
 } from '$shared/mention-context'
+import { selectBlockMarkup } from '@pdslng/cio-icon/markup/select-block'
 
 const INLINE_CODE_CLASS = 'border border-border bg-elevated px-1 py-0.5 font-mono text-[0.9em]'
 const INLINE_BADGE_CLASS =
@@ -21,8 +22,7 @@ const CODE_CONTENT_CLASS =
 const CODE_ACTION_GROUP_CLASS = 'flex items-center gap-0.5'
 const CODE_DELETE_BUTTON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>'
-const CODE_SELECT_BUTTON_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2"></path><path d="M16 4h2a2 2 0 0 1 2 2v2"></path><path d="M20 16v2a2 2 0 0 1-2 2h-2"></path><path d="M8 20H6a2 2 0 0 1-2-2v-2"></path><path d="M8 9.5h8"></path><path d="M8 14.5h8"></path></svg>'
+const CODE_SELECT_BUTTON_SVG = selectBlockMarkup(12, 2.25)
 const CODE_ACTION_BUTTON_CLASS =
   'grid h-5 w-5 place-items-center text-dimmed opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-surface hover:text-foreground focus:opacity-100 focus:outline-none'
 const CODE_SELECT_BUTTON_HTML = `<button type="button" data-editor-codeblock-select="true" title="Select code block" aria-label="Select code block" class="${CODE_ACTION_BUTTON_CLASS}">${CODE_SELECT_BUTTON_SVG}</button>`
