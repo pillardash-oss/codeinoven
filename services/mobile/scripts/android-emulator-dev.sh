@@ -7,6 +7,7 @@
 #   ./scripts/android-emulator-dev.sh                      # build, install, launch
 #   ./scripts/android-emulator-dev.sh --api http://10.0.2.2:8081
 #   ./scripts/android-emulator-dev.sh --avd cio_mobile --no-build
+#   ./scripts/android-emulator-dev.sh --follow             # then stream the app's log
 #
 # The emulator is left running when the script exits: a window stays visible on
 # the machine, so a boot costs nothing on the next run.
@@ -77,12 +78,14 @@ DEVICE_PROFILE="pixel_7"
 APP_ID="com.pillardash.codeinoven"
 ACTIVITY="$APP_ID/.MainActivity"
 BUILD=true
+FOLLOW=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --avd) AVD="$2"; shift 2 ;;
     --api) API_BASE="$2"; shift 2 ;;
     --no-build) BUILD=false; shift ;;
+    --follow) FOLLOW=true; shift ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -98,10 +101,21 @@ if ! avdmanager list avd | grep -q "Name: $AVD$"; then
 fi
 
 # 2. Boot it visibly, then wait for the framework to finish starting.
+#
+#    The launch gets its own process group (`set -m`). Without job control the
+#    emulator shares this script's group, the terminal's hangup reaches it when
+#    the script exits, and the emulator's launcher reads that hangup as a
+#    shutdown request: the emulator died the instant the run finished, taking the
+#    installed app with it. Its own group also keeps a stop of the run (which
+#    signals the group) from killing the emulator.
 if ! adb devices | grep -q "^emulator-.*device$"; then
   echo "booting $AVD"
+  set -m
   nohup emulator -avd "$AVD" -no-boot-anim -no-snapshot-save \
-    >"${TMPDIR:-/tmp}/cio-emulator-$AVD.log" 2>&1 &
+    </dev/null >"${TMPDIR:-/tmp}/cio-emulator-$AVD.log" 2>&1 &
+  emulator_pid=$!
+  set +m
+  disown "$emulator_pid" 2>/dev/null || true
 fi
 
 adb wait-for-device
@@ -147,3 +161,18 @@ adb shell am start -n "$ACTIVITY"
 
 echo "installed $(du -h "$APK" | cut -f1) from $APK against $API_BASE"
 adb devices | grep emulator-
+
+# 6. Optionally stay attached to the running app so the run keeps showing what
+#    the app actually does, instead of ending on the install line while the
+#    window sits on screen. The filter is the app's own pid, which carries the
+#    WebView's console output too. Stopping the stream leaves the emulator and
+#    the app running.
+if [ "$FOLLOW" = true ]; then
+  app_pid="$(adb shell pidof -s "$APP_ID" 2>/dev/null | tr -d '\r')"
+  echo "following the app's log (stop the run to end the log; the app stays up)"
+  if [ -n "$app_pid" ]; then
+    exec adb logcat -v time --pid="$app_pid"
+  else
+    exec adb logcat -v time -s Capacitor/Console:V Capacitor:V chromium:V
+  fi
+fi
