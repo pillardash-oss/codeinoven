@@ -2,7 +2,9 @@ import type { BrowserWindow } from 'electron'
 import {
   DISPLAY_SOURCE_KINDS,
   isDisplayControlAction,
+  isDisplayInputGesture,
   isDisplaySourceKind,
+  type DisplayInputGesture,
   type DisplaySourceKind
 } from '../../lib/ipc/display'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -69,6 +71,10 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     const service = await displayService()
     await service.control(requireSessionId(sessionId), requireControl(action))
   })
+  ipcMain.handle('display:input', async (_event, sessionId: unknown, gesture: unknown) => {
+    const service = await displayService()
+    await service.input(requireSessionId(sessionId), requireGesture(gesture))
+  })
   ipcMain.handle('display:presence', () => presence.state)
   ipcMain.handle('display:noteWorkingThreads', (_event, threadIds: unknown) => {
     if (!Array.isArray(threadIds) || threadIds.some((id) => typeof id !== 'string')) {
@@ -111,6 +117,11 @@ function requireDemand(value: unknown): { maxDimension: number; visible: boolean
 
 function requireControl(value: unknown) {
   if (!isDisplayControlAction(value)) throw new TypeError('That display control is not known')
+  return value
+}
+
+function requireGesture(value: unknown): DisplayInputGesture {
+  if (!isDisplayInputGesture(value)) throw new TypeError('That display gesture is not known')
   return value
 }
 

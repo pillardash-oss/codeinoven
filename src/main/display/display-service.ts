@@ -6,6 +6,7 @@ import {
   type DisplayControlAction,
   type DisplayFrame,
   type DisplayFrameDemand,
+  type DisplayInputGesture,
   type DisplaySessionRequest,
   type DisplaySourceKind,
   type DisplaySourceListing
@@ -79,6 +80,10 @@ interface DisplaySession {
   disposed: boolean
   /** True while one `grab` is in flight, so a tick can never stack frames. */
   busy: boolean
+  /** True when the capture adapter can be touched and typed into. */
+  input: boolean
+  /** Why it cannot be, when it cannot. */
+  inputProblem: string | null
 }
 
 export class DisplayService {
@@ -126,7 +131,9 @@ export class DisplayService {
       detail: null,
       frames: 0,
       disposed: false,
-      busy: false
+      busy: false,
+      input: Boolean(capture.input),
+      inputProblem: capture.input ? null : (capture.inputProblem ?? null)
     }
     this.sessions.set(session.id, session)
     this.watchWindowReload()
@@ -168,6 +175,25 @@ export class DisplayService {
     }
     if (!session.capture.control) throw new Error('This target cannot be controlled')
     await session.capture.control(action)
+  }
+
+  /**
+   * Work one target's own screen.
+   *
+   * A gesture is sent and then painted: the next frame is asked for immediately
+   * instead of waiting out the session's cadence, because the whole point of
+   * touching a mirrored device is seeing what the touch did.
+   */
+  async input(sessionId: string, gesture: DisplayInputGesture): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error('That display session is no longer open')
+    if (!session.capture.input) {
+      throw new Error(session.inputProblem ?? 'This target cannot be controlled')
+    }
+    await session.capture.input(gesture)
+    // A tap that lands while the stage is paused still deserves its frame: the
+    // user is looking at the tab, and the demand tick only re-arms on focus.
+    if (!session.disposed) this.schedule(session, 0)
   }
 
   /** Stop one session and forget it. Safe for an id that is already gone. */
@@ -315,6 +341,8 @@ export class DisplayService {
     const state: DisplayCaptureState = {
       sessionId: session.id,
       phase: session.phase,
+      input: session.input,
+      ...(session.inputProblem ? { inputProblem: session.inputProblem } : {}),
       ...(session.detail ? { detail: session.detail } : {})
     }
     this.send('display:captureState', state, null)

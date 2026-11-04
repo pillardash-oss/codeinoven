@@ -124,6 +124,80 @@ export interface DisplayCaptureState {
   phase: DisplayCapturePhase
   /** Human sentence for `retrying` and `failed`; absent while healthy. */
   detail?: string
+  /** True when this target accepts touch and typing from the panel. */
+  input: boolean
+  /** Why this target cannot be worked from the panel, when it cannot. */
+  inputProblem?: string
+}
+
+/**
+ * One act of touch, in fractions of the target's own screen.
+ *
+ * Fractions and not pixels: the panel paints a downscaled JPEG and never learns
+ * the device's resolution, while the adapter that owns the device knows exactly
+ * what to multiply by. A tap at `0.5, 0.5` is the middle of any screen, which is
+ * the only coordinate both sides agree on without a second round trip.
+ */
+export type DisplayInputGesture =
+  | { type: 'tap'; x: number; y: number }
+  | { type: 'long-press'; x: number; y: number }
+  | { type: 'swipe'; fromX: number; fromY: number; toX: number; toY: number; durationMs: number }
+  | { type: 'text'; text: string }
+  | { type: 'key'; key: DisplayInputKey }
+
+/** The keys the panel can press on a target beyond letters and digits. */
+export type DisplayInputKey =
+  'enter' | 'backspace' | 'tab' | 'escape' | 'up' | 'down' | 'left' | 'right'
+
+const DISPLAY_INPUT_KEYS: readonly DisplayInputKey[] = [
+  'enter',
+  'backspace',
+  'tab',
+  'escape',
+  'up',
+  'down',
+  'left',
+  'right'
+]
+
+/** Longest text one gesture may carry, so a paste cannot become a device flood. */
+const DISPLAY_INPUT_TEXT_LIMIT = 256
+
+/** Whether a gesture is inside the contract, checked at the IPC boundary. */
+export function isDisplayInputGesture(value: unknown): value is DisplayInputGesture {
+  if (typeof value !== 'object' || value === null) return false
+  const gesture = value as Record<string, unknown>
+  const fraction = (entry: unknown): entry is number =>
+    typeof entry === 'number' && Number.isFinite(entry) && entry >= 0 && entry <= 1
+  switch (gesture.type) {
+    case 'tap':
+    case 'long-press':
+      return fraction(gesture.x) && fraction(gesture.y)
+    case 'swipe':
+      return (
+        fraction(gesture.fromX) &&
+        fraction(gesture.fromY) &&
+        fraction(gesture.toX) &&
+        fraction(gesture.toY) &&
+        typeof gesture.durationMs === 'number' &&
+        Number.isFinite(gesture.durationMs) &&
+        gesture.durationMs >= 0 &&
+        gesture.durationMs <= 3000
+      )
+    case 'text':
+      return (
+        typeof gesture.text === 'string' &&
+        gesture.text.length > 0 &&
+        gesture.text.length <= DISPLAY_INPUT_TEXT_LIMIT
+      )
+    case 'key':
+      return (
+        typeof gesture.key === 'string' &&
+        (DISPLAY_INPUT_KEYS as readonly string[]).includes(gesture.key)
+      )
+    default:
+      return false
+  }
 }
 
 /**
@@ -210,6 +284,13 @@ export const invokeDisplayContract = {
    * boundary agree without a second copy of the rule.
    */
   'display:control': {} as Contract<[sessionId: string, action: DisplayControlAction], void>,
+  /**
+   * Work the target's own screen: tap, press, swipe, type.
+   *
+   * Refused for a session whose capture reports `input: false`, so a target that
+   * cannot be touched says so once and the panel never fires into nothing.
+   */
+  'display:input': {} as Contract<[sessionId: string, gesture: DisplayInputGesture], void>,
   /** Read the presence flag. One call restores the rail item after a reload. */
   'display:presence': {} as Contract<[], DisplayAvailability>,
   /**

@@ -1,9 +1,12 @@
 import { app, type NativeImage } from 'electron'
+import { accessSync, constants as fsConstants } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   DisplayControlAction,
+  DisplayInputGesture,
+  DisplayInputKey,
   DisplaySourceDescriptor,
   DisplaySourceListing
 } from '../../lib/ipc/display'
@@ -27,8 +30,73 @@ import { captureCommand, captureText } from './display-exec'
 const SIMCTL_LIST_TIMEOUT_MS = 15_000
 /** One framebuffer read. A booted simulator answers in 100-300 ms. */
 const SIMCTL_CAPTURE_TIMEOUT_MS = 10_000
+/** One injected gesture. idb reaches a companion over gRPC, so it is the slower half. */
+const IDB_INPUT_TIMEOUT_MS = 15_000
+/** Asking a simulator how big its screen is, in the points its taps use. */
+const IDB_DESCRIBE_TIMEOUT_MS = 20_000
 
 const SIMCTL = '/usr/bin/xcrun'
+
+/**
+ * The idb client, which is the only way to touch a booted Simulator.
+ *
+ * `simctl` reads a simulator's framebuffer but cannot inject an event into it,
+ * and `idb_companion` on its own is a server with no command line worth typing.
+ * The `idb` client speaks to that companion, so a simulator gains taps and
+ * typing the moment this binary exists and keeps a read-only preview until then.
+ */
+let resolvedIdb: string | null = null
+let lookedForIdb = false
+
+function idbCandidates(): string[] {
+  const candidates: string[] = []
+  const path = process.env.PATH ?? ''
+  for (const directory of path.split(':')) {
+    if (directory.length > 0) candidates.push(join(directory, 'idb'))
+  }
+  const home = homedir()
+  candidates.push(
+    '/opt/homebrew/bin/idb',
+    '/usr/local/bin/idb',
+    join(home, '.local', 'bin', 'idb'),
+    join(home, 'Library', 'Python', 'bin', 'idb')
+  )
+  return candidates
+}
+
+/** The idb client this machine has, or null. A success is remembered; a miss is
+ *  re-checked, because installing it while the app runs should just start working. */
+export function resolveIdb(): string | null {
+  if (resolvedIdb) return resolvedIdb
+  lookedForIdb = true
+  for (const candidate of idbCandidates()) {
+    try {
+      accessSync(candidate, fsConstants.X_OK)
+      resolvedIdb = candidate
+      return resolvedIdb
+    } catch {
+      // Next candidate: a Python user install and a Homebrew install coexist often.
+    }
+  }
+  return null
+}
+/** Whether the last idb lookup was a miss, so a listing can say so instead of
+ *  pretending the platform offers nothing. */
+export function idbWasMissing(): boolean {
+  return lookedForIdb && resolvedIdb === null
+}
+
+/** The HID key usages `idb ui key` takes, by the panel's own key names. */
+const IDB_KEY_CODES: Record<DisplayInputKey, number> = {
+  enter: 40,
+  escape: 41,
+  backspace: 42,
+  tab: 43,
+  right: 79,
+  left: 80,
+  down: 81,
+  up: 82
+}
 
 interface SimctlDevice {
   udid?: unknown
@@ -126,11 +194,21 @@ export class IosDisplayCapture implements DisplayCapture {
   private disposed = false
   /** Screen-capture scratch for this session, created on the first frame. */
   private directory: Promise<string | null> | null = null
+  /** The simulator's point size, asked once before the first gesture. */
+  private screen: { width: number; height: number } | null = null
+  private screenRequest: Promise<{ width: number; height: number } | null> | null = null
 
   constructor(
     readonly sourceId: string,
     readonly label: string
   ) {}
+
+  /** Why a simulator cannot be touched, when its client is missing. */
+  get inputProblem(): string | undefined {
+    return resolveIdb()
+      ? undefined
+      : 'Tapping a simulator needs the idb client (fb-idb). Preview only.'
+  }
 
   async grab(_maxDimension: number): Promise<NativeImage | null> {
     if (this.disposed) return null
@@ -179,6 +257,95 @@ export class IosDisplayCapture implements DisplayCapture {
     ).promise
   }
 
+  async input(gesture: DisplayInputGesture): Promise<void> {
+    const idb = resolveIdb()
+    if (!idb) throw new Error('Tapping a simulator needs the idb client (fb-idb)')
+    switch (gesture.type) {
+      case 'tap':
+      case 'long-press': {
+        const point = await this.points(idb, gesture.x, gesture.y)
+        if (gesture.type === 'tap') {
+          await this.ask(idb, ['ui', 'tap', String(point.x), String(point.y)])
+          return
+        }
+        // A press on iOS is a tap that is held: a drag that starts and ends on the
+        // same point for six tenths of a second is what iOS reports as a press.
+        await this.ask(idb, [
+          'ui',
+          'swipe',
+          String(point.x),
+          String(point.y),
+          String(point.x),
+          String(point.y),
+          '--duration',
+          '0.6'
+        ])
+        return
+      }
+      case 'swipe': {
+        const from = await this.points(idb, gesture.fromX, gesture.fromY)
+        const to = await this.points(idb, gesture.toX, gesture.toY)
+        await this.ask(idb, [
+          'ui',
+          'swipe',
+          String(from.x),
+          String(from.y),
+          String(to.x),
+          String(to.y),
+          '--duration',
+          String(Math.max(0.05, gesture.durationMs / 1000))
+        ])
+        return
+      }
+      case 'text':
+        await this.ask(idb, ['ui', 'text', gesture.text])
+        return
+      case 'key':
+        await this.ask(idb, ['ui', 'key', String(IDB_KEY_CODES[gesture.key])])
+        return
+    }
+  }
+
+  /** One idb command against this simulator. */
+  private async ask(idb: string, args: string[]): Promise<void> {
+    await captureCommand(idb, [...args, '--udid', this.sourceId], IDB_INPUT_TIMEOUT_MS).promise
+  }
+
+  /** A fraction of the screen as the points a simulator's taps are measured in. */
+  private async points(idb: string, x: number, y: number): Promise<{ x: number; y: number }> {
+    const screen = await this.screenSize(idb)
+    if (!screen) return { x: Math.round(x * 400), y: Math.round(y * 800) }
+    return {
+      x: Math.min(screen.width - 1, Math.max(0, Math.round(x * screen.width))),
+      y: Math.min(screen.height - 1, Math.max(0, Math.round(y * screen.height)))
+    }
+  }
+
+  /**
+   * The simulator's screen in points.
+   *
+   * `idb describe` reports both pixels and points; taps are in points, which is
+   * the number that matches what the screenshot is scaled from.
+   */
+  private screenSize(idb: string): Promise<{ width: number; height: number } | null> {
+    if (this.screen) return Promise.resolve(this.screen)
+    if (this.screenRequest) return this.screenRequest
+    const request = captureText(
+      idb,
+      ['describe', '--udid', this.sourceId, '-j'],
+      IDB_DESCRIBE_TIMEOUT_MS
+    )
+      .then((output) => readScreenPoints(output))
+      .catch(() => null)
+      .then((screen) => {
+        this.screen = screen
+        this.screenRequest = null
+        return screen
+      })
+    this.screenRequest = request
+    return request
+  }
+
   dispose(): void {
     this.disposed = true
     this.cancelled?.()
@@ -199,4 +366,22 @@ export class IosDisplayCapture implements DisplayCapture {
     this.directory = created
     return created
   }
+}
+
+/** Pull width and height in points out of `idb describe`'s JSON. */
+function readScreenPoints(output: string): { width: number; height: number } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(output)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const dimensions = (parsed as { screen_dimensions?: unknown }).screen_dimensions
+  if (typeof dimensions !== 'object' || dimensions === null) return null
+  const size = dimensions as { width_points?: unknown; height_points?: unknown }
+  const width = typeof size.width_points === 'number' ? size.width_points : null
+  const height = typeof size.height_points === 'number' ? size.height_points : null
+  if (!width || !height || width <= 0 || height <= 0) return null
+  return { width, height }
 }

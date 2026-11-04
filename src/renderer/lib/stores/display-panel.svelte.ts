@@ -3,6 +3,7 @@ import type {
   DisplayCaptureState,
   DisplayControlAction,
   DisplayFrame,
+  DisplayInputGesture,
   DisplaySourceKind,
   DisplaySourceListing
 } from '$shared/ipc/display'
@@ -33,6 +34,10 @@ export interface DisplaySession {
   phase: DisplayCapturePhase
   /** Sentence shown while retrying or failed; cleared by the next good frame. */
   detail: string | null
+  /** True when the target accepts taps and typing from the panel. */
+  input: boolean
+  /** Why it does not, when it does not. */
+  inputProblem: string | null
 }
 
 export interface DisplaySourceSection {
@@ -95,6 +100,8 @@ class DisplayPanelState {
           if (session.sessionId !== state.sessionId) continue
           session.phase = state.phase
           session.detail = state.detail ?? null
+          session.input = state.input
+          session.inputProblem = state.inputProblem ?? null
           return
         }
       })
@@ -125,7 +132,9 @@ class DisplayPanelState {
       sessionId: crypto.randomUUID(),
       frame: null,
       phase: 'starting',
-      detail: null
+      detail: null,
+      input: false,
+      inputProblem: null
     }
     this.demands.delete(tabId)
     this.sessions = { ...this.sessions, [tabId]: session }
@@ -192,6 +201,21 @@ class DisplayPanelState {
     if (!session) return
     void invoke('display:control', session.sessionId, action).catch((error: unknown) =>
       logRendererError(`The display control "${action}" failed`, error)
+    )
+  }
+
+  /**
+   * Work the target's screen: a tap, a drag, a typed word.
+   *
+   * Fire and forget, like a finger: the frame that comes back is the receipt, so
+   * a gesture that fails says so in the log rather than in a dialog in front of
+   * the picture the user is watching.
+   */
+  sendInput(tabId: string, gesture: DisplayInputGesture): void {
+    const session = this.sessions[tabId]
+    if (!session) return
+    void invoke('display:input', session.sessionId, gesture).catch((error: unknown) =>
+      logRendererError(`The display gesture "${gesture.type}" failed`, error)
     )
   }
 

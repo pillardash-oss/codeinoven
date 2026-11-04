@@ -1,5 +1,9 @@
 import { nativeImage, type NativeImage } from 'electron'
-import type { DisplayControlAction, DisplaySourceKind } from '../../lib/ipc/display'
+import type {
+  DisplayControlAction,
+  DisplayInputGesture,
+  DisplaySourceKind
+} from '../../lib/ipc/display'
 
 /**
  * One mirrorable target, as the display service drives it.
@@ -23,6 +27,16 @@ export interface DisplayCapture {
    * home button, and offering one would be a lie in the rail.
    */
   control?(action: DisplayControlAction): Promise<void>
+  /**
+   * Work the target's own screen.
+   *
+   * The same channel that presses a hardware key, carried one step further: a
+   * tap, a drag, a typed word. Only a target that can be touched implements it,
+   * and the service checks that before it forwards anything.
+   */
+  input?(gesture: DisplayInputGesture): Promise<void>
+  /** Why `input` is missing, phrased for the panel. Absent when input works. */
+  readonly inputProblem?: string
   /** One frame at the target's own resolution, or null when there is nothing to paint.
    *  Downscaling and encoding are the service's job, so every adapter hands back
    *  the same thing: pixels. `maxDimension` is offered to an adapter that can
