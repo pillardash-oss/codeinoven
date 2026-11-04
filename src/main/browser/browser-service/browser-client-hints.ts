@@ -12,11 +12,21 @@
  * user agent, which is what earlier attempts did, could never clear it, because the
  * other half kept naming Chromium.
  *
- * So this makes one identity out of the two halves: the hints Chromium already sends are
- * rewritten to the brand and version the user agent claims, and the page's own
+ * So this makes one identity out of the two halves: the hints the request carries are
+ * rewritten to the brand and version the user agent claims, the hints a real Chrome
+ * always sends are supplied when the request has none, and the page's own
  * `navigator.userAgentData` answers the same way. Nothing is invented that a real
  * browser does not send   high-entropy hints stay the ones Chromium itself reports,
  * because only the brands were inconsistent in the first place.
+ *
+ * Supplying the missing hints is not optional bookkeeping. Measured on a running app
+ * (`https://httpbin.org/headers`, `https://tls.peet.ws/api/all`), a browser jar sends
+ * a branded Chrome user agent and no `Sec-CH-UA*` header at all: overriding the user
+ * agent leaves Chromium with no client-hint metadata to publish. Real Chrome attaches
+ * the three low-entropy hints to every request, so a Chrome user agent without them
+ * is precisely how a site recognises an embedded or faked browser. The rewrite below
+ * therefore adds the hints a real browser would have sent instead of waiting for
+ * Chromium to send hints it never sends.
  */
 
 /** The greased brand every Chromium build advertises, and its version. */
@@ -77,35 +87,75 @@ export function toStringHeaders(headers: ClientHintHeaders): Record<string, stri
   return flattened
 }
 
+/** The low-entropy hint names every Chrome request carries, and how it spells them. */
+const LOW_ENTROPY_HINT_NAMES: Record<string, string> = {
+  'sec-ch-ua': 'Sec-CH-UA',
+  'sec-ch-ua-mobile': 'Sec-CH-UA-Mobile',
+  'sec-ch-ua-platform': 'Sec-CH-UA-Platform'
+}
+
+/**
+ * The three low-entropy hints a real Chrome attaches to every request.
+ *
+ * They stay low-entropy on purpose: a mobile flag that is honest for this runtime and
+ * the platform name Chromium itself reports, which is the same answer a Chrome on this
+ * machine would give. High-entropy hints are never supplied here, because Chrome only
+ * sends those to an origin that asked with `Accept-CH`.
+ */
+export function lowEntropyHintValues(
+  chromeVersion: string,
+  platform: NodeJS.Platform
+): Record<string, string> {
+  return {
+    'sec-ch-ua': serializeBrandList(chromeBrands(chromeVersion)),
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': `"${clientHintPlatform(platform)}"`
+  }
+}
+
 /**
  * The same request headers with the brand hints naming the browser the user agent
- * names, or null when there was nothing to rewrite.
+ * names, or null when the request already says what a real Chrome would say.
  *
- * Only the two brand hints are touched: `Sec-CH-UA-Mobile` and `Sec-CH-UA-Platform`
- * already describe this machine correctly, and rewriting a hint Chromium never sent
- * would make the request look less like a browser's rather than more.
+ * The two brand hints are rewritten to this build's version. `Sec-CH-UA-Mobile` and
+ * `Sec-CH-UA-Platform` are left exactly as Chromium sent them, since they describe the
+ * machine correctly; when Chromium sent none of the three, as it does with our branded
+ * user agent, all three are supplied with the values a Chrome on this machine sends.
+ * A full-version-list hint is only ever rewritten, never added: Chrome sends that one
+ * to an origin that asked for it, and only to that origin.
  */
 export function coherentClientHintHeaders(
   headers: ClientHintHeaders,
-  chromeVersion: string
+  chromeVersion: string,
+  platform: NodeJS.Platform
 ): ClientHintHeaders | null {
   const brandList = serializeBrandList(chromeBrands(chromeVersion))
   const fullVersionList = serializeBrandList(chromeFullVersionList(chromeVersion))
+  const present = new Set<string>()
   let changed = false
   const rewritten: ClientHintHeaders = {}
   for (const [name, value] of Object.entries(headers)) {
     const normalized = name.toLowerCase()
     if (normalized === 'sec-ch-ua') {
       rewritten[name] = brandList
-      changed = true
+      present.add(normalized)
+      if (value !== brandList) changed = true
       continue
     }
     if (normalized === 'sec-ch-ua-full-version-list') {
       rewritten[name] = fullVersionList
-      changed = true
+      present.add(normalized)
+      if (value !== fullVersionList) changed = true
       continue
     }
+    if (normalized in LOW_ENTROPY_HINT_NAMES) present.add(normalized)
     rewritten[name] = value
+  }
+  const supplied = lowEntropyHintValues(chromeVersion, platform)
+  for (const [normalized, name] of Object.entries(LOW_ENTROPY_HINT_NAMES)) {
+    if (present.has(normalized)) continue
+    rewritten[name] = supplied[normalized]
+    changed = true
   }
   return changed ? rewritten : null
 }

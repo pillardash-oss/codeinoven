@@ -220,7 +220,11 @@ export class BrowserServiceSessions {
     browserSession.webRequest.onBeforeSendHeaders(
       { urls: ['http://*/*', 'https://*/*'] },
       (details, done) => {
-        const rewritten = coherentClientHintHeaders(details.requestHeaders, process.versions.chrome)
+        const rewritten = coherentClientHintHeaders(
+          details.requestHeaders,
+          process.versions.chrome,
+          process.platform
+        )
         done({
           requestHeaders: rewritten === null ? details.requestHeaders : toStringHeaders(rewritten)
         })
