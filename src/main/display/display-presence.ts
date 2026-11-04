@@ -1,24 +1,20 @@
 import type { DisplayAvailability } from '../../lib/ipc/display'
 
 /**
- * Whether an agent is driving something the display panel could show, and which
- * thread is doing it.
+ * Whether an agent is driving something the display panel could show, which thread
+ * is doing it, and which device the panel should be showing.
  *
- * The panel is not a tool a user browses to: it is a window into work an agent
- * started (an emulator, a booted simulator, a screen it is driving). So the app
- * must not look for one until an agent is actually working, and it must not look
- * on a timer while nothing runs.
+ * Two reasons the app looks for a device, and only two:
  *
- * Two signals, because one is not enough:
+ *  - An agent is working. Then a target that appeared during the turn is work the
+ *    agent started, and it takes the panel. This is the reliable attribution: the
+ *    process tree names the thread, and `simctl boot` itself lives for a second.
+ *  - The panel is showing no device. A person boots a simulator to use it, and the
+ *    panel is supposed to come up on it by itself. Nothing subscribes to that, so
+ *    this half is a cheap poll that stops the moment the panel has a device.
  *
- *  - the devices themselves, compared against what was already there when the turn
- *    started. A target that appeared during the turn is work the agent started.
- *    This is the reliable one: `simctl boot` lives for a second and a simulator the
- *    OS launches belongs to no agent process at all.
- *  - the harness process tree, which names the exact thread that ran a device
- *    command and so attributes the mark without guessing.
- *
- * Both run only while a thread is working.
+ * Both cases end in the same answer: the one target the panel should be mirroring,
+ * so an agent that moves from one emulator to another takes the panel with it.
  */
 export interface DisplayPresenceDeps {
   /** Every process the agent process service currently tracks. Never cached here. */
@@ -29,6 +25,10 @@ export interface DisplayPresenceDeps {
   onAvailable: (threadIds: string[]) => void
   /** A thread started or stopped using a display target. */
   onActivity: (threadId: string, active: boolean, at: number) => void
+  /** A target should take the panel: `ios:<udid>`, optionally for one thread. */
+  onTargetAppeared: (key: string, threadId?: string) => void
+  /** Whether the app window is on screen, so a hidden app never probes devices. */
+  isWindowOnScreen: () => boolean
 }
 
 /** One tracked process, as the decision needs it. */
@@ -82,6 +82,16 @@ export function displayThreadForProcess(process: TrackedCommand): string | null 
 const FIRST_CHECK_DELAY_MS = 3_000
 /** How often the watch looks again while a thread works. */
 const CHECK_INTERVAL_MS = 8_000
+/**
+ * How often a closed panel looks for a device to open.
+ *
+ * A device can be booted by the person rather than by an agent   they start a
+ * simulator to work in it themselves   and the panel has to come up on it either
+ * way. There is no event to subscribe to for that (`simctl` has no watch mode),
+ * so this is a poll, and it is deliberately the cheap one: two short child
+ * processes, only while the panel is showing nothing and the window is up.
+ */
+const DISCOVERY_INTERVAL_MS = 5_000
 
 export class DisplayPresence {
   private availableSince: number | null = null
@@ -91,6 +101,13 @@ export class DisplayPresence {
   private readonly activeThreads = new Map<string, number>()
   /** Targets that were already there when the first thread started working. */
   private baseline: Set<string> | null = null
+  /** Targets already handed to the panel, so nothing is offered twice. */
+  private readonly offered = new Set<string>()
+  /** The target the panel is mirroring, when it is mirroring one. */
+  private panelTarget: string | null = null
+  /** Whether the renderer has ever said what the panel shows (a launch always
+   *  reports it, including "nothing"). */
+  private panelReported = false
   private timer: ReturnType<typeof setTimeout> | null = null
   private checking = false
   private disposed = false
@@ -115,12 +132,15 @@ export class DisplayPresence {
     // A thread that stopped working stops wearing the mark, whatever it touched.
     for (const threadId of stopped) this.markThread(threadId, false)
     if (next.size === 0) {
-      this.clearTimer()
+      // Discovery keeps looking for a device the person boots themselves.
+      this.schedule(this.panelTarget === null ? DISCOVERY_INTERVAL_MS : null)
       return
     }
     if (this.availableSince !== null) {
-      // The panel already exists. A new turn in a working thread joins the mark.
+      // The panel already exists. A new turn in a working thread joins the mark,
+      // and the watch keeps looking so a different device can take the panel.
       for (const threadId of started) this.markThread(threadId, true)
+      this.schedule(started.length > 0 ? 0 : CHECK_INTERVAL_MS)
       return
     }
     if (this.baseline === null) {
@@ -128,6 +148,23 @@ export class DisplayPresence {
       return
     }
     this.schedule(started.length > 0 ? 0 : FIRST_CHECK_DELAY_MS)
+  }
+
+  /**
+   * Report the target the panel is mirroring, so the watch knows whether it still
+   * has something to find and never offers the target already on screen.
+   */
+  setPanelTarget(key: string | null): void {
+    if (this.disposed) return
+    const changed = !this.panelReported || this.panelTarget !== key
+    const first = !this.panelReported
+    this.panelReported = true
+    this.panelTarget = key
+    if (key !== null) this.offered.add(key)
+    if (!changed) return
+    // A launch that reports "nothing mirrored" is what arms discovery.
+    if (first && key === null) this.schedule(0)
+    else this.schedule(this.working.size === 0 && key !== null ? null : 0)
   }
 
   dispose(): void {
@@ -147,9 +184,11 @@ export class DisplayPresence {
     this.schedule(FIRST_CHECK_DELAY_MS)
   }
 
-  private schedule(delay: number): void {
+  private schedule(delay: number | null): void {
     this.clearTimer()
-    if (this.disposed || this.working.size === 0 || this.availableSince !== null) return
+    if (this.disposed || delay === null) return
+    // Nothing to look for: an idle app with the panel already showing a device.
+    if (this.working.size === 0 && this.panelTarget !== null) return
     this.timer = setTimeout(() => {
       this.timer = null
       void this.check()
@@ -164,12 +203,20 @@ export class DisplayPresence {
 
   /** One look at the devices and the agent's process tree, then the next look. */
   private async check(): Promise<void> {
-    if (this.disposed || this.checking || this.availableSince !== null) return
+    if (this.disposed || this.checking) return
+    if (this.working.size === 0 && this.panelTarget !== null) return
+    if (!this.deps.isWindowOnScreen()) {
+      // A hidden window is nothing to mirror: look again when it is back.
+      this.schedule(DISCOVERY_INTERVAL_MS)
+      return
+    }
     this.checking = true
     try {
       const [targets, processes] = await Promise.all([
         this.deps.detectTargets().catch(() => [] as string[]),
-        this.deps.listAgentProcesses().catch(() => [] as TrackedCommand[])
+        this.working.size === 0
+          ? Promise.resolve([] as TrackedCommand[])
+          : this.deps.listAgentProcesses().catch(() => [] as TrackedCommand[])
       ])
       if (this.disposed) return
 
@@ -186,14 +233,25 @@ export class DisplayPresence {
         // turn that was running when it appeared is the one that did.
         for (const threadId of this.working) attributed.add(threadId)
       }
-      if (attributed.size === 0) {
-        this.schedule(CHECK_INTERVAL_MS)
-        return
+
+      // The panel follows the device, not just the fact that one exists: a
+      // simulator booted by the person and an emulator an agent moved to both
+      // arrive through here, once each.
+      const fresh = targets.filter((target) => !this.offered.has(target))
+      const focus = fresh.at(-1)
+      if (focus) {
+        this.offered.add(focus)
+        this.deps.onTargetAppeared(focus, [...attributed][0])
       }
-      this.availableSince = Date.now()
-      this.clearTimer()
-      for (const threadId of attributed) this.markThread(threadId, true)
-      this.deps.onAvailable([...attributed])
+
+      if (attributed.size > 0 && this.availableSince === null) {
+        this.availableSince = Date.now()
+        for (const threadId of attributed) this.markThread(threadId, true)
+        this.deps.onAvailable([...attributed])
+      }
+
+      const idle = this.working.size === 0
+      this.schedule(idle ? DISCOVERY_INTERVAL_MS : CHECK_INTERVAL_MS)
     } finally {
       this.checking = false
     }

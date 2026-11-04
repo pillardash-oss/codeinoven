@@ -36,11 +36,40 @@ export interface DisplayIpcDeps {
 export function registerDisplayIpc(deps: DisplayIpcDeps): void {
   bindDisplayWindow(deps.window)
 
-  const send = (channel: 'display:available' | 'display:activity', payload: unknown): void => {
+  const send = (
+    channel: 'display:available' | 'display:activity' | 'display:target',
+    payload: unknown
+  ): void => {
     const window = deps.window()
     if (!window || window.isDestroyed()) return
     sendToRenderer(window.webContents, channel, payload)
   }
+
+  /**
+   * Hand the renderer the device that should take the panel.
+   *
+   * The watch only knows target keys, which are cheap and stable, while the panel
+   * needs a label and a mark. The listing that answers that is the same one the
+   * picker uses, so this resolves the descriptor from the device itself instead
+   * of inventing one.
+   */
+  const announceTarget = async (key: string, threadId?: string): Promise<void> => {
+    const [kind, sourceId] = key.split(':', 2)
+    if (!isDisplaySourceKind(kind) || !sourceId) return
+    try {
+      const listing = await (await displayService()).listSources(kind)
+      const target = listing.sources.find((source) => source.sourceId === sourceId)
+      if (!target) return
+      send('display:target', {
+        target,
+        ...(threadId ? { threadId } : {}),
+        at: Date.now()
+      })
+    } catch (error) {
+      Logger.dev(`Display target ${key} could not be resolved:`, error)
+    }
+  }
+
   const presence = new DisplayPresence({
     listAgentProcesses: deps.listAgentProcesses,
     detectTargets: detectDisplayTargets,
@@ -48,6 +77,11 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
     onActivity: (threadId, active, at) => {
       const activity: DisplayThreadActivity = { threadId, active, at }
       send('display:activity', activity)
+    },
+    onTargetAppeared: (key, threadId) => void announceTarget(key, threadId),
+    isWindowOnScreen: () => {
+      const window = deps.window()
+      return Boolean(window && !window.isDestroyed() && window.isVisible() && !window.isMinimized())
     }
   })
 
@@ -81,6 +115,21 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
       throw new TypeError('Working threads must be a list of thread ids')
     }
     presence.setWorkingThreads(threadIds as string[])
+  })
+  ipcMain.handle('display:notePanel', (_event, mirrored: unknown) => {
+    if (mirrored === null) {
+      presence.setPanelTarget(null)
+      return
+    }
+    if (typeof mirrored !== 'object' || mirrored === null) {
+      throw new TypeError('A mirrored target must be an object or null')
+    }
+    const target = mirrored as { kind?: unknown; sourceId?: unknown }
+    const kind = requireKind(target.kind)
+    if (typeof target.sourceId !== 'string' || target.sourceId.length === 0) {
+      throw new TypeError('A mirrored target must name its source')
+    }
+    presence.setPanelTarget(`${kind}:${target.sourceId}`)
   })
 
   Logger.dev('Display panel registered: capture modules load on first use')

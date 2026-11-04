@@ -1,5 +1,7 @@
 import type {
   DisplayAvailability as DisplayPresenceSnapshot,
+  DisplayPanelTarget,
+  DisplayTargetOffer,
   DisplayThreadActivity
 } from '$shared/ipc/display'
 import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -21,10 +23,22 @@ class DisplayAvailabilityState {
   /** Threads wearing the "driving a display target" mark, by thread id. */
   activity = $state<Record<string, number>>({})
 
+  /**
+   * A device the panel should be showing, waiting for the workspace to open it.
+   *
+   * The watch in main decides which device was booted or moved to; opening the
+   * tab needs the thread and project the workspace is standing in, which a store
+   * cannot know, so the offer waits here until a surface drains it.
+   */
+  pendingTarget = $state<DisplayTargetOffer | null>(null)
+
   private cleanups: Array<() => void> = []
   private started = false
   /** Last working-thread list reported, so a busy badge changing costs no round trip. */
   private reportedThreads: string | null = null
+  /** Last mirrored target reported, for the same reason. Undefined until the
+   *  first report, so a launch with no panel still arms the watch. */
+  private reportedPanelTarget: string | null | undefined = undefined
 
   init(): void {
     if (this.started) return
@@ -32,6 +46,12 @@ class DisplayAvailabilityState {
     this.cleanups.push(
       subscribe('display:available', () => {
         this.available = true
+      })
+    )
+    this.cleanups.push(
+      subscribe('display:target', (offer: DisplayTargetOffer) => {
+        this.available = true
+        this.pendingTarget = offer
       })
     )
     this.cleanups.push(
@@ -56,6 +76,8 @@ class DisplayAvailabilityState {
     for (const cleanup of this.cleanups) cleanup()
     this.cleanups = []
     this.started = false
+    this.reportedPanelTarget = undefined
+    this.pendingTarget = null
   }
 
   /** Whether this thread's agent is driving a display target right now. */
@@ -81,6 +103,26 @@ class DisplayAvailabilityState {
     void invoke('display:noteWorkingThreads', [...threadIds]).catch((error: unknown) =>
       logRendererError('The agent working threads could not be reported', error)
     )
+  }
+
+  /**
+   * Tell main which device the panel is mirroring, and whether it is showing one.
+   *
+   * While it shows one the watch can stop looking; when the tab closes, the watch
+   * arms again so the next device that comes up opens the panel.
+   */
+  notePanelTarget(mirrored: DisplayPanelTarget | null): void {
+    const key = mirrored ? `${mirrored.kind}:${mirrored.sourceId}` : null
+    if (this.reportedPanelTarget === key) return
+    this.reportedPanelTarget = key
+    void invoke('display:notePanel', mirrored).catch((error: unknown) =>
+      logRendererError('The display panel target could not be reported', error)
+    )
+  }
+
+  /** Drop the offer the workspace just acted on, so nothing opens twice. */
+  clearPendingTarget(at: number): void {
+    if (this.pendingTarget?.at === at) this.pendingTarget = null
   }
 
   private applyActivity(activity: DisplayThreadActivity): void {

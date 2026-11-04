@@ -269,6 +269,20 @@ export interface DisplayThreadActivity {
   at: number
 }
 
+/** One target the panel should mirror, pushed when a device shows up. */
+export interface DisplayTargetOffer {
+  target: DisplaySourceDescriptor
+  /** The thread whose work started it, when an agent started it. */
+  threadId?: string
+  at: number
+}
+
+/** The device one display tab is mirroring, as the watch needs to know it. */
+export interface DisplayPanelTarget {
+  kind: DisplaySourceKind
+  sourceId: string
+}
+
 export const invokeDisplayContract = {
   /**
    * Enumerate one kind's targets.
@@ -299,6 +313,13 @@ export const invokeDisplayContract = {
   'display:input': {} as Contract<[sessionId: string, gesture: DisplayInputGesture], void>,
   /** Read the presence flag. One call restores the rail item after a reload. */
   'display:presence': {} as Contract<[], DisplayAvailability>,
+  /**
+   * Report the target the panel is mirroring, or null when it shows none.
+   *
+   * This is what stops the watch: while a device is on screen there is nothing to
+   * find, and the offer that put it there must never be repeated.
+   */
+  'display:notePanel': {} as Contract<[mirrored: DisplayPanelTarget | null], void>,
   /**
    * Report the threads agents are working in right now.
    *

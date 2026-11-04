@@ -413,27 +413,22 @@
           ]
         : authoredWork
 
-    // The display panel has no rail item by default: it is a view of work an agent
-    // started (an emulator it launched, a simulator it booted, a window it is
-    // driving), so the control appears only once that has happened. Leaving a
-    // preview open keeps it there for as long as the tab lives.
-    const showsDisplay =
-      displayAvailability.available ||
-      contextSidebarState.tabs.some((tab) => tab.kind === 'display')
-    if (showsDisplay) {
-      coordination.push({
-        id: 'display',
-        label: board.switcherPanelTabs.dockKindActive('display')
-          ? `Hide ${feature('display').name}`
-          : `Show ${feature('display').name}`,
-        icon: feature('display').icon,
-        active: board.switcherPanelTabs.dockKindActive('display'),
-        onSelect: () =>
-          board.switcherPanelTabs.toggleDockPanel('display', () =>
-            contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
-          )
-      })
-    }
+    // The display panel is a tool a person reaches for, not only a view of work an
+    // agent started: booting your own simulator and mirroring it is the same panel.
+    // So the item is always in the rail, and an agent's activity adds the thread
+    // mark and the busy badge rather than the entry itself.
+    coordination.push({
+      id: 'display',
+      label: board.switcherPanelTabs.dockKindActive('display')
+        ? `Hide ${feature('display').name}`
+        : `Show ${feature('display').name}`,
+      icon: feature('display').icon,
+      active: board.switcherPanelTabs.dockKindActive('display'),
+      onSelect: () =>
+        board.switcherPanelTabs.toggleDockPanel('display', () =>
+          contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
+        )
+    })
 
     // Browser tabs keep their own hairline-separated group: they are live pages,
     // not a written aside, so they do not ride with history.
@@ -549,6 +544,34 @@
       .filter(([, run]) => run.busy)
       .map(([threadId]) => threadId)
     displayAvailability.noteWorkingThreads(working)
+  })
+
+  /**
+   * Open the device the watch found, on the thread the person is standing in.
+   *
+   * The offer is the whole point of the watch: a simulator or emulator that comes
+   * up takes the panel by itself, so monitoring (and working the mirrored screen)
+   * starts without hunting for a rail item first. Focusing a tab already mirroring
+   * that device is what makes an agent moving between devices follow it here.
+   */
+  $effect(() => {
+    const offer = displayAvailability.pendingTarget
+    const thread = selectedThread
+    if (!offer || !thread) return
+    contextSidebarState.openDisplayTarget(thread.projectId, thread.id, offer.target)
+    displayAvailability.clearPendingTarget(offer.at)
+  })
+
+  /** Report what the panel is mirroring, so the watch stops looking for a device. */
+  $effect(() => {
+    const mirrored = contextSidebarState.tabs.find(
+      (candidate) => candidate.kind === 'display' && candidate.sourceKind && candidate.sourceId
+    )
+    displayAvailability.notePanelTarget(
+      mirrored?.kind === 'display' && mirrored.sourceKind && mirrored.sourceId
+        ? { kind: mirrored.sourceKind, sourceId: mirrored.sourceId }
+        : null
+    )
   })
 
   /**
