@@ -9,6 +9,7 @@ import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
 import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
 import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
@@ -494,10 +495,24 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
 
   browserFullscreenTabId = $state<string | null>(null)
 
+  /** The display tab shown fullscreen, if any. A phone-sized preview is exactly
+   *  what a dock-width panel cannot show, so the panel owns the same surface the
+   *  terminal and browser do. */
+  displayFullscreenTabId = $state<string | null>(null)
+
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
    *  unless it was the last tab of that kind. */
-  closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
+  closeFullscreenTab(kind: 'terminal' | 'browser' | 'display', tabId: string): void {
     this.closeContextTab(tabId)
+    if (kind === 'display') {
+      // The fullscreen surface needs a tab to show, so it follows the last one
+      // left of its own kind instead of pointing at the tab that just closed.
+      const remaining = contextSidebarState.tabs.filter(
+        (tab) => tab.kind === 'display' && tab.id !== tabId
+      )
+      this.displayFullscreenTabId = remaining.at(-1)?.id ?? null
+      return
+    }
     if (kind === 'terminal') {
       // Nothing left of that kind: the surface has no tab to show, so the record
       // has to go with it rather than point at the tab that just closed.
@@ -534,15 +549,30 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
    *  opening one closes the other kind instead of leaving two full screen dialogs
    *  stacked, where the lower one's suppression block would blank the browser's
    *  native view. */
+  /** Open another display tab, which starts as the target chooser. Returns the tab
+   *  so a fullscreen surface can switch to it. */
+  openDisplayChooser(): string | null {
+    const thread = this.selectedThread
+    if (!thread) return null
+    return contextSidebarState.openDisplayChooser(thread.projectId, thread.id)
+  }
+
   openTabFullscreen(tabId: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
     if (tab?.kind === 'browser') {
       this.root.switcherPanelTabs.browserFullscreenThreadId = this.selectedThread?.id ?? null
       this.browserFullscreenTabId = tabId
       this.terminalFullscreenTabId = null
+      this.displayFullscreenTabId = null
     }
     if (tab?.kind === 'terminal') {
       this.terminalFullscreenTabId = tabId
+      this.browserFullscreenTabId = null
+      this.displayFullscreenTabId = null
+    }
+    if (tab?.kind === 'display') {
+      this.displayFullscreenTabId = tabId
+      this.terminalFullscreenTabId = null
       this.browserFullscreenTabId = null
     }
   }
@@ -582,6 +612,9 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
       this.terminalFullscreenTabId = null
     }
     contextSidebarState.close(id)
+    if (tab.kind === 'display' && this.displayFullscreenTabId === tab.id) {
+      this.displayFullscreenTabId = null
+    }
     if (tab.kind === 'browser' && this.browserFullscreenTabId === tab.id) {
       this.browserFullscreenTabId = contextSidebarState.activeBrowserTabId
     }
@@ -622,25 +655,36 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
   }
 
   async deleteProject(projectId: string, deleteFolder = false): Promise<void> {
-    if (this.root.createThreadInProject.projectDialogs.deletingProjectId !== null) return
+    if (projectDeletionState.isPending(projectId)) return
     const project = this.root.createThreadInProject.projects.find((p) => p.id === projectId)
     if (!project) return
-    this.root.createThreadInProject.projectDialogs.deletingProjectId = projectId
 
-    // Deletion is transactional: the backend either deletes everything or
-    // nothing (folder erasure runs first and gates every other step). The UI
-    // mirrors the change only after the backend confirms success, so a failed
-    // deletion leaves the sidebar, threads, and icon exactly as they were.
+    // The row must react before anything is deleted, not after: the main process
+    // accepts the job and answers at once, then reports every stage on the
+    // `project:deletion` event. `begin` is what greys the row and makes it inert
+    // immediately, so twenty deletions can be accepted in a row while the work
+    // drains in the background, one project at a time.
+    projectDeletionState.begin(projectId)
     try {
       await invoke('project:delete', projectId, { deleteFolder })
     } catch (error) {
+      // The request was refused before it was queued (invalid id, unknown
+      // project), so nothing is running and the row becomes usable again.
+      projectDeletionState.settle(projectId)
       reportError(error, 'The project could not be deleted.')
-      return
-    } finally {
-      this.root.createThreadInProject.projectDialogs.deletingProjectId = null
     }
+  }
 
-    // Backend deletion succeeded; now mirror it in the UI state.
+  /**
+   * Mirror a finished deletion in the UI state.
+   *
+   * Driven by the main process's `project:deletion` event rather than by a
+   * returned promise, so the row leaves the sidebar the moment the deletion
+   * really completed and every window drops it   including windows that never
+   * asked for the deletion.
+   */
+  applyProjectDeleted(projectId: string): void {
+    projectDeletionState.settle(projectId)
     const browserTabIds = contextSidebarState.removeProjectBrowsers(projectId)
     if (this.browserFullscreenTabId && browserTabIds.includes(this.browserFullscreenTabId)) {
       this.browserFullscreenTabId = null
@@ -662,6 +706,12 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
     // Best-effort teardown of the project's browser sessions. The project is
     // already gone backend-side, so a failure here must not roll the UI back.
     void invoke('browser:destroyProject', projectId).catch(() => {})
+  }
+
+  /** Put a project the deletion could not finish back in the user's hands. */
+  applyProjectDeletionFailed(projectId: string, message: string): void {
+    projectDeletionState.settle(projectId)
+    reportError(new Error(message), 'The project could not be deleted.')
   }
 
   openThread(thread: Thread): void {

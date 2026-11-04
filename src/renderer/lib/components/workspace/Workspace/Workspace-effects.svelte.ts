@@ -2,10 +2,12 @@ import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelt
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
+import { viewShowsWorkspaceShell } from '$lib/content-view-projects'
 import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { motionDuration } from '$lib/motion'
+import { openInBrowser } from '$lib/open-in-browser'
 import { isOverlayOpen } from '$lib/overlay-close.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { speechController } from '$lib/speech/speech-controller.svelte'
@@ -14,6 +16,7 @@ import { loadBrowser } from '$lib/stores/browser-access.svelte'
 import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
 import { projectWorkState } from '$lib/stores/project-work.svelte'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
@@ -663,6 +666,24 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     })
 
     $effect(() => {
+      // A project deletion runs in the main process without holding any window
+      // on it, so this is where every window learns what happened: the row it
+      // greyed leaves the sidebar on `deleted`, and comes back on `failed` with
+      // the reason instead of sitting greyed forever.
+      return subscribe('project:deletion', (event) => {
+        projectDeletionState.applyEvent(event)
+        if (event.status === 'deleted') {
+          this.root.openThreadFromSwitcher.applyProjectDeleted(event.projectId)
+        } else if (event.status === 'failed') {
+          this.root.openThreadFromSwitcher.applyProjectDeletionFailed(
+            event.projectId,
+            event.error ?? 'The deletion did not finish.'
+          )
+        }
+      })
+    })
+
+    $effect(() => {
       return subscribe('agent:processesChanged', (projectId, threadId) => {
         if (
           workspaceState.selectedThread?.projectId === projectId &&
@@ -776,6 +797,14 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
             context.reveal,
             context.boxId
           )
+          return
+        }
+        // A surface with no project context is not a workspace thread: Settings,
+        // Scope and the app-wide browser all replace the shell, so a plain link
+        // clicked there belongs where every other in-app link goes, never in a
+        // project thread's browser the reader cannot connect to the page in front.
+        if (!viewShowsWorkspaceShell(rendererRecovery.activeView)) {
+          void openInBrowser(url, 'global')
           return
         }
         if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)

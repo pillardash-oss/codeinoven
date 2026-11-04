@@ -10,7 +10,7 @@ interface Job {
   reject(error: Error): void
 }
 
-function createLane() {
+function createLane(deadlineMs = 15_000) {
   // Each lane dispatches one request at a time and releases its worker when idle.
   const queue: Job[] = []
   let worker: Worker | undefined
@@ -66,7 +66,7 @@ function createLane() {
       const current = worker
       deadline = setTimeout(() => {
         if (worker === current) stop(new Error('Background I/O timed out'))
-      }, 15_000)
+      }, deadlineMs)
       worker.postMessage(active?.request)
     } catch (error) {
       stop(error instanceof Error ? error : new Error(String(error)))
@@ -85,11 +85,17 @@ function createLane() {
 }
 
 // Parsing a document must not queue directory listings behind its CPU work.
-// At most two workers exist, each with a bounded heap, queue and active deadline.
+// At most three workers exist, each with a bounded heap, queue and active deadline.
 const interactive = createLane()
 const processing = createLane()
+// Erasing a project folder or a browser profile is a long, entry-by-entry walk
+// whose result the caller genuinely awaits, so it gets its own lane with a
+// deletion-scale deadline instead of starving (or being killed by) the lanes
+// that serve typing and thread reads.
+const purge = createLane(15 * 60_000)
 
 export function backgroundIo<T>(request: BackgroundIoRequest): Promise<T> {
+  if (request.kind === 'remove-trees') return purge<T>(request)
   return request.kind === 'list-directory' ||
     request.kind === 'credential-read' ||
     request.kind === 'credential-delete'

@@ -21,6 +21,7 @@ import type { BrowserService } from '../browser-service'
  * root cannot drift apart: a changed signature is a compile error here.
  */
 export interface ConversationPagesHost {
+  readonly agentPageTargets: BrowserService['agentPageTargets']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentUserPageTabIds: BrowserService['agentUserPageTabIds']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
@@ -77,6 +78,32 @@ export class BrowserServiceConversationPages {
    * `"strip"` is the explicit way to move onto whatever the strip shows now.
    */
   utilityTarget(input: {
+    scope: string
+    threadId: string
+    contextKey: string
+    page: BrowserUtilityPage | null
+  }): { tabId: string; tab: BrowserTab; attached: boolean } | null {
+    const target = this.resolveTarget(input)
+    // Remembered here so a later call can be told the strip moved it: `page "strip"`
+    // follows whatever the user opens, and a model mid-edit must not discover that by
+    // typing into the wrong site.
+    if (target) {
+      const contents = target.tab.view.webContents
+      this.host.agentPageTargets.set(input.contextKey, {
+        tabId: target.tabId,
+        url: contents.isDestroyed() ? '' : contents.getURL()
+      })
+    }
+    return target
+  }
+
+  /** What the previous call for this context worked on, if any. */
+  previousPageTarget(contextKey: string): { tabId: string; url: string } | null {
+    return this.host.agentPageTargets.get(contextKey) ?? null
+  }
+
+  /** The tab one browser utility call resolves to, before the ledger is updated. */
+  private resolveTarget(input: {
     scope: string
     threadId: string
     contextKey: string

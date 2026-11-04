@@ -655,6 +655,40 @@ function questionDialogTitle(questions) {
   return CIO_QUESTION_MARKER + JSON.stringify({ questions })
 }
 
+/**
+ * The picture an agent may attach to a question or to one of its options.
+ *
+ * Exactly one medium is set. HTML and SVG are authored in place, an image is a
+ * picture the agent generated, and Mermaid is the fallback for a model that can
+ * draw nothing else. The question card draws whichever arrived behind one eye
+ * button, so the user decides from what they can see rather than from prose.
+ */
+function questionVisualParameters() {
+  return Type.Object({
+    html: Type.Optional(
+      Type.String({
+        description:
+          'A self-contained HTML document (inline styles only, no scripts) drawing what this question or option means.'
+      })
+    ),
+    svg: Type.Optional(
+      Type.String({ description: 'Raw SVG markup drawing what this question or option means.' })
+    ),
+    image: Type.Optional(
+      Type.String({
+        description:
+          'A generated picture: a data URL, an http(s) URL, or a path inside the project.'
+      })
+    ),
+    mermaid: Type.Optional(
+      Type.String({ description: 'A Mermaid diagram, when the point is a flow or a relationship.' })
+    ),
+    caption: Type.Optional(
+      Type.String({ description: 'One short line naming what the picture shows.' })
+    )
+  })
+}
+
 export default function codeInOvenCoreToolsExtension(pi) {
   // Disable the sub-agent tools whenever this session published a tool
   // allowlist that does not name them. Pi drops an inactive tool from the

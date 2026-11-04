@@ -34,6 +34,8 @@
     onStop: () => void
     onEdit: () => void
     onDelete: () => void
+    /** False for an engine whose server the user runs themselves. */
+    managed?: boolean
   }
 
   let {
@@ -48,7 +50,8 @@
     onStart,
     onStop,
     onEdit,
-    onDelete
+    onDelete,
+    managed = true
   }: Props = $props()
 
   let copied = $state(false)
@@ -143,13 +146,17 @@
     </div>
 
     <div class="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-      {#key badge.label}
-        <SettingsStatusBadge label={badge.label} classes={badge.classes}>
-          <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
-        </SettingsStatusBadge>
-      {/key}
+      {#if managed}
+        {#key badge.label}
+          <SettingsStatusBadge label={badge.label} classes={badge.classes}>
+            <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
+          </SettingsStatusBadge>
+        {/key}
+      {/if}
 
-      {#if busy}
+      {#if !managed}
+        <!-- Nothing to start: the process belongs to the user's own tooling. -->
+      {:else if busy}
         <button
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Stop {entry.name}"
@@ -175,11 +182,13 @@
         ariaLabel="{entry.name} actions"
       />
 
-      <SettingsDisclosure
-        {expanded}
-        title={`${expanded ? 'Hide' : 'Show'} ${entry.name} log`}
-        onclick={onToggle}
-      />
+      {#if managed}
+        <SettingsDisclosure
+          {expanded}
+          title={`${expanded ? 'Hide' : 'Show'} ${entry.name} log`}
+          onclick={onToggle}
+        />
+      {/if}
     </div>
   </div>
 

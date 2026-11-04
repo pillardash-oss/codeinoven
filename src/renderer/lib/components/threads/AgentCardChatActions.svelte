@@ -9,6 +9,10 @@
    * reading and the fold, so the footer below keeps its room for the card's own
    * controls. At head size they are glyphs: the tooltip carries the wording, and
    * each title stays action-specific through `subject`.
+   *
+   * The picture and the walkthrough an entry carries are deliberately not here:
+   * they belong to the entry being decided on (the question, or one option), so
+   * they are drawn beside it by `QuestionEntryActions`, as siblings.
    */
   interface Props {
     /** Opens the explain side chat; omitted hides the action. */

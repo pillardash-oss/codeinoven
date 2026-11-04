@@ -15,11 +15,13 @@ import { invokeAssistantContract } from './ipc/invoke-assistant'
 import { invokeTypesafeContract } from './ipc/invoke-typesafe'
 import { invokeDesignContract } from './ipc/invoke-design'
 import { invokeExpertContract } from './ipc/invoke-expert'
+import { invokeDisplayContract } from './ipc/display'
 import { invokeMediaContract } from './ipc/invoke-media'
 import { invokeOvenContract } from './ipc/invoke-oven'
 import { invokeCioCleanupContract } from './ipc/invoke-cio-cleanup'
 import { invokeSearchContract } from './ipc/invoke-search'
 import { invokeOrchestrationContract } from './ipc/invoke-orchestration'
+import { invokeReceiptContract } from './ipc/invoke-receipt'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
 import type { GitInvocation, GitRefusedOperation, GitRemoteUnavailable } from './types'
 
@@ -28,12 +30,14 @@ export * from './ipc/browser'
 export * from './ipc/design'
 export * from './ipc/expert'
 export * from './ipc/media'
+export * from './ipc/display'
 export * from './ipc/logging'
 export * from './ipc/notifications'
 export * from './ipc/events'
 export * from './ipc/invoke-cio-cleanup'
 export * from './ipc/invoke-search'
 export * from './ipc/invoke-orchestration'
+export * from './ipc/invoke-receipt'
 
 export const IPC_INVOKE_CONTRACT = {
   ...invokeAccountContract,
@@ -54,10 +58,12 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeDesignContract,
   ...invokeExpertContract,
   ...invokeMediaContract,
+  ...invokeDisplayContract,
   ...invokeOvenContract,
   ...invokeCioCleanupContract,
   ...invokeSearchContract,
-  ...invokeOrchestrationContract
+  ...invokeOrchestrationContract,
+  ...invokeReceiptContract
 }
 
 export type IpcInvokeContract = typeof IPC_INVOKE_CONTRACT

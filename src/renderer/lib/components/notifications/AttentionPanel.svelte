@@ -35,21 +35,13 @@
   let busyId = $state<string | null>(null)
 
   /**
-   * What this panel is showing. The gate is keyed to the conversation on screen,
-   * and through it to the assistant task it ran for and the assistant that owns
-   * that task, so a decision made on a scheduled run thread is still visible on
-   * the task's own thread.
+   * What this panel is showing. A gate is keyed to the conversation it settled
+   * on, plus the task thread that conversation ran for, so a decision made on a
+   * transient run thread is still visible on the task it actually ran for. It is
+   * never keyed to the owning assistant: one assistant holds many tasks, and a
+   * decision belongs only to the one that asked.
    */
-  const scope = $derived.by((): AutoAnswerThreadScope => {
-    const thread = workspaceState.selectedThread
-    const matches = thread !== null && thread.id === threadId && thread.projectId === projectId
-    return {
-      id: threadId,
-      projectId,
-      ...(matches && thread.assistantId ? { assistantId: thread.assistantId } : {}),
-      ...(matches && thread.assistantTaskId ? { assistantTaskId: thread.assistantTaskId } : {})
-    }
-  })
+  const scope = $derived.by((): AutoAnswerThreadScope => ({ id: threadId, projectId }))
 
   let unread = $derived(attentionState.unreadFor(scope))
 

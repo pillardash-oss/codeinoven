@@ -21,7 +21,8 @@ import type {
   GitSyncSummary,
   MergeSummary,
   PullRequestCompare,
-  PrComposeInput
+  PrComposeInput,
+  PrResolveOptions
 } from '../../lib/types'
 import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
 import { GitServiceBranches } from './git/git-service-branches'
@@ -31,6 +32,7 @@ import { GitServiceConflictResolution } from './git/git-service-conflict-resolut
 import { GitServiceCore } from './git/git-service-core'
 import { GitServiceMergeRebase } from './git/git-service-merge-rebase'
 import { GitServicePullRequests } from './git/git-service-pull-requests'
+import { GitServiceRanges, type GitRangeFile } from './git/git-service-ranges'
 import { GitServiceRemotes } from './git/git-service-remotes'
 import { GitServiceRepository } from './git/git-service-repository'
 import { GitServiceStashes } from './git/git-service-stashes'
@@ -88,6 +90,7 @@ export interface GitServiceOptions {
  * | {@link GitServiceMergeRebase} | merge, rebase, their aborts, and stepping a stopped rebase |
  * | {@link GitServicePullRequests} | PR branch compare, compose context, PR conflict round trip |
  * | {@link GitServiceStashes} | stash push, list, pop and drop |
+ * | {@link GitServiceRanges} | one bounded read of what a commit range changed |
  *
  * The doc comment for each operation lives on the method that implements it in
  * its unit, so there is one description and it sits next to the code.
@@ -104,6 +107,7 @@ export class GitService {
   private readonly mergeRebase: GitServiceMergeRebase
   private readonly pullRequests: GitServicePullRequests
   private readonly stashes: GitServiceStashes
+  private readonly ranges: GitServiceRanges
 
   constructor(options: GitServiceOptions = {}) {
     const conflictFileLimit =
@@ -119,10 +123,22 @@ export class GitService {
     this.mergeRebase = new GitServiceMergeRebase(this.core)
     this.pullRequests = new GitServicePullRequests(this.core)
     this.stashes = new GitServiceStashes(this.core)
+    this.ranges = new GitServiceRanges(this.core)
   }
 
   async getStatus(projectPath: string): Promise<GitStatus> {
     return this.core.getStatus(projectPath)
+  }
+
+  /**
+   * Files changed in `from..to`, or in the working tree when `to` is omitted.
+   *
+   * One bounded pair of Git reads for the whole range   status letters and line
+   * counts   never a diff per file, so a receipt can describe a large changeset
+   * without a process per path.
+   */
+  async rangeFiles(projectPath: string, from: string, to?: string): Promise<GitRangeFile[]> {
+    return this.ranges.rangeFiles(projectPath, from, to)
   }
 
   async getDiff(projectPath: string, relativePath: string, staged: boolean): Promise<GitDiff> {
@@ -382,22 +398,13 @@ export class GitService {
     return this.mergeRebase.rebaseAction(projectPath, action)
   }
 
-  async preparePrResolve(
-    projectPath: string,
-    options: { remote: string; pullNumber: number; baseBranch: string }
-  ): Promise<GitStatus> {
+  async preparePrResolve(projectPath: string, options: PrResolveOptions): Promise<GitStatus> {
     return this.pullRequests.preparePrResolve(projectPath, options)
   }
 
   async finishPrResolve(
     projectPath: string,
-    options: {
-      remote: string
-      pullNumber: number
-      headBranch: string
-      returnBranch: string
-      token?: string
-    }
+    options: PrResolveOptions & { token?: string }
   ): Promise<GitStatus> {
     return this.pullRequests.finishPrResolve(projectPath, options)
   }

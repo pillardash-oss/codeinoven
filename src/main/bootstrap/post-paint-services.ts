@@ -56,6 +56,7 @@ import { SearchService } from '../search/search-service'
 import { registerSearchSettingsIpc } from '../ipc/search-settings-ipc'
 import { getLlamaServerBinary } from '../speech/backends/llama-backend'
 import { sharedLlamaRuntimeService } from '../speech/llama-runtime-service'
+import { sharedLocalAiRuntimeRegistry } from '../local-ai/local-ai-runtime-registry'
 import type { BootstrapState } from './bootstrap-state'
 
 /**
@@ -625,7 +626,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.updaterService?.setDictationActivitySource({
     activity: () => state.speechService?.dictationActivity() ?? { recording: 0, transcribing: 0 }
   })
-  // Initialize auto-evict timers from persisted sound settings
+  // Initialize auto-evict timers from persisted sound settings, and the one idle
+  // window the local AI registry unloads every local server on.
   try {
     const cfg = await storage.getConfig()
     state.speechService?.updateUnloadOptions({
@@ -633,19 +635,18 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       cleanup: cfg.sound.cleanupUnload,
       tts: cfg.sound.ttsUnload
     })
+    sharedLocalAiRuntimeRegistry().setUnloadOption(cfg.llamaCppUnload)
   } catch {
     // defaults already applied
   }
-  // Intent search shares the one local llama.cpp runtime with speech, so both
-  // draw from the same discovered/downloaded binary and the same process journal.
+  // Intent search draws the same discovered/downloaded binary through the local
+  // AI runtime registry as speech, which owns the process, its idle window, and
+  // its journal entry.
   state.searchService = new SearchService(database, {
     subscribeCorpus: subscribeThreadCorpus,
     summarizeThread: (input) => state.chatEngine!.summarizeSearchThread(input),
     llamaServerPath: () => getLlamaServerBinary(),
-    runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild(),
-    registerProcess: (pid, command, cwd) =>
-      sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
-    unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
+    runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild()
   })
   // A runtime that will not start disables semantic search and nothing else:
   // this used to abort the whole feature boot, which left every feature channel
@@ -883,6 +884,21 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
   })
   videoStudio.registerIpc()
+  // The display panel is not part of a launch: its rail item appears only after an
+  // agent starts or attaches to a display target, and its capture modules load on
+  // the first frame someone asks for. What is registered here is the thin IPC
+  // boundary plus the presence watch that decides when the panel exists at all.
+  const { registerDisplayIpc } = await import('../display/display-ipc')
+  registerDisplayIpc({
+    window: () => state.mainWindow,
+    listAgentProcesses: async () => {
+      const processes = await state.chatEngine?.state.agentProcesses.listAll()
+      return (processes ?? []).map((process) => ({
+        command: process.command,
+        threadId: process.threadId
+      }))
+    }
+  })
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
       studio: videoStudio.execute,
@@ -1139,6 +1155,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
     const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
+    const { registerLocalAiIpc } = await import('../local-ai/local-ai-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     registerProviderAccountIpc(storage, undefined, (accountId) =>
@@ -1151,6 +1168,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     registerLlamaCppIpc({
       hasPtySession: (terminalId) => state.ptyService?.hasSession(terminalId) ?? false
     })
+    // The Local AI page lists every runtime the app can drive beside the
+    // llama.cpp rows, and owns the one unload window they all share.
+    registerLocalAiIpc()
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,

@@ -27,7 +27,8 @@ import type {
   GitSyncResult,
   GitHubPermissionRequired,
   MergeSummary,
-  PrResolveOptions
+  PrResolveOptions,
+  PrResolveSession
 } from '$shared/types'
 import {
   errorMessage,
@@ -90,7 +91,7 @@ export class GitLocalOperations {
    * committed: push back to the PR head, check out the original branch, and
    * delete the temporary branch. Cleared after a successful finish.
    */
-  prResolveSession = $state<(PrResolveOptions & { projectId: string }) | null>(null)
+  prResolveSession = $state<(PrResolveSession & { projectId: string }) | null>(null)
 
   constructor(private readonly access: GitLocalOperationAccess) {}
 
@@ -755,20 +756,24 @@ export class GitLocalOperations {
    * Prepare to resolve a PR's online conflicts locally: checks out the PR head
    * as `pr-<number>` and merges the base in so the conflicts land in the working
    * tree. A conflicted result is normal and is not reported as an error - the
-   * panel hands over to the conflict UI. Records the session so the Resolve
-   * button can finish the whole flow without manual follow-up.
+   * panel hands over to the conflict UI. Main records the session on disk, and
+   * the status that comes back carries it, so the whole flow survives a reload
+   * or a restart between resolving and completing.
    */
   async preparePrResolve(projectId: string, options: PrResolveOptions): Promise<void> {
     const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('merge', true)
     this.error = null
     try {
-      this.status = await invokeGit(
+      const status = await invokeGit(
         'git:preparePrResolve',
         ...this.access.scopedGitArgs(projectId, options)
       )
+      this.status = status
       this.noteRemoteIssue(projectId, null, scopeBucketId)
-      this.prResolveSession = { ...options, projectId }
+      this.prResolveSession = status.prResolveSession
+        ? { ...status.prResolveSession, projectId }
+        : null
       await this.access.refresh(projectId)
     } catch (reason) {
       // Preparing the session fetches the PR's head and base, so an offline
@@ -788,7 +793,9 @@ export class GitLocalOperations {
    * Finish a recorded PR-conflict session: push the resolved merge commit back
    * to the PR's head branch, check out the user's original branch, and delete
    * the temporary `pr-<n>` branch. Only meaningful after the merge commit was
-   * made and `prResolveSession` still matches this project.
+   * made, and `prResolveSession` still names this project's prepared checkout.
+   * Main keeps its own copy of the session, so the finish step can still find
+   * it after a reload even if this mirror were empty.
    */
   async finishPrResolve(projectId: string): Promise<boolean> {
     const session = this.prResolveSession
@@ -797,7 +804,12 @@ export class GitLocalOperations {
     this.access.markBusy('push', true)
     this.error = null
     try {
-      const { projectId: _sessionProjectId, ...options } = session
+      const {
+        projectId: _sessionProjectId,
+        branch: _branch,
+        createdAt: _createdAt,
+        ...options
+      } = session
       this.status = await invokeGit(
         'git:finishPrResolve',
         ...this.access.scopedGitArgs(projectId, options)

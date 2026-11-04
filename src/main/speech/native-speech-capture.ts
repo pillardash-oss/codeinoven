@@ -18,6 +18,26 @@ interface NativeCaptureResponse {
   /** CoreAudio's own domain and status, when the worker reported a failure. */
   errorDomain?: string
   errorCode?: number
+  /** Audio frames the finished take actually wrote, when a stop reported it. */
+  framesWritten?: number | null
+  /** How many times the worker rebuilt its engine to keep the take alive. */
+  engineRestarts?: number | null
+  /** Why a finished take is known to have lost audio, if it did. */
+  captureWarning?: string | null
+}
+
+/**
+ * What a finished native take actually contains.
+ *
+ * `framesWritten` is the worker's own count of the audio it wrote, so the host
+ * can compare the file with the elapsed recording instead of trusting the
+ * clock. It is `null` when the worker that recorded the take is gone and only
+ * the file on disk knows the answer.
+ */
+export interface NativeCaptureReport {
+  framesWritten: number | null
+  engineRestarts: number
+  warning: string | null
 }
 
 interface PendingRequest {
@@ -41,6 +61,15 @@ export class NativeSpeechCapture {
    * cannot grow the buffer.
    */
   private stderrTail = ''
+  /**
+   * The session whose worker exited while it was still recording.
+   *
+   * A worker that dies mid-take stops feeding the file, and the previous `stop`
+   * silently answered from a freshly spawned worker, so a take that lost most
+   * of its audio was finished and transcribed as if it were whole. The session
+   * is remembered here so the stop can say what really happened.
+   */
+  private lostSession: { sessionId: string; reason: string } | null = null
 
   constructor(private readonly executablePath: string) {}
 
@@ -79,6 +108,7 @@ export class NativeSpeechCapture {
     if (this.currentSessionId && this.currentSessionId !== sessionId) {
       await this.stop(this.currentSessionId).catch(() => undefined)
     }
+    this.lostSession = null
     try {
       await this.request({
         id: randomUUID(),
@@ -95,14 +125,55 @@ export class NativeSpeechCapture {
     this.currentSessionId = sessionId
   }
 
-  async stop(sessionId: string): Promise<void> {
-    if (this.currentSessionId !== sessionId) return
+  async stop(sessionId: string): Promise<NativeCaptureReport> {
+    const empty: NativeCaptureReport = { framesWritten: null, engineRestarts: 0, warning: null }
+    if (this.currentSessionId !== sessionId) return empty
+    // The worker died during this take: its file is whatever it managed to
+    // write, and a fresh worker has nothing to say about it. Reporting that
+    // honestly is what stops a short take being handed on as a whole one.
+    if (this.lostSession?.sessionId === sessionId) {
+      const report: NativeCaptureReport = {
+        framesWritten: null,
+        engineRestarts: 0,
+        warning: this.lostSession.reason
+      }
+      this.lostSession = null
+      this.currentSessionId = null
+      return report
+    }
     try {
-      await this.request({ id: randomUUID(), operation: 'stop' })
+      const response = await this.request({ id: randomUUID(), operation: 'stop' })
+      const framesWritten =
+        typeof response.framesWritten === 'number' && response.framesWritten >= 0
+          ? response.framesWritten
+          : null
+      if (response.captureWarning) {
+        Logger.error('Native speech capture lost audio during the take', {
+          sessionId,
+          warning: response.captureWarning,
+          engineRestarts: response.engineRestarts ?? 0
+        })
+      }
+      if ((response.engineRestarts ?? 0) > 0) {
+        Logger.dev('Native speech capture rebuilt its engine during the take', {
+          sessionId,
+          engineRestarts: response.engineRestarts ?? 0
+        })
+      }
+      return {
+        framesWritten,
+        engineRestarts: response.engineRestarts ?? 0,
+        warning: response.captureWarning ?? null
+      }
     } catch (error) {
       // A rejected or timed-out stop means the worker is wedged with an engine
       // that may still hold the microphone. Kill it instead of reusing it.
       this.restart(error instanceof Error ? error : new Error(String(error)))
+      return {
+        framesWritten: null,
+        engineRestarts: 0,
+        warning: 'the microphone recorder stopped responding'
+      }
     } finally {
       // A rejected stop (the worker exited or wedged) still ends this session's
       // claim on the microphone. Leaving the claim set would fail every later
@@ -143,12 +214,25 @@ export class NativeSpeechCapture {
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => this.recordStderr(chunk))
     child.once('error', (error) => this.failPending(error))
-    child.once('exit', (code) => {
+    child.once('exit', (code, signal) => {
       this.process = null
-      if (code !== 0)
-        this.failPending(
-          new Error(`Native microphone recorder exited with code ${code ?? 'unknown'}.`)
-        )
+      const sessionId = this.currentSessionId
+      const detail = `Native microphone recorder exited (code ${code ?? 'none'}, signal ${signal ?? 'none'}).`
+      // Every exit is logged, clean or not: a worker that dies mid-take used to
+      // leave no trace at all while the take carried on looking live.
+      Logger.dev('Native speech capture worker exited', {
+        code: code ?? null,
+        signal: signal ?? null,
+        sessionId
+      })
+      if (sessionId) {
+        this.lostSession = {
+          sessionId,
+          reason: 'the microphone recorder stopped before the take ended'
+        }
+        Logger.error('Native microphone recorder stopped during a recording.', { sessionId })
+      }
+      this.failPending(new Error(detail))
     })
     return child
   }

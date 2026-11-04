@@ -52,6 +52,7 @@
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
+  import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { STAGE_COLORS, STAGE_LABELS, STAGE_ORDER, scopeState } from '$lib/stores/scope.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
@@ -1315,6 +1316,8 @@
                       sticky
                       {stateCounts}
                       showLocation={hasProjectNameCollision(project, visibleProjects)}
+                      deleting={projectDeletionState.isPending(project.id)}
+                      deletingLabel={projectDeletionState.label(project.id) ?? undefined}
                       actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                         openProjectMenuId === project.id}
                       onToggle={() => toggleFolder(project.id)}
@@ -1569,6 +1572,8 @@
                   sticky
                   {stateCounts}
                   showLocation={hasProjectNameCollision(project, visibleProjects)}
+                  deleting={projectDeletionState.isPending(project.id)}
+                  deletingLabel={projectDeletionState.label(project.id) ?? undefined}
                   actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                     openProjectMenuId === project.id}
                   onToggle={() => toggleFolder(project.id)}

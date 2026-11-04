@@ -92,6 +92,11 @@ export class BrowserServiceSurfaces {
    *
    * The tab is parked offscreen before it loads, exactly as an agent-opened tab
    * is, so the page runs whether or not it ends up on screen.
+   *
+   * `preferredTabId` is the tab the app remembers giving this screen (see
+   * `PreviewTargetRegistry`). It is used only while the browser still holds it
+   * for the same project and thread, so a record the user has outrun can never
+   * move another conversation's tab.
    */
   async openDesignScreen(input: {
     projectId: string
@@ -103,6 +108,8 @@ export class BrowserServiceSurfaces {
     url: string
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
+    /** The tab the app remembers for this screen, or null when it remembers none. */
+    preferredTabId?: string | null
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
     this.requireWindow()
     const movedTab = [...this.host.tabs].find(
@@ -113,7 +120,7 @@ export class BrowserServiceSurfaces {
         tab.design?.directory === input.directory &&
         this.tabUrl(id) === input.url
     )
-    const tabId = movedTab?.[0] ?? designScreenTabId(input)
+    const tabId = movedTab?.[0] ?? this.rememberedScreenTab(input) ?? designScreenTabId(input)
     const reused = this.host.tabs.has(tabId)
     const tab = this.host.ensureTab(
       tabId,
@@ -147,6 +154,32 @@ export class BrowserServiceSurfaces {
       boxId: tab.boxId
     })
     return { tabId, tab: reused ? 'reused' : 'opened' }
+  }
+
+  /** Whether the browser still holds one tab, which is what makes a remembered
+   *  tab a page the user can be shown rather than a record to discard. */
+  hasTab(tabId: string): boolean {
+    return this.host.tabs.has(tabId)
+  }
+
+  /**
+   * The remembered tab for one screen, when it is still that screen's own.
+   *
+   * A tab belongs to the screen it is showing, and to the conversation that
+   * opened it, so the record is trusted only while it names a tab this browser
+   * still holds, under the same project and thread. A record that fails any of
+   * that is not a tab this click may take over.
+   */
+  private rememberedScreenTab(input: {
+    projectId: string
+    threadId: string
+    preferredTabId?: string | null
+  }): string | null {
+    const preferred = input.preferredTabId
+    if (preferred === undefined || preferred === null || preferred === '') return null
+    const tab = this.host.tabs.get(preferred)
+    if (!tab) return null
+    return tab.projectId === input.projectId && tab.threadId === input.threadId ? preferred : null
   }
 
   /**

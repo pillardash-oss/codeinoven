@@ -15,6 +15,7 @@ import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
 import { pipState } from '$lib/stores/pip.svelte'
+import { displayAvailability } from '$lib/stores/display-availability.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -395,6 +396,10 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // initialise the store here so the overlay's dynamic import can be gated on
   // `pipState.active` without ever missing a frame.
   pipState.init()
+  // Presence only: this is what turns the display rail item on when an agent
+  // starts a device. The panel's own module (and its capture code) loads when the
+  // item is actually opened.
+  displayAvailability.init()
   // Load which threads carry a user note so sidebar rows and the right-dock
   // indicator can react; the store keeps itself in sync via `note:changed`.
   threadNotesState.init()

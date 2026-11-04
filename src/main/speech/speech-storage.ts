@@ -27,6 +27,10 @@ import { RecordingPlaybackAudio } from './playback-audio'
  */
 const MAX_REMOVED_ATTEMPT_IDS = 512
 
+/** The native worker writes 16 kHz mono 32-bit float PCM (64 bytes per ms). */
+const NATIVE_CAPTURE_SAMPLE_RATE = 16_000
+const CAPTURE_CONTAINER_OVERHEAD_BYTES = 4 * 1024
+
 interface SpeechStorageIndex {
   version: 1
   attempts: SpeechRecordingAttempt[]
@@ -231,7 +235,11 @@ export class SpeechStorage {
     return session.byteSize
   }
 
-  async finalizeCapture(sessionId: string, durationMs: number): Promise<SpeechRecordingAttempt> {
+  async finalizeCapture(
+    sessionId: string,
+    durationMs: number,
+    nativeReport?: { framesWritten: number | null }
+  ): Promise<SpeechRecordingAttempt> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Capture session is stale or unknown.')
     this.sessions.delete(sessionId)
@@ -267,6 +275,16 @@ export class SpeechStorage {
     attempt.audioAvailable = true
     attempt.byteSize = session.byteSize
     attempt.durationMs = Math.max(0, Math.round(durationMs))
+    if (nativeReport) {
+      // The worker's own frame count is the truth when it survived the take.
+      // When it did not, the file's data length is: the CAF header is a few
+      // hundred bytes against 64 bytes per millisecond of audio.
+      const frames =
+        nativeReport.framesWritten !== null
+          ? nativeReport.framesWritten
+          : Math.max(0, Math.floor((session.byteSize - CAPTURE_CONTAINER_OVERHEAD_BYTES) / 4))
+      attempt.capturedMs = Math.max(0, Math.round((frames / NATIVE_CAPTURE_SAMPLE_RATE) * 1000))
+    }
     attempt.stage = 'stopping'
     attempt.updatedAt = Date.now()
     await this.persistIndex()

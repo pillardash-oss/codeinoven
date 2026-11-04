@@ -17,6 +17,7 @@
     CuaUpdateProgress
   } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { publicAssetUrl } from '$lib/static-assets'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
@@ -152,7 +153,7 @@
 
   async function openExternal(url: string): Promise<void> {
     try {
-      await invoke('shell:openExternal', url)
+      await openInBrowser(url, 'global')
     } catch (openError) {
       error = errorMessage(openError, 'The link could not be opened.')
     }

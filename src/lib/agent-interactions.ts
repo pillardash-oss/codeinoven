@@ -1,4 +1,5 @@
 import type { AgentQuestion, AgentQuestionOption } from './types'
+import { normalizeQuestionVisual } from './question-visual'
 
 const TODO_TOOL_NAMES = new Set([
   'todo',
@@ -207,10 +208,14 @@ function normalizeQuestion(value: unknown, index: number): AgentQuestion | null 
           if (!cleanedLabel) return null
           const description = firstString(entry['description'], entry['detail'], entry['help'])
           const instruction = firstString(entry['instruction'], entry['instructions'])
+          const visual = normalizeQuestionVisual(
+            entry['visual'] ?? entry['preview'] ?? entry['mockup'] ?? entry['diagram']
+          )
           return {
             label: cleanedLabel,
             ...(description ? { description } : {}),
             ...(instruction ? { instruction } : {}),
+            ...(visual ? { visual } : {}),
             ...(entry['recommended'] === true || /\(recommended\)/iu.test(cleanedLabel)
               ? { recommended: true }
               : {})

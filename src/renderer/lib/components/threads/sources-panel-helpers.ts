@@ -15,6 +15,14 @@ export function isImageSource(source: FileAgentSource): boolean {
   )
 }
 
+/** A source the panel can open as a picture in the media lightbox: an
+ *  attachment or a generated image whose bytes render as an image. */
+export function isPreviewableImageSource(source: AgentSource): source is FileAgentSource {
+  return (
+    (source.kind === 'attachment' || source.kind === 'generated-image') && isImageSource(source)
+  )
+}
+
 export function sourceLabel(source: AgentSource): string {
   if (source.kind === 'attachment') return 'Attachment'
   if (source.kind === 'generated-image') return 'Generated image'

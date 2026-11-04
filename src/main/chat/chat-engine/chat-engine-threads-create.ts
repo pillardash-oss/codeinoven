@@ -19,6 +19,14 @@ export class ChatEngineThreadsCreate {
     projectId: string
     title: string
     settings: ThreadSettings
+    /**
+     * Who dispatched this thread, recorded on the row itself.
+     *
+     * Written once at creation rather than inferred later: the project board
+     * states a dispatched row's origin from this fact, so it can never drift
+     * from the dispatch that actually created it.
+     */
+    dispatchOrigin?: import('../../../lib/types').ThreadDispatchOrigin
   }): Promise<Thread> {
     const { thread, finalize } = this.host.threadManager.prepareCreateThread(
       {
@@ -26,7 +34,8 @@ export class ChatEngineThreadsCreate {
         providerId: input.settings.providerId,
         title: input.title,
         titleSource: 'manual',
-        settings: input.settings
+        settings: input.settings,
+        dispatchOrigin: input.dispatchOrigin
       },
       {
         onEviction: (outcome) => {

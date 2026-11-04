@@ -4,6 +4,7 @@ import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import type { Project } from '$shared/types'
 
@@ -32,8 +33,6 @@ export class WorkspaceProjectDialogs {
   removeDeleteFolder = $state(false)
   /** Second-confirmation modal shown when folder erasure is requested. */
   showRemoveFinalConfirm = $state(false)
-  /** Project currently being deleted in the background; guards repeat clicks. */
-  deletingProjectId = $state<string | null>(null)
 
   // Edit-project modal
   showEditModal = $state(false)
@@ -178,7 +177,7 @@ export class WorkspaceProjectDialogs {
 
   async confirmRemoveProject(): Promise<void> {
     const target = this.removeTarget
-    if (!target || this.deletingProjectId !== null) return
+    if (!target || projectDeletionState.isPending(target.id)) return
     if (this.removeDeleteFolder) {
       // Folder erasure is destructive beyond the app, so it gets its own
       // explicit confirmation before anything is deleted.
@@ -188,6 +187,8 @@ export class WorkspaceProjectDialogs {
     }
     this.showRemoveModal = false
     this.removeTarget = null
+    // The row is greyed and made inert inside `deleteProject`; this dialog has
+    // nothing left to wait for, so it closes at once.
     await this.options.deleteProject(target.id)
   }
 
@@ -200,7 +201,7 @@ export class WorkspaceProjectDialogs {
 
   async confirmRemoveWithFolder(): Promise<void> {
     const target = this.removeTarget
-    if (!target || this.deletingProjectId !== null) return
+    if (!target || projectDeletionState.isPending(target.id)) return
     this.showRemoveFinalConfirm = false
     this.showRemoveModal = false
     this.removeTarget = null

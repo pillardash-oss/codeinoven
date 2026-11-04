@@ -1,4 +1,4 @@
-import { opendir, stat } from 'node:fs/promises'
+import { opendir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { BackgroundIoRequest } from './background-io-protocol'
 import type { ProjectFileEntry } from '../../lib/types'
@@ -96,6 +96,31 @@ async function credentials(
   }
 }
 
+/**
+ * Erase the given trees one path at a time.
+ *
+ * Sequential on purpose: two multi-gigabyte walks at once would put several
+ * filesystem traversals on the pool at the same time, and a path that cannot be
+ * removed is reported rather than aborting the rest of the list. `force` treats
+ * an already-missing path as removed, which is what a project folder needs
+ * (another tool may have erased it first).
+ */
+async function removeTrees(
+  request: Extract<BackgroundIoRequest, { kind: 'remove-trees' }>
+): Promise<{ removed: string[]; failed: { path: string; error: string }[] }> {
+  const removed: string[] = []
+  const failed: { path: string; error: string }[] = []
+  for (const path of request.paths) {
+    try {
+      await rm(path, { recursive: true, force: request.force, maxRetries: 3, retryDelay: 200 })
+      removed.push(path)
+    } catch (error) {
+      failed.push({ path, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return { removed, failed }
+}
+
 /** Disposable remote Oven processes also use this implementation directly. */
 export async function backgroundIo<T>(request: BackgroundIoRequest): Promise<T> {
   let result: unknown
@@ -139,6 +164,9 @@ export async function backgroundIo<T>(request: BackgroundIoRequest): Promise<T> 
     }
     case 'list-directory':
       result = await listDirectory(request)
+      break
+    case 'remove-trees':
+      result = await removeTrees(request)
       break
     case 'turn-stream-tail': {
       const { readTurnStreamTail, fileTurnStreamSource } = await import('../chat/turn-stream-log')

@@ -24,7 +24,7 @@ import {
 } from '../../lib/search/types'
 import { normalizeInPlace } from '../../lib/search/vector'
 import { SearchModelDownloader } from './embedding-model-downloader'
-import type { EmbeddingRuntime } from './llama-embedding-runtime'
+import type { EmbeddingCallOptions, EmbeddingRuntime } from './llama-embedding-runtime'
 import { LlamaEmbeddingRuntime, embeddingWorkingContext } from './llama-embedding-runtime'
 import { SearchModelImporter, type ImportProbe } from './search-model-importer'
 import { ThreadEmbeddingIndex, composeDocument } from './thread-embedding-index'
@@ -41,6 +41,16 @@ import {
 const PERIODIC_SWEEP_MS = 5 * 60 * 1000
 
 /**
+ * Whether an embed is a person waiting or background indexing.
+ *
+ * The local AI registry restarts its unload window only for an interactive
+ * embed. A sweep that re-armed it on every pass held the embedding model for the
+ * whole session, so the window the user chose never fired.
+ */
+const INTERACTIVE: EmbeddingCallOptions = { interactive: true }
+const BACKGROUND: EmbeddingCallOptions = { interactive: false }
+
+/**
  * Minimum spacing between whole-corpus sweeps triggered by a new thread.
  *
  * A sweep already walks every thread it knows about, so a second one started
@@ -53,15 +63,20 @@ const PERIODIC_SWEEP_MS = 5 * 60 * 1000
 const CORPUS_SWEEP_MIN_GAP_MS = 60 * 1000
 
 /**
- * How long the summary stage stands down after no account could produce one.
+ * How long the summary stage stands down after no account could produce one,
+ * before that wait doubles up to {@link SUMMARY_BACKOFF_MAX_MS}.
  *
  * A summary is an optional refinement: without it a thread is still found through
  * the keyword index and its own window embeddings, so indexing continues either
- * way. The stand-down is bounded rather than permanent because the cause is a
- * credential that can be renewed, and it is long enough that a sweep of hundreds
- * of threads does not re-ask every one of them.
+ * way. The first stand-down is deliberately short because the failures that reach
+ * here are usually transient - an auxiliary completion that hit its own timeout,
+ * or a harness process that exited before the model answered - and one of those
+ * used to cost half an hour of unsummarized indexing. Each further consecutive
+ * failure doubles the wait, so a genuinely absent credential settles at the old
+ * thirty minutes instead of paying a harness round trip per thread every minute.
  */
-const SUMMARY_STANDDOWN_MS = 30 * 60 * 1000
+const SUMMARY_BACKOFF_INITIAL_MS = 60 * 1000
+const SUMMARY_BACKOFF_MAX_MS = 30 * 60 * 1000
 
 /**
  * How long after a run settles its thread is indexed.
@@ -106,8 +121,6 @@ export interface SearchServiceHost {
    * sweep with an opaque model-load error.
    */
   runtimeBuild: () => number | null
-  registerProcess: (pid: number, command: string, cwd: string) => void
-  unregisterProcess: (pid: number) => void
 }
 
 /**
@@ -164,6 +177,10 @@ export class SearchService {
   private summaryDetail: SearchIndexStatus['progress'] = null
   /** Epoch ms the summary stage may try again after no account could answer. */
   private summariesBlockedUntil = 0
+  /** Consecutive stand-downs, so a transient cause retries in a minute, not thirty. */
+  private summaryFailures = 0
+  /** Wakes the summary stage when its stand-down elapses, without waiting for a sweep. */
+  private summaryResumeTimer: ReturnType<typeof setTimeout> | null = null
   private generation = 0
 
   constructor(
@@ -355,7 +372,7 @@ export class SearchService {
         const startedAt = performance.now()
         await this.index.indexNow(
           id,
-          (texts) => this.embedWith(runtime, texts, controller.signal),
+          (texts) => this.embedWith(runtime, texts, controller.signal, BACKGROUND),
           options
         )
         await paceIndexing(startedAt, controller.signal)
@@ -744,9 +761,10 @@ export class SearchService {
   private async embedOne(
     runtime: EmbeddingRuntime,
     text: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options: EmbeddingCallOptions = INTERACTIVE
   ): Promise<Float32Array> {
-    const [vector] = await this.embedWith(runtime, [text], signal)
+    const [vector] = await this.embedWith(runtime, [text], signal, options)
     if (!vector) throw new Error('The embedding model returned no vector.')
     return vector
   }
@@ -755,9 +773,10 @@ export class SearchService {
   private async embedWith(
     runtime: EmbeddingRuntime,
     texts: readonly string[],
-    signal: AbortSignal
+    signal: AbortSignal,
+    options: EmbeddingCallOptions
   ): Promise<Float32Array[]> {
-    const vectors = await runtime.embed(texts, signal)
+    const vectors = await runtime.embed(texts, signal, options)
     for (const vector of vectors) normalizeInPlace(vector)
     return vectors
   }
@@ -771,9 +790,9 @@ export class SearchService {
    * no-op unless intent search is enabled with a model the local runtime can
    * load, and idempotent while a boot is already in flight.
    *
-   * The embed is not about the text: it is what re-arms the runtime's idle timer
-   * (five minutes), so a warm-up nobody follows up on is retired again instead of
-   * holding the model for the rest of the session.
+   * The warm is an explicit interactive use, so it restarts the Local AI unload
+   * window: a warm-up nobody follows up on is retired again when that window
+   * elapses instead of holding the model for the rest of the session.
    */
   warm(): void {
     const model = this.activeModel()
@@ -826,6 +845,8 @@ export class SearchService {
     // renewed credential becomes worth trying: the stand-down only exists to
     // stop a sweep from asking the same dead accounts once per thread.
     this.summariesBlockedUntil = 0
+    this.summaryFailures = 0
+    this.clearSummaryResume()
     this.sweepController?.abort()
     this.settledIndexController?.abort()
     await this.sweep
@@ -852,7 +873,7 @@ export class SearchService {
       const effectiveTokens = embeddingWorkingContext(this.settings.contextTokens)
       const modelSignature = modelSignatureOf(model, effectiveTokens)
       const result = await this.index.sweep(
-        (texts) => this.embedWith(runtime, texts, controller.signal),
+        (texts) => this.embedWith(runtime, texts, controller.signal, BACKGROUND),
         {
           modelSignature,
           documentPrefix: model.documentPrefix,
@@ -909,6 +930,36 @@ export class SearchService {
     this.summaryController.abort()
     this.summaryController = new AbortController()
     this.summaryDetail = null
+    this.clearSummaryResume()
+  }
+
+  /** Drop a pending resume; the stage is either cancelled or already running. */
+  private clearSummaryResume(): void {
+    if (!this.summaryResumeTimer) return
+    clearTimeout(this.summaryResumeTimer)
+    this.summaryResumeTimer = null
+  }
+
+  /**
+   * Retry the queued summaries when a stand-down elapses.
+   *
+   * The stand-down used to end only on the next sweep, which for a settled corpus
+   * is up to a full periodic interval away, so a transient failure at 09:03 could
+   * leave twenty minutes of threads indexed without a summary. The timer is short
+   * on the first failure, unref'd so it never holds the process open, and cleared
+   * whenever the stage is cancelled or restarted.
+   */
+  private scheduleSummaryResume(delayMs: number): void {
+    this.clearSummaryResume()
+    this.summaryResumeTimer = setTimeout(
+      () => {
+        this.summaryResumeTimer = null
+        if (this.disposed) return
+        this.startSummaries()
+      },
+      Math.max(1_000, delayMs)
+    )
+    this.summaryResumeTimer.unref?.()
   }
 
   /** Optional refinements never hold up the raw/truncated indexing sweep. */
@@ -963,20 +1014,28 @@ export class SearchService {
         const vector = await this.embedOne(
           runtime,
           composeDocument(job.model.documentPrefix, job.thread.title, summary),
-          signal
+          signal,
+          BACKGROUND
         )
         if (signal.aborted || job.generation !== this.generation || this.index.isParked(id))
           continue
-        await this.index.applySummary(
+        const applied = await this.index.applySummary(
           job.thread,
           vector,
           summary,
           modelSignatureOf(job.model, embeddingWorkingContext(this.settings.contextTokens))
         )
+        // An account answered, so the next stand-down starts over at the short
+        // wait instead of resuming the long one a bad patch had built up.
+        if (applied) this.summaryFailures = 0
       } catch (error) {
         if (!signal.aborted) {
-          if (error instanceof SearchSummaryUnavailableError) this.standDownSummaries(error)
-          else
+          if (error instanceof SearchSummaryUnavailableError) {
+            // The job left the queue before the attempt, and no account answered,
+            // so it goes back in line for the retry this stand-down schedules.
+            this.summaryJobs.set(id, job)
+            this.standDownSummaries(error)
+          } else
             Logger.dev('Optional search summary failed; keeping the window embeddings.', {
               threadId: id,
               error: error instanceof Error ? error.message : String(error)
@@ -992,16 +1051,24 @@ export class SearchService {
    * Index threads directly when no account on this machine can summarize them.
    *
    * The summarizer already tried every account that serves the model, so a
-   * failure here is the machine's credentials, not this thread: queueing the
-   * remaining jobs would spend a harness process and a provider round trip per
-   * account per thread to learn the same thing. The queued jobs stay in place, so
-   * the stage resumes on the next sweep once the window has passed.
+   * failure here is either the machine's credentials or a transient provider
+   * fault. The queued job goes back in line and the resume timer decides when to
+   * ask again: a minute for the first stand-down, doubling to thirty minutes, so a
+   * timeout no longer turns into half an hour of unsummarized indexing while a dead
+   * credential still stops the sweep from re-asking once per thread.
    */
   private standDownSummaries(error: SearchSummaryUnavailableError): void {
-    this.summariesBlockedUntil = Date.now() + SUMMARY_STANDDOWN_MS
+    const delay = Math.min(
+      SUMMARY_BACKOFF_INITIAL_MS * 2 ** this.summaryFailures,
+      SUMMARY_BACKOFF_MAX_MS
+    )
+    this.summaryFailures += 1
+    this.summariesBlockedUntil = Date.now() + delay
     this.summaryDetail = null
+    this.scheduleSummaryResume(delay)
     Logger.info('Search summaries stood down; indexing threads without them', {
       reason: error.message,
+      consecutiveFailures: this.summaryFailures,
       retryAt: new Date(this.summariesBlockedUntil).toISOString()
     })
   }

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import CioClipboardList from '@pdslng/cio-icon/CioClipboardList.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPaperclip from '@pdslng/cio-icon/CioPaperclip.svelte'
   import CioSend from '@pdslng/cio-icon/CioSend.svelte'
@@ -32,14 +31,18 @@
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type {
     AgentQuestion,
-    AgentQuestionOption,
+    AgentQuestionVisual,
     PendingAgentQuestionRequest,
     ProviderCatalog,
     ThreadSettings
   } from '$shared/types'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
   import AgentCardChatActions from './AgentCardChatActions.svelte'
-  import AgentQuestionInstructionModal from './AgentQuestionInstructionModal.svelte'
+  import AgentQuestionWalkthroughModal from './AgentQuestionWalkthroughModal.svelte'
+  import QuestionEntryActions from './QuestionEntryActions.svelte'
+  import QuestionVisualModal from './QuestionVisualModal.svelte'
+  import { questionVisualSource } from './question-visual-source'
+  import { hasQuestionVisual } from '$shared/question-visual'
   import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
@@ -111,8 +114,23 @@
   let working = $state(false)
   let actionError = $state('')
   let folded = $state(false)
-  /** The option whose instruction the user opened for copying, or null. */
-  let instructionOption = $state<AgentQuestionOption | null>(null)
+  /**
+   * The walkthrough the user opened for copying.
+   *
+   * It belongs to one entry, never to the card: the question's own walkthrough
+   * argues for the whole choice, and an option's walkthrough argues for that
+   * option, so the modal names which one it is showing.
+   */
+  let walkthroughTarget = $state<{ subject: string; text: string } | null>(null)
+  /**
+   * The picture the user opened with the eye button.
+   *
+   * A question about something that does not exist yet cannot be answered from
+   * words alone, so the agent attaches the smallest picture of what it means and
+   * this holds the one the user asked to see: the question's own visual, or the
+   * visual attached to one option.
+   */
+  let visualTarget = $state<{ title: string; visual: AgentQuestionVisual } | null>(null)
   // svelte-ignore state_referenced_locally
   let interactedIndexes = new SvelteSet(request.interactedQuestionIndexes)
   let syncedServerState = $state('')
@@ -131,6 +149,12 @@
   }
 
   let question = $derived(request.questions[currentIndex])
+  // The conversation a question's relative picture path resolves inside. The
+  // card's speech scope already names it, so a visual is mounted exactly where
+  // the transcript's own artifacts are.
+  let threadIdForPreview = $derived(
+    scope.kind === 'global' ? null : (scope.threadId ?? request.threadId)
+  )
   let total = $derived(request.questions.length)
   let currentAnswers = $derived(answers[currentIndex] ?? [])
   let currentCustomAnswer = $derived(customAnswers[currentIndex] ?? '')
@@ -443,11 +467,21 @@
     }
   }
 
-  /** Opens the copyable instruction modal for one option. */
-  function openInstruction(option: AgentQuestionOption): void {
-    if (working) return
-    instructionOption = option
+  /** Opens the walkthrough that belongs to one entry, for copying. */
+  function openWalkthrough(subject: string, text: string | undefined): void {
+    if (working || !text) return
+    walkthroughTarget = { subject, text }
   }
+
+  /** Opens the picture attached to one of the question's options. */
+  function openVisual(visual: AgentQuestionVisual | undefined, label: string): void {
+    if (working || !visual) return
+    visualTarget = { title: label, visual }
+  }
+
+  const visualSource = $derived(
+    questionVisualSource(visualTarget?.visual, projectId, threadIdForPreview)
+  )
 
   function openQuestionChat(
     onOpen: ((requestId: string, question: AgentQuestion) => void) | undefined
@@ -543,9 +577,11 @@
           <div class="grid gap-2" role="group" aria-label="Answer options">
             {#each question.richOptions as option (option.label)}
               {@const selected = currentAnswers.includes(option.label) && !currentCustomAnswer}
-              <!-- The option is a split control: selecting it is one button, and an
-                   instruction it carries gets its own button so the copyable text
-                   never sits inside the selection target. -->
+              <!-- The option is a split control: selecting it is one button, and the
+                   picture and the walkthrough it carries get their own buttons so
+                   neither sits inside the selection target. The two are siblings
+                   separated by a rule, so an option that has both shows both
+                   instead of one hiding the other. -->
               <CardOption
                 title={option.label}
                 description={option.description}
@@ -557,18 +593,15 @@
                 onclick={() => toggleOption(option.label)}
               >
                 {#snippet trailing()}
-                  {#if option.instruction}
-                    <button
-                      type="button"
-                      class="flex w-10 shrink-0 items-center justify-center border-l border-border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={working}
-                      onclick={() => openInstruction(option)}
-                      title={`View instruction: ${option.label}`}
-                      aria-label={`View instruction for ${option.label}`}
-                    >
-                      <CioClipboardList size={14} />
-                    </button>
-                  {/if}
+                  <QuestionEntryActions
+                    hasWalkthrough={Boolean(option.instruction)}
+                    hasVisual={hasQuestionVisual(option.visual)}
+                    subject={option.label}
+                    disabled={working}
+                    onWalkthrough={() => openWalkthrough(option.label, option.instruction)}
+                    onVisual={() =>
+                      openVisual(option.visual, option.visual?.caption ?? option.label)}
+                  />
                 {/snippet}
               </CardOption>
             {/each}
@@ -724,11 +757,18 @@
     </div>
   {/if}
 
-  <AgentQuestionInstructionModal
-    open={instructionOption !== null}
-    optionLabel={instructionOption?.label ?? ''}
-    instruction={instructionOption?.instruction ?? ''}
-    onClose={() => (instructionOption = null)}
+  <AgentQuestionWalkthroughModal
+    open={walkthroughTarget !== null}
+    subject={walkthroughTarget?.subject ?? ''}
+    walkthrough={walkthroughTarget?.text ?? ''}
+    onClose={() => (walkthroughTarget = null)}
+  />
+
+  <QuestionVisualModal
+    open={visualTarget !== null}
+    title={visualTarget?.title ?? 'Visual'}
+    source={visualSource}
+    onClose={() => (visualTarget = null)}
   />
 </section>
 

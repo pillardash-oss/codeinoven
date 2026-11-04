@@ -261,11 +261,28 @@ export class ScopeToolService {
 
   // ─── Writes ───────────────────────────────────────────────────────────────
 
+  /**
+   * `create` answers two intents, and naming a scope is what tells them apart:
+   * no `scope` forks a brand-new scope, while `scope` gives that existing
+   * project-rooted scope its managed worktree. The scope board and the user's
+   * own `scope:worktree:create` flow can both attach a worktree to a scope that
+   * already exists, so a thread that is already in a scope and is asked to
+   * carry on in a worktree must be able to do the same; forking a second bucket
+   * would strand the conversation away from the board row the user pointed at.
+   */
   private async createScope(
     call: ScopeToolCall,
     context: ScopeToolContext,
     projectPath: string
   ): Promise<unknown> {
+    if (call.scope !== undefined) {
+      return await this.attachWorktreeToScope(
+        call,
+        context,
+        projectPath,
+        this.resolveScope(call.scope, context)
+      )
+    }
     if (!call.title) throw new TypeError('title is required for create')
     const defaults = this.scopes.getBoard(context.projectId).worktreeDefaults
     const bucket = this.scopes.createBucket(context.projectId, { name: call.title }).bucket
@@ -321,6 +338,82 @@ export class ScopeToolService {
         this.scopes.deleteBucket(context.projectId, bucket.id)
       }
       throw cause
+    }
+  }
+
+  /**
+   * Give a scope that already exists on the board its managed worktree, without
+   * creating or renaming a bucket. Every refusal happens before a directory is
+   * created, so a scope that cannot be attached is left exactly as it was.
+   */
+  private async attachWorktreeToScope(
+    call: ScopeToolCall,
+    context: ScopeToolContext,
+    projectPath: string,
+    bucket: ScopeBucket
+  ): Promise<unknown> {
+    if (bucket.id === DEFAULT_SCOPE_BUCKET_ID) {
+      throw new TypeError(
+        'The Default scope works in the project directory and cannot become a managed worktree. Omit scope and pass a title to create a new scope with its own worktree.'
+      )
+    }
+    if (bucket.root.kind === 'worktree') {
+      throw new Error(
+        `The scope “${bucket.name}” already has a managed worktree on ${bucket.root.branch}. Read it with action "status", repair it with "repair", or detach it with "detach_worktree" before creating another.`
+      )
+    }
+    if (bucket.archivedAt !== undefined) {
+      throw new Error(
+        `The scope “${bucket.name}” is archived, so a new worktree would be hidden from the board. Restore it with action "restore" first.`
+      )
+    }
+
+    const defaults = this.scopes.getBoard(context.projectId).worktreeDefaults
+    const target: ScopeTarget = { projectId: context.projectId, scopeBucketId: bucket.id }
+    const runSetup = call.runSetup ?? defaults.runSetupByDefault
+    // A scope that already has a name needs no second one: the scope name is
+    // what names the branch and the checkout directory.
+    const title = call.title ?? bucket.name
+    const descriptor = await this.worktrees.createManagedWorktree(
+      target,
+      {
+        title,
+        runSetup,
+        environmentMode: call.environmentMode ?? defaults.environmentMode,
+        ...(call.baseBranch === undefined ? {} : { baseBranch: call.baseBranch }),
+        ...(call.setupCommands === undefined ? {} : { setupCommands: call.setupCommands })
+      },
+      this.progressFor(target, title)
+    )
+    // A thread that already works in this scope is already where it belongs.
+    let threadMoved = false
+    if ((call.attachThread ?? true) && bucket.id !== context.scopeBucketId) {
+      await this.options.scopeThreads?.moveThreadIntoScope(
+        context.projectId,
+        context.threadId,
+        bucket.id
+      )
+      threadMoved = this.options.scopeThreads !== undefined
+    }
+    this.options.onBoardChanged?.({
+      projectId: context.projectId,
+      scopeBucketId: bucket.id,
+      summary: `gave the scope ${bucket.name} the worktree ${descriptor.branch}`
+    })
+    return {
+      created: false,
+      attached: true,
+      scope: await this.summarize(context, projectPath, bucket.id),
+      branch: descriptor.branch,
+      baseBranch: descriptor.baseBranch,
+      directoryName: descriptor.directoryName,
+      path: getScopeRootPath(context.projectId, descriptor.directoryName),
+      setupState: descriptor.setup.state,
+      setupRan: runSetup,
+      threadMoved,
+      guidance: threadMoved
+        ? 'This thread now works in the scope’s checkout from its next turn. Commit your work there, then bring it back with action "sync_to_main".'
+        : 'The scope works in its new checkout from the next turn of its threads. Commit your work there, then bring it back with action "sync_to_main".'
     }
   }
 

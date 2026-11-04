@@ -28,10 +28,14 @@
   import SpeechPlaybackButton from '../../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../../speech/speech-controller.svelte'
   import WorkingTrace from '../WorkingTrace.svelte'
+  import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
+  import { runReceiptState } from '$lib/stores/run-receipt.svelte'
+  import { isBoundAssistantTask } from '$shared/bound-scope'
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import InlineMediaFigure from '../InlineMediaFigure.svelte'
   import InlineImageFigure from '../InlineImageFigure.svelte'
   import CitedEntryCard from '../CitedEntryCard.svelte'
+  import type { CitedEntry } from '$shared/cited-work'
   import RunChangesCard from '../RunChangesCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import DeferredMarkdownView from '../../markdown/DeferredMarkdownView.svelte'
@@ -79,6 +83,35 @@
   let { board }: { board: ThreadViewBoard } = $props()
 
   /**
+   * The run thread a receipt belongs to, when this conversation is one.
+   *
+   * A receipt describes what *a run* did, so only a bound run thread carries one:
+   * an ordinary project thread's work is already shown by the rail's Changes, and
+   * an assistant task without a binding has no checkout to describe.
+   */
+  let receiptThread = $derived.by(() => {
+    const thread = board.handleAgentEvent.thread
+    return isBoundAssistantTask(thread) && thread.assistantTaskId ? thread : null
+  })
+
+  /**
+   * The receipt is read once per range. A running run reads its state, and a run
+   * that settles re-reads exactly once, which is the app's own settle signal
+   * doing the invalidation instead of a timer. The store owns the dedupe, so this
+   * body only reports what the thread looks like right now.
+   */
+  $effect(() => {
+    const thread = receiptThread
+    const bound = thread?.boundScope
+    if (!thread || !bound) return
+    const settled =
+      thread.status === 'completed' ||
+      thread.status === 'failed' ||
+      thread.status === 'working-paused'
+    runReceiptState.sync(bound.projectId, thread.id, bound.scopeBucketId, settled, thread.updatedAt)
+  })
+
+  /**
    * Decide, once per distinct state, whether the transcript's final turn drew
    * its file-changes card.
    *
@@ -108,6 +141,81 @@
   const readingColumn = $derived(
     board.props.ownsReadingColumn ? board.state.conversationColumn.attachment : noopAttachment
   )
+
+  /**
+   * The newest message that carries cited work, and what it cites.
+   *
+   * A turn's report is published as its own app-owned row once the turn settles,
+   * which lands after the turn's own messages. When that same turn also changed
+   * files, the row belongs *inside* the turn's changes card instead of floating
+   * under it, so the reader sees one outcome rather than two surfaces that
+   * describe the same turn.
+   */
+  const citedTail = $derived.by(() => {
+    const messages = board.loadOlderMessages.messages
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (!message?.inlineArtifact) continue
+      const entries: CitedEntry[] = []
+      for (const part of message.parts) {
+        if (part.type !== 'cited') continue
+        entries.push({
+          name: part.name,
+          path: part.path,
+          kind: part.kind,
+          modifiedAt: part.modifiedAt,
+          ...(part.work ? { work: part.work } : {})
+        })
+      }
+      if (entries.length === 0) continue
+      return { messageId: message.id, index, entries }
+    }
+    return null
+  })
+
+  /** Whether the changes card of a turn is drawn at this message index. */
+  function changesCardAt(absIndex: number): boolean {
+    if (board.props.chatMode) return false
+    const index = board.pollStreamParts.transcriptIndex
+    const checkpoint = index.checkpoint[absIndex] ?? null
+    if (!checkpoint || checkpoint.changes.length === 0) return false
+    return index.checkpointCard[absIndex] ?? false
+  }
+
+  /**
+   * The cited entries a changes card at `absIndex` should draw itself.
+   *
+   * Only the turn that closed after the card: a cited row earlier in the
+   * transcript belongs to a turn of its own, and a user message in between means
+   * the reader asked something new, so that row keeps its own card.
+   */
+  function citedForCard(absIndex: number): CitedEntry[] {
+    const tail = citedTail
+    if (!tail || tail.index <= absIndex) return []
+    const between = board.loadOlderMessages.messages.slice(absIndex + 1, tail.index)
+    if (between.some((message) => message.role === 'user')) return []
+    return tail.entries
+  }
+
+  /**
+   * Whether the changes card of the turn that produced this cited row drew it.
+   *
+   * The row is hidden only when a card above it actually took the rows: a turn
+   * that cited work without changing files has no card, and its report must keep
+   * its own.
+   */
+  function citedRowAbsorbed(messageId: string): boolean {
+    const tail = citedTail
+    if (!tail || tail.messageId !== messageId) return false
+    const messages = board.loadOlderMessages.messages
+    for (let index = tail.index - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (!message) continue
+      if (message.role === 'user') return false
+      if (changesCardAt(index)) return true
+    }
+    return false
+  }
 </script>
 
 <div
@@ -319,7 +427,13 @@
         {#if absIndex === board.buildSpecActionPrompt.heldSteerAbsIndex && !board.pollStreamParts.turnAboveHasAssistantRow(absIndex)}
           {@render liveTurnTrace(board.composerScope.unmirroredTraceParts, true)}
         {/if}
-        {#if msg.inlineArtifact}
+        {@const citedParts = msg.parts.filter(
+          (part): part is Extract<AgentPart, { type: 'cited' }> => part.type === 'cited'
+        )}
+        {#if msg.inlineArtifact && citedRowAbsorbed(msg.id)}
+          <!-- The turn's report rows are drawn by its changes card above, so this
+               row has nothing left of its own to say. -->
+        {:else if msg.inlineArtifact}
           <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
             {#each msg.parts as part (part.id)}
               {#if part.type === 'text'}
@@ -357,15 +471,17 @@
                   filename={part.filename ?? 'Media'}
                   onExpand={() => board.editVideoNote.openMessageViewer(msg, part)}
                 />
-              {:else if part.type === 'cited'}
+              {:else if part.type === 'cited' && citedParts[0]?.id === part.id}
                 <CitedEntryCard
-                  entry={{
-                    name: part.name,
-                    path: part.path,
-                    kind: part.kind,
-                    modifiedAt: part.modifiedAt
-                  }}
+                  entries={citedParts.map((cited) => ({
+                    name: cited.name,
+                    path: cited.path,
+                    kind: cited.kind,
+                    modifiedAt: cited.modifiedAt,
+                    ...(cited.work ? { work: cited.work } : {})
+                  }))}
                   projectId={board.handleAgentEvent.thread.projectId}
+                  threadId={board.handleAgentEvent.thread.id}
                 />
               {/if}
             {/each}
@@ -986,6 +1102,7 @@
                         checkpoint={turnCheckpoint}
                         projectId={board.handleAgentEvent.thread.projectId}
                         threadId={board.handleAgentEvent.thread.id}
+                        cited={citedForCard(absIndex)}
                         onRevealFile={(path) =>
                           board.unmirroredTraceStartTime.revealCheckpointFile(
                             turnCheckpoint.id,
@@ -1267,6 +1384,22 @@
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
         />
+      {/if}
+
+      {#if receiptThread}
+        {@const receipt = runReceiptState.receiptFor(receiptThread.id)}
+        {#if receipt}
+          {#await loadCachedPanelModule(PANEL_KEYS.runReceipt, () => import('../RunReceipt.svelte'))}
+            <!-- The receipt loads after a run settles, so the wait is a blank line
+                 rather than a placeholder that would claim a receipt exists. -->
+            <div class="h-4" aria-hidden="true"></div>
+          {:then { default: RunReceiptBlock }}
+            <RunReceiptBlock thread={receiptThread} {receipt} />
+          {:catch}
+            <!-- A receipt that cannot load leaves the conversation exactly as it
+                 was: it is evidence, never a requirement. -->
+          {/await}
+        {/if}
       {/if}
 
       {#if board.unmirroredTraceStartTime.brainstormReportRefreshing || board.buildSpecActionPrompt.delegatedWorkBusy || board.composerScope.assignmentFormulating || (board.buildSpecActionPrompt.heldSteerAbsIndex === -1 && !board.buildSpecActionPrompt.pendingLiveTurn && !board.submitBrainstormDecision.activePlanningEntry && !board.harnessUsage.specFormulating && board.switchProject.busy && board.pollStreamParts.latestTurnRenderableParts.length === 0)}

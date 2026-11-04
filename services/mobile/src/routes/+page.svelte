@@ -1,21 +1,30 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
-  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import { goto } from '$app/navigation'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { STATUS_WEIGHT } from '#lib/api/status'
   import type { ThreadStatus } from '#lib/api/types'
   import type { Project, Thread } from '#lib/api/types'
   import AppBar from '#lib/components/AppBar.svelte'
+  import FamilyTitle from '#lib/components/FamilyTitle.svelte'
   import Mark from '#lib/components/Mark.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
+  import { arrive, fold } from '#lib/motion'
 
   /**
    * Projects. The desktop's project panel, folded down to what a thumb can do:
    * one strip per project, its threads inside it, and the activity cluster that
    * says what needs attention without opening anything. The whole list is two
    * requests, because every thread arrives once and is grouped here.
+   *
+   * A strip folds rather than toggles, and its head keeps one square for
+   * everything the project can do, so the row stays two lines instead of a wall
+   * of controls.
    */
 
   const FOLD_KEY = 'cio.mobile.projects.folded'
@@ -28,6 +37,8 @@
   let searchOpen = $state(false)
   let query = $state('')
   let folded = $state<Record<string, boolean>>({})
+  let menuFor = $state<string | null>(null)
+  let menuBox = $state<{ left: number; top: number } | null>(null)
 
   /** Focus the filter as soon as it appears, because a search control that opens
    *  without the caret is a second tap the user did not ask for. */
@@ -114,14 +125,7 @@
     return STATUS_WEIGHT[status] ?? 99
   }
 
-  function totalThreads(): number {
-    return projects.reduce((sum, project) => sum + project.threadCount, 0)
-  }
-
-  function toggleSearch(): void {
-    searchOpen = !searchOpen
-    if (!searchOpen) query = ''
-  }
+  let totalThreads = $derived(threads.length)
 
   function clusterLabel(project: Project): string {
     const parts: string[] = []
@@ -132,9 +136,65 @@
     if (counts.failed > 0) parts.push(`${counts.failed} failed`)
     return parts.length > 0 ? parts.join(', ') : 'Nothing running'
   }
+
+  function toggleSearch(): void {
+    searchOpen = !searchOpen
+    if (!searchOpen) query = ''
+  }
+
+  /* ---- The strip's own menu ---- */
+
+  function openMenu(event: MouseEvent, project: Project): void {
+    const button = event.currentTarget
+    if (!(button instanceof HTMLElement)) return
+    if (menuFor === project.id) {
+      closeMenu()
+      return
+    }
+    const box = button.getBoundingClientRect()
+    menuBox = { left: Math.max(8, box.right - 192), top: box.bottom + 6 }
+    menuFor = project.id
+  }
+
+  function closeMenu(): void {
+    menuFor = null
+    menuBox = null
+  }
+
+  function outside(event: PointerEvent): void {
+    if (menuFor === null) return
+    const target = event.target
+    if (target instanceof Element && target.closest('.ctx, .strip-actions')) return
+    closeMenu()
+  }
+
+  function escape(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && menuFor !== null) closeMenu()
+  }
+
+  function onlyThisProject(project: Project): void {
+    closeMenu()
+    searchOpen = true
+    query = project.name
+  }
+
+  function openThreads(project: Project): void {
+    closeMenu()
+    void goto(`/threads?project=${project.id}`)
+  }
 </script>
 
+<svelte:window onpointerdown={outside} onkeydown={escape} />
+
 <AppBar title="Projects" count={projects.length}>
+  {#snippet titleSlot()}
+    <FamilyTitle
+      current="projects"
+      count={projects.length}
+      projects={projects.length}
+      threads={totalThreads}
+    />
+  {/snippet}
   {#snippet actions()}
     <button
       class="icon-btn"
@@ -196,49 +256,95 @@
             class="strip-toggle"
             type="button"
             aria-expanded={open}
-            aria-label="{open ? 'Fold' : 'Unfold'} {project.name}"
             onclick={() => toggle(project.id)}
           >
-            <CioChevronDown class="strip-caret" size={14} />
-            <Mark {project} size={28} />
-            <span class="strip-name">{project.name}</span>
-            <span class="strip-count">{project.threadCount}</span>
+            <span class="strip-id">
+              <CioChevronDown class="strip-caret" size={14} />
+              <Mark {project} size={28} />
+              <span class="strip-name">{project.name}</span>
+              <span class="strip-count">{project.threadCount}</span>
+            </span>
+            <span class="strip-state">
+              <span class="cluster" role="img" aria-label={clusterLabel(project)}>
+                {#if project.statusCounts.attention > 0}
+                  <span style:color="var(--color-warning)">
+                    <i class="dot" data-tone="needs"></i>{project.statusCounts.attention}
+                  </span>
+                {/if}
+                {#if project.statusCounts.spec > 0}
+                  <span style:color="var(--color-thread-spec)">
+                    <i class="dot" data-tone="spec"></i>{project.statusCounts.spec}
+                  </span>
+                {/if}
+                {#if project.statusCounts.working > 0}
+                  <span style:color="var(--color-info)">
+                    <i class="dot" data-tone="working"></i>{project.statusCounts.working}
+                  </span>
+                {/if}
+                {#if project.statusCounts.failed > 0}
+                  <span style:color="var(--color-danger)">
+                    <i class="dot" data-tone="error"></i>{project.statusCounts.failed}
+                  </span>
+                {/if}
+              </span>
+            </span>
           </button>
-          <span class="cluster" role="img" aria-label={clusterLabel(project)}>
-            {#if project.statusCounts.attention > 0}
-              <span style:color="var(--color-warning)">
-                <i class="dot" data-tone="needs"></i>{project.statusCounts.attention}
-              </span>
-            {/if}
-            {#if project.statusCounts.spec > 0}
-              <span style:color="var(--color-thread-spec)">
-                <i class="dot" data-tone="spec"></i>{project.statusCounts.spec}
-              </span>
-            {/if}
-            {#if project.statusCounts.working > 0}
-              <span style:color="var(--color-info)">
-                <i class="dot" data-tone="working"></i>{project.statusCounts.working}
-              </span>
-            {/if}
+          <span class="strip-actions">
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="Actions for {project.name}"
+              title="Actions for {project.name}"
+              aria-expanded={menuFor === project.id}
+              onclick={(event) => openMenu(event, project)}
+            >
+              <CioEllipsis size={20} />
+            </button>
           </span>
         </div>
-        <div class="strip-body">
-          {#each rows.slice(0, ROWS_PER_STRIP) as thread (thread.id)}
-            <ThreadRow {thread} compact />
-          {:else}
-            <p class="strip-empty">No threads in this project yet</p>
-          {/each}
-          {#if rows.length > ROWS_PER_STRIP}
-            <a class="strip-more" href="/threads?project={project.id}">
-              All {project.threadCount} threads
-            </a>
-          {/if}
-        </div>
+
+        {#if open}
+          <div class="strip-body" transition:fold>
+            {#each rows.slice(0, ROWS_PER_STRIP) as thread (thread.id)}
+              <ThreadRow {thread} compact />
+            {:else}
+              <p class="strip-empty">No threads in this project yet</p>
+            {/each}
+            {#if rows.length > ROWS_PER_STRIP}
+              <a class="strip-more" href="/threads?project={project.id}">
+                All {project.threadCount} threads
+              </a>
+            {/if}
+          </div>
+        {/if}
       </section>
     {/each}
-    <p class="list-foot">{totalThreads()} threads across {projects.length} projects</p>
+    <p class="list-foot">{totalThreads} threads across {projects.length} projects</p>
   {/if}
 </div>
+
+{#if menuFor !== null && menuBox !== null}
+  {@const chosen = projects.find((project) => project.id === menuFor)}
+  {#if chosen}
+    <div
+      class="ctx"
+      role="menu"
+      aria-label="{chosen.name} actions"
+      style:left="{menuBox.left}px"
+      style:top="{menuBox.top}px"
+      in:arrive
+    >
+      <button type="button" role="menuitem" onclick={() => onlyThisProject(chosen)}>
+        <CioSearch size={17} />
+        <span>Search this project</span>
+      </button>
+      <button type="button" role="menuitem" onclick={() => openThreads(chosen)}>
+        <CioFolderOpen size={17} />
+        <span>Open every thread</span>
+      </button>
+    </div>
+  {/if}
+{/if}
 
 <style>
   .search-row {

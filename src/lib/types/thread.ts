@@ -1,9 +1,11 @@
-import type { ScopeSlice } from './scope'
+import type { BoundScopeRebind, ScopeSlice } from './scope'
+import type { ScopeWorktreeHealthCategory } from './scope-worktree'
 import type { AuthoredWorkKind } from '../ipc/design'
 import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
 import type { AssistantSchedule } from './schedule'
+import type { RunBaseRecord } from './receipt'
 import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from './project'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
@@ -33,6 +35,47 @@ export function scopeSliceForStatus(status: ThreadStatus): ScopeSlice {
 }
 
 export type ThreadTitleSource = 'default' | 'auto' | 'manual'
+
+/**
+ * The project scope a thread runs in, when that differs from its home.
+ *
+ * The definition lives beside `ScopeTarget`, because it is the same pair; this
+ * alias only keeps the name earlier call sites imported.
+ */
+export type ThreadBoundScope = BoundScopeRebind
+
+/**
+ * The assistant that dispatched a project thread into existence, recorded once
+ * when the dispatch is accepted.
+ *
+ * The project board is where an orchestrated run actually lands, and its row
+ * states origin from this record rather than from a colour or an inferred
+ * status. Written once and never rewritten by a later run, so a thread cannot
+ * drift away from the dispatch that created it.
+ */
+export interface ThreadDispatchOrigin {
+  /** Assistant whose turn made the dispatch, when an assistant made it. */
+  assistantId?: string
+  assistantName?: string
+  initiatorProjectId: string
+  initiatorThreadId: string
+  at: number
+}
+
+/**
+ * Why a run was parked instead of started.
+ *
+ * Typed rather than a string so the row and the receipt can offer the exact
+ * repair the app already guides (`isScopeWorktreeHealthRepairable`) instead of
+ * matching prose. `message` is the guidance string main already produces, kept
+ * so a surface that can only render text still tells the user what to do.
+ */
+export interface ThreadParkReason {
+  category: ScopeWorktreeHealthCategory
+  message: string
+  projectId: string
+  scopeBucketId: string
+}
 
 export interface Thread {
   id: string
@@ -85,6 +128,32 @@ export interface Thread {
   authoredWorkKinds?: AuthoredWorkKind[]
   /** User-defined feature bucket used by the project's Scope board. */
   scopeBucketId?: string
+  /**
+   * The project scope this thread actually works in, when it works in a real
+   * checkout that is not its home.
+   *
+   * `projectId` answers two questions at once, and this field separates them.
+   * Home (where the thread appears) stays `projectId`; workspace (which
+   * checkout the session runs in, what the file tree mounts, what Changes and
+   * Git read) becomes this. An assistant task bound to a project carries both.
+   *
+   * Absent keeps today's behaviour exactly: the home container's own
+   * app-storage directory (`assistant-cwd/<assistantId>`, `chats-cwd/<threadId>`,
+   * `browser-cwd/<threadId>`), or the project root for a real project thread.
+   * Assistant-space only: a project thread already names its own scope.
+   */
+  boundScope?: BoundScopeRebind
+  /**
+   * The commit a run started from, recorded once when the run begins so its
+   * receipt answers "what did this run do" rather than "what is in this
+   * checkout now". Absent means no base was ever recorded, which the receipt
+   * reports instead of borrowing today's state.
+   */
+  runBase?: RunBaseRecord
+  /** Assistant origin of an orchestrated dispatch, written once at creation. */
+  dispatchOrigin?: ThreadDispatchOrigin
+  /** Set while a run is parked on its bound scope's health; cleared on repair. */
+  parkReason?: ThreadParkReason
   /** Per-thread agent configuration (harness, model, thinking, permissions). */
   settings?: ThreadSettings
   /** Distinct agent harnesses used across this thread's session, newest first. */
@@ -420,6 +489,12 @@ export interface CreateThreadInput {
   assistantGettingStarted?: boolean
   /** Set when creating a run thread: the assistant task it runs. */
   assistantTaskId?: string
+  /** Project scope this thread works in when it is not its home container. */
+  boundScope?: BoundScopeRebind
+  /** Commit the run starts from, recorded once by whoever starts it. */
+  runBase?: RunBaseRecord
+  /** Assistant origin of an orchestrated dispatch, written once at creation. */
+  dispatchOrigin?: ThreadDispatchOrigin
 }
 
 /** Where a thread search match was found. */

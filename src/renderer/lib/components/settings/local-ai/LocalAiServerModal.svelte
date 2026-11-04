@@ -17,8 +17,10 @@
     isLlamaCppPortValid,
     llamaCppEntryProblem,
     llamaCppModelLabel,
+    localAiModelCopy,
     parseHuggingFaceModelReference,
-    type LlamaCppServerEntry
+    type LlamaCppServerEntry,
+    type LocalAiRuntimeId
   } from '$shared/llama-cpp'
   import { uuidv7 } from '$shared/id'
   import { onDestroy, tick } from 'svelte'
@@ -27,6 +29,8 @@
   import { stripTerminalEscapes } from './local-ai-controller.svelte'
 
   interface Props {
+    /** Engine the saved row belongs to. Only llama.cpp can be launched here. */
+    runtime?: LocalAiRuntimeId
     initial: LlamaCppServerEntry
     entries: readonly LlamaCppServerEntry[]
     /** The resolved `llama-server` a row would launch. */
@@ -35,7 +39,10 @@
     onSave: (entry: LlamaCppServerEntry) => void | Promise<void>
   }
 
-  let { initial, entries, executable, onClose, onSave }: Props = $props()
+  let { runtime = 'llama.cpp', initial, entries, executable, onClose, onSave }: Props = $props()
+
+  /** The engine whose server the app starts itself. */
+  const managed = $derived(runtime === 'llama.cpp')
 
   const fieldClass = 'h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary'
   const monoFieldClass =
@@ -115,6 +122,7 @@
 
   const draft = $derived<LlamaCppServerEntry>({
     id: initial.id || uuidv7(),
+    runtime,
     name: name.trim(),
     modelPath: source === 'local' ? modelPath.trim() : '',
     modelReference: source === 'huggingface' ? modelReference.trim() : '',
@@ -127,25 +135,29 @@
     buildLlamaServerArgs(draft).length > 0 ? describeLlamaServerCommand(draft) : ''
   )
 
-  const sourceChoices: Array<{
-    id: 'local' | 'huggingface'
-    title: string
-    hint: string
-    icon: typeof CioFolder
-  }> = [
-    {
-      id: 'local',
-      title: 'Local GGUF file',
-      hint: 'A file already on this machine, referenced where it lives.',
-      icon: CioFolder
-    },
-    {
-      id: 'huggingface',
-      title: 'Hugging Face',
-      hint: 'llama.cpp downloads the model on the first start.',
-      icon: CioDownload
-    }
-  ]
+  /** What this engine calls its model, so no tab tells an MLX user about GGUF. */
+  const copy = $derived(localAiModelCopy(runtime))
+
+  const sourceChoices = $derived(
+    [
+      {
+        id: 'local' as const,
+        title: copy.localTitle,
+        hint: copy.localHint,
+        icon: CioFolder
+      },
+      ...(copy.huggingFace
+        ? [
+            {
+              id: 'huggingface' as const,
+              title: 'Hugging Face',
+              hint: 'Fetched when the server first loads it.',
+              icon: CioDownload
+            }
+          ]
+        : [])
+    ].filter((choice) => choice.id !== 'huggingface' || copy.huggingFace)
+  )
 
   async function chooseSource(next: 'local' | 'huggingface'): Promise<void> {
     if (source === next) return
@@ -158,7 +170,7 @@
   }
 
   async function pickFile(): Promise<void> {
-    const path = await invoke('llamaCpp:pickModel')
+    const path = await invoke('llamaCpp:pickModel', runtime)
     if (!path) return
     modelPath = path
     if (!name.trim() || name.trim() === 'Local server') {
@@ -367,8 +379,8 @@
               <input
                 class={`${monoFieldClass} min-w-0 flex-1`}
                 bind:value={modelPath}
-                placeholder="/path/to/model.gguf"
-                aria-label="Path of the GGUF model"
+                placeholder={copy.localPlaceholder}
+                aria-label={copy.localTitle}
               />
               <button
                 type="button"
@@ -386,15 +398,15 @@
                 class={monoFieldClass}
                 {@attach captureReference}
                 bind:value={modelReference}
-                placeholder="LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M"
+                placeholder={copy.referencePlaceholder}
               />
             </label>
             {#if parsedReference}
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                llama.cpp downloads <span class="font-mono"
+                The server fetches <span class="font-mono"
                   >{formatHuggingFaceModelReference(parsedReference)}</span
                 >
-                on the first start.
+                when it first loads the model.
               </p>
             {:else if modelReference.trim().length > 0}
               <p class="text-[0.6875rem] text-danger">
@@ -403,8 +415,8 @@
               </p>
             {:else}
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                Paste <span class="font-mono">LiquidAI/LFM2.5-2.6B-GGUF</span>, a quant
-                <span class="font-mono">owner/repo:Q5_K_M</span>, or a specific file URL.
+                Paste <span class="font-mono">{copy.referencePlaceholder}</span>, or a specific file
+                URL.
               </p>
             {/if}
           {/if}
@@ -473,7 +485,7 @@
       {/if}
     </fieldset>
 
-    {#if command}
+    {#if command && managed}
       <div class="border bg-raised p-3">
         <p class="text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">Command</p>
         <p class="mt-1 break-all font-mono text-[0.6875rem] leading-relaxed text-muted">
@@ -496,7 +508,9 @@
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50 {managed
+            ? ''
+            : 'hidden'}"
           title="Start the row on {testedAddress}, stop it once llama.cpp begins loading the model"
           disabled={testing}
           onclick={() => void testConnection()}

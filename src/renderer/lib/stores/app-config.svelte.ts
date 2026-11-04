@@ -13,6 +13,7 @@ import type {
   ContrastLevel,
   GitPullPreference,
   InAppNotificationSoundSettings,
+  PrMergeMethod,
   MediaGenerationConfig,
   ModelProfile
 } from '$shared/types'
@@ -53,6 +54,8 @@ let inAppNotificationSound = $state<InAppNotificationSoundSettings>(
   structuredClone(DEFAULT_IN_APP_NOTIFICATION_SOUND)
 )
 let defaultPullStrategy = $state<GitPullPreference>('ask')
+/** How the panel merges a pull request when the user has not picked a method. */
+let defaultMergeMethod = $state<PrMergeMethod>('squash')
 let fontFamily = $state(DEFAULT_APP_FONT_FAMILY)
 let appFontSize = $state(DEFAULT_APP_FONT_SIZE)
 let fontWeight = $state(DEFAULT_APP_FONT_WEIGHT)
@@ -144,6 +147,9 @@ export const appConfigState = {
   get defaultPullStrategy(): GitPullPreference {
     return defaultPullStrategy
   },
+  get defaultMergeMethod(): PrMergeMethod {
+    return defaultMergeMethod
+  },
   get fontFamily(): string {
     return fontFamily
   },
@@ -205,6 +211,7 @@ export const appConfigState = {
       ...config.inAppNotificationSound
     }
     defaultPullStrategy = config.defaultPullStrategy
+    defaultMergeMethod = config.defaultMergeMethod ?? 'squash'
     fontFamily = config.fontFamily
     appFontSize = config.appFontSize
     fontWeight = config.fontWeight

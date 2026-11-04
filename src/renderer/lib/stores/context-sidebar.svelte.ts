@@ -23,6 +23,7 @@ import {
   type ThreadNoteContextTab
 } from './context-sidebar-types'
 import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
+import type { DisplayTarget } from './context-sidebar-tabs.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 
 export type {
@@ -41,6 +42,7 @@ export type {
   CoordinatorContextTab,
   DebuggerContextTab,
   DiffContextTab,
+  DisplayContextTab,
   FilesContextTab,
   GitContextTab,
   MemoryContextTab,
@@ -894,6 +896,25 @@ class ContextSidebarState {
     this.tabContexts.openCloudDeployments(projectId, threadId)
   }
 
+  /** Open (or focus) the chooser tab and report which tab it is, so a surface
+   *  that is showing one specific tab can follow it there. */
+  openDisplayChooser(projectId: string, threadId: string): string {
+    return this.tabContexts.openDisplayChooser(projectId, threadId)
+  }
+
+  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
+    this.tabContexts.openDisplayTarget(projectId, threadId, target)
+  }
+
+  applyDisplayTarget(
+    projectId: string,
+    threadId: string,
+    tabId: string,
+    target: DisplayTarget
+  ): void {
+    this.tabContexts.applyDisplayTarget(projectId, threadId, tabId, target)
+  }
+
   /**
    * Dock the coordinator for a thread. The title tracks the coordination kind
    * (Assignment vs Achievement vs Audit), so an existing tab is re-titled rather than
@@ -1098,6 +1119,20 @@ class ContextSidebarState {
       return
     }
     this.tabContexts.focusTab(id)
+  }
+
+  /**
+   * Close every browser tab a conversation owns, in main and in the strip.
+   *
+   * The rail menu's "close all tabs" uses this. Both halves run together on
+   * purpose: `browser:destroyThread` destroys the `WebContentsView` behind each
+   * tab (which is what releases its renderer process), and `removeForThread`
+   * drops the matching rows so the strip cannot show a page that no longer
+   * exists.
+   */
+  async closeBrowserTabsForThread(projectId: string, threadId: string): Promise<void> {
+    await invoke('browser:destroyThread', projectId, threadId)
+    this.browser.removeForThread(projectId, threadId)
   }
 
   close(id: string): void {

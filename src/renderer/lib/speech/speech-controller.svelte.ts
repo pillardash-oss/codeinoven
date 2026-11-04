@@ -11,6 +11,7 @@ import { logRendererError } from '../system/renderer-logger'
 import type {
   SpeechDictationSpan,
   SpeechPlaybackState,
+  SpeechRecordingAttempt,
   SpeechScope
 } from '../../../lib/speech/types'
 import { DEFAULT_SPEECH_SETTINGS } from '../../../lib/speech/types'
@@ -25,7 +26,9 @@ import {
   CAPTURE_TIMESLICE_MS,
   CAPTURE_UPLOAD_DRAIN_TIMEOUT_MS,
   PAUSE_UPLOAD_DEPTH,
+  SHORT_CAPTURE_WARNING_MS,
   errorMessage,
+  formatSpeechDuration,
   recordingToastMessage,
   selectedMimeType,
   type RecordingFailurePhase
@@ -888,6 +891,7 @@ class SpeechController {
           Math.round(durationMs)
         )
         if (!finished.ok) throw new Error(finished.error.message)
+        this.warnShortNativeCapture(finished.value)
       } else {
         if (!active.recorder || !active.stream) throw new Error('Browser capture is unavailable.')
         await this.stopRecorder(active.recorder)
@@ -1142,6 +1146,31 @@ class SpeechController {
     // voice message sent from another thread teaches the model exactly like one
     // sent by hand.
     if (deliveredText !== null) this.observeSent(intent.targetId, deliveredText)
+  }
+
+  /**
+   * Tell the user when a finished take holds clearly less audio than it ran
+   * for. The microphone can die mid-take (a device switch the system never
+   * announced, a recorder process that exited), and the transcript that
+   * follows only covers what was actually saved: saying so is the difference
+   * between a short transcript and a silent one.
+   */
+  private warnShortNativeCapture(attempt: SpeechRecordingAttempt): void {
+    const capturedMs = attempt.capturedMs
+    const recordedMs = attempt.durationMs
+    if (capturedMs === undefined || recordedMs === undefined) return
+    if (recordedMs - capturedMs <= SHORT_CAPTURE_WARNING_MS) return
+    logRendererError(`Voice recording saved ${capturedMs} ms of a ${recordedMs} ms take.`)
+    try {
+      toast.warning('Part of that recording was not captured', {
+        id: 'voice-recording-short',
+        description: `${formatSpeechDuration(capturedMs)} of the ${formatSpeechDuration(recordedMs)} take was saved, so the transcript covers only that part.`,
+        closeButton: true,
+        duration: 8000
+      })
+    } catch (cause) {
+      logRendererError('Could not show the short recording notice.', cause)
+    }
   }
 
   private stopRecorder(recorder: MediaRecorder): Promise<void> {

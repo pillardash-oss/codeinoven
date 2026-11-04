@@ -19,6 +19,7 @@ import { isCioUtilityRequest } from '../../utilities/cio-utility-prompt'
 import { isCioDesignRequest } from '../../utilities/cio-design-prompt'
 import { isCioVideoRequest } from '../../utilities/cio-video-prompt'
 import { isCioOrchestrateRequest } from '../../orchestration/cio-orchestrate-prompt'
+import { RunScopeGate } from '../run-scope-gate'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import type { UtilityTurnBudgetContext } from '../../utilities/utility-orchestration-service'
 import type {
@@ -104,7 +105,16 @@ import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-send-prompt: one concern, moved verbatim from the composition root. */
 export class ChatEngineTurnsSendPrompt {
-  constructor(private readonly host: ChatEngine) {}
+  /**
+   * The bound-scope gate, built once from the resolver this engine already uses
+   * for every other scope read. A run that cannot name its checkout never
+   * starts, whichever origin asked for the turn.
+   */
+  private readonly runScopeGate: RunScopeGate
+
+  constructor(private readonly host: ChatEngine) {
+    this.runScopeGate = new RunScopeGate(host.scopeRoots)
+  }
 
   /** Send a prompt to the agent (non-blocking; the reply streams over events). */
   async sendPrompt(
@@ -322,6 +332,16 @@ export class ChatEngineTurnsSendPrompt {
       origin === 'user'
     ) {
       throw new Error('This Assignment task is locked. Return to its coordinator to continue.')
+    }
+    // An assistant task bound to a project runs in that project's checkout, so
+    // the checkout is inspected before the turn starts. An unhealthy scope parks
+    // the run with the resolver's own guidance and refuses the turn: continuing
+    // would write the run's files into assistant storage while the user believes
+    // it worked in their project.
+    if (targetThread?.boundScope) {
+      await this.runScopeGate.guard(targetThread, (parkReason) =>
+        this.host.threadManager.parkThread(projectId, threadId, parkReason)
+      )
     }
     const hiddenPromptContext = promptContext
       ? validateBoundedString(promptContext, 'Prompt context', 1, 100_000)

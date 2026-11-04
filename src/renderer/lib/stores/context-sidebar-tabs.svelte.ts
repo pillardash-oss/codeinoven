@@ -1,6 +1,16 @@
 import { feature } from '$lib/feature-registry'
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
+import type { DisplaySourceKind } from '$shared/ipc/display'
+
+/** A picked target, on its way to becoming a display tab. */
+export interface DisplayTarget {
+  kind: DisplaySourceKind
+  sourceId: string
+  label: string
+  /** The target's own mark, when the platform gave one (a window's app icon). */
+  iconUrl?: string
+}
 import { agentRuns } from './agent-runs.svelte'
 import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
@@ -750,6 +760,102 @@ export class SidebarTabContexts {
       title: 'Cloud Deployments',
       projectId,
       threadId
+    })
+  }
+
+  /**
+   * Dock the display chooser: the tab that is not mirroring anything yet.
+   *
+   * This is what the rail's own icon and the strip's "+" open. It is reused per
+   * project so reaching for the panel twice never leaves two pickers behind, and
+   * picking a target turns this tab into the tab that mirrors it.
+   */
+  openDisplayChooser(projectId: string, threadId: string): string {
+    const context = this.ensureProjectContext(projectId, threadId)
+    const chooserId = `display:${projectId}:chooser`
+    const existing = context.tabs.find((tab) => tab.id === chooserId)
+    // A chooser someone already picked from is that target's tab now, and the
+    // rail icon must focus it rather than silently retarget a live preview. A
+    // second chooser is a new tab, which is exactly what the strip's "+" means.
+    if (existing?.kind === 'display' && existing.sourceId === null) {
+      existing.threadId = threadId
+      this.focusInProjectContext(context, chooserId)
+      return chooserId
+    }
+    const id = existing ? `display:${projectId}:${crypto.randomUUID()}` : chooserId
+    this.openProject(context, {
+      id,
+      kind: 'display',
+      title: 'Choose a target',
+      projectId,
+      threadId,
+      sourceKind: null,
+      sourceId: null,
+      iconUrl: null
+    })
+    return id
+  }
+
+  /**
+   * Point one display tab at a target.
+   *
+   * A target already open in another tab is focused instead of mirrored twice,
+   * because two captures of one device are two child processes for one picture.
+   * The chooser tab becomes that target's tab in place, so a person who picked
+   * from the picker keeps the tab they were standing on.
+   */
+  applyDisplayTarget(
+    projectId: string,
+    threadId: string,
+    tabId: string,
+    target: DisplayTarget
+  ): void {
+    const context = this.ensureProjectContext(projectId, threadId)
+    const duplicate = context.tabs.find(
+      (tab) =>
+        tab.kind === 'display' &&
+        tab.id !== tabId &&
+        tab.sourceId === target.sourceId &&
+        tab.sourceKind === target.kind
+    )
+    const tab = context.tabs.find((candidate) => candidate.id === tabId)
+    if (tab?.kind === 'display') {
+      tab.title = target.label
+      tab.sourceKind = target.kind
+      tab.sourceId = target.sourceId
+      tab.iconUrl = target.iconUrl ?? tab.iconUrl
+      tab.threadId = threadId
+      context.tabs = [...context.tabs]
+    }
+    if (duplicate) {
+      this.focusInProjectContext(context, duplicate.id)
+      return
+    }
+    this.focusInProjectContext(context, tabId)
+  }
+
+  /** Mirror one target immediately, in a fresh tab. Used when the picker is not
+   *  in front (a target that is already open simply takes focus). */
+  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
+    const context = this.ensureProjectContext(projectId, threadId)
+    const existing = context.tabs.find(
+      (tab) =>
+        tab.kind === 'display' && tab.sourceId === target.sourceId && tab.sourceKind === target.kind
+    )
+    if (existing) {
+      this.focusInProjectContext(context, existing.id)
+      return
+    }
+    const id = `display:${projectId}:${crypto.randomUUID()}`
+    this.openProject(context, {
+      id,
+      kind: 'display',
+      title: target.label,
+      projectId,
+      threadId,
+      sourceKind: target.kind,
+      sourceId: target.sourceId,
+      iconUrl: target.iconUrl ?? null
     })
   }
 

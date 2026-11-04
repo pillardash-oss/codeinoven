@@ -44,6 +44,7 @@ import type {
   ThreadClickedPayload
 } from './notifications'
 import type { UpdaterStatus } from './updater'
+import type { DisplayCaptureState, DisplayFrame } from './display'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
   BrowserOverlayAck,
@@ -137,6 +138,13 @@ export const IPC_EVENT_CONTRACT = {
   'taskManager:processesChanged': [] as [],
   'agent:temporaryChatExpired': [] as unknown as [temporaryChatId: string],
   'thread:deleted': [] as unknown as [projectId: string, threadId: string],
+  /**
+   * One stage of a project deletion running in the background: started,
+   * per-phase progress, finished, or failed. The row stays greyed and inert
+   * while this says `started`/`progress`, leaves the sidebar on `deleted`, and
+   * comes back on `failed`.
+   */
+  'project:deletion': [] as unknown as [event: import('../project-deletion').ProjectDeletionEvent],
   /** Live thread snapshot push so sidebar indicators react without polling. */
   'thread:updated': [] as unknown as [thread: Thread],
   /**
@@ -330,6 +338,19 @@ export const IPC_EVENT_CONTRACT = {
   'projectFiles:ideProgress': [] as unknown as [progress: IdeProgress],
   'computerUse:pipFrame': [] as unknown as [frame: ComputerUsePipFrame],
   'computerUse:pipState': [] as unknown as [state: ComputerUsePipState],
+  /**
+   * One preview frame for the display panel, already downscaled and encoded.
+   *
+   * Pushed rather than polled: a session only produces frames while its stage is
+   * on screen, so the stream stopping is itself the signal that nothing is being
+   * captured. `tabId` rides along so a frame that lands after its tab closed is
+   * dropped instead of painted into another tab's stage.
+   */
+  'display:frame': [] as unknown as [frame: DisplayFrame],
+  /** Where one display session is: starting, live, retrying, or failed. */
+  'display:captureState': [] as unknown as [state: DisplayCaptureState],
+  /** An agent started or attached to a display target, so the rail item appears. */
+  'display:available': [] as unknown as [available: boolean],
   /**
    * Progress of an in-app Cua Driver update. The update itself answers over
    * `computerUse:updateCua`; this stream carries the installer's milestones so a

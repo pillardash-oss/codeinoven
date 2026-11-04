@@ -17,6 +17,39 @@ import type {
   UsagePricingProvenance
 } from './usage'
 
+/**
+ * A picture the agent drew to make one option judgeable.
+ *
+ * A question about something that does not exist yet (a new mark on a card, a
+ * layout, a flow) cannot be answered from words alone: the user is asked to
+ * choose between things they cannot see. The agent therefore creates the
+ * smallest picture that shows what an option means and pastes it into that
+ * option, and the card offers it behind the option's eye button.
+ *
+ * The eye is the alternative to the walkthrough (the copyable instruction): the
+ * same option, two ways to understand the same choice. When an option carries
+ * both, the card draws the two buttons side by side, divided by a rule.
+ *
+ * Exactly one of the fields is set, in this precedence order:
+ *
+ *  - `html`   a self-contained HTML document (no scripts, inline styles only)
+ *  - `svg`    raw SVG markup drawn as an image
+ *  - `image`  markup that renders as an image, e.g. an agent-generated picture
+ *  - `mermaid` a Mermaid diagram, for an agent that can draw nothing else
+ */
+export interface AgentQuestionVisual {
+  /** Self-contained HTML drawn in a sandboxed frame. */
+  html?: string
+  /** Raw SVG markup, rendered as a themed image. */
+  svg?: string
+  /** An image the agent generated or a picture reference it named. */
+  image?: string
+  /** Mermaid source, rendered by the app's own diagram renderer. */
+  mermaid?: string
+  /** One short line naming what the picture shows. */
+  caption?: string
+}
+
 /** A selectable option within an agent question. */
 export interface AgentQuestionOption {
   label: string
@@ -29,6 +62,11 @@ export interface AgentQuestionOption {
   instruction?: string
   /** Explicit provider recommendation, or inferred from a “(Recommended)” label. */
   recommended?: boolean
+  /**
+   * A picture of what picking this option produces, shown behind the option's
+   * eye button. Never sent back to the agent.
+   */
+  visual?: AgentQuestionVisual
 }
 
 /**
@@ -294,6 +332,11 @@ export type AgentPart =
       kind: 'file' | 'directory'
       /** Last modification time of the entry on disk. */
       modifiedAt: number
+      /**
+       * The authored work this folder is, when it is one: a design or a
+       * composition opens served in the browser rather than as a file tree.
+       */
+      work?: 'design' | 'video'
     }
 
 /** A generated image that can be previewed from a conversation or its context sidebar. */

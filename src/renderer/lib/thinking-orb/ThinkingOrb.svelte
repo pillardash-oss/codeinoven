@@ -92,8 +92,19 @@
 
     let raf = 0
     let running = false
-    const loop = (): void => {
-      frame((performance.now() / 1000) * effSpeed)
+    /**
+     * Draw at most this often. The orb is decoration: 20 draws a second reads the
+     * same as 60, and it is the animation that keeps a renderer producing frames
+     * for the whole life of an agent turn, including while the agent is blocked
+     * on a tool. At 60 Hz one mounted orb alone was a measurable share of a core.
+     */
+    const FRAME_INTERVAL_MS = 50
+    let lastDrawnAt = 0
+    const loop = (now: number): void => {
+      if (now - lastDrawnAt >= FRAME_INTERVAL_MS) {
+        lastDrawnAt = now
+        frame((now / 1000) * effSpeed)
+      }
       if (running) raf = requestAnimationFrame(loop)
     }
     const start = (): void => {

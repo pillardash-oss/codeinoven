@@ -45,7 +45,7 @@ import {
   isModelProfileId,
   isUsableModelProfile
 } from '../../../lib/model-profiles'
-import { validateLlamaCppServers } from '../../../lib/llama-cpp'
+import { isLocalAiUnloadOption, validateLlamaCppServers } from '../../../lib/llama-cpp'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import {
   MAX_BROWSER_HIBERNATION_MINUTES,
@@ -235,7 +235,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'sound',
   'cioCleanupRetentionDays',
   'cioCleanupExcludedCategories',
-  'llamaCppServers'
+  'llamaCppServers',
+  'llamaCppUnload'
 ])
 
 const AGENT_DEFAULT_FIELDS = new Set([
@@ -954,6 +955,15 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       MIN_CIO_CLEANUP_RETENTION_DAYS,
       MAX_CIO_CLEANUP_RETENTION_DAYS
     )
+  }
+
+  if ('llamaCppUnload' in value) {
+    // The local AI unload window: one of the options the page offers, refused
+    // here rather than stored and silently replaced by the default.
+    if (!isLocalAiUnloadOption(value.llamaCppUnload)) {
+      throw new TypeError('Local AI unload window is invalid')
+    }
+    patch.llamaCppUnload = value.llamaCppUnload
   }
 
   if ('llamaCppServers' in value) {

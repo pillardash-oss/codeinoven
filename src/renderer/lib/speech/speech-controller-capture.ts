@@ -48,3 +48,19 @@ export function recordingToastMessage(cause: unknown, phase: RecordingFailurePha
   if (phase === 'transcription') return 'Voice recording could not be transcribed.'
   return 'Voice recording failed.'
 }
+
+/**
+ * How far a finished take may fall short of its recorded length before the user
+ * is told the transcript covers only part of it. Conversion jitter is a few
+ * milliseconds; the take that prompted this kept 13 s of 160 s.
+ */
+export const SHORT_CAPTURE_WARNING_MS = 3_000
+
+/** A short human duration for recording notices, e.g. `13 s` or `2 min 40 s`. */
+export function formatSpeechDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  if (totalSeconds < 60) return `${totalSeconds} s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`
+}

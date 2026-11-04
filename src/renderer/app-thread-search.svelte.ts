@@ -42,6 +42,15 @@ const RESULT_LIMIT = 50
 const SEARCH_WATCHDOG_MS = 3000
 /** Assistant-name matches surfaced above the task rows. */
 const MAX_ASSISTANT_RESULTS = 12
+/**
+ * How long the panel may keep saying it is still ranking by meaning.
+ *
+ * The local model answers in milliseconds once warm and can take tens of seconds
+ * on its first query after a retire. Past this the note would be a lie the user
+ * cannot act on, so the keyword ranking is presented as the final answer instead
+ * of the panel promising a second one forever.
+ */
+const RANKING_NOTE_TIMEOUT_MS = 30_000
 
 export interface ThreadSearchPaletteDeps {
   openThread: (thread: Thread) => void
@@ -60,6 +69,16 @@ export class ThreadSearchPaletteController {
   paletteOpen = $state(false)
   actions = $state<ActionDefinition[]>([])
   loading = $state(false)
+  /**
+   * The rows on screen are keyword matches and the meaning-based ranking that
+   * replaces them has not landed yet.
+   *
+   * Set only when main reports intent search as active, so a palette with the
+   * model switched off or unindexed never claims to be ranking by meaning. The
+   * footer shows it, which is what stops a query like "ci optimization" from
+   * reading as the final answer when it is really only the first half of one.
+   */
+  rankingByMeaning = $state(false)
   /** Selected sub-container ids for the footer picker; empty = all of them.
    *  Project ids for the Projects screen, assistant ids for the Assistant one. */
   scopeIds = $state<string[]>([])
@@ -88,6 +107,10 @@ export class ThreadSearchPaletteController {
   private renderedRequest = -1
   /** Semantic batches that beat their own keyword rows, keyed by request. */
   private readonly deferredIntents = new SvelteMap<number, ThreadSearchResult[][]>()
+  /** Main can rank by meaning right now: intent search is on and the index holds
+   *  threads. Read once per open, since that is when the user is about to type. */
+  private intentAvailable = false
+  private rankingTimer: number | null = null
   private readonly targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   constructor(
@@ -111,6 +134,7 @@ export class ThreadSearchPaletteController {
     this.lastQuery = ''
     this.renderedRequest = -1
     this.deferredIntents.clear()
+    this.stopRankingNote()
   }
 
   openPalette(): void {
@@ -120,6 +144,7 @@ export class ThreadSearchPaletteController {
     // retire; start that boot while the user is still typing. Main no-ops it
     // unless intent search is enabled.
     warmIntentSearch()
+    void this.refreshIntentAvailability()
     // The assistant screen's assistant picker and assistant rows read the assistants
     // Store, which may not have hydrated yet on a session that restored onto a
     // non-content view. Idempotent, so an already-initialised store is free.
@@ -132,6 +157,47 @@ export class ThreadSearchPaletteController {
   close(): void {
     this.paletteOpen = false
     this.reset()
+  }
+
+  /**
+   * Arm the "ranking by meaning" note for a search that asked the model.
+   *
+   * The keyword rows are already painted when this runs, so the note describes a
+   * second delivery that is genuinely in flight: it is cleared the moment that
+   * batch lands, when the request is superseded, and by a bounded timeout.
+   */
+  private startRankingNote(): void {
+    this.stopRankingNote()
+    if (!this.intentAvailable) return
+    this.rankingByMeaning = true
+    this.rankingTimer = window.setTimeout(() => {
+      this.rankingTimer = null
+      this.rankingByMeaning = false
+    }, RANKING_NOTE_TIMEOUT_MS)
+  }
+
+  private stopRankingNote(): void {
+    if (this.rankingTimer !== null) {
+      window.clearTimeout(this.rankingTimer)
+      this.rankingTimer = null
+    }
+    this.rankingByMeaning = false
+  }
+
+  /**
+   * Ask main whether a query would actually be ranked by meaning.
+   *
+   * The footer note is only shown for a palette where semantic search can answer,
+   * so a disabled model, a missing runtime or an unindexed corpus shows nothing
+   * rather than a promise the app cannot keep. Failure is read as unavailable.
+   */
+  private async refreshIntentAvailability(): Promise<void> {
+    try {
+      const state = await invoke('search:getState')
+      this.intentAvailable = state.status.active
+    } catch {
+      this.intentAvailable = false
+    }
   }
 
   handleQuery(query: string): void {
@@ -254,6 +320,7 @@ export class ThreadSearchPaletteController {
       if (key !== request) this.deferredIntents.delete(key)
     }
     this.armWatchdog(request)
+    this.startRankingNote()
     let results: ThreadSearchResult[]
     try {
       // Scoped search: fan out per selected sub-container so the manager can use
@@ -262,6 +329,7 @@ export class ThreadSearchPaletteController {
       results = await this.runFanOut(query)
     } catch {
       results = []
+      this.stopRankingNote()
     }
     this.clearWatchdog()
     if (request !== this.request || !this.paletteOpen) return
@@ -360,6 +428,8 @@ export class ThreadSearchPaletteController {
   /** Fold one semantic batch into the rows on screen. */
   private applyIntent(request: number, incoming: readonly ThreadSearchResult[]): void {
     if (request !== this.request) return
+    // The ranking this note was waiting for has arrived.
+    this.stopRankingNote()
     // A fan-out answers one query with several hybrid rankings; merging keeps the
     // rows each of them already returned. A single query swaps wholesale, which
     // is the ranking the merge produced (title matches, then meaning, then the

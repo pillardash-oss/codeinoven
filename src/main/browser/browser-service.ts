@@ -193,6 +193,15 @@ export class BrowserService {
    * mounted through the ordinary binding path.
    */
   public readonly agentUserPageTabIds = new Map<string, string>()
+  /**
+   * The page the previous browser call for each context worked on, by context key.
+   *
+   * `page "strip"` means whatever the strip shows now, so it can legitimately move
+   * between two calls. A model that is mid-edit is not helped by a silent move, and the
+   * page it was on is only knowable here: so the answer to a call whose tab changed says
+   * what changed and which page it was on before.
+   */
+  public readonly agentPageTargets = new Map<string, { tabId: string; url: string }>()
   public readonly configuredSessions = new Set<string>()
   /** Where the browser page's identity preload was written, or null if it could not be. */
   public browserIdentityPreloadPath: string | null = null
@@ -955,8 +964,16 @@ export class BrowserService {
     url: string
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
+    /** The tab the app remembers for this screen, or null when it remembers none. */
+    preferredTabId?: string | null
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
     return this.surfacesUnit.openDesignScreen(input)
+  }
+
+  /** Whether this browser still holds one tab, which is what makes a remembered
+   *  tab trustworthy rather than stale. */
+  hasTab(tabId: string): boolean {
+    return this.surfacesUnit.hasTab(tabId)
   }
 
   async showThreadWorkTab(input: {
@@ -1172,6 +1189,10 @@ export class BrowserService {
 
   destroy(tabId: string, reason: BrowserTabDestroyReason): void {
     this.tabsUnit.destroy(tabId, reason)
+  }
+
+  closeUnreferencedAgentTabs(contextKey: string): number {
+    return this.tabsUnit.closeUnreferencedAgentTabs(contextKey)
   }
 
   // ---------------------------------------------------------------------------
@@ -1656,6 +1677,10 @@ export class BrowserService {
     page: BrowserUtilityPage | null
   }): { tabId: string; tab: BrowserTab; attached: boolean } | null {
     return this.conversationPagesUnit.utilityTarget(input)
+  }
+
+  previousPageTarget(contextKey: string): { tabId: string; url: string } | null {
+    return this.conversationPagesUnit.previousPageTarget(contextKey)
   }
 
   threadBrowserHint(

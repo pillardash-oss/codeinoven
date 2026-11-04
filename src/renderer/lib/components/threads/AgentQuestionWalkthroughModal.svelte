@@ -5,23 +5,27 @@
   import Modal from '../ui/Modal.svelte'
 
   /**
-   * Shows the step-by-step instruction attached to one agent answer option.
+   * Shows the walkthrough attached to a question or to one of its options.
    *
-   * The instruction is text the user must run or paste to produce the answer
-   * (a command, a script, an ordered procedure). It lives outside the option's
-   * description precisely so it can be copied verbatim instead of transcribed
-   * from a wrapped paragraph, so this modal renders it as selectable text and
-   * offers a single copy control for the whole block.
+   * The walkthrough is the step-by-step text the user must run or paste to
+   * produce the answer (a command, a script, an ordered procedure). It lives
+   * outside the entry's description precisely so it can be copied verbatim
+   * instead of transcribed from a wrapped paragraph, so this modal renders it as
+   * selectable text and offers a single copy control for the whole block.
+   *
+   * It is one of the two ways to understand an entry; the other is the visual the
+   * agent drew. An entry may carry either or both, and the card shows both
+   * buttons side by side when it has both.
    */
   interface Props {
     open: boolean
-    /** The option label, used in the title so multi-option questions stay clear. */
-    optionLabel: string
-    instruction: string
+    /** What the walkthrough belongs to: the question header or an option label. */
+    subject: string
+    walkthrough: string
     onClose: () => void
   }
 
-  let { open, optionLabel, instruction, onClose }: Props = $props()
+  let { open, subject, walkthrough, onClose }: Props = $props()
 
   let copied = $state(false)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
@@ -30,7 +34,7 @@
 
   async function copy(): Promise<void> {
     try {
-      await copyText(instruction, null)
+      await copyText(walkthrough, null)
       copied = true
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)
@@ -45,19 +49,19 @@
 
   A blocking dialog is normally projected into the overlay window, which is a
   separate document: its text is selectable there, but nothing in that window
-  owns a right-click, so selecting part of this instruction and right-clicking
+  owns a right-click, so selecting part of this walkthrough and right-clicking
   offered no Copy at all. This modal exists to be copied from, so it keeps the
   app's own selection behaviour: in this document `TextSelectionContextMenu`
   answers the right-click with Copy and Select All, exactly as it does for the
   rest of the app's text.
 -->
-<Modal {open} {onClose} title="Instruction: {optionLabel}" size="lg" nativePresentation={false}>
+<Modal {open} {onClose} title="Walkthrough: {subject}" size="lg" nativePresentation={false}>
   <div class="space-y-2">
     <p class="text-xs text-muted">
-      Follow this to produce the answer. Select any part you need, or copy the whole instruction.
+      Follow this to produce the answer. Select any part you need, or copy the whole walkthrough.
     </p>
     <pre
-      class="max-h-[60dvh] overflow-auto border bg-elevated px-3 py-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground select-text">{instruction}</pre>
+      class="max-h-[60dvh] overflow-auto border bg-elevated px-3 py-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground select-text">{walkthrough}</pre>
   </div>
 
   {#snippet footer()}
@@ -79,7 +83,7 @@
         Copied
       {:else}
         <CioCopy size={14} />
-        Copy instruction
+        Copy walkthrough
       {/if}
     </button>
   {/snippet}

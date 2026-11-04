@@ -151,6 +151,10 @@ export async function persistInheritedThreadSettings(
  * set the user sees wins over the persisted row   a staged (not-yet-sent)
  * Toolbox selection must travel too.
  *
+ * A source whose marker is empty, with no switch ever selected and no run ever
+ * started, hands over nothing: the destination stays neutral instead of wearing
+ * an Engineering mark for a workflow it will never enter.
+ *
  * Best-effort and non-fatal: a source that is not an Engineering thread, or an
  * independent-audit/orchestration-child source, leaves the destination neutral
  * and returns `null`.

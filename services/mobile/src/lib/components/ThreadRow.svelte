@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatAge, statusSkin } from '#lib/api/status'
+  import { arrive } from '#lib/motion'
   import type { Project, Thread } from '#lib/api/types'
   import Mark from './Mark.svelte'
 
@@ -24,7 +25,7 @@
   let unread = $derived(!thread.read)
 </script>
 
-<a class={['row', { flat: showProject, compact }]} href="/threads/{thread.id}">
+<a class={['row', { flat: showProject, compact }]} href="/threads/{thread.id}" in:arrive>
   {#if showProject && project}
     <Mark {project} size={28} />
   {:else}

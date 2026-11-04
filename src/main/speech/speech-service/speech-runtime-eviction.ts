@@ -20,6 +20,17 @@ export const CAPABILITY_RUNTIME_MAP: Record<SpeechCapability, SpeechRuntime[]> =
 }
 
 /**
+ * Runtimes whose process the local AI registry owns.
+ *
+ * The gguf runtime is a `llama-server` the registry spawns, shares with search
+ * embeddings, and unloads on the Local AI page's one idle window. Evicting it
+ * here would fight that window with a second policy for the same process, so
+ * resident accounting and every eviction path skip it: this class keeps owning
+ * the native ASR and TTS workers, which are not servers at all.
+ */
+const REGISTRY_OWNED_RUNTIMES: ReadonlySet<SpeechRuntime> = new Set<SpeechRuntime>(['gguf'])
+
+/**
  * The most runtimes allowed to hold a model at once. One runtime per capability
  * is the working set the user actually asked for, so the cap equals the
  * capability count and only a runtime switch can cross it. Without it, moving ASR
@@ -35,6 +46,10 @@ const MAX_RESIDENT_RUNTIMES = CAPABILITIES.length
  */
 function capabilitiesOf(runtime: SpeechRuntime): SpeechCapability[] {
   return CAPABILITIES.filter((capability) => CAPABILITY_RUNTIME_MAP[capability].includes(runtime))
+}
+
+function isEvictableRuntime(runtime: SpeechRuntime): boolean {
+  return !REGISTRY_OWNED_RUNTIMES.has(runtime)
 }
 
 function unloadMs(option: SpeechUnloadOption): number | null {
@@ -291,7 +306,7 @@ export class SpeechRuntimeEviction {
    */
   private async enforceResidentCap(): Promise<void> {
     try {
-      const residents = this.host.residentRuntimes()
+      const residents = this.host.residentRuntimes().filter(isEvictableRuntime)
       if (residents.length <= MAX_RESIDENT_RUNTIMES) return
       const leastRecentFirst = [...residents].sort(
         (left, right) =>
@@ -351,6 +366,9 @@ export class SpeechRuntimeEviction {
 
   private scheduleEvict(capability: SpeechCapability): void {
     this.clearEvict(capability)
+    // A capability whose only runtime belongs to the local AI registry has no
+    // window here: an armed timer would fire, find no target, and say nothing.
+    if (!CAPABILITY_RUNTIME_MAP[capability].some(isEvictableRuntime)) return
     const option = this.unloadOptions[capability]
     const delay = unloadMs(option)
     if (delay === null) return
@@ -383,7 +401,7 @@ export class SpeechRuntimeEviction {
       Logger.dev('Speech auto-evict deferred: capability busy', { capability })
       return
     }
-    const runtimes = CAPABILITY_RUNTIME_MAP[capability]
+    const runtimes = CAPABILITY_RUNTIME_MAP[capability].filter(isEvictableRuntime)
     // Only a runtime that actually holds a process can be released, and a
     // runtime the user touched moments ago is still earning its memory.
     const residents = new Set(this.host.residentRuntimes())

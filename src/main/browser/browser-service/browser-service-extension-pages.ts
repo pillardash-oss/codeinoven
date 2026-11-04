@@ -2,12 +2,13 @@ import { WebContentsView } from 'electron'
 import { Logger } from '../../system/logger'
 import { type BrowserExtensionActionPopupOpenRequest } from '../extensions/browser-extension-service'
 import { ownedExtensionPageUrl } from '../extensions/browser-extension-page-url'
+import { browserPartitionFor } from './browser-validation'
 import {
   BROWSER_EXTENSION_HOSTED_WINDOW_ID,
   extensionWindowKey
 } from '../../../lib/browser/browser-extension-window'
 import { loadExtensionDocument } from '../extensions/browser-extension-page-load'
-import { type BrowserPageOwner } from './browser-types'
+import { type BrowserPageOwner, type BrowserTab } from './browser-types'
 import { MAX_POPUP_WINDOWS_PER_TAB } from './browser-validation'
 import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
@@ -200,14 +201,60 @@ export class BrowserServiceExtensionPages {
     return { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId }
   }
 
+  /**
+   * The page of one jar a request lands on when it named none.
+   *
+   * An extension's worker shares one notion of the tab it acts for across the whole
+   * jar, so a request can arrive unable to name the page it belongs to   a passkey
+   * prompt is issued by the very worker the ceremony woke. The jar's page on screen
+   * is then the page the prompt is about, which is the same answer a browser gives.
+   * A jar with nothing on screen falls back to its first page, and a jar with no
+   * page at all answers null.
+   */
+  jarPageOwner(jar: string): { id: string; tab: BrowserTab } | null {
+    const entries = [...this.host.tabs.entries()].filter(
+      ([, candidate]) => browserPartitionFor(candidate.projectId, candidate.boxId) === jar
+    )
+    const entry = entries.find(([tabId]) => tabId === this.host.activeTabId) ?? entries[0]
+    if (!entry) return null
+    const [tabId, tab] = entry
+    return { id: tabId, tab }
+  }
+
   openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
-    const owner = this.host.tabForContents(request.extensionTabId)
+    // A request names the jar it came from, and a box's jar is one session every
+    // context that picked that box shares. The jar is therefore what the request is
+    // held to, never the context the jar first happened to be loaded by: a boxed
+    // conversation tab and the global browser's tab of the same box are the same
+    // jar, and refusing the conversation's request because the global browser got
+    // there first is what kept a passkey prompt in the thread browser from ever
+    // being asked for.
+    const jar = browserPartitionFor(request.projectId, request.boxId)
+    const owner = this.host.tabForContents(request.extensionTabId) ?? this.jarPageOwner(jar)
     if (!owner) {
       this.refuseExtensionWindow(request, 'there is no page to open it beside')
       return
     }
     const tab = owner.tab
-    if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
+    if (browserPartitionFor(tab.projectId, tab.boxId) !== jar) {
+      Logger.dev('An extension window request named a page in another jar:', {
+        extensionId: request.extensionId,
+        kind: request.kind,
+        requestedJar: jar,
+        tabJar: browserPartitionFor(tab.projectId, tab.boxId)
+      })
+      this.refuseExtensionWindow(request, 'the page it named is in another jar')
+      return
+    }
+    // The page's own context owns what it opens: a box's jar is shared, its tabs
+    // are not, and a popup opened beside a conversation's page belongs to that
+    // conversation.
+    const tabOwner = {
+      tabId: owner.id,
+      projectId: tab.projectId,
+      threadId: tab.threadId,
+      boxId: tab.boxId
+    }
 
     if (request.kind === 'open-tab') {
       // The extension asked for a window that is not its own popout, and this app
@@ -215,11 +262,8 @@ export class BrowserServiceExtensionPages {
       // extension is acting on. The URL is held to the same rule a link click is,
       // so a web page is admitted and nothing else is.
       try {
-        const url = this.host.validateTabNavigationUrl(request.projectId, tab.boxId, request.url)
-        this.host.openNewTabFor(
-          { tabId: owner.id, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
-          url
-        )
+        const url = this.host.validateTabNavigationUrl(tab.projectId, tab.boxId, request.url)
+        this.host.openNewTabFor(tabOwner, url)
       } catch (error: unknown) {
         Logger.dev('An extension window request used an invalid URL:', {
           extensionId: request.extensionId,
@@ -248,13 +292,13 @@ export class BrowserServiceExtensionPages {
         windowKey === null
           ? this.host.popupWindows.extensionPopupForJar(
               request.extensionId,
-              request.projectId,
-              request.boxId
+              tabOwner.projectId,
+              tabOwner.boxId
             )
           : this.host.popupWindows.extensionWindowFor(
               request.extensionId,
-              request.projectId,
-              request.boxId,
+              tabOwner.projectId,
+              tabOwner.boxId,
               windowKey
             )
       if (cached) this.host.popupWindows.dismiss(cached)
@@ -272,10 +316,10 @@ export class BrowserServiceExtensionPages {
       return
     }
     void this.openExtensionPopup(
-      request.projectId,
-      owner.id,
-      tab.threadId,
-      tab.boxId,
+      tabOwner.projectId,
+      tabOwner.tabId,
+      tabOwner.threadId,
+      tabOwner.boxId,
       request.extensionId,
       requestedUrl
     ).catch((error: unknown) => {

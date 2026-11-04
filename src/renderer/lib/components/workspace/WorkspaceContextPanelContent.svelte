@@ -40,6 +40,7 @@
     type AgentPart,
     type Project
   } from '$shared/types'
+  import { threadEvidenceProjectId } from '$shared/bound-scope'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
@@ -50,6 +51,9 @@
     gitPanelVisible: boolean
     terminalFullscreenTabId: string | null
     browserFullscreenTabId: string | null
+    /** The display tab currently shown full screen, so the dock does not mirror
+     *  the same target twice. */
+    displayFullscreenTabId: string | null
     activeProject: Project | null
     selectedThread?: Thread | null
     projectIcons: SvelteMap<string, string>
@@ -76,6 +80,7 @@
     gitPanelVisible,
     terminalFullscreenTabId,
     browserFullscreenTabId,
+    displayFullscreenTabId,
     activeProject,
     selectedThread = null,
     projectIcons,
@@ -89,6 +94,23 @@
     onAdoptAssistantTask
   }: Props = $props()
 
+  /**
+   * The project whose checkout holds this conversation's evidence.
+   *
+   * A project thread's evidence lives in its own project. A bound assistant task
+   * lives on the Assistant view but works in a real checkout, so its Changes,
+   * Git, Files and terminal all read that checkout. Resolving both through the
+   * shared bound-scope resolver is what lets one rail serve every view without a
+   * second surface: the tab's project simply has to match this id.
+   */
+  let evidenceProjectId = $derived(
+    (selectedThread ? threadEvidenceProjectId(selectedThread) : null) ?? activeProject?.id ?? null
+  )
+  /** The bound scope a bound task's rail reads, so its panels resolve that scope. */
+  let evidenceScopeBucketId = $derived(
+    selectedThread?.boundScope?.scopeBucketId ?? gitPanelScopeBucketId
+  )
+
   let activeContextTab = $derived.by(() => {
     const tab = contextSidebarState.sidebarActiveTab
     if (!tab) return null
@@ -97,7 +119,7 @@
     // followed the thread on screen yet (see `ensureDockedThread`), and drawing
     // the older project's panel in the meantime is what put another project's
     // coordinator board on screen. Refusing the tab drops it instead.
-    if (activeProject && 'projectId' in tab && tab.projectId !== activeProject.id) return null
+    if (activeProject && 'projectId' in tab && tab.projectId !== evidenceProjectId) return null
     return tab
   })
 
@@ -324,7 +346,7 @@
         <GitStatusPanel
           projectId={gitPanelProjectId}
           threadId={gitPanelThreadId}
-          scopeBucketId={ovenRootKey(gitPanelProjectId) ?? gitPanelScopeBucketId}
+          scopeBucketId={ovenRootKey(gitPanelProjectId) ?? evidenceScopeBucketId}
         />
       </div>
     {:catch error}
@@ -487,6 +509,20 @@
           {:catch error}
             {@render panelLoadFailed(PANEL_KEYS.cloudDeployment, 'Cloud deployment', error)}
           {/await}
+        {:else if activeContextTab.kind === 'display'}
+          {#if displayFullscreenTabId === activeContextTab.id}
+            <div class="flex h-full items-center justify-center text-[0.6875rem] text-muted">
+              Display is open in fullscreen
+            </div>
+          {:else}
+            {#await loadCachedPanelModule(PANEL_KEYS.display, () => import('../display/DisplayPanel.svelte'))}
+              {@render panelLoading('Display')}
+            {:then { default: DisplayPanel }}
+              <DisplayPanel tab={activeContextTab} />
+            {:catch error}
+              {@render panelLoadFailed(PANEL_KEYS.display, 'Display', error)}
+            {/await}
+          {/if}
         {:else if activeContextTab.kind === 'temporary-chat'}
           {#await loadCachedPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
             {@render panelLoading('Chat')}

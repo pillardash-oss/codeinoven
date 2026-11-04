@@ -1,4 +1,5 @@
 import type { ComposerIdentity } from '../../chats/ComposerIdentity.svelte'
+import { resolveThreadBoundScope } from '$shared/bound-scope'
 import {
   type ComposerRelocationItem,
   type ComposerRelocationMode
@@ -30,11 +31,7 @@ import {
 import { latestAgentTodo } from '$lib/agent-todos'
 import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
 import { revealAttachmentFile, revealCitationFile, revealFileInAppTree } from '$lib/reveal-file'
-import {
-  ASSISTANT_SPACE_ID,
-  DEFAULT_SCOPE_BUCKET_ID,
-  usesThreadWorkspaceMount
-} from '$shared/types'
+import { ASSISTANT_SPACE_ID, usesThreadWorkspaceMount } from '$shared/types'
 import type {
   Thread,
   ThreadSettings,
@@ -181,21 +178,33 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
       : null
   )
 
-  /** The scope segment's data, for a project thread that has a scope on the board. */
+  /**
+   * The scope segment's data, for a thread that works in a real checkout.
+   *
+   * A project thread states its own scope; a bound assistant task states the
+   * scope it is bound to, in the same row, through the same badge. The resolver
+   * is the shared one, so the shoe, the rail and the run receipt can never name
+   * different checkouts for one thread.
+   */
   composerScope(identity: ComposerIdentity, isNewThread: boolean) {
-    if (identity.kind !== 'project') return undefined
-    const bucketId = this.root.handleAgentEvent.thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    // Resolve against the thread's own project board like scope.bucketForThread.
+    const thread = this.root.handleAgentEvent.thread
+    const target = resolveThreadBoundScope(thread)
+    if (!target) return undefined
     const board =
-      scopeState.boards.get(this.root.handleAgentEvent.thread.projectId) ?? scopeState.board
-    const bucket = board.buckets.find((candidate) => candidate.id === bucketId)
+      scopeState.boards.get(target.projectId) ??
+      (target.projectId === thread.projectId ? scopeState.board : undefined)
+    const bucket = board?.buckets.find((candidate) => candidate.id === target.scopeBucketId)
     if (!bucket) return undefined
+    // Only a project thread chooses its scope from the composer. A bound task's
+    // scope is its binding, edited from the task itself, so the shoe states it.
+    const readOnly = identity.kind !== 'project'
     return {
-      projectId: this.root.handleAgentEvent.thread.projectId,
-      threadId: this.root.handleAgentEvent.thread.id,
+      projectId: target.projectId,
+      threadId: thread.id,
       bucket,
-      isNewThread,
-      onOpenScopeView: () => this.root.props.onOpenScopeView?.(this.root.handleAgentEvent.thread)
+      isNewThread: readOnly ? false : isNewThread,
+      ...(readOnly ? { readOnly: true } : {}),
+      onOpenScopeView: () => this.root.props.onOpenScopeView?.(thread)
     }
   }
 

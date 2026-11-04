@@ -4,6 +4,7 @@
   import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
   import CioSkipForward from '@pdslng/cio-icon/CioSkipForward.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -134,6 +135,22 @@
         <CioMerge size={11} />
       {/if}
       Complete merge
+    </button>
+  {/if}
+  {#if board.loadRepoState.agentConflictThreadId}
+    <!--
+      The handoff minted its thread on this checkout, so the row keeps the way
+      back into it: the agent resolves the files and stops, and the conversation
+      that did it is one click away while the integration is still open.
+    -->
+    <button
+      type="button"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
+      title="Open the agent thread resolving these conflicts"
+      onclick={() => board.loadRepoState.openAgentConflictThread()}
+    >
+      <CioSubagent size={11} />
+      Open agent thread
     </button>
   {/if}
   {#if withAbort}
@@ -516,6 +533,7 @@
     mergeAwaitsCompletion={board.loadRepoState.mergeAwaitsCompletion}
     mergePending={board.loadRepoState.mergePending}
     prResolveBranch={board.loadRepoState.prResolveBranch}
+    prResolveLost={board.loadRepoState.prResolveLost}
     completeMergeBusy={board.confirmAcceptAllConflicts.completeMergeBusy}
     pushRecoverMode={board.loadRepoState.pushRecoverMode}
     localBranches={board.confirmAcceptAllConflicts.localBranches}

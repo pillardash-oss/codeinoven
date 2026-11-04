@@ -7,6 +7,7 @@
   import type { Assistant } from '#lib/api/types'
   import AppBar from '#lib/components/AppBar.svelte'
   import Mark from '#lib/components/Mark.svelte'
+  import { fold } from '#lib/motion'
 
   /**
    * Assistants. A phone lists them and opens one to see what it does; creating,
@@ -50,6 +51,22 @@
       return filter === 'scheduled' ? assistant.scheduled : !assistant.scheduled
     })
   )
+
+  /** The scheduled ones first: a run that starts itself is the one that matters. */
+  let groups = $derived([
+    {
+      id: 'scheduled',
+      rows: visible
+        .filter((assistant) => assistant.scheduled)
+        .sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
+    },
+    {
+      id: 'manual',
+      rows: visible
+        .filter((assistant) => !assistant.scheduled)
+        .sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
+    }
+  ])
 
   let pausedCount = $derived(assistants.filter((assistant) => assistant.paused).length)
 
@@ -118,53 +135,67 @@
   {:else if visible.length === 0}
     <p class="empty">No assistant matches this filter</p>
   {:else}
-    <section class="section">
-      {#each visible as assistant (assistant.id)}
-        {@const open = opened[assistant.id] === true}
-        <div class="assistant-row">
-          <button
-            class="row flat"
-            type="button"
-            aria-expanded={assistant.scheduled ? open : undefined}
-            onclick={() => (assistant.scheduled ? toggle(assistant.id) : undefined)}
-          >
-            <Mark project={assistant} size={28} />
-            <span class="body-cell">
-              <span class="row-title">{assistant.name}</span>
-              <span class="row-line">{subtitle(assistant)}</span>
-              <span class="row-meta">
-                <span
-                  class="state"
-                  style:color={assistant.paused ? 'var(--color-warning)' : undefined}
-                >
-                  <i class="dot" data-tone={assistant.paused ? 'needs' : 'done'}></i>
-                  {assistant.paused ? 'paused' : 'ready'}
+    {#each groups as list (list.id)}
+      {#if list.rows.length > 0}
+        <section class="section">
+          {#each list.rows as assistant (assistant.id)}
+            {@const open = opened[assistant.id] === true}
+            <div class="assistant-row">
+              <button
+                class="row flat"
+                type="button"
+                aria-expanded={assistant.scheduled ? open : undefined}
+                onclick={() => (assistant.scheduled ? toggle(assistant.id) : undefined)}
+              >
+                <Mark project={assistant} size={28} />
+                <span class="body-cell">
+                  <span class="row-title">{assistant.name}</span>
+                  <span class="row-line">{subtitle(assistant)}</span>
+                  <span class="row-meta">
+                    <span
+                      class="state"
+                      style:color={assistant.paused ? 'var(--color-warning)' : undefined}
+                    >
+                      <i class="dot" data-tone={assistant.paused ? 'needs' : 'done'}></i>
+                      {assistant.paused ? 'paused' : 'ready'}
+                    </span>
+                    {#if assistant.scheduled && assistant.scheduleName}
+                      <span>{assistant.scheduleName}</span>
+                    {:else}
+                      <span>on demand</span>
+                    {/if}
+                    {#if assistant.lastRunAt}
+                      <span>{formatAge(assistant.lastRunAt)}</span>
+                    {/if}
+                  </span>
                 </span>
-                {#if assistant.scheduled && assistant.scheduleName}
-                  <span>{assistant.scheduleName}</span>
+                {#if assistant.scheduled}
+                  <CioChevronDown class="chev" size={16} />
                 {/if}
-                {#if assistant.lastRunAt}
-                  <span>{formatAge(assistant.lastRunAt)}</span>
-                {/if}
-              </span>
-            </span>
-            {#if assistant.scheduled}
-              <CioChevronDown class="chev" size={16} />
-            {/if}
-          </button>
+              </button>
 
-          {#if assistant.scheduled && open}
-            <div class="detail" data-open="true">
-              <p class="run"><span>{assistant.description}</span></p>
-              <p class="run">
-                <span>Work produced</span>
-                <em>{assistant.threadCount} threads</em>
-              </p>
+              {#if assistant.scheduled && open}
+                <div class="detail" data-open="true" transition:fold>
+                  <p class="run"><span>{assistant.description}</span></p>
+                  <p class="run">
+                    <span>Work produced</span>
+                    <em
+                      >{assistant.threadCount === 1
+                        ? '1 thread'
+                        : `${assistant.threadCount} threads`}</em
+                    >
+                  </p>
+                  <p class="run">
+                    <span>Last run</span>
+                    <em>{assistant.lastRunAt ? formatAge(assistant.lastRunAt) : 'never'}</em>
+                  </p>
+                </div>
+              {/if}
             </div>
-          {/if}
-        </div>
-      {/each}
-    </section>
+          {/each}
+        </section>
+      {/if}
+    {/each}
   {/if}
 </div>
 

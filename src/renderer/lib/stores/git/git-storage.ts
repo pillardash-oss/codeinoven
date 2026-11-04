@@ -15,6 +15,10 @@ export class GitStateStorage {
     this.host.error = null
     this.host.githubPermission = null
     this.host.conflictsMode = false
+    // The session belongs to the checkout it was prepared in. The next refresh
+    // rehydrates it from main's recorded copy, so clearing here only prevents a
+    // previous project's session from gating this panel's controls.
+    this.host.prResolveSession = null
     this.host.statusReadAt = 0
     this.host.cachedStatus = false
     this.host.statusError = null

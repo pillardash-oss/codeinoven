@@ -1,4 +1,5 @@
 import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
+import type { DisplaySourceKind } from '$shared/ipc/display'
 
 export type TerminalPlacement = 'right' | 'bottom'
 
@@ -175,6 +176,34 @@ export interface CloudDeploymentContextTab {
   title: string
   projectId: string
   threadId: string
+}
+
+/**
+ * The display panel: one tab per mirror target (an Android target over adb, a
+ * booted iOS Simulator, a desktop screen or one window).
+ *
+ * It is tabbed like a terminal, because a person watching several targets wants
+ * them side by side in the dock's own strip rather than in a second strip of the
+ * panel's own. A tab that names no source is the chooser: it is what the rail's
+ * own icon and the strip's "+" open, and picking a target turns that tab into the
+ * tab that mirrors it.
+ *
+ * It is a project tab because previews survive switching between the project's
+ * threads: the work being mirrored belongs to the project, not to the tab that
+ * happened to open it.
+ */
+export interface DisplayContextTab {
+  id: string
+  kind: 'display'
+  title: string
+  projectId: string
+  threadId: string
+  /** What this tab mirrors, or null while it is still the chooser. */
+  sourceKind: DisplaySourceKind | null
+  /** The target's own identity (adb serial, simulator udid, capture id). */
+  sourceId: string | null
+  /** The mark the target wears when it has one (a window's application icon). */
+  iconUrl: string | null
 }
 
 export interface NotificationContextTab {
@@ -422,6 +451,7 @@ export type ContextSidebarTab =
   | ActionsContextTab
   | ThreadNoteContextTab
   | CloudDeploymentContextTab
+  | DisplayContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
   | StickyNotesContextTab
@@ -491,6 +521,7 @@ export const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
   'actions',
   'git',
   'cloud-deployment',
+  'display',
   'memory',
   'assistant-knowledge'
 ])

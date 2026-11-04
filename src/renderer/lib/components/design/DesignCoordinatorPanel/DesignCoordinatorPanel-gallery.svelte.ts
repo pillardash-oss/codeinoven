@@ -123,14 +123,6 @@ export class DesignBoardGallery extends BoardUnit<DesignBoard> {
       : (this.designState?.items ?? [])
   })
 
-  /** How many designs sit behind the "Others" trigger. */
-  otherCount = $derived(Math.max(0, this.items.length - 1))
-
-  /** What the trigger and its menu are called, in this board's own words. */
-  switchLabel = $derived(
-    `Switch ${this.noun}, ${this.otherCount} other ${this.otherCount === 1 ? this.noun : `${this.noun}s`} in ${this.root.studio.ownerLabel}`
-  )
-
   /** The folder this thread last previewed, when it belongs to the kind on screen.
    *  A rail-opened board ignores a record that describes the other kind. */
   currentFolder = $derived.by(() => {
@@ -139,6 +131,18 @@ export class DesignBoardGallery extends BoardUnit<DesignBoard> {
     if (this.root.props.kind !== undefined && current.kind !== this.root.props.kind) return null
     return this.items.some((item) => item.directory === current.directory) ? current : null
   })
+
+  /**
+   * Whether this board leads with nothing until the thread writes work of its own.
+   *
+   * A session's board is the thread's own surface, so an older design or composition
+   * from somewhere else in the project is not what the user opened it for: the
+   * thread starts with an empty board and fills it when the agent writes. The rail's
+   * board is the other way round, because browsing the project's work is its job.
+   */
+  leadsWithNothing = $derived(
+    this.root.props.projectBoard !== true && this.designState?.active === true
+  )
 
   /** The folder in front: the one the user picked, else the thread's own. */
   selected = $derived.by(() => {
@@ -152,20 +156,47 @@ export class DesignBoardGallery extends BoardUnit<DesignBoard> {
       this.selectionThreadId !== this.root.props.threadId
         ? projectWorkState.focusedDirectory(this.root.props.projectId, this.requestedKind)
         : ''
-    const directory = this.items.some((item) => item.directory === picked)
-      ? picked
-      : (this.items.find((item) => item.directory === inherited)?.directory ??
-        current?.directory ??
-        this.items.find((item) => item.creatorThreadId === this.selectionThreadId)?.directory ??
-        this.items.find(
+    // The folders this board may put in front without the user having chosen one:
+    // what they picked, the one a thread being viewed had focused, the folder this
+    // thread previewed, and any folder this thread wrote itself. A session's board
+    // stops there, so a fresh session shows its own empty board rather than an
+    // older design that happens to sit in the project.
+    const known =
+      this.items.find((item) => item.directory === picked)?.directory ??
+      this.items.find((item) => item.directory === inherited)?.directory ??
+      current?.directory ??
+      this.items.find((item) => item.creatorThreadId === this.selectionThreadId)?.directory ??
+      ''
+    const browsed = this.leadsWithNothing
+      ? ''
+      : (this.items.find(
           (item) =>
             item.directory ===
             projectWorkState.focusedDirectory(this.root.props.projectId, this.requestedKind)
         )?.directory ??
         this.items[0]?.directory ??
         '')
+    const directory = known === '' ? browsed : known
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
+
+  /**
+   * How many designs sit behind the "Others" trigger.
+   *
+   * A board that leads with nothing has no design in front, so every design of the
+   * project waits behind the trigger instead of all but one of them.
+   */
+  otherCount = $derived(
+    this.selected.directory === '' ? this.items.length : Math.max(0, this.items.length - 1)
+  )
+
+  /** Whether the header offers the rest of the project's work at all. */
+  showSwitcher = $derived(this.otherCount > 0)
+
+  /** What the trigger and its menu are called, in this board's own words. */
+  switchLabel = $derived(
+    `Switch ${this.noun}, ${this.otherCount} other ${this.otherCount === 1 ? this.noun : `${this.noun}s`} in ${this.root.studio.ownerLabel}`
+  )
 
   /** The folder in front as main lists it, which is where its entry page is known. */
   selectedItem = $derived(

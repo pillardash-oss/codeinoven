@@ -46,6 +46,27 @@ export interface ScopeTarget {
   scopeBucketId: string
 }
 
+/**
+ * The project scope a thread is bound to when that is not its home.
+ *
+ * A pair rather than a path: the scope's filesystem root is resolved by the
+ * scope root resolver, which is the only authority allowed to turn a target
+ * into a directory. Persisting a path would survive a worktree move, a project
+ * relocation or a repaired worktree as a lie.
+ */
+export interface BoundScope {
+  projectId: string
+  scopeBucketId: string
+}
+
+/**
+ * A thread's bound scope with the home container that owned it before binding.
+ *
+ * `homeProjectId` is what makes unbinding honest: the thread returns to the
+ * container it came from rather than to a guessed default.
+ */
+export type BoundScopeRebind = BoundScope & { homeProjectId?: string }
+
 /** Environment-file propagation mode for a managed worktree. */
 export type ScopeEnvironmentMode = 'copy' | 'symlink'
 

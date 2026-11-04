@@ -14,7 +14,7 @@
     { href: '/', label: 'Projects', icon: CioProjects },
     { href: '/threads', label: 'Threads', icon: CioThreads },
     { href: '/assistant', label: 'Assistant', icon: CioSparkles },
-    { href: '/account', label: 'Account', icon: CioTabSettings }
+    { href: '/settings', label: 'Settings', icon: CioTabSettings }
   ]
 
   function current(href: string): boolean {

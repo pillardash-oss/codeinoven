@@ -175,6 +175,7 @@ export type IpcChatEngine = Pick<
       | 'cancelRankingGrade'
       | 'rankingGradeRunStatus'
       | 'refreshSensitiveFilePermissions'
+      | 'gitHeadCommit'
     >
   >
 

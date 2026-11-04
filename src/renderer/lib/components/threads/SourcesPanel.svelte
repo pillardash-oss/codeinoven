@@ -18,6 +18,7 @@
     SectionAgentSource
   } from '$lib/agent-sources'
   import MediaPreview from '../chats/MediaPreview.svelte'
+  import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import { revealSourceFilePath, revealCitationFile } from '$lib/reveal-file'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -52,6 +53,7 @@
   import SourcesPanelMemoryRow from './SourcesPanelMemoryRow.svelte'
   import {
     isImageSource,
+    isPreviewableImageSource,
     sourceFilterLabel,
     type ContextSection,
     type OriginFilter,
@@ -67,13 +69,28 @@
 
   const MINIMUM_REFRESH_FEEDBACK_MS = 500
 
+  type PreviewScope = 'sources' | 'artifacts'
+
+  /** The open media lightbox: which of the panel's image lists it belongs to and
+   *  the position it is showing in that list. */
+  interface PreviewRequest {
+    scope: PreviewScope
+    index: number
+  }
+
+  interface PreviewMediaItem {
+    url: string
+    filename: string
+    mime: string
+  }
+
   let { sources, projectId, threadId }: Props = $props()
   let section = $state<SourcesSection>('sources')
   let contextSection = $state<ContextSection>('mcps')
   let originFilter = $state<OriginFilter>('all')
   let sourceFilter = $state<SourceFilter>('all')
   let searchQuery = $state('')
-  let previewSource = $state<FileAgentSource | null>(null)
+  let preview = $state<PreviewRequest | null>(null)
   let imageUrls = new FileBlobUrlManager()
   let capabilities = $state<AgentContextCapabilities | null>(null)
   let capabilitiesLoading = $state(false)
@@ -92,7 +109,6 @@
   let artifacts = $state<AgentArtifact[]>([])
   let artifactsLoading = $state(false)
   let artifactsError = $state('')
-  let previewArtifact = $state<AgentArtifact | null>(null)
   let memory = $state<MemoryEntry[]>([])
   let memoryLoading = $state(false)
   let memoryError = $state('')
@@ -158,6 +174,57 @@
 
   function toggleSourceFilter(kind: SourceFilter): void {
     sourceFilter = sourceFilter === kind ? 'all' : kind
+  }
+
+  /**
+   * The panel's images in the order they are listed, so a lightbox opened over
+   * one of them can step to its siblings. The sources section and the artifacts
+   * section page separately: each list matches what the user is looking at.
+   */
+  const previewableSourceImages = $derived(filteredSources.filter(isPreviewableImageSource))
+  const previewableArtifacts = $derived(artifacts.filter((artifact) => isImageMime(artifact.mime)))
+
+  const previewItems = $derived.by<PreviewMediaItem[]>(() => {
+    if (!preview) return []
+    if (preview.scope === 'sources') {
+      return previewableSourceImages.map((source) => ({
+        url: source.url,
+        filename: source.title,
+        mime: source.mime
+      }))
+    }
+    return previewableArtifacts.map((artifact) => ({
+      url: artifact.url,
+      filename: artifact.filename,
+      mime: artifact.mime
+    }))
+  })
+
+  const previewItem = $derived(preview ? (previewItems[preview.index] ?? null) : null)
+
+  /** Sibling navigation for the open lightbox, absent when the list it belongs
+   *  to holds fewer than two images. */
+  const previewPager = $derived.by<PreviewPagerState | undefined>(() => {
+    if (!preview || previewItems.length < 2) return undefined
+    return {
+      index: preview.index,
+      count: previewItems.length,
+      onPrevious: () => stepPreview(-1),
+      onNext: () => stepPreview(1)
+    }
+  })
+
+  function stepPreview(delta: number): void {
+    if (!preview) return
+    const index = preview.index + delta
+    if (!previewItems[index]) return
+    preview = { scope: preview.scope, index }
+  }
+
+  function openPreview(scope: PreviewScope, items: readonly { url: string }[], url: string): void {
+    const index = items.findIndex((item) => item.url === url)
+    if (index < 0) return
+    preview = { scope, index }
   }
 
   const availableMcps = $derived(capabilities?.mcp ?? [])
@@ -318,7 +385,7 @@
   }
 
   function openArtifact(artifact: AgentArtifact): void {
-    previewArtifact = artifact
+    openPreview('artifacts', previewableArtifacts, artifact.url)
   }
 
   function revealArtifact(artifact: AgentArtifact): void {
@@ -409,7 +476,7 @@
 
   function openFileInViewer(source: FileAgentSource): void {
     if (isImageSource(source)) {
-      previewSource = source
+      openPreview('sources', previewableSourceImages, source.url)
       return
     }
     const project = workspaceState.activeProject
@@ -481,7 +548,7 @@
           <SourcesPanelSourceRow
             {source}
             {imageUrls}
-            onPreviewImage={(next) => (previewSource = next)}
+            onPreviewImage={(next) => openPreview('sources', previewableSourceImages, next.url)}
             onOpenSource={openFileInViewer}
             onOpenWeb={openWebUrl}
             onOpenCitation={handleCitationClick}
@@ -716,22 +783,13 @@
   </Modal>
 {/if}
 
-{#if previewSource}
+{#if previewItem}
   <MediaPreview
-    src={imageUrls.getUrl(previewSource.url)}
-    revealUrl={previewSource.url}
-    filename={previewSource.title}
-    mime={previewSource.mime}
-    onClose={() => (previewSource = null)}
-  />
-{/if}
-
-{#if previewArtifact}
-  <MediaPreview
-    src={imageUrls.getUrl(previewArtifact.url)}
-    revealUrl={previewArtifact.url}
-    filename={previewArtifact.filename}
-    mime={previewArtifact.mime}
-    onClose={() => (previewArtifact = null)}
+    src={imageUrls.getUrl(previewItem.url)}
+    revealUrl={previewItem.url}
+    filename={previewItem.filename}
+    mime={previewItem.mime}
+    pager={previewPager}
+    onClose={() => (preview = null)}
   />
 {/if}

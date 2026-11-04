@@ -13,7 +13,14 @@ import type { NativeFloatingPanelBounds } from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
-import type { LlamaCppLogStream, LlamaCppProbeResult, LlamaCppRuntimeStatus } from '../llama-cpp'
+import type {
+  LlamaCppLogStream,
+  LlamaCppProbeResult,
+  LlamaCppRuntimeStatus,
+  LocalAiRuntimeId,
+  LocalAiRuntimeSummary,
+  LocalAiUnloadResult
+} from '../llama-cpp'
 /** One file the user explicitly chooses to save from the renderer. */
 export interface SaveFileInput {
   suggestedName: string
@@ -47,6 +54,9 @@ export const invokeAppContract = {
     [role: AgentRole, selection: AgentModelSelection],
     AppConfig
   >,
+  /** The local inference runtimes this machine can drive, for the Local AI page. */
+  'localAi:runtimes': {} as Contract<[], LocalAiRuntimeSummary[]>,
+  'localAi:unloadNow': {} as Contract<[], LocalAiUnloadResult>,
   /** The `llama-server` the app can launch here, its version and its installer. */
   'llamaCpp:detect': {} as Contract<[], LlamaCppRuntimeStatus>,
   /** Ask a started server for its loaded model ids, which is what readiness means. */
@@ -60,7 +70,7 @@ export const invokeAppContract = {
   /** Follow a row's log, either over its live PTY or by reading its log file. */
   'llamaCpp:logStream': {} as Contract<[entryId: string, follow: boolean], LlamaCppLogStream>,
   /** Pick a local `.gguf` file; the row references it where it lives. */
-  'llamaCpp:pickModel': {} as Contract<[], string | null>,
+  'llamaCpp:pickModel': {} as Contract<[runtime?: LocalAiRuntimeId], string | null>,
   'dialog:pickFolder': {} as Contract<[], string | null>,
   'dialog:pickCloneDestination': {} as Contract<[], string | null>,
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,

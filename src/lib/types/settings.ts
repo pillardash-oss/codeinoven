@@ -536,6 +536,12 @@ export interface AppConfig {
    */
   llamaCppServers?: import('../llama-cpp').LlamaCppServerEntry[]
   /**
+   * How long a local model the app loads stays resident after its last use. One
+   * window for every local inference server the app owns, because the same
+   * model serves speech cleanup and search embeddings.
+   */
+  llamaCppUnload: import('../llama-cpp').LocalAiUnloadOption
+  /**
    * Age in days after which CIO Cleanup deletes content of a workspace's `.cio`
    * scratch folder. Bounded to `MIN/MAX_CIO_CLEANUP_RETENTION_DAYS`.
    */
@@ -621,6 +627,7 @@ export type AppConfigPatch = Partial<
     | 'inAppNotificationSound'
     | 'sound'
     | 'llamaCppServers'
+    | 'llamaCppUnload'
     | 'cioCleanupRetentionDays'
     | 'cioCleanupExcludedCategories'
   >

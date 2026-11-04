@@ -408,7 +408,11 @@ export class ChatEngineAssistantAuthoring {
         workingDirectory: input.task.workingDirectory,
         settings: input.settings ?? input.task.settings,
         assistantId: input.task.assistantId,
-        assistantTaskId: input.task.id
+        assistantTaskId: input.task.id,
+        // The run works where its task does: inheriting the binding is what
+        // makes the run's session, file tree and receipt read the project
+        // checkout, and what lets the park gate refuse an unusable scope.
+        boundScope: input.task.boundScope
       },
       {
         onEviction: (outcome) => {
@@ -423,6 +427,33 @@ export class ChatEngineAssistantAuthoring {
       }
     )
     await finalize()
+    // The run's starting commit is recorded once, now, so its receipt can answer
+    // what this run did rather than what the checkout happens to contain when the
+    // user opens it. A checkout that cannot be read leaves no base, which the
+    // receipt states instead of inventing one.
+    if (thread.boundScope) {
+      const scope = thread.boundScope
+      try {
+        const path = await this.host.units['thread-lifecycle'].resolveThreadPath(
+          ASSISTANT_SPACE_ID,
+          thread.id
+        )
+        const head = await this.host.gitHeadCommit?.(path)
+        if (head) {
+          await this.host.threadManager.setRunBase(ASSISTANT_SPACE_ID, thread.id, {
+            sha: head,
+            projectId: scope.projectId,
+            scopeBucketId: scope.scopeBucketId,
+            recordedAt: Date.now()
+          })
+        }
+      } catch (error) {
+        Logger.dev('Assistant run base could not be recorded', {
+          threadId: thread.id,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
     // The sidebar draws the run's row from this broadcast the moment it
     // exists, so it must reach every renderer.
     broadcastThreadUpdate(thread)

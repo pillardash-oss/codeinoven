@@ -278,6 +278,7 @@ export const invokeThreadContract = {
           | 'providerId'
           | 'workingDirectory'
           | 'scopeBucketId'
+          | 'boundScope'
           | 'lastActivity'
           | 'read'
           | 'assistantGettingStarted'

@@ -18,6 +18,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { modelKey } from '$lib/model-keys'
 import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from '$shared/types'
 import type {
+  ComposerProject,
   Thread,
   ThreadSettings,
   ThreadContextUsage,
@@ -65,11 +66,16 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
     // chat's own title in place of what it actually is.
     if (this.root.loadOlderMessages.hasController) return { kind: 'chat', temporary: true }
     if (target.projectId === ASSISTANT_SPACE_ID) {
+      // A bound task works in a real checkout, so the shoe states that project's
+      // branch beside the scope exactly as a project thread does.
+      const boundProject = this.boundProject(target)
       // A run inherits its task's assistant, so this resolves for a task and each
       // of its runs alike; an assistant-less task is named by itself.
       const assistant = assistants.assistantForTask(target)
-      if (assistant) return { kind: 'assistant', assistant }
-      return { kind: 'task', task: target }
+      if (assistant) {
+        return { kind: 'assistant', assistant, ...(boundProject ? { project: boundProject } : {}) }
+      }
+      return { kind: 'task', task: target, ...(boundProject ? { project: boundProject } : {}) }
     }
     if (!this.root.props.chatMode && this.project) {
       return {
@@ -91,6 +97,28 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       }
     }
     return { kind: 'chat' }
+  }
+
+  /**
+   * The project checkout a bound assistant task works in, shaped as the shoe's
+   * project identity so the binding reads as one row rather than a second bar.
+   *
+   * The branch is the thread's own recorded branch, which is what the project
+   * thread identity uses for the same pill.
+   */
+  private boundProject(target: Thread): ComposerProject | undefined {
+    const bound = target.boundScope
+    if (!bound) return undefined
+    const project = scopeState.projectRecords.find((record) => record.id === bound.projectId)
+    if (!project) return undefined
+    return {
+      name: project.name,
+      path: project.path,
+      source: project.source,
+      host: project.host,
+      iconUrl: getProjectIcon(project, this.root.switchProject.projectIconUrl ?? undefined),
+      branch: target.branch
+    }
   }
 
   contextUsage = $derived.by((): AgentContextUsage | undefined => {

@@ -1,4 +1,5 @@
 import type { AgentQuestion, AgentQuestionOption, AgentQuestionRequest } from '../../../lib/types'
+import { normalizeQuestionVisual } from '../../../lib/question-visual'
 import { arrayValue, recordValue, stringValue } from './v2-values'
 
 /** One choice a V2 form field offers. */
@@ -7,6 +8,7 @@ interface FormOption {
   label: string
   description?: string
   instruction?: string
+  visual?: AgentQuestionOption['visual']
 }
 
 /** The field shapes this mapper understands from `Form.Field`. */
@@ -26,12 +28,14 @@ function formOptions(value: unknown): FormOption[] {
     const description = stringValue(record?.['description'])
     const instruction =
       stringValue(record?.['instruction']) ?? stringValue(record?.['instructions'])
+    const visual = normalizeQuestionVisual(record?.['visual'])
     return [
       {
         value: optionValue,
         label: stringValue(record?.['label']) ?? optionValue,
         ...(description ? { description } : {}),
-        ...(instruction ? { instruction } : {})
+        ...(instruction ? { instruction } : {}),
+        ...(visual ? { visual } : {})
       }
     ]
   })
@@ -74,6 +78,7 @@ function toQuestionOption(option: FormOption): AgentQuestionOption {
     label: option.label,
     ...(option.description ? { description: option.description } : {}),
     ...(option.instruction ? { instruction: option.instruction } : {}),
+    ...(option.visual ? { visual: option.visual } : {}),
     ...(recommended ? { recommended: true } : {})
   }
 }

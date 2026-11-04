@@ -24,6 +24,12 @@
     bucket: ScopeBucket
     /** New threads can reassign the scope; existing ones toggle the scope view. */
     isNewThread: boolean
+    /**
+     * The scope is stated, not chosen. A bound assistant task's scope is its
+     * binding, which the task's own picker changes, so the shoe must not offer
+     * the composer's project-scope reassignment for it.
+     */
+    readOnly?: boolean
     /** Opens the projects/threads scope view for this thread (existing threads). */
     onOpenScopeView?: () => void | Promise<void>
   }
@@ -111,8 +117,18 @@
   let threadId = $derived(shoe.scope?.threadId ?? '')
   let bucket = $derived(shoe.scope?.bucket)
   let isNewThread = $derived(shoe.scope?.isNewThread ?? false)
+  let scopeReadOnly = $derived(shoe.scope?.readOnly ?? false)
   let isWorking = $derived(shoe.isWorking ?? false)
-  let project = $derived(shoe.identity.kind === 'project' ? shoe.identity.project : undefined)
+  // A project thread names its project, and a bound assistant task carries the
+  // checkout it works in, so the branch pill states a real branch in both cases
+  // from the same row.
+  let project = $derived(
+    shoe.identity.kind === 'project' ||
+      shoe.identity.kind === 'task' ||
+      shoe.identity.kind === 'assistant'
+      ? shoe.identity.project
+      : undefined
+  )
   /** Worker reporting is the one control the shoe states besides the identity. */
   let report = $derived(shoe.report)
 
@@ -466,7 +482,7 @@
         onclick={toggleMenu}
         oncontextmenu={(event: MouseEvent) => {
           event.preventDefault()
-          if (isWorking) return
+          if (isWorking || scopeReadOnly) return
           changeScopeOpen = true
         }}
         aria-disabled={isWorking}

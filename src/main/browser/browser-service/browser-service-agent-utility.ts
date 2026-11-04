@@ -72,6 +72,8 @@ export interface AgentUtilityHost {
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentTargetChanged: BrowserService['agentTargetChanged']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
+  readonly boxOfExistingTab: BrowserService['boxOfExistingTab']
+  readonly closeUnreferencedAgentTabs: BrowserService['closeUnreferencedAgentTabs']
   readonly captureScreenshot: BrowserService['captureScreenshot']
   readonly clickAgentTarget: BrowserService['clickAgentTarget']
   readonly conversationScope: BrowserService['conversationScope']
@@ -88,6 +90,8 @@ export interface AgentUtilityHost {
   readonly runAgentScript: BrowserService['runAgentScript']
   readonly stage: BrowserService['stage']
   readonly stateFor: BrowserService['stateFor']
+  readonly tabs: BrowserService['tabs']
+  readonly previousPageTarget: BrowserService['previousPageTarget']
   readonly threadBrowserHint: BrowserService['threadBrowserHint']
   readonly touchParkedTab: BrowserService['touchParkedTab']
   readonly uploadFiles: BrowserService['uploadFiles']
@@ -144,14 +148,26 @@ export class BrowserServiceAgentUtility {
     if (operation === 'open') {
       const url = validateBrowserUrl(this.host.requiredInputString(input, 'url'))
       const attention = validateAttention(input['attention'])
-      const tabId = `browser:agent:${crypto.randomUUID()}`
-      const tab = this.host.ensureTab(tabId, projectId, threadId)
+      // One agent tab per conversation. A research turn opens several pages, and
+      // minting a tab for each one left a renderer process behind every time:
+      // 154 processes and 7.8 GB in a five hour session. The tab this
+      // conversation already owns is navigated instead.
+      const existing = this.host.agentTabIds.get(contextKey) ?? null
+      const reused = existing !== null && this.host.tabs.has(existing)
+      const tabId = reused && existing ? existing : `browser:agent:${crypto.randomUUID()}`
+      const tab = this.host.ensureTab(tabId, projectId, threadId, this.host.boxOfExistingTab(tabId))
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
-      this.host.parkTab(tabId)
+      if (!reused) this.host.parkTab(tabId)
+      else if (this.host.activeTabId !== tabId && !this.host.stage.isParked(tab.view)) {
+        // The parked cap can drop a view off the stage window without freeing it,
+        // so a reused tab is mounted again before it navigates.
+        this.host.parkTab(tabId)
+      }
       this.host.load(tabId, url)
       this.host.agentTabIds.set(contextKey, tabId)
+      this.host.closeUnreferencedAgentTabs(contextKey)
       // An opportunistic reveal is skipped once the user has shown twice that
       // they leave agent-opened tabs straight away.
       const relaxed = attention === 'focus' && this.host.isRelaxed(threadId)
@@ -240,6 +256,7 @@ export class BrowserServiceAgentUtility {
       // Which page the answer came from, so the agent can tell a page it opened
       // apart from the page the user is reading.
       page: attached ? ('user' as const) : ('agent' as const),
+      ...this.movedPageHint(contextKey, tabId),
       ...this.host.threadBrowserHint(scope, tabId, contextKey)
     }
     if (operation === 'viewport') {
@@ -541,6 +558,30 @@ export class BrowserServiceAgentUtility {
         : {
             reason: 'the field did not keep the text it was given; check its type or its validation'
           })
+    }
+  }
+
+  /**
+   * Say so when the page moved between two calls.
+   *
+   * `page "strip"` is defined as whatever the strip shows now, so the user opening
+   * another tab legitimately moves it. The one thing that must never happen is a model
+   * typing into a different site without being told, which is why the tab this call did
+   * not want is named in its result instead of silently replacing the last one.
+   */
+  private movedPageHint(
+    contextKey: string,
+    answeredTabId: string
+  ): { pageMoved?: { fromTabId: string; fromUrl: string; detail: string } } {
+    const previous = this.host.previousPageTarget(contextKey)
+    if (!previous || previous.tabId === answeredTabId) return {}
+    return {
+      pageMoved: {
+        fromTabId: previous.tabId,
+        fromUrl: previous.url,
+        detail:
+          'The page this call worked on is not the one the previous call worked on, because page "strip" follows the tab the user is on. Read the page before acting again, or open a page of your own with "open" and use page "agent" to keep one across the user\u2019s tab switches.'
+      }
     }
   }
 

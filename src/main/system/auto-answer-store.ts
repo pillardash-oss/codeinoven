@@ -109,7 +109,8 @@ export class AutoAnswerStore {
     threadId: string
     /** Assistant task the gate ran for, when it settled on a run thread. */
     taskId?: string
-    /** Assistant owning the task, so the gate also surfaces on the assistant. */
+    /** Assistant that owned the task, recorded as provenance only: it never
+     *  widens where the gate surfaces beyond its own thread and task. */
     assistantId?: string
     entries: AutoAnswerEntry[]
     at?: number

@@ -143,6 +143,12 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
       const effective = staged ?? persistedSelection
       const hasActiveSelection =
         effective !== null && (effective.autopilot || effective.stages.length > 0)
+      // A source that hands over nothing (no switch on and no run ever started)
+      // carries no Engineering state to copy. Marking the destination anyway is
+      // what produced threads the rail read as Engineering while every switch
+      // sat off and the turn pipeline ran them as plain conversations, so a
+      // marker-only source ends here instead of propagating.
+      if (!hasActiveSelection && sourceLifecycle?.startedAt === undefined) return null
       // The switches travel as a fresh run; a parked source (every switch off)
       // also hands over its permanent started marker so the sibling's Toolbox
       // stays filled exactly as the source's does.

@@ -102,7 +102,7 @@ const PAGE_TARGET_FIELD = {
   type: 'string',
   enum: ['user', 'strip', 'agent'],
   description:
-    'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser resolved for you (it stays yours while the tab lives, even when the user or another conversation moves the browser elsewhere), "strip" for whatever that browser is showing right now. Defaults to your own page when you have one, and to page "user" otherwise.'
+    'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser resolved for you (it stays yours while the tab lives, even when the user or another conversation moves the browser elsewhere), "strip" for whatever that browser is showing right now. "strip" follows the user\u2019s own tab switches, so it can move between two calls and the result says so when it did; open a page of your own and use "agent" when the work must survive that. Defaults to your own page when you have one, and to page "user" otherwise.'
 }
 
 /** The element an action addresses, by the reference a snapshot reported. */

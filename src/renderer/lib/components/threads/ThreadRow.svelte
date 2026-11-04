@@ -83,6 +83,7 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import { dispatchBadgeFor } from './thread-dispatch-badge'
 
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
@@ -778,6 +779,9 @@
   )
 
   /** Title colour, shared by every row layout. */
+  /** The origin badge an orchestrated dispatch wears, above its title. */
+  let dispatchBadge = $derived(dispatchBadgeFor(thread))
+
   let titleClass = $derived(
     threadState === 'approval'
       ? 'font-medium text-warning'
@@ -1458,9 +1462,16 @@
         <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
         {@render threadStatusSlot(Boolean(projectIconUrl || projectIconGlyph))}
 
-        <!-- Title -->
-        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">
-          {displayTitle}
+        <!-- Title, with the origin badge above it for a dispatched thread. -->
+        <span class="flex min-w-0 flex-1 flex-col">
+          {#if dispatchBadge}
+            <span class="truncate text-xs text-muted" title={dispatchBadge.title}>
+              {dispatchBadge.label}
+            </span>
+          {/if}
+          <span class="min-w-0 truncate text-[0.75rem] {titleClass}">
+            {displayTitle}
+          </span>
         </span>
         {@render peekIndicator()}
 
@@ -1636,7 +1647,14 @@
            user, else the age. Pinning is not here: the row's context menu and
            the pin keymap already do it, so the line keeps no reserved space. -->
       <span class="flex w-full min-w-0 items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
+        <span class="flex min-w-0 flex-1 flex-col">
+          {#if dispatchBadge}
+            <span class="truncate text-xs text-muted" title={dispatchBadge.title}>
+              {dispatchBadge.label}
+            </span>
+          {/if}
+          <span class="min-w-0 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
+        </span>
         {@render peekIndicator()}
         {#if activeIndicators.length > 0}
           <!-- Every live action the thread has, not only the loudest one. A thread

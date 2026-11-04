@@ -7,6 +7,7 @@
   import Sheet from '#lib/components/Sheet.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
+  import { arrive } from '#lib/motion'
   import type { Message, Thread } from '#lib/api/types'
 
   /**
@@ -69,26 +70,37 @@
 
   /* ---- Reading ---- */
 
+  /**
+   * The transcript groups by calendar day in the reader's own timezone. Intl
+   * does that without building a Date per row and without mutating one, which is
+   * also what keeps the grouping pure enough to derive.
+   */
+  const dayKeyFormat = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  })
+  const shortDayFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+  const longDayFormat = new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })
+  const yearFormat = new Intl.DateTimeFormat(undefined, { year: 'numeric' })
+  const DAY_MS = 86_400_000
+
   function dayKey(epoch: number): string {
-    const date = new Date(epoch)
-    return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+    return dayKeyFormat.format(epoch)
   }
 
   /** A phone reads relative days, and names only what "today" cannot say. */
   function dayLabel(epoch: number, now: number): string {
     const key = dayKey(epoch)
     if (key === dayKey(now)) return 'Today'
-    const yesterday = new Date(now)
-    yesterday.setDate(yesterday.getDate() - 1)
-    if (key === dayKey(yesterday.getTime())) return 'Yesterday'
-    const date = new Date(epoch)
-    const sameYear = date.getFullYear() === new Date(now).getFullYear()
-    return date.toLocaleDateString(
-      undefined,
-      sameYear
-        ? { month: 'short', day: 'numeric' }
-        : { month: 'short', day: 'numeric', year: 'numeric' }
-    )
+    if (key === dayKey(now - DAY_MS)) return 'Yesterday'
+    return yearFormat.format(epoch) === yearFormat.format(now)
+      ? shortDayFormat.format(epoch)
+      : longDayFormat.format(epoch)
   }
 
   function buildRows(items: Message[], pending: QueuedTurn[]): Row[] {
@@ -209,11 +221,7 @@
 
   onMount(() => {
     void load()
-  })
-
-  // Teardown is the one thing an effect is right for here: a poll must not
-  // outlive the screen that started it.
-  $effect(() => {
+    // Teardown belongs to the screen: a poll must not outlive the thread it reads.
     return () => stopPoll()
   })
 </script>
@@ -265,16 +273,16 @@
     <div class="chat" {@attach attachChat}>
       {#each rows as row (row.key)}
         {#if row.kind === 'marker'}
-          <p class="marker">{row.label}</p>
+          <p class="marker" in:arrive>{row.label}</p>
         {:else if row.kind === 'queued'}
-          <div class="queued">
+          <div class="queued" in:arrive>
             <p class="turn-user">{row.turn.body}</p>
             <span class="chip">Queued</span>
           </div>
         {:else if row.message.role === 'user'}
-          <p class="turn-user">{row.message.body}</p>
+          <p class="turn-user" in:arrive>{row.message.body}</p>
         {:else}
-          <article class="turn">
+          <article class="turn" in:arrive>
             <div class="answer">
               {#each paragraphs(row.message.body) as paragraph, index (index)}
                 <p>{paragraph}</p>

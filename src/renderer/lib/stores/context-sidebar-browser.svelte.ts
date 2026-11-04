@@ -216,7 +216,12 @@ export class SidebarBrowserTabs {
    * no view for yet has to be mounted again from its address.
    */
   get activePage(): BrowserThreadBrowserPage | null {
-    const tabId = this.activeTabIdOrLast()
+    // The tab this strip is on, and nothing else. `activeTabIdOrLast` is a display
+    // convenience: falling back to the last tab in the list re-pointed an agent's page
+    // onto a different site whenever the remembered tab was not in this scope, which is
+    // how an agent ended up editing the wrong tab without anyone asking it to. With no
+    // remembered tab there is no page to report, which main can refuse cleanly.
+    const tabId = this.activeTabId
     if (!tabId) return null
     const tab = this.tabs.find((candidate) => candidate.id === tabId)
     if (!tab) return null

@@ -6,6 +6,8 @@
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { RunChangesState } from './run-changes-state.svelte'
+  import CitedEntryRow from './CitedEntryRow.svelte'
+  import type { CitedEntry } from '$shared/cited-work'
   import { fly, slide } from 'svelte/transition'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import HoverDiffPopover from '../files/HoverDiffPopover.svelte'
@@ -32,6 +34,15 @@
     onReview: () => void
     onUndo: () => Promise<void>
     onRedo: () => Promise<void>
+    /**
+     * The work the same turn cited, drawn as the card's own Report section.
+     *
+     * A turn that changed files and also produced a report left two surfaces
+     * floating under one answer. They are one turn's outcome, so they are one
+     * card: the diff rows say what moved, the report rows say what the turn left
+     * to read, and both actions sit on the right where a reader looks for them.
+     */
+    cited?: CitedEntry[]
   }
 
   let {
@@ -43,7 +54,8 @@
     onOpenFile,
     onReview,
     onUndo,
-    onRedo
+    onRedo,
+    cited = []
   }: Props = $props()
 
   // The head's fold owns the card's body visibility, so the two are one value.
@@ -75,6 +87,17 @@
   const hasLeadBlock = $derived(
     Boolean(checkpoint.failure) || (checkpoint.skippedFiles?.length ?? 0) > 0
   )
+  /** What the Report section holds, in the words the head uses when folded. */
+  const reportSummary = $derived.by(() => {
+    if (cited.length === 0) return ''
+    const files = cited.filter((entry) => entry.kind === 'file').length
+    const folders = cited.length - files
+    const parts: string[] = []
+    if (files > 0) parts.push(`${files} ${files === 1 ? 'file' : 'files'}`)
+    if (folders > 0) parts.push(`${folders} ${folders === 1 ? 'folder' : 'folders'}`)
+    return parts.join(', ')
+  })
+
   /** The state the card is honestly in, not a duration it does not track. */
   const chip = $derived(rolledBack ? { text: 'Undone', tone: 'paused' as const } : undefined)
   const title = $derived(
@@ -178,6 +201,11 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
             <span class="font-normal text-dimmed">partial count</span>
           {/if}
         </span>
+      {/snippet}
+      {#snippet actions()}
+        {#if folded && reportSummary}
+          <span class="shrink-0 text-[0.6875rem] text-dimmed">Report: {reportSummary}</span>
+        {/if}
       {/snippet}
       {#snippet controls()}
         {#if rolledBack}
@@ -362,6 +390,18 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
         {/if}
         {#if aggregation.error}
           <p class="px-3 py-2 text-xs text-muted" role="status">{aggregation.error}</p>
+        {/if}
+
+        {#if cited.length > 0}
+          <div
+            class="flex items-center gap-2 border-t border-border bg-elevated px-3 py-2 text-[0.625rem] tracking-[0.08em] text-dimmed uppercase"
+          >
+            Report
+            <span class="tracking-normal text-muted">{cited.length}</span>
+          </div>
+          {#each cited as entry (entry.path)}
+            <CitedEntryRow {entry} {projectId} {threadId} />
+          {/each}
         {/if}
       </div>
     {/if}

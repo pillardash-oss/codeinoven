@@ -487,11 +487,27 @@ export class DirectoryPreviewServer {
   /** Whether the platform watcher has delivered anything since it started. */
   private sawWatchEvent = false
   private readonly onChange: DirectoryPreviewChangeListener | undefined
+  /**
+   * The port this server asks the OS for, or null to let it pick one.
+   *
+   * A preview the app served before is asked for on the port it was served on,
+   * so a browser tab restored onto that origin still finds the design it was
+   * showing instead of a dead page. It is a preference and never a promise: an
+   * occupied port falls back to a fresh one, which is what keeps one design's
+   * record from taking another app's port.
+   */
+  private preferredPort: number | null
 
   /** @param directory the directory to serve; canonicalized on `start()`.
-   *  @param onChange notified once per batch of changes to the served tree. */
-  constructor(directory: string, onChange?: DirectoryPreviewChangeListener) {
+   *  @param onChange notified once per batch of changes to the served tree.
+   *  @param preferredPort a port to ask for first, or null to let the OS choose. */
+  constructor(
+    directory: string,
+    onChange?: DirectoryPreviewChangeListener,
+    preferredPort: number | null = null
+  ) {
     this.root = directory
+    this.preferredPort = preferredPort
     this.onChange = onChange
   }
 
@@ -528,15 +544,8 @@ export class DirectoryPreviewServer {
       })
       this.server = server
       try {
-        await new Promise<void>((resolveListening, rejectListening) => {
-          server.once('error', rejectListening)
-          server.listen(0, '127.0.0.1', resolveListening)
-        })
-        const address = server.address()
-        if (!address || typeof address === 'string') {
-          throw new Error('Directory preview port unavailable')
-        }
-        this.endpoint = { url: `http://127.0.0.1:${address.port}/`, port: address.port }
+        const port = await this.listen(server)
+        this.endpoint = { url: `http://127.0.0.1:${port}/`, port }
         this.startWatching()
         return this.endpoint
       } catch (error) {
@@ -551,6 +560,51 @@ export class DirectoryPreviewServer {
     } finally {
       if (this.starting === starting) this.starting = null
     }
+  }
+
+  /**
+   * Bind the loopback port this preview runs on, preferring the one it remembers.
+   *
+   * A remembered port that is no longer free (another app took it, or a second
+   * instance of this app is serving the same design) is not a failure: the
+   * preview falls back to any free port, which is what it would have used
+   * anyway. Only a port the OS refuses for the second time fails the start.
+   */
+  private async listen(server: Server): Promise<number> {
+    const preferred = this.preferredPort
+    if (preferred !== null) {
+      const bound = await this.bindTo(server, preferred).catch((error: unknown) => {
+        Logger.dev('The remembered preview port could not be reused', {
+          port: preferred,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        this.preferredPort = null
+        return null
+      })
+      if (bound !== null) return bound
+    }
+    return this.bindTo(server, 0)
+  }
+
+  private async bindTo(server: Server, port: number): Promise<number> {
+    return new Promise<number>((resolveListening, rejectListening) => {
+      const onError = (error: Error): void => {
+        server.removeListener('listening', onListening)
+        rejectListening(error)
+      }
+      const onListening = (): void => {
+        server.removeListener('error', onError)
+        const address = server.address()
+        if (!address || typeof address === 'string') {
+          rejectListening(new Error('Directory preview port unavailable'))
+          return
+        }
+        resolveListening(address.port)
+      }
+      server.once('error', onError)
+      server.once('listening', onListening)
+      server.listen(port, '127.0.0.1')
+    })
   }
 
   async dispose(): Promise<void> {

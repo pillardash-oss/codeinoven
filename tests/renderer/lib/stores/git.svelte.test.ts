@@ -25,7 +25,8 @@ const fixtureStatus: GitStatus = {
   untrackedChanges: 1,
   conflicted: [],
   ahead: 2,
-  behind: 1
+  behind: 1,
+  prResolveSession: null
 }
 
 function mockInvokeForRefresh(): void {

@@ -22,6 +22,7 @@ import { browserFindResultFor } from './browser-find'
 import type { BrowserService } from '../browser-service'
 import { consoleFrameUrl } from './browser-service-common'
 import { pageKeyFromInput } from './browser-service-keyboard'
+import { browserContextKey } from './browser-validation'
 import { liveContents, liveWindowContents } from './browser-view-contents'
 
 /**
@@ -752,6 +753,27 @@ export class BrowserServiceTabs {
   watchCaptureMainFrame(tabId: string, contents: WebContents): void {
     if (this.isViewSourceDocument(contents)) return
     this.host.capture.watch(tabId, contents.mainFrame)
+  }
+
+  /**
+   * Destroy every agent tab this conversation no longer owns.
+   *
+   * `open` used to mint a fresh `browser:agent:` tab per call and overwrite the
+   * map entry that named the previous one, so each call left a renderer process
+   * with nothing pointing at it and nothing able to close it. The reuse path
+   * stops the leak; this sweep clears what an earlier build left behind, and any
+   * agent tab a page opened that the conversation cannot reach.
+   */
+  closeUnreferencedAgentTabs(contextKey: string): number {
+    const owned = this.host.agentTabIds.get(contextKey) ?? null
+    const unreferenced: string[] = []
+    for (const [tabId, tab] of this.host.tabs) {
+      if (!tabId.startsWith('browser:agent:') || tabId === owned) continue
+      if (browserContextKey(tab.projectId, tab.threadId) !== contextKey) continue
+      unreferenced.push(tabId)
+    }
+    for (const tabId of unreferenced) this.destroy(tabId, 'closed')
+    return unreferenced.length
   }
 
   destroy(tabId: string, reason: BrowserTabDestroyReason): void {

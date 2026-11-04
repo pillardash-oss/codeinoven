@@ -138,6 +138,7 @@ function defaultConfig(): AppConfig {
     backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
     maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
     browserSearchEngine: 'duckduckgo',
+    llamaCppUnload: '30m',
     browserCustomSearchEngines: [],
     cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
     cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],

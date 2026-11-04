@@ -15,6 +15,7 @@ import {
   validateRepositoryDirectory
 } from './git-service-runtime'
 import { detectConflictState, mapStatus } from './git-service-status'
+import { readPrResolveSession } from '../pr-resolve-session'
 
 /**
  * The plumbing every git concern in this folder shares: the two per-project
@@ -119,7 +120,10 @@ export class GitServiceCore {
     return this.wrapError(directory, 'read', async () => {
       const status = await this.client(directory).status()
       const conflictState = await detectConflictState(this.client(directory), directory)
-      return mapStatus(directory, status, conflictState)
+      // A prepared PR resolution is recorded on disk, so the status carries it
+      // even after a reload or a restart. The renderer never has to remember it.
+      const prResolveSession = await readPrResolveSession(directory, status.current ?? null)
+      return mapStatus(directory, status, conflictState, prResolveSession)
     })
   }
 
