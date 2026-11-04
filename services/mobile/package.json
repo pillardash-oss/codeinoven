@@ -16,7 +16,8 @@
     "native:add:android": "cap add android",
     "native:sync": "bun run build && cap sync",
     "native:ios": "cap open ios",
-    "native:android": "cap open android"
+    "native:android": "cap open android",
+    "dev:android": "bash scripts/mobile-dev.sh"
   },
   "dependencies": {
     "@capacitor/app": "8.0.1",
