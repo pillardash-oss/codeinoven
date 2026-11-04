@@ -54,6 +54,13 @@ export interface BrowserContextMenuActions {
    * link, which the probe finds from the click point.
    */
   openPeekWindow?(url: string, media?: BrowserPeekMediaTarget | null): void
+  /**
+   * Open a link beside the page on screen, in the side panel.
+   *
+   * Only a surface that has a side panel supplies this, so a menu for a page
+   * with none contributes no row rather than a row that cannot work.
+   */
+  openLinkInSidePanel?(url: string): void
   /** Save a link's target through the download manager. */
   saveLinkAs(url: string): void
 
@@ -214,6 +221,14 @@ function buildLinkItems(
       })
     }
     items.push(...buildPeekItems(url, null, actions))
+    // Beside the peek, which is the other way to read a link without losing the
+    // page on screen.
+    if (actions.openLinkInSidePanel) {
+      items.push({
+        label: 'Open in Side Panel',
+        click: () => actions.openLinkInSidePanel?.(url)
+      })
+    }
   }
   if (params.linkText.trim()) {
     items.push({ label: 'Copy Link Text', click: () => actions.copyText(params.linkText) })
