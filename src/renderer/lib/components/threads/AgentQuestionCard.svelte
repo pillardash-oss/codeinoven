@@ -497,6 +497,7 @@
 <section
   out:slide={dismissSlide()}
   data-drop-region={question.fileRequest ? 'file-request-card' : undefined}
+  data-voice-trigger-root
   class={cardFrameClass(
     'replace',
     `question-card relative overflow-hidden ${draggingFiles ? 'border-primary' : ''}`

@@ -279,6 +279,7 @@
   out:slide={dismissSlide()}
   class={cardFrameClass('replace', 'overflow-hidden')}
   aria-label="Agent secret request"
+  data-voice-trigger-root
 >
   <!-- The card that takes the composer's place while the agent waits for a
      credential: what it needs, the field, and the two actions that end it. -->
