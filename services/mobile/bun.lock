@@ -10,7 +10,7 @@
         "@capacitor/core": "^8.6.0",
         "@capacitor/preferences": "^8.0.1",
         "@capacitor/status-bar": "^8.0.0",
-        "@pdslng/cio-icon": "^0.1.1",
+        "@pdslng/cio-icon": "^0.3.0",
         "bits-ui": "^2.20.3",
       },
       "devDependencies": {
@@ -82,7 +82,7 @@
 
     "@oxc-project/types": ["@oxc-project/types@0.156.0", "", {}, "sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw=="],
 
-    "@pdslng/cio-icon": ["@pdslng/cio-icon@0.1.1", "", { "peerDependencies": { "svelte": "^5.0.0" } }, "sha512-dFzDeXoog0A7zp8+iSsvJdh2a5wxu9H3KYlQ85ezcSZlEfyNXvG8nHoJV1QBf0IjUpGPfyG1SQbBzrek7I6NEw=="],
+    "@pdslng/cio-icon": ["@pdslng/cio-icon@0.3.0", "", { "peerDependencies": { "svelte": "^5.0.0" } }, "sha512-Dk8ON2CjGvFxisCg4g6KYy6iSR6OwlhnY0H22VI0Bsxs/cP8mMzIFMIsXC5pI2uLpmn/i9PKFDeMAFbt8Is8zQ=="],
 
     "@polka/url": ["@polka/url@1.0.0-next.29", "", {}, "sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww=="],
 
