@@ -551,7 +551,8 @@ class SpeechController {
   async start(
     target: SpeechEditorTarget,
     scope: SpeechScope,
-    preparedSnapshot?: SpeechEditorSnapshot | null
+    preparedSnapshot?: SpeechEditorSnapshot | null,
+    pressedAt?: number
   ): Promise<void> {
     if (this.active || !['idle', 'failed'].includes(this.state.state)) return
     // TTS and the recorder cannot run together; whoever started last wins.
@@ -597,7 +598,7 @@ class SpeechController {
         this.surfaceFailure(target.id, 'permission', new DOMException(message, 'NotAllowedError'))
         return
       }
-      const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(
+      const nativeStarted = await invoke('speech:beginNativeCapture', scope, pressedAt).catch(
         (cause: unknown) => {
           // Falling back to the browser recorder is expected on a device without
           // the native worker, but a failure with the worker present is the real
@@ -1214,6 +1215,28 @@ class SpeechController {
   resetFailure(targetId: string): void {
     if (this.state.state === 'failed' && this.state.targetId === targetId)
       this.state = { state: 'idle' }
+  }
+
+  /**
+   * Open the microphone ahead of the press.
+   *
+   * Called the moment the pointer is over a mic. Opening CoreAudio's input
+   * device takes 150-800 ms, so a press that opened it lost everything said in
+   * that window, which is exactly the first few words of a dictation. With the
+   * device already open the press only opens the take's file, and the audio the
+   * microphone buffered from the press onwards is kept.
+   */
+  armCapture(): void {
+    if (this.active || !['idle', 'failed'].includes(this.state.state)) return
+    void invoke('speech:armNativeCapture').catch((cause: unknown) => {
+      logRendererError('Could not open the microphone ahead of the press.', cause)
+    })
+  }
+
+  /** Release a microphone that was armed but never pressed. */
+  disarmCapture(): void {
+    if (this.active || this.state.state === 'starting') return
+    void invoke('speech:disarmNativeCapture').catch(() => undefined)
   }
 
   observeSent(targetId: string, sentText: string): void {

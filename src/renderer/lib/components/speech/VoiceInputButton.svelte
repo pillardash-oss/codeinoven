@@ -243,6 +243,13 @@
    */
   let pendingRestart: ReturnType<typeof setTimeout> | null = null
   let lastClickAt = 0
+  /**
+   * When the user pressed this mic, on the wall clock the worker also reads.
+   * The recorder buffers audio while the pointer is over the button and keeps
+   * only what was captured from this instant onwards, so a take starts at the
+   * press rather than after the microphone finished opening.
+   */
+  let pressedAt: number | null = null
 
   function clearPendingRestart(): void {
     if (pendingRestart) clearTimeout(pendingRestart)
@@ -331,8 +338,12 @@
 
   function prepareTarget(): void {
     if (disabled || action !== 'start') return
+    pressedAt = Date.now()
     preparedTarget = getTarget()
     preparedSnapshot = preparedTarget?.capture() ?? null
+    // Open the microphone in the same gesture, so a slow CoreAudio start is
+    // already paid for when the click lands.
+    speechController.armCapture()
   }
 
   async function openBlockedRecordingThread(): Promise<void> {
@@ -394,10 +405,12 @@
     }
     const target = preparedTarget ?? getTarget()
     const snapshot = preparedSnapshot ?? target?.capture()
+    const pressedInstant = pressedAt ?? Date.now()
     preparedTarget = null
     preparedSnapshot = null
+    pressedAt = null
     if (!target) return
-    await speechController.start(target, scope, snapshot)
+    await speechController.start(target, scope, snapshot, pressedInstant)
   }
 
   // Expose this mic input to the global voice shortcut so double-press Left Alt
@@ -434,6 +447,18 @@
       // target still captures its value and caret before the click is handled.
       event.preventDefault()
       prepareTarget()
+    }}
+    onpointerenter={() => {
+      // Hovering the mic opens it early. Nothing is kept from before the press:
+      // the recorder only hands over the audio it captured after `pressedAt`.
+      if (!disabled && action === 'start') speechController.armCapture()
+    }}
+    onpointerleave={() => {
+      // The pointer is gone and no take is starting: release the microphone.
+      // A take that is already recording keeps its own microphone, and the
+      // controller refuses the release in that case.
+      pressedAt = null
+      speechController.disarmCapture()
     }}
     onkeydown={(event) => {
       if (event.key === 'Enter' || event.key === ' ') prepareTarget()

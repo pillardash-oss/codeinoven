@@ -7,8 +7,10 @@ import { Logger } from '../system/logger'
 
 interface NativeCaptureRequest {
   id: string
-  operation: 'start' | 'stop' | 'prepare'
+  operation: 'start' | 'stop' | 'prepare' | 'ping' | 'arm' | 'disarm'
   outputPath?: string
+  /** The instant the user pressed record, in epoch milliseconds. */
+  since?: number
 }
 
 interface NativeCaptureResponse {
@@ -99,7 +101,43 @@ export class NativeSpeechCapture {
     await this.request({ id: randomUUID(), operation: 'prepare' }).catch(() => undefined)
   }
 
-  async start(sessionId: string, outputPath: string): Promise<void> {
+  /**
+   * Spawn the worker ahead of any recording, without touching the microphone.
+   *
+   * Merely starting the process is what the first press used to pay: Swift
+   * runtime and dyld cost up to a second, and everything said during it was
+   * gone. This runs at launch and never opens CoreAudio, so it cannot show a
+   * permission prompt.
+   */
+  async ping(): Promise<void> {
+    if (!(await this.available())) return
+    await this.request({ id: randomUUID(), operation: 'ping' }).catch(() => undefined)
+  }
+
+  /**
+   * Open the microphone ahead of the press and buffer what it hears.
+   *
+   * Opening CoreAudio's input device costs 150-800 ms, so a press that opened
+   * it lost the first words every time. The renderer arms the recorder as soon
+   * as the pointer is over the mic, and pressing only has to open the file and
+   * hand the buffered opening over.
+   */
+  async arm(): Promise<void> {
+    if (this.currentSessionId) return
+    if (!(await this.available())) return
+    await this.request({ id: randomUUID(), operation: 'arm' }).catch((error: unknown) => {
+      Logger.dev('Native speech capture could not arm the microphone:', error)
+    })
+  }
+
+  /** Release an armed microphone the user never pressed. */
+  async disarm(): Promise<void> {
+    if (this.currentSessionId) return
+    if (!this.process) return
+    await this.request({ id: randomUUID(), operation: 'disarm' }).catch(() => undefined)
+  }
+
+  async start(sessionId: string, outputPath: string, pressedAt?: number): Promise<void> {
     if (!(await this.available())) throw new Error('Native microphone recording is unavailable.')
     // A claim that was never released (a renderer reload, a lost stop) must not
     // fail every later attempt with "a native recording is already active" and
@@ -113,7 +151,8 @@ export class NativeSpeechCapture {
       await this.request({
         id: randomUUID(),
         operation: 'start',
-        outputPath
+        outputPath,
+        ...(pressedAt !== undefined ? { since: pressedAt } : {})
       })
     } catch (error) {
       // A failed or unresponsive start leaves a worker whose engine may be

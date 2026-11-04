@@ -247,6 +247,13 @@ export class SpeechService {
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
     await this.loadInstalledIndex()
+    // Spawn the capture worker now, without touching the microphone. The first
+    // press used to pay process launch (Swift runtime and dyld, up to a second)
+    // and everything said during it was lost. Spawning opens no audio device, so
+    // this is safe on a fresh install where no microphone decision exists yet.
+    void this.nativeCapture.ping().catch((error) => {
+      Logger.dev('Native speech capture could not be started ahead of time:', error)
+    })
     // Warm the native capture worker so the first recording after a launch does
     // not pay process and audio-unit init. The warmup opens CoreAudio's input
     // path, which is exactly what makes macOS show its microphone prompt, so it
@@ -392,7 +399,34 @@ export class SpeechService {
     return value
   }
 
-  async beginNativeCapture(scope: SpeechScope): Promise<SpeechCaptureSessionInfo> {
+  /**
+   * Open the microphone before the user presses record.
+   *
+   * The mic surface arms this as soon as the pointer is over it, so the device
+   * open (150-800 ms) has already happened when the press arrives and the take
+   * starts with the press instead of a second later. It never runs before a
+   * microphone decision exists, because opening the input device is what makes
+   * macOS ask for permission.
+   */
+  async armNativeCapture(): Promise<void> {
+    if (this.openCaptures.size > 0) return
+    if (!microphoneAccessGranted()) return
+    // Opening the input device from a second process can make a sibling's live
+    // capture renegotiate, so an armed mic never fights another instance's take.
+    if (await this.storage.anotherInstanceIsRecording()) return
+    await this.nativeCapture.arm()
+  }
+
+  /** Release an armed microphone that was never pressed. */
+  async disarmNativeCapture(): Promise<void> {
+    if (this.openCaptures.size > 0) return
+    await this.nativeCapture.disarm()
+  }
+
+  async beginNativeCapture(
+    scope: SpeechScope,
+    pressedAt?: number
+  ): Promise<SpeechCaptureSessionInfo> {
     if (!(await this.nativeCapture.available())) {
       throw new Error('Native microphone recording is unavailable on this device.')
     }
@@ -403,7 +437,11 @@ export class SpeechService {
     if (!access.granted) throw new Error(access.message ?? 'Microphone access is unavailable.')
     const started = await this.storage.beginNativeCapture(scope)
     try {
-      await this.nativeCapture.start(started.sessionId, started.stagingPath)
+      // `pressedAt` is the instant of the gesture, not of this line: the take
+      // keeps the buffered audio the armed microphone captured from the press
+      // onwards, and drops what it heard while the pointer was merely over the
+      // button.
+      await this.nativeCapture.start(started.sessionId, started.stagingPath, pressedAt)
     } catch (cause) {
       await this.storage.failCapture(
         started.sessionId,
