@@ -122,7 +122,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
+      'Open an http(s) URL in a browser tab owned by this project and thread, inside the box (cookie jar) this conversation\u2019s thread browser is using, so a session the user signed in there is the one the page runs in. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
     inputSchema: {
       type: 'object',
       properties: {

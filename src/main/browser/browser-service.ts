@@ -1679,6 +1679,10 @@ export class BrowserService {
     return this.conversationPagesUnit.utilityTarget(input)
   }
 
+  conversationBoxFor(scope: string): string | null {
+    return this.conversationPagesUnit.conversationBoxFor(scope)
+  }
+
   previousPageTarget(contextKey: string): { tabId: string; url: string } | null {
     return this.conversationPagesUnit.previousPageTarget(contextKey)
   }

@@ -177,6 +177,18 @@ export class BrowserServiceConversationPages {
   }
 
   /**
+   * The box (cookie jar) one conversation's browser is using, when it has a page.
+   *
+   * A tab's jar is fixed when it is created, so this is what a page the agent opens
+   * has to use: the user may have moved this conversation onto the personal box to
+   * bring a signed-in session into it, and a page opened into the conversation's own
+   * empty jar would see none of that session.
+   */
+  conversationBoxFor(scope: string): string | null {
+    return this.threadBrowserPage(scope)?.boxId ?? null
+  }
+
+  /**
    * The page one conversation's thread browser is in use on, when it is live.
    *
    * Used for what an answer advertises rather than for what it does, so it never
