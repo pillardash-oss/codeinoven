@@ -182,7 +182,7 @@
   }
   $effect(synchronizePageFrame)
 
-  let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
+  let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect, surface))
   /**
    * Whether this row is watching a picture the reader can see.
    *
@@ -490,7 +490,7 @@
     // Ask the store directly instead of reading the template's `panelVisible`
     // derived: this also runs from ResizeObserver/rAF continuations, after the
     // effect that owns a component derived may have been torn down.
-    if (!browserVisibility.isVisible(tabId, bounds)) return
+    if (!browserVisibility.isVisible(tabId, bounds, surface)) return
     if (!bounds) return
     // A tab showing the error card has no page to place. The attachment is not
     // applied on that edge, but the resize observer and the sidebar's entry
@@ -520,7 +520,7 @@
       // it. Re-asking the store keeps the decision authoritative at the moment
       // the attach lands. A redundant hide is a no-op in the main process when
       // this tab is not the one attached.
-      if (!browserVisibility.isVisible(tabId, contentBounds())) {
+      if (!browserVisibility.isVisible(tabId, contentBounds(), surface)) {
         browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
       }
     } catch {
@@ -652,6 +652,11 @@
     // Claim the native view for this tab while this panel is mounted. The claim
     // is released with the component, so a destroyed panel can never keep the view.
     const releaseBrowserClaim = browserVisibility.claimTab(tabId, surface)
+    // A placement that ran before this claim was refused by the gate, so the claim
+    // itself asks for the page to be placed again. Without this the page waited for
+    // the next resize, and a tab switched to in the full screen browser kept the
+    // rectangle the sidebar had given it.
+    void tick().then(() => showAtCurrentBounds().catch(() => {}))
     // Downloads outlive the run that started them, so the project's records are
     // read back when the panel appears: the badge and the menu are how a download
     // the app stopped on its way out becomes visible again rather than silent.

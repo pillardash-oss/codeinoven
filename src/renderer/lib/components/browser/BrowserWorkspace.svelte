@@ -72,7 +72,7 @@
     return () => browserVisibility.clearPageFrame(nativeFrameKey)
   })
 
-  let pageVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
+  let pageVisible = $derived(browserVisibility.isVisible(tabId, contentRect, surface))
 
   /** Whether the page may actually be attached: the store's decision, held back
    *  while the surface around the frame is still arriving. The distinction matters
@@ -128,7 +128,7 @@
     if (loadError || isBlank) return
     // Ask the store directly instead of reading the template's `pageVisible`
     // derived: this also runs from ResizeObserver and attachment continuations.
-    if (holdPage || !browserVisibility.isVisible(tabId, bounds)) return
+    if (holdPage || !browserVisibility.isVisible(tabId, bounds, surface)) return
     try {
       await invoke(
         'browser:show',
@@ -146,7 +146,7 @@
       // surface may start holding the page off screen (a peek's flight). Only one
       // native view can exist at a time, so a stale attach would leave the page on
       // screen on top of the surface that now owns it.
-      if (holdPage || !browserVisibility.isVisible(tabId, contentBounds())) {
+      if (holdPage || !browserVisibility.isVisible(tabId, contentBounds(), surface)) {
         browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
       }
     } catch {
@@ -228,6 +228,9 @@
     // keep the view. Publishing it also flips `pageVisible`, which is what
     // attaches the page on the first paint.
     const releaseClaim = browserVisibility.claimTab(tabId, surface)
+    // The first placement can be refused while no claim exists yet; the claim is
+    // therefore also a request to place the page, not only a permission for it.
+    void tick().then(() => showAtCurrentBounds().catch(() => {}))
     let destroyed = false
     const observer = new ResizeObserver(() => {
       if (!destroyed) void showAtCurrentBounds().catch(() => {})
