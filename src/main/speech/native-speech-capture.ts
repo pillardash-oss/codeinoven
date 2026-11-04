@@ -16,6 +16,18 @@ import { resolveFfmpegPath } from './ffmpeg-path'
 const CAPTURE_RESUME_LIMIT = 3
 /** Delay before re-opening the microphone into a continuation segment. */
 const CAPTURE_RESUME_DELAY_MS = 150
+/**
+ * How often a live take asks its recorder for a sign of life, and how long that
+ * answer may take.
+ *
+ * A recorder process that hangs instead of dying writes nothing and exits never,
+ * so the take would keep running with no audio and only find out at the stop. A
+ * bounded ping turns that into a resume: the take continues in a new segment and
+ * the merged file keeps everything written before the hang.
+ */
+const CAPTURE_HEALTH_INTERVAL_MS = 4_000
+const CAPTURE_HEALTH_TIMEOUT_MS = 2_000
+const CAPTURE_HEALTH_FAILURE_LIMIT = 2
 
 interface NativeCaptureRequest {
   id: string
@@ -145,6 +157,9 @@ export class NativeSpeechCapture {
   private resumeTimer: ReturnType<typeof setTimeout> | null = null
   /** Set when this take lost its recorder and continued in another segment. */
   private recovered = false
+  /** Periodic proof that the live take's recorder is still answering. */
+  private healthTimer: ReturnType<typeof setInterval> | null = null
+  private healthFailures = 0
 
   constructor(private readonly executablePath: string) {}
 
@@ -239,10 +254,12 @@ export class NativeSpeechCapture {
       throw error
     }
     this.currentSessionId = sessionId
+    this.startTakeWatchdog(sessionId)
   }
 
   async stop(sessionId: string): Promise<NativeCaptureReport> {
     const empty: NativeCaptureReport = { framesWritten: null, engineRestarts: 0, warning: null }
+    this.stopTakeWatchdog()
     if (this.currentSessionId !== sessionId) return empty
     this.clearResumeTimer()
     // A resume that never came back leaves the take in its last written segment.
@@ -311,6 +328,7 @@ export class NativeSpeechCapture {
 
   async dispose(): Promise<void> {
     this.clearResumeTimer()
+    this.stopTakeWatchdog()
     if (this.currentSessionId) {
       await this.request({ id: randomUUID(), operation: 'stop' }).catch(() => undefined)
       this.currentSessionId = null
@@ -380,6 +398,7 @@ export class NativeSpeechCapture {
     this.buffered = ''
     this.currentSessionId = null
     this.clearResumeTimer()
+    this.stopTakeWatchdog()
     this.failPending(reason)
     if (!child || child.killed) return
     // The worker ignores a polite signal while a take is live, because that is
@@ -437,6 +456,58 @@ export class NativeSpeechCapture {
   }
 
   /**
+   * Ask the live take's recorder for a sign of life.
+   *
+   * A recorder that hangs keeps the renderer's recording going while writing no
+   * audio, which is exactly the failure this class exists to make loud. Two
+   * unanswered checks kill the wedged process, which lets the exit handler resume
+   * the take into a continuation segment.
+   */
+  private startTakeWatchdog(sessionId: string): void {
+    this.stopTakeWatchdog()
+    this.healthFailures = 0
+    this.healthTimer = setInterval(() => {
+      void this.checkTakeHealth(sessionId)
+    }, CAPTURE_HEALTH_INTERVAL_MS)
+    this.healthTimer.unref?.()
+  }
+
+  private stopTakeWatchdog(): void {
+    if (this.healthTimer) clearInterval(this.healthTimer)
+    this.healthTimer = null
+    this.healthFailures = 0
+  }
+
+  private async checkTakeHealth(sessionId: string): Promise<void> {
+    if (this.currentSessionId !== sessionId) {
+      this.stopTakeWatchdog()
+      return
+    }
+    if (this.lostSession) return
+    try {
+      await this.request({ id: randomUUID(), operation: 'ping' }, CAPTURE_HEALTH_TIMEOUT_MS)
+      this.healthFailures = 0
+    } catch (cause) {
+      if (this.currentSessionId !== sessionId) return
+      this.healthFailures += 1
+      Logger.dev('Native speech capture did not answer its health check', {
+        sessionId,
+        failures: this.healthFailures,
+        detail: cause instanceof Error ? cause.message : String(cause)
+      })
+      if (this.healthFailures < CAPTURE_HEALTH_FAILURE_LIMIT) return
+      this.stopTakeWatchdog()
+      Logger.error('Native microphone recorder stopped responding; resuming the take', {
+        sessionId
+      })
+      // The exit handler marks the take as lost and schedules the resume into a
+      // continuation segment, so killing is the whole recovery here.
+      if (this.process) this.process.kill('SIGKILL')
+      else this.scheduleResume(sessionId)
+    }
+  }
+
+  /**
    * Fold a take's continuation segments back into the file the take started in.
    *
    * Every segment is the same LPCM format, so the bundled decoder concatenates
@@ -487,13 +558,16 @@ export class NativeSpeechCapture {
     }
   }
 
-  private request(request: NativeCaptureRequest): Promise<NativeCaptureResponse> {
+  private request(
+    request: NativeCaptureRequest,
+    timeoutMs = 10_000
+  ): Promise<NativeCaptureResponse> {
     const child = this.ensureProcess()
     return new Promise<NativeCaptureResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(request.id)
         reject(new Error('Native microphone recorder did not respond.'))
-      }, 10_000)
+      }, timeoutMs)
       this.pending.set(request.id, { resolve, reject, timeout })
       child.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
         if (!error) return
