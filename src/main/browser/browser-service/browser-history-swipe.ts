@@ -17,20 +17,39 @@ const NAVIGATION_COOLDOWN_MS = 800
  * Runs wholly in the page renderer's isolated world, with no app API exposed.
  *
  * Only a trackpad swipe walks history. A mouse wheel, and above all the tilt
- * wheel on a Logitech M720, is told apart from that swipe by its per-event
- * shape: detent-sized jumps that wait out a detent's gap are a wheel turning,
- * and their horizontal travel stays the page's own panning.
+ * wheel on a Logitech M720, must keep panning the page instead.
+ *
+ * A wheel and a trackpad cannot be told apart by the shape of a single event:
+ * Logitech's smooth scrolling turns one detent into a stream of small variable
+ * deltas that looks exactly like a fine trackpad scroll, which is why a
+ * shape-only guess walked history on every tilt. macOS does report one fact
+ * that no wheel can produce, the inertia of a scroll whose fingers have lifted,
+ * and Blink exposes it as `WheelEvent.momentum`. On macOS that inertia is the
+ * only proof accepted here: a gesture may accumulate travel while the fingers
+ * are down, but it becomes a history swipe only once the same gesture reports
+ * momentum. Windows and Linux have no momentum phase at all, so there a
+ * tick-based wheel is recognised by its detents instead.
+ *
+ * The platform is passed in rather than sniffed: main already knows it, and a
+ * page this script runs in cannot be trusted to describe itself.
  */
-function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
+function waitForHistorySwipe(cooldownUntil: number, platform: string): Promise<HistoryDirection> {
   const host = window as Window & {
     __cioHistorySwipe?: (until: number) => Promise<HistoryDirection>
   }
   if (host.__cioHistorySwipe) return host.__cioHistorySwipe(cooldownUntil)
 
-  const threshold = 180
+  /** Horizontal travel that makes a gesture a swipe rather than a wobble. */
+  const threshold = 140
   const idleMs = 280
-  const maximumDurationMs = 1400
-  const horizontalRatio = 3
+  const maximumDurationMs = 1800
+  /** A swipe is horizontal; a page panning vertically is never taken for one. */
+  const horizontalRatio = 2
+  /**
+   * macOS is the platform whose scroll events carry the inertia that proves a
+   * trackpad. Everywhere else the shape of a tick-based wheel is the evidence.
+   */
+  const inertiaProvesTrackpad = platform === 'darwin'
   /** One detent of a mouse wheel, reported as a single jump of this size or more. */
   const wheelDetentPixels = 28
   /** How far apart two detents of the same wheel turn can arrive. */
@@ -99,7 +118,7 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
 
   window.addEventListener(
     'wheel',
-    (event: WheelEvent) => {
+    (event: WheelEvent & { momentum?: boolean }) => {
       if (!event.isTrusted) return
       const path = event.composedPath()
       // Let the site's handlers finish first, including handlers registered
@@ -115,13 +134,11 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
           blocked = pageOwnsGesture(path, event.deltaX)
         }
         wheelEvents += 1
-        // A wheel, including the tilt wheel of a Logitech M720, reports either one
-        // large jump per detent or a steady repeat of the same step, and its
-        // detents cannot repeat faster than the wheel is physically turned. A
-        // trackpad instead reports varied steps of a few pixels, packed far
-        // closer together than that. A step of either wheel shape that also waits
-        // out a detent's gap is therefore a wheel, whose horizontal travel belongs
-        // to the page's own panning rather than to history.
+        // Wheel identity, only used where the platform has no momentum phase.
+        // A wheel reports either one large jump per detent or a steady repeat of
+        // the same step, and its detents cannot repeat faster than the wheel is
+        // physically turned. A trackpad instead reports varied steps of a few
+        // pixels, packed far closer together than that.
         const magnitude = Math.abs(event.deltaX)
         const detentStep = magnitude >= 1 && magnitude === lastMagnitude
         lastMagnitude = magnitude
@@ -141,11 +158,15 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
         ) {
           blocked = true
         }
-        if (blocked || completed || now < notBefore || now - startedAt > maximumDurationMs) return
+        if (blocked || completed || now < notBefore) return
+        if (now - startedAt > maximumDurationMs) {
+          blocked = true
+          return
+        }
         // The gesture is a wheel turning, already recognised by two detents. It
         // keeps that identity until the wheel goes idle, so a long tilt can never
         // accumulate its way into a history navigation.
-        if (wheelDetents >= wheelDetentsBeforeWheel) {
+        if (!inertiaProvesTrackpad && wheelDetents >= wheelDetentsBeforeWheel) {
           blocked = true
           return
         }
@@ -161,12 +182,16 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
           blocked = true
           return
         }
-        if (Math.abs(horizontal) < threshold || Math.abs(horizontal) < vertical * horizontalRatio)
-          return
+        // On macOS nothing resolves while the fingers are still on the trackpad:
+        // a wheel tilting sideways is one continuous non-inertial stream too, and
+        // the inertia of a lifted scroll is the one thing it can never send.
+        if (inertiaProvesTrackpad && event.momentum !== true) return
+        if (Math.abs(horizontal) < threshold) return
+        if (Math.abs(horizontal) < vertical * horizontalRatio) return
         // A wheel covers this distance in a few jumps while a swipe spends a dozen
         // or more frames on it, so a threshold reached by a handful of events is
         // the last guard against a smooth-scrolling wheel counting as a swipe.
-        if (wheelEvents < minimumSwipeEvents) {
+        if (!inertiaProvesTrackpad && wheelEvents < minimumSwipeEvents) {
           blocked = true
           return
         }
@@ -190,8 +215,17 @@ function waitForHistorySwipe(cooldownUntil: number): Promise<HistoryDirection> {
   return host.__cioHistorySwipe(cooldownUntil)
 }
 
-/** Install on every main-frame document, for global and conversation tabs alike. */
-export function installBrowserHistorySwipe(contents: WebContents): void {
+/**
+ * Install on every main-frame document, for global and conversation tabs alike.
+ *
+ * The platform is a parameter rather than a read of `process.platform` on the
+ * spot so the one decision that depends on it, whether a scroll can prove a
+ * trackpad, is stated at the call and testable without faking the host.
+ */
+export function installBrowserHistorySwipe(
+  contents: WebContents,
+  platform: NodeJS.Platform = process.platform
+): void {
   if (contents.isDestroyed()) return
   const previous = documents.get(contents)
   const state: SwipeDocument = {
@@ -201,7 +235,7 @@ export function installBrowserHistorySwipe(contents: WebContents): void {
 
   const arm = (): void => {
     if (contents.isDestroyed() || documents.get(contents) !== state) return
-    const code = `(${waitForHistorySwipe.toString()})(${state.cooldownUntil})`
+    const code = `(${waitForHistorySwipe.toString()})(${state.cooldownUntil}, ${JSON.stringify(platform)})`
     void contents
       .executeJavaScriptInIsolatedWorld(SWIPE_WORLD_ID, [{ code }])
       .then((direction: unknown) => {
