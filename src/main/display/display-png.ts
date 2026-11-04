@@ -1,6 +1,7 @@
 /// <reference types="electron-vite/node" />
 import type { Worker } from 'node:worker_threads'
 import createPngWorker from './display-png-worker.ts?nodeWorker'
+import { trackQuitWorker } from '../system/quit-worker-sweep'
 import type { PngEncodeMessage, PngEncodeReply } from './display-png-worker'
 
 /**
@@ -51,7 +52,7 @@ class PngEncoderPool {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker
-    const worker = createPngWorker({ name: 'codeinoven-display-png' })
+    const worker = trackQuitWorker(createPngWorker({ name: 'codeinoven-display-png' }))
     worker.on('message', (reply: PngEncodeReply) => this.settle(reply))
     // A worker that dies takes its answers with it: fail them now rather than
     // leaving a session waiting on a frame that can never arrive.

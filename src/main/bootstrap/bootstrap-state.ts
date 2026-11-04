@@ -71,6 +71,11 @@ export interface BootstrapState {
   /** Workspace startup failed; the independent recovery/update surface owns quit. */
   startupRecovery: boolean
   startupServicesFailed: boolean
+  /**
+   * The shutdown pipeline handed the process to Electron's teardown, so the
+   * watchdog covering that phase now owns the exit and nothing may disarm it.
+   */
+  quitTeardownStarted: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
 
   // Renderer readiness and startup milestones.
@@ -185,6 +190,7 @@ export function createBootstrapState(): BootstrapState {
     quitForUpdate: false,
     startupRecovery: false,
     startupServicesFailed: false,
+    quitTeardownStarted: false,
     shutdownFailsafe: null,
     rendererReadyReported: false,
     packagedSmokeProofStarted: false,

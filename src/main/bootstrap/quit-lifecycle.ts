@@ -9,6 +9,7 @@
 
 import { app, session } from 'electron'
 import type { BrowserWindow } from 'electron'
+import { Worker } from 'node:worker_threads'
 import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import { getActiveThreadProjects } from '../database/active-thread-report'
 import type { Database } from '../database/database'
@@ -21,6 +22,11 @@ import type { CleanShutdownStore } from '../system/clean-shutdown-store'
 export interface QuitLifecycleState {
   quitCleanupStarted: boolean
   quitConfirmed: boolean
+  /**
+   * The shutdown pipeline has finished and handed the process to Electron's own
+   * teardown. From here nothing may cancel the watchdog that covers it.
+   */
+  quitTeardownStarted: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
   /** The process-wide download owner, or null when no window ever attached the
    *  browser. Read for the close prompt's downloads section. */
@@ -53,16 +59,96 @@ export function flushSessionStorage(): void {
  * repeated close attempts.
  */
 export function armQuitFailsafe(state: QuitLifecycleState): void {
-  disarmQuitFailsafe(state)
+  // A teardown watchdog already owns the exit: it was armed later, covers more
+  // of the lifecycle, and must never be replaced by this shorter one.
+  if (state.quitTeardownStarted) return
+  clearQuitFailsafeTimer(state)
   state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Quit failsafe fired   forcing exit')
-    flushSessionStorage()
     // The user asked to close and the pipeline could not finish in time: that is
     // still a deliberate exit, so leave the marker before the forced one, or the
     // next launch would report every in-flight turn as a harness crash.
-    state.cleanShutdownStore?.recordSync()
-    app.exit(0)
+    exitOnPurpose(state)
   }, 15_000)
+}
+
+/**
+ * Deadline for the teardown that follows the shutdown pipeline.
+ *
+ * Every disposal step has already run when this is armed, so all that is left is
+ * Electron's own termination, which is immediate when it is healthy. A teardown
+ * still running after ten seconds is not going to finish, and the report that
+ * prompted this guard showed exactly that: the pipeline completed at 12:24:56
+ * and the main thread never ran again, parked in the run loop with no CPU use.
+ */
+export const TEARDOWN_GRACE_MS = 10_000
+
+/**
+ * How much longer the out-of-process killer waits than the main-thread timer.
+ *
+ * The timer is the graceful path, and it needs the main thread to run. The stall
+ * this guard exists for is inside Node's own environment teardown, where no
+ * timer on that thread can fire at all, so the last resort kills this instance
+ * from a worker that does not share the wedged thread.
+ */
+const TEARDOWN_KILL_SLACK_MS = 1_000
+
+/**
+ * Guard Electron's process teardown, the one phase the quit pipeline cannot see.
+ *
+ * `runShutdownPipeline` ends by calling `app.quit()`, and everything after that
+ * point runs inside Electron and Node: window and renderer destruction, session
+ * flushing, and finally `Environment::RunCleanup`. A handle that never closes
+ * there parks the main thread forever, and no JavaScript remains to recover. So
+ * this arms the same deliberate exit the earlier phases use, plus a killer that
+ * survives a main thread no timer can reach.
+ *
+ * Called once, from the end of the shutdown pipeline, and never disarmed: only
+ * the process exiting ends it.
+ */
+export function armTeardownWatchdog(state: QuitLifecycleState): void {
+  if (state.quitTeardownStarted) return
+  state.quitTeardownStarted = true
+  clearQuitFailsafeTimer(state)
+  state.shutdownFailsafe = setTimeout(() => {
+    Logger.error('Process teardown did not finish in time   forcing exit')
+    exitOnPurpose(state)
+  }, TEARDOWN_GRACE_MS)
+  try {
+    const watchdog = new Worker(
+      `const { workerData } = require('node:worker_threads')
+       setTimeout(() => process.kill(workerData.pid, 'SIGKILL'), workerData.deadline)`,
+      {
+        eval: true,
+        workerData: {
+          pid: process.pid,
+          deadline: TEARDOWN_GRACE_MS + TEARDOWN_KILL_SLACK_MS
+        }
+      }
+    )
+    watchdog.on('error', (error) => Logger.error('Teardown watchdog failed', error))
+    // Never keep the process alive for a watchdog: a clean exit takes it along.
+    watchdog.unref()
+  } catch (error) {
+    Logger.error('Could not start the teardown watchdog', error)
+  }
+}
+
+/** Leave the proof of a deliberate exit, then terminate the process. */
+function exitOnPurpose(state: QuitLifecycleState): void {
+  flushSessionStorage()
+  try {
+    state.cleanShutdownStore?.recordSync()
+  } catch (error) {
+    Logger.error('Clean-shutdown marker write failed during a forced exit:', error)
+  }
+  app.exit(0)
+}
+
+function clearQuitFailsafeTimer(state: QuitLifecycleState): void {
+  if (!state.shutdownFailsafe) return
+  clearTimeout(state.shutdownFailsafe)
+  state.shutdownFailsafe = null
 }
 
 /**
@@ -70,11 +156,14 @@ export function armQuitFailsafe(state: QuitLifecycleState): void {
  * the user dismissed the confirmation, or a save it asked for failed and the app
  * deliberately stays open. Without this the armed timer force-exits an app the
  * user chose to keep working in fifteen seconds after they said "not now".
+ *
+ * Once the teardown watchdog owns the exit there is nothing left to cancel: the
+ * pipeline finished, every disposal step already ran, and a caller clearing the
+ * timer here is what left a stalled exit with no deadline at all.
  */
 export function disarmQuitFailsafe(state: QuitLifecycleState): void {
-  if (!state.shutdownFailsafe) return
-  clearTimeout(state.shutdownFailsafe)
-  state.shutdownFailsafe = null
+  if (state.quitTeardownStarted) return
+  clearQuitFailsafeTimer(state)
 }
 
 export interface CloseConfirmationDeps {

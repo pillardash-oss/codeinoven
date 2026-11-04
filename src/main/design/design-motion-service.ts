@@ -1,5 +1,6 @@
 /// <reference types="electron-vite/node" />
 import createTargetWorker from './design-motion-target-worker.ts?nodeWorker'
+import { trackQuitWorker } from '../system/quit-worker-sweep'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -54,7 +55,7 @@ export async function executeDesignMotion(
   const id = operation === 'motion-inspect' ? undefined : motionTargetId(input.targetId)
   const styleRange = id
     ? await new Promise<{ start: number; end: number } | null>((resolveTarget, rejectTarget) => {
-        const worker = createTargetWorker({ workerData: { source, id } })
+        const worker = trackQuitWorker(createTargetWorker({ workerData: { source, id } }))
         let settled = false
         const finish = (
           error?: Error,
