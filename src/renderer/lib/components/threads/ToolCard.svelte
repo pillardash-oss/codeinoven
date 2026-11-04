@@ -188,6 +188,10 @@
    *  tool's own name, which is what the expanded card spells out. */
   const labeled = $derived(codeModeLabel !== part.tool)
 
+  /** The row's label reduced to its letters and digits, so the subject beside it
+   *  can skip a value the label already names. */
+  const labelKey = $derived(codeModeLabel.toLowerCase().replace(/[^a-z0-9]/gu, ''))
+
   /** Bound on the collapsed row's input preview. The row truncates to the
    *  width it actually has in CSS, so this only stops a pathological first
    *  argument (a whole file's contents) being copied into a second string on
@@ -212,6 +216,10 @@
       if (name === ACTION_SUMMARY_INPUT_KEY) continue
       const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
       if (!text || (typeof value === 'string' && isOpaqueId(value))) continue
+      // A value the label already names is the same words twice: `Used the
+      // Frontend Design skill` needs no `: frontend-design` beside it.
+      const valueKey = text.toLowerCase().replace(/[^a-z0-9]/gu, '')
+      if (valueKey.length >= 3 && labelKey.includes(valueKey)) continue
       const preview =
         text.length > PREVIEW_MAX_CHARS ? `${text.slice(0, PREVIEW_MAX_CHARS)}…` : text
       return `: ${preview}`

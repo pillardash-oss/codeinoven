@@ -21,6 +21,18 @@ import type { AgentPart } from './types'
 export function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): AgentPart {
   if (incoming.id !== existing.id) return incoming
   if (incoming.type !== existing.type) return incoming
+  // A tool's action label is stamped when the call is first seen, and some
+  // harnesses drop the arguments that named the action from the snapshot that
+  // settles the call. The row must not lose the words the user just read, so a
+  // snapshot carrying no label keeps the one already shown.
+  if (
+    incoming.type === 'tool' &&
+    existing.type === 'tool' &&
+    !incoming.actionLabel &&
+    existing.actionLabel
+  ) {
+    return { ...incoming, actionLabel: existing.actionLabel }
+  }
   if (incoming.type !== 'text' && incoming.type !== 'reasoning') return incoming
   const streamedText: string =
     existing.type === 'text' || existing.type === 'reasoning' ? existing.text : ''
