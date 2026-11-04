@@ -98,6 +98,14 @@ class DisplayRequests {
   private availableSince: number | null = null
   /** Threads that asked to mirror something, so their row wears the mark. */
   private readonly threads = new Map<string, number>()
+  /**
+   * The thread whose own display tab is on screen, when no agent asked for it.
+   *
+   * A person can open the panel and pick a device, and the thread they are
+   * standing in is what that mirror belongs to. It is held apart from the asking
+   * threads so closing the panel never erases a mark an agent put there.
+   */
+  private panelThread: string | null = null
   /** The target on screen, as `kind:sourceId`, so a repeat is not a reopen. */
   private mirrored: string | null = null
 
@@ -105,7 +113,9 @@ class DisplayRequests {
     return {
       available: this.availableSince !== null,
       ...(this.availableSince === null ? {} : { since: this.availableSince }),
-      threads: [...this.threads.keys()]
+      threads: [
+        ...new Set([...this.threads.keys(), ...(this.panelThread ? [this.panelThread] : [])])
+      ]
     }
   }
 
@@ -178,10 +188,25 @@ class DisplayRequests {
    * Report what the panel is showing, so a repeat call does not reopen it and a
    * closed panel clears the marks that claimed a thread was driving something.
    */
-  noteMirrored(key: string | null): void {
+  noteMirrored(key: string | null, threadId: string | null): void {
     this.mirrored = key
-    if (key !== null) return
-    for (const threadId of [...this.threads.keys()]) this.clearThread(threadId)
+    if (key === null) {
+      if (this.panelThread !== null) {
+        const previous = this.panelThread
+        this.panelThread = null
+        if (!this.threads.has(previous))
+          sink?.activity({ threadId: previous, active: false, at: Date.now() })
+      }
+      for (const threadId of [...this.threads.keys()]) this.clearThread(threadId)
+      return
+    }
+    if (threadId === null || this.threads.has(threadId) || this.panelThread === threadId) return
+    if (this.panelThread !== null && !this.threads.has(this.panelThread)) {
+      sink?.activity({ threadId: this.panelThread, active: false, at: Date.now() })
+    }
+    this.panelThread = threadId
+    this.availableSince ??= Date.now()
+    sink?.activity({ threadId, active: true, at: Date.now() })
   }
 
   private clearThread(threadId: string): void {

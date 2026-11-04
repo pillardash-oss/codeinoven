@@ -58,8 +58,14 @@ const MAC_KEY_CODES: Record<DisplayInputKey, number> = {
   right: 124
 }
 
-/** How long a measurement is trusted before the screen is located again. */
-const SURFACE_TTL_MS = 15_000
+/**
+ * How long a measurement is trusted before the screen is located again.
+ *
+ * Short on purpose: reading the frame is one accessibility query, and a window
+ * that was dragged or moved to another display between two taps must not send the
+ * second one somewhere the device no longer is.
+ */
+const SURFACE_TTL_MS = 3_000
 
 let compiled: Promise<string | null> | null = null
 const surfaces = new Map<number, SimulatorSurface>()
@@ -139,6 +145,10 @@ export function simulatorInputHelper(): Promise<string | null> {
       })
       return binary
     } catch {
+      // A failed build is not remembered: the toolchain may be installed while the
+      // app is running, and the next gesture should try again instead of answering
+      // "this machine cannot" for the rest of the session.
+      compiled = null
       return null
     }
   })()
@@ -244,11 +254,6 @@ export async function measureSimulatorSurface(
   const surface: SimulatorSurface = { window, ...frame, measuredAt: Date.now() }
   surfaces.set(window.id, surface)
   return surface
-}
-
-/** Forget a measurement, so the next gesture measures again. */
-export function forgetSimulatorSurface(windowId: number): void {
-  surfaces.delete(windowId)
 }
 
 /** Send one gesture to a measured surface. */

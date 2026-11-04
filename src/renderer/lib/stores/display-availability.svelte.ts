@@ -89,14 +89,16 @@ class DisplayAvailabilityState {
   }
 
   /**
-   * Tell main which device the panel is mirroring, and whether it is showing one.
+   * Tell main which device the panel is mirroring, and which thread owns it.
    *
    * A repeat request for the same device is then a no-op instead of a stream
    * restart, and closing the panel clears the thread marks that claimed an agent
-   * was driving something.
+   * was driving something. The thread travels with it because a person who picks
+   * a device themselves is still mirroring it on some thread, and that row is the
+   * one place the app can say where the picture came from.
    */
   notePanelTarget(mirrored: DisplayPanelTarget | null): void {
-    const key = mirrored ? `${mirrored.kind}:${mirrored.sourceId}` : null
+    const key = mirrored ? `${mirrored.kind}:${mirrored.sourceId}:${mirrored.threadId ?? ''}` : null
     if (this.reportedPanelTarget === key) return
     this.reportedPanelTarget = key
     void invoke('display:notePanel', mirrored).catch((error: unknown) =>

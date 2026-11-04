@@ -555,14 +555,21 @@
     displayAvailability.clearPendingTarget(offer.at)
   })
 
-  /** Report what the panel is mirroring, so the watch stops looking for a device. */
+  /**
+   * Report what the panel is mirroring, and on which thread, so the watch stops
+   * looking for a device and that thread's row says its screen is on display.
+   */
   $effect(() => {
     const mirrored = contextSidebarState.tabs.find(
       (candidate) => candidate.kind === 'display' && candidate.sourceKind && candidate.sourceId
     )
     displayAvailability.notePanelTarget(
       mirrored?.kind === 'display' && mirrored.sourceKind && mirrored.sourceId
-        ? { kind: mirrored.sourceKind, sourceId: mirrored.sourceId }
+        ? {
+            kind: mirrored.sourceKind,
+            sourceId: mirrored.sourceId,
+            threadId: mirrored.threadId
+          }
         : null
     )
   })

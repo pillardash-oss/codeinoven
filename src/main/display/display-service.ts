@@ -176,6 +176,9 @@ export class DisplayService {
     }
     if (!session.capture.control) throw new Error('This target cannot be controlled')
     await session.capture.control(action)
+    // A button press changes the device, so its frame is asked for now instead of
+    // at the next tick: the person pressed it to see what it did.
+    if (!session.disposed) this.schedule(session, 0)
   }
 
   /**
