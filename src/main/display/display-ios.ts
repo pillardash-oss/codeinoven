@@ -1,5 +1,5 @@
 import { app, type NativeImage } from 'electron'
-import { accessSync, constants as fsConstants } from 'node:fs'
+import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -55,12 +55,22 @@ function idbCandidates(): string[] {
     if (directory.length > 0) candidates.push(join(directory, 'idb'))
   }
   const home = homedir()
-  candidates.push(
-    '/opt/homebrew/bin/idb',
-    '/usr/local/bin/idb',
-    join(home, '.local', 'bin', 'idb'),
-    join(home, 'Library', 'Python', 'bin', 'idb')
-  )
+  candidates.push('/opt/homebrew/bin/idb', '/usr/local/bin/idb', join(home, '.local', 'bin', 'idb'))
+  // A `pip install --user` on macOS system Python, which is the install the
+  // fb-idb docs describe, lands the client under a versioned directory that is
+  // never on PATH: `~/Library/Python/3.9/bin/idb`. It is checked before the
+  // unversioned guess so a client that exists is actually found.
+  const pythonRoot = join(home, 'Library', 'Python')
+  try {
+    for (const version of readdirSync(pythonRoot).sort().reverse()) {
+      // Only the versioned install directories: `~/Library/Python` also holds
+      // whatever the Finder left there, and a `.DS_Store` is not a Python.
+      if (!/^\d+\.\d+$/u.test(version)) continue
+      candidates.push(join(pythonRoot, version, 'bin', 'idb'))
+    }
+  } catch {
+    // No user Python install at all: the fixed candidates above still apply.
+  }
   return candidates
 }
 
@@ -234,27 +244,61 @@ export class IosDisplayCapture implements DisplayCapture {
   }
 
   /**
-   * A simulator answers for its own appearance and nothing else.
+   * A simulator's own buttons, and nothing invented.
    *
-   * There is no home, volume or power key to inject through simctl, and driving
-   * the Simulator app's menus would be a different, fragile channel, so the rail
-   * offers what the platform really exposes instead of a key that does nothing.
+   * The device answers `HOME`, `LOCK` (the side button, which locks a lit screen
+   * and wakes a dark one) and `SIRI` through the idb client, and its back
+   * affordance is the system edge swipe rather than a key. Appearance is the one
+   * control `simctl` owns. Volume is absent on purpose: the simulator exposes no
+   * volume button, so a rail entry for it would be a button that does nothing.
    */
   async control(action: DisplayControlAction): Promise<void> {
-    if (action !== 'appearance') {
-      throw new Error(`A simulator has no "${action}" control`)
+    if (action === 'appearance') {
+      const current = await captureText(
+        SIMCTL,
+        ['simctl', 'ui', this.sourceId, 'appearance'],
+        SIMCTL_CAPTURE_TIMEOUT_MS
+      )
+      const next = current.trim() === 'dark' ? 'light' : 'dark'
+      await captureCommand(
+        SIMCTL,
+        ['simctl', 'ui', this.sourceId, 'appearance', next],
+        SIMCTL_CAPTURE_TIMEOUT_MS
+      ).promise
+      return
     }
-    const current = await captureText(
-      SIMCTL,
-      ['simctl', 'ui', this.sourceId, 'appearance'],
-      SIMCTL_CAPTURE_TIMEOUT_MS
-    )
-    const next = current.trim() === 'dark' ? 'light' : 'dark'
-    await captureCommand(
-      SIMCTL,
-      ['simctl', 'ui', this.sourceId, 'appearance', next],
-      SIMCTL_CAPTURE_TIMEOUT_MS
-    ).promise
+    const idb = resolveIdb()
+    if (!idb) throw new Error('A simulator needs the idb client (fb-idb) for its buttons')
+    switch (action) {
+      case 'home':
+        await this.ask(idb, ['ui', 'button', 'HOME'])
+        return
+      case 'power':
+        await this.ask(idb, ['ui', 'button', 'LOCK'])
+        return
+      case 'siri':
+        await this.ask(idb, ['ui', 'button', 'SIRI'])
+        return
+      case 'back': {
+        // iOS has no back button: the system affordance is a drag that starts at
+        // the left edge, so the rail presses where a thumb would.
+        const screen = (await this.screenSize(idb)) ?? { width: 400, height: 800 }
+        const y = Math.round(screen.height / 2)
+        await this.ask(idb, [
+          'ui',
+          'swipe',
+          String(Math.max(1, Math.round(screen.width * 0.005))),
+          String(y),
+          String(Math.round(screen.width * 0.7)),
+          String(y),
+          '--duration',
+          '0.25'
+        ])
+        return
+      }
+      default:
+        throw new Error(`A simulator has no "${action}" control`)
+    }
   }
 
   async input(gesture: DisplayInputGesture): Promise<void> {
@@ -332,7 +376,7 @@ export class IosDisplayCapture implements DisplayCapture {
     if (this.screenRequest) return this.screenRequest
     const request = captureText(
       idb,
-      ['describe', '--udid', this.sourceId, '-j'],
+      ['describe', '--json', '--udid', this.sourceId],
       IDB_DESCRIBE_TIMEOUT_MS
     )
       .then((output) => readScreenPoints(output))

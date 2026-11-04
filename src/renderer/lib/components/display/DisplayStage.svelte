@@ -7,6 +7,7 @@
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import type { Component } from 'svelte'
   import type { DisplayContextTab } from '$lib/stores/context-sidebar.svelte'
@@ -58,6 +59,7 @@
     'volume-up': { action: 'volume-up', label: 'Volume up', icon: CioVolumeUp },
     'volume-down': { action: 'volume-down', label: 'Volume down', icon: CioVolumeDown },
     power: { action: 'power', label: 'Power', icon: CioLock },
+    siri: { action: 'siri', label: 'Siri', icon: CioSparkles },
     appearance: { action: 'appearance', label: 'Switch light and dark', icon: CioMoon }
   }
 

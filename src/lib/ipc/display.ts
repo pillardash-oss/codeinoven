@@ -206,17 +206,22 @@ export function isDisplayInputGesture(value: unknown): value is DisplayInputGest
  * A phone preview without its buttons is a picture, and the point of this panel
  * is to let a person work the device the agent is on without reaching for it (an
  * emulator with no window has nothing to reach for). The set is per kind, because
- * it says what the platform can actually do: adb injects hardware key events, and
- * a booted simulator answers only for its own appearance.
+ * it says what the platform can actually do: adb injects a full hardware key set,
+ * and a booted simulator takes the buttons it really has (home, the side button,
+ * Siri) plus its left-edge back gesture. Volume is not on the simulator's channel
+ * at all, so the rail does not pretend otherwise.
  */
 export type DisplayControlAction =
-  'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'appearance'
+  'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'siri' | 'appearance'
 
 /** What each kind can be asked to do, in the order the rail lists it. */
 export const DISPLAY_CONTROLS_BY_KIND: Record<DisplaySourceKind, readonly DisplayControlAction[]> =
   {
     android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'power'],
-    ios: ['appearance'],
+    // The simulator's own buttons, in the order a hand finds them. `back` is the
+    // system edge swipe, `power` the side button (lock and wake), and `appearance`
+    // the light/dark switch, which only `simctl` can make.
+    ios: ['home', 'back', 'power', 'siri', 'appearance'],
     'desktop-screen': [],
     'desktop-window': []
   }
@@ -229,6 +234,7 @@ export function isDisplayControlAction(value: unknown): value is DisplayControlA
     value === 'volume-up' ||
     value === 'volume-down' ||
     value === 'power' ||
+    value === 'siri' ||
     value === 'appearance'
   )
 }
