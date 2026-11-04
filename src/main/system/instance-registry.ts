@@ -842,6 +842,11 @@ export class InstanceRegistry {
       this.watcher = watch(this.dir, { persistent: false }, (_eventType, filename) => {
         try {
           const file = filename?.toString()
+          // Our own heartbeat write fires this watcher for the temporary file and
+          // the rename that publishes it. Neither can change membership or carry
+          // another instance's event, so reacting to them only re-read the whole
+          // registry folder (three times) for our own write.
+          if (file === `.${this.selfEntry.pid}.tmp` || file === `${this.selfEntry.pid}.json`) return
           const files = file
             ? [file]
             : readdirSync(this.dir).filter((candidate) => candidate.endsWith('.json'))

@@ -215,12 +215,13 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
-  // This independent prerequisite must not hold the feature graph, a first
-  // message, or terminal creation behind a download/extraction promise.
-  if (process.platform === 'win32')
-    void import('../drivers/windows-git-runtime')
-      .then(({ startWindowsGitPreparation }) => startWindowsGitPreparation())
-      .catch((error: unknown) => Logger.error('Windows Git startup preparation failed', error))
+  // Windows Git preparation is deliberately NOT started at boot. Its first
+  // step is a GitHub lookup, then a ~50 MB PortableGit download and extract,
+  // and a fresh install with no projects needs none of it. On a low-end
+  // machine that began under the first paint and competed with everything the
+  // user was trying to do. The interactive paths that actually need Git start
+  // it through `prepareWindowsGitRuntime` (terminal launch, harness spawn,
+  // Oven SSH), so it is prepared when it is about to be used.
   const [
     { registerIpcHandlers },
     { ProjectManager },
