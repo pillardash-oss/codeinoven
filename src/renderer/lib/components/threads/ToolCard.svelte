@@ -15,7 +15,12 @@
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { isCioToolName, isCodeModeToolName } from '$shared/agent-interactions'
-  import { ACTION_SUMMARY_INPUT_KEY, isOpaqueId } from '$shared/tool-action-label'
+  import {
+    ACTION_SUMMARY_INPUT_KEY,
+    isOpaqueId,
+    toolActionLabel,
+    toolTitleRestatesInput
+  } from '$shared/tool-action-label'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
@@ -175,10 +180,33 @@
     return ''
   }
 
+  /**
+   * True when the harness title only restates one of the call's arguments.
+   *
+   * Such a title is the row's subject, not its label: codex puts the shell
+   * command in `title`, and reading it as the headline printed the command where
+   * the action belongs (`Shell : <command>` is the row a reader wants).
+   */
+  const titleIsSubject = $derived(
+    !!part.state.title?.trim() && toolTitleRestatesInput(part.state.title, part.state.input)
+  )
+
+  /**
+   * The row's action label.
+   *
+   * Normally the snapshot the main process stamped when the call was first seen.
+   * A row recorded before that snapshot existed has none, so it is derived here,
+   * and only for the rows whose harness title cannot stand in for it.
+   */
+  const actionLabel = $derived(
+    part.actionLabel ??
+      (titleIsSubject ? toolActionLabel({ tool: part.tool, input: part.state.input }) : undefined)
+  )
+
   const codeModeLabel = $derived(
     firstSpoken(
-      part.state.title,
-      part.actionLabel,
+      titleIsSubject ? undefined : part.state.title,
+      actionLabel,
       toolKind === 'code' ? 'Code mode' : undefined,
       part.tool
     )

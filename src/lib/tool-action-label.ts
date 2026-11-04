@@ -264,6 +264,32 @@ export function isOpaqueId(value: string): boolean {
   return /^[0-9a-f]{16,}$/iu.test(value.trim())
 }
 
+/** A value reduced to what it says, so two spellings of one text can be compared. */
+function comparableText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/gu, '')
+}
+
+/**
+ * True when a harness title merely restates one of the call's own arguments.
+ *
+ * Codex fills a shell call's `title` with the command itself, so treating that
+ * title as the call's label printed the command as the row's headline (and, with
+ * the subject beside it, twice) while the action never got named. A title that
+ * says nothing beyond an argument is that argument, never a label.
+ */
+export function toolTitleRestatesInput(title: string, input: Record<string, unknown>): boolean {
+  const stated = comparableText(title)
+  if (stated.length < 3) return false
+  for (const value of Object.values(input)) {
+    const text = typeof value === 'string' ? value : JSON.stringify(value)
+    if (!text) continue
+    const candidate = comparableText(text)
+    if (candidate.length < 3) continue
+    if (candidate.startsWith(stated) || stated.startsWith(candidate)) return true
+  }
+  return false
+}
+
 /** Turn an identifier into words: `svelte-autofixer` reads as "Svelte Autofixer". */
 function humanizeName(value: string): string {
   return value
@@ -360,14 +386,17 @@ export interface ToolActionLabelSource {
  *
  * The chain is: the app's own vocabulary, then the model's own words when the
  * harness exposes them, then the harness-agnostic action patterns. A harness
- * title or provider label always wins upstream (see `toolActionLabelForPart`),
- * and code mode keeps its own wording, because a call a script made can carry
- * any inner tool name and the row says more by naming the script than by
- * repeating a nested name.
+ * title wins upstream (see `toolActionLabelForPart`) unless it only restates an
+ * argument, and code mode keeps its own wording, because a call a script made
+ * can carry any inner tool name and the row says more by naming the script than
+ * by repeating a nested name.
  */
 export function toolActionLabel(source: ToolActionLabelSource): string | undefined {
-  if (source.title?.trim()) return undefined
   const input = source.input ?? {}
+  // A harness title wins when it labels the call. When it only restates an
+  // argument, it is the row's subject and the action still has to be named.
+  const title = source.title?.trim()
+  if (title && !toolTitleRestatesInput(title, input)) return undefined
   // The action summary is the model saying what this call is for, in the words a
   // reader wants, so it outranks every name-shaped guess below it.
   const summary = actionSummaryLabel(input)
