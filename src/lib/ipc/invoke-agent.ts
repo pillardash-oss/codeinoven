@@ -487,6 +487,8 @@ export const invokeAgentContract = {
   'note:delete': {} as Contract<[projectId: string, threadId: string], void>,
   /** Thread ids that currently have a note (renderer presence sync). */
   'note:list': {} as Contract<[], string[]>,
+  /** Pending agent-scheduled wakes, so a thread row can badge its scheduled state. */
+  'followUps:list': {} as Contract<[], import('../follow-up').FollowUpNotice[]>,
   /** List sticky note tab metadata without loading every body into memory. */
   'sticky-note:list': {} as Contract<[], StickyNoteSummary[]>,
   'sticky-note:get': {} as Contract<[id: string], StickyNote | null>,

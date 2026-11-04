@@ -58,6 +58,31 @@ export interface FollowUp {
   deferred: number
 }
 
+/**
+ * What a renderer needs to badge a row and describe the wake on hover.
+ *
+ * Deliberately not the whole record: the instruction is the agent's own business
+ * and can be long, and no surface needs it to say "this thread wakes at 09:10".
+ */
+export interface FollowUpNotice {
+  id: string
+  projectId: string
+  threadId: string
+  dueAt: number
+  note: string
+}
+
+/** Reduce one armed wake to what the renderer reads. */
+export function followUpNotice(followUp: FollowUp): FollowUpNotice {
+  return {
+    id: followUp.id,
+    projectId: followUp.projectId,
+    threadId: followUp.threadId,
+    dueAt: followUp.dueAt,
+    note: followUp.note
+  }
+}
+
 /** What the capability accepts when an agent schedules one. */
 export interface FollowUpRequest {
   projectId: string

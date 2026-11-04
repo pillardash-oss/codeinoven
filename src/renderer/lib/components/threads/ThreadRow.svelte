@@ -10,6 +10,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
+  import ThreadFollowUpMark from '$lib/components/threads/ThreadFollowUpMark.svelte'
   import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
@@ -1269,6 +1270,7 @@
               <span>{branchLabel}</span>
             </span>
           {/if}
+          <ThreadFollowUpMark threadId={thread.id} />
           <ThreadNoteMark threadId={thread.id} />
           <AuthoredWorkMarks kinds={authoredWorkKinds} />
           {#each activeIndicators as live (live)}
@@ -1586,6 +1588,7 @@
                 <span>{branchLabel}</span>
               </span>
             {/if}
+            <ThreadFollowUpMark threadId={thread.id} />
             <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
             <AuthoredWorkMarks kinds={authoredWorkKinds} />
@@ -1764,6 +1767,7 @@
                 <span class="truncate">{branchLabel}</span>
               </span>
             {/if}
+            <ThreadFollowUpMark threadId={thread.id} />
             <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
             <AuthoredWorkMarks kinds={authoredWorkKinds} />

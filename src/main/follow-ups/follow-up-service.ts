@@ -58,8 +58,22 @@ export class FollowUpService {
   private timer: ReturnType<typeof setTimeout> | null = null
   private tickChain: Promise<void> = Promise.resolve()
   private disposed = false
+  /** Called after anything that changes the armed set, so a watcher can repaint. */
+  private changeListener: (() => void) | null = null
 
   constructor(private readonly deps: FollowUpServiceDeps) {}
+
+  /**
+   * Watch the armed set. The row badge and the residency check both read it, and
+   * neither may poll a scheduler to find out it changed.
+   */
+  attachChangeListener(listener: (() => void) | null): void {
+    this.changeListener = listener
+  }
+
+  private changed(): void {
+    this.changeListener?.()
+  }
 
   /** The one clock this service and its capability read. */
   now(): number {
@@ -130,6 +144,7 @@ export class FollowUpService {
     }
     const followUp = this.deps.store.add({ ...input, dueAt })
     this.arm()
+    this.changed()
     Logger.info('Follow-up scheduled', {
       projectId: followUp.projectId,
       threadId: followUp.threadId,
@@ -142,21 +157,30 @@ export class FollowUpService {
   /** Cancel one wake. Returns whether it was armed. */
   cancel(id: string): boolean {
     const removed = this.deps.store.remove(id)
-    if (removed) this.arm()
+    if (removed) {
+      this.arm()
+      this.changed()
+    }
     return removed
   }
 
   /** Cancel every wake armed on a thread, which is what deleting it does. */
   cancelForThread(threadId: string): number {
     const removed = this.deps.store.removeForThread(threadId)
-    if (removed > 0) this.arm()
+    if (removed > 0) {
+      this.arm()
+      this.changed()
+    }
     return removed
   }
 
   /** Cancel every wake of a project that was removed. */
   cancelForProject(projectId: string): number {
     const removed = this.deps.store.removeForProject(projectId)
-    if (removed > 0) this.arm()
+    if (removed > 0) {
+      this.arm()
+      this.changed()
+    }
     return removed
   }
 
@@ -172,6 +196,7 @@ export class FollowUpService {
     const due = this.deps.store.list().filter((followUp) => followUp.dueAt <= now)
     for (const followUp of due) await this.fire(followUp)
     this.arm()
+    if (due.length > 0) this.changed()
   }
 
   /**

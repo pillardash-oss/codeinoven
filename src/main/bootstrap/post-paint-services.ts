@@ -258,7 +258,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { broadcastCioCleanupProgress, broadcastCioCleanupState },
     { FollowUpService },
     { FollowUpStore },
-    { createFollowUpExecutor }
+    { createFollowUpExecutor },
+    { broadcastFollowUpsChanged }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -290,7 +291,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../cio-cleanup/cio-cleanup-events'),
     import('../follow-ups/follow-up-service'),
     import('../follow-ups/follow-up-store'),
-    import('../follow-ups/follow-up-executor')
+    import('../follow-ups/follow-up-executor'),
+    import('../follow-ups/follow-up-ipc')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -1034,6 +1036,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerCustomVendorIpc } = await import('../providers/custom-vendor-ipc')
     registerCustomVendorIpc(storage)
   }
+  // The armed set of thread wakes, readable before the scheduler that owns it is
+  // built: a row badge asks once, then follows `followUps:changed`.
+  {
+    const { registerFollowUpHandlers } = await import('../follow-ups/follow-up-ipc')
+    registerFollowUpHandlers(() => state.followUpService)
+  }
   await (async () => {
     const [
       { ProviderConnectionService },
@@ -1312,7 +1320,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       })
       state.followUpService = followUps
       state.chatEngine?.setFollowUpExecutor(createFollowUpExecutor(followUps))
+      // The row badge reads the armed set, so every change to it is pushed
+      // instead of polled, and a window opened later reads the same set once.
+      followUps.attachChangeListener(() => broadcastFollowUpsChanged(followUps))
       await followUps.start()
+      broadcastFollowUpsChanged(followUps)
     } catch (error) {
       Logger.error('Follow-up scheduler startup failed (non-fatal):', error)
     }
