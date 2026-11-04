@@ -251,16 +251,19 @@
    * the comment already written.
    */
   const designComment = $derived.by(() => {
-    const editing = browserInspector.editingFor(tabId)
-    if (!editing) return null
-    const reference = responseReferencesState
-      .forThread(tabProjectId, tabThreadId)
-      .find((candidate) => candidate.id === editing.referenceId)
-    if (!reference) return null
+    const open = browserInspector.commentFor(tabId)
+    if (!open) return null
+    const { reference } = open
     const named = (reference.text.split('\n')[0] ?? '').replace(/^Design element:\s*/u, '')
     return {
       referenceId: reference.id,
-      anchor: editing.anchor,
+      anchor: open.anchor,
+      reference,
+      // The conversation the tab belongs right now, which is the one the pick
+      // wrote its reference into. A panel whose tab snapshot predates a
+      // re-scope still edits the reference it is actually showing.
+      projectId: open.projectId,
+      threadId: open.threadId,
       elementName: named || reference.label,
       comment: reference.comment ?? ''
     }
@@ -582,22 +585,37 @@
 
   /** Persist the in-progress text, so a closed bubble cannot discard a draft. */
   function draftDesignComment(referenceId: string, comment: string): void {
-    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
+    const open = designComment
+    responseReferencesState.updateCommentDraft(
+      open?.projectId ?? tabProjectId,
+      open?.threadId ?? tabThreadId,
+      referenceId,
+      comment
+    )
   }
 
   /** Land the comment on the element it was written for, and close the bubble. */
   function commitDesignComment(referenceId: string, comment: string): void {
-    responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
+    const open = designComment
+    responseReferencesState.updateComment(
+      open?.projectId ?? tabProjectId,
+      open?.threadId ?? tabThreadId,
+      referenceId,
+      comment
+    )
     browserInspector.closeComment(tabId)
   }
 
   /** Detach the element, and the comment it carries, from the conversation. */
   function removeDesignComment(referenceId: string): void {
+    const open = designComment
+    const projectId = open?.projectId ?? tabProjectId
+    const threadId = open?.threadId ?? tabThreadId
     responseReferencesState.setForThread(
-      tabProjectId,
-      tabThreadId,
+      projectId,
+      threadId,
       responseReferencesState
-        .forThread(tabProjectId, tabThreadId)
+        .forThread(projectId, threadId)
         .filter((reference) => reference.id !== referenceId)
     )
     browserInspector.closeComment(tabId)
@@ -615,16 +633,12 @@
   function openDesignElementChat(mode: 'elaborate' | 'quick'): void {
     const open = designComment
     if (!open) return
-    const reference = responseReferencesState
-      .forThread(tabProjectId, tabThreadId)
-      .find((candidate) => candidate.id === open.referenceId)
-    if (!reference) return
     openAnnotationChat({
-      projectId: tabProjectId,
-      threadId: tabThreadId,
+      projectId: open.projectId,
+      threadId: open.threadId,
       mode,
-      selection: reference.text,
-      context: designElementChatContext(reference.directory, reference.designEntry)
+      selection: open.reference.text,
+      context: designElementChatContext(open.reference.directory, open.reference.designEntry)
     })
     browserInspector.closeComment(tabId)
   }
@@ -1020,7 +1034,7 @@
   -->
   <DesignElementCommentPopover
     hostId={`design-comment-${surface}-${tabId}`}
-    comment={panelVisible && browserVisibility.ownsSurface(tabId, surface) ? designComment : null}
+    comment={panelVisible ? designComment : null}
     targetId={`design-comment-${tabId}-${designComment?.referenceId ?? 'none'}`}
     scope={{ kind: 'project', projectId: tabProjectId }}
     onDraftChange={draftDesignComment}

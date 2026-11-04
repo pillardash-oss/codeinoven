@@ -59,12 +59,71 @@ interface TabOwner {
   threadId: string
 }
 
+/**
+ * A set of tab ids the session remembers, kept out of Svelte's reactive graph.
+ *
+ * These flags answer questions the session asks itself while publishing, so a
+ * reactive collection here would make every read retrigger the effect that does
+ * the asking. Nothing renders from them, so they are plain records with the
+ * three operations the session needs.
+ */
+class TabFlags {
+  private readonly flags: Record<string, true> = {}
+
+  has(tabId: string): boolean {
+    return this.flags[tabId] === true
+  }
+
+  add(tabId: string): void {
+    this.flags[tabId] = true
+  }
+
+  delete(tabId: string): void {
+    delete this.flags[tabId]
+  }
+
+  ids(): string[] {
+    return Object.keys(this.flags)
+  }
+}
+
+/** The design each tab is serving, also kept out of the reactive graph. */
+class DesignMirror {
+  private readonly designs: Record<string, BrowserDesignTab> = {}
+
+  has(tabId: string): boolean {
+    return this.designs[tabId] !== undefined
+  }
+
+  get(tabId: string): BrowserDesignTab | undefined {
+    return this.designs[tabId]
+  }
+
+  set(tabId: string, design: BrowserDesignTab): void {
+    this.designs[tabId] = design
+  }
+
+  /** Whether a record was removed, which is what tells a caller it went away. */
+  delete(tabId: string): boolean {
+    if (this.designs[tabId] === undefined) return false
+    delete this.designs[tabId]
+    return true
+  }
+}
+
 class BrowserInspectorSession {
   /** Tabs whose page is armed for picking. */
   private readonly armed = new SvelteSet<string>()
-  /** The design each tab is serving, mirrored from `browser:state`. A tab that
-   *  is not serving a design is not inspectable, and never gets pins. */
-  private readonly designs = new SvelteMap<string, BrowserDesignTab>()
+  /**
+   * The design each tab is serving, mirrored from `browser:state`.
+   *
+   * Deliberately ordinary collections rather than reactive ones: this is
+   * bookkeeping the session reads while deciding what to publish, and a reactive
+   * collection read inside the session's own effect made every read retrigger
+   * that effect. Nothing renders from these; the pins and the bubble are told to
+   * change instead of deriving from them.
+   */
+  private readonly designs = new DesignMirror()
   /**
    * The comment bubble each tab has open: the reference it belongs to, and where
    * the element was when the reader picked or reopened it.
@@ -89,9 +148,19 @@ already have come and gone, which is why the list is watched rather than read
    * created) is deliberately *not* recorded here, so the next change of the list
    * asks again instead of the session going blind.
    */
-  private readonly statesRead = new SvelteSet<string>()
+  private readonly statesRead = new TabFlags()
+  /**
+   * Tabs whose state has been read once more after they became the page on
+   * screen.
+   *
+   * A restored tab's design report can arrive before this session was started,
+   * and the broadcast is the only other way it would ever be seen. Asking again
+   * when the reader actually shows the tab closes that gap without polling: one
+   * extra question per tab per session, on the first time it is looked at.
+   */
+  private readonly activeRead = new TabFlags()
   /** Reads in flight, so one tab is never asked about twice at once. */
-  private readonly reading = new SvelteSet<string>()
+  private readonly reading = new TabFlags()
 
   /**
    * Whether {@link start} has wired the session. Inspection is a browser-only
@@ -185,9 +254,38 @@ already have come and gone, which is why the list is watched rather than read
     this.setArmed(tabId, !this.armed.has(tabId))
   }
 
-  /** The comment bubble this tab has open, and where the element sits. */
-  editingFor(tabId: string): { referenceId: string; anchor: BrowserInspectorRect } | null {
-    return this.editing.get(tabId) ?? null
+  /**
+   * The open comment on a tab, resolved against the conversation that owns the
+   * tab right now.
+   *
+   * The reference a pick writes and the reference the bubble reads have to come
+   * from one owner. Reading it here, from the tab the session already knows,
+   * keeps the bubble alive when the panel's own snapshot of the tab is older than
+   * the list (a tab re-scoped to another thread, a restored tab) instead of the
+   * comment silently vanishing because a lookup used a stale thread id.
+   */
+  commentFor(tabId: string): {
+    referenceId: string
+    anchor: BrowserInspectorRect
+    projectId: string
+    threadId: string
+    reference: ResponseReferenceAnchor
+  } | null {
+    const editing = this.editing.get(tabId)
+    if (!editing) return null
+    const owner = this.ownerOf(tabId)
+    if (!owner) return null
+    const reference = responseReferencesState
+      .forThread(owner.projectId, owner.threadId)
+      .find((candidate) => candidate.id === editing.referenceId)
+    if (!reference) return null
+    return {
+      referenceId: editing.referenceId,
+      anchor: editing.anchor,
+      projectId: owner.projectId,
+      threadId: owner.threadId,
+      reference
+    }
   }
 
   /** Close this tab's comment bubble. The comment itself is left alone. */
@@ -242,17 +340,29 @@ already have come and gone, which is why the list is watched rather than read
    * being unknown until its page reloads.
    */
   private readTabStates(): void {
-    const open = new SvelteSet<string>()
+    const open = new TabFlags()
+    const activeId = contextSidebarState.sidebarActiveTabId
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       open.add(tab.id)
-      if (this.designs.has(tab.id) || this.statesRead.has(tab.id)) continue
+      if (this.designs.has(tab.id)) continue
       if (this.reading.has(tab.id)) continue
+      // The page the reader is actually looking at is asked again once, even if
+      // its state was already read: the design mark may have been published
+      // before this session existed, and no later broadcast would carry it.
+      if (tab.id === activeId) {
+        if (this.activeRead.has(tab.id)) continue
+        this.activeRead.add(tab.id)
+        void this.readPageState(tab.id)
+        continue
+      }
+      if (this.statesRead.has(tab.id)) continue
       void this.readPageState(tab.id)
     }
+    for (const id of this.activeRead.ids()) if (!open.has(id)) this.activeRead.delete(id)
     // A closed tab's record goes with it, so a long session does not keep the id
     // of every tab it ever showed.
-    for (const id of this.statesRead) if (!open.has(id)) this.statesRead.delete(id)
+    for (const id of this.statesRead.ids()) if (!open.has(id)) this.statesRead.delete(id)
   }
 
   /**
@@ -559,7 +669,6 @@ already have come and gone, which is why the list is watched rather than read
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       if (tab.projectId !== projectId || tab.threadId !== threadId) continue
-      if (!this.designs.has(tab.id)) continue
       // An open bubble whose reference is gone (removed from the composer) closes
       // with it, exactly as the page's own card used to.
       const editing = this.editing.get(tab.id)
@@ -570,8 +679,18 @@ already have come and gone, which is why the list is watched rather than read
     }
   }
 
+  /**
+   * Hand one tab's pins to the page.
+   *
+   * Deliberately not gated on the mirrored design: the pins are a function of
+   * the conversation's references and the tab's id, and a design mark this
+   * session has not heard about yet (a restored tab, a report published before
+   * the session started) must not cost the reader the pins their comments
+   * already own. A tab that cannot be resolved is skipped, so an unknown tab is
+   * never asked about.
+   */
   private publishMarkers(tabId: string): void {
-    if (!this.designs.has(tabId)) return
+    if (!this.ownerOf(tabId)) return
     void invoke('browser:inspectMarkers', tabId, this.markersFor(tabId)).catch(() => {})
   }
 
