@@ -324,7 +324,12 @@ export class ChatEngineQuestions {
       const question = pending.request.questions[currentIndex]
       if (!question) return
       pending.timer = undefined
-      pending.request.answers[currentIndex] = [recommendedQuestionAnswer(question)]
+      // The timer only answers what nobody answered. An entry the user already
+      // filled in keeps their own answer, so a card that timed out half filled
+      // sends what was filled instead of the recommended option on top of it.
+      if ((pending.request.answers[currentIndex] ?? []).length === 0) {
+        pending.request.answers[currentIndex] = [recommendedQuestionAnswer(question)]
+      }
 
       const nextIndex = pending.request.answers.findIndex(
         (answer, index) => index !== currentIndex && answer.length === 0
