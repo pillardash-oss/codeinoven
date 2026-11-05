@@ -106,7 +106,9 @@ export function normalizeAcpAgent(
 
   const icon = input.icon === undefined ? existing?.icon : validateIcon(input.icon, 'The icon')
   const iconDark =
-    input.iconDark === undefined ? existing?.iconDark : validateIcon(input.iconDark, 'The dark icon')
+    input.iconDark === undefined
+      ? existing?.iconDark
+      : validateIcon(input.iconDark, 'The dark icon')
 
   return {
     id: existing?.id ?? input.id ?? `${ACP_AGENT_ID_PREFIX}${slug(name)}`,

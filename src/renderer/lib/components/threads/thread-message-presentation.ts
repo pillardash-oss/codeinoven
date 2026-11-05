@@ -9,6 +9,7 @@ import {
 import { assistantTagIconHtml } from '$lib/components/assistant/assistant-tag-badge'
 import { threadComposerTag } from '$lib/components/chats/composer-tag'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
 import { taggedThreads } from '$lib/stores/tagged-threads.svelte'
 import { assistantAccentColor } from '$lib/assistant-icons'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
@@ -368,6 +369,9 @@ export function harnessDisplayName(harnessId: string): string {
   if (harnessId === 'cline') return 'Cline'
   if (harnessId === 'pi') return 'Pi'
   if (harnessId === 'antigravity') return 'Antigravity'
+  // Agents the user added over ACP are named by them, so the configured name is
+  // the only honest label; the store falls back to the id when it is unknown.
+  if (harnessId.startsWith('acp-')) return acpAgentsStore.nameFor(harnessId) ?? harnessId
   return harnessId
 }
 

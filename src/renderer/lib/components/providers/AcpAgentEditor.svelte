@@ -27,12 +27,10 @@
     name: string
     command: string
     args: string
-    /** Uploaded icons as data URLs; the dark one falls back to `icon`. */
     icon: string | undefined
     iconDark: string | undefined
   }
 
-  /** Both variants are offered, so a logo stays legible on either surface. */
   const ICON_VARIANTS = [
     { key: 'icon', label: 'Icon' },
     { key: 'iconDark', label: 'Dark icon' }
@@ -46,7 +44,6 @@
   const MONO_FIELD = `${FIELD} font-mono`
   const UPLOAD = 'flex h-7 items-center border bg-surface px-2 text-[0.6875rem]'
   const CLEAR = 'flex h-7 items-center px-2 text-[0.6875rem] text-muted'
-  const CHIP = 'flex items-center gap-2 px-2.5 py-1.5 hover:bg-elevated'
   const SECONDARY = 'h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay'
   const PRIMARY = 'flex h-9 items-center gap-1.5 bg-primary px-4 text-xs text-on-primary'
   const DANGER = 'flex h-9 items-center gap-1.5 px-2 text-xs font-medium text-danger'
@@ -72,16 +69,24 @@
   let error = $state('')
   let confirmingDelete = $state(false)
   let removing = $state(false)
-  let fileInput = $state<HTMLInputElement | null>(null)
+  let fileInput: HTMLInputElement | null = null
+
+  /** Attach the hidden picker without `bind:this`, so the click is a call. */
+  function captureFileInput(node: HTMLInputElement): () => void {
+    fileInput = node
+    return () => {
+      if (fileInput === node) fileInput = null
+    }
+  }
   let pendingVariant = $state<IconVariant>('icon')
 
   const title = $derived(agent ? `Edit ${agent.name}` : 'Add ACP agent')
   const chipStatus = $derived(draft.name.trim() || draft.command.trim() || 'Untitled agent')
-  const named = $derived(draft.name.trim().length > 0)
-  const commanded = $derived(draft.command.trim().length > 0)
-  const canSave = $derived(!acpAgentsStore.saving && reading === null && named && commanded)
+  const filled = $derived(draft.name.trim() !== '' && draft.command.trim() !== '')
+  const canSave = $derived(!acpAgentsStore.saving && reading === null && filled)
+  /** A save or upload failure, else whatever the last read of the agents said. */
+  const message = $derived(error || acpAgentsStore.error)
 
-  /** One text field holds the arguments; whitespace separates them again. */
   function splitArgs(value: string): string[] {
     return value.split(/\s+/u).filter(Boolean)
   }
@@ -214,7 +219,13 @@
   {#snippet dock()}
     <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked ACP agent">
       <div class="flex items-center border bg-surface p-1.5 shadow-xl">
-        <button type="button" class={CHIP} onclick={() => (docked = false)}>
+        <button
+          type="button"
+          class="flex items-center gap-2 px-2.5 py-1.5 hover:bg-elevated"
+          title="Show the ACP agent form"
+          aria-label="Show the ACP agent form ({chipStatus})"
+          onclick={() => (docked = false)}
+        >
           <CioPlug size={14} class="text-dimmed" />
           <span class="max-w-40 truncate text-[0.6875rem] font-medium">{chipStatus}</span>
         </button>
@@ -292,10 +303,16 @@
           {/if}
         </div>
       {/each}
-      <input type="file" bind:this={fileInput} hidden accept={ICON_ACCEPT} onchange={chooseIcon} />
+      <input
+        type="file"
+        {@attach captureFileInput}
+        hidden
+        accept={ICON_ACCEPT}
+        onchange={chooseIcon}
+      />
     </div>
 
-    {#if error}<p class="text-xs text-danger">{error}</p>{/if}
+    {#if message}<p class="text-xs text-danger">{message}</p>{/if}
   </form>
 </DockableModal>
 

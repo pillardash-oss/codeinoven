@@ -11,7 +11,7 @@ import {
   resolveExecutablePath
 } from './cli-environment'
 import { spawnInUtilityHost } from './harness-utility-host'
-import { currentAcpAgentConfig, ensureAcpAgentConfigLoaded } from './acp/acp-config'
+import { ensureAcpAgentsLoaded, findAcpAgent, isAcpAgentId } from './acp/acp-agents-store'
 import { appResourcesRoot } from '../bootstrap/app-resources'
 import { Logger } from '../system/logger'
 
@@ -135,11 +135,10 @@ export async function isHarnessAvailableAsync(
   command: string | undefined,
   env?: NodeJS.ProcessEnv
 ): Promise<boolean> {
-  if (id === 'acp') {
-    const config = await ensureAcpAgentConfigLoaded()
-    const resolved = config ?? currentAcpAgentConfig()
-    if (!resolved) return false
-    return isHarnessCommandAvailableAsync(resolved.command, env)
+  if (isAcpAgentId(id)) {
+    await ensureAcpAgentsLoaded()
+    const agent = await findAcpAgent(id)
+    return agent ? isHarnessCommandAvailableAsync(agent.command, env) : false
   }
   return command !== undefined && (await isHarnessCommandAvailableAsync(command, env))
 }

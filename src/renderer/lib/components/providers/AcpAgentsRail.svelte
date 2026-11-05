@@ -99,8 +99,8 @@
       <div class="min-w-0">
         <p class="text-sm font-medium">No ACP agents yet</p>
         <p class="mt-0.5 text-xs text-muted">
-          Runs any harness that speaks the Agent Client Protocol. Add one with the command that
-          starts it.
+          An ACP agent runs any harness that speaks the Agent Client Protocol. You add one with the
+          command that starts it.
         </p>
       </div>
     </div>
