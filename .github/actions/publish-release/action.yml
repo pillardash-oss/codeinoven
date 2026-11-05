@@ -74,11 +74,15 @@ runs:
         if [ "$RELEASE_CHANNEL" = "nightly" ]; then
           title="CodeInOven $RELEASE_VERSION nightly"
           create_flags=(--prerelease --latest=false)
-          edit_flags=(--prerelease)
+          # `--draft=false` publishes a release a failed attempt left as a draft:
+          # `gh release create` cleans its draft up itself, but that cleanup can
+          # fail too (Nightly #206: two consecutive HTTP 500s), and a draft that
+          # is never published is invisible to users and to the updater.
+          edit_flags=(--prerelease --draft=false)
         else
           title="CodeInOven $RELEASE_VERSION"
           create_flags=(--latest)
-          edit_flags=(--prerelease=false --latest)
+          edit_flags=(--prerelease=false --draft=false --latest)
         fi
 
         if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
@@ -152,21 +156,25 @@ runs:
             fi
             # Chained so a failed upload cannot be masked by a succeeding edit:
             # `publish_exit` reflects only the last command in the branch.
+            # Every guarded command captures its status with `||`, never with a
+            # following `$?`: the step runs under `set -e`, which aborts the
+            # shell at the first failing command, so a bare
+            # `cmd` + `exit=$?` pair skipped the loop entirely and failed
+            # Nightly #206 on a single transient HTTP 500 with no retry.
             if [ "$branch_exit" -eq 0 ]; then
-              gh release edit "$RELEASE_TAG" --title "$title" --notes-file release-notes.md "${edit_flags[@]}"
-              branch_exit=$?
+              gh release edit "$RELEASE_TAG" --title "$title" --notes-file release-notes.md "${edit_flags[@]}" || branch_exit=$?
             fi
             publish_exit=$branch_exit
             if [ "$immutable_blocked" = true ]; then
               break
             fi
           else
+            publish_exit=0
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$GITHUB_SHA" \
               --title "$title" \
               --notes-file release-notes.md \
-              "${create_flags[@]}"
-            publish_exit=$?
+              "${create_flags[@]}" || publish_exit=$?
           fi
           if [ "$publish_exit" -eq 0 ]; then
             break
