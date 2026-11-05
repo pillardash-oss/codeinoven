@@ -6,7 +6,7 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
-  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
@@ -48,7 +48,6 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
-  import AcpAgentsRail from './AcpAgentsRail.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
   import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
@@ -94,17 +93,31 @@
   /** Harness id whose resolved path was just copied   drives the Copy → Check icon swap. */
   let copiedPathId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+  /** ACP agent awaiting removal; the record is deleted, nothing is uninstalled. */
+  let acpRemoveTarget = $state<ProviderConnectionInfo | null>(null)
+  let acpRemoving = $state(false)
+  let acpRemoveError = $state('')
 
   /**
-   * The dedicated-driver rows. Agents the user added over ACP are their own
-   * records, so that rail renders from the ACP store rather than the registry:
-   * nothing there is installed, updated or managed by the app.
+   * The rows one rail shows. Native harnesses come from the registry, ACP agents
+   * from the records the user added, and both arrive as the same
+   * `ProviderConnectionInfo` row: an agent differs only in that the app can never
+   * install or update it, so every other column renders identically.
    */
+  const railProviders = $derived(
+    providerStore.providers.filter(
+      (provider) => (provider.transport ?? 'native') === (activeTab === 'acp' ? 'acp' : 'native')
+    )
+  )
   const nativeProviders = $derived(
     providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'native')
   )
   let nativeCount = $derived(nativeProviders.length)
-  let acpCount = $derived(acpAgentsStore.agents.length)
+  let acpCount = $derived(
+    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'acp').length
+  )
+  /** Agents in the user's own store, which answers before the probe pass does. */
+  let agentCount = $derived(acpAgentsStore.agents.length)
   let allCount = $derived(nativeCount)
   let updatesCount = $derived(
     nativeProviders.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id))
@@ -115,7 +128,7 @@
   )
 
   let filteredProviders = $derived.by(() => {
-    let list = nativeProviders
+    let list = railProviders
     if (statusFilter === 'updates') {
       list = list.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id))
     } else if (statusFilter === 'issues') {
@@ -194,11 +207,13 @@
       return {
         Icon: CioCheckCircle,
         label:
-          provider.executionTarget?.kind === 'wsl'
-            ? `Ready · WSL ${provider.executionTarget.distribution}`
-            : provider.executionTarget?.kind === 'bundled'
-              ? 'Ready · Bundled'
-              : 'Ready · Native',
+          provider.transport === 'acp'
+            ? 'Ready · ACP'
+            : provider.executionTarget?.kind === 'wsl'
+              ? `Ready · WSL ${provider.executionTarget.distribution}`
+              : provider.executionTarget?.kind === 'bundled'
+                ? 'Ready · Bundled'
+                : 'Ready · Native',
         classes: 'border-success/30 bg-success/10 text-success'
       }
     }
@@ -241,6 +256,29 @@
         onClick: () => void checkOne(provider.id)
       }
     ]
+    // An ACP agent is a record the user owns, not an install: everything about it
+    // belongs in this menu, and the only action the row keeps outside is the
+    // provider itself.
+    if (provider.transport === 'acp') {
+      items.push(
+        { label: `divider-${provider.id}`, divider: true },
+        {
+          label: 'Edit agent',
+          icon: CioPencil,
+          onClick: () => acpAgentsStore.openEdit(provider.id)
+        },
+        {
+          label: 'Remove agent',
+          icon: CioTrash,
+          danger: true,
+          onClick: () => {
+            acpRemoveError = ''
+            acpRemoveTarget = provider
+          }
+        }
+      )
+      return items
+    }
     if (canRestartHarness(provider) || canUninstallHarness(provider)) {
       items.push({ label: `divider-${provider.id}`, divider: true })
     }
@@ -414,6 +452,29 @@
   function cancelRestart(): void {
     if (restartBusy) return
     restartTarget = null
+  }
+
+  /** Remove one ACP agent's record. Removal is never silent. */
+  async function confirmAcpRemove(): Promise<void> {
+    const target = acpRemoveTarget
+    if (!target || acpRemoving) return
+    acpRemoving = true
+    acpRemoveError = ''
+    try {
+      await acpAgentsStore.remove(target.id)
+      acpRemoveTarget = null
+    } catch (error) {
+      acpRemoveError =
+        error instanceof Error ? error.message : `${target.name} could not be removed.`
+    } finally {
+      acpRemoving = false
+    }
+  }
+
+  function cancelAcpRemove(): void {
+    if (acpRemoving) return
+    acpRemoveTarget = null
+    acpRemoveError = ''
   }
 
   function customCountFor(harnessId: string): number {
@@ -786,8 +847,28 @@
       </div>
     </div>
 
-    {#if activeTab === 'acp'}
-      <AcpAgentsRail query={searchQuery} />
+    {#if activeTab === 'acp' && acpAgentsStore.settings !== null && agentCount === 0}
+      <div class="flex flex-wrap items-center justify-between gap-4 border border-dashed p-6">
+        <div class="flex min-w-0 items-start gap-3">
+          <CioPlug size={20} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
+          <div class="min-w-0">
+            <p class="text-sm font-medium">No ACP agents yet</p>
+            <p class="mt-0.5 text-xs text-muted">
+              An ACP agent runs any harness that speaks the Agent Client Protocol. You add one with
+              the command that starts it.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          title="Add an ACP agent"
+          onclick={() => acpAgentsStore.openNew()}
+        >
+          <CioPlus size={13} />
+          Add agent
+        </button>
+      </div>
     {:else}
       <div class="@container space-y-3">
         {#each filteredProviders as provider (provider.id)}
@@ -910,7 +991,10 @@
                     View details
                   </button>
                 {:else}
-                  {#if provider.status === 'not_found'}
+                  {#if provider.transport === 'acp'}
+                    <!-- Nothing to install or update: the agent is a command the
+                         user already had, so the row keeps only its providers. -->
+                  {:else if provider.status === 'not_found'}
                     <button
                       class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
                       title="Install {provider.name} in the embedded terminal"
@@ -954,17 +1038,13 @@
                     class="flex shrink-0 items-center gap-1.5 whitespace-nowrap bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
                     title={canAddProvider(provider)
                       ? provider.transport === 'acp'
-                        ? `Sign in to ${provider.name} with a method the agent declares`
+                        ? `Manage the providers ${provider.name} signs in to`
                         : `Add a provider to ${provider.name}`
                       : 'Install the harness first, then re-check to add providers'}
                     disabled={!canAddProvider(provider)}
                     onclick={() => providerConnectFlow.open(provider.id)}
                   >
-                    {#if provider.transport === 'acp'}
-                      <CioKey size={13} /> Sign in
-                    {:else}
-                      <CioPlug size={13} /> Manage providers
-                    {/if}
+                    <CioPlug size={13} /> Manage providers
                   </button>
                 {/if}
 
@@ -995,6 +1075,29 @@
                     class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
                       >{provider.detail ?? 'No additional detail available.'}</code
                     ></pre>
+                {:else if provider.transport === 'acp'}
+                  <p class="text-xs font-semibold text-foreground">Agent</p>
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-foreground">Command</p>
+                      <p class="mt-0.5 truncate font-mono text-[0.625rem] text-dimmed">
+                        {provider.command}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      class="flex shrink-0 items-center gap-1.5 border bg-elevated px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                      title="Edit {provider.name} in the ACP agent editor"
+                      onclick={() => acpAgentsStore.openEdit(provider.id)}
+                    >
+                      <CioPencil size={13} /> Edit agent
+                    </button>
+                  </div>
+                  <p class="text-[0.625rem] leading-relaxed text-dimmed">
+                    {provider.name} was added by you and is never installed or updated by
+                    {APP_NAME}. Its providers and models belong to the agent; Manage providers shows
+                    the sign-in methods it declares.
+                  </p>
                 {:else}
                   <p class="text-xs font-semibold text-foreground">Settings</p>
                   {#if manifestFor(provider.id)}
@@ -1088,6 +1191,27 @@
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}
 </div>
+
+{#if acpRemoveTarget}
+  <ConfirmDialog
+    open
+    title={`Remove ${acpRemoveTarget.name}?`}
+    confirmLabel="Remove agent"
+    variant="danger"
+    busy={acpRemoving}
+    onCancel={cancelAcpRemove}
+    onConfirm={confirmAcpRemove}
+  >
+    <p>
+      {acpRemoveTarget.name} stops appearing in the harness list, and any thread pinned to it must pick
+      another harness. Nothing is uninstalled from your machine, and {APP_NAME} keeps the rest of your
+      data.
+    </p>
+    {#if acpRemoveError}
+      <p class="text-xs text-danger">{acpRemoveError}</p>
+    {/if}
+  </ConfirmDialog>
+{/if}
 
 {#if restartTarget}
   <ConfirmDialog
