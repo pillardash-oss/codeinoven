@@ -335,6 +335,22 @@ export class ChangeTrackingService {
     return { projectRoot, capturedAt: Date.now(), files }
   }
 
+  /**
+   * Capture one project-relative path as it is on disk right now.
+   *
+   * Completion normally compares two whole-project snapshots, but a file a tool
+   * provably just wrote can be missing from that diff while another turn keeps
+   * the project contested. Re-reading the single path the turn has evidence for
+   * is what keeps its real change on the card, and the same containment, size
+   * and blob rules apply as in a full snapshot.
+   */
+  async capturePath(projectPath: string, relativePath: string): Promise<CheckpointFile | null> {
+    const projectRoot = await this.resolveProjectRoot(projectPath)
+    const candidate = this.resolveTrackedPath(projectRoot, relativePath)
+    const observed = await this.observeFile(projectRoot, candidate, new Map())
+    return observed.kind === 'captured' ? observed.file : null
+  }
+
   /** Project-relative paths created, modified, or deleted between two fingerprints. */
   diffFingerprints(before: ProjectFingerprint, after: ProjectFingerprint): string[] {
     if (before.projectRoot !== after.projectRoot) {

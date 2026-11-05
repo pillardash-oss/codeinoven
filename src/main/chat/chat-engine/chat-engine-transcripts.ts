@@ -480,6 +480,11 @@ export class ChatEngineTranscripts {
         undefined,
         {
           changeSources: info.changeSources,
+          // The durable transcript is handed over separately: absorbing it into
+          // the live session can be undone by an interleaved scan, and a turn
+          // whose only evidence was absorbed and then dropped recorded no
+          // changes at all.
+          evidencedPaths: durableEvidence ? new Set(durableEvidence.keys()) : undefined,
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignPrecisePaths: foreignLive.claimed,
           foreignWindowPaths: foreignLive.window,
