@@ -7,24 +7,24 @@
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import { composerHasThirdLine, composerShowsExpandControl } from '#shared/composer-expand'
   import { api, ApiError } from '#lib/api/client'
-  import { statusSkin, toneColor } from '#lib/api/status'
   import type { Project, Prompt, Thread } from '#lib/api/types'
 
   /**
    * The composer writes into the thread and states what it is writing into, the
-   * same readings the desktop composer carries under its editor: the thread's
-   * state, the model, the harness, and the project. The service fixes the model
-   * and harness per thread, so on a phone they are readings rather than pickers,
-   * and nothing here opens a menu that would have nothing to choose from.
+   * same readings the desktop composer carries under its editor: the model, the
+   * harness and the project. The service fixes the model and harness per thread,
+   * so on a phone they are readings rather than pickers, and nothing here opens a
+   * menu that would have nothing to choose from.
    *
    * Enter sends from the keyboard, because a phone keyboard has no modifier to
    * hold; Shift+Enter writes a second line, and Cmd/Ctrl+Enter still sends the
-   * way it does on the desktop. The box grows to six lines and stops, so the
-   * transcript above it keeps most of the screen.
+   * way it does on the desktop. The field grows to the app's rest cap and stops,
+   * unless the compose control has grown it, so the transcript above keeps most
+   * of the screen.
    */
   interface Props {
     threadId: string
-    /** The thread being written into; carried for its state, model and harness. */
+    /** The thread being written into; carried for its model and harness. */
     thread?: Thread | null
     /** The project the thread belongs to, named beside the model. */
     project?: Project | null
@@ -53,9 +53,6 @@
   let box: HTMLTextAreaElement | null = null
 
   let canSend = $derived(text.trim().length > 0 && !sending)
-
-  let skin = $derived(statusSkin(thread?.status ?? 'created'))
-  let detailTone = $derived(toneColor(skin.tone))
 
   /** Height follows the content; the stylesheet's cap is what stops the growth,
    *  exactly as the desktop editor's `max-height` does. */
@@ -132,7 +129,12 @@
   }
 </script>
 
-<form class="composer-box" class:is-expanded={expanded} onsubmit={onSubmit}>
+<form
+  class="composer-box"
+  data-has-text={text.trim().length > 0}
+  data-expanded={expanded}
+  onsubmit={onSubmit}
+>
   <div class="composer-field">
     <span class="composer-prompt" aria-hidden="true">&gt;</span>
     <textarea
@@ -157,37 +159,38 @@
         : 'Expand the composer for a taller typing area'}
       onclick={toggleExpand}
     >
-      {#if expanded}
-        <CioMinimize size={13} />
-      {:else}
-        <CioMaximize size={13} />
-      {/if}
+      <span class="expand-glyphs" aria-hidden="true">
+        <span class="g-max"><CioMaximize size={13} /></span>
+        <span class="g-min"><CioMinimize size={13} /></span>
+      </span>
     </button>
   {/if}
 
-  <div class="composer-foot">
-    <span class="composer-meta">
+  <div class="composer-toolbar">
+    <span class="toolbar-group">
       {#if error}
         <span class="composer-error" title={error}>{error}</span>
-      {:else if thread}
-        <i class="dot" style:background={detailTone} aria-hidden="true"></i>
-        {#if thread.model}
-          <span class="composer-chip" title={`Model: ${thread.model}`}>
+      {:else}
+        {#if thread?.model}
+          <span class="model-reading" title={`Model: ${thread.model}`}>
             <CioCpu size={12} />
-            {thread.model}
+            <span>{thread.model}</span>
           </span>
         {/if}
-        {#if thread.harness}
-          <span class="composer-chip" title={`Harness: ${thread.harness}`}>
-            <CioHarness size={12} />
+        {#if thread?.harness}
+          <span class="think-chip" title={`Harness: ${thread.harness}`}>
+            <CioHarness size={10} />
             {thread.harness}
           </span>
         {/if}
         {#if project}
-          <span class="composer-where" title={project.name}>{project.name}</span>
+          <span class="project-reading" title={project.name}>{project.name}</span>
         {/if}
       {/if}
     </span>
+
+    <span class="toolbar-spacer"></span>
+
     <button
       class="send"
       type="submit"
@@ -195,95 +198,7 @@
       title={working ? 'Queue this message' : 'Send this message'}
       aria-label={working ? 'Queue this message' : 'Send this message'}
     >
-      <CioArrowUp size={17} />
+      <CioArrowUp size={15} />
     </button>
   </div>
 </form>
-
-<style>
-  /* The field keeps a gutter on its left, as the app's editor does: the prompt
-     marker lives in it, every wrapped line clears it, and the compose control
-     sits under the marker without ever covering the writing. */
-  .composer-box {
-    position: relative;
-  }
-
-  .composer-field {
-    position: relative;
-    display: flex;
-    align-items: flex-start;
-  }
-
-  .composer-prompt {
-    position: absolute;
-    top: 0.6875rem;
-    left: 0.5rem;
-    z-index: 1;
-    font-weight: 700;
-    line-height: 1.45;
-    color: var(--color-accent);
-    opacity: 0.55;
-    pointer-events: none;
-    transition:
-      opacity 200ms ease-out,
-      transform 200ms ease-out;
-  }
-
-  .composer-box:focus-within .composer-prompt {
-    opacity: 1;
-    transform: translateX(0.125rem);
-  }
-
-  .composer-field textarea {
-    flex: 1 1 auto;
-    width: 100%;
-    min-width: 0;
-    padding-left: 1.5rem;
-    overflow-y: auto;
-  }
-
-  /* The compose control sits in the gutter, under the prompt, clear of the text.
-     The same spot the desktop draws it in. */
-  .composer-expand {
-    position: absolute;
-    top: 2.5rem;
-    left: 0.375rem;
-    display: grid;
-    place-items: center;
-    width: 1.5rem;
-    height: 1.5rem;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--color-dimmed);
-    cursor: pointer;
-    transition:
-      background 120ms ease-out,
-      color 120ms ease-out;
-  }
-
-  .composer-expand:hover {
-    background: var(--color-elevated);
-    color: var(--color-foreground);
-  }
-
-  .composer-box.is-expanded {
-    margin-inline: -0.75rem;
-  }
-
-  .composer-error {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--color-danger);
-  }
-
-  /* The readings never wrap: the project name is the one part that gives way. */
-  .composer-where {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--color-muted);
-  }
-</style>
