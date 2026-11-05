@@ -113,6 +113,10 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       0
     )
     const projectId = optionalEntityId(entry.projectId, `Memory entry ${index} project ID`)
+    const scopeBucketId = optionalEntityId(
+      entry.scopeBucketId,
+      `Memory entry ${index} scope bucket ID`
+    )
     const threadId = optionalEntityId(entry.threadId, `Memory entry ${index} thread ID`)
     const assistantId = optionalEntityId(entry.assistantId, `Memory entry ${index} assistant ID`)
     const scopes = validateMemoryScopes(
@@ -134,6 +138,7 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       frequency,
       lastReinforced,
       projectId,
+      scopeBucketId,
       threadId,
       assistantId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
@@ -259,6 +264,7 @@ export function normalizeStoredProposal(value: unknown): MemoryProposal | null {
     const category = enumValue(value.category, VALID_CATEGORIES, 'preference', 'Proposal category')
     const priority = enumValue(value.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
     const projectId = optionalEntityId(value.projectId, 'Proposal project ID')
+    const scopeBucketId = optionalEntityId(value.scopeBucketId, 'Proposal scope bucket ID')
     const threadId = optionalEntityId(value.threadId, 'Proposal thread ID')
     const assistantId = optionalEntityId(value.assistantId, 'Proposal assistant ID')
     const legacyScope = typeof value.scope === 'string' ? value.scope : undefined
@@ -283,6 +289,7 @@ export function normalizeStoredProposal(value: unknown): MemoryProposal | null {
       priority,
       scopes,
       projectId,
+      scopeBucketId,
       threadId,
       assistantId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),

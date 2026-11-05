@@ -2,7 +2,7 @@ import { SvelteMap } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
 import { scopeState, type ScopeProject } from '$lib/stores/scope.svelte'
-import type { Assistant, Thread } from '$shared/types'
+import type { Assistant, ScopeBucket, Thread } from '$shared/types'
 
 /** How long a project's thread list stays reusable across picker opens. */
 const THREADS_TTL_MS = 30_000
@@ -34,6 +34,25 @@ class MemoryScopeOptionsState {
   /** Stored custom icon data URLs, so a picked assistant shows its own mark. */
   get assistantIconUrls(): ReadonlyMap<string, string> {
     return assistants.iconUrls
+  }
+
+  /**
+   * The project's feature scopes, offered by the scope picker.
+   *
+   * Read from the shared scope board cache rather than fetched per panel: the
+   * board is loaded once per project and every other scope surface reads the
+   * same map, so opening a memory picker costs nothing new.
+   */
+  bucketsFor(projectId?: string): ScopeBucket[] {
+    if (!projectId) return []
+    const buckets = scopeState.boards.get(projectId)?.buckets ?? []
+    return [...buckets].sort((a, b) => a.sortOrder - b.sortOrder)
+  }
+
+  /** Load a project's scope board for the picker. Safe to spam: the store caches it. */
+  async ensureBuckets(projectId?: string): Promise<void> {
+    if (!projectId || scopeState.hasBoard(projectId)) return
+    await scopeState.cacheBoardForLookup(projectId)
   }
 
   /** Load the assistant list on the first panel that needs it. Safe to spam:

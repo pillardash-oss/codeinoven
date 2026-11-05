@@ -293,10 +293,13 @@ export class ChatEngineTemporaryChats {
       'Temporary chat'
     )
     try {
+      const ownerThread = await this.host.threadManager.getThread(projectId, threadId)
       const memoryPrompt = await this.host.state.memoryService.formatCurrent(
         projectId,
         threadId,
-        modelKey(settings.harnessId, settings.providerId, settings.modelId)
+        modelKey(settings.harnessId, settings.providerId, settings.modelId),
+        ownerThread?.assistantId,
+        ownerThread?.scopeBucketId
       )
       const systemPrompt = [
         TEMPORARY_CHAT_SYSTEM_PROMPT,

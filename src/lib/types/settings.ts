@@ -104,12 +104,13 @@ export type MemoryAudience = 'projects' | 'chat' | 'assistant' | 'browser'
 
 /**
  * One scope a memory carries: an audience, or a single place inside an
- * audience (`project`/`thread` for projects, `routine`/`task` for assistants).
+ * audience (`project`/`scope`/`thread` for projects, `routine`/`task` for
+ * assistants).
  *
  * A scope set is either audience-level (any subset of `MemoryAudience`, empty
  * meaning every audience) or exactly one place. It is never both.
  */
-export type MemoryScope = MemoryAudience | 'project' | 'thread' | 'routine' | 'task'
+export type MemoryScope = MemoryAudience | 'project' | 'scope' | 'thread' | 'routine' | 'task'
 
 export type MemorySource = 'manual' | 'auto-detected'
 
@@ -128,6 +129,8 @@ export interface MemoryEntry {
   frequency: number
   lastReinforced: number
   projectId?: string
+  /** Set by scope-scoped memory: the project feature scope that receives it. */
+  scopeBucketId?: string
   threadId?: string
   /** Set by routine-scoped memory: the routine whose tasks receive it. */
   assistantId?: string
@@ -152,6 +155,8 @@ export interface MemoryProposal {
   /** Audiences/places this proposal would apply to; empty means every audience. */
   scopes: MemoryScope[]
   projectId?: string
+  /** Set by a scope-scoped proposal: the project feature scope that receives it. */
+  scopeBucketId?: string
   threadId?: string
   /** Set by a routine-scoped proposal: the routine whose tasks receive it. */
   assistantId?: string

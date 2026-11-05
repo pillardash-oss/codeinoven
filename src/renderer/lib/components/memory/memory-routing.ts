@@ -33,6 +33,8 @@ export interface MemoryScopeOption {
   needsThread: boolean
   /** The entry stores a chosen assistant on itself. */
   needsAssistant: boolean
+  /** The entry stores a chosen project feature scope on itself. */
+  needsScope: boolean
 }
 
 /** Audience choices are separate from Global, which uses an empty scope set. */
@@ -44,7 +46,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     },
     {
       value: 'chat',
@@ -52,7 +55,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     },
     {
       value: 'assistant',
@@ -60,7 +64,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     },
     {
       value: 'browser',
@@ -68,7 +73,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     }
   ],
   'sidebar-projects': [
@@ -78,7 +84,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     },
     {
       value: 'project',
@@ -86,7 +93,17 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: true,
       needsProject: true,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
+    },
+    {
+      value: 'scope',
+      label: 'Scope',
+      located: true,
+      needsProject: true,
+      needsThread: false,
+      needsAssistant: false,
+      needsScope: true
     },
     {
       value: 'thread',
@@ -94,7 +111,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: true,
       needsProject: true,
       needsThread: true,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     }
   ],
   'sidebar-chats': [
@@ -104,7 +122,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     },
     {
       value: 'thread',
@@ -112,7 +131,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: true,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     }
   ],
   'sidebar-browser': [
@@ -122,7 +142,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     },
     {
       value: 'thread',
@@ -130,7 +151,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: true,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     }
   ],
   'sidebar-assistant': [
@@ -140,7 +162,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: false,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     },
     {
       value: 'routine',
@@ -148,7 +171,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: true,
       needsProject: false,
       needsThread: false,
-      needsAssistant: true
+      needsAssistant: true,
+      needsScope: false
     },
     {
       value: 'task',
@@ -156,7 +180,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
       located: true,
       needsProject: false,
       needsThread: false,
-      needsAssistant: false
+      needsAssistant: false,
+      needsScope: false
     }
   ]
 }
@@ -166,6 +191,8 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
 export interface MemorySurfaceContext {
   surface: MemoryPanelSurface
   projectId?: string
+  /** The project feature scope the open thread belongs to, when it has one. */
+  scopeBucketId?: string
   threadId?: string
   assistantId?: string
 }
@@ -203,6 +230,7 @@ export function entryVisibleOnSurface(entry: MemoryEntry, context: MemorySurface
   return memoryScopesMatchContext(entry, {
     audience: surfaceContextAudience(context.surface),
     projectId: context.projectId,
+    scopeBucketId: context.scopeBucketId,
     threadId: context.threadId,
     assistantId: context.assistantId
   })
@@ -219,6 +247,7 @@ export function proposalVisibleOnSurface(
   return memoryScopesMatchContext(proposal, {
     audience: surfaceContextAudience(context.surface),
     projectId: context.projectId,
+    scopeBucketId: context.scopeBucketId,
     threadId: context.threadId,
     assistantId: context.assistantId
   })
@@ -241,6 +270,11 @@ export function locationForScopeChange(
   switch (locationScopeOf(scopes)) {
     case 'project':
       return { projectId: current.projectId ?? context.projectId }
+    case 'scope':
+      return {
+        projectId: current.projectId ?? context.projectId,
+        scopeBucketId: current.scopeBucketId ?? context.scopeBucketId
+      }
     case 'thread':
       return {
         projectId: current.projectId ?? context.projectId,
@@ -273,12 +307,18 @@ export function memoryDestinationFor(
   const location = locationScopeOf(entry.scopes)
   const context: MemoryScopeLocation = {
     projectId: entry.projectId ?? fallback.projectId,
+    scopeBucketId: entry.scopeBucketId ?? fallback.scopeBucketId,
     threadId: entry.threadId ?? fallback.threadId,
     assistantId: entry.assistantId ?? fallback.assistantId
   }
   if (location === 'project' && !context.projectId) {
     throw new Error(
       `"${entry.label}" needs a project. Use Global or Projects scope, or add this memory inside a project.`
+    )
+  }
+  if (location === 'scope' && (!context.projectId || !context.scopeBucketId)) {
+    throw new Error(
+      `"${entry.label}" needs a project scope. Use Global, Projects, or Specific project, or pick the scope this memory belongs to.`
     )
   }
   if (location === 'thread' && (!context.projectId || !context.threadId)) {
@@ -310,6 +350,7 @@ export function normalizeMemoryEntryForLocation(
   return {
     ...entry,
     projectId: resolved.projectId,
+    scopeBucketId: resolved.scopeBucketId,
     threadId: resolved.threadId,
     assistantId: resolved.assistantId
   }
@@ -363,6 +404,7 @@ export function planMemorySaveGroups(
     ensure(location).managedEntries.push(
       normalizeMemoryEntryForLocation(entry, {
         projectId: location.projectId,
+        scopeBucketId: entry.scopeBucketId,
         threadId: location.threadId,
         assistantId: entry.assistantId
       })
@@ -388,6 +430,7 @@ export function memoryEntriesHaveChanges(
       entry.category !== original.category ||
       entry.priority !== original.priority ||
       entry.projectId !== original.projectId ||
+      entry.scopeBucketId !== original.scopeBucketId ||
       entry.threadId !== original.threadId ||
       entry.assistantId !== original.assistantId ||
       entry.scopes.join(',') !== original.scopes.join(',') ||

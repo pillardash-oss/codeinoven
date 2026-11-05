@@ -112,7 +112,12 @@ export class ChatEngineMemory {
     const ownerThread = await this.host.threadManager.getThread(projectId, threadId)
     if (ownerThread && isAssistantSetupThread(ownerThread)) return
     const assistantId = ownerThread?.assistantId
-    const current = await this.host.state.memoryService.current(projectId, threadId, assistantId)
+    const current = await this.host.state.memoryService.current(
+      projectId,
+      threadId,
+      assistantId,
+      ownerThread?.scopeBucketId
+    )
     if (current.enabled) {
       // Deterministic extraction gate (A-06): skip the auxiliary model call when
       // no durable candidate is detected, the conversation is debounced, or the
@@ -625,7 +630,12 @@ export class ChatEngineMemory {
       }
     }
     const assistantId = ownerThread?.assistantId
-    const current = await this.host.state.memoryService.current(projectId, threadId, assistantId)
+    const current = await this.host.state.memoryService.current(
+      projectId,
+      threadId,
+      assistantId,
+      ownerThread?.scopeBucketId
+    )
     if (!current.enabled) {
       return {
         status: 'memory_disabled',

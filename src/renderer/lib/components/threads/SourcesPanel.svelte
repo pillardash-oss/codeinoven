@@ -31,6 +31,7 @@
     entryVisibleOnSurface,
     type MemoryPanelSurface
   } from '$lib/components/memory/memory-routing'
+  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import type {
     AgentCapabilityEntry,
     AgentContextCapabilities,
@@ -329,10 +330,17 @@
         ? 'sidebar-chats'
         : 'sidebar-projects'
     // An assistant task's assistant decides which assistant-scoped entries apply,
-    // so it is read from the thread rather than guessed from the panel.
-    const assistantId = isAssistant
-      ? (await invoke('thread:get', containerId, containerThreadId))?.assistantId
+    // and a project thread's feature scope decides which scope-scoped ones do, so
+    // both are read from the thread rather than guessed from the panel.
+    const needsThread = isAssistant || surface === 'sidebar-projects'
+    const thread = needsThread
+      ? await invoke('thread:get', containerId, containerThreadId)
       : undefined
+    const assistantId = isAssistant ? thread?.assistantId : undefined
+    const scopeBucketId =
+      surface === 'sidebar-projects'
+        ? (thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+        : undefined
     const [rootEntries, containerEntries, threadEntries] = await Promise.all([
       invoke('memory:getEntries'),
       invoke('memory:getEntries', containerId),
@@ -342,6 +350,7 @@
       entryVisibleOnSurface(entry, {
         surface,
         projectId: containerId,
+        scopeBucketId,
         threadId: containerThreadId,
         assistantId
       })

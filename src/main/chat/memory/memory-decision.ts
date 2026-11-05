@@ -102,6 +102,9 @@ const SCOPE_OPTIONS: Record<MemoryScope, string> = {
   assistant: 'Applies to every assistant, whatever its task.',
   browser: 'Applies to every browser chat, but not to projects or standalone chats.',
   project: 'Applies only to this project.',
+  // A project feature scope is chosen by the user, never by the extraction model,
+  // so this description exists only to keep the scope vocabulary exhaustive.
+  scope: 'Applies only to one feature scope of this project.',
   thread: 'Applies only to this conversation.',
   // Stored token for "one assistant"; see MEMORY_LOCATION_SCOPES.
   routine: 'Applies only to tasks in this assistant.',

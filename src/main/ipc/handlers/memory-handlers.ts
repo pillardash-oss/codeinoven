@@ -79,7 +79,8 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
         : undefined,
       safeProjectId === INBOX_PROJECT_ID ? 'standalone-chat' : 'project-thread',
       'full',
-      thread?.assistantId
+      thread?.assistantId,
+      thread?.scopeBucketId
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>
@@ -138,6 +139,7 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
           typeof opts.source === 'string' ? (opts.source as MemoryEntry['source']) : undefined,
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
+        scopeBucketId: optionalMemoryEntityId(opts.scopeBucketId, 'Scope bucket ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
         assistantId: optionalMemoryEntityId(opts.assistantId, 'Assistant ID')
       })
@@ -196,6 +198,7 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
         scopes: Array.isArray(opts.scopes) ? (opts.scopes as MemoryScope[]) : undefined,
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
+        scopeBucketId: optionalMemoryEntityId(opts.scopeBucketId, 'Scope bucket ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
         assistantId: optionalMemoryEntityId(opts.assistantId, 'Assistant ID')
       })

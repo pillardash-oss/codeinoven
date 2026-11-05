@@ -66,9 +66,9 @@ export class ChatEngineSpecAuthoring {
       projectId,
       threadId
     )
-    const workflowThread = pendingWorkflow
-      ? await this.host.threadManager.getThread(projectId, threadId)
-      : null
+    // Read once: the pending workflow and the thread's feature scope both need it.
+    const ownerThread = await this.host.threadManager.getThread(projectId, threadId)
+    const workflowThread = pendingWorkflow ? ownerThread : null
     const artifactDirectory = featureArtifactDirectory(
       await ensureFeatureSlug(this.host.database, projectId, threadId)
     )
@@ -76,7 +76,9 @@ export class ChatEngineSpecAuthoring {
     const memoryPrompt = await this.host.state.memoryService.formatCurrent(
       projectId,
       threadId,
-      modelKey(settings.harnessId, settings.providerId, settings.modelId)
+      modelKey(settings.harnessId, settings.providerId, settings.modelId),
+      ownerThread?.assistantId,
+      ownerThread?.scopeBucketId
     )
     const specMemoryPrompt = await this.host.units['memory'].formatSpecGenerationMemory(
       projectId,
