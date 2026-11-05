@@ -136,6 +136,7 @@ export class ChatEngineAudit {
         `Worker ${task?.workerName ?? task?.threadId ?? taskId} reported task “${task?.title ?? taskId}”.`,
         'Inspect the worker thread, project changes, audit-checklist.md, baseline.txt, and check.txt. Correctly audit every checklist item.',
         'Call the review-task API with pass, rework, or fail. If it passes, assign every newly ready task returned by the API. If you mark it fail, re-dispatch it immediately with assign-task so a fresh worker retries it   a failed task is not terminal.',
+        this.host.units['assignment'].coordinatorWaitingInstruction(),
         this.host.units['assignment-run'].assignmentApiInstructions(
           this.host.units['assignment-run'].assignmentApiCapability({
             role: 'coordinator',

@@ -675,6 +675,26 @@ export class ChatEngineAssignment {
     return assignment.content.tasks.some((task) => task.status !== 'completed')
   }
 
+  /**
+   * The rule every coordinator prompt must carry: waiting is the app's job.
+   *
+   * The report-driven flow is already automatic. A worker that reports wakes the
+   * coordinator through `promptCoordinatorForAudit`, a worker that finishes
+   * without reporting is handed over by the unreported-completion path, and a
+   * worker that dies leaves an attention task that resumes the coordinator. A
+   * coordinator that does not know any of that invents its own wait: it runs
+   * `curl` in a `for i in $(seq ...)` loop against `/v1/assignments/get`, which
+   * keeps its turn open for minutes, burns tokens, and holds the thread busy
+   * while the report it is waiting for has nowhere to land.
+   */
+  coordinatorWaitingInstruction(): string {
+    return [
+      "Waiting for a worker is the application's job, not yours.",
+      'When every task you can act on is dispatched and the rest are workers still running, end your turn: the application starts a new coordinator turn the moment a worker reports, finishes without reporting, or leaves an attention task, and that turn carries the report.',
+      'Never poll, sleep, or loop on /v1/assignments/get or any other endpoint to wait for a worker: a waiting loop keeps this thread busy, delays the report you are waiting for, and the report reaches you as a new turn anyway. Call get only to read state you are about to act on right now.'
+    ].join(' ')
+  }
+
   coordinatorAssignmentPrompt(assignment: AssignmentPlan): string {
     const actionableTasks = assignment.content.tasks.filter(
       (task) => task.status !== 'completed' && task.status !== 'blocked'
@@ -682,6 +702,7 @@ export class ChatEngineAssignment {
     return [
       'You are the Sr. Engineer coordinating an approved Assignment. This is a live user-facing coordinator thread: the user can steer or stop you at any time.',
       'Assign ready tasks using the deterministic local API. For a worker task, the API creates and prompts its durable worker thread. For a Sr. Engineer task, the API returns the task and you perform it in this coordinator thread.',
+      this.coordinatorWaitingInstruction(),
       'When the user changes direction, use the steer-worker or stop-worker endpoint for any affected worker before continuing.',
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks. A rework review automatically returns the same approved task and your complete review findings to its worker; do not create a replacement Assignment or ask the user to sign off again.',
