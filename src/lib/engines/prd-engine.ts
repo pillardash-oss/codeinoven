@@ -5,6 +5,7 @@ import type { StorageEngine } from '../../main/storage/storage-engine'
 import { exportPrdMarkdown } from '../prd/prd-markdown'
 import { parseGeneratedPrdContent } from '../prd/prd-validation'
 import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
+import { markThreadEngineeringEngaged } from './engineering-engagement'
 import type {
   PrdAnnotation,
   PrdContent,
@@ -466,6 +467,10 @@ export class PrdEngine {
       document.createdAt,
       document.updatedAt
     )
+    // The version now exists, so the thread owns a PRD and the view must read
+    // it: the marker is what lets the card and the Studio control appear for a
+    // PRD an agent created on a plain conversation.
+    markThreadEngineeringEngaged(this.db, document.projectId, document.threadId)
     const featureSlug = await ensureFeatureSlug(this.db, document.projectId, document.threadId)
     const project = requireLocalProject(this.db, document.projectId)
     const writes = [

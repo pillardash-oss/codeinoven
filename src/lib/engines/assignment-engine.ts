@@ -22,6 +22,7 @@ import { DEFAULT_SCOPE_BUCKET_ID, workerReportsToCoordinator } from '../types'
 import { generateId } from '../utils'
 import { validateAssignment } from '../assignment/assignment-validation'
 import { ThreadManager } from './thread-manager'
+import { markThreadEngineeringEngaged } from './engineering-engagement'
 import type { SpecEngine } from './spec-engine'
 import { AssignmentEngineError } from './assignment-engine-error'
 import {
@@ -186,7 +187,6 @@ export class AssignmentEngine {
     await this.persist(assignment)
     return assignment
   }
-
   getActive(projectId: string, coordinatorThreadId: string): AssignmentPlan | null {
     return this.repo.getActive(projectId, coordinatorThreadId)
   }
@@ -1338,6 +1338,11 @@ export class AssignmentEngine {
   ): Promise<AssignmentPlan> {
     const settled = settleAuditOffer(plan)
     this.repo.save(settled, approvedVersion)
+    // The plan now exists, so the coordinator thread owns an Assignment and the
+    // view must read it: the marker is what lets the Assignment card and the
+    // header's Studio control appear for an Assignment an agent created from a
+    // plain conversation, on this mount and every later one.
+    markThreadEngineeringEngaged(this.db, settled.projectId, settled.coordinatorThreadId)
     await this.artifacts.writeMarkdown(settled)
     return settled
   }

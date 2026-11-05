@@ -17,6 +17,7 @@ import type {
 } from '../types'
 import { generateId } from '../utils'
 import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
+import { markThreadEngineeringEngaged } from './engineering-engagement'
 import { exportEngineeringSpecMarkdown } from '../spec/spec-markdown'
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
@@ -591,6 +592,10 @@ export class SpecEngine {
       JSON.stringify(spec),
       spec.createdAt
     )
+    // The version now exists, so the thread owns a specification and the view
+    // must read it: the marker is what lets the card and the Studio control
+    // appear for a specification an agent created on a plain conversation.
+    markThreadEngineeringEngaged(this.db, spec.projectId, spec.threadId)
     const featureSlug = await ensureFeatureSlug(this.db, spec.projectId, spec.threadId)
     const project = requireLocalProject(this.db, spec.projectId)
     const markdown = exportEngineeringSpecMarkdown(spec)
