@@ -3,6 +3,7 @@ import CioStar from '@pdslng/cio-icon/CioStar.svelte'
 import { getAgentIcon } from '$lib/agent-icons/registry'
 import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'
+import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
 import { visionModels } from '$lib/stores/vision-models.svelte'
 import { getVendorSlug } from '$lib/vendor-icons/registry'
 import { resolveModelProvider } from '$shared/provider-identity'
@@ -200,7 +201,9 @@ export function searchWords(value: string): string[] {
 }
 
 export function harnessName(harnessId: string): string {
-  return getAgentIcon(harnessId)?.name ?? harnessId
+  // An ACP agent is named by the user, so its record is the authority; the
+  // bundled registry only knows the dedicated harnesses.
+  return getAgentIcon(harnessId)?.name ?? acpAgentsStore.nameFor(harnessId) ?? harnessId
 }
 
 /** Canonical registry rank of a harness; unknown ids sort last. */

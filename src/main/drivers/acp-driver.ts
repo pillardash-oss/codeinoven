@@ -401,11 +401,16 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   // ------------------------------------------------------------------- turns
 
   private startTurn(session: PersistentCliSession, messageId: string): AcpActiveTurn {
-    const fold = new AcpTurnFold(session.id, messageId, {
-      partUpdated: (part) => this.publishPart(session, part),
-      partDelta: (partId, field, delta) =>
-        this.publishDelta(session, messageId, partId, field, delta)
-    })
+    const fold = new AcpTurnFold(
+      session.id,
+      messageId,
+      {
+        partUpdated: (part) => this.publishPart(session, part),
+        partDelta: (partId, field, delta) =>
+          this.publishDelta(session, messageId, partId, field, delta)
+      },
+      this.id
+    )
     const turn: AcpActiveTurn = { sessionId: session.id, messageId, fold, startedAt: Date.now() }
     this.activeTurns.set(session.id, turn)
     return turn
@@ -525,10 +530,15 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
         if (settings.modelId && settings.modelId !== 'default') {
           await transport.setModel(opened.sessionId, settings.modelId).catch(() => undefined)
         }
-        const fold = new AcpTurnFold(sessionId, `acp:${sessionId}:1:1`, {
-          partUpdated: () => undefined,
-          partDelta: () => undefined
-        })
+        const fold = new AcpTurnFold(
+          sessionId,
+          `acp:${sessionId}:1:1`,
+          {
+            partUpdated: () => undefined,
+            partDelta: () => undefined
+          },
+          this.id
+        )
         this.activeTurns.set(sessionId, {
           sessionId,
           messageId: `acp:${sessionId}:1:1`,

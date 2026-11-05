@@ -49,7 +49,10 @@ export function acpProviderCatalog(
     {
       id: providerId,
       name: agentName,
-      harnessId: 'acp',
+      // The agent's own id, not a generic 'acp': each agent is a harness of its
+      // own, so a picker lists "Cursor agent" beside the dedicated harnesses
+      // instead of folding every agent into one "ACP" entry.
+      harnessId: providerId,
       models,
       supportsAttachments: false
     }

@@ -82,7 +82,9 @@ export class AcpTurnFold {
   constructor(
     readonly sessionId: string,
     readonly messageId: string,
-    private readonly sink: AcpTurnSink
+    private readonly sink: AcpTurnSink,
+    /** Harness id of the agent this turn belongs to. */
+    private readonly harnessId: string
   ) {}
 
   /** Apply one `session/update` payload. Unknown variants are ignored by design. */
@@ -124,7 +126,7 @@ export class AcpTurnFold {
       role: 'assistant',
       parts: [...this.parts],
       createdAt: this.createdAt,
-      harnessId: 'acp'
+      harnessId: this.harnessId
     }
   }
 
