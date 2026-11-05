@@ -875,6 +875,11 @@ export function piCoreToolsSubagentSource(): string {
     session.subscribe(function (event) {
       stream.push(event)
       if (event.type !== 'message_end') return
+      // message_end also fires for the user message that carries the framed
+      // worker prompt. Folding that in would publish the app's own prompt as
+      // the worker's captured output, which is exactly what leaked the primary
+      // agent's prompt onto the sub-agent response side.
+      if (!event.message || event.message.role !== 'assistant') return
       const text = subAgentText(event.message)
       if (!text) return
       record.output = capOutput(record.output ? record.output + '\\n\\n' + text : text)
