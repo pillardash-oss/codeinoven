@@ -43,6 +43,40 @@ interface StoredAgents {
   agents: AcpAgent[]
 }
 
+/** Case- and spacing-insensitive form of the name an agent is keyed by. */
+export function agentNameKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/gu, ' ')
+}
+
+/**
+ * One agent per identity, keeping the most recently saved copy of each.
+ *
+ * Two records are the same agent when they share a name, and also when they
+ * share the exact launch configuration: a list that already holds "Cursor" and
+ * "Cursor agent" pointed at one `cursor-agent acp` is three copies of one agent,
+ * not three agents. The newest record wins because it is the one the user last
+ * finished editing, so it is the one that carries their icon and args.
+ */
+function keepOnePerName(agents: readonly AcpAgent[]): AcpAgent[] {
+  const newestFirst = [...agents].sort(
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+  )
+  const seenNames = new Set<string>()
+  const seenLaunch = new Set<string>()
+  const kept: AcpAgent[] = []
+  for (const agent of newestFirst) {
+    const nameKey = agentNameKey(agent.name)
+    const launchKey = [agent.command, ...agent.args, ...Object.entries(agent.env).flat()].join(
+      '\u0000'
+    )
+    if (seenNames.has(nameKey) || seenLaunch.has(launchKey)) continue
+    seenNames.add(nameKey)
+    seenLaunch.add(launchKey)
+    kept.push(agent)
+  }
+  return kept.reverse()
+}
+
 /** Whether an id names an ACP agent this store owns. */
 export function isAcpAgentId(id: string): boolean {
   return id.startsWith(ACP_AGENT_ID_PREFIX)
@@ -157,13 +191,31 @@ export class AcpAgentStore {
     return agents.find((agent) => agent.id === id) ?? null
   }
 
-  /** Create or update one agent. Returns the saved record. */
+  /**
+   * Create or update one agent. Returns the saved record.
+   *
+   * An agent's identity is the name the user gave it, so a name that is already
+   * taken is the same agent: saving it edits that record instead of appending a
+   * second copy, which is how repeated clicks on Save used to leave the list with
+   * three identical rows. Two different names remain two agents, whatever command
+   * they start.
+   */
   async save(input: AcpAgentInput): Promise<AcpAgent> {
     const agents = await this.list()
     const existing = input.id ? (agents.find((agent) => agent.id === input.id) ?? null) : null
     if (input.id && !existing) throw new Error(`No ACP agent with id ${input.id} exists`)
-    const saved = normalizeAcpAgent(input, existing, Date.now())
-    const next = existing
+    const nameKey = agentNameKey(input.name)
+    const sameName = agents.find(
+      (agent) => agent.id !== existing?.id && agentNameKey(agent.name) === nameKey
+    )
+    if (existing && sameName) {
+      throw new Error(
+        `An agent named "${sameName.name}" already exists. Give this one another name.`
+      )
+    }
+    const target = existing ?? sameName ?? null
+    const saved = normalizeAcpAgent(input, target, Date.now())
+    const next = target
       ? agents.map((agent) => (agent.id === saved.id ? saved : agent))
       : [...agents, this.uniqueId(saved, agents)]
     this.agents = next
@@ -214,7 +266,7 @@ export class AcpAgentStore {
   private async read(): Promise<AcpAgent[]> {
     const stored = await this.storage.read<StoredAgents>(STORE_PATH).catch(() => null)
     if (stored && Array.isArray(stored.agents)) {
-      return stored.agents
+      const agents = stored.agents
         .filter(
           (agent): agent is AcpAgent =>
             typeof agent?.id === 'string' &&
@@ -222,6 +274,17 @@ export class AcpAgentStore {
             typeof agent.command === 'string'
         )
         .map((agent) => ({ ...agent, enabled: agent.enabled !== false }))
+      const healed = keepOnePerName(agents)
+      // A store written before names were the identity can hold the same agent
+      // several times; the healed list is written back so the next save does not
+      // resurrect a duplicate.
+      if (healed.length !== agents.length) {
+        await this.storage.write(STORE_PATH, {
+          version: 1,
+          agents: healed
+        } satisfies StoredAgents)
+      }
+      return healed
     }
     return this.importLegacy()
   }
