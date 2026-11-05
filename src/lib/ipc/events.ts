@@ -1,3 +1,4 @@
+import type { CustomVendorIconSet } from '../custom-vendor-icon'
 import type { VideoEditorGesture } from '../video/edit'
 import type { IdeProgress } from '../editor-ide'
 import type {
@@ -76,7 +77,9 @@ export const IPC_EVENT_CONTRACT = {
     id: string,
     archived: boolean
   ],
-  'customVendors:iconChanged': [] as unknown as [payload: { providerId: string; icon: string }],
+  'customVendors:iconChanged': [] as unknown as [
+    payload: { providerId: string; icons: CustomVendorIconSet }
+  ],
   'design:historyChanged': [] as unknown as [projectId: string, directory: string],
   'design:relocated': [] as unknown as [
     projectId: string,

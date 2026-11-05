@@ -17,6 +17,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
   discoverHarnessRuntimes,
   probeHarnessRuntime,
+  runHarnessCommand,
   type HarnessRuntime
 } from '../drivers/harness-runtime'
 import { resolveExecutablePathAsync } from '../drivers/cli-environment'
@@ -28,6 +29,29 @@ const PROBE_CACHE_TTL_MS = 60_000
 const PROBE_YIELD_MS = 50
 /** Coalesce renderer work while still reporting progress during a full pass. */
 const PROBE_BROADCAST_BATCH_SIZE = 2
+/** An ACP agent's own `--version` is a single short line, so it is cheap to ask. */
+const ACP_VERSION_TIMEOUT_MS = 8_000
+const ACP_VERSION_MAX_BYTES = 16 * 1024
+
+/**
+ * First line of `<command> --version` for an ACP agent.
+ *
+ * The app never installs an agent, so it cannot know a version by reading its
+ * own manifest: the command is the only authority, and one that does not answer
+ * simply has no version to show rather than a row that fails its probe.
+ */
+async function acpCommandVersion(command: string): Promise<string | undefined> {
+  try {
+    const result = await runHarnessCommand(command, ['--version'], {
+      timeoutMs: ACP_VERSION_TIMEOUT_MS,
+      maxOutputBytes: ACP_VERSION_MAX_BYTES
+    })
+    const line = (result.stdout || result.stderr).split(/\r?\n/u)[0]?.trim()
+    return line ? line : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Every command that can satisfy a harness: its canonical name plus aliases. */
 function commandCandidates(definition: HarnessDescriptor): string[] {
@@ -100,6 +124,7 @@ export class ProviderConnectionService {
         supportsCustomProviders: false,
         supportsManualCompaction: false,
         transport: 'acp',
+        enabled: agent.enabled !== false,
         status: existing?.status ?? 'idle',
         ...(existing?.resolvedPath ? { resolvedPath: existing.resolvedPath } : {})
       })
@@ -114,7 +139,7 @@ export class ProviderConnectionService {
     }
   }
 
-  /** Probe one ACP agent's command. No version arg: the app never installed it. */
+  /** Probe one ACP agent's command: where it lives and the version it reports. */
   private async probeAcpAgent(id: string): Promise<ProviderConnectionInfo> {
     this.syncAcpRows()
     const agent = await findAcpAgent(id)
@@ -132,14 +157,23 @@ export class ProviderConnectionService {
     if (!agent)
       return { ...row, status: 'error', detail: 'This ACP agent is no longer configured.' }
     const resolvedPath = await resolveExecutablePathAsync(agent.command)
+    const version = resolvedPath ? await acpCommandVersion(agent.command) : undefined
     const result: ProviderConnectionInfo = resolvedPath
-      ? { ...row, name: agent.name, command: agent.command, status: 'available', resolvedPath }
+      ? {
+          ...row,
+          name: agent.name,
+          command: agent.command,
+          status: 'available',
+          resolvedPath,
+          ...(version ? { version } : {})
+        }
       : {
           ...row,
           name: agent.name,
           command: agent.command,
           status: 'error',
           resolvedPath: undefined,
+          version: undefined,
           detail: `"${agent.command}" was not found on PATH.`
         }
     this.acpRows.set(id, result)

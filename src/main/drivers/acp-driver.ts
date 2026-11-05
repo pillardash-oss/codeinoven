@@ -586,7 +586,7 @@ function acpTokens(usage: Record<string, unknown>): AgentMessage['tokens'] {
   }
 }
 
-/** Every configured agent, so the engine can build one driver per agent. */
+/** Every enabled agent, so the engine builds one driver per usable agent. */
 export function configuredAcpAgents(): AcpAgent[] {
-  return currentAcpAgents()
+  return currentAcpAgents().filter((agent) => agent.enabled !== false)
 }

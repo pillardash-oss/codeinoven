@@ -104,6 +104,7 @@ export function normalizeAcpAgent(
     env[key] = value
   }
 
+  const enabled = input.enabled ?? existing?.enabled ?? true
   const icon = input.icon === undefined ? existing?.icon : validateIcon(input.icon, 'The icon')
   const iconDark =
     input.iconDark === undefined
@@ -118,6 +119,7 @@ export function normalizeAcpAgent(
     env,
     ...(icon ? { icon } : {}),
     ...(iconDark ? { iconDark } : {}),
+    enabled,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   }
@@ -193,6 +195,7 @@ export class AcpAgentStore {
         args: [...agent.args],
         ...(agent.icon ? { icon: agent.icon } : {}),
         ...(agent.iconDark ? { iconDark: agent.iconDark } : {}),
+        enabled: agent.enabled !== false,
         ...(resolvedPath
           ? { resolvedPath }
           : { detail: `"${agent.command}" was not found on PATH.` })
@@ -211,12 +214,14 @@ export class AcpAgentStore {
   private async read(): Promise<AcpAgent[]> {
     const stored = await this.storage.read<StoredAgents>(STORE_PATH).catch(() => null)
     if (stored && Array.isArray(stored.agents)) {
-      return stored.agents.filter(
-        (agent): agent is AcpAgent =>
-          typeof agent?.id === 'string' &&
-          typeof agent.name === 'string' &&
-          typeof agent.command === 'string'
-      )
+      return stored.agents
+        .filter(
+          (agent): agent is AcpAgent =>
+            typeof agent?.id === 'string' &&
+            typeof agent.name === 'string' &&
+            typeof agent.command === 'string'
+        )
+        .map((agent) => ({ ...agent, enabled: agent.enabled !== false }))
     }
     return this.importLegacy()
   }
@@ -270,12 +275,19 @@ export function acpAgentStore(storage: StorageEngine): AcpAgentStore {
 export function acpHarnessDescriptors(
   agents: readonly AcpAgent[]
 ): { id: string; name: string; command: string }[] {
-  return agents.map((agent) => ({ id: agent.id, name: agent.name, command: agent.command }))
+  return agents
+    .filter((agent) => agent.enabled !== false)
+    .map((agent) => ({ id: agent.id, name: agent.name, command: agent.command }))
 }
 
 /** Name of one agent by harness id, or null when it is not an ACP agent. */
 export function acpHarnessName(id: string): string | null {
   return sharedStore?.snapshot().find((agent) => agent.id === id)?.name ?? null
+}
+
+/** Only the enabled agents, for drivers and harness lists. */
+export function enabledAcpAgents(): AcpAgent[] {
+  return currentAcpAgents().filter((agent) => agent.enabled !== false)
 }
 
 /** Synchronous snapshot of the configured agents, for gates that cannot await. */

@@ -138,7 +138,8 @@ export async function isHarnessAvailableAsync(
   if (isAcpAgentId(id)) {
     await ensureAcpAgentsLoaded()
     const agent = await findAcpAgent(id)
-    return agent ? isHarnessCommandAvailableAsync(agent.command, env) : false
+    if (!agent || agent.enabled === false) return false
+    return isHarnessCommandAvailableAsync(agent.command, env)
   }
   return command !== undefined && (await isHarnessCommandAvailableAsync(command, env))
 }

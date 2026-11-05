@@ -19,6 +19,12 @@ export interface ProviderConnectionInfo {
    * The Harnesses page groups its rows by this value.
    */
   transport: 'native' | 'acp'
+  /**
+   * Whether the user currently offers this harness. Only the user's own ACP
+   * agents can be parked: a disabled agent keeps its row (so it can be turned
+   * back on) but is absent from every list that offers a harness to use.
+   */
+  enabled?: boolean
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string

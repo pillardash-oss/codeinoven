@@ -61,6 +61,7 @@ import type {
 } from '../types'
 import type { WorkerNameSettings } from '../assignment/worker-names'
 import type { AcpAgentAuthStatus, AcpAgentInput, AcpAgentSettings } from '../acp'
+import type { CustomVendorIconSet, CustomVendorIconVariant } from '../custom-vendor-icon'
 import type { CioPromptId, CioPromptSetting } from '../cio-prompts'
 import type { Contract } from './contract-helpers'
 
@@ -199,8 +200,11 @@ export const invokeProviderContract = {
     [harnessId: string, providerId: string, hidden: boolean],
     string[]
   >,
-  'customVendors:listIcons': {} as Contract<[], Record<string, string>>,
-  'customVendors:saveIcon': {} as Contract<[providerId: string, image: string], string>,
+  'customVendors:listIcons': {} as Contract<[], Record<string, CustomVendorIconSet>>,
+  'customVendors:saveIcon': {} as Contract<
+    [providerId: string, image: string | null, variant?: CustomVendorIconVariant],
+    CustomVendorIconSet
+  >,
   'baseUrlProviders:list': {} as Contract<[], BaseUrlProvider[]>,
   'baseUrlProviders:create': {} as Contract<[input: BaseUrlProviderCreateRequest], BaseUrlProvider>,
   'baseUrlProviders:update': {} as Contract<

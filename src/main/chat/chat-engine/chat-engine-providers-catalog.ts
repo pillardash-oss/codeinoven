@@ -45,7 +45,7 @@ export class ChatEngineProvidersCatalog {
    */
   async refreshAcpHarnesses(): Promise<void> {
     await ensureAcpAgentsLoaded()
-    const agents = currentAcpAgents()
+    const agents = currentAcpAgents().filter((agent) => agent.enabled !== false)
     const wanted = new Set(agents.map((agent) => agent.id))
     for (const [id, driver] of [...this.host.drivers]) {
       if (!isAcpAgentId(id) || wanted.has(id)) continue

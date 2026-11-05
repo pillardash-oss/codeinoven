@@ -180,11 +180,24 @@
    * nothing typed is lost by collapsing it.
    */
   let docked = $state(false)
+  /** Draft artwork per theme; `undefined` means "keep what is saved". */
   let iconDataUrl = $state<string | undefined>()
+  let iconDarkDataUrl = $state<string | undefined>()
+  const ICON_VARIANTS = [
+    { key: 'light', label: 'Light mode' },
+    { key: 'dark', label: 'Dark mode' }
+  ] as const
+  type IconVariant = (typeof ICON_VARIANTS)[number]['key']
+  let iconTab = $state<IconVariant>('light')
   let readingIcon = $state(false)
   let submitting = $state(false)
   let iconUploadDisabled = $derived(readingIcon || baseUrlProviderStore.saving || submitting)
-  let iconPreview = $derived(iconDataUrl ?? customVendorIcons.get(provider?.id))
+  /** Draft first, then the saved artwork for the theme, never a bare monogram. */
+  let iconPreview = $derived(
+    iconTab === 'dark'
+      ? (iconDarkDataUrl ?? customVendorIcons.get(provider?.id, 'dark'))
+      : (iconDataUrl ?? customVendorIcons.get(provider?.id, 'light'))
+  )
 
   /**
    * The app's modal focus rule: the first field the user would type into, else
@@ -636,7 +649,8 @@
       }
 
       if (!saved) throw new Error('No harness selected to save.')
-      if (iconDataUrl) await customVendorIcons.save(saved.id, iconDataUrl)
+      if (iconDataUrl) await customVendorIcons.save(saved.id, iconDataUrl, 'light')
+      if (iconDarkDataUrl) await customVendorIcons.save(saved.id, iconDarkDataUrl, 'dark')
       toast.success(wasEditing ? 'Provider updated.' : 'Provider created.')
       onSaved(saved)
     } catch (saveError) {
@@ -840,11 +854,6 @@
 
   <form id="base-url-provider-form" class="space-y-4" onsubmit={save}>
     <fieldset class="space-y-1.5 text-xs font-medium">
-      <legend>Harnesses</legend>
-      <p class="text-[0.6875rem] font-normal text-dimmed">
-        Select every harness that should offer this provider. Saving applies your changes to all of
-        them.
-      </p>
       <HarnessToggleGroup
         options={availableHarnesses.map((harness) => ({ id: harness.id, name: harness.name }))}
         value={draft.harnessIds}
@@ -895,16 +904,49 @@
       </div>
     </div>
 
-    <IconUploadField
-      label="Vendor icon"
-      accept={SOFTWARE_ICON_TYPES}
-      maxBytes={MAX_CUSTOM_VENDOR_ICON_BYTES}
-      value={iconPreview}
-      disabled={iconUploadDisabled}
-      hint="SVG or image, up to 256 KiB. Saved with this provider."
-      onselect={(data) => (iconDataUrl = data)}
-      onreading={(reading) => (readingIcon = reading)}
-    />
+    <div class="space-y-1.5">
+      <div
+        class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+        role="tablist"
+        aria-label="Vendor icon theme"
+      >
+        {#each ICON_VARIANTS as variant (variant.key)}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={iconTab === variant.key}
+            class="px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {iconTab ===
+            variant.key
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            title={`Edit the ${variant.label.toLowerCase()} vendor icon`}
+            onclick={() => (iconTab = variant.key)}
+          >
+            {variant.label}
+          </button>
+        {/each}
+      </div>
+      <IconUploadField
+        label={iconTab === 'dark' ? 'Dark mode' : 'Light mode'}
+        id={provider?.id}
+        accept={SOFTWARE_ICON_TYPES}
+        maxBytes={MAX_CUSTOM_VENDOR_ICON_BYTES}
+        value={iconPreview}
+        disabled={iconUploadDisabled}
+        hint="SVG or image, up to 256 KiB. The theme without its own image uses the other one."
+        onselect={(data) => {
+          if (iconTab === 'dark') iconDarkDataUrl = data
+          else iconDataUrl = data
+        }}
+        onclear={() => {
+          if (!provider?.id) return
+          void customVendorIcons.save(provider.id, null, iconTab)
+          if (iconTab === 'dark') iconDarkDataUrl = undefined
+          else iconDataUrl = undefined
+        }}
+        onreading={(reading) => (readingIcon = reading)}
+      />
+    </div>
 
     <label class="block space-y-1 text-xs font-medium">
       <span>Display name</span>

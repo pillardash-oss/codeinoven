@@ -152,6 +152,23 @@
       : `Last checked: ${formatCompactAge(lastCheckedAt, now)}`
   )
 
+  /** Park or restore one ACP agent without opening its editor. */
+  async function toggleAcpAgent(provider: ProviderConnectionInfo, enabled: boolean): Promise<void> {
+    const agent = acpAgentsStore.get(provider.id)
+    if (!agent) return
+    try {
+      await acpAgentsStore.save({
+        id: agent.id,
+        name: agent.name,
+        command: agent.command,
+        args: agent.args,
+        enabled
+      })
+    } catch (error) {
+      reportError(error, 'The agent could not be updated.')
+    }
+  }
+
   function toggleSettings(harnessId: string): void {
     expandedSettings[harnessId] = !expandedSettings[harnessId]
   }
@@ -185,6 +202,13 @@
 
   /** Single, mutually-exclusive status badge per harness row. */
   function badgeFor(provider: ProviderConnectionInfo): BadgeInfo {
+    if (provider.enabled === false) {
+      return {
+        Icon: CioCircle,
+        label: 'Disabled',
+        classes: 'border-border bg-raised text-dimmed'
+      }
+    }
     if (provider.status === 'error') {
       return {
         Icon: CioAttention,
@@ -266,6 +290,11 @@
           label: 'Edit agent',
           icon: CioPencil,
           onClick: () => acpAgentsStore.openEdit(provider.id)
+        },
+        {
+          label: provider.enabled === false ? 'Enable agent' : 'Disable agent',
+          icon: provider.enabled === false ? CioCheckCircle : CioCircle,
+          onClick: () => void toggleAcpAgent(provider, provider.enabled === false)
         },
         {
           label: 'Remove agent',
@@ -1075,31 +1104,24 @@
                     class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
                       >{provider.detail ?? 'No additional detail available.'}</code
                     ></pre>
-                {:else if provider.transport === 'acp'}
-                  <p class="text-xs font-semibold text-foreground">Agent</p>
-                  <div class="flex items-center justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="text-xs font-medium text-foreground">Command</p>
-                      <p class="mt-0.5 truncate font-mono text-[0.625rem] text-dimmed">
-                        {provider.command}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      class="flex shrink-0 items-center gap-1.5 border bg-elevated px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                      title="Edit {provider.name} in the ACP agent editor"
-                      onclick={() => acpAgentsStore.openEdit(provider.id)}
-                    >
-                      <CioPencil size={13} /> Edit agent
-                    </button>
-                  </div>
-                  <p class="text-[0.625rem] leading-relaxed text-dimmed">
-                    {provider.name} was added by you and is never installed or updated by
-                    {APP_NAME}. Its providers and models belong to the agent; Manage providers shows
-                    the sign-in methods it declares.
-                  </p>
                 {:else}
                   <p class="text-xs font-semibold text-foreground">Settings</p>
+                  {#if provider.transport === 'acp'}
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="text-xs font-medium text-foreground">Enabled</p>
+                        <p class="mt-0.5 truncate text-[0.625rem] text-dimmed">
+                          Parking keeps the agent's settings and leaves every harness list
+                        </p>
+                      </div>
+                      <Switch
+                        checked={provider.enabled !== false}
+                        onchange={(value) => void toggleAcpAgent(provider, value)}
+                        aria-label={`Offer ${provider.name} as a harness`}
+                        title={`Turn off to park ${provider.name} without deleting it`}
+                      />
+                    </div>
+                  {/if}
                   {#if manifestFor(provider.id)}
                     {@const entry = manifestFor(provider.id)!}
                     <div class="flex items-center justify-between gap-3">
@@ -1138,28 +1160,30 @@
                     </div>
                   {/if}
 
-                  <div class="flex items-center justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="text-xs font-medium text-foreground">
-                        Update automatically on launch
-                      </p>
-                      <p
-                        class="mt-0.5 truncate text-[0.625rem] text-dimmed"
-                        title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
-                      >
-                        Updates in the background when {APP_NAME} opens
-                      </p>
+                  {#if provider.transport !== 'acp'}
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="text-xs font-medium text-foreground">
+                          Update automatically on launch
+                        </p>
+                        <p
+                          class="mt-0.5 truncate text-[0.625rem] text-dimmed"
+                          title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
+                        >
+                          Updates in the background when {APP_NAME} opens
+                        </p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-2">
+                        <Switch
+                          checked={autoUpdatePrefs[provider.id] === true}
+                          disabled={autoUpdateSaving[provider.id]}
+                          onchange={(value) => void setAutoUpdatePref(provider.id, value)}
+                          aria-label={`Update ${provider.name} automatically on launch`}
+                          title={`Set whether ${provider.name} updates automatically on launch`}
+                        />
+                      </div>
                     </div>
-                    <div class="flex shrink-0 items-center gap-2">
-                      <Switch
-                        checked={autoUpdatePrefs[provider.id] === true}
-                        disabled={autoUpdateSaving[provider.id]}
-                        onchange={(value) => void setAutoUpdatePref(provider.id, value)}
-                        aria-label={`Update ${provider.name} automatically on launch`}
-                        title={`Set whether ${provider.name} updates automatically on launch`}
-                      />
-                    </div>
-                  </div>
+                  {/if}
                   {#if isOpenCodeV2Row(provider)}
                     <div class="border-t border-border pt-2.5">
                       <OpenCodeV2CatalogPanel harnessName={provider.name} />

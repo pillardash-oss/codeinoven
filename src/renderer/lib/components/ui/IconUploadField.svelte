@@ -23,6 +23,8 @@
     disabled?: boolean
     /** Fallback name for the placeholder mark while no image is chosen. */
     name?: string
+    /** Provider/vendor id, so the mark the app ships for it is the default. */
+    id?: string
     /** One line under the picker explaining the accepted artwork. */
     hint?: string
     /** Called with the data URL once a file was read and validated. */
@@ -40,6 +42,7 @@
     value,
     disabled = false,
     name = 'CodeInOven',
+    id,
     hint = 'SVG or image, up to 256 KiB.',
     onselect,
     onclear,
@@ -99,7 +102,7 @@
   <span
     class="flex h-12 w-12 shrink-0 items-center justify-center border border-border bg-elevated"
   >
-    <VendorIcon {name} imageSrc={value} size={value ? 40 : 32} />
+    <VendorIcon {name} {...id ? { id } : {}} imageSrc={value} size={value ? 40 : 32} />
   </span>
   <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
     <span class="flex items-center justify-between gap-2">

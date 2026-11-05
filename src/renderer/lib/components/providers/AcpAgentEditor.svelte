@@ -15,6 +15,7 @@
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
   import IconUploadField from '../ui/IconUploadField.svelte'
+  import Switch from '../ui/Switch.svelte'
 
   /** Add or edit the command that starts one ACP agent. It docks so the
    *  command can be tried in a terminal while the draft stays put. */
@@ -29,6 +30,7 @@
     args: string
     icon: string | undefined
     iconDark: string | undefined
+    enabled: boolean
   }
 
   /** The two artworks an agent can carry, one per theme. */
@@ -55,7 +57,8 @@
       command: source?.command ?? '',
       args: source?.args.join(' ') ?? '',
       icon: source?.icon,
-      iconDark: source?.iconDark
+      iconDark: source?.iconDark,
+      enabled: source?.enabled ?? true
     }
   }
 
@@ -96,7 +99,8 @@
         command: draft.command.trim(),
         args: splitArgs(draft.args),
         icon: draft.icon ?? null,
-        iconDark: draft.iconDark ?? null
+        iconDark: draft.iconDark ?? null,
+        enabled: draft.enabled
       })
       acpAgentsStore.closeEditor()
     } catch (saveFailure) {
@@ -185,10 +189,8 @@
         <CioTrash size={13} /> Delete
       </button>
     {/if}
-    <button type="button" data-modal-dismiss class="{SECONDARY} ml-auto" onclick={close}>
-      Cancel
-    </button>
-    <button type="button" class={PRIMARY} disabled={!canSave} onclick={save}>Save</button>
+    <button type="button" data-modal-dismiss class={SECONDARY} onclick={close}>Cancel</button>
+    <button type="button" class="{PRIMARY} ml-auto" disabled={!canSave} onclick={save}>Save</button>
   {/snippet}
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -203,10 +205,21 @@
       {/each}
     </div>
 
-    <label class="block space-y-1 text-xs font-medium">
-      <span>Agent name</span>
-      <input class={FIELD} placeholder="Cursor" required bind:value={draft.name} />
-    </label>
+    <div class="flex items-end gap-3">
+      <label class="block min-w-0 flex-1 space-y-1 text-xs font-medium">
+        <span>Agent name</span>
+        <input class={FIELD} placeholder="Cursor" required bind:value={draft.name} />
+      </label>
+      <div class="flex h-9 shrink-0 items-center gap-2 border bg-surface px-3">
+        <span class="text-xs font-medium">Enabled</span>
+        <Switch
+          checked={draft.enabled}
+          onchange={(value) => (draft.enabled = value)}
+          aria-label="Offer this agent as a harness"
+          title="Turn off to park this agent without deleting it"
+        />
+      </div>
+    </div>
 
     <label class="block space-y-1 text-xs font-medium">
       <span>Command</span>

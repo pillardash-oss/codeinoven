@@ -19,6 +19,12 @@ export interface AcpAgent {
   icon?: string
   /** Icon used on dark surfaces; falls back to `icon` when unset. */
   iconDark?: string
+  /**
+   * Whether the agent is offered as a harness. A disabled agent keeps its record,
+   * its icon and its settings but leaves every harness list, so a user can park
+   * one without losing it.
+   */
+  enabled: boolean
   createdAt: number
   updatedAt: number
 }
@@ -32,6 +38,7 @@ export interface AcpAgentInput {
   env?: Record<string, string>
   icon?: string | null
   iconDark?: string | null
+  enabled?: boolean
 }
 
 /** A configured agent with what the app resolved for it on this machine. */
@@ -42,6 +49,7 @@ export interface AcpAgentStatus {
   args: string[]
   icon?: string
   iconDark?: string
+  enabled: boolean
   /** Absolute path of the resolved binary, when it exists. */
   resolvedPath?: string
   /** Actionable reason when the configured command cannot be started. */
