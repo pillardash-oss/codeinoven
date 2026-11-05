@@ -17,7 +17,7 @@ import {
   normalizeFastInference,
   supportsFastInference
 } from '$shared/fast-inference'
-import { getAgentIcon } from '$lib/agent-icons/registry'
+import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
 import { invoke } from '$lib/ipc.svelte'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
 import {
@@ -768,9 +768,7 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
       providerName: provider?.name ?? null,
       providerId: provider?.id ?? null,
       harnessId: selection.harnessId || null,
-      harnessName: selection.harnessId
-        ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
-        : null,
+      harnessName: selection.harnessId ? agentDisplayName(selection.harnessId) : null,
       accountLabel:
         this.harnessAccounts.find(
           (account) =>

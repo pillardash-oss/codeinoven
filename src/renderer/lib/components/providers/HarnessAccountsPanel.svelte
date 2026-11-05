@@ -14,6 +14,7 @@
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import type {
     HarnessAccount,
     ProviderAccountAuthEntry,
@@ -102,7 +103,7 @@
   }
 
   function harnessName(harnessId: string): string {
-    return harnessFor(harnessId)?.name ?? harnessId
+    return harnessFor(harnessId)?.name ?? agentDisplayName(harnessId)
   }
 
   function providerLabel(account: HarnessAccount): string {

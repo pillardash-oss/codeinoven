@@ -3,7 +3,7 @@
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -108,7 +108,7 @@
   })
 
   function harnessLabel(harnessId: string): string {
-    return getAgentIcon(harnessId)?.name ?? harnessId
+    return agentDisplayName(harnessId)
   }
 
   let scopeColor = $derived(
