@@ -5,7 +5,7 @@ import {
   assistantWorkspaceGuard,
   PromptAssembler
 } from '../../src/main/chat/prompt-assembler'
-import { defaultCioPrompt } from '../../src/lib/cio-prompts'
+import { ASSISTANT_BEHAVIOR_PROMPT } from '../../src/lib/assistant-behavior-prompt'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT, SKILLS_SECTION_BODY } from '../../src/lib/agent-behavior'
 
 function assembler(): PromptAssembler {
@@ -125,7 +125,7 @@ describe('PromptAssembler application behavior', () => {
       { id: 'opencode', name: 'OpenCode' },
       undefined,
       'assistant',
-      defaultCioPrompt('assistant'),
+      ASSISTANT_BEHAVIOR_PROMPT,
       undefined,
       'assistant',
       'assistant'
@@ -163,7 +163,7 @@ describe('PromptAssembler application behavior', () => {
       const trimmed = line.trim()
       if (trimmed.length === 0) continue
       expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain(trimmed)
-      expect(defaultCioPrompt('assistant')).toContain(trimmed)
+      expect(ASSISTANT_BEHAVIOR_PROMPT).toContain(trimmed)
     }
   })
 })
