@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentPart, AgentToolState } from '../../../lib/types'
+import { toolActionLabel } from '../../../lib/tool-action-label'
 import {
   acpArray,
   acpNumber,
@@ -119,12 +120,17 @@ export class AcpTurnFold {
     }
   }
 
-  /** The turn's assistant message, ready for `message.completed`. */
+  /**
+   * The turn's assistant message, ready for the transcript. Parts are copied
+   * rather than shared: the fold keeps mutating its own part objects while
+   * chunks arrive, and a transcript that held those references would absorb any
+   * late chunk a second time after the message was already stored.
+   */
   message(): AgentMessage {
     return {
       id: this.messageId,
       role: 'assistant',
-      parts: [...this.parts],
+      parts: this.parts.map((part) => ({ ...part })),
       createdAt: this.createdAt,
       harnessId: this.harnessId
     }
@@ -180,26 +186,41 @@ export class AcpTurnFold {
     content?: readonly unknown[] | null
   }): void {
     const existing = this.tools.get(update.toolCallId)
-    const title = update.title?.trim() || existing?.actionLabel || update.kind || 'tool'
+    // An ACP agent's title describes what the call acted on (Cursor titles a
+    // shell call with the command itself and a search with `Find `<pattern>``),
+    // so it is the row's subject and never its action label. The label is
+    // derived from the tool kind, the way every other harness's is.
+    const reportedTitle = update.title?.trim() || existing?.state.title
+    const title = reportedTitle || update.kind || 'tool'
     const input = acpRecord(update.rawInput) ?? existing?.state.input ?? {}
     const outputText = acpToolContentText(update.content)
     const status: AgentToolState['status'] = acpToolStatus(update.status ?? undefined)
+    const tool = acpToolName(update.kind ?? undefined, title)
+    const label = toolActionLabel({ tool })
     const now = Date.now()
     const part: ToolPart = existing ?? {
       type: 'tool',
       id: `${this.messageId}:tool:${update.toolCallId}`,
       messageID: this.messageId,
       callID: update.toolCallId,
-      tool: acpToolName(update.kind ?? undefined, title),
-      actionLabel: title,
-      state: { status: 'pending', input, time: { start: now } }
+      tool,
+      ...(label ? { actionLabel: label } : {}),
+      state: {
+        status: 'pending',
+        input,
+        ...(reportedTitle ? { title: reportedTitle } : {}),
+        time: { start: now }
+      }
     }
-    part.actionLabel = title
+    // An agent that titles a call without naming its kind still owes the row an
+    // action, and the label is stamped once so a settled call keeps it.
+    part.actionLabel = part.actionLabel ?? label
     const finished = status === 'completed' || status === 'error'
     part.state = {
       ...part.state,
       status,
       input,
+      ...(reportedTitle ? { title: reportedTitle } : {}),
       ...(outputText.length > 0 && status === 'completed' ? { output: outputText } : {}),
       ...(finished ? { time: { start: part.state.time?.start ?? now, end: now } } : {})
     }
