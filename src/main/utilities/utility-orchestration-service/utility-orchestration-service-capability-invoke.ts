@@ -45,7 +45,7 @@ import {
   reanchorCuaAction,
   shapeCuaResult
 } from '../../../lib/cua-driver'
-import { type McpClient } from '../../agents/mcp-stdio-client'
+import { type McpClient, type McpTool } from '../../agents/mcp-stdio-client'
 import {
   WEB_TOOL_INPUT_SCHEMAS,
   WEB_TOOL_OUTPUT_SCHEMAS,
@@ -108,6 +108,32 @@ import type {
   VideoCapabilityExecutor
 } from '../utility-orchestration-service'
 import type { UtilityOrchestrationService } from '../utility-orchestration-service'
+
+/**
+ * Whether this turn carries the capability's playbook because a session was open,
+ * rather than because the agent activated it.
+ *
+ * The two authored-work capabilities travel as a skill bound to the session
+ * (`utility-orchestration-service-turn-runtime` pushes the design or video utility
+ * in as instructions only), so an activation in such a turn finds the entry
+ * already marked active and would otherwise answer without ever naming an
+ * operation.
+ */
+export function sessionCarriesCapability(
+  request: TurnState['request'],
+  utilityId: string
+): boolean {
+  const open = (session: string | undefined): boolean => session !== undefined && session !== 'off'
+  if (utilityId === APP_DESIGN_UTILITY_ID) return open(request.designSession)
+  if (utilityId === APP_VIDEO_UTILITY_ID) return open(request.videoSession)
+  return false
+}
+
+/** The operation catalog an authored-work session's capability offers this turn. */
+export function authoredWorkOperationTools(projectId: string, utilityId: string): McpTool[] {
+  const roots = currentWorkRoots(projectId)
+  return utilityId === APP_DESIGN_UTILITY_ID ? designUtilityTools(roots) : videoUtilityTools(roots)
+}
 
 /** UtilityOrchestrationService capability-invoke: one concern, moved verbatim from the composition root. */
 export class UtilityOrchestrationServiceCapabilityInvoke {
@@ -409,15 +435,28 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         kind: resolved.utility.kind,
         alreadyActive: true
       })
+      // A turn that carries an authored-work session is handed that capability's
+      // playbook as instructions only (`utility-orchestration-service-turn-runtime`
+      // pushes it in for the session, never as a typed operation catalog). So this
+      // entry is marked active by the session, not by an activation: nothing in the
+      // turn declares what `checkpoint` accepts, and a playbook that says to call it
+      // hands a model a step it cannot look up. Answer with the catalog then, and
+      // leave the instructions out because the prompt already carries them.
+      const sessionCarries = sessionCarriesCapability(state.request, utilityId)
       return {
         utility: {
           id: resolved.utility.id,
           name: resolved.utility.name,
           kind: resolved.utility.kind
         },
-        capability: {
-          note: 'Already active in this turn. Its capability description was returned by the earlier activation and is unchanged; invoke it directly. If compaction dropped that description from context, re-list it with cio_util_docs_lookup (or re-activate with input {"force": true}).'
-        }
+        capability: sessionCarries
+          ? {
+              note: 'This session already carries the playbook, so its instructions are not repeated. Its operation catalog follows: call these operations through cio_util_use and fill the fields their schemas declare.',
+              tools: authoredWorkOperationTools(state.request.projectId, utilityId)
+            }
+          : {
+              note: 'Already active in this turn. Its capability description was returned by the earlier activation and is unchanged; invoke it directly. If compaction dropped that description from context, re-list it with cio_util_docs_lookup (or re-activate with input {"force": true}).'
+            }
       }
     }
     state.activated.set(utilityId, resolved)
