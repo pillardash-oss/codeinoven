@@ -37,6 +37,11 @@
   let messages = $state<Message[]>([])
   /** The prompts this phone sent that the service has not finished answering. */
   let queued = $state<Prompt[]>([])
+  /** What the composer holds. The page owns it, so a held message taken back for
+   *  editing lands in the same field its send goes through. */
+  let draft = $state('')
+  /** Counts drafts handed in from outside, so the field knows to take focus. */
+  let draftArrivals = $state(0)
   let loading = $state(true)
   let error = $state<string | null>(null)
   let drawerOpen = $state(false)
@@ -228,6 +233,23 @@
     startPoll()
   }
 
+  function handlePromptRemoved(id: string): void {
+    queued = queued.filter((prompt) => prompt.id !== id)
+    if (queued.length === 0) stopPoll()
+  }
+
+  /** A held message taken back to the box: it leaves the queue and becomes the
+   *  draft, so editing and sending go through the one field. */
+  function handlePromptEdited(body: string, id: string): void {
+    handlePromptRemoved(id)
+    draft = body
+    draftArrivals += 1
+  }
+
+  function handlePromptSteered(prompt: Prompt): void {
+    queued = queued.map((held) => (held.id === prompt.id ? prompt : held))
+  }
+
   /* ---- Drawer ---- */
 
   function onKeydown(event: KeyboardEvent): void {
@@ -314,8 +336,23 @@
 
   <div class="slot">
     {#if threadId.length > 0}
-      {#if queued.length > 0}<QueuedStrip prompts={queued} />{/if}
-      <Composer {threadId} {thread} {project} working={queued.length > 0} onqueued={handleQueued} />
+      {#if queued.length > 0}
+        <QueuedStrip
+          prompts={queued}
+          onremoved={handlePromptRemoved}
+          onedited={handlePromptEdited}
+          onsteered={handlePromptSteered}
+        />
+      {/if}
+      <Composer
+        {threadId}
+        {thread}
+        {project}
+        working={queued.length > 0}
+        bind:draft
+        focusSeq={draftArrivals}
+        onqueued={handleQueued}
+      />
     {/if}
   </div>
 

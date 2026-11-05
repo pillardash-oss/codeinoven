@@ -244,5 +244,11 @@ export const api = {
     data<Prompt>(`/v1/threads/${threadId}/prompts`, { method: 'POST', body: input }),
 
   /** Where the prompt the phone sent has got to: queued, claimed, done, failed. */
-  prompt: (id: string) => data<Prompt>(`/v1/prompts/${id}`)
+  prompt: (id: string) => data<Prompt>(`/v1/prompts/${id}`),
+
+  /** Take back a message that is still waiting its turn. */
+  deletePrompt: (id: string) => data<void>(`/v1/prompts/${id}`, { method: 'DELETE' }),
+
+  /** Stop waiting: the oven takes this message before the rest of the queue. */
+  steerPrompt: (id: string) => data<Prompt>(`/v1/prompts/${id}/steer`, { method: 'POST' })
 }

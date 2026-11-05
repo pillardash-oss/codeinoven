@@ -6,7 +6,10 @@
 
 .app {
   position: relative;
-  height: 100dvh;
+  /* The keyboard is layout space, not an overlay: the native shell writes its
+     height as `--keyboard-inset`, so the shell shortens by exactly that much and
+     the composer keeps its seat above the keys. */
+  height: calc(100dvh - var(--keyboard-inset, 0px));
   display: flex;
   flex-direction: column;
   overflow: hidden;

@@ -587,3 +587,65 @@ func (s *Store) PromptByID(ctx context.Context, schemaName, promptID string) (Pr
 	}
 	return prompt, nil
 }
+
+// The one state a person may still change. Once an Oven has claimed a prompt it
+// belongs to the run, and the service refuses to rewrite or remove it.
+const promptQueuedState = "queued"
+
+// promptNotQueued turns a failed guarded write into the reason it failed: a
+// prompt that does not exist, or one that is already on its way.
+func promptNotQueued(tx pgx.Tx, ctx context.Context, promptID string) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM prompts WHERE id = $1)`, promptID).
+		Scan(&exists); err != nil {
+		return fmt.Errorf("store: check prompt: %w", err)
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return ErrConflict
+}
+
+// DeletePrompt removes a prompt the Oven has not claimed yet. A prompt that is
+// already being answered is a conflict rather than a silent no-op, so the phone
+// can say why the held message is not its to remove anymore.
+func (s *Store) DeletePrompt(ctx context.Context, schemaName, promptID string) error {
+	return s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM prompts WHERE id = $1 AND state = $2`, promptID, promptQueuedState)
+		if err != nil {
+			return fmt.Errorf("store: delete prompt: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return promptNotQueued(tx, ctx, promptID)
+		}
+		return nil
+	})
+}
+
+// SteerPrompt moves a queued prompt ahead of the rest of its thread's queue, so
+// the Oven takes it next instead of finishing the queue in order. The state is
+// the record of that: `steering` means the prompt is no longer waiting its turn.
+func (s *Store) SteerPrompt(
+	ctx context.Context, schemaName, promptID string,
+) (Prompt, error) {
+	var prompt Prompt
+	err := s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
+		var err error
+		prompt, err = scanPrompt(tx.QueryRow(ctx, `
+			UPDATE prompts SET state = 'steering', updated_at = now()
+			WHERE id = $1 AND state = $2
+			RETURNING `+promptColumns, promptID, promptQueuedState))
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return promptNotQueued(tx, ctx, promptID)
+			}
+			return fmt.Errorf("store: steer prompt: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return Prompt{}, err
+	}
+	return prompt, nil
+}

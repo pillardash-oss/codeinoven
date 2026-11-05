@@ -253,6 +253,15 @@ body {
   color: var(--color-muted);
 }
 
+/* A destructive action wears the app's danger ink on the same plate as the
+   primary one, so it is never mistaken for a quiet alternative. */
+.btn.danger {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-surface);
+  font-weight: 500;
+}
+
 .btn:disabled {
   color: var(--color-dimmed);
   cursor: default;

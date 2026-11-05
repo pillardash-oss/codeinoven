@@ -16,11 +16,12 @@
    * so on a phone they are readings rather than pickers, and nothing here opens a
    * menu that would have nothing to choose from.
    *
-   * Enter sends from the keyboard, because a phone keyboard has no modifier to
-   * hold; Shift+Enter writes a second line, and Cmd/Ctrl+Enter still sends the
-   * way it does on the desktop. The field grows to the app's rest cap and stops,
-   * unless the compose control has grown it, so the transcript above keeps most
-   * of the screen.
+   * The keyboard's return key writes a line, exactly as the design's field does:
+   * the send plate is the only control that makes a message leave this screen, so
+   * a thumb resting on return cannot send half-written thought. Cmd/Ctrl+Enter
+   * still sends, the way it does on the desktop. The field grows to the app's
+   * rest cap and stops, unless the compose control has grown it, so the
+   * transcript above keeps most of the screen.
    */
   interface Props {
     threadId: string
@@ -32,11 +33,22 @@
     working?: boolean
     /** Called once the service has accepted the prompt, so the page can track it. */
     onqueued: (turn: { prompt: Prompt; body: string }) => void
+    /** The writing itself, owned by the page: a held message that is taken back
+     *  to the box arrives as a new draft. */
+    draft?: string
+    /** Bumped when a draft arrives from outside, so the field can take focus. */
+    focusSeq?: number
   }
 
-  let { threadId, thread = null, project = null, working = false, onqueued }: Props = $props()
-
-  let text = $state('')
+  let {
+    threadId,
+    thread = null,
+    project = null,
+    working = false,
+    onqueued,
+    draft = $bindable(''),
+    focusSeq = 0
+  }: Props = $props()
   let sending = $state(false)
   let error = $state<string | null>(null)
   /**
@@ -52,7 +64,7 @@
   /** A plain node reference: the box is measured imperatively, never rendered from. */
   let box: HTMLTextAreaElement | null = null
 
-  let canSend = $derived(text.trim().length > 0 && !sending)
+  let canSend = $derived(draft.trim().length > 0 && !sending)
 
   /** Height follows the content; the stylesheet's cap is what stops the growth,
    *  exactly as the desktop editor's `max-height` does. */
@@ -84,6 +96,18 @@
     handleInput()
   }
 
+  /** A draft handed in from elsewhere (an edited held message) is written and
+   *  focused, because the person is expected to carry on in the field. */
+  $effect(() => {
+    if (focusSeq <= 0) return
+    if (!box) return
+    box.focus()
+    const end = box.value.length
+    box.setSelectionRange(end, end)
+    fit()
+    handleInput()
+  })
+
   /** Keep the element and size it once it is in the document. */
   function attachBox(node: HTMLTextAreaElement): () => void {
     box = node
@@ -94,14 +118,14 @@
   }
 
   async function send(): Promise<void> {
-    const body = text.trim()
+    const body = draft.trim()
     if (body.length === 0 || sending) return
     const clientId = crypto.randomUUID()
     sending = true
     error = null
     try {
       const prompt = await api.sendPrompt(threadId, { body, clientId })
-      text = ''
+      draft = ''
       expanded = false
       await tick()
       handleInput()
@@ -120,18 +144,17 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Enter') return
-    // A phone keyboard sends with its own return key; a second line is asked for.
-    if (!event.shiftKey) {
-      event.preventDefault()
-      void send()
-    }
+    // The return key is a line break. Sending is the plate's job alone.
+    if (event.key !== 'Enter' || event.shiftKey) return
+    if (!event.metaKey && !event.ctrlKey) return
+    event.preventDefault()
+    void send()
   }
 </script>
 
 <form
   class="composer-box"
-  data-has-text={text.trim().length > 0}
+  data-has-text={draft.trim().length > 0}
   data-expanded={expanded}
   onsubmit={onSubmit}
 >
@@ -139,13 +162,13 @@
     <span class="composer-prompt" aria-hidden="true">&gt;</span>
     <textarea
       {@attach attachBox}
-      bind:value={text}
+      bind:value={draft}
       oninput={handleInput}
       onkeydown={onKeydown}
       rows="1"
       placeholder={working ? 'Queue a message for the oven' : 'Message the oven'}
       aria-label="Message the oven"
-      enterkeyhint="send"></textarea>
+      enterkeyhint="enter"></textarea>
   </div>
 
   {#if showExpand}

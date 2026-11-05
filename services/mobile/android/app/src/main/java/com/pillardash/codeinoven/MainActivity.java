@@ -1,6 +1,7 @@
 package com.pillardash.codeinoven;
 
 import android.os.Bundle;
+import android.view.WindowManager;
 import android.webkit.WebView;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -21,12 +22,16 @@ public class MainActivity extends BridgeActivity {
      * before Chromium 140 and reports zero insets, so this activity takes the
      * insets itself: the decor no longer fits system windows, the page is handed
      * the bar heights as the same CSS variables Capacitor would otherwise inject,
-     * and the keyboard keeps the room the old adjustResize gave it.
+     * and the keyboard is handed over as `--keyboard-inset` so the page can lift
+     * its own composer above it.
      */
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        // The window asks to resize for the keyboard instead of panning the page:
+        // the page decides where a focused field sits, never the system.
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
         WebView webView = getBridge().getWebView();
         if (webView == null) {
@@ -41,20 +46,25 @@ public class MainActivity extends BridgeActivity {
             Insets keyboard = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
             boolean keyboardVisible = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
 
-            // The page keeps the keyboard's height as real layout space, which is
-            // what adjustResize used to give it; the bars stay CSS variables.
-            view.setPadding(0, 0, 0, keyboardVisible ? keyboard.bottom : 0);
+            // The WebView keeps its own size and the page spends the keyboard as
+            // layout space it can see: one variable the shell subtracts from its
+            // height, so the composer rises with the keyboard instead of hiding
+            // behind it. Padding the WebView instead would move the page without
+            // telling CSS anything, which is what left the field under the keys.
+            int keyboardInset = keyboardVisible ? Math.round(keyboard.bottom / density) : 0;
 
             String script = String.format(
                 Locale.US,
                 "document.documentElement.style.setProperty('--safe-area-inset-top','%dpx');" +
                 "document.documentElement.style.setProperty('--safe-area-inset-right','%dpx');" +
                 "document.documentElement.style.setProperty('--safe-area-inset-bottom','%dpx');" +
-                "document.documentElement.style.setProperty('--safe-area-inset-left','%dpx');",
+                "document.documentElement.style.setProperty('--safe-area-inset-left','%dpx');" +
+                "document.documentElement.style.setProperty('--keyboard-inset','%dpx');",
                 Math.round(bars.top / density),
                 Math.round(bars.right / density),
                 Math.round(bars.bottom / density),
-                Math.round(bars.left / density)
+                Math.round(bars.left / density),
+                keyboardInset
             );
             webView.evaluateJavascript(script, null);
             return windowInsets;

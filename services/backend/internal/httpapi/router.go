@@ -93,6 +93,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/threads/{id}/messages", s.requireSession(http.HandlerFunc(s.handleListMessages)))
 	mux.Handle("POST /v1/threads/{id}/prompts", s.requireSession(http.HandlerFunc(s.handleCreatePrompt)))
 	mux.Handle("GET /v1/prompts/{id}", s.requireSession(http.HandlerFunc(s.handleGetPrompt)))
+	mux.Handle("DELETE /v1/prompts/{id}", s.requireSession(http.HandlerFunc(s.handleDeletePrompt)))
+	mux.Handle("POST /v1/prompts/{id}/steer", s.requireSession(http.HandlerFunc(s.handleSteerPrompt)))
 
 	// Presence and store.
 	mux.Handle("POST /v1/ovens/heartbeat", s.requireSession(http.HandlerFunc(s.handleOvenHeartbeat)))

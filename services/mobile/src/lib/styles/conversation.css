@@ -651,7 +651,29 @@
 }
 
 .queue b {
+  flex: none;
   font-weight: 500;
+}
+
+/* The held message is the part that gives way, so the strip stays one 44px row
+   whatever was written. */
+.queue .lead {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue .lead span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-muted);
 }
 
 .queue svg {
@@ -671,6 +693,52 @@
   border-top: 1px solid var(--color-border);
   border-bottom: 0;
   background: var(--color-surface);
+}
+
+.queue-body p {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--color-foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Every held message owns its own actions: what it says, then what can still be
+   done with it, with the destructive one kept apart from the two that act. */
+.queued-item + .queued-item {
+  border-top: 1px solid var(--color-border);
+}
+
+.queue-acts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.queue-acts .right {
+  display: flex;
+  gap: 0.375rem;
+}
+
+/* A message that has moved on states where it went instead of offering actions
+   that would now be refused. */
+.queue-state {
+  margin: 0;
+  padding: 0 0.75rem 0.625rem;
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+.queue-error {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0;
+  font-size: 0.75rem;
+  color: var(--color-danger);
 }
 
 .skeleton-block {

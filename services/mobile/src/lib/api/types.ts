@@ -137,7 +137,8 @@ export interface Prompt {
   id: string
   threadId: string
   body: string
-  state: 'queued' | 'claimed' | 'done' | 'failed'
+  /** `steering` means the oven takes it next, ahead of the rest of the queue. */
+  state: 'queued' | 'claimed' | 'steering' | 'done' | 'failed'
   error: string | null
   createdAt: number
   updatedAt: number
