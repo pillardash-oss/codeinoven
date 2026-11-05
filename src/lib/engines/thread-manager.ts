@@ -56,6 +56,7 @@ import {
   type ThreadListOptions
 } from './thread-manager-capacity'
 import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
+import { assertScopeSwapAllowed } from './thread-manager-scope-swap'
 import { assistantRunDescendants, orchestrationDescendants } from './thread-manager-lineage'
 import { ThreadForkService } from './thread-manager-fork'
 import { ThreadSearchService, type IntentSearchProvider } from './thread-manager-search'
@@ -833,6 +834,16 @@ export class ThreadManager {
     const movedScopes =
       input.scopeBucketId !== undefined &&
       input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+
+    // A working thread inside a worktree scope may not be reassigned: its run
+    // lives in that checkout, and the move would repoint it mid-turn.
+    if (movedScopes && input.scopeBucketId !== undefined) {
+      await assertScopeSwapAllowed({
+        thread: existing,
+        targetBucketId: input.scopeBucketId,
+        boardFor: (projectId) => this.scopeManager.getBoardSnapshot(projectId)
+      })
+    }
 
     const updated: Thread = {
       ...existing,
