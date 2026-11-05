@@ -645,10 +645,13 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   async revealAssignmentInAppFile(content: AssignmentPlanContent): Promise<void> {
     this.root.submitSpecDecision.assignmentError = ''
     try {
+      // The Assignment belongs to its coordinator, which a worker thread's view
+      // presents; key the call on the document's owner, never the mounted thread.
+      const owner = this.root.submitSpecDecision.assignmentOwner()
       const absPath = await invoke(
         'assignment:revealInFiles',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        owner.projectId,
+        owner.threadId,
         content
       )
       await revealFileInAppTree(this.root.handleAgentEvent.thread.projectId, absPath)
