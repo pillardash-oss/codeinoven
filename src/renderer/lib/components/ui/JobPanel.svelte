@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBan from '@pdslng/cio-icon/CioBan.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -74,6 +75,8 @@
 
   const running = $derived(status === 'running')
   const done = $derived(status === 'succeeded')
+  /** Work the user backed out of: ended, but nothing went wrong. */
+  const cancelled = $derived(status === 'cancelled')
 </script>
 
 <DockableModal
@@ -96,6 +99,9 @@
       {:else if done}
         <CioCheckCircle size={13} class="text-success" aria-hidden="true" />
         <span class="text-success">{statusLabel}</span>
+      {:else if cancelled}
+        <CioBan size={13} class="text-muted" aria-hidden="true" />
+        <span class="text-muted">{statusLabel}</span>
       {:else}
         <CioAttention size={13} class="text-danger" aria-hidden="true" />
         <span class="text-danger">{statusLabel}</span>

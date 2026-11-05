@@ -1,4 +1,6 @@
 import { subscribe } from '$lib/ipc.svelte'
+import { onDraftActivity } from '$lib/stores/draft-activity.svelte'
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import type { AgentEvent } from '$shared/types'
 import type { JobStatus, JobStepView } from '../ui/job-view'
@@ -50,6 +52,15 @@ export const ASSIST_STEPS = [
 const PROMPT_WAIT_MS = 10 * 60 * 1000
 
 /**
+ * How long a cleared composer has to stay empty before the handoff is called off.
+ *
+ * Sending a reviewed brief clears the draft a beat before the turn starts, and
+ * the two look identical from here. This window lets a real send become the run
+ * it is meant to be, so only a draft the user emptied on purpose ends the wait.
+ */
+const PROMPT_CLEAR_SETTLE_MS = 4000
+
+/**
  * Thread statuses that mean the agent has picked the brief up and is working.
  *
  * Read only by a job that is waiting for its reviewed prompt to be sent, so a
@@ -69,6 +80,8 @@ class AgentAssistJobs {
   private listeners: Array<() => void> = []
   /** Waiting jobs by id: their reviewed brief has not been sent yet. */
   private promptWaits = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Jobs whose prompt just went empty, pending the settle window above. */
+  private draftWaits = new Map<string, ReturnType<typeof setTimeout>>()
 
   start(
     request: AgentAssistRequest,
@@ -131,7 +144,28 @@ class AgentAssistJobs {
   }
   close(id: string): void {
     this.clearPromptWait(id)
+    this.clearDraftWait(id)
     this.jobs = this.jobs.filter((job) => job.id !== id || job.status === 'running')
+  }
+
+  /**
+   * Record that the thread a waiting handoff points at is gone.
+   *
+   * "Open thread" used to retry for a couple of seconds and then say nothing, so
+   * a thread the user deleted left the panel waiting for a prompt that could
+   * never be sent. The operation is over: the panel says so and offers the close
+   * it was withholding while it believed it was still working.
+   */
+  threadUnavailable(id: string): void {
+    const job = this.jobs.find((entry) => entry.id === id)
+    if (!job || job.status !== 'running') return
+    this.settle(
+      id,
+      'cancelled',
+      'The thread for this handoff no longer exists, so the operation was cancelled.',
+      null,
+      true
+    )
   }
 
   /**
@@ -149,10 +183,22 @@ class AgentAssistJobs {
       detail: 'Prompt ready. Send it in the thread.',
       awaitingSend: true
     })
+    const job = this.jobs.find((entry) => entry.id === id)
+    // A brief sent the instant the thread opened can beat this call: the turn is
+    // already in the thread and its status event was handled while the job was
+    // not yet waiting. Following it now keeps the panel on the run it belongs to.
+    if (job?.threadId && this.threadHasTurn(job.projectId, job.threadId)) {
+      this.beginRun(id, 'Starting the agent')
+      return
+    }
     this.clearPromptWait(id)
     this.promptWaits.set(
       id,
-      setTimeout(() => this.finish(id, 'succeeded'), PROMPT_WAIT_MS)
+      setTimeout(
+        () =>
+          this.settle(id, 'cancelled', 'The prompt was never sent, so this handoff was cancelled.'),
+        PROMPT_WAIT_MS
+      )
     )
   }
 
@@ -161,6 +207,53 @@ class AgentAssistJobs {
     if (timer === undefined) return
     clearTimeout(timer)
     this.promptWaits.delete(id)
+  }
+
+  private clearDraftWait(id: string): void {
+    const timer = this.draftWaits.get(id)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.draftWaits.delete(id)
+  }
+
+  /**
+   * The thread's composer went empty: either the user cleared the brief or they
+   * just sent it.
+   *
+   * The job cannot tell those apart at the moment the draft disappears, so it
+   * waits out {@link PROMPT_CLEAR_SETTLE_MS} and then checks the evidence: a
+   * sent brief is a turn in the thread, a cleared one leaves it empty.
+   */
+  private draftChanged(projectId: string, threadId: string, drafting: boolean): void {
+    const job = this.jobs.find(
+      (entry) =>
+        entry.status === 'running' &&
+        entry.awaitingSend &&
+        entry.projectId === projectId &&
+        entry.threadId === threadId
+    )
+    if (!job) return
+    this.clearDraftWait(job.id)
+    if (drafting) return
+    this.draftWaits.set(
+      job.id,
+      setTimeout(() => this.confirmPromptAbandoned(job.id), PROMPT_CLEAR_SETTLE_MS)
+    )
+  }
+
+  private confirmPromptAbandoned(id: string): void {
+    this.draftWaits.delete(id)
+    const job = this.jobs.find((entry) => entry.id === id)
+    if (!job || job.status !== 'running' || !job.awaitingSend || !job.threadId) return
+    if (rendererRecovery.hasDraftContent(job.projectId, job.threadId)) return
+    if (this.threadHasTurn(job.projectId, job.threadId)) return
+    this.settle(id, 'cancelled', 'The prompt was cleared, so this handoff was cancelled.')
+  }
+
+  /** Whether the thread already holds a user turn, i.e. a sent brief. */
+  private threadHasTurn(projectId: string, threadId: string): boolean {
+    if (!threadMessages.loaded(projectId, threadId)) return false
+    return threadMessages.messages(projectId, threadId).some((message) => message.role === 'user')
   }
 
   /** The reviewed brief became a turn: this job is a live run again. */
@@ -187,16 +280,40 @@ class AgentAssistJobs {
   }
 
   private finish(id: string, status: JobStatus, error: string | null = null): void {
+    this.settle(id, status, error ?? (status === 'succeeded' ? 'Ready' : 'Stopped'), error)
+  }
+
+  /**
+   * End a job and say how it ended.
+   *
+   * A cancelled run keeps no error: nothing went wrong, the user simply did not
+   * go ahead, and a red failure box would misread the message. `clearThread`
+   * drops a thread id that no longer resolves, so the panel stops offering an
+   * `Open thread` action that has nothing to open.
+   */
+  private settle(
+    id: string,
+    status: JobStatus,
+    detail: string,
+    error: string | null = null,
+    clearThread = false
+  ): void {
     this.clearPromptWait(id)
+    this.clearDraftWait(id)
     this.patch(id, {
       status,
       error,
-      detail: error ?? (status === 'succeeded' ? 'Ready' : 'Stopped')
+      detail,
+      awaitingSend: false,
+      ...(clearThread ? { threadId: null } : {})
     })
-    if (!this.jobs.some((job) => job.status === 'running')) {
-      for (const dispose of this.listeners) dispose()
-      this.listeners = []
-    }
+    if (this.jobs.some((job) => job.status === 'running')) return
+    for (const dispose of this.listeners) dispose()
+    this.listeners = []
+    for (const timer of this.promptWaits.values()) clearTimeout(timer)
+    this.promptWaits.clear()
+    for (const timer of this.draftWaits.values()) clearTimeout(timer)
+    this.draftWaits.clear()
   }
 
   private listen(): void {
@@ -204,6 +321,27 @@ class AgentAssistJobs {
     this.listeners = [
       subscribe('agent:event', (event) => this.event(event)),
       subscribe('agent:remoteEvent', ({ event }) => this.event(event)),
+      subscribe('thread:deleted', (projectId, threadId) => {
+        const job = this.jobs.find(
+          (entry) =>
+            entry.status === 'running' &&
+            entry.projectId === projectId &&
+            entry.threadId === threadId
+        )
+        if (!job) return
+        this.settle(
+          job.id,
+          'cancelled',
+          job.started
+            ? 'The thread was deleted, so this run was cancelled.'
+            : 'The thread was deleted before the prompt was sent, so this handoff was cancelled.',
+          null,
+          true
+        )
+      }),
+      onDraftActivity((projectId, threadId, drafting) =>
+        this.draftChanged(projectId, threadId, drafting)
+      ),
       subscribe('thread:updated', (thread) => {
         const job = this.jobs.find(
           (entry) =>
