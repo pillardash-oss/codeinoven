@@ -81,39 +81,41 @@
         </p>
       </div>
     {:else}
-      {#each groups as group (group.label)}
-        {@const folded = threadGroupingState.isFolded(group.label)}
-        <section>
-          <div class="sticky -top-2 z-10 bg-surface">
-            <PinnedSection
-              sectionKey="threads"
-              label={group.label}
-              threads={group.threads}
-              headerOnly
-              icon={THREAD_GROUP_ICONS[group.label]}
-              accent={THREAD_GROUP_COLORS[group.label]}
-              {folded}
-              onToggleFold={() => threadGroupingState.toggleFold(group.label)}
-              activeThreadId={selectedThreadId}
-              onOpen={openRun}
-            />
-          </div>
-          {#if !folded}
-            <div class="space-y-px pb-5" role="list">
-              {#each group.threads as thread (thread.id)}
-                <ThreadRow
-                  {thread}
-                  detailed
-                  projectIconUrl={projectIcon(thread)}
-                  selected={selectedThreadId === thread.id}
-                  showChangeScope={false}
-                  onOpen={openRun}
-                />
-              {/each}
+      <div class="px-2">
+        {#each groups as group (group.label)}
+          {@const folded = threadGroupingState.isFolded(group.label)}
+          <section>
+            <div class="sticky -top-2 z-10 bg-surface">
+              <PinnedSection
+                sectionKey="threads"
+                label={group.label}
+                threads={group.threads}
+                headerOnly
+                icon={THREAD_GROUP_ICONS[group.label]}
+                accent={THREAD_GROUP_COLORS[group.label]}
+                {folded}
+                onToggleFold={() => threadGroupingState.toggleFold(group.label)}
+                activeThreadId={selectedThreadId}
+                onOpen={openRun}
+              />
             </div>
-          {/if}
-        </section>
-      {/each}
+            {#if !folded}
+              <div class="space-y-px pb-5" role="list">
+                {#each group.threads as thread (thread.id)}
+                  <ThreadRow
+                    {thread}
+                    detailed
+                    projectIconUrl={projectIcon(thread)}
+                    selected={selectedThreadId === thread.id}
+                    showChangeScope={false}
+                    onOpen={openRun}
+                  />
+                {/each}
+              </div>
+            {/if}
+          </section>
+        {/each}
+      </div>
     {/if}
   </div>
 </div>
