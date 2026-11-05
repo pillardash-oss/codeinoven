@@ -6,6 +6,7 @@
   import { Browser } from '@capacitor/browser'
   import BrandMark from '#lib/components/BrandMark.svelte'
   import ProviderMark from '#lib/components/ProviderMark.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import { api, getApiBase, ApiError } from '#lib/api/client'
   import { session } from '#lib/stores/session.svelte'
 
@@ -23,6 +24,8 @@
   let email = $state('')
   let password = $state('')
   let name = $state('')
+  /** The password is written hidden, and the eye beside it reveals it. */
+  let revealed = $state(false)
   let localError = $state<string | null>(null)
   /** The first field takes the caret as soon as it exists. */
   function focusOnMount(node: HTMLInputElement): void {
@@ -36,11 +39,10 @@
    * browser the same code arrives as a query parameter on this route.
    */
   let providers = $state<Record<string, boolean>>({})
-  /** Until the server answers, a provider button is shown disabled rather than
-   *  missing, so the screen does not jump once the answer lands. */
+  /** False until the server has answered which providers it can complete. */
   let providersLoaded = $state(false)
-  let showGoogle = $derived(!providersLoaded || providers.google === true)
-  let showGithub = $derived(!providersLoaded || providers.github === true)
+  /** Whether that answer came at all, which is what a disabled plate says. */
+  let providersReachable = $state(false)
   let message = $derived(localError ?? session.error)
   let actionLabel = $derived(actionText(mode, session.busy))
 
@@ -129,19 +131,23 @@
   async function loadProviders(): Promise<void> {
     try {
       providers = await api.providers()
+      providersReachable = true
     } catch {
-      // An unreachable service already explains itself on submit; the provider
-      // buttons stay hidden rather than offering a flow that cannot start.
+      // The buttons stay on the screen either way: a provider this server cannot
+      // complete is a plate that says so, never a control that silently vanishes.
       providers = {}
     } finally {
       providersLoaded = true
     }
   }
 
-  /** The reason a provider button is not pressable yet, or what it will do. */
+  /** The reason a provider button is not pressable, or what pressing it does. */
   function providerTitle(name: 'Google' | 'GitHub', available: boolean): string {
     if (!providersLoaded) return `Checking whether ${name} sign-in is available`
-    return available ? `Sign in with ${name}` : `${name} sign-in is not configured on this server`
+    if (available) return `Sign in with ${name}`
+    return providersReachable
+      ? `${name} sign-in is not configured on this server`
+      : `Could not reach the service to check ${name} sign-in`
   }
 
   async function startProvider(provider: 'google' | 'github'): Promise<void> {
@@ -179,37 +185,31 @@
     <p class="brand-line">The desktop's work, in your pocket.</p>
   </div>
 
-  {#if showGoogle || showGithub}
-    <div class="providers">
-      {#if showGoogle}
-        <button
-          class="btn provider"
-          type="button"
-          disabled={session.busy || !providersLoaded || providers.google !== true}
-          title={providerTitle('Google', providers.google === true)}
-          onclick={() => startProvider('google')}
-        >
-          <ProviderMark provider="google" />
-          <span class="provider-label">Continue with Google</span>
-        </button>
-      {/if}
-      {#if showGithub}
-        <button
-          class="btn provider"
-          type="button"
-          disabled={session.busy || !providersLoaded || providers.github !== true}
-          title={providerTitle('GitHub', providers.github === true)}
-          onclick={() => startProvider('github')}
-        >
-          <ProviderMark provider="github" />
-          <span class="provider-label">Continue with GitHub</span>
-        </button>
-      {/if}
-      <p class="provider-note">New accounts are created on first sign in.</p>
-    </div>
+  <div class="providers">
+    <button
+      class="btn provider"
+      type="button"
+      disabled={session.busy || !providersLoaded || providers.google !== true}
+      title={providerTitle('Google', providers.google === true)}
+      onclick={() => startProvider('google')}
+    >
+      <ProviderMark provider="google" />
+      <span class="provider-label">Continue with Google</span>
+    </button>
+    <button
+      class="btn provider"
+      type="button"
+      disabled={session.busy || !providersLoaded || providers.github !== true}
+      title={providerTitle('GitHub', providers.github === true)}
+      onclick={() => startProvider('github')}
+    >
+      <ProviderMark provider="github" />
+      <span class="provider-label">Continue with GitHub</span>
+    </button>
+    <p class="provider-note">New accounts are created on first sign in.</p>
+  </div>
 
-    <p class="or"><span>or with email</span></p>
-  {/if}
+  <p class="or"><span>or with email</span></p>
 
   <form class="card auth" onsubmit={onSubmit} aria-busy={session.busy} novalidate>
     <div class="fields">
@@ -243,19 +243,36 @@
         />
       </label>
 
-      <label class="field">
-        <span>Password</span>
-        <input
-          bind:value={password}
-          onkeydown={onKeydown}
-          type="password"
-          autocomplete={mode === 'create' ? 'new-password' : 'current-password'}
-          minlength={mode === 'create' ? MIN_PASSWORD : undefined}
-        />
+      <div class="field">
+        <label for="sign-in-password">Password</label>
+        <span class="secret">
+          <input
+            id="sign-in-password"
+            bind:value={password}
+            onkeydown={onKeydown}
+            type={revealed ? 'text' : 'password'}
+            autocomplete={mode === 'create' ? 'new-password' : 'current-password'}
+            minlength={mode === 'create' ? MIN_PASSWORD : undefined}
+          />
+          <!-- One eye in two inks: dim while the password stays dots, lit once
+               the text is readable. The plate is the size of a thumb, because
+               this is the only control inside a field on this screen. -->
+          <button
+            class="reveal"
+            type="button"
+            data-revealed={revealed}
+            aria-pressed={revealed}
+            aria-label={revealed ? 'Hide password' : 'Show password'}
+            title={revealed ? 'Hide password' : 'Show password'}
+            onclick={() => (revealed = !revealed)}
+          >
+            <CioEye size={17} />
+          </button>
+        </span>
         {#if mode === 'create'}
           <span class="hint">At least {MIN_PASSWORD} characters.</span>
         {/if}
-      </label>
+      </div>
 
       {#if message}
         <p class="note" role="status">{message}</p>
@@ -295,7 +312,9 @@
   }
 
   /* Providers first, because that is how an account is made and reopened. The
-     email form below is the fallback for a server that has no providers. */
+     email form below is the fallback for a server that has no providers, and a
+     provider this server cannot complete stays visible as a disabled plate so
+     its absence is a stated fact rather than a missing control. */
   .providers {
     display: flex;
     flex-direction: column;
@@ -389,6 +408,38 @@
     margin: 0;
     font-size: 0.75rem;
     color: var(--ink-meta);
+  }
+
+  /* The eye sits inside the password field's own rule, so the field reads as one
+     control, and it takes the right padding the mark needs. */
+  .card.auth .secret {
+    position: relative;
+    display: block;
+  }
+
+  .card.auth .secret input {
+    width: 100%;
+    padding-right: 2.75rem;
+  }
+
+  .card.auth .reveal {
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-dimmed);
+    cursor: pointer;
+  }
+
+  .card.auth .reveal:hover,
+  .card.auth .reveal[data-revealed='true'] {
+    color: var(--color-foreground);
   }
 
   .card.auth .note {
