@@ -69,11 +69,16 @@ export function registerAcpAgentIpc(
       if (typeof methodId !== 'string' || methodId.trim().length === 0) {
         throw new TypeError('A sign-in method id is required')
       }
-      return authenticateAcpAgent(
+      const status = await authenticateAcpAgent(
         agent.id,
         methodId.trim(),
         typeof projectPath === 'string' && projectPath.length > 0 ? projectPath : undefined
       )
+      // The catalog was probed while the agent was still signed out (a refused
+      // session is what produced the sign-in card), so its cached answer has to
+      // go: without this the model picker keeps the empty catalog until the TTL.
+      await options.onAgentsChanged?.()
+      return status
     }
   )
 }
@@ -98,6 +103,7 @@ function readInput(input: unknown): {
   args: string[]
   icon?: string | null
   iconDark?: string | null
+  enabled?: boolean
 } {
   if (typeof input !== 'object' || input === null) throw new TypeError('An ACP agent is required')
   const record = input as Record<string, unknown>
@@ -110,7 +116,9 @@ function readInput(input: unknown): {
     typeof record['id'] === 'string' && isAcpAgentId(record['id']) ? record['id'] : undefined
   const icon = record['icon']
   const iconDark = record['iconDark']
+  const enabled = record['enabled']
   return {
+    ...(typeof enabled === 'boolean' ? { enabled } : {}),
     ...(id ? { id } : {}),
     name,
     command,

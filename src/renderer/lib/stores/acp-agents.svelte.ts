@@ -1,5 +1,7 @@
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { invoke } from '$lib/ipc.svelte'
+import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+import { providerStore } from '$lib/stores/providers.svelte'
 import type { AcpAgentInput, AcpAgentSettings, AcpAgentStatus, AcpKnownAgent } from '$shared/acp'
 
 /**
@@ -69,6 +71,7 @@ class AcpAgentsStore {
     try {
       const next = await invoke('acpAgents:save', input)
       this.#replace(next)
+      await this.#refreshHarness(input.id ?? this.editing)
       // Creating an agent pins the editor to the record it just made, so saving
       // again edits that agent instead of adding another copy of it.
       if (input.id === undefined) {
@@ -87,6 +90,8 @@ class AcpAgentsStore {
     try {
       const next = await invoke('acpAgents:remove', id)
       this.#replace(next)
+      // A removed agent's models are not a stale cache, they are gone.
+      providerCatalog.invalidateAll()
       return next
     } finally {
       this.saving = false
@@ -112,6 +117,19 @@ class AcpAgentsStore {
 
   closeEditor(): void {
     this.editing = null
+  }
+
+  /**
+   * Drop the cached harness rows and model catalog for one agent.
+   *
+   * A new agent is a harness the picker has never discovered, and a sign-in let
+   * an existing one report models it previously refused. Both cases are stale
+   * answers in the renderer's caches, so neither can wait for a TTL sweep.
+   */
+  async #refreshHarness(id: string | 'new' | null | undefined): Promise<void> {
+    providerCatalog.invalidateAll()
+    if (typeof id !== 'string') return
+    await providerStore.checkOne(id).catch(() => undefined)
   }
 
   #replace(next: AcpAgentSettings): void {

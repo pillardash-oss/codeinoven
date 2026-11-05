@@ -344,6 +344,17 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     return this.activeTurns.has(sessionId)
   }
 
+  /**
+   * A cheap fingerprint of this agent's catalog inputs: the record the user
+   * saved. Editing the command or parking the agent changes it, so cached
+   * discovery cannot keep serving models the agent no longer offers.
+   */
+  async providerCatalogFingerprint(): Promise<string | null> {
+    const agent = await this.store.get(this.id)
+    if (!agent) return null
+    return [agent.id, agent.command, agent.args.join(' '), agent.enabled ? 'on' : 'off'].join('|')
+  }
+
   async restartRuntime(): Promise<void> {
     for (const transport of this.transports.values()) transport.stop()
     this.transports.clear()

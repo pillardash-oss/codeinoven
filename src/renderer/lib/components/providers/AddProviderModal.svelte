@@ -8,6 +8,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { findFirstTextField, findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
@@ -521,6 +522,10 @@
       try {
         const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
         await loadAcpAuth()
+        // A successful sign-in changes the models the agent reports, so the
+        // picker's cached (refused) catalog has to be dropped and re-probed now.
+        providerCatalog.invalidateAll()
+        void providerStore.checkOne(harness.id).catch(() => undefined)
         step = 'idle'
         selectedProvider = null
         actionWarning =
