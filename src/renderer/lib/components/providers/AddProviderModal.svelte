@@ -27,7 +27,6 @@
   import AddProviderModalConnectTab from './AddProviderModalConnectTab.svelte'
   import AddProviderModalCustomTab from './AddProviderModalCustomTab.svelte'
   import AddProviderModalFooter from './AddProviderModalFooter.svelte'
-  import AcpAgentSignIn from './AcpAgentSignIn.svelte'
   import { ProviderSignInController } from './provider-sign-in.svelte'
   import {
     type AddTab,
@@ -94,15 +93,25 @@
   let apiKey = $state('')
   let storingKey = $state(false)
 
+  /**
+   * An ACP agent is a harness like any other here: it gets the same connect tab,
+   * the same custom base URL tab and the same footer. Only the sign-in itself
+   * differs, because the agent declares it over the protocol.
+   */
+  let isAcpHarness = $derived(harness.transport === 'acp')
+
   let customProviders = $derived(
     baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id)
   )
   let customCount = $derived(customProviders.length)
 
+  // An ACP agent signs in over its own protocol rather than through a login
+  // command, but the panel is the same panel: it still offers a provider list, a
+  // connected list, and one action for both.
   let canSignIn = $derived(
     authStatus !== null &&
-      authStatus.capabilities !== null &&
-      authStatus.capabilities.loginHandoff !== false
+      (isAcpHarness ||
+        (authStatus.capabilities !== null && authStatus.capabilities.loginHandoff !== false))
   )
 
   /**
@@ -118,13 +127,9 @@
    */
   let apiKeyEntry = $derived(authStatus?.capabilities?.apiKeyEntry === true)
 
-  let canAddCustom = $derived(harness.supportsCustomProviders && harness.integration === 'ready')
-
-  /**
-   * ACP harnesses own their providers, so this panel shows the sign-in the agent
-   * itself declares instead of a provider list and a custom base URL form.
-   */
-  let isAcpHarness = $derived(harness.transport === 'acp')
+  let canAddCustom = $derived(
+    harness.integration === 'ready' && (harness.supportsCustomProviders || isAcpHarness)
+  )
 
   /** Whether this harness already holds a provider, from the last status read. */
   let hasConnectedProviders = $derived(
@@ -268,9 +273,48 @@
     return true
   }
 
+  /**
+   * Read an ACP agent's sign-in state and the methods it accepts.
+   *
+   * The methods become this panel's provider list, so a harness the user added
+   * over ACP is connected with the exact component a native harness uses.
+   */
+  async function loadAcpAuth(): Promise<void> {
+    const status = await invoke('acpAgents:authStatus', harness.id)
+    authStatus = {
+      capabilities: {
+        status: true,
+        loginHandoff: true,
+        logout: false,
+        accountActivation: false,
+        multipleAccounts: false,
+        pickerLogin: false,
+        apiKeyEntry: false,
+        inAppLogin: false
+      },
+      state: status.state === 'unknown' ? 'unknown' : status.state,
+      accounts:
+        status.state === 'authenticated'
+          ? [{ id: harness.id, providerId: harness.id, label: harness.name, method: 'agent' }]
+          : [],
+      ...(status.detail ? { detail: status.detail } : {})
+    }
+    offered = status.methods.map((method) => ({
+      id: method.id,
+      name: method.name,
+      modelCount: 0,
+      authenticated: status.state === 'authenticated',
+      ...(method.description ? { detail: method.description } : {})
+    }))
+  }
+
   async function checkAuth(): Promise<void> {
     checkingAuth = true
     try {
+      if (isAcpHarness) {
+        await loadAcpAuth()
+        return
+      }
       authStatus = await invoke('providerAccounts:getAuthStatus', harness.id)
       knownAccounts = await invoke('providerAccounts:list', harness.id)
     } catch (authError) {
@@ -466,6 +510,31 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    if (isAcpHarness) {
+      if (!provider) {
+        openPicker()
+        return
+      }
+      // The agent runs the method it declared; there is no command to hand to a
+      // terminal and no key for the app to store.
+      storingKey = true
+      try {
+        const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
+        await loadAcpAuth()
+        step = 'idle'
+        selectedProvider = null
+        actionWarning =
+          status.state === 'authenticated'
+            ? ''
+            : `${provider.name} finished, but ${harness.name} still refuses a session.`
+      } catch (authError) {
+        actionError =
+          authError instanceof Error ? authError.message : `${provider.name} could not run.`
+      } finally {
+        storingKey = false
+      }
+      return
+    }
     try {
       const providerId =
         provider?.id ??
@@ -581,9 +650,6 @@
 
   onMount(() => {
     void baseUrlProviderStore.load()
-    // An ACP agent has no offered-provider catalog to load: its sign-in panel
-    // asks the agent directly.
-    if (isAcpHarness) return
     void loadHidden()
     // A caller that names a provider search wants it waiting in the search box
     // for the next time the provider list is opened   never applied on top of
@@ -670,99 +736,93 @@
   {/snippet}
 
   {#snippet footer()}
-    {#if !isAcpHarness}
-      <AddProviderModalFooter
-        {tab}
-        {step}
-        {canSignIn}
-        {pickerLogin}
-        {apiKeyEntry}
-        emptyState={emptyConnectState}
-        {storingKey}
-        oauthLoginId={oauth.loginId}
-        {selectedProvider}
-        {finalizingAccount}
-        onOpenCustom={() => onAddCustom(harness.id)}
-        onSaveAccount={() => void saveAuthenticatedAccount()}
-        onCancelConnection={cancelConnection}
-        onStartConnect={(provider) => void startConnect(provider)}
-        onOpenPicker={openPicker}
-        onConnectWithKey={() => void connectWithKey()}
-      />
-    {/if}
+    <AddProviderModalFooter
+      {tab}
+      {step}
+      {canSignIn}
+      {pickerLogin}
+      {apiKeyEntry}
+      emptyState={emptyConnectState}
+      {storingKey}
+      oauthLoginId={oauth.loginId}
+      {selectedProvider}
+      {finalizingAccount}
+      onOpenCustom={() => onAddCustom(harness.id)}
+      onSaveAccount={() => void saveAuthenticatedAccount()}
+      onCancelConnection={cancelConnection}
+      onStartConnect={(provider) => void startConnect(provider)}
+      onOpenPicker={openPicker}
+      onConnectWithKey={() => void connectWithKey()}
+    />
   {/snippet}
 
-  {#if isAcpHarness}
-    <AcpAgentSignIn harnessId={harness.id} harnessName={harness.name} />
-  {:else}
-    <div class="mb-4 flex gap-1 border border-border bg-elevated p-1">
+  <div class="mb-4 flex gap-1 border border-border bg-elevated p-1">
+    <button
+      class="flex h-8 flex-1 items-center justify-center gap-1.5 text-xs font-medium transition-colors {tab ===
+      'connect'
+        ? 'bg-surface text-foreground'
+        : 'text-muted hover:text-foreground'}"
+      type="button"
+      onclick={() => (tab = 'connect')}
+    >
+      <CioPlug size={13} /> Connect provider
+    </button>
+    {#if canAddCustom}
       <button
         class="flex h-8 flex-1 items-center justify-center gap-1.5 text-xs font-medium transition-colors {tab ===
-        'connect'
+        'custom'
           ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         type="button"
-        onclick={() => (tab = 'connect')}
+        onclick={() => (tab = 'custom')}
       >
-        <CioPlug size={13} /> Connect provider
+        <CioServer size={13} /> Custom base URL
       </button>
-      {#if canAddCustom}
-        <button
-          class="flex h-8 flex-1 items-center justify-center gap-1.5 text-xs font-medium transition-colors {tab ===
-          'custom'
-            ? 'bg-surface text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          type="button"
-          onclick={() => (tab = 'custom')}
-        >
-          <CioServer size={13} /> Custom base URL
-        </button>
-      {/if}
-    </div>
-
-    {#if tab === 'connect'}
-      <AddProviderModalConnectTab
-        {harness}
-        {step}
-        {authStatus}
-        {checkingAuth}
-        {actionError}
-        {actionWarning}
-        {notice}
-        {authenticatedProvider}
-        bind:accountLabel
-        {loginHandoff}
-        {terminalId}
-        bind:search
-        {offered}
-        {offeredLoading}
-        {offeredError}
-        {filteredOffered}
-        bind:selectedProvider
-        bind:apiKey
-        {apiKeyEntry}
-        {pickerLogin}
-        {canSignIn}
-        {storingKey}
-        oauthLoginId={oauth.loginId}
-        {hiddenIds}
-        {supportsHide}
-        {togglingHide}
-        {oauth}
-        {accountForConnected}
-        onOpenPicker={openPicker}
-        onCheckAuth={() => void checkAuth()}
-        onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
-        onBackToList={backToList}
-        onConnectWithKey={() => void connectWithKey()}
-        onStartConnect={(provider) => void startConnect(provider)}
-        onLoginExit={(exitCode, output) => void handleLoginExit(exitCode, output)}
-        onRequestDisconnect={(account) => (disconnectTarget = account)}
-        onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}
-      />
-    {:else}
-      <AddProviderModalCustomTab {harness} {customProviders} {customCount} {onEditCustom} />
     {/if}
+  </div>
+
+  {#if tab === 'connect'}
+    <AddProviderModalConnectTab
+      {harness}
+      {step}
+      {authStatus}
+      {checkingAuth}
+      {actionError}
+      {actionWarning}
+      {notice}
+      {authenticatedProvider}
+      bind:accountLabel
+      {loginHandoff}
+      {terminalId}
+      bind:search
+      {offered}
+      {offeredLoading}
+      {offeredError}
+      {filteredOffered}
+      bind:selectedProvider
+      bind:apiKey
+      {apiKeyEntry}
+      {pickerLogin}
+      {canSignIn}
+      {storingKey}
+      oauthLoginId={oauth.loginId}
+      {hiddenIds}
+      {supportsHide}
+      {togglingHide}
+      {oauth}
+      {accountForConnected}
+      onOpenPicker={openPicker}
+      onCheckAuth={() => void checkAuth()}
+      onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
+      onBackToList={backToList}
+      onConnectWithKey={() => void connectWithKey()}
+      onStartConnect={(provider) => void startConnect(provider)}
+      onLoginExit={(exitCode, output) => void handleLoginExit(exitCode, output)}
+      onRequestDisconnect={(account) => (disconnectTarget = account)}
+      onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}
+    />
+  {:else}
+    <AddProviderModalCustomTab {harness} {customProviders} {customCount} {onEditCustom} />
   {/if}
 </DockableModal>
 
