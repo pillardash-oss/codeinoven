@@ -18,6 +18,8 @@ export type HistoryDirection = 'back' | 'forward'
 export interface HistoryGestureFacts {
   /** The page's running number for this gesture, so repeats are recognisable. */
   gesture: number
+  /** When the gesture's first event arrived, on the machine's clock. */
+  startedAt: number
   /** Total horizontal travel, negative towards previous entries. */
   horizontal: number
   /** Total vertical travel, always positive. */
@@ -71,11 +73,13 @@ export function readHistoryGestureFacts(value: unknown): HistoryGestureFacts | n
   if (!value || typeof value !== 'object') return null
   const report = value as Partial<Record<keyof HistoryGestureFacts, unknown>>
   const gesture = report.gesture
+  const startedAt = report.startedAt
   const horizontal = report.horizontal
   const vertical = report.vertical
   const wheelDetents = report.wheelDetents
   const events = report.events
   if (typeof gesture !== 'number' || !Number.isFinite(gesture)) return null
+  if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) return null
   if (typeof horizontal !== 'number' || !Number.isFinite(horizontal)) return null
   if (typeof vertical !== 'number' || !Number.isFinite(vertical)) return null
   if (typeof wheelDetents !== 'number' || !Number.isFinite(wheelDetents)) return null
@@ -84,6 +88,7 @@ export function readHistoryGestureFacts(value: unknown): HistoryGestureFacts | n
   if (typeof report.pageOwns !== 'boolean') return null
   return {
     gesture,
+    startedAt,
     horizontal,
     vertical,
     momentum: report.momentum,

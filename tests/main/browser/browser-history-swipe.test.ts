@@ -205,7 +205,15 @@ describe('browser history gesture, end to end', () => {
     await spinAll(repeat(18, { deltaX: -14, momentum: true, gapMs: 1 }))
     await settle()
     await wait(400)
-    await spinAll(repeat(18, { deltaX: -14, momentum: true, gapMs: 1 }))
+    // The second swipe starts inside the cooldown and outlasts its end, the way
+    // one does on a slow machine where each step of the stream takes longer.
+    await spinAll(
+      Array.from({ length: 18 }, (_, index) => ({
+        deltaX: index % 2 === 0 ? -12 : -16,
+        momentum: true,
+        gapMs: 25
+      }))
+    )
     await settle()
     await wait(200)
     expect(contents.back).toBe(1)
