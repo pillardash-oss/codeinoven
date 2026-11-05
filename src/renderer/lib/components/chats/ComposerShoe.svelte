@@ -71,10 +71,9 @@
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { moveThreadToScope } from '$lib/stores/thread-scope-move'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
-  import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
@@ -165,11 +164,9 @@
     bucketId: string
   ): Promise<void> {
     try {
-      const updated = await invoke('thread:update', targetProjectId, targetThreadId, {
-        scopeBucketId: bucketId
-      })
-      workspaceState.updateThread(updated)
-      scopeState.updateThread(updated)
+      // A refusal (a working thread in a worktree scope) is toasted by the
+      // helper itself, so it is user feedback rather than a reported error.
+      if (!(await moveThreadToScope(targetProjectId, targetThreadId, bucketId))) return
       closeMenu()
     } catch (error) {
       reportError(error, 'The scope could not be changed.')

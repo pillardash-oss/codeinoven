@@ -9,6 +9,7 @@
     withProjectOven
   } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
+  import { moveThreadToScope } from '$lib/stores/thread-scope-move'
   import {
     DEFAULT_THREAD_TITLE,
     activeThreadRowId,
@@ -171,11 +172,9 @@
     const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
     if (!thread || scopeState.bucketForThread(thread) === bucketId) return
     try {
-      const updated = await invoke('thread:update', thread.projectId, thread.id, {
-        scopeBucketId: bucketId
-      })
-      scopeState.updateThread(updated)
-      workspaceState.updateThread(updated)
+      // A refused move is toasted by the helper, which is why it answers null
+      // instead of throwing an error this banner would have to repeat.
+      await moveThreadToScope(thread.projectId, thread.id, bucketId)
     } catch (error) {
       actionError = errorMessage(error, 'The thread could not be moved.')
     }

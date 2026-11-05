@@ -13,6 +13,7 @@ import type {
   ThreadContextUsage,
   ThreadMessageCursor,
   ThreadMessagePage,
+  ThreadScopeMoveResult,
   ThreadSettings,
   ThreadStatus,
   ThreadTransferResult,
@@ -277,7 +278,6 @@ export const invokeThreadContract = {
           | 'titleSource'
           | 'providerId'
           | 'workingDirectory'
-          | 'scopeBucketId'
           | 'boundScope'
           | 'lastActivity'
           | 'read'
@@ -286,6 +286,19 @@ export const invokeThreadContract = {
       >
     ],
     Thread
+  >,
+  /**
+   * Move a thread into another scope.
+   *
+   * Its own channel because the move can be refused: a working thread inside an
+   * app-managed worktree may not be reassigned while its run lives in that
+   * checkout. The refusal comes back as `{ ok: false, refusal }` instead of a
+   * rejected invoke, so Electron's handler log never records a sentence the UI
+   * is already toasting.
+   */
+  'thread:moveScope': {} as Contract<
+    [projectId: string, threadId: string, scopeBucketId: string],
+    ThreadScopeMoveResult
   >,
   'thread:updateSettings': {} as Contract<
     [projectId: string, threadId: string, settings: ThreadSettings],
