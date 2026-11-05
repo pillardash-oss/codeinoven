@@ -27,6 +27,14 @@
   const measuredRatios = new SvelteMap<string, number>()
   /** What an unmeasured video reserves: the shape nearly every recording has. */
   const FALLBACK_RATIO = 16 / 9
+  /**
+   * The tallest a picture taller than it is wide is drawn in the conversation.
+   *
+   * A portrait recording has no width to fill: filling the column would make it
+   * taller than the window. It is capped at this height (in `rem`, so it follows
+   * the reader's font size setting) and takes only the width that height needs.
+   */
+  const INLINE_MAX_HEIGHT_REM = 24
 
   /** The part of a painted-frame report this player reads. */
   interface PaintedFrame {
@@ -181,6 +189,32 @@
 
   /** The box the picture reserves, so metadata can land without moving it. */
   const ratio = $derived(measuredRatio ?? measuredRatios.get(src) ?? FALLBACK_RATIO)
+
+  /**
+   * The width an inline figure takes, at the recording's own shape.
+   *
+   * A recording wider than it is tall fills the conversation column, so no black
+   * edge ever frames it. A recording taller than it is wide has no width to fill,
+   * so it is capped at a readable height and takes only the width that height
+   * needs, which is what makes it sit at the column's left edge as a picture
+   * rather than float inside a band of black it does not fill.
+   */
+  const inlineFigureStyle = $derived.by(() => {
+    if (fit === 'fill' || ratio >= 1) return undefined
+    return `width: calc(${INLINE_MAX_HEIGHT_REM}rem * ${ratio}); max-width: 100%`
+  })
+
+  /**
+   * The box the picture reserves.
+   *
+   * It is always the recording's own shape and never a clamped one: clamping the
+   * height of an aspect-ratio box leaves a box of a different shape than the
+   * picture it holds, and the leftover is exactly the black bar the reader sees.
+   * The height is therefore whatever the width implies.
+   */
+  const inlineBoxStyle = $derived(
+    fit === 'fill' ? undefined : `aspect-ratio: ${ratio}; width: 100%`
+  )
 
   /** `m:ss.cc`: hundredths, so moving one frame is visible in the readout. */
   function timecode(seconds: number): string {
@@ -383,8 +417,8 @@
        box reserved at its own shape, so the frame that measures it does not also
        move the document under the reader. -->
   <div
-    class={['relative w-full overflow-hidden bg-black', fit === 'fill' ? 'h-full' : 'max-h-96']}
-    style={fit === 'fill' ? undefined : `aspect-ratio: ${ratio}`}
+    class={['relative w-full overflow-hidden bg-black', fit === 'fill' && 'h-full']}
+    style={inlineBoxStyle}
   >
     <video
       bind:this={video}
@@ -505,6 +539,7 @@
     fit === 'fill' ? 'flex h-full w-full flex-col' : 'w-full',
     layout
   ]}
+  style={inlineFigureStyle}
 >
   <!-- The picture answers a press with play/pause and a double press with the big
        view, which is what every player does; the controls carry the same actions
