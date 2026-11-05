@@ -61,6 +61,8 @@ export interface AppIpcSubscriptionDeps {
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
   handleNewTerminalShortcut: () => void
+  /** A native menu asked for Settings; the shell owns the navigation. */
+  openSettings: () => void
   goBack: () => Promise<void>
   goForward: () => Promise<void>
   handleOpenedPaths: (paths: OpenedPath[]) => Promise<void>
@@ -391,6 +393,9 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeHistoryForward = subscribeGuarded('window:historyForward', () => {
     void deps.goForward()
   })
+  const unsubscribeOpenSettings = subscribeGuarded('window:openSettings', () => {
+    deps.openSettings()
+  })
   // OS hand-offs that arrive after mount; the queue drain below covers the
   // paths that were already waiting when the renderer started.
   const unsubscribeOpenedPaths = subscribeGuarded('openWith:paths', (paths: OpenedPath[]) => {
@@ -444,6 +449,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeNewTerminalShortcut()
     unsubscribeHistoryBack()
     unsubscribeHistoryForward()
+    unsubscribeOpenSettings()
     unsubscribeOpenedPaths()
     updaterState.destroy()
     updateBlockers.destroy()

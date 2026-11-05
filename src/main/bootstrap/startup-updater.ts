@@ -6,6 +6,7 @@ import os from 'node:os'
 import { cleanUpdaterCache } from '../notifications/updater-cache-cleanup'
 import { getAppCacheDir, resolveUpdaterCacheLocation } from '../notifications/updater-download'
 import { purgeAbandonedInstallStaging } from '../notifications/updater-install-recovery'
+import { isExtraInstanceLaunch } from '../system/instance-slots'
 
 const starting = new WeakMap<BootstrapState, Promise<void>>()
 
@@ -66,7 +67,12 @@ export function startStartupUpdater(state: BootstrapState, storage: StorageEngin
           appName: app.getName().toLowerCase()
         })
     }
-    state.updaterService.start()
+    // An extra instance (a slot opened from "New Instance") is a secondary window
+    // into the same app, so it must not run its own update schedule: that would
+    // double every check, and resuming a pending install there would quit a
+    // window nobody asked to close. The service still exists, so an explicit
+    // check from the application menu or Settings works on demand.
+    if (!isExtraInstanceLaunch()) state.updaterService.start()
     // Tray integration is optional and must not hold the independent updater.
     try {
       state.backgroundLifecycle?.setUpdater({

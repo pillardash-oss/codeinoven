@@ -158,6 +158,7 @@ export class AppEffects extends BoardUnit<App> {
         showStartAtLoginOffer: () => (this.root.updateConfig.startAtLoginOfferOpen = true),
         handleCloseShortcut: this.root.onKeydown.handleCloseShortcut,
         handleNewTerminalShortcut: this.root.state.handleNewTerminalShortcut,
+        openSettings: () => this.root.onKeydown.navigate('settings'),
         goBack: () => this.root.openAssistantFromSearch.handleMouseHistoryNavigation('back'),
         goForward: () => this.root.openAssistantFromSearch.handleMouseHistoryNavigation('forward'),
         handleOpenedPaths: (paths) =>

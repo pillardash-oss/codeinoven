@@ -309,6 +309,12 @@ export const IPC_EVENT_CONTRACT = {
   'window:historyBack': [] as [],
   /** Emitted when the user presses the mouse's forward side button. */
   'window:historyForward': [] as [],
+  /**
+   * The user asked for Settings from a native menu (the application menu, or the
+   * menu bar icon's context menu on a platform without one). The renderer owns
+   * the navigation, so main only names what to open.
+   */
+  'window:openSettings': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
   /**
    * What a pending update install is still waiting on: working sessions first,

@@ -1,9 +1,14 @@
 import { app } from 'electron'
-import { mkdirSync } from 'fs'
+import { mkdirSync, writeFileSync } from 'fs'
 import { isAbsolute, join } from 'path'
 import { getConfigRoot, isUnpackagedElectronLaunch } from '../../lib/utils'
 import { isShippedBuild } from './app-resources'
 import { Logger } from '../system/logger'
+import {
+  instanceSlotPidFile,
+  instanceSlotProfileDirectory,
+  requestedInstanceSlot
+} from '../system/instance-slots'
 
 /**
  * Keep every Chromium-owned file inside CodeInOven's own data root.
@@ -27,6 +32,28 @@ import { Logger } from '../system/logger'
  *
  */
 export function configureElectronDataRoot(): void {
+  // An extra instance opened from a running app occupies its own reusable slot
+  // profile. The single-instance lock is keyed by this path, so without a path
+  // of its own the second launch would hand its arguments to the first and
+  // exit. Only the Chromium profile moves: the config root, and with it the
+  // database, projects and threads, stays shared, which is what makes the new
+  // process a secondary window into the same data rather than a second app.
+  const slot = requestedInstanceSlot()
+  if (slot !== null) {
+    const slotRoot = instanceSlotProfileDirectory(slot)
+    try {
+      mkdirSync(slotRoot, { recursive: true })
+      app.setPath('userData', slotRoot)
+      app.setPath('sessionData', slotRoot)
+      // Record which process holds the slot so the launcher only reuses it once
+      // this one is gone.
+      writeFileSync(instanceSlotPidFile(slot), String(process.pid), 'utf8')
+    } catch (error: unknown) {
+      Logger.error('Extra instance profile could not be configured:', error)
+    }
+    return
+  }
+
   // Windows production already uses Electron's established `%APPDATA%` location.
   // Keep it in place while unpackaged development still receives its own profile.
   if (process.platform === 'win32' && isShippedBuild()) return
