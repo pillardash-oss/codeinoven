@@ -8,6 +8,7 @@
   import Dock from '#lib/components/Dock.svelte'
   import NewThreadSheet from '#lib/components/NewThreadSheet.svelte'
   import { DOUBLE_TAP_MS, planNewThread, startNewThread } from '#lib/new-thread'
+  import { isPanel, showsDock } from '#lib/navigation'
   import { syncSystemBars } from '#lib/system-bars'
   import '../app.css'
 
@@ -24,14 +25,16 @@
   let { children }: { children: Snippet } = $props()
 
   /**
-   * A screen change follows the direction it was opened from. A conversation is
-   * read from the row that opened it, so it pushes in over the list and the list
-   * returns the way it came; the work list's two readings swap in place. The
-   * browser does the crossfade and the slide in one snapshot pass, which keeps
-   * it off the main thread.
+   * A screen change follows the direction it was opened from. Panels are the root,
+   * a conversation is one step under the list it was opened from, and a screen
+   * opened from either is one step further, so it pushes in over its parent and
+   * its parent returns the way it came. The browser does the crossfade and the
+   * slide in one snapshot pass, which keeps it off the main thread.
    */
   function depth(path: string): number {
-    return /^\/threads\/[^/]+$/.test(path) ? 2 : 1
+    if (path === '/sign-in') return 0
+    if (isPanel(path)) return 1
+    return /^\/threads\/[^/]+$/.test(path) ? 2 : 3
   }
 
   function reduced(): boolean {
@@ -73,7 +76,12 @@
 
   let path = $derived(page.url.pathname)
   let signedIn = $derived(session.phase === 'authenticated')
-  let showDock = $derived(signedIn && path !== '/sign-in' && !/^\/threads\/[^/]+$/.test(path))
+  /**
+   * The dock is the panels' own foot. A screen opened from one of them says so in
+   * its header and leads back from there, so it never wears the navigation it was
+   * reached through.
+   */
+  let showDock = $derived(signedIn && showsDock(path))
 
   /**
    * The chooser is the fallback, never the flow: it opens when there is a choice

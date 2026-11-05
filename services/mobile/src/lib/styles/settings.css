@@ -2,7 +2,43 @@
 
    The scheme is a single choice out of Light, Dark and the system's own, so it is
    one control. Two switches could disagree with each other, and a phone that is
-   told to follow the system cannot also be told to be always dark. */
+   told to follow the system cannot also be told to be always dark.
+
+   The screen is reached from a panel and wears no dock, so its list ends on its
+   own content instead of leaving room for a bar that is not there. */
+.settings {
+  padding-bottom: 2rem;
+}
+
+.avatar {
+  flex: none;
+  width: var(--mark);
+  height: var(--mark);
+  object-fit: cover;
+}
+
+.avatar.mark {
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+  background: var(--color-elevated);
+}
+
+.plate {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  background: var(--color-elevated);
+  color: var(--color-muted);
+}
+
+.device-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+}
 
 .set-head {
   margin: 0;
@@ -78,34 +114,9 @@
   color: var(--color-danger);
 }
 
-.set-foot {
-  margin: 0;
-  padding: 1.5rem var(--gutter) 2rem;
-  font-size: 0.75rem;
-  color: var(--ink-meta);
-  line-height: 1.5;
-}
-
-.icon-plate {
+.set-row .btn {
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  background: var(--color-elevated);
-  color: var(--color-muted);
-}
-
-.identity-avatar {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: var(--mark);
-  height: var(--mark);
-  object-fit: cover;
-  background: var(--color-elevated);
-  color: var(--color-muted);
-  font-size: 0.75rem;
+  padding: 0 0.625rem;
 }
 
 .field-row {
@@ -153,13 +164,6 @@
   font-size: 0.75rem;
   color: var(--color-muted);
   text-align: center;
-}
-
-.warn {
-  flex: none;
-  display: grid;
-  place-items: center;
-  color: var(--color-warning);
 }
 
 .btn.with-icon {

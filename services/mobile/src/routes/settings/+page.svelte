@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
-  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import { page } from '$app/state'
   import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
   import CioLogOut from '@pdslng/cio-icon/CioLogOut.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
@@ -11,17 +11,17 @@
   import { api, ApiError } from '#lib/api/client'
   import { formatAge } from '#lib/api/status'
   import type { Device, DevicePlatform } from '#lib/api/types'
+  import { crumbFrom, trailTo } from '#lib/navigation'
   import { session } from '#lib/stores/session.svelte'
   import { syncSystemBars } from '#lib/system-bars'
 
   /**
-   * Settings. The phone answers three questions here and nothing else: how it
-   * reads, who this device is signed in as, and which devices still hold the
-   * account.
+   * Settings. It answers what a phone can answer and nothing else: who is signed
+   * in here, how the app reads, which devices hold the account, and the way out.
    *
-   * A setting is one row. The scheme is one choice out of three, so it is one
-   * segmented control: a pair of switches can disagree, and a scheme that can be
-   * both "follow the system" and "always dark" has no meaning on a phone.
+   * The screen is one column of rows under four short headings, and the only
+   * explanation it offers is the second line of a row. It is not a place to
+   * describe the product, so a row that cannot say something useful says nothing.
    */
 
   const THEME_KEY = 'cio.mobile.theme'
@@ -53,17 +53,22 @@
   let identityError = $state<string | null>(null)
   let confirmingSignOut = $state(false)
 
+  /**
+   * The panel this screen was opened from, so the crumb and the chevron agree. A
+   * reload loses the address it came through, and the work list is the panel a
+   * phone leads back to when nothing else is known.
+   */
+  let parent = $derived(
+    crumbFrom(page.url.searchParams.get('from')) ?? { label: 'Threads', href: '/threads' }
+  )
+  let trail = $derived(trailTo(parent))
+
   let email = $derived(session.user?.email ?? '')
   let displayName = $derived(session.user?.name ?? 'No name yet')
   let avatarUrl = $derived(session.user?.avatarUrl ?? null)
   let unverified = $derived(session.user !== null && session.user.emailVerifiedAt === null)
   let initials = $derived(initialsOf(session.user?.name ?? null, email))
-  let memberSince = $derived(session.user ? joinedAge(session.user.createdAt) : '')
-  let deviceLabel = $derived(
-    session.device
-      ? `${session.device.name} · ${PLATFORM_LABELS[session.device.platform]}`
-      : 'This phone'
-  )
+  let accountLine = $derived(unverified ? `${email} · not verified` : email)
 
   function themeSummary(choice: ThemeChoice): string {
     if (choice === 'dark') return 'Always dark'
@@ -79,11 +84,6 @@
       .map((part) => part[0]?.toUpperCase() ?? '')
       .join('')
     return marks.length > 0 ? marks : '?'
-  }
-
-  function joinedAge(epoch: number): string {
-    const age = formatAge(epoch)
-    return age === 'now' ? 'Joined today' : `Joined ${age} ago`
   }
 
   function failure(cause: unknown): string {
@@ -194,7 +194,7 @@
   })
 </script>
 
-<PanelBar title="Settings">
+<PanelBar title="Settings" {trail}>
   {#snippet actions()}
     <button
       class="icon-btn"
@@ -209,28 +209,6 @@
 </PanelBar>
 
 <div class="list settings">
-  <p class="set-head">Appearance</p>
-
-  <div class="set-row">
-    <span class="body-cell">
-      <span class="row-title">Scheme</span>
-      <span class="row-line">{themeSummary(theme)}</span>
-    </span>
-    <span class="seg" role="group" aria-label="Colour scheme">
-      {#each SCHEMES as scheme (scheme.id)}
-        <button
-          type="button"
-          aria-pressed={theme === scheme.id}
-          onclick={() => setTheme(scheme.id)}
-        >
-          {scheme.label}
-        </button>
-      {/each}
-    </span>
-  </div>
-
-  <p class="set-head">Account</p>
-
   <div class="set-row">
     {#if avatarUrl}
       <img class="avatar" src={avatarUrl} alt="" />
@@ -239,10 +217,16 @@
     {/if}
     <span class="body-cell">
       <span class="row-title">{displayName}</span>
-      <span class="row-line">{email}</span>
+      <span class="row-line">{accountLine}</span>
     </span>
     {#if !editingName}
-      <button class="btn quiet with-icon" type="button" onclick={beginEdit}>
+      <button
+        class="btn quiet with-icon"
+        type="button"
+        aria-label="Edit your name"
+        title="Edit your name"
+        onclick={beginEdit}
+      >
         <CioPencil size={14} />
         Edit
       </button>
@@ -268,31 +252,27 @@
     <p class="set-note" role="status">{identityError}</p>
   {/if}
 
-  <div class="set-row">
-    <span class="body-cell">
-      <span class="row-title">Member since</span>
-      <span class="row-line">{memberSince}</span>
-    </span>
-  </div>
-
-  {#if unverified}
-    <div class="set-row">
-      <span class="body-cell">
-        <span class="row-title">Email not verified</span>
-        <span class="row-line">Verify it from the desktop to finish the account</span>
-      </span>
-      <span class="warn"><CioAlertCircle size={18} /></span>
-    </div>
-  {/if}
-
-  <p class="set-head">Connection</p>
+  <p class="set-head">Appearance</p>
 
   <div class="set-row">
     <span class="body-cell">
-      <span class="row-title">This device</span>
-      <span class="row-line">{deviceLabel}</span>
+      <span class="row-title">Scheme</span>
+      <span class="row-line">{themeSummary(theme)}</span>
+    </span>
+    <span class="seg" role="group" aria-label="Colour scheme">
+      {#each SCHEMES as scheme (scheme.id)}
+        <button
+          type="button"
+          aria-pressed={theme === scheme.id}
+          onclick={() => setTheme(scheme.id)}
+        >
+          {scheme.label}
+        </button>
+      {/each}
     </span>
   </div>
+
+  <p class="set-head">Devices</p>
 
   {#if devicesLoading}
     <div class="set-row">
@@ -346,7 +326,7 @@
     </div>
   {/if}
 
-  <p class="set-head">Sign out</p>
+  <p class="set-head">Session</p>
 
   {#if confirmingSignOut}
     <div class="confirm">
@@ -358,136 +338,14 @@
     </div>
   {:else}
     <div class="set-row">
-      <span class="lead plate"><CioLogOut size={16} /></span>
+      <span class="plate"><CioLogOut size={16} /></span>
       <span class="body-cell">
-        <span class="row-title">Sign this device out</span>
-        <span class="row-line">The oven keeps working without it</span>
+        <span class="row-title">Sign out</span>
+        <span class="row-line">This phone only</span>
       </span>
       <button class="btn quiet" type="button" onclick={() => (confirmingSignOut = true)}>
         Sign out
       </button>
     </div>
   {/if}
-
-  <p class="set-foot">
-    The phone has no editor, terminal or browser of its own. Everything here is about how this
-    client reaches the desktop and how it reads.
-  </p>
 </div>
-
-<style>
-  .settings {
-    padding-bottom: 1.5rem;
-  }
-
-  .avatar {
-    flex: none;
-    width: var(--mark);
-    height: var(--mark);
-    object-fit: cover;
-  }
-
-  .avatar.mark {
-    display: grid;
-    place-items: center;
-    font-size: 0.75rem;
-    color: var(--color-muted);
-    background: var(--color-elevated);
-  }
-
-  .lead.plate,
-  .device-icon {
-    flex: none;
-    width: 1.75rem;
-    height: 1.75rem;
-    display: grid;
-    place-items: center;
-    background: var(--color-elevated);
-    color: var(--color-muted);
-  }
-
-  .device-icon {
-    width: 1.5rem;
-    height: 1.5rem;
-  }
-
-  .set-row .btn {
-    flex: none;
-    padding: 0 0.625rem;
-  }
-
-  .btn.with-icon {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-  }
-
-  .field-row {
-    align-items: stretch;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.375rem;
-    flex: 1;
-    min-width: 0;
-    font-size: 0.75rem;
-    color: var(--ink-meta);
-  }
-
-  .field input {
-    width: 100%;
-    min-height: 2.75rem;
-    padding: 0 0.625rem;
-    border: 1px solid var(--color-border-strong);
-    background: var(--color-surface);
-    color: var(--color-foreground);
-    font: inherit;
-    font-size: 0.9375rem;
-  }
-
-  .actions-row {
-    justify-content: space-between;
-  }
-
-  .confirm {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem 0.5rem 0.25rem;
-    border-top: 1px solid var(--color-border);
-    background: var(--color-elevated);
-  }
-
-  .confirm span {
-    flex: 1;
-    min-width: 0;
-    font-size: 0.75rem;
-    color: var(--color-muted);
-    text-align: center;
-  }
-
-  .warn {
-    flex: none;
-    display: grid;
-    place-items: center;
-    color: var(--color-warning);
-  }
-
-  .set-note {
-    margin: 0;
-    padding: 0.5rem var(--gutter) 0;
-    font-size: 0.75rem;
-    color: var(--color-danger);
-  }
-
-  .set-foot {
-    margin: 0;
-    padding: 1.5rem var(--gutter) 2rem;
-    font-size: 0.75rem;
-    color: var(--ink-meta);
-    line-height: 1.5;
-  }
-</style>
