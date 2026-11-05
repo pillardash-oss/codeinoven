@@ -95,8 +95,23 @@ interface Spin {
 type WheelHandler = (event: FakeWheelEvent) => void
 let wheelHandler: WheelHandler | null = null
 
+/**
+ * The clock the reporter reads, driven by the test.
+ *
+ * The page measures one gesture with `Date.now` and main judges its cooldown with
+ * the same clock, so a synthetic gap has to be the gap the reporter actually
+ * sees. Driving it from real `setTimeout` made that a property of the runner: on
+ * a loaded Windows runner a requested `gapMs: 1` arrives 40ms late, the steady
+ * repeat then reads as wheel detents, and a fine trackpad swipe is classified as
+ * a tilt wheel. The gesture parameters of every test stay exactly what they say;
+ * only wasted runner time stops counting as part of the gesture.
+ */
+let clock = 1_700_000_000_000
+
 beforeEach(() => {
   wheelHandler = null
+  clock = 1_700_000_000_000
+  vi.spyOn(Date, 'now').mockImplementation(() => clock)
   delete (globalThis as { __cioHistorySwipeRelay?: unknown }).__cioHistorySwipeRelay
   vi.stubGlobal('WheelEvent', FakeWheelEvent)
   vi.spyOn(window, 'addEventListener').mockImplementation(((
@@ -119,6 +134,9 @@ async function settle(): Promise<void> {
 async function spinAll(gestures: Spin[]): Promise<void> {
   for (const gesture of gestures) {
     expect(wheelHandler).not.toBeNull()
+    // Advance the reporter's clock by the gap this step declares, so the gap it
+    // measures is the gesture's own and never the runner's scheduling delay.
+    clock += gesture.gapMs
     wheelHandler?.(
       new FakeWheelEvent(gesture.deltaX, gesture.momentum === true, gesture.deltaY ?? 0)
     )
