@@ -116,7 +116,21 @@ export class NativeFloatingPanel {
         this.moveIntoHost(container)
       }
       this.eventRoot = mount(NativeFloatingEventRoot, { target, props: { attach: attached } })
-      flushSync()
+      // The flush is what adopts the live tree into this window, and it runs every
+      // other effect the app left pending along with it. A renderer that is mid
+      // storm (Svelte's `effect_update_depth_exceeded`) therefore threw out of
+      // here and the panel was abandoned as failed: the comment a reader had just
+      // written stayed in the app window, behind the page, invisible. Adoption has
+      // already happened by this point, so an update error is reported and the
+      // panel keeps its content rather than taking the comment down with it.
+      try {
+        flushSync()
+      } catch (error) {
+        logRendererError(
+          'A native floating panel adopted its content while the renderer was mid update.',
+          error
+        )
+      }
       await this.initializeDocument(popup)
       if (this.disposed) return
       if (!this.enabled) this.restore()
