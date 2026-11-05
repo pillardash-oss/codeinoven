@@ -831,11 +831,14 @@ export class CheckpointManager {
    * words a crash: this one is expected, so the file-changes card stays neutral.
    */
   async markActiveUserStopped(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
-    const active = this.db.get<{ turn_id: string | null }>(
+    // A Stop is an interaction path, so the ledger probe reads on the
+    // maintenance worker like every other read this file makes on the turn path.
+    const rows = await this.queryRows<{ turn_id: string | null }>(
       'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
-      projectId,
-      threadId
+      [projectId, threadId],
+      1
     )
+    const active = rows[0]
     if (!active?.turn_id) return null
     const checkpoint = await this.get(projectId, threadId, active.turn_id)
     if (!checkpoint || checkpoint.status !== 'active') {
