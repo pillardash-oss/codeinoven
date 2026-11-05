@@ -109,19 +109,20 @@
 
   /**
    * The strip, in reading order: what the assistant is and how it works first,
-   * then the three things that used to be stacked at the bottom of its behaviour
-   * card (when it runs, where its output goes, and what it is waiting on), then
-   * what it uses and, last, what needs the user.
+   * then what it uses and what needs the user, and last the three sections that
+   * only earn a tab when they hold something (when it runs, what it is waiting
+   * on, and where its output goes). Keeping those three at the end means the
+   * strip only grows past Issues for an assistant that actually has the state.
    */
   const TABS: ReadonlyArray<{ id: AssistantPanelTab; label: string }> = [
     { id: 'all', label: 'All' },
     { id: 'behaviour', label: 'Behaviour' },
-    { id: 'schedule', label: 'Schedule' },
-    { id: 'reporting', label: 'Reporting' },
-    { id: 'wakes', label: 'Wakes' },
     { id: 'connections', label: 'Connections' },
     { id: 'agents', label: 'Agents' },
-    { id: 'issues', label: 'Issues' }
+    { id: 'issues', label: 'Issues' },
+    { id: 'schedule', label: 'Schedule' },
+    { id: 'wakes', label: 'Wakes' },
+    { id: 'reporting', label: 'Reporting' }
   ]
 
   const task = $derived(
@@ -178,14 +179,13 @@
   let fullscreen = $state(false)
 
   /**
-   * A task with no assistant has no behaviour, clock, reporting, wakes or models
-   * to show, so it keeps only the two sections that still apply to it.
+   * The section on screen. A hidden tab can still be selected from its row on
+   * **All**, so the selected id is honoured even when the strip does not carry it:
+   * the body renders and no tab reads as active, rather than the page silently
+   * snapping back to All.
    */
-  const visibleTabs = $derived(
-    assistant ? TABS : TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
-  )
   const activeTab = $derived(
-    visibleTabs.some((entry) => entry.id === panelTab) ? panelTab : ('all' as AssistantPanelTab)
+    TABS.some((entry) => entry.id === panelTab) ? panelTab : ('all' as AssistantPanelTab)
   )
 
   /** The status pill's ink: a paused assistant is a warning, a running one is a success. */
@@ -437,6 +437,37 @@
 
   /** Wakes armed on this assistant's own threads, newest first as the store holds them. */
   const wakes = $derived(followUpsState.forThreads(assistantTasks.map((entry) => entry.id)))
+
+  // ─── Which sections earn a tab ────────────────────────────────────────────
+
+  /**
+   * Whether a section has anything to show yet. A section with no state keeps its
+   * row on **All** (so the state is still stated and the row still opens it, see
+   * `activeTab`); what it loses is a strip tab that would otherwise restate
+   * "nothing here". Three sections are conditional, so a quiet assistant is All,
+   * Behaviour, Connections, Agents, Issues and no clutter.
+   */
+  const scheduleTabVisible = $derived(Boolean(assistant && scheduleAgreed && scheduled))
+  const wakesTabVisible = $derived(wakes.length > 0)
+  const reportingTabVisible = $derived(Boolean(assistant?.delivery || assistant?.priority))
+
+  /**
+   * The strip's entries: every section of a real assistant, minus the conditional
+   * ones that hold nothing. A task with no assistant has no behaviour, clock,
+   * reporting, wakes or models to show, so it keeps only the two sections that
+   * still apply to it.
+   */
+  const visibleTabs = $derived.by(() => {
+    if (!assistant) {
+      return TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
+    }
+    return TABS.filter((entry) => {
+      if (entry.id === 'schedule') return scheduleTabVisible
+      if (entry.id === 'wakes') return wakesTabVisible
+      if (entry.id === 'reporting') return reportingTabVisible
+      return true
+    })
+  })
 
   // ─── Issues ───────────────────────────────────────────────────────────────
 
