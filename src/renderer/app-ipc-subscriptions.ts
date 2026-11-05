@@ -27,6 +27,7 @@ import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
 import { followUpsState } from '$lib/stores/follow-ups.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
 import { updateBlockers } from '$lib/stores/update-blockers.svelte'
@@ -426,6 +427,8 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // Load which threads carry a user note so sidebar rows and the right-dock
   // indicator can react; the store keeps itself in sync via `note:changed`.
   threadNotesState.init()
+  // Which tabs agents are on, so a tab row can name the thread using it.
+  browserAgentClaims.init()
   // Load which threads have an agent-scheduled wake so their rows can show it;
   // the store keeps itself in sync via `followUps:changed`.
   followUpsState.init()

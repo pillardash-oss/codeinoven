@@ -64,7 +64,6 @@ import {
   validateTabDestroyReason,
   validateTabId,
   validateThreadBrowserPage,
-  validateConversationScopeId,
   validateThreadId,
   validateToastOverlayAck,
   validateToastOverlayInteraction,
@@ -171,7 +170,9 @@ export interface IpcSurfaceHost {
   readonly tabHistory: BrowserService['tabHistory']
   readonly tabs: BrowserService['tabs']
   readonly targetUrl: BrowserService['targetUrl']
-  readonly threadBrowserPages: BrowserService['threadBrowserPages']
+  readonly agentTabClaims: BrowserService['agentTabClaims']
+  readonly bindConversationPage: BrowserService['bindConversationPage']
+  readonly unbindConversationPage: BrowserService['unbindConversationPage']
   readonly toastVisible: BrowserService['toastVisible']
   readonly toggleDevTools: BrowserService['toggleDevTools']
   readonly transport: BrowserService['transport']
@@ -988,18 +989,26 @@ export class BrowserServiceIpcSurface {
     replaceHandler('browser:unbindAssistantPage', (_event, rawThreadId) => {
       this.host.assistantPageTabIds.delete(validateThreadId(rawThreadId))
     })
-    replaceHandler('browser:bindThreadBrowserPage', (_event, rawScopeId, rawPage) => {
-      // Binding is tolerant about the page: a tab restored from a previous launch
-      // has no view in this process until something shows it, and the binding is
-      // only read when an operation actually needs that page (see
-      // `conversationPageTab`).
-      this.host.threadBrowserPages.set(
-        validateConversationScopeId(rawScopeId),
-        validateThreadBrowserPage(rawPage)
+    replaceHandler(
+      'browser:bindThreadBrowserPage',
+      (_event, rawProjectId, rawThreadId, rawPage) => {
+        // Binding is tolerant about the page: a tab restored from a previous launch
+        // has no view in this process until something shows it, and the binding is
+        // only read when an operation actually needs that page (see
+        // `conversationPageTab`).
+        this.host.bindConversationPage(
+          validateProjectId(rawProjectId),
+          validateThreadId(rawThreadId),
+          validateThreadBrowserPage(rawPage)
+        )
+      }
+    )
+    replaceHandler('browser:agentTabClaims', () => this.host.agentTabClaims())
+    replaceHandler('browser:unbindThreadBrowserPage', (_event, rawProjectId, rawThreadId) => {
+      this.host.unbindConversationPage(
+        validateProjectId(rawProjectId),
+        validateThreadId(rawThreadId)
       )
-    })
-    replaceHandler('browser:unbindThreadBrowserPage', (_event, rawScopeId) => {
-      this.host.threadBrowserPages.delete(validateConversationScopeId(rawScopeId))
     })
     replaceHandler('browser:destroyThread', (_event, rawProjectId, rawThreadId) => {
       const projectId = validateProjectId(rawProjectId)

@@ -31,6 +31,7 @@ export type BrowserTabContextMenuChoice =
   | { action: 'sleep' }
   | { action: 'toggleBookmark' }
   | { action: 'duplicate' }
+  | { action: 'copyTabId' }
   | { action: 'newBefore' }
   | { action: 'newTab' }
   | { action: 'newPlaced'; groupId: string | null; boxId: string | null }

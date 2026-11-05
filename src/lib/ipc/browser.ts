@@ -189,6 +189,20 @@ export interface BrowserThreadBrowserPage {
   url: string
 }
 
+/**
+ * A browser tab one conversation's agent has claimed.
+ *
+ * A claim is what the tab strip reads to say which thread is working on a tab: the
+ * tab an agent opened for itself and the page a conversation was assigned are both
+ * claimed for that conversation, and nothing else is.
+ */
+export interface BrowserAgentTabClaim {
+  tabId: string
+  projectId: string
+  /** The thread whose agent holds this tab. */
+  threadId: string
+}
+
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
 export interface BrowserPageState {
   tabId: string

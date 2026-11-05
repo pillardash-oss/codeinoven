@@ -882,11 +882,12 @@ export class BrowserServiceTabs {
     for (const [threadId, pageTabId] of this.host.assistantPageTabIds) {
       if (pageTabId === tabId) this.host.assistantPageTabIds.delete(threadId)
     }
-    for (const [scopeId, page] of this.host.threadBrowserPages) {
+    for (const [conversationKey, page] of this.host.threadBrowserPages) {
       // A hibernated tab is put to sleep, not closed: its binding stays so the
       // page can be mounted again the next time the agent reaches for it, which is
       // what the revival in `conversationPageTab` is for.
-      if (page.tabId === tabId && reason === 'closed') this.host.threadBrowserPages.delete(scopeId)
+      if (page.tabId === tabId && reason === 'closed')
+        this.host.threadBrowserPages.delete(conversationKey)
     }
   }
 }

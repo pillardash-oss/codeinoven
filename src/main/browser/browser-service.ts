@@ -31,6 +31,7 @@ import type {
   BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserTabDestroyReason,
+  BrowserAgentTabClaim,
   BrowserThreadBrowserPage,
   BrowserScrollbarTheme,
   BrowserTransportCommand,
@@ -1671,7 +1672,7 @@ export class BrowserService {
   // ---------------------------------------------------------------------------
 
   utilityTarget(input: {
-    scope: string
+    projectId: string
     threadId: string
     contextKey: string
     page: BrowserUtilityPage | null
@@ -1679,8 +1680,20 @@ export class BrowserService {
     return this.conversationPagesUnit.utilityTarget(input)
   }
 
-  conversationBoxFor(scope: string): string | null {
-    return this.conversationPagesUnit.conversationBoxFor(scope)
+  conversationBoxFor(projectId: string, threadId: string): string | null {
+    return this.conversationPagesUnit.conversationBoxFor(projectId, threadId)
+  }
+
+  bindConversationPage(projectId: string, threadId: string, page: BrowserThreadBrowserPage): void {
+    this.conversationPagesUnit.bindConversationPage(projectId, threadId, page)
+  }
+
+  unbindConversationPage(projectId: string, threadId: string): void {
+    this.conversationPagesUnit.unbindConversationPage(projectId, threadId)
+  }
+
+  agentTabClaims(): BrowserAgentTabClaim[] {
+    return this.conversationPagesUnit.agentTabClaims()
   }
 
   previousPageTarget(contextKey: string): { tabId: string; url: string } | null {
@@ -1688,7 +1701,8 @@ export class BrowserService {
   }
 
   threadBrowserHint(
-    scope: string,
+    projectId: string,
+    threadId: string,
     answeredTabId: string | null,
     contextKey: string
   ): {
@@ -1701,7 +1715,12 @@ export class BrowserService {
     }
     userPage?: { tabId: string; url: string; title: string }
   } {
-    return this.conversationPagesUnit.threadBrowserHint(scope, answeredTabId, contextKey)
+    return this.conversationPagesUnit.threadBrowserHint(
+      projectId,
+      threadId,
+      answeredTabId,
+      contextKey
+    )
   }
 
   conversationScope(projectId: string, threadId: string): string {
