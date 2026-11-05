@@ -287,6 +287,86 @@ body {
   border: 0;
 }
 
+/* ---- Screen changes ----
+   A conversation pushes in from the edge the row was on, and back returns the
+   way it came. The work list's two readings swap in place. The browser snapshots
+   both screens and animates them as images, so none of this runs on the main
+   thread and nothing in either screen can reflow. */
+::view-transition {
+  background: var(--color-app);
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+  animation-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
+  animation-fill-mode: both;
+}
+
+html[data-nav='forward'] ::view-transition-old(root) {
+  animation-name: page-out-left;
+}
+
+html[data-nav='forward'] ::view-transition-new(root) {
+  animation-name: page-in-right;
+}
+
+html[data-nav='back'] ::view-transition-old(root) {
+  animation-name: page-out-right;
+}
+
+html[data-nav='back'] ::view-transition-new(root) {
+  animation-name: page-in-left;
+}
+
+html[data-nav='swap'] ::view-transition-old(root) {
+  animation-name: page-out-swap;
+}
+
+html[data-nav='swap'] ::view-transition-new(root) {
+  animation-name: page-in-swap;
+}
+
+@keyframes page-in-right {
+  from {
+    opacity: 0.35;
+    transform: translateX(1.5rem);
+  }
+}
+
+@keyframes page-out-left {
+  to {
+    opacity: 0.35;
+    transform: translateX(-1.25rem);
+  }
+}
+
+@keyframes page-in-left {
+  from {
+    opacity: 0.35;
+    transform: translateX(-1.25rem);
+  }
+}
+
+@keyframes page-out-right {
+  to {
+    opacity: 0.35;
+    transform: translateX(1.5rem);
+  }
+}
+
+@keyframes page-in-swap {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes page-out-swap {
+  to {
+    opacity: 0;
+  }
+}
+
 /* The one entrance: a list, a row or a menu rises a quarter of a rem. */
 @keyframes list-in {
   from {

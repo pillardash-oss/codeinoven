@@ -5,7 +5,7 @@
   import Mark from '#lib/components/Mark.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
   import TitleMenu from '#lib/components/TitleMenu.svelte'
-  import { arrive } from '#lib/motion'
+  import { fold } from '#lib/motion'
   import { toneColor } from '#lib/api/status'
   import type { Project, Thread } from '#lib/api/types'
   import type { PageData } from './$types'
@@ -82,7 +82,7 @@
     <p class="empty">No projects yet.</p>
   {:else}
     {#each data.projects as project (project.id)}
-      <section class="strip" data-open={open.has(project.id)} in:arrive>
+      <section class="strip" data-open={open.has(project.id)}>
         <div class="strip-head">
           <button
             class="strip-toggle"
@@ -110,7 +110,7 @@
         </div>
 
         {#if open.has(project.id)}
-          <div class="strip-body" id={panelId(project.id)}>
+          <div class="strip-body" id={panelId(project.id)} transition:fold>
             {#if threadsOf(project.id).length === 0}
               <p class="project-empty">No threads yet</p>
             {:else}

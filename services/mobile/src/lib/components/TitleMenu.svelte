@@ -4,6 +4,7 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
   import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
+  import { drop } from '#lib/motion'
   import { rememberWorkView, workViewHref, type WorkView } from '#lib/work-view'
 
   /**
@@ -60,7 +61,7 @@
   </button>
 
   {#if open}
-    <div class="title-menu" role="menu" aria-label="Threads or projects">
+    <div class="title-menu" role="menu" aria-label="Threads or projects" transition:drop>
       {#each items as item (item.view)}
         <button
           class="title-menu-item"

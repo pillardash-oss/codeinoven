@@ -4,6 +4,7 @@
   import PanelBar from '#lib/components/PanelBar.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
   import TitleMenu from '#lib/components/TitleMenu.svelte'
+  import { fold } from '#lib/motion'
   import type { PageData } from './$types'
 
   /**
@@ -93,7 +94,7 @@
 </PanelBar>
 
 {#if searchOpen}
-  <div class="search-row">
+  <div class="search-row" transition:fold>
     <input
       {@attach focusOnMount}
       value={query}

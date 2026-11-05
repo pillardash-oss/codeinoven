@@ -1,7 +1,6 @@
 <script lang="ts">
   import { formatAge, statusSkin } from '#lib/api/status'
   import type { Project, Thread } from '#lib/api/types'
-  import { arrive } from '#lib/motion'
   import Mark from './Mark.svelte'
   import StatusMark from './StatusMark.svelte'
 
@@ -30,7 +29,7 @@
 </script>
 
 {#if variant === 'strip'}
-  <a class="row" href="/threads/{thread.id}" in:arrive>
+  <a class="row" href="/threads/{thread.id}">
     <StatusMark status={thread.status} />
     <span class="body-cell">
       <span class="row-title" class:unread={!thread.read}>{thread.title}</span>
@@ -42,7 +41,7 @@
     {#if !thread.read}<span class="sr-only">Unread</span>{/if}
   </a>
 {:else}
-  <a class="row flat" href="/threads/{thread.id}" in:arrive>
+  <a class="row flat" href="/threads/{thread.id}">
     {#if project}
       <Mark {project} size={28} />
     {:else}
@@ -51,8 +50,8 @@
     <span class="body-cell">
       <span class="row-title" class:unread={!thread.read}>{thread.title}</span>
       <span class="row-line">
-        {#if project}<span class="row-project">{project.name}</span> ·
-        {/if}{skin.label} · {age}
+        {#if project}<span class="row-project">{project.name}</span
+          >{' · '}{/if}{skin.label}{' · '}{age}
       </span>
     </span>
     <StatusMark status={thread.status} rail={false} />

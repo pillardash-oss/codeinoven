@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import type { Snippet } from 'svelte'
+  import { onNavigate } from '$app/navigation'
   import { page } from '$app/state'
   import { session } from '#lib/stores/session.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
@@ -21,6 +22,36 @@
    */
 
   let { children }: { children: Snippet } = $props()
+
+  /**
+   * A screen change follows the direction it was opened from. A conversation is
+   * read from the row that opened it, so it pushes in over the list and the list
+   * returns the way it came; the work list's two readings swap in place. The
+   * browser does the crossfade and the slide in one snapshot pass, which keeps
+   * it off the main thread.
+   */
+  function depth(path: string): number {
+    return /^\/threads\/[^/]+$/.test(path) ? 2 : 1
+  }
+
+  function reduced(): boolean {
+    return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  }
+
+  onNavigate((navigation) => {
+    if (!document.startViewTransition || reduced()) return
+    const from = navigation.from?.url.pathname ?? ''
+    const to = navigation.to?.url.pathname ?? ''
+    const forward = depth(to) > depth(from)
+    const back = depth(to) < depth(from)
+    document.documentElement.dataset.nav = forward ? 'forward' : back ? 'back' : 'swap'
+    return new Promise<void>((resolve) => {
+      document.startViewTransition(async () => {
+        resolve()
+        await navigation.complete
+      })
+    })
+  })
 
   /** Mounted on first use, so no screen asks for the project list it does not need. */
   let newThreadOpen = $state(false)
