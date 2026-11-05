@@ -155,23 +155,32 @@ function git(...args: string[]): string {
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).trim()
 }
 
-/** List release tags via `gh`, preferring it over possibly-stale local tags. */
+/**
+ * List release tags via `gh`, preferring it over possibly-stale local tags.
+ *
+ * Drafts are excluded: GitHub creates a draft's tag only when the draft is
+ * published, so a draft left behind by a failed attempt (Nightly #206) names a
+ * release whose ref does not exist. Counting it as the range start is what
+ * failed Nightly #207 with "Range start v0.5.69-nightly.9 does not resolve to a
+ * commit".
+ */
 function ghReleaseTags(): { prerelease: string[]; stable: string[] } | null {
   try {
     const stdout = execFileSync(
       'gh',
-      ['release', 'list', '--limit', '1000', '--json', 'tagName,isPrerelease'],
+      ['release', 'list', '--limit', '1000', '--json', 'tagName,isPrerelease,isDraft'],
       { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }
     )
     interface GhReleaseRow {
       tagName: string
       isPrerelease: boolean
+      isDraft: boolean
     }
     const rows = JSON.parse(stdout) as GhReleaseRow[]
     const prerelease: string[] = []
     const stable: string[] = []
     for (const row of rows) {
-      if (!row.tagName) continue
+      if (!row.tagName || row.isDraft) continue
       if (row.isPrerelease) prerelease.push(row.tagName)
       else stable.push(row.tagName)
     }
@@ -192,13 +201,22 @@ function compareVersions(left: string, right: string): number {
   return 0
 }
 
+/** Highest nightly counter first, so `[0]` is the newest and the last is oldest. */
+function newestFirst(a: string, b: string): number {
+  return Number(/\d+$/.exec(b)?.[0] ?? 0) - Number(/\d+$/.exec(a)?.[0] ?? 0)
+}
+
 /**
- * Resolve the range start for a channel without an explicit `--from`.
- * For nightly builds of base `X.Y.Z`: newest `vX.Y.Z-nightly.[N]` tag, else the
- * last stable `vX.Y.Z` tag. For stable builds: the last stable tag.
- * Falls back to the oldest commit when nothing resolves (first-ever release).
+ * Every range start worth trying for a channel, newest first.
+ * For nightly builds of base `X.Y.Z`: the `vX.Y.Z-nightly.[N]` tags, else the
+ * stable tags. For stable builds: the stable tags. The remote release list is
+ * preferred, local tags follow, and the oldest commit closes the list so a
+ * first-ever release still produces notes.
  */
-export function resolveFromRef(channel: 'nightly' | 'stable', baseVersion: string): string {
+export function resolveFromCandidates(
+  channel: 'nightly' | 'stable',
+  baseVersion: string
+): string[] {
   const releases = ghReleaseTags()
   const tags = releases ?? { prerelease: [], stable: [] }
   const stableTags = tags.stable
@@ -209,44 +227,46 @@ export function resolveFromRef(channel: 'nightly' | 'stable', baseVersion: strin
     )
     .sort((a, b) => compareVersions(b.slice(1), a.slice(1)))
 
+  const candidates: string[] = []
   if (channel === 'nightly') {
-    const nightlyTags = tags.prerelease
-      .filter((t) => new RegExp(`^v${baseVersion.replace(/\./g, '\\.')}-nightly[.-]\\d+$`).test(t))
-      .sort((a, b) => {
-        const na = Number(/\d+$/.exec(a)?.[0] ?? 0)
-        const nb = Number(/\d+$/.exec(b)?.[0] ?? 0)
-        return nb - na
-      })
-    if (nightlyTags.length > 0) return nightlyTags[0]
-    if (stableTags.length > 0) return stableTags[0]
-  } else if (stableTags.length > 0) {
-    return stableTags[0]
+    candidates.push(
+      ...tags.prerelease
+        .filter((t) =>
+          new RegExp(`^v${baseVersion.replace(/\./g, '\\.')}-nightly[.-]\\d+$`).test(t)
+        )
+        .sort(newestFirst)
+    )
   }
+  candidates.push(...stableTags)
 
   // gh unavailable or no releases: fall back to local tags so a local run and
   // a CI run without gh still produce correct notes.
-  const localNightly =
-    channel === 'nightly'
-      ? git('tag', '--list', `v${baseVersion}-nightly*`).split('\n').filter(Boolean)
-      : []
-  if (localNightly.length > 0) {
-    return localNightly.sort((a, b) => {
-      const na = Number(/\d+$/.exec(a)?.[0] ?? 0)
-      const nb = Number(/\d+$/.exec(b)?.[0] ?? 0)
-      return nb - na
-    })[0]
-  }
-  const localStable = git('tag', '--list', 'v*.*.*')
-    .split('\n')
-    .filter(
-      (t) =>
-        /^v\d+\.\d+\.\d+$/.test(t) &&
-        (channel === 'nightly' || compareVersions(t.slice(1), baseVersion) < 0)
+  if (channel === 'nightly') {
+    candidates.push(
+      ...git('tag', '--list', `v${baseVersion}-nightly*`)
+        .split('\n')
+        .filter(Boolean)
+        .sort(newestFirst)
     )
-    .sort((a, b) => compareVersions(b.slice(1), a.slice(1)))
-  if (localStable.length > 0) return localStable[0]
+  }
+  candidates.push(
+    ...git('tag', '--list', 'v*.*.*')
+      .split('\n')
+      .filter(
+        (t) =>
+          /^v\d+\.\d+\.\d+$/.test(t) &&
+          (channel === 'nightly' || compareVersions(t.slice(1), baseVersion) < 0)
+      )
+      .sort((a, b) => compareVersions(b.slice(1), a.slice(1)))
+  )
 
-  return git('rev-list', '--max-parents=0', 'HEAD').split('\n').pop() ?? 'HEAD'
+  candidates.push(git('rev-list', '--max-parents=0', 'HEAD').split('\n').pop() ?? 'HEAD')
+  return candidates
+}
+
+/** The preferred range start for a channel, i.e. the first candidate. */
+export function resolveFromRef(channel: 'nightly' | 'stable', baseVersion: string): string {
+  return resolveFromCandidates(channel, baseVersion)[0] ?? 'HEAD'
 }
 
 /** Render the grouped commits as the markdown release body. */
@@ -348,7 +368,10 @@ async function main(): Promise<number> {
   }
 
   let from = flags.from
-  if (!from) {
+  let candidates: string[]
+  if (from) {
+    candidates = [from]
+  } else {
     let baseVersion: string
     try {
       const pkg = JSON.parse(
@@ -364,27 +387,42 @@ async function main(): Promise<number> {
       console.error(`Could not read package.json version: ${String(error)}`)
       return 1
     }
-    from = resolveFromRef(channel, baseVersion)
+    candidates = resolveFromCandidates(channel, baseVersion)
   }
 
-  // Fail early with a clear message if the range is invalid (unknown ref).
-  // Local checkouts can lag behind published tags, so one tag fetch is tried
-  // before giving up (CI checkouts with fetch-depth: 0 already have all tags).
-  const verifyFrom = (): void => {
-    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${from}^{commit}`])
-  }
-  try {
-    verifyFrom()
-  } catch {
+  // The range start must exist as a git commit. A candidate can be missing (a
+  // stale release record, or a local checkout lagging published tags), so a
+  // single tag fetch is tried and, when a candidate was auto-resolved, the next
+  // one is used instead of failing the release over it.
+  const findResolvable = (): string | undefined =>
+    candidates.find((candidate) => {
+      try {
+        execFileSync('git', ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`])
+        return true
+      } catch {
+        return false
+      }
+    })
+
+  let resolvedFrom = findResolvable()
+  if (!resolvedFrom) {
     try {
       execFileSync('git', ['fetch', '--tags', '--quiet', 'origin'])
-      verifyFrom()
     } catch {
-      // eslint-disable-next-line no-console
-      console.error(`Range start ${from} does not resolve to a commit`)
-      return 1
+      // Offline or no remote: the local tags are all this run can offer.
     }
+    resolvedFrom = findResolvable()
   }
+  if (!resolvedFrom) {
+    // eslint-disable-next-line no-console
+    console.error(
+      from
+        ? `Range start ${from} does not resolve to a commit`
+        : `No release tag resolves to a commit (tried ${candidates.join(', ')}); pass --from <ref>`
+    )
+    return 1
+  }
+  from = resolvedFrom
 
   const subjects = git(
     'log',

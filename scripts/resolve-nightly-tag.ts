@@ -93,18 +93,25 @@ function remoteTags(base: string): string[] {
 /**
  * Tags carried by published releases. This covers a tag that was pushed but not
  * yet fetched by the checkout running this script, which is what makes two
- * back-to-back promotions resolve distinct counters.
+ * back-to-back promotions resolve distinct counters. Drafts are skipped: a draft
+ * carries a tag name but no tag ref, so counting it would skip a counter and
+ * leave a nightly number that never shipped.
  */
 function releasedTags(base: string): string[] {
   try {
     const output = execFileSync(
       'gh',
-      ['release', 'list', '--limit', '200', '--json', 'tagName', '--jq', '.[].tagName'],
+      ['release', 'list', '--limit', '200', '--json', 'tagName,isDraft'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
     )
-    return output
-      .split('\n')
-      .map((tag) => tag.trim())
+    interface GhReleaseRow {
+      tagName: string
+      isDraft: boolean
+    }
+    const rows = JSON.parse(output) as GhReleaseRow[]
+    return rows
+      .filter((row) => !row.isDraft)
+      .map((row) => row.tagName.trim())
       .filter((tag) => tag.length > 0 && nightlyIndexFromTag(tag, base) !== null)
   } catch {
     return []
