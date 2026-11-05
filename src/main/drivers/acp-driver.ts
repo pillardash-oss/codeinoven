@@ -284,7 +284,7 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
         init.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
       const blocks = await acpPromptBlocks(opts.text, opts.attachments, capabilities)
       const result = await transport.prompt(binding.acpSessionId, blocks, TURN_TIMEOUT_MS)
-      this.completeTurn(turn, session, result)
+      await this.completeTurn(turn, session, result)
     } catch (error) {
       this.failTurn(turn, session, error)
     }
@@ -452,8 +452,20 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     this.emit(event)
   }
 
-  private completeTurn(turn: AcpActiveTurn, session: PersistentCliSession, result: unknown): void {
+  private async completeTurn(
+    turn: AcpActiveTurn,
+    session: PersistentCliSession,
+    result: unknown
+  ): Promise<void> {
     this.activeTurns.delete(turn.sessionId)
+    // The mirrored transcript has to hold the finished message before the turn
+    // is announced as complete: this driver streams parts, and a part event
+    // only folds into a message that already exists. Without this merge the
+    // session kept no assistant message at all, so finalization reported "the
+    // harness ended the turn without returning a final response" even though
+    // the answer had streamed.
+    this.mergeMessages(session, [turn.fold.message()])
+    await this.persistSession(session).catch(() => undefined)
     const usage = acpRecord(acpRecord(result)?.['usage'])
     const tokens = usage ? acpTokens(usage) : undefined
     this.emit({
@@ -465,7 +477,6 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
       ...(turn.fold.usedContext ? { contextUsed: turn.fold.usedContext } : {})
     })
     this.emit({ type: 'session.idle', sessionId: turn.sessionId })
-    void this.persistSession(session)
   }
 
   /** End a turn whose transport disappeared. `error` null means a deliberate stop. */
@@ -485,6 +496,9 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   private failTurn(turn: AcpActiveTurn, session: PersistentCliSession, error: unknown): void {
     const message = error instanceof Error ? error.message : 'The ACP turn failed'
     this.activeTurns.delete(turn.sessionId)
+    // Keep whatever the turn produced, so a failed turn still explains itself.
+    this.mergeMessages(session, [turn.fold.message()])
+    void this.persistSession(session).catch(() => undefined)
     this.emit({
       type: 'message.completed',
       sessionId: turn.sessionId,
@@ -493,7 +507,6 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     })
     this.emit({ type: 'session.error', sessionId: turn.sessionId, error: message })
     this.emit({ type: 'session.idle', sessionId: turn.sessionId })
-    void this.persistSession(session)
   }
 
   // -------------------------------------------------------- auxiliary runs
