@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
@@ -15,6 +16,7 @@
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
   import IconUploadField from '../ui/IconUploadField.svelte'
+  import { vendorIconSlugFor } from '$lib/agent-icons/agent-vendor'
   import Switch from '../ui/Switch.svelte'
 
   /** Add or edit the command that starts one ACP agent. It docks so the
@@ -76,6 +78,12 @@
   const chipStatus = $derived(draft.name.trim() || draft.command.trim() || 'Untitled agent')
   const filled = $derived(draft.name.trim() !== '' && draft.command.trim() !== '')
   const canSave = $derived(!acpAgentsStore.saving && !reading && filled)
+  /**
+   * What the empty icon preview shows: the vendor the agent's command belongs to,
+   * or the app's own vendor mark. A monogram of the name the user typed is not a
+   * vendor icon, so it is never the preview.
+   */
+  const placeholderVendorId = $derived(vendorIconSlugFor(draft.command, draft.name))
   /** A save or upload failure, else whatever the last read of the agents said. */
   const message = $derived(error || acpAgentsStore.error)
 
@@ -190,7 +198,13 @@
       </button>
     {/if}
     <button type="button" data-modal-dismiss class={SECONDARY} onclick={close}>Cancel</button>
-    <button type="button" class="{PRIMARY} ml-auto" disabled={!canSave} onclick={save}>Save</button>
+    <button type="button" class="{PRIMARY} ml-auto" disabled={!canSave} onclick={save}>
+      {#if acpAgentsStore.saving}
+        <CioSpinner size={13} class="animate-spin" /> Saving…
+      {:else}
+        Save
+      {/if}
+    </button>
   {/snippet}
 
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -262,6 +276,7 @@
             value={draft[variant.key]}
             disabled={acpAgentsStore.saving}
             name={draft.name.trim() || 'ACP agent'}
+            id={placeholderVendorId}
             hint="SVG or image, up to 256 KiB."
             onselect={(data) => (draft[variant.key] = data)}
             onclear={() => (draft[variant.key] = undefined)}

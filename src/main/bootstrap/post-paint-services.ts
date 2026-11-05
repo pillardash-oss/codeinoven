@@ -1184,9 +1184,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerAcpAgentIpc } = await import('../providers/acp-agent-ipc')
     registerAcpAgentIpc(storage, {
       onAgentsChanged: async () => {
+        // Only the cheap derivations are awaited: the drivers have to exist
+        // before the answer returns so the picker and the next turn see the
+        // agent. A probe pass spawns one process per harness and used to hold
+        // the save response for seconds, which is what made Save look stuck.
         await state.chatEngine?.refreshAcpHarnesses()
         await state.chatEngine?.invalidateProviderCatalogs()
-        await state.providerConnection?.checkAll(true)
+        void state.providerConnection?.checkAll(true).catch(() => undefined)
       }
     })
     registerBaseUrlProviderIpc(storage)

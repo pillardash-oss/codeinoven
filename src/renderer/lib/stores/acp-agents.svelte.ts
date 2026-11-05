@@ -65,9 +65,16 @@ class AcpAgentsStore {
    */
   async save(input: AcpAgentInput): Promise<AcpAgentSettings> {
     this.saving = true
+    const before = new Set(this.settings?.agents.map((agent) => agent.id) ?? [])
     try {
       const next = await invoke('acpAgents:save', input)
       this.#replace(next)
+      // Creating an agent pins the editor to the record it just made, so saving
+      // again edits that agent instead of adding another copy of it.
+      if (input.id === undefined) {
+        const created = next.agents.find((agent) => !before.has(agent.id))
+        if (created) this.editing = created.id
+      }
       return next
     } finally {
       this.saving = false

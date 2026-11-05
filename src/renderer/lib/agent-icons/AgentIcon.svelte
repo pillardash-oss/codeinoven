@@ -1,13 +1,15 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { getAgentIcon } from './registry'
   import { publicAssetUrl } from '$lib/static-assets'
   import { schemeState } from '$lib/stores/scheme.svelte'
   import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
+  import { harnessMarkForCommand } from './agent-vendor'
 
   interface Props {
     agentId?: string
     label?: string
-    size?: 14 | 16 | 20 | 22 | 24
+    size?: number
     class?: string
   }
 
@@ -30,9 +32,23 @@
    * branded icon asset, which carries its own surface and so reads the same on
    * light and dark. The harness keeps it until the user gives it its own icon.
    */
-  let usesVendorIcon = $derived(acpAgent !== undefined && customImage === undefined && !entry)
+  /** The shipped mark for the harness this agent's own command starts. */
+  let commandMark = $derived(
+    acpAgent && customImage === undefined && !entry
+      ? harnessMarkForCommand(acpAgent.command)
+      : undefined
+  )
+  let usesVendorIcon = $derived(
+    acpAgent !== undefined && customImage === undefined && !entry && commandMark === undefined
+  )
   let accessibleLabel = $derived(label ?? entry?.name ?? agentId ?? 'Agent')
   const placeholderIconUrl = publicAssetUrl('assets/agents/_placeholder.svg')
+
+  // The model picker draws this icon before Harnesses was ever opened, so the
+  // agent records are read here too; the store answers a second call for free.
+  onMount(() => {
+    void acpAgentsStore.load()
+  })
   const vendorIconUrl = publicAssetUrl('icon.svg')
 </script>
 
@@ -44,6 +60,8 @@
 >
   {#if customImage}
     <img class="h-full w-full object-contain" src={customImage} alt={accessibleLabel} />
+  {:else if commandMark}
+    <img class="h-full w-full object-contain" src={commandMark.iconUrl} alt={accessibleLabel} />
   {:else if usesVendorIcon}
     <img class="h-full w-full object-contain" src={vendorIconUrl} alt={accessibleLabel} />
   {:else if entry}

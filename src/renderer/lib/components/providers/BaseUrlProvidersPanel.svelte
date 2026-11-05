@@ -200,19 +200,19 @@
       </div>
       <div class="flex gap-2">
         <button
+          class="flex h-8 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          title="Add base URL provider"
+          onclick={openCreate}
+        >
+          <CioPlus size={13} /> Add provider
+        </button>
+        <button
           class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Refresh base URL providers"
           disabled={baseUrlProviderStore.loading}
           onclick={() => void baseUrlProviderStore.load()}
         >
           <CioRefresh size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
-        </button>
-        <button
-          class="flex h-8 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          title="Add base URL provider"
-          onclick={openCreate}
-        >
-          <CioPlus size={13} /> Add provider
         </button>
       </div>
     </div>

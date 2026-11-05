@@ -223,13 +223,15 @@
    * back to the live provider store so the section is never blank.
    */
   let availableHarnesses = $derived.by(() => {
-    const fromProp = harnesses.filter(
-      (harness) => harness.supportsCustomProviders && harness.integration === 'ready'
-    )
+    // An ACP agent is offered here even though the app does not declare custom
+    // providers for it: the agent brings its own endpoint handling, so a custom
+    // base URL is still the user's to scope to it.
+    const acceptsCustom = (harness: ProviderConnectionInfo): boolean =>
+      harness.integration === 'ready' &&
+      (harness.supportsCustomProviders || harness.transport === 'acp')
+    const fromProp = harnesses.filter(acceptsCustom)
     if (fromProp.length > 0) return fromProp
-    return providerStore.providers.filter(
-      (provider) => provider.supportsCustomProviders && provider.integration === 'ready'
-    )
+    return providerStore.providers.filter(acceptsCustom)
   })
 
   /** Every persisted record sharing this provider's id   one per linked
