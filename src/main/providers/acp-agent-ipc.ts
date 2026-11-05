@@ -7,6 +7,12 @@ import { acpAgentAuthStatus, authenticateAcpAgent } from './acp-agent-auth'
 export interface AcpAgentIpcOptions {
   /** Called after any change, so drivers, catalogs and the harness list agree. */
   onAgentsChanged?: () => void | Promise<void>
+  /**
+   * Cheap check that every configured agent has a driver, run whenever the
+   * Harnesses page reads the list. Opening the page then heals a map that was
+   * built before the agent store had loaded, without restarting the app.
+   */
+  ensureDrivers?: () => void | Promise<void>
 }
 
 /**
@@ -27,7 +33,10 @@ export function registerAcpAgentIpc(
     knownAgents: KNOWN_ACP_AGENTS.map((agent) => ({ ...agent, args: [...agent.args] }))
   })
 
-  ipcMain.handle('acpAgents:list', () => settings())
+  ipcMain.handle('acpAgents:list', async () => {
+    void options.ensureDrivers?.()
+    return settings()
+  })
 
   ipcMain.handle('acpAgents:save', async (_event, input: unknown) => {
     const record = readInput(input)

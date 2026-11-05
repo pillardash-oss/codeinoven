@@ -1198,6 +1198,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         await state.chatEngine?.refreshAcpHarnesses()
         await state.chatEngine?.invalidateProviderCatalogs()
         void state.providerConnection?.checkAll(true).catch(() => undefined)
+      },
+      ensureDrivers: async () => {
+        await state.chatEngine?.refreshAcpHarnesses()
       }
     })
     registerBaseUrlProviderIpc(storage)
