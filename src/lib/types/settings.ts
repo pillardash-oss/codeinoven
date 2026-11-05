@@ -405,6 +405,8 @@ export interface AppConfig {
   agentQuestionCap: number
   /** Standard stdio LSP configurations shared by project trees. Enabling IDE Mode remains local to each tree. */
   ideLanguageServers?: import('../ide-language-servers').IdeLanguageServer[]
+  /** Format a file through its language server before the editor writes it. */
+  ideFormatOnSave?: boolean
   keybindings: Record<string, string>
   /** How slash commands are handled: in-app actions or forwarded to the harness. */
   slashCommandMode: SlashCommandMode
@@ -589,6 +591,7 @@ export type AppConfigPatch = Partial<
     | 'agentQuestionCap'
     | 'slashCommandMode'
     | 'ideLanguageServers'
+    | 'ideFormatOnSave'
     | 'preferredEditor'
     | 'memory'
     | 'agentDefaults'

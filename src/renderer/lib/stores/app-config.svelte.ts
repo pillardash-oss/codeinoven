@@ -86,6 +86,8 @@ let autoRunMissedAssistantRuns = $state(true)
  * a mutation of the previous one, which is what lets the picker rows re-key.
  */
 let modelProfiles = $state<ModelProfile[]>([])
+/** Whether IDE Mode reformats a file through its language server on save. */
+let ideFormatOnSave = $state(true)
 
 /** Push the persisted appearance preferences onto the document. The CSS itself
  *  is applied by `lib/app-typography.ts`, which the app's child documents use as
@@ -182,6 +184,10 @@ export const appConfigState = {
   get modelProfiles(): ModelProfile[] {
     return modelProfiles
   },
+  /** Whether IDE Mode reformats a file through its language server on save. */
+  get ideFormatOnSave(): boolean {
+    return ideFormatOnSave
+  },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
@@ -225,6 +231,7 @@ export const appConfigState = {
     ]
     autoRunMissedAssistantRuns = config.autoRunMissedAssistantRuns
     modelProfiles = config.modelProfiles ?? []
+    ideFormatOnSave = config.ideFormatOnSave !== false
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.
     keymapState.setOverrides(config.keybindings)

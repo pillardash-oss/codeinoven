@@ -54,6 +54,7 @@
   import FileDiffView from './FileDiffView.svelte'
   import { FileDiffState } from './file-diff-state.svelte'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { beautifyFileContent, fileBeautifyLabel } from '$lib/file-beautify'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
@@ -669,7 +670,8 @@
    *  a press with no draft left to write marks the file resolved, so one press
    *  cannot stage a file whose progress the scratch file has not seen. */
   async function saveActiveFile(): Promise<void> {
-    if (!activeTab) return
+    const tab = activeTab
+    if (!tab) return
     if (activeFileInMergeEditor) {
       if (conflictStep === 'draft') {
         await conflictController?.saveDraft()
@@ -678,7 +680,35 @@
       if (conflictStep === 'resolve') await conflictController?.save()
       return
     }
-    await projectFilesWorkspace.save(projectId, activeTab.path)
+    if (activeSession) await formatBeforeSave(tab, activeSession.draft)
+    await projectFilesWorkspace.save(projectId, tab.path)
+  }
+
+  /**
+   * Re-lay-out the active draft through its language server before it is written.
+   *
+   * Format on save is an IDE Mode behaviour, because the language server is what
+   * knows the file's conventions: it parsed this exact document for navigation,
+   * so a TypeScript file, a stylesheet, an HTML page and a Svelte component each
+   * keep their own layout instead of the editor guessing one. A formatter that
+   * answers with nothing, times out, or fails leaves the draft exactly as the
+   * user wrote it and the save still happens, so a broken server can never stop
+   * a write. The reformatted text is applied as an ordinary draft change, which
+   * keeps it one undo away and leaves the buffer dirty-free only because it is
+   * being saved in the same breath.
+   */
+  async function formatBeforeSave(tab: ProjectFileTab, draft: string): Promise<void> {
+    if (!projectState.ideModeEnabled || !appConfigState.ideFormatOnSave) return
+    if (tab.origin !== 'working' || tab.view !== 'source' || tab.path !== activeTab?.path) return
+    const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
+    if (!editor) return
+    const formatted = await editor.formatText(draft)
+    // The draft is compared again after the wait: the user may have typed while
+    // the server was answering, and their newer text must not be replaced by a
+    // layout of the older text.
+    if (formatted === null || formatted === draft) return
+    if (activeSession?.draft !== draft) return
+    projectFilesWorkspace.updateDraft(projectId, tab.path, formatted)
   }
 
   async function loadCheckpointPaths(

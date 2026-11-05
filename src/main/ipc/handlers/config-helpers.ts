@@ -195,6 +195,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'slashCommandMode',
   'preferredEditor',
   'ideLanguageServers',
+  'ideFormatOnSave',
   'memory',
   'agentDefaults',
   'auxiliaryAgents',
@@ -1080,6 +1081,12 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('ideLanguageServers' in value)
     patch.ideLanguageServers = validateIdeLanguageServers(value.ideLanguageServers)
+
+  if ('ideFormatOnSave' in value) {
+    if (typeof value.ideFormatOnSave !== 'boolean')
+      throw new TypeError('Format on save must be true or false')
+    patch.ideFormatOnSave = value.ideFormatOnSave
+  }
 
   if ('preferredEditor' in value) {
     if (

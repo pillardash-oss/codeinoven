@@ -91,6 +91,10 @@
   export function findProjectFile(): boolean {
     return ideTools?.findProjectFile() ?? false
   }
+  /** Reformat `text` through IDE Mode, or null when no formatter answered. */
+  export async function formatText(text: string): Promise<string | null> {
+    return ideTools ? ideTools.formatText(text) : null
+  }
 
   onMount(() => {
     const hostElement = host

@@ -82,7 +82,11 @@
   const floatingKey = $derived(`${projectId}:${scopeBucketId ?? ''}:${threadId ?? ''}`)
   const active = $derived(enabled && Boolean(projectId))
 
-  async function request(action: IdeAction, token?: IdeToken): Promise<IdeResponse> {
+  async function request(
+    action: IdeAction,
+    token?: IdeToken,
+    text: string = token?.text ?? value
+  ): Promise<IdeResponse> {
     return invoke(
       'projectFiles:ide',
       projectId,
@@ -90,7 +94,7 @@
         owner,
         action,
         path,
-        text: token?.text ?? value,
+        text,
         line: token?.line,
         character: token?.character,
         query
@@ -98,6 +102,24 @@
       scopeBucketId,
       threadId
     )
+  }
+
+  /**
+   * Re-lay-out a document through the file's own language server.
+   *
+   * Returns `null` when nothing came back: IDE Mode is off, no server covering
+   * this file advertises formatting, the server answered with no edits, or the
+   * request failed. A failed format must never cost the user their save, so the
+   * caller keeps the text it already had.
+   */
+  export async function formatText(text: string): Promise<string | null> {
+    if (!active) return null
+    try {
+      const result = await request('format', undefined, text)
+      return result.text && result.text !== text ? result.text : null
+    } catch {
+      return null
+    }
   }
 
   interface SessionContext {
