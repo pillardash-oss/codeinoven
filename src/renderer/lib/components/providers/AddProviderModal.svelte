@@ -126,6 +126,18 @@
    */
   let isAcpHarness = $derived(harness.transport === 'acp')
 
+  /** Whether this harness already holds a provider, from the last status read. */
+  let hasConnectedProviders = $derived(
+    (authStatus?.accounts ?? []).some((account) => account.active !== false)
+  )
+
+  /**
+   * The idle screen with nothing connected: the connect action moves into the
+   * body and the footer stays empty, so the first provider is the one thing the
+   * screen offers.
+   */
+  let emptyConnectState = $derived(!hasConnectedProviders && step === 'idle')
+
   /** Only OpenCode exposes a config-file mechanism to hide providers:
    *  V1's `disabled_providers`, V2's `experimental.policies` provider.use deny. */
   let supportsHide = $derived(harness.id === 'opencode')
@@ -665,6 +677,7 @@
         {canSignIn}
         {pickerLogin}
         {apiKeyEntry}
+        emptyState={emptyConnectState}
         {storingKey}
         oauthLoginId={oauth.loginId}
         {selectedProvider}
@@ -729,6 +742,9 @@
         bind:apiKey
         {apiKeyEntry}
         {pickerLogin}
+        {canSignIn}
+        {storingKey}
+        oauthLoginId={oauth.loginId}
         {hiddenIds}
         {supportsHide}
         {togglingHide}
@@ -739,6 +755,7 @@
         onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
         onBackToList={backToList}
         onConnectWithKey={() => void connectWithKey()}
+        onStartConnect={(provider) => void startConnect(provider)}
         onLoginExit={(exitCode, output) => void handleLoginExit(exitCode, output)}
         onRequestDisconnect={(account) => (disconnectTarget = account)}
         onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}
