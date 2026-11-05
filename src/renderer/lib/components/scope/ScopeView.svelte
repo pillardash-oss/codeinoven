@@ -3,7 +3,6 @@
   import { scopeState, type ThreadStage } from '$lib/stores/scope.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import {
-    inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewThread,
     threadWithInheritedSettings,
@@ -230,16 +229,7 @@
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, bucketId)
           navigateToScopedThreads?.()
-          // Adopt the inherited row: it carries the Engineering marker the
-          // opened view reads to keep its Toolbox filled.
-          let opened = thread
-          if (activeThread && activeThread.projectId === activeProject.id) {
-            opened =
-              (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
-              thread
-            scopeState.updateThread(opened)
-          }
-          workspaceState.openThread(opened, activeProject)
+          workspaceState.openThread(thread, activeProject)
         } catch (error) {
           actionError = errorMessage(error, 'The thread could not be opened.')
         }
@@ -261,18 +251,9 @@
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
       navigateToScopedThreads?.()
-      // Adopt the inherited row: it carries the Engineering marker the opened
-      // view reads to keep its Toolbox filled.
-      let opened = thread
-      if (activeThread && activeThread.projectId === activeProject.id) {
-        opened =
-          (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
-          thread
-        scopeState.updateThread(opened)
-      }
-      workspaceState.openThread(opened, activeProject)
+      workspaceState.openThread(thread, activeProject)
       if (activeThread?.settings) {
-        void persistInheritedThreadSettings(opened, inheritedSettings).catch((error) => {
+        void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
           actionError = errorMessage(error, 'The inherited thread settings could not be saved.')
         })
       }

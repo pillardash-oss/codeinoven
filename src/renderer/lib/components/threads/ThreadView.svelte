@@ -31,6 +31,7 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
+  import { engineeringPendingMessage } from '$shared/engineering-generation'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { ANNOTATION_BUBBLE_SIZE } from '$lib/selection-anchors'
   import { createThreadView } from './ThreadView/ThreadView-board.svelte'
@@ -1181,10 +1182,19 @@
         {/await}
       {/key}
     {:else}
-      <div class="flex flex-1 items-center justify-center text-sm text-dimmed">
-        {board.abortRun.specBusy
-          ? 'Loading specification…'
-          : board.abortRun.specError || 'No specification is available.'}
+      <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+        {#if engineeringPendingMessage(board.sources.generationInFlight)}
+          <CioSpinner size={15} class="animate-spin text-dimmed" />
+          <p class="max-w-md text-sm leading-relaxed text-muted" role="status">
+            {engineeringPendingMessage(board.sources.generationInFlight)}
+          </p>
+        {:else}
+          <p class="text-sm text-dimmed">
+            {board.abortRun.specBusy
+              ? 'Loading specification…'
+              : board.abortRun.specError || 'No specification is available.'}
+          </p>
+        {/if}
       </div>
     {/if}
   {/if}

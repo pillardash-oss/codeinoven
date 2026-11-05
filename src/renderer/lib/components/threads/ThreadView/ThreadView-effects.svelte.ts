@@ -1,4 +1,5 @@
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
+import { engineeringStudioVisible } from '$shared/engineering-generation'
 import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
 import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
 import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
@@ -14,8 +15,7 @@ import { actionContext } from '$lib/stores/action-context.svelte'
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { chatDraft } from '$lib/stores/chat-draft'
-import { loadLifecycleIntent, loadIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
-import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
+import { loadIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
 import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -548,11 +548,20 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.submitBrainstormDecision.spec !== null ||
         this.root.submitSpecDecision.assignment !== null ||
         this.root.contextUsage.auditReport !== null
-      workspaceState.specStudioAvailable =
-        !this.root.props.chatMode && (hasStudioDocument || this.root.abortRun.specStudioRetryable)
+      // A tool call that started a stage is enough to offer the studio: the agent
+      // is already working, and the reader must be able to look while the
+      // document is still being prepared.
+      const generationInFlight = this.root.sources.generationInFlight
+      workspaceState.specStudioAvailable = engineeringStudioVisible({
+        chatMode: this.root.props.chatMode === true,
+        hasDocument: hasStudioDocument,
+        retryable: this.root.abortRun.specStudioRetryable,
+        generationInFlight
+      })
       workspaceState.specStudioOpen = this.root.submitSpecDecision.showSpecStudio
       workspaceState.specStudioBusy = this.root.abortRun.specBusy
-      workspaceState.specStudioFormulating = this.root.harnessUsage.specFormulating
+      workspaceState.specStudioFormulating =
+        this.root.harnessUsage.specFormulating || generationInFlight !== null
       workspaceState.specStudioError = this.root.abortRun.specError
       workspaceState.specStudioRetryable = this.root.abortRun.specStudioRetryable
       if (!this.root.submitSpecDecision.showSpecStudio) {
@@ -585,6 +594,12 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           this.root.editVideoNote.openBrainstormStudio()
         } else if (this.root.abortRun.specStudioRetryable) {
           void this.root.abortRun.openSpecStudio()
+        } else if (this.root.sources.generationInFlight !== null) {
+          // Nothing exists yet, and the agent is still generating it: open the
+          // studio on its pending state instead of leaving the toggle inert.
+          this.root.harnessUsage.studioDocument =
+            this.root.sources.generationInFlight === 'assignment' ? 'assignment' : 'spec'
+          this.root.submitSpecDecision.showSpecStudio = true
         }
       }
       return () => {
@@ -853,43 +868,11 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           })
       }
       if (!this.root.props.chatMode) {
-        // Staged choices are local intent, not durable Engineering state: a thread
-        // that has not engaged Engineering yet still has to show the switches the
-        // user staged on it, so this restore stays outside the hydration gate.
-        //
-        // Restore a staged (not-yet-sent) Toolbox selection from a previous
-        // session or thread switch so the switches keep the user's last choice.
-        const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
-        if (stagedIntent) this.root.harnessUsage.pendingLifecycleSelection = stagedIntent
-        // Same for a staged (not-yet-sent) Independent Audit toggle.
+        // A staged (not-yet-sent) Independent Audit toggle is restored here.
         const stagedAuditIntent = loadIndependentAuditIntent(mountedProjectId, mountedThreadId)
         if (stagedAuditIntent !== null)
           this.root.currentWorkingTraceAttribution.pendingIndependentAudit = stagedAuditIntent
       }
-      // A sibling thread may inherit its Engineering lifecycle after this view
-      // already hydrated (the inheritance write is async). Re-read once the
-      // inheritance lands so the inherited switches show as on.
-      this.root.state.unsubscribeLifecycleInheritance = onEngineeringLifecycleInherited(
-        (inheritedThreadId) => {
-          if (
-            !this.root.loadOlderMessages.alive ||
-            inheritedThreadId !== this.root.handleAgentEvent.thread.id ||
-            this.root.props.chatMode
-          ) {
-            return
-          }
-          void invoke(
-            'engineeringLifecycle:get',
-            this.root.handleAgentEvent.thread.projectId,
-            this.root.handleAgentEvent.thread.id
-          )
-            .then((state) => {
-              if (this.root.loadOlderMessages.alive)
-                this.root.handleAgentEvent.engineeringLifecycle = state
-            })
-            .catch(() => {})
-        }
-      )
       this.root.steerQueuedMessage.scheduleResponseHighlightRestore(
         this.root.steerQueuedMessage.annotationReferences
       )
@@ -1109,7 +1092,6 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.state.unsubscribe?.()
         this.root.state.unsubscribeThreadUpdated?.()
         this.root.state.unsubscribeRemoteEvents?.()
-        this.root.state.unsubscribeLifecycleInheritance?.()
         unsubscribeVoiceSend()
         unsubscribeVoiceDraft()
         window.removeEventListener('resize', onResize)

@@ -11,8 +11,13 @@ import {
 } from '../../src/lib/engineering-tools'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
 import { CIO_PROMPT_DEFINITIONS } from '../../src/lib/cio-prompts'
+import {
+  engineeringPendingMessage,
+  engineeringStudioVisible
+} from '../../src/lib/engineering-generation'
+import { neutralEngineeringThreadSettings } from '../../src/lib/thread-engineering-neutral'
 import { normalizeLifecycleStages } from '../../src/lib/engines/engineering-lifecycle-engine'
-import type { EngineeringLifecycleStage } from '../../src/lib/types'
+import type { EngineeringLifecycleStage, ThreadSettings } from '../../src/lib/types'
 
 /**
  * Probe for the post-toolbox contract: every Engineering lifecycle stage is a
@@ -94,5 +99,75 @@ describe('Engineering stage tools probe', () => {
   it('still cascades the Achievement dependency onto Spec', () => {
     expect(normalizeLifecycleStages(['achievement'])).toEqual(['spec', 'achievement'])
     expect(normalizeLifecycleStages(['assignment'])).toEqual(['assignment'])
+  })
+
+  it('offers the studio while a tool-started stage is still generating', () => {
+    // The bug this covers: an agent initiated a spec or Assignment itself, and
+    // the studio stayed hidden until the document existed.
+    expect(
+      engineeringStudioVisible({
+        chatMode: false,
+        hasDocument: false,
+        retryable: false,
+        generationInFlight: 'spec'
+      })
+    ).toBe(true)
+    expect(
+      engineeringStudioVisible({
+        chatMode: false,
+        hasDocument: false,
+        retryable: false,
+        generationInFlight: 'assignment'
+      })
+    ).toBe(true)
+    // Nothing to show and nothing running stays hidden.
+    expect(
+      engineeringStudioVisible({
+        chatMode: false,
+        hasDocument: false,
+        retryable: false,
+        generationInFlight: null
+      })
+    ).toBe(false)
+    // A chat never gets an Engineering studio.
+    expect(
+      engineeringStudioVisible({
+        chatMode: true,
+        hasDocument: true,
+        retryable: false,
+        generationInFlight: 'spec'
+      })
+    ).toBe(false)
+  })
+
+  it('says the agent is still working instead of rendering an empty document', () => {
+    for (const stage of ['spec', 'assignment'] as const) {
+      const message = engineeringPendingMessage(stage)
+      expect(message).toContain('Nothing has been generated yet')
+      expect(message).toContain('still working')
+    }
+    expect(engineeringPendingMessage(null)).toBeNull()
+  })
+
+  it('starts a new thread neutral instead of inheriting Engineering modes', () => {
+    // A sibling created beside an Engineering thread must not arrive already in
+    // Assignment or Achievement mode, and no stage selection travels with it.
+    const inherited: ThreadSettings = {
+      harnessId: 'pi',
+      providerId: 'opencode-go',
+      modelId: 'deepseek-v4.1-flash',
+      thinkingLevel: 'low',
+      permissionLevel: 'auto_review',
+      assignmentMode: true,
+      loopMode: true
+    }
+    const neutral = neutralEngineeringThreadSettings(inherited)
+    expect(neutral.assignmentMode).toBe(false)
+    expect(neutral.loopMode).toBe(false)
+    // The user's own configuration still travels.
+    expect(neutral.harnessId).toBe(inherited.harnessId)
+    expect(neutral.providerId).toBe(inherited.providerId)
+    expect(neutral.modelId).toBe(inherited.modelId)
+    expect(neutral.permissionLevel).toBe(inherited.permissionLevel)
   })
 })
