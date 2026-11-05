@@ -8,6 +8,7 @@ import type {
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import { escapeRegExp, isGeneratedAccountLabelFor } from '../../lib/account-label'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
+import { isAcpAgentId } from '../drivers/acp/acp-agents-store'
 import { linkMacosLoginKeychain } from '../drivers/antigravity/antigravity-keychain'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -56,6 +57,7 @@ export class HarnessAccountRegistry {
   constructor(private readonly storage: StorageEngine) {}
 
   async list(harnessId?: string): Promise<HarnessAccount[]> {
+    await this.forgetAcpAccounts()
     const stored = await this.read()
     const accounts = stored.accounts
       .filter(
@@ -66,6 +68,22 @@ export class HarnessAccountRegistry {
       .sort((left, right) => left.createdAt - right.createdAt)
     await this.repairContainerHomes(accounts)
     return accounts
+  }
+
+  /**
+   * Drop account rows belonging to ACP agents.
+   *
+   * An agent is a harness the user added, not a credential CodeInOven holds: it
+   * owns its own sign-in, so a row here would say the app can switch or remove a
+   * credential it never had. Rows written before this rule are removed on the
+   * next read, which is what clears the "Cursor agent" entries from Accounts.
+   */
+  private async forgetAcpAccounts(): Promise<void> {
+    const stored = await this.read()
+    if (!stored.accounts.some((account) => isAcpAgentId(account.harnessId))) return
+    await this.mutate(async (registry) => {
+      registry.accounts = registry.accounts.filter((account) => !isAcpAgentId(account.harnessId))
+    })
   }
 
   /** Mirror credentials from a harness's original home into provider-level account rows. */

@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { isAcpAgentId } from '../drivers/acp/acp-agents-store'
 import { isAbsolute } from 'node:path'
 import type { HarnessAccount, ProviderAccountLoginOptions } from '../../lib/types'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -176,6 +177,11 @@ export function registerProviderAccountIpc(
   ): Promise<HarnessAuthStatus> {
     const status = await auth.getStatus(harnessId, projectPath)
     if (status.state === 'error' || status.state === 'unknown') return status
+    // An ACP agent owns its own sign-in and has no credential home for the app
+    // to hold, so its status is reported and nothing is mirrored into the
+    // account registry. Its entry reached Accounts as "Cursor agent 1..3" noise
+    // before this rule.
+    if (isAcpAgentId(harnessId)) return status
     // Legacy reconciliation must only see default-home credentials; merged
     // container entries are display-only for the provider check list.
     await accounts.reconcileLegacy(harnessId, status.accounts)
