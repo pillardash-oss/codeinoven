@@ -299,6 +299,19 @@ export function registerProviderAccountIpc(
           )
         }
       }
+      // A row whose harness has no authentication at all is a stale record left
+      // by an earlier build (an ACP agent used to register one). There is no
+      // credential to remove, so dropping the row is the whole operation; saying
+      // "authentication is not supported" left the user with a row they could
+      // neither disconnect nor delete.
+      const capabilities = await auth.capabilities(harnessId)
+      // An ACP agent owns its own sign-in (it now reports a status capability),
+      // so a row naming one is still only a stale record: there is no credential
+      // here to remove, and dropping the row is the whole operation.
+      if (!capabilities || isAcpAgentId(harnessId)) {
+        if (accountId) await accounts.remove(accountId)
+        return
+      }
       const account = accountId
         ? await resolveCredentialAccount(accounts, harnessId, accountId)
         : undefined
