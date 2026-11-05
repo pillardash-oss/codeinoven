@@ -1,6 +1,8 @@
 <script lang="ts">
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
   import CioFilter from '@pdslng/cio-icon/CioFilter.svelte'
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioLogIn from '@pdslng/cio-icon/CioLogIn.svelte'
@@ -49,6 +51,8 @@
   let editLabel = $state('')
   let saving = $state(false)
   let disconnectTarget = $state<HarnessAccount | null>(null)
+  /** Account whose hidden flag is being written; keeps the row's action single-shot. */
+  let hidingAccountId = $state('')
   let disconnecting = $state(false)
 
   /**
@@ -494,6 +498,21 @@
     }
   }
 
+  /** Hide an account from the pickers that offer one, or show it again. Nothing
+   *  about the credential moves, so this never touches the sign-in state. */
+  async function toggleHidden(account: HarnessAccount): Promise<void> {
+    if (hidingAccountId) return
+    hidingAccountId = account.id
+    error = ''
+    try {
+      replaceAccount(await harnessAccountCache.setHidden(account, !account.hidden))
+    } catch (hideError) {
+      error = hideError instanceof Error ? hideError.message : 'The account was not hidden.'
+    } finally {
+      hidingAccountId = ''
+    }
+  }
+
   async function disconnectAccount(): Promise<void> {
     if (!disconnectTarget || disconnecting) return
     disconnecting = true
@@ -681,6 +700,14 @@
                     Default
                   </span>
                 {/if}
+                {#if account.hidden}
+                  <span
+                    class="shrink-0 border border-border bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                    title="Hidden from account pickers, still connected"
+                  >
+                    Hidden
+                  </span>
+                {/if}
                 {#if isCustomProviderRow(account)}
                   <span
                     class="shrink-0 border border-border bg-raised px-1 text-[0.625rem] font-medium text-muted"
@@ -728,6 +755,26 @@
                 Make default
               </button>
             {/if}
+            <button
+              type="button"
+              class="inline-flex shrink-0 items-center gap-1 px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              title={account.hidden
+                ? `Show ${account.label} in account pickers again`
+                : `Hide ${account.label} from account pickers without disconnecting it`}
+              aria-label={account.hidden
+                ? `Show ${account.label} in account pickers again`
+                : `Hide ${account.label} from account pickers without disconnecting it`}
+              disabled={hidingAccountId === account.id}
+              onclick={() => void toggleHidden(account)}
+            >
+              {#if account.hidden}
+                <CioEye size={12} aria-hidden="true" />
+                Show
+              {:else}
+                <CioEyeOff size={12} aria-hidden="true" />
+                Hide
+              {/if}
+            </button>
             <button
               type="button"
               class="inline-flex items-center gap-1 px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"

@@ -136,6 +136,14 @@ export function registerProviderAccountIpc(
       text(rawLabel, 'Account label', 80)
     )
   )
+  ipcMain.handle(
+    'providerAccounts:setAccountHidden',
+    (_, rawAccountId: unknown, rawHidden: unknown) =>
+      accounts.setHidden(
+        validateEntityId(rawAccountId, 'Account ID', 256),
+        boolean(rawHidden, 'Hidden')
+      )
+  )
   ipcMain.handle('providerAccounts:setDefault', async (_, rawAccountId: unknown) => {
     const account = await accounts.setDefault(validateEntityId(rawAccountId, 'Account ID', 256))
     return accounts.list(account.harnessId)

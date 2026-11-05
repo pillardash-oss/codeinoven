@@ -171,6 +171,12 @@ export const invokeProviderContract = {
   >,
   'providerAccounts:cancelPending': {} as Contract<[pendingAccountId: string], void>,
   'providerAccounts:rename': {} as Contract<[accountId: string, label: string], HarnessAccount>,
+  /** Hide an account from the pickers that offer one, or restore it. The
+   *  account stays connected either way. */
+  'providerAccounts:setAccountHidden': {} as Contract<
+    [accountId: string, hidden: boolean],
+    HarnessAccount
+  >,
   /** Mark an account as its harness's default for the account's provider.
    *  Returns the harness's full account list so callers can refresh caches. */
   'providerAccounts:setDefault': {} as Contract<[accountId: string], HarnessAccount[]>,

@@ -322,6 +322,21 @@
       : ((providerAccounts.find((account) => account.isDefault) ?? providerAccounts[0])?.id ??
           `${harnessId}.default`)
   )
+  /**
+   * Accounts this picker offers as a choice.
+   *
+   * A hidden account stays connected but drops out of the menu, so the picker
+   * never proposes it for a new turn. The account a thread already runs on is
+   * the exception: the trigger has to keep naming what the next turn will use,
+   * even when the user hid it afterwards. A provider whose accounts are all
+   * hidden falls back to the full list rather than an empty menu.
+   */
+  let offeredAccounts = $derived.by(() => {
+    const visible = providerAccounts.filter((account) => !account.hidden)
+    if (visible.length === 0) return providerAccounts
+    const current = providerAccounts.find((account) => account.id === accountId && account.hidden)
+    return current ? [...visible, current] : visible
+  })
   let selectedAccount = $derived(
     providerAccounts.find((account) => account.id === effectiveAccountId)
   )
@@ -332,7 +347,7 @@
    * is a statement about switching, not about the account having a name, which is
    * why it does not also decide whether the chip is drawn.
    */
-  let showAccountPicker = $derived(!multiSelect && providerAccounts.length > 1)
+  let showAccountPicker = $derived(!multiSelect && offeredAccounts.length > 1)
   /**
    * Whether the lone account carries a label worth putting on screen.
    *
@@ -616,9 +631,17 @@
     const matchingAccounts = availableAccounts.filter(
       (account) => account.harnessId === targetHarnessId && account.providerId === targetProviderId
     )
+    // A hidden account is never chosen for a new pick. The account a thread
+    // already names is exempt: switching provider back must return to it. When a
+    // provider hides every account there is nothing better to offer, so the
+    // full list stands in and the menu keeps working.
+    const visibleAccounts = matchingAccounts.filter(
+      (account) => !account.hidden || account.id === accountId
+    )
+    const selectableAccounts = visibleAccounts.length > 0 ? visibleAccounts : matchingAccounts
     return (
-      matchingAccounts.find((account) => account.id === accountId)?.id ??
-      (matchingAccounts.find((account) => account.isDefault) ?? matchingAccounts[0])?.id ??
+      selectableAccounts.find((account) => account.id === accountId)?.id ??
+      (selectableAccounts.find((account) => account.isDefault) ?? selectableAccounts[0])?.id ??
       `${targetHarnessId}.default`
     )
   }
@@ -877,7 +900,7 @@
               {#if accountLoading}
                 <div class="px-2 py-2 text-xs text-muted">Loading accounts…</div>
               {:else}
-                {#each providerAccounts as account (account.id)}
+                {#each offeredAccounts as account (account.id)}
                   {@const active = account.id === effectiveAccountId}
                   <DropdownMenu.Item
                     class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
@@ -894,6 +917,14 @@
                       <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{account.label}</span>
+                    {#if account.hidden}
+                      <span
+                        class="shrink-0 bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                        title="Hidden from account pickers"
+                      >
+                        Hidden
+                      </span>
+                    {/if}
                     {#if account.isDefault}
                       <span
                         class="shrink-0 bg-raised px-1 text-[0.625rem] font-medium text-muted"

@@ -152,6 +152,14 @@ export interface HarnessAccount {
   /** Marks the user's preferred account for this harness+provider. When unset,
    *  the earliest created account acts as the default. */
   isDefault?: boolean
+  /**
+   * Left out of the lists that offer an account to use, while staying connected.
+   *
+   * Hiding is not disconnecting: the credentials stay in place and a thread that
+   * already runs on this account keeps using it. Only the pickers that offer a
+   * new account choice stop listing it.
+   */
+  hidden?: boolean
   createdAt: number
   updatedAt: number
 }
