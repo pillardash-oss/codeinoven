@@ -1,7 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import { GLOBAL_BROWSER_PROJECT_ID, type AuthoredWorkKind } from '$shared/ipc-contract'
-import { threadStage, type ScopeSidebarContext, type ThreadStage } from './scope-board'
+import { STAGE_ORDER, threadStage, type ScopeSidebarContext, type ThreadStage } from './scope-board'
 import {
   isOrchestrationChildThread,
   DEFAULT_SCOPE_BUCKET_ID,
@@ -246,6 +246,30 @@ export class ScopeThreads {
       if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
       return a.id.localeCompare(b.id)
     })
+  }
+
+  /**
+   * The slice a scope switch lands on.
+   *
+   * A scope is opened to look at the threads in it, so an empty slice is only
+   * ever chosen when the scope really holds nothing: the open thread's own slice
+   * when it lives in that scope, then the slice already showing if it still has
+   * threads, then the first slice of the rail that does, and Todo when the scope
+   * is empty. Picking `todo` blind left every scope whose threads sat in Done or
+   * Unread showing "No threads in this slice" until the user clicked through the
+   * rail to find them.
+   */
+  stageForBucketSwitch(bucketId: string, currentStage: ThreadStage): ThreadStage {
+    const contextThreadId = this.host.currentSidebarContext()?.threadId ?? null
+    if (contextThreadId !== null) {
+      const open = this.allScopeThreads.find(
+        (thread) => thread.id === contextThreadId && this.bucketForThread(thread) === bucketId
+      )
+      if (open !== undefined) return this.stageForThread(open)
+    }
+    if (this.threadsFor(bucketId, currentStage).length > 0) return currentStage
+    const populated = STAGE_ORDER.find((stage) => this.threadsFor(bucketId, stage).length > 0)
+    return populated ?? 'todo'
   }
 
   async reorderThreads(
