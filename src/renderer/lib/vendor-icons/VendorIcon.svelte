@@ -44,7 +44,6 @@
       src={customIcon}
       alt=""
       class="h-full w-full bg-white object-contain"
-      style:padding={`${size * 0.08}px`}
       onerror={() => {
         failedIcon = customIcon
       }}
