@@ -4,6 +4,7 @@ import type {
   AuthResult,
   Device,
   Message,
+  Oven,
   Page,
   Project,
   Prompt,
@@ -221,6 +222,9 @@ export const api = {
   sessions: () => data<Session[]>('/v1/auth/sessions'),
 
   revokeSession: (id: string) => data<void>(`/v1/auth/sessions/${id}`, { method: 'DELETE' }),
+
+  /** Every machine this account has reported in from, most recent first. */
+  ovens: () => data<Oven[]>('/v1/ovens'),
 
   assistants: () => data<Assistant[]>('/v1/assistants'),
 

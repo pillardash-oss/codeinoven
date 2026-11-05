@@ -18,7 +18,7 @@ weight 200, 2px corners, hairline rules, and the handcrafted icon set from
 | Chats        | The chats panel; this service does not carry chats yet, and the screen says so           |
 | New thread   | A name and a project, created through `POST /v1/threads`, then opened                    |
 | Conversation | One thread's transcript, the composer that queues a prompt, and a drawer of thread facts |
-| Settings     | Who is signed in, the scheme, the device list with revocation, and sign out              |
+| Settings     | Theme, font, size, weight and zoom from the shared table, the Ovens that reported in, the devices, and sign out |
 
 Three screens are panels and wear the dock at their foot: the work list, chats, and
 the assistant. Anything opened from a panel, a conversation and Settings included,

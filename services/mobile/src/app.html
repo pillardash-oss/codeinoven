@@ -13,14 +13,24 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <link rel="icon" href="/codeinoven-mark.svg" />
     <script>
-      // Paint the saved scheme before the first frame: the app's theme is a class
-      // on the document, and a dark phone that opens light reads as a bug.
+      // Paint the saved appearance before the first frame: the theme, the base size
+      // and the zoom decide what that frame looks like, and a dark phone that
+      // opens light reads as a bug. The font stack is not repeated here, because
+      // the shared table in `src/lib/app-appearance.ts` owns it; the shell writes
+      // it as soon as it mounts.
       try {
-        var saved = localStorage.getItem('cio.mobile.theme')
-        if (saved === 'dark') document.documentElement.classList.add('dark')
-        if (saved === 'light') document.documentElement.classList.add('light')
+        var saved = {}
+        var raw = localStorage.getItem('cio.mobile.appearance')
+        if (raw) saved = JSON.parse(raw) || {}
+        // The scheme lived under its own key before appearance was one record.
+        var theme = saved.theme || localStorage.getItem('cio.mobile.theme')
+        if (theme === 'dark') document.documentElement.classList.add('dark')
+        if (theme === 'light') document.documentElement.classList.add('light')
         document.documentElement.style.colorScheme =
-          saved === 'dark' ? 'dark' : saved === 'light' ? 'light' : 'light dark'
+          theme === 'dark' ? 'dark' : theme === 'light' ? 'light' : 'light dark'
+        var size = typeof saved.appFontSize === 'number' ? saved.appFontSize : 16
+        var zoom = typeof saved.zoomLevel === 'number' ? saved.zoomLevel : 1
+        document.documentElement.style.fontSize = size * zoom + 'px'
       } catch (error) {}
     </script>
     <style>

@@ -253,13 +253,11 @@ registerAppControlRevalidation({
 /** Options for the Appearance font-family picker. */
 export const FONT_FAMILY_OPTIONS = APP_FONT_OPTIONS
 
-/** Font weights offered in Appearance settings. */
-export const FONT_WEIGHT_OPTIONS: Array<{ id: number; label: string }> = [
-  { id: 200, label: 'Extra light (default)' },
-  { id: 300, label: 'Light' },
-  { id: 400, label: 'Regular' },
-  { id: 500, label: 'Medium' }
-]
+/**
+ * Weights and zoom steps are the shared table, so the phone offers the same
+ * choices the desktop does instead of a second list that can drift from it.
+ */
+export { FONT_WEIGHT_OPTIONS, ZOOM_LEVEL_OPTIONS } from '$shared/app-appearance'
 
 /**
  * Contrast levels offered in Appearance settings, with the one line that says
@@ -277,19 +275,4 @@ export const CONTRAST_LEVEL_OPTIONS: Array<{
   { id: 'normal', label: 'Normal', hint: 'The shipped palette' },
   { id: 'more', label: 'More', hint: 'About twice the contrast' },
   { id: 'intense', label: 'Intense', hint: 'About three times the contrast' }
-]
-
-/** Zoom levels offered in Appearance settings, as percentages. */
-export const ZOOM_LEVEL_OPTIONS: Array<{ id: number; label: string }> = [
-  { id: 0.5, label: '50%' },
-  { id: 0.67, label: '67%' },
-  { id: 0.75, label: '75%' },
-  { id: 0.8, label: '80%' },
-  { id: 0.9, label: '90%' },
-  { id: 1, label: '100%' },
-  { id: 1.1, label: '110%' },
-  { id: 1.25, label: '125%' },
-  { id: 1.5, label: '150%' },
-  { id: 1.75, label: '175%' },
-  { id: 2, label: '200%' }
 ]

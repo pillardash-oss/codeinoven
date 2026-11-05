@@ -133,6 +133,19 @@ export interface Session {
   current: boolean
 }
 
+/**
+ * A machine that reported in to this account. The descriptor is whatever the Oven
+ * chose to say about itself (host, platform, the harnesses it offers), so it is
+ * read as a record rather than guessed at here.
+ */
+export interface Oven {
+  id: string
+  name: string
+  fingerprint: string
+  lastHeartbeatAt: number
+  descriptor: Record<string, unknown> | null
+}
+
 export interface Prompt {
   id: string
   threadId: string

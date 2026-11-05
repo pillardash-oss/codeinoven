@@ -9,6 +9,7 @@
   import NewThreadSheet from '#lib/components/NewThreadSheet.svelte'
   import { DOUBLE_TAP_MS, planNewThread, startNewThread } from '#lib/new-thread'
   import { isPanel, showsDock } from '#lib/navigation'
+  import { appearance } from '#lib/stores/appearance.svelte'
   import { syncSystemBars } from '#lib/system-bars'
   import '../app.css'
 
@@ -64,7 +65,10 @@
   let starting = $state(false)
 
   onMount(() => {
-    // The boot frame in app.html has done its job once the shell is on screen.
+    // The reader's appearance is written before the boot frame goes, so the first
+    // screen is drawn in the face and size they chose.
+    appearance.restore()
+    appearance.apply()
     document.getElementById('boot')?.remove()
     void syncSystemBars()
     // The bar follows the system while the app is following it.

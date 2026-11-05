@@ -7,45 +7,46 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
+  import {
+    FONT_FAMILY_OPTIONS,
+    FONT_WEIGHT_OPTIONS,
+    THEME_OPTIONS,
+    ZOOM_LEVEL_OPTIONS
+  } from '#shared/app-appearance'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge } from '#lib/api/status'
-  import type { Device, DevicePlatform } from '#lib/api/types'
+  import type { Device, DevicePlatform, Oven } from '#lib/api/types'
   import { crumbFrom, trailTo } from '#lib/navigation'
+  import { appearance } from '#lib/stores/appearance.svelte'
   import { session } from '#lib/stores/session.svelte'
-  import { syncSystemBars } from '#lib/system-bars'
 
   /**
-   * Settings. It answers what a phone can answer and nothing else: who is signed
-   * in here, how the app reads, which devices hold the account, and the way out.
+   * Settings. It answers what a phone can answer and nothing else: how the app
+   * reads, who is signed in here, which machines have reported in, which devices
+   * hold the account, and the way out.
    *
-   * The screen is one column of rows under four short headings, and the only
-   * explanation it offers is the second line of a row. It is not a place to
-   * describe the product, so a row that cannot say something useful says nothing.
+   * The appearance rows are the desktop's own table, shared rather than copied, so
+   * the two clients cannot drift into different products. A row is its name, the
+   * value in force, and the control that changes it; the only explanation a row
+   * carries is that value.
    */
 
-  const THEME_KEY = 'cio.mobile.theme'
   const PLATFORM_LABELS: Readonly<Record<DevicePlatform, string>> = {
     desktop: 'Desktop',
     ios: 'iOS',
     android: 'Android'
   }
 
-  type ThemeChoice = 'light' | 'dark' | 'system'
-
-  const SCHEMES: readonly { id: ThemeChoice; label: string }[] = [
-    { id: 'light', label: 'Light' },
-    { id: 'dark', label: 'Dark' },
-    { id: 'system', label: 'Auto' }
-  ]
-
-  let theme = $state<ThemeChoice>('system')
-
   let devices = $state<Device[]>([])
   let devicesLoading = $state(true)
   let devicesError = $state<string | null>(null)
   let revokingId = $state<string | null>(null)
   let confirmDeviceId = $state<string | null>(null)
+
+  let ovens = $state<Oven[]>([])
+  let ovensLoading = $state(true)
+  let ovensError = $state<string | null>(null)
 
   let editingName = $state(false)
   let nameDraft = $state('')
@@ -70,10 +71,8 @@
   let initials = $derived(initialsOf(session.user?.name ?? null, email))
   let accountLine = $derived(unverified ? `${email} · not verified` : email)
 
-  function themeSummary(choice: ThemeChoice): string {
-    if (choice === 'dark') return 'Always dark'
-    if (choice === 'light') return 'Always light'
-    return 'System default'
+  function shortLabel(label: string): string {
+    return label.replace(/\s*\(default\)$/, '')
   }
 
   function initialsOf(name: string | null, address: string): string {
@@ -96,25 +95,28 @@
 
   /* ---- Appearance ---- */
 
-  function applyTheme(choice: ThemeChoice): void {
-    const root = document.documentElement
-    root.classList.remove('dark', 'light')
-    if (choice === 'dark') root.classList.add('dark')
-    if (choice === 'light') root.classList.add('light')
-    // The platform draws form controls and scrollbars from this, and the system
-    // bars read it through syncSystemBars.
-    root.style.colorScheme = choice === 'system' ? 'light dark' : choice
+  function setFont(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLSelectElement)) return
+    appearance.set({ fontFamily: target.value })
   }
 
-  function setTheme(choice: ThemeChoice): void {
-    theme = choice
-    try {
-      globalThis.localStorage?.setItem(THEME_KEY, choice)
-    } catch {
-      // A phone with no storage still changes for this session.
-    }
-    applyTheme(choice)
-    void syncSystemBars()
+  function setWeight(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLSelectElement)) return
+    appearance.set({ fontWeight: Number(target.value) })
+  }
+
+  function setZoom(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLSelectElement)) return
+    appearance.set({ zoomLevel: Number(target.value) })
+  }
+
+  function setFontSize(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLInputElement)) return
+    appearance.set({ appFontSize: Number(target.value) })
   }
 
   /* ---- Identity ---- */
@@ -142,6 +144,20 @@
       identityError = failure(cause)
     } finally {
       savingName = false
+    }
+  }
+
+  /* ---- Ovens ---- */
+
+  async function loadOvens(): Promise<void> {
+    ovensLoading = true
+    ovensError = null
+    try {
+      ovens = await api.ovens()
+    } catch (cause) {
+      ovensError = failure(cause)
+    } finally {
+      ovensLoading = false
     }
   }
 
@@ -186,10 +202,13 @@
     await goto('/sign-in')
   }
 
+  function refresh(): void {
+    void loadOvens()
+    void loadDevices()
+  }
+
   onMount(() => {
-    const stored = globalThis.localStorage?.getItem(THEME_KEY)
-    theme = stored === 'dark' || stored === 'light' ? stored : 'system'
-    applyTheme(theme)
+    void loadOvens()
     void loadDevices()
   })
 </script>
@@ -199,9 +218,9 @@
     <button
       class="icon-btn"
       type="button"
-      aria-label="Refresh devices"
-      title="Refresh devices"
-      onclick={loadDevices}
+      aria-label="Refresh ovens and devices"
+      title="Refresh ovens and devices"
+      onclick={refresh}
     >
       <CioRefresh size={20} />
     </button>
@@ -254,23 +273,99 @@
 
   <p class="set-head">Appearance</p>
 
-  <div class="set-row">
-    <span class="body-cell">
-      <span class="row-title">Scheme</span>
-      <span class="row-line">{themeSummary(theme)}</span>
-    </span>
-    <span class="seg" role="group" aria-label="Colour scheme">
-      {#each SCHEMES as scheme (scheme.id)}
+  <div class="set-row control-row">
+    <span class="body-cell"><span class="row-title">Theme</span></span>
+    <span class="seg" role="group" aria-label="Theme">
+      {#each THEME_OPTIONS as option (option.id)}
         <button
           type="button"
-          aria-pressed={theme === scheme.id}
-          onclick={() => setTheme(scheme.id)}
+          aria-pressed={appearance.theme === option.id}
+          onclick={() => appearance.set({ theme: option.id })}
         >
-          {scheme.label}
+          {option.label}
         </button>
       {/each}
     </span>
   </div>
+
+  <div class="set-row control-row">
+    <span class="body-cell"><span class="row-title">Font</span></span>
+    <select class="set-select" value={appearance.fontFamily} aria-label="Font" onchange={setFont}>
+      {#each FONT_FAMILY_OPTIONS as option (option.id)}
+        <option value={option.id}>{shortLabel(option.label)}</option>
+      {/each}
+    </select>
+  </div>
+
+  <div class="set-row control-row">
+    <span class="body-cell"><span class="row-title">Font size</span></span>
+    <input
+      class="set-range"
+      type="range"
+      min="12"
+      max="18"
+      step="1"
+      value={appearance.appFontSize}
+      aria-label="Font size"
+      title="Adjust the base font size"
+      oninput={setFontSize}
+    />
+    <span class="set-reading">{appearance.appFontSize}px</span>
+  </div>
+
+  <div class="set-row control-row">
+    <span class="body-cell"><span class="row-title">Weight</span></span>
+    <select
+      class="set-select"
+      value={appearance.fontWeight}
+      aria-label="Font weight"
+      onchange={setWeight}
+    >
+      {#each FONT_WEIGHT_OPTIONS as option (option.id)}
+        <option value={option.id}>{shortLabel(option.label)}</option>
+      {/each}
+    </select>
+  </div>
+
+  <div class="set-row control-row">
+    <span class="body-cell"><span class="row-title">Zoom</span></span>
+    <select class="set-select" value={appearance.zoomLevel} aria-label="Zoom" onchange={setZoom}>
+      {#each ZOOM_LEVEL_OPTIONS as option (option.id)}
+        <option value={option.id}>{option.label}</option>
+      {/each}
+    </select>
+  </div>
+
+  <p class="set-head">Ovens</p>
+
+  {#if ovensLoading}
+    <div class="set-row">
+      <span class="body-cell"><span class="row-line">Checking in with the service</span></span>
+    </div>
+  {:else}
+    {#each ovens as oven (oven.id)}
+      <div class="set-row">
+        <span class="mark plain device-icon"><CioDisplay size={16} /></span>
+        <span class="body-cell">
+          <span class="row-title">{oven.name}</span>
+          <span class="row-line">Seen {formatAge(oven.lastHeartbeatAt)}</span>
+        </span>
+      </div>
+    {/each}
+    {#if ovens.length === 0 && !ovensError}
+      <div class="set-row">
+        <span class="body-cell"><span class="row-line">No Oven has reported in yet.</span></span>
+      </div>
+    {/if}
+  {/if}
+
+  {#if ovensError}
+    <p class="set-note" role="status">{ovensError}</p>
+    <div class="set-row actions-row">
+      <span></span>
+      <button class="btn" type="button" onclick={loadOvens}>Retry</button>
+    </div>
+  {/if}
 
   <p class="set-head">Devices</p>
 
