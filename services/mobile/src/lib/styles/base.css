@@ -31,6 +31,10 @@
   --color-border: #e2e1dc;
   --color-border-strong: #c8c7c2;
   --color-accent: #d4af37;
+  --color-accent-hover: #c19d2b;
+  /* Ink on the gold plate is the app's own dark, in both themes: the accent does
+     not flip with the scheme, so neither does what is written on it. */
+  --color-on-accent: #081825;
   --color-primary: #081825;
   --color-on-primary: #f7f6f2;
   --color-success: #0f7a37;
@@ -59,6 +63,7 @@ html.dark {
   --color-dimmed: #5f5f68;
   --color-border: #27272c;
   --color-border-strong: #3b3b42;
+  --color-accent-hover: #e0bd4d;
   --color-primary: #f5f4f0;
   --color-on-primary: #0b0b0d;
   --color-success: #34d399;
@@ -80,6 +85,7 @@ html.dark {
     --color-dimmed: #5f5f68;
     --color-border: #27272c;
     --color-border-strong: #3b3b42;
+    --color-accent-hover: #e0bd4d;
     --color-primary: #f5f4f0;
     --color-on-primary: #0b0b0d;
     --color-success: #34d399;

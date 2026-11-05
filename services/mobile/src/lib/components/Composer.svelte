@@ -1,32 +1,37 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import CioSend from '@pdslng/cio-icon/CioSend.svelte'
+  import CioArrowUp from '@pdslng/cio-icon/CioArrowUp.svelte'
+  import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
+  import CioHarness from '@pdslng/cio-icon/CioHarness.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { statusSkin, toneColor } from '#lib/api/status'
-  import type { Project, Thread } from '#lib/api/types'
+  import type { Project, Prompt, Thread } from '#lib/api/types'
 
   /**
-   * The composer is the only place a phone writes to the Oven. It grows to six
-   * lines and stops there, so the transcript above it keeps most of the screen.
-   * Cmd+Enter and Ctrl+Enter send, because that is the app's primary action
-   * key; a plain Enter inserts a newline, because a touch keyboard has no
-   * modifier to press and a half written prompt must not leave the box.
+   * The composer writes into the thread and states what it is writing into, the
+   * same readings the desktop composer carries under its editor: the thread's
+   * state, the model, the harness, and the project. The service fixes the model
+   * and harness per thread, so on a phone they are readings rather than pickers,
+   * and nothing here opens a menu that would have nothing to choose from.
    *
-   * Under the box it states what the message is being written into, the same
-   * reading the desktop composer's shoe gives: the thread's own state and the
-   * model and harness that will answer it.
+   * Enter sends from the keyboard, because a phone keyboard has no modifier to
+   * hold; Shift+Enter writes a second line, and Cmd/Ctrl+Enter still sends the
+   * way it does on the desktop. The box grows to six lines and stops, so the
+   * transcript above it keeps most of the screen.
    */
   interface Props {
     threadId: string
     /** The thread being written into; carried for its state, model and harness. */
     thread?: Thread | null
-    /** The project the thread belongs to, used when the thread names no model. */
+    /** The project the thread belongs to, named beside the model. */
     project?: Project | null
-    /** Called once the service has accepted the prompt, so the page can queue it. */
-    onqueued: (turn: { clientId: string; body: string }) => void
+    /** True while a prompt is waiting to be answered, which the field states. */
+    working?: boolean
+    /** Called once the service has accepted the prompt, so the page can track it. */
+    onqueued: (turn: { prompt: Prompt; body: string }) => void
   }
 
-  let { threadId, thread = null, project = null, onqueued }: Props = $props()
+  let { threadId, thread = null, project = null, working = false, onqueued }: Props = $props()
 
   let text = $state('')
   let sending = $state(false)
@@ -38,18 +43,6 @@
 
   let skin = $derived(statusSkin(thread?.status ?? 'created'))
   let detailTone = $derived(toneColor(skin.tone))
-  /**
-   * Model and harness name what answers, which is what the desktop states too.
-   * A thread whose service payload carries neither still says where it lives
-   * rather than leaving the line empty.
-   */
-  let detailLabel = $derived.by(() => {
-    const parts = [thread?.model, thread?.harness].filter(
-      (part): part is string => typeof part === 'string' && part.length > 0
-    )
-    if (parts.length > 0) return parts.join(' · ')
-    return project?.name ?? skin.label
-  })
 
   /** Height follows the content; the sheet's max-height is what caps the growth. */
   function fit(): void {
@@ -74,11 +67,11 @@
     sending = true
     error = null
     try {
-      await api.sendPrompt(threadId, { body, clientId })
+      const prompt = await api.sendPrompt(threadId, { body, clientId })
       text = ''
       await tick()
       fit()
-      onqueued({ clientId, body })
+      onqueued({ prompt, body })
     } catch (cause) {
       // The text stays in the box so nothing written is lost to a flaky network.
       error = cause instanceof ApiError ? cause.message : 'Cannot reach CodeInOven right now.'
@@ -94,9 +87,11 @@
 
   function onKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Enter') return
-    if (!event.metaKey && !event.ctrlKey) return
-    event.preventDefault()
-    void send()
+    // A phone keyboard sends with its own return key; a second line is asked for.
+    if (!event.shiftKey) {
+      event.preventDefault()
+      void send()
+    }
   }
 </script>
 
@@ -107,9 +102,9 @@
     oninput={fit}
     onkeydown={onKeydown}
     rows="1"
-    placeholder="Message the oven"
+    placeholder={working ? 'Queue a message for the oven' : 'Message the oven'}
     aria-label="Message the oven"
-    enterkeyhint="enter"></textarea>
+    enterkeyhint="send"></textarea>
 
   <div class="composer-foot">
     <span class="composer-meta">
@@ -117,17 +112,31 @@
         <span class="composer-error" title={error}>{error}</span>
       {:else if thread}
         <i class="dot" style:background={detailTone} aria-hidden="true"></i>
-        <span class="composer-where" title={detailLabel}>{detailLabel}</span>
+        {#if thread.model}
+          <span class="composer-chip" title={`Model: ${thread.model}`}>
+            <CioCpu size={12} />
+            {thread.model}
+          </span>
+        {/if}
+        {#if thread.harness}
+          <span class="composer-chip" title={`Harness: ${thread.harness}`}>
+            <CioHarness size={12} />
+            {thread.harness}
+          </span>
+        {/if}
+        {#if project}
+          <span class="composer-where" title={project.name}>{project.name}</span>
+        {/if}
       {/if}
     </span>
     <button
       class="send"
       type="submit"
       disabled={!canSend}
-      title="Send prompt"
-      aria-label="Send prompt"
+      title={working ? 'Queue this message' : 'Send this message'}
+      aria-label={working ? 'Queue this message' : 'Send this message'}
     >
-      <CioSend size={18} />
+      <CioArrowUp size={17} />
     </button>
   </div>
 </form>
@@ -146,18 +155,12 @@
     color: var(--color-danger);
   }
 
-  /* The model and harness line stays one line: a long model name is cut, never
-     wrapped into a second row under the box. */
+  /* The readings never wrap: the project name is the one part that gives way. */
   .composer-where {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--color-muted);
-  }
-
-  .send:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
 </style>

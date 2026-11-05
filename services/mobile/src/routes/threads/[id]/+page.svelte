@@ -4,32 +4,27 @@
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import Composer from '#lib/components/Composer.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
+  import QueuedStrip from '#lib/components/QueuedStrip.svelte'
   import Sheet from '#lib/components/Sheet.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
   import { arrive } from '#lib/motion'
-  import type { Message, Project, Thread } from '#lib/api/types'
+  import type { Message, Project, Prompt, Thread } from '#lib/api/types'
 
   /**
    * One thread, read on a phone. The screen has three parts and no fourth: what
    * the thread is doing, what was said, and the box that writes back. A v1 Oven
-   * answers by writing rows the service stores, so a sent prompt is queued
-   * locally and the transcript is polled until the answer lands.
+   * answers by writing rows the service stores, so a sent prompt is held on the
+   * composer and its own state polled until the answer lands.
    */
 
   const MESSAGE_LIMIT = 100
   const POLL_INTERVAL = 4000
   const POLL_LIMIT = 120_000
 
-  interface QueuedTurn {
-    clientId: string
-    body: string
-  }
-
   type Row =
     | { key: string; kind: 'marker'; label: string }
     | { key: string; kind: 'message'; message: Message }
-    | { key: string; kind: 'queued'; turn: QueuedTurn }
 
   let threadId = $derived(page.params.id ?? '')
 
@@ -37,7 +32,8 @@
   /** The thread's project, so the composer can name where a message is written. */
   let project = $state<Project | null>(null)
   let messages = $state<Message[]>([])
-  let queued = $state<QueuedTurn[]>([])
+  /** The prompts this phone sent that the service has not finished answering. */
+  let queued = $state<Prompt[]>([])
   let loading = $state(true)
   let error = $state<string | null>(null)
   let drawerOpen = $state(false)
@@ -57,7 +53,7 @@
     thread ? toneColor(statusSkin(thread.status).tone) : 'var(--color-dimmed)'
   )
   let meta = $derived(thread ? `${statusLabel} ${formatAge(thread.lastActivity)}` : statusLabel)
-  let rows = $derived(buildRows(messages, queued))
+  let rows = $derived(buildRows(messages))
   let details = $derived(
     thread
       ? [
@@ -107,7 +103,7 @@
       : longDayFormat.format(epoch)
   }
 
-  function buildRows(items: Message[], pending: QueuedTurn[]): Row[] {
+  function buildRows(items: Message[]): Row[] {
     const out: Row[] = []
     let lastDay = ''
     for (const message of items) {
@@ -122,7 +118,6 @@
       }
       out.push({ key: message.id, kind: 'message', message })
     }
-    for (const turn of pending) out.push({ key: turn.clientId, kind: 'queued', turn })
     return out
   }
 
@@ -180,7 +175,6 @@
 
   let timer: ReturnType<typeof setInterval> | null = null
   let pollStartedAt = 0
-  let answersAtStart = 0
 
   function stopPoll(): void {
     if (timer === null) return
@@ -191,38 +185,48 @@
   function startPoll(): void {
     stopPoll()
     pollStartedAt = Date.now()
-    answersAtStart = messages.filter((message) => message.role === 'assistant').length
     timer = setInterval(() => {
       void poll()
     }, POLL_INTERVAL)
   }
 
+  /**
+   * The service owns the queue, so the answer to "is this sent?" is the prompt's
+   * own state: once it is done or failed the transcript is re-read and the
+   * waiting strip goes away. A prompt that stays claimed simply keeps waiting.
+   */
   async function poll(): Promise<void> {
     if (Date.now() - pollStartedAt > POLL_LIMIT) {
       stopPoll()
       return
     }
+    if (queued.length === 0) {
+      stopPoll()
+      return
+    }
     try {
-      const transcript = await api.messages(threadId, { limit: MESSAGE_LIMIT })
-      const items = transcript.items
-      const answered =
-        items.filter((message) => message.role === 'assistant').length > answersAtStart
-      messages = items
-      if (answered) {
-        stopPoll()
-        // The stored turns replace the local copies, so nothing is said twice.
-        queued = []
+      const states = await Promise.all(queued.map((prompt) => api.prompt(prompt.id)))
+      const settled = states.filter(
+        (prompt) => prompt.state === 'done' || prompt.state === 'failed'
+      )
+      if (settled.length > 0) {
+        const transcript = await api.messages(threadId, { limit: MESSAGE_LIMIT })
+        messages = transcript.items
         thread = await api.thread(threadId)
+        queued = queued.filter((prompt) => !settled.some((done) => done.id === prompt.id))
+        await scrollToEnd()
+      } else {
+        queued = states
       }
-      await scrollToEnd()
+      if (queued.length === 0) stopPoll()
     } catch {
       // A poll that cannot reach the service is not worth a banner; the next
       // tick tries again, and the two minute limit ends the wait either way.
     }
   }
 
-  function handleQueued(turn: QueuedTurn): void {
-    queued = [...queued, turn]
+  function handleQueued(turn: { prompt: Prompt; body: string }): void {
+    queued = [...queued, turn.prompt]
     void scrollToEnd()
     startPoll()
   }
@@ -283,11 +287,6 @@
       {#each rows as row (row.key)}
         {#if row.kind === 'marker'}
           <p class="marker" in:arrive>{row.label}</p>
-        {:else if row.kind === 'queued'}
-          <div class="queued" in:arrive>
-            <p class="turn-user">{row.turn.body}</p>
-            <span class="chip">Queued</span>
-          </div>
         {:else if row.message.role === 'user'}
           <p class="turn-user" in:arrive>{row.message.body}</p>
         {:else}
@@ -310,7 +309,8 @@
 
   <div class="slot">
     {#if threadId.length > 0}
-      <Composer {threadId} {thread} {project} onqueued={handleQueued} />
+      {#if queued.length > 0}<QueuedStrip prompts={queued} />{/if}
+      <Composer {threadId} {thread} {project} working={queued.length > 0} onqueued={handleQueued} />
     {/if}
   </div>
 
@@ -349,17 +349,6 @@
   /* Assistant prose keeps the author's line breaks without reading raw HTML. */
   .answer p {
     white-space: pre-wrap;
-  }
-
-  .queued {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.375rem;
-  }
-
-  .queued .turn-user {
-    width: 100%;
   }
 
   .skeleton-block {
