@@ -18,6 +18,7 @@
   import {
     ACTION_SUMMARY_INPUT_KEY,
     isOpaqueId,
+    resolveToolCall,
     toolActionLabel,
     toolTitleRestatesInput
   } from '$shared/tool-action-label'
@@ -128,7 +129,12 @@
   )
   const failed = $derived(part.state.status === 'error')
 
-  const inputPreview = $derived(formatInput(part.state.input))
+  /** The tool the call actually reached. A harness that routes every MCP call
+   *  through one meta-tool reports the wrapper, and the real tool sits in the
+   *  arguments, so the glyph, the label and the row's subject all read here. */
+  const call = $derived(resolveToolCall(part.tool, part.state.input))
+
+  const inputPreview = $derived(formatInput(call.input))
   /** The tool-kind glyph: washed out with the row, brighter on hover. */
   const kindIconClass = 'shrink-0 text-dimmed transition-colors group-hover/tool:text-muted'
   const toolKind = $derived.by(() => {
@@ -137,12 +143,12 @@
     // them must not be read as the tool's subject. `cio_todo_write` is not a
     // file write, and the reader should see the app's mark on the call rather
     // than a glyph that says otherwise.
-    if (isCioToolName(part.tool)) return 'cio'
+    if (isCioToolName(call.tool)) return 'cio'
     // Code mode outranks the name heuristics: a call a script made can carry
     // any inner tool name (read, bash, an MCP call), and it belongs to the
     // code-mode glyph wherever the harness reports it as such.
     if (part.codeMode === true || isCodeModeToolName(part.tool)) return 'code'
-    const name = part.tool.toLowerCase().replace(/[-_\s]/g, '')
+    const name = call.tool.toLowerCase().replace(/[-_\s]/g, '')
     if (name.includes('websearch') || name.includes('webfetch')) return 'web'
     if (
       name.includes('search') ||
@@ -195,12 +201,19 @@
    * The row's action label.
    *
    * Normally the snapshot the main process stamped when the call was first seen.
-   * A row recorded before that snapshot existed has none, so it is derived here,
-   * and only for the rows whose harness title cannot stand in for it.
+   * A row recorded before that snapshot existed has none, so it is derived here.
+   * The harness title is handed to the deriver, which keeps a title that labels
+   * the call and names the action for one that only restates an argument.
    */
   const actionLabel = $derived(
     part.actionLabel ??
-      (titleIsSubject ? toolActionLabel({ tool: part.tool, input: part.state.input }) : undefined)
+      toolActionLabel({
+        tool: part.tool,
+        input: part.state.input,
+        title: part.state.title,
+        output: part.state.output,
+        codeMode: part.codeMode
+      })
   )
 
   const codeModeLabel = $derived(
@@ -238,10 +251,17 @@
    * argument a reader can actually use.
    */
   function formatInput(input: Record<string, unknown>): string {
-    for (const [name, value] of Object.entries(input)) {
-      // The label field IS the row's label, so repeating it as the subject
-      // would make the row say the same words twice.
-      if (name === ACTION_SUMMARY_INPUT_KEY) continue
+    // The label field IS the row's label, so repeating it as the subject would
+    // make the row say the same words twice.
+    const entries = Object.entries(input).filter(([name]) => name !== ACTION_SUMMARY_INPUT_KEY)
+    // A bare number names nothing beside the label: antigravity lists a read's
+    // line range before its path, and `Read : 100` is not the file that was
+    // read. Numbers are only the subject when the call has nothing else.
+    const ordered = [
+      ...entries.filter(([, value]) => typeof value !== 'number'),
+      ...entries.filter(([, value]) => typeof value === 'number')
+    ]
+    for (const [, value] of ordered) {
       const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
       if (!text || (typeof value === 'string' && isOpaqueId(value))) continue
       // A value the label already names is the same words twice: `Used the

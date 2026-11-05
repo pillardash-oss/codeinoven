@@ -95,7 +95,10 @@ const SHORT_TOOL_LABELS: Array<{ match: RegExp; label: string }> = [
     label: 'Write'
   },
   { match: /^(?:read|readfile|readfiles|cat|view|viewfile)$/u, label: 'Read' },
-  { match: /^(?:ls|listdir|listfiles|list)$/u, label: 'List' },
+  {
+    match: /^(?:ls|listdir|listdirs|listfiles|list|listdirectory|listfolders|listfolder)$/u,
+    label: 'List'
+  },
   {
     match: /^(?:grep|glob|find|search|searchfiles|ripgrep|rg|findbyname)$/u,
     label: 'Search'
@@ -176,6 +179,31 @@ function shortToolLabel(tool: string): string | undefined {
 const SKILL_TOOL_NAME =
   /^(?:skills?|useskill|loadskill|readskill|invokeskill|activateskill|skilltool|skillread|dispatcheskill)$/u
 
+/**
+ * Tool names a harness uses as one meta-tool for every MCP tool it can reach.
+ *
+ * Antigravity routes every gateway and MCP call through `call_mcp_tool` and
+ * carries the real tool in the arguments, so a trace that reads the reported
+ * name names the wrapper and never the tool that ran.
+ */
+const MCP_META_TOOL_NAME =
+  /^(?:callmcptool|mcptool|mcpcall|calltool|usemcptool|invokemcptool|mcpinvoke)$/u
+
+/** Input fields naming the real tool behind an MCP meta-tool call. */
+const MCP_TARGET_INPUT_KEYS = ['ToolName', 'tool_name', 'toolName', 'tool', 'name', 'toolId']
+
+/** Input fields carrying the real tool's own arguments. */
+const MCP_ARGUMENT_INPUT_KEYS = ['Arguments', 'arguments', 'args', 'input', 'parameters']
+
+/**
+ * Tool names for a harness's background-task manager.
+ *
+ * Antigravity's `manage_task` checks on and stops a task the CLI spawned, so
+ * the `task` in its name is a process, not a sub-agent the agent delegated to.
+ */
+const BACKGROUND_TASK_TOOL_NAME =
+  /^(?:managetask|taskmanage|taskstatus|taskkill|killtask|stoptask|listtasks)$/u
+
 /** True when a call loaded a skill's instructions. */
 export function isSkillToolName(tool: string): boolean {
   return SKILL_TOOL_NAME.test(bareToolName(tool))
@@ -219,6 +247,38 @@ function skillName(input: Record<string, unknown>, output: string | undefined): 
   if (!header) return undefined
   const named = header.match(SKILL_OUTPUT_NAME)?.[1] ?? header.match(SKILL_OUTPUT_HEADING)?.[1]
   return named?.trim() || undefined
+}
+
+/** A plain object value, when the field holds one. */
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** The tool that actually ran, and the arguments it ran with. */
+export interface ResolvedToolCall {
+  tool: string
+  input: Record<string, unknown>
+}
+
+/**
+ * The tool a call actually reached.
+ *
+ * A harness that routes every MCP tool through one meta-tool reports the
+ * wrapper and puts the real tool in the arguments. Everything that reads a call
+ * (its label, its row subject, its glyph) goes through here, so no reader has to
+ * know which harness does that.
+ */
+export function resolveToolCall(
+  tool: string,
+  input: Record<string, unknown> = {}
+): ResolvedToolCall {
+  if (!MCP_META_TOOL_NAME.test(bareToolName(tool))) return { tool, input }
+  const target = MCP_TARGET_INPUT_KEYS.map((key) => input[key]).find(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0
+  )
+  if (!target) return { tool, input }
+  const args = MCP_ARGUMENT_INPUT_KEYS.map((key) => input[key]).find(isRecordValue)
+  return { tool: target.trim(), input: args ?? {} }
 }
 
 /**
@@ -367,6 +427,15 @@ export function patternActionPhrase(tool: string): string | undefined {
   return TOOL_ACTION_PATTERNS.find(({ match }) => match.test(tool))?.label
 }
 
+/** What a background-task manager call did, in the words the call carries. */
+function backgroundTaskLabel(input: Record<string, unknown>): string {
+  const raw = input['Action'] ?? input['action']
+  const action = typeof raw === 'string' ? raw.toLowerCase() : ''
+  if (/kill|stop|cancel|terminate/.test(action)) return 'Stopped a background task'
+  if (/list/.test(action)) return 'Listed background tasks'
+  return 'Checked a background task'
+}
+
 /** What a friendly action label is derived from. */
 export interface ToolActionLabelSource {
   tool: string
@@ -392,7 +461,10 @@ export interface ToolActionLabelSource {
  * by repeating a nested name.
  */
 export function toolActionLabel(source: ToolActionLabelSource): string | undefined {
-  const input = source.input ?? {}
+  // A meta-tool call is named by the tool it reached, never by the wrapper.
+  const call = resolveToolCall(source.tool, source.input ?? {})
+  const tool = call.tool
+  const input = call.input
   // A harness title wins when it labels the call. When it only restates an
   // argument, it is the row's subject and the action still has to be named.
   const title = source.title?.trim()
@@ -401,7 +473,7 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
   // reader wants, so it outranks every name-shaped guess below it.
   const summary = actionSummaryLabel(input)
   if (summary) return capitalizeActionPhrase(summary)
-  const appKey = appToolKey(source.tool)
+  const appKey = appToolKey(tool)
   if (appKey && UTILITY_ACTIVATE_TOOL_KEYS.has(appKey)) {
     const name = utilityName(input)
     return name ? `Activated the ${name} utility` : 'Activated a utility'
@@ -421,22 +493,27 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
   if (source.codeMode === true) return undefined
   // A skill call is the agent loading instructions for how to do the work, and
   // the skill's own name is the only label that says which work it loaded for.
-  if (isSkillToolName(source.tool)) {
+  if (isSkillToolName(tool)) {
     const skill = skillName(input, source.output)
     return skill ? `Used the ${humanizeName(skill)} skill` : 'Used a skill'
   }
   // Two interaction shapes keep their own words wherever they come from: a
   // harness's question tool and a harness's task-list tool are the same act
   // whichever name the harness gave them.
-  if (isQuestionToolName(source.tool)) return 'Asked a question'
-  if (isTodoToolName(source.tool)) return 'Updated the task list'
+  if (isQuestionToolName(tool)) return 'Asked a question'
+  if (isTodoToolName(tool)) return 'Updated the task list'
+  if (BACKGROUND_TASK_TOOL_NAME.test(bareToolName(tool))) return backgroundTaskLabel(input)
   const stated = modelLabel(input)
   if (stated) return capitalizeActionPhrase(stated)
   // The core primitives say everything in their own name, see SHORT_TOOL_LABELS.
-  const short = shortToolLabel(source.tool)
+  const short = shortToolLabel(tool)
   if (short) return short
-  const phrase = patternActionPhrase(source.tool)
-  return phrase ? capitalizeActionPhrase(phrase) : undefined
+  const phrase = patternActionPhrase(tool)
+  if (phrase) return capitalizeActionPhrase(phrase)
+  // A meta-tool call still has to name the MCP tool it reached, even when that
+  // tool's own name is not one this app has words for.
+  if (tool !== source.tool) return `Used the ${humanizeName(tool)} MCP tool`
+  return undefined
 }
 
 /**
