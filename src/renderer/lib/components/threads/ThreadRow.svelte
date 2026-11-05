@@ -54,6 +54,7 @@
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
+  import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
@@ -571,6 +572,10 @@
     // fact about the thread that asked, so it shows on a project thread, a chat
     // and an assistant task alike, and it persists after the run settles.
     if (orchestrationCoordinatorState.hasDispatched(thread.id)) live.push('orchestrator')
+    // The delegation mark: this thread spawned pawn agents, which live on threads
+    // of their own and are therefore never rows of their own. The pawn board is
+    // where those threads are listed, so the row has to say they exist.
+    if (pawnAgentsState.hasWorkers(thread.id)) live.push('pawn')
     return live
   })
 

@@ -26,6 +26,7 @@
   import { pipState } from '$lib/stores/pip.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
+  import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -313,6 +314,9 @@
     // thread is what dispatched the runs, so an assistant task that started work
     // elsewhere never reads as an ordinary task.
     if (orchestrationCoordinatorState.hasDispatched(task.id)) live.push('orchestrator')
+    // A pawn the task's own thread spawned lives on a thread of its own, so the
+    // task row is the only list spot that can say the delegated work exists.
+    if (pawnAgentsState.hasWorkers(task.id)) live.push('pawn')
     return live
   })
   /** The authored-work sessions this thread has entered, in canonical order, so
