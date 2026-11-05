@@ -20,7 +20,7 @@
     isOpaqueId,
     resolveToolCall,
     toolActionLabel,
-    toolTitleRestatesInput
+    toolTitleLabelsCall
   } from '$shared/tool-action-label'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
@@ -194,7 +194,8 @@
    * the action belongs (`Shell : <command>` is the row a reader wants).
    */
   const titleIsSubject = $derived(
-    !!part.state.title?.trim() && toolTitleRestatesInput(part.state.title, part.state.input)
+    !!part.state.title?.trim() &&
+      !toolTitleLabelsCall(part.state.title, part.tool, part.state.input)
   )
 
   /**

@@ -80,14 +80,14 @@ const SHORT_TOOL_LABELS: Array<{ match: RegExp; label: string }> = [
   {
     // Every harness's shell: pi's `bash`, opencode's `shell`, codex's
     // `command_execution`, Claude Code's `Bash`, Antigravity's `run_command`,
-    // Cline's `run_commands`, and the Windows shells.
+    // Cline's `run_commands` and `execute_command`, and the Windows shells.
     match:
-      /^(?:bash|shell|sh|zsh|cmd|powershell|pwsh|exec|execute|terminal|command|commandexecution|runcommand|runcommands)$/u,
+      /^(?:bash|shell|sh|zsh|cmd|powershell|pwsh|exec|execute|terminal|command|commandexecution|executecommand|runcommand|runcommands)$/u,
     label: 'Shell'
   },
   {
     match:
-      /^(?:edit|edits|editfile|editfiles|multiedit|strreplace|strreplaceeditor|applypatch|patch|filechange|fileedit|notebookedit|editor|replacefilecontent)$/u,
+      /^(?:edit|edits|editfile|editfiles|multiedit|strreplace|strreplaceeditor|applypatch|applydiff|patch|filechange|fileedit|notebookedit|editor|replacefilecontent|replaceinfile)$/u,
     label: 'Edit'
   },
   {
@@ -104,6 +104,20 @@ const SHORT_TOOL_LABELS: Array<{ match: RegExp; label: string }> = [
     label: 'Search'
   }
 ]
+
+/**
+ * Exact tool names whose act its spelling never says.
+ *
+ * A harness invents these for one act each, so a pattern built from shell and
+ * file vocabulary reads them wrongly or not at all.
+ */
+const NAMED_TOOL_PHRASES: Record<string, string> = {
+  attemptcompletion: 'Finished the task',
+  toolsearch: 'Searched for a tool',
+  accessmcpresource: 'Read an MCP resource',
+  loadmcpdocumentation: 'Read the MCP docs',
+  planmoderespond: 'Answered in plan mode'
+}
 
 /**
  * The field an agent fills with, in its own words, what the call accomplishes.
@@ -350,6 +364,37 @@ export function toolTitleRestatesInput(title: string, input: Record<string, unkn
   return false
 }
 
+/**
+ * True when a harness title only repeats the tool's own name.
+ *
+ * Muse falls back to the raw tool name as the title of a call the CLI gave no
+ * description for, and Cline keeps the tool name as the title of a partial call.
+ * That title is the harness naming the tool, never the action it performed, so it
+ * must not win over the label derived from the same name.
+ */
+export function toolTitleRepeatsToolName(title: string, tool: string): boolean {
+  const stated = comparableText(title)
+  if (!stated) return false
+  return stated === comparableText(tool) || stated === comparableText(bareToolName(tool))
+}
+
+/**
+ * True when a harness title actually labels the call, in words of its own.
+ *
+ * The one question a reader of a tool part asks of its title: is this the action,
+ * or is it the command, the path, or the tool's own name written again?
+ */
+export function toolTitleLabelsCall(
+  title: string | undefined,
+  tool: string,
+  input: Record<string, unknown>
+): boolean {
+  const trimmed = title?.trim()
+  if (!trimmed) return false
+  if (toolTitleRestatesInput(trimmed, input)) return false
+  return !toolTitleRepeatsToolName(trimmed, tool)
+}
+
 /** Turn an identifier into words: `svelte-autofixer` reads as "Svelte Autofixer". */
 function humanizeName(value: string): string {
   return value
@@ -468,7 +513,14 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
   // A harness title wins when it labels the call. When it only restates an
   // argument, it is the row's subject and the action still has to be named.
   const title = source.title?.trim()
-  if (title && !toolTitleRestatesInput(title, input)) return undefined
+  if (
+    title &&
+    !toolTitleRestatesInput(title, input) &&
+    !toolTitleRepeatsToolName(title, tool) &&
+    !toolTitleRepeatsToolName(title, source.tool)
+  ) {
+    return undefined
+  }
   // The action summary is the model saying what this call is for, in the words a
   // reader wants, so it outranks every name-shaped guess below it.
   const summary = actionSummaryLabel(input)
@@ -508,10 +560,15 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
   // The core primitives say everything in their own name, see SHORT_TOOL_LABELS.
   const short = shortToolLabel(tool)
   if (short) return short
+  // The names a harness invented for one act, which no pattern can read.
+  const named = NAMED_TOOL_PHRASES[bareToolName(tool)]
+  if (named) return named
   const phrase = patternActionPhrase(tool)
   if (phrase) return capitalizeActionPhrase(phrase)
-  // A meta-tool call still has to name the MCP tool it reached, even when that
-  // tool's own name is not one this app has words for.
+  // A namespaced name is an MCP tool this app has no words for, and a meta-tool
+  // call still has to name the tool it reached: the reader sees what ran.
+  const segments = toolNameSegments(tool)
+  if (segments.length > 1) return `Used the ${humanizeName(segments.at(-1) ?? tool)} MCP tool`
   if (tool !== source.tool) return `Used the ${humanizeName(tool)} MCP tool`
   return undefined
 }
