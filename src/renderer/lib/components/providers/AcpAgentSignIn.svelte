@@ -166,9 +166,4 @@
       </p>
     </div>
   {/if}
-
-  <p class="text-[0.625rem] leading-relaxed text-dimmed">
-    Providers and models belong to {harnessName}: they appear in this thread's model picker as soon
-    as the agent answers a session, and {harnessName}'s own settings stay the place to manage them.
-  </p>
 </div>

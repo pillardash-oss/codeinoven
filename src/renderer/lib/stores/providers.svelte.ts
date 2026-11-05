@@ -143,6 +143,7 @@ class ProviderStore {
     return this.providers.filter(
       (provider) =>
         provider.integration === 'ready' &&
+        provider.enabled !== false &&
         // ACP agents own their endpoint; they still belong in this list because
         // a custom provider can be scoped to the harness the user added.
         (provider.supportsCustomProviders || provider.transport === 'acp')
