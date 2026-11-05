@@ -30,7 +30,7 @@
   let checking = $state(false)
   let busyMethod = $state('')
   let error = $state('')
-  let notice = $state('')
+  let warning = $state('')
 
   const authenticated = $derived(status?.state === 'authenticated')
   const methods = $derived<AcpAuthMethod[]>(status?.methods ?? [])
@@ -67,12 +67,15 @@
     if (busyMethod) return
     busyMethod = method.id
     error = ''
-    notice = ''
+    warning = ''
     try {
       status = await invoke('acpAgents:authenticate', harnessId, method.id, projectPath)
-      notice =
+      // A finished method that leaves the agent refusing a session is the one
+      // result worth a line of text: it means the agent wants something the app
+      // cannot supply, and the status row alone would read as success.
+      warning =
         status.state === 'authenticated'
-          ? `${method.name} finished. ${harnessName} is signed in.`
+          ? ''
           : `${method.name} finished, but ${harnessName} still refuses a session.`
     } catch (authError) {
       error =
@@ -115,25 +118,27 @@
     </p>
   {/if}
 
-  {#if notice}
-    <p class="border border-success/30 bg-success/10 px-3 py-2 text-xs text-success" role="status">
-      {notice}
+  {#if warning}
+    <p class="border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning" role="status">
+      {warning}
     </p>
   {/if}
 
-  {#if status?.detail && !authenticated && !error}
-    <p class="border bg-surface px-3 py-2 text-[0.6875rem] leading-relaxed text-muted">
-      <span class="font-medium text-foreground">{harnessName} said:</span>
-      {status.detail}
+  {#if authenticated}
+    <!-- A signed-in agent has nothing to sign in to: the methods are the answer to
+         an unauthenticated session, so listing them beside a green check offered a
+         button for a job already done. -->
+    <p class="text-[0.6875rem] leading-relaxed text-muted">
+      {harnessName} speaks for its own providers and models, and they are already available in the model
+      picker. Signing in again only matters when the agent stops accepting a session; Check will say so
+      and offer the methods again.
     </p>
-  {/if}
-
-  {#if methods.length > 0}
+  {:else if methods.length > 0}
     <div class="overflow-hidden border bg-surface">
       <div
         class="border-b bg-elevated px-3 py-2 text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
       >
-        Sign-in methods {harnessName} accepts
+        Sign in to {harnessName}
       </div>
       {#each methods as method (method.id)}
         <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
@@ -146,22 +151,26 @@
             {/if}
           </div>
           <button
-            class="flex h-7 shrink-0 items-center gap-1.5 bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            class="flex h-8 shrink-0 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             type="button"
             title="Sign in to {harnessName} with {method.name}"
             disabled={busyMethod !== ''}
             onclick={() => void authenticate(method)}
           >
-            {#if busyMethod === method.id}<CioSpinner size={11} class="animate-spin" />{/if}
-            <CioKey size={11} /> Sign in
+            {#if busyMethod === method.id}<CioSpinner size={12} class="animate-spin" />{/if}
+            <CioKey size={12} /> Sign in
           </button>
         </div>
       {/each}
     </div>
   {:else if !checking}
-    <div class="border border-dashed px-3 py-4 text-center">
-      <p class="text-xs text-muted">
-        {harnessName} declares no sign-in methods. It may need no sign-in at all, or its credentials live
+    <div
+      class="flex flex-col items-center justify-center gap-2 border border-dashed px-4 py-8 text-center"
+    >
+      <CioKey size={20} class="text-dimmed" aria-hidden="true" />
+      <p class="text-sm font-medium text-foreground">No sign-in to run</p>
+      <p class="max-w-96 text-xs leading-relaxed text-muted">
+        {harnessName} declares no sign-in methods. It may need none at all, or it keeps its credentials
         in its own settings.
       </p>
     </div>

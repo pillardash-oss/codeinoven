@@ -877,25 +877,20 @@
     </div>
 
     {#if activeTab === 'acp' && acpAgentsStore.settings !== null && agentCount === 0}
-      <div class="flex flex-wrap items-center justify-between gap-4 border border-dashed p-6">
-        <div class="flex min-w-0 items-start gap-3">
-          <CioPlug size={20} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
-          <div class="min-w-0">
-            <p class="text-sm font-medium">No ACP agents yet</p>
-            <p class="mt-0.5 text-xs text-muted">
-              An ACP agent runs any harness that speaks the Agent Client Protocol. You add one with
-              the command that starts it.
-            </p>
-          </div>
-        </div>
+      <div class="border border-dashed p-6 text-center">
+        <CioPlug size={17} class="mx-auto mb-1.5 text-dimmed" aria-hidden="true" />
+        <p class="text-sm font-medium text-foreground">No ACP agents yet</p>
+        <p class="mx-auto mt-1 max-w-96 text-xs leading-relaxed text-muted">
+          An ACP agent is any harness you already have that speaks the Agent Client Protocol. You
+          add one with the command that starts it, and its models join the picker.
+        </p>
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="mt-2.5 flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary mx-auto transition-colors hover:bg-primary-hover"
           title="Add an ACP agent"
           onclick={() => acpAgentsStore.openNew()}
         >
-          <CioPlus size={13} />
-          Add agent
+          <CioPlus size={12} /> Add agent
         </button>
       </div>
     {:else}
