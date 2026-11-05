@@ -5,22 +5,23 @@
   import Mark from '#lib/components/Mark.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
   import TitleMenu from '#lib/components/TitleMenu.svelte'
-  import { toneColor } from '#lib/api/status'
   import { arrive } from '#lib/motion'
+  import { toneColor } from '#lib/api/status'
   import type { Project, Thread } from '#lib/api/types'
   import type { PageData } from './$types'
 
   /**
-   * The work list read as projects, the way the desktop panel draws it: one
-   * foldable strip per project, and that project's threads inside the strip when
-   * it is open. The strip itself is the whole control, so reading a project
-   * never leaves this list.
+   * The work list read as projects, drawn the way the design draws the desktop
+   * sidebar on a phone: one foldable strip per project, its identity and the
+   * states that exist right now, and the project's threads inside it when it is
+   * open. The strip is the whole control, so reading a project never leaves this
+   * list.
    */
   interface StatusEntry {
     count: number
     label: string
-    tone: string
-    toneName: string
+    tone: 'working' | 'needs' | 'spec'
+    color: string
   }
 
   let { data }: { data: PageData } = $props()
@@ -58,11 +59,11 @@
       {
         count: counts.attention,
         label: 'need attention',
-        tone: toneColor('attention'),
-        toneName: 'attention'
+        tone: 'needs',
+        color: toneColor('attention')
       },
-      { count: counts.spec, label: 'have a spec ready', tone: toneColor('spec'), toneName: 'spec' },
-      { count: counts.working, label: 'working', tone: toneColor('working'), toneName: 'working' }
+      { count: counts.spec, label: 'have a spec ready', tone: 'spec', color: toneColor('spec') },
+      { count: counts.working, label: 'working', tone: 'working', color: toneColor('working') }
     ]
     return entries.filter((entry) => entry.count > 0)
   }
@@ -81,40 +82,45 @@
     <p class="empty">No projects yet.</p>
   {:else}
     {#each data.projects as project (project.id)}
-      <button
-        class="project-strip"
-        type="button"
-        aria-expanded={open.has(project.id)}
-        aria-controls={panelId(project.id)}
-        onclick={() => toggle(project.id)}
-        in:arrive
-      >
-        <Mark {project} size={28} />
-        <span class="strip-cell">
-          <span class="strip-name">{project.name}</span>
-        </span>
-        <span class="strip-state">
-          {#each statuses(project) as entry (entry.toneName)}
-            <span class="strip-pip" style:color={entry.tone}>
-              <i class="dot" style:background={entry.tone} aria-hidden="true"></i>{entry.count}
-              <span class="sr-only">{entry.label}</span>
+      <section class="strip" data-open={open.has(project.id)} in:arrive>
+        <div class="strip-head">
+          <button
+            class="strip-toggle"
+            type="button"
+            aria-expanded={open.has(project.id)}
+            aria-controls={panelId(project.id)}
+            onclick={() => toggle(project.id)}
+          >
+            <span class="strip-id">
+              <CioChevronDown class="strip-caret" size={14} />
+              <Mark {project} size={28} />
+              <span class="strip-name">{project.name}</span>
             </span>
-          {/each}
-        </span>
-        <span class="strip-more"><CioChevronDown size={15} class="strip-caret" /></span>
-      </button>
-
-      {#if open.has(project.id)}
-        <div class="project-threads" id={panelId(project.id)}>
-          {#if threadsOf(project.id).length === 0}
-            <p class="project-empty">No threads yet</p>
-          {:else}
-            {#each threadsOf(project.id) as thread (thread.id)}
-              <ThreadRow {thread} />
-            {/each}
-          {/if}
+            {#if statuses(project).length > 0}
+              <span class="strip-state">
+                {#each statuses(project) as entry (entry.tone)}
+                  <span style:color={entry.color}>
+                    <i class="dot" data-tone={entry.tone}></i>{entry.count}
+                    <span class="sr-only">{entry.label}</span>
+                  </span>
+                {/each}
+              </span>
+            {/if}
+          </button>
         </div>
-      {/if}
+
+        {#if open.has(project.id)}
+          <div class="strip-body" id={panelId(project.id)}>
+            {#if threadsOf(project.id).length === 0}
+              <p class="project-empty">No threads yet</p>
+            {:else}
+              {#each threadsOf(project.id) as thread (thread.id)}
+                <ThreadRow {thread} variant="strip" />
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </section>
     {/each}
   {/if}
 </div>

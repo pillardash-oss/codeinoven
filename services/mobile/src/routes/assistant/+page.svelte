@@ -4,18 +4,18 @@
   import { api, ApiError } from '#lib/api/client'
   import { formatAge } from '#lib/api/status'
   import type { Assistant } from '#lib/api/types'
-  import Mark from '#lib/components/Mark.svelte'
+  import AssistantMark from '#lib/components/AssistantMark.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import { fold } from '#lib/motion'
 
   /**
-   * Assistants. A phone lists them and opens one to see what it does; creating,
-   * scheduling and editing stay on the desktop, because that is where the work
-   * they run on lives.
+   * Assistants, drawn the way the design draws them: each one carries its own
+   * mark, the schedule and the work it produced on the line under its name, and
+   * the state it last ran in below that. Creating, scheduling and editing stay on
+   * the desktop, because that is where the work they run on lives.
    *
-   * Scheduled ones come first, because a run that starts itself is the one that
-   * matters, and a scheduled assistant folds open to what it does and how much it
-   * has produced.
+   * A scheduled assistant folds open to what it does, and a manual one is a row
+   * because it has no schedule to explain.
    */
 
   type Filter = 'all' | 'scheduled' | 'manual'
@@ -55,21 +55,19 @@
   let groups = $derived([
     {
       id: 'scheduled',
-      label: 'Scheduled',
       rows: visible
         .filter((assistant) => assistant.scheduled)
         .sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
     },
     {
       id: 'manual',
-      label: 'On demand',
       rows: visible
         .filter((assistant) => !assistant.scheduled)
         .sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0))
     }
   ])
 
-  function subtitle(assistant: Assistant): string {
+  function line(assistant: Assistant): string {
     const origin = assistant.scheduled
       ? (assistant.scheduleName ?? 'Scheduled')
       : 'Starts when you ask'
@@ -82,7 +80,7 @@
   }
 </script>
 
-<PanelBar title="Assistant" count={assistants.length} />
+<PanelBar title="Assistant" />
 
 <div class="tabs" role="group" aria-label="Filter assistants">
   <button
@@ -107,7 +105,7 @@
     aria-pressed={filter === 'manual'}
     onclick={() => (filter = 'manual')}
   >
-    On demand
+    Manual
   </button>
 </div>
 
@@ -124,54 +122,74 @@
   {:else}
     {#each groups as group (group.id)}
       {#if group.rows.length > 0}
-        <p class="section-label">{group.label}</p>
-        {#each group.rows as assistant (assistant.id)}
-          {@const open = opened[assistant.id] === true}
-          <div class="assistant-row">
-            <button
-              class="thread-row"
-              type="button"
-              aria-expanded={assistant.scheduled ? open : undefined}
-              onclick={() => (assistant.scheduled ? toggle(assistant.id) : undefined)}
-            >
-              <span class="thread-mark">
-                <Mark project={assistant} size={24} />
-              </span>
-              <span class="thread-cell">
-                <span class="thread-name">{assistant.name}</span>
-                <span class="thread-meta">{subtitle(assistant)}</span>
-              </span>
-              <span class="thread-age">
-                {assistant.lastRunAt ? formatAge(assistant.lastRunAt) : ''}
-              </span>
-              {#if assistant.scheduled}
+        <section class="section">
+          {#each group.rows as assistant (assistant.id)}
+            {@const open = opened[assistant.id] === true}
+            {#if assistant.scheduled}
+              <button
+                class="row"
+                type="button"
+                aria-expanded={open}
+                onclick={() => toggle(assistant.id)}
+              >
+                <AssistantMark {assistant} size={36} />
+                <span class="body-cell">
+                  <span class="row-title">{assistant.name}</span>
+                  <span class="row-line">{line(assistant)}</span>
+                  <span class="row-meta">
+                    <span class="state">
+                      <i class="dot" data-tone={assistant.paused ? 'needs' : 'done'}></i>
+                      {assistant.paused ? 'paused' : 'done'}
+                    </span>
+                    <span class="age">
+                      {assistant.lastRunAt ? formatAge(assistant.lastRunAt) : 'never'}
+                    </span>
+                  </span>
+                </span>
                 <CioChevronDown class="chev" size={16} />
-              {/if}
-            </button>
+              </button>
 
-            {#if assistant.scheduled && open}
-              <div class="detail" transition:fold>
-                <p class="run"><span>{assistant.description}</span></p>
-                <p class="run">
-                  <span>Work produced</span>
-                  <em
-                    >{assistant.threadCount === 1
-                      ? '1 thread'
-                      : `${assistant.threadCount} threads`}</em
-                  >
-                </p>
-                <p class="run">
-                  <span>Last run</span>
-                  <em>{assistant.lastRunAt ? formatAge(assistant.lastRunAt) : 'never'}</em>
-                </p>
-                <p class="run">
-                  <span>State</span>
-                  <em>{assistant.paused ? 'paused' : 'ready'}</em>
-                </p>
+              {#if open}
+                <div class="detail" transition:fold>
+                  <p class="run"><span>{assistant.description}</span></p>
+                  <p class="run">
+                    <span>Work produced</span>
+                    <em>
+                      {assistant.threadCount === 1
+                        ? '1 thread'
+                        : `${assistant.threadCount} threads`}
+                    </em>
+                  </p>
+                  <p class="run">
+                    <span>Last run</span>
+                    <em>{assistant.lastRunAt ? formatAge(assistant.lastRunAt) : 'never'}</em>
+                  </p>
+                  <p class="run">
+                    <span>State</span>
+                    <em>{assistant.paused ? 'paused' : 'ready'}</em>
+                  </p>
+                </div>
+              {/if}
+            {:else}
+              <div class="row">
+                <AssistantMark {assistant} size={36} />
+                <span class="body-cell">
+                  <span class="row-title">{assistant.name}</span>
+                  <span class="row-line">{line(assistant)}</span>
+                  <span class="row-meta">
+                    <span class="state">
+                      <i class="dot" data-tone={assistant.paused ? 'needs' : 'done'}></i>
+                      {assistant.paused ? 'paused' : 'done'}
+                    </span>
+                    <span class="age">
+                      {assistant.lastRunAt ? formatAge(assistant.lastRunAt) : 'never'}
+                    </span>
+                  </span>
+                </span>
               </div>
             {/if}
-          </div>
-        {/each}
+          {/each}
+        </section>
       {/if}
     {/each}
   {/if}

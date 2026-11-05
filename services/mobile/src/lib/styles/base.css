@@ -51,6 +51,8 @@
 
   --gutter: 1.25rem;
   --mark: 2.25rem;
+  /* Where a row's separator starts: the text column, past the leading mark. */
+  --row-inset: calc(var(--gutter) + var(--mark) + 0.875rem);
 }
 
 html.dark {
@@ -259,7 +261,8 @@ body {
 .btn:focus-visible,
 .send:focus-visible,
 .dockitem:focus-visible,
-.thread-row:focus-visible {
+.row:focus-visible,
+.strip-toggle:focus-visible {
   outline: 2px solid var(--color-foreground);
   outline-offset: -2px;
 }

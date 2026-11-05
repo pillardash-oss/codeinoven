@@ -13,7 +13,7 @@ weight 200, 2px corners, hairline rules, and the handcrafted icon set from
 | Screen       | Read and write                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------- |
 | Sign-in      | Google and GitHub through the system browser, email and password as the fallback         |
-| Threads      | Every thread of the project in scope, pinned first, each row carrying its project's mark |
+| Threads      | Every thread across every project, pinned first, each row carrying its project's mark    |
 | Projects     | One foldable strip per project; opening a strip reads its threads in place               |
 | Chats        | The chats panel; this service does not carry chats yet, and the screen says so           |
 | New thread   | A name and a project, created through `POST /v1/threads`, then opened                    |

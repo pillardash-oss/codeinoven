@@ -7,10 +7,11 @@
   import type { PageData } from './$types'
 
   /**
-   * The work list read as threads: every thread across every project, newest and
-   * most urgent first, grouped only by which ones are pinned. Projects is the
-   * other reading of this same list, and the header's title switches between
-   * them, so this screen never grows a second list.
+   * The work list read as threads: every thread across every project, pinned
+   * first and then newest and most urgent, each row carrying its project's mark
+   * because no heading above it names the project. Projects is the other reading
+   * of this same list, and the header's title switches between them, so this
+   * screen never grows a second list.
    *
    * A long list is drawn as it is scrolled, because a hundred and twenty rows
    * laid out at once is a stall on a phone, not a list.
@@ -36,9 +37,6 @@
         })
       : data.threads
   )
-
-  let pinned = $derived(filtered.filter((thread) => thread.pinned))
-  let recent = $derived(filtered.filter((thread) => !thread.pinned))
 
   function projectOf(id: string) {
     return data.projects.find((project) => project.id === id) ?? null
@@ -117,14 +115,7 @@
   {:else if filtered.length === 0}
     <p class="empty">{query ? 'No thread matches that name' : 'No threads yet.'}</p>
   {:else}
-    {#if pinned.length > 0}
-      <p class="section-label">Pinned</p>
-      {#each pinned as thread (thread.id)}
-        <ThreadRow {thread} project={projectOf(thread.projectId)} />
-      {/each}
-    {/if}
-
-    {#each recent.slice(0, Math.max(0, shown - pinned.length)) as thread (thread.id)}
+    {#each filtered.slice(0, shown) as thread (thread.id)}
       <ThreadRow {thread} project={projectOf(thread.projectId)} />
     {/each}
   {/if}

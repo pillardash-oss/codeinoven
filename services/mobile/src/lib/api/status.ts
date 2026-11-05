@@ -59,6 +59,24 @@ export function statusSkin(status: ThreadStatus): StatusSkin {
   return SKINS[status] ?? SKINS.created
 }
 
+/**
+ * The states whose spine continues under the mark. A run that is still going,
+ * or parked on the person, is joined to the row beneath it; work that has ended
+ * closes the line, which is how the desktop draws a strip's run.
+ */
+const SPINE_STATES: ReadonlySet<ThreadStatus> = new Set<ThreadStatus>([
+  'created',
+  'planning',
+  'awaiting_approval',
+  'spec',
+  'executing',
+  'interrupted'
+])
+
+export function showsSpine(status: ThreadStatus): boolean {
+  return SPINE_STATES.has(status)
+}
+
 /** The colour a tone draws in, read by name from the app's palette. */
 export function toneColor(tone: StatusTone): string {
   switch (tone) {
