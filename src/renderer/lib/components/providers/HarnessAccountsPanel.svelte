@@ -148,11 +148,21 @@
     return (siblingCounts.get(`${account.harnessId}\u0000${account.providerId}`) ?? 0) > 1
   }
 
-  /** Whether any of this account's windows is at or above 90% used. */
+  /**
+   * Whether an account is close to running out, measured on the window that
+   * lasts longest: a 5-hour session at 95% resets within the hour, while the
+   * weekly or monthly allowance at 80% is what actually runs out first in the
+   * user's day. Reaching 100% is at the limit, which also reports here.
+   */
+  const NEAR_LIMIT_PERCENT = 80
+
   function isNearLimit(account: HarnessAccount): boolean {
-    return (harnessAccountUsageCache.snapshotFor(account.id)?.usage?.rateLimits ?? []).some(
-      (window) => (quotaPercent(window) ?? 0) >= 90
+    const windows = harnessAccountUsageCache.snapshotFor(account.id)?.usage?.rateLimits ?? []
+    if (windows.length === 0) return false
+    const longest = windows.reduce((widest, window) =>
+      (window.windowMinutes ?? 0) > (widest.windowMinutes ?? 0) ? window : widest
     )
+    return (quotaPercent(longest) ?? 0) >= NEAR_LIMIT_PERCENT
   }
 
   const filteredRows = $derived.by(() => {
@@ -610,7 +620,7 @@
       </button>
     </div>
 
-    <div class="flex flex-wrap items-center gap-2">
+    <div class="sticky top-0 z-20 flex flex-wrap items-center gap-2 bg-app py-1.5">
       <div
         class="flex flex-wrap items-center gap-0.5 border bg-elevated p-0.5"
         role="group"

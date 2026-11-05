@@ -1,6 +1,8 @@
 <script lang="ts">
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import { prefersReducedMotion } from 'svelte/motion'
   import { SvelteSet } from 'svelte/reactivity'
+  import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import type { HarnessAccount } from '$shared/types'
@@ -34,7 +36,7 @@
     {@const hiddenCount = group.accounts.filter((account) => account.hidden === true).length}
     <button
       type="button"
-      class="sticky top-0 z-10 flex w-full items-center gap-1.5 border-y bg-surface px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+      class="flex w-full items-center gap-1.5 border-y bg-surface px-2.5 py-1.5 text-left transition-colors hover:bg-elevated lg:sticky lg:top-0 lg:z-10"
       aria-expanded={!folded.has(group.harnessId)}
       title={`${folded.has(group.harnessId) ? 'Unfold' : 'Fold'} the ${group.harnessName} accounts`}
       onclick={() => toggleGroup(group.harnessId)}
@@ -56,66 +58,73 @@
         {group.accounts.length}{hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}
       </span>
     </button>
-    {#each folded.has(group.harnessId) ? [] : group.accounts as account (account.id)}
-      <button
-        type="button"
-        class="block w-full border-l-2 px-3.5 py-2 text-left transition-colors {account.id ===
-        selectedId
-          ? 'border-accent bg-elevated'
-          : 'border-transparent hover:bg-elevated/60'}"
-        aria-current={account.id === selectedId ? 'true' : undefined}
-        title={`Open ${account.label}`}
-        onclick={() => onselect(account)}
+    {#if !folded.has(group.harnessId)}
+      <div
+        class="overflow-hidden"
+        transition:slide={{ duration: prefersReducedMotion.current ? 0 : 160 }}
       >
-        <span class="flex min-w-0 items-center gap-1.5">
-          <span
-            class="truncate text-xs font-semibold {account.hidden
-              ? 'text-muted'
-              : 'text-foreground'}">{account.label}</span
+        {#each group.accounts as account (account.id)}
+          <button
+            type="button"
+            class="block w-full border-l-2 px-3.5 py-2 text-left transition-colors {account.id ===
+            selectedId
+              ? 'border-accent bg-elevated'
+              : 'border-transparent hover:bg-elevated/60'}"
+            aria-current={account.id === selectedId ? 'true' : undefined}
+            title={`Open ${account.label}`}
+            onclick={() => onselect(account)}
           >
-          {#if account.isDefault}
-            <span
-              class="shrink-0 border border-accent/45 bg-accent/10 px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-accent"
-              title="Default account for this provider"
-            >
-              Default
+            <span class="flex min-w-0 items-center gap-1.5">
+              <span
+                class="truncate text-xs font-semibold {account.hidden
+                  ? 'text-muted'
+                  : 'text-foreground'}">{account.label}</span
+              >
+              {#if account.isDefault}
+                <span
+                  class="shrink-0 border border-accent/45 bg-accent/10 px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-accent"
+                  title="Default account for this provider"
+                >
+                  Default
+                </span>
+              {/if}
+              {#if account.hidden}
+                <span
+                  class="shrink-0 border bg-surface px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
+                  title="Hidden from account pickers, still connected"
+                >
+                  Hidden
+                </span>
+              {/if}
+              {#if isExpired(account)}
+                <span
+                  class="shrink-0 border border-danger/45 bg-danger/10 px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
+                  title="The harness sign-in for this account expired"
+                >
+                  Sign in
+                </span>
+              {/if}
+              {#if isCodeInOvenCustomProviderId(account.providerId)}
+                <span
+                  class="shrink-0 border bg-surface px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
+                  title="Custom base URL provider"
+                >
+                  Custom
+                </span>
+              {/if}
             </span>
-          {/if}
-          {#if account.hidden}
             <span
-              class="shrink-0 border bg-surface px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
-              title="Hidden from account pickers, still connected"
+              class="mt-0.5 block truncate text-[0.625rem] text-muted"
+              title={`${group.harnessName} · ${account.providerName || account.providerId}`}
             >
-              Hidden
+              {account.providerName || account.providerId}
             </span>
-          {/if}
-          {#if isExpired(account)}
-            <span
-              class="shrink-0 border border-danger/45 bg-danger/10 px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
-              title="The harness sign-in for this account expired"
-            >
-              Sign in
+            <span class="block">
+              <HarnessAccountGlance {account} />
             </span>
-          {/if}
-          {#if isCodeInOvenCustomProviderId(account.providerId)}
-            <span
-              class="shrink-0 border bg-surface px-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
-              title="Custom base URL provider"
-            >
-              Custom
-            </span>
-          {/if}
-        </span>
-        <span
-          class="mt-0.5 block truncate text-[0.625rem] text-muted"
-          title={`${group.harnessName} · ${account.providerName || account.providerId}`}
-        >
-          {account.providerName || account.providerId}
-        </span>
-        <span class="block">
-          <HarnessAccountGlance {account} />
-        </span>
-      </button>
-    {/each}
+          </button>
+        {/each}
+      </div>
+    {/if}
   {/each}
 </div>
