@@ -8,8 +8,13 @@
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type { Snippet } from 'svelte'
+  import { onDestroy } from 'svelte'
   import SeekBar from './SeekBar.svelte'
   import { SvelteMap } from 'svelte/reactivity'
+  import {
+    mediaPlayheadState,
+    type MediaPlayheadCheckpoint
+  } from '$lib/stores/media-playhead.svelte'
   import { preloadNearViewport } from './preload-near-viewport'
 
   /**
@@ -87,6 +92,16 @@
     /** The file's name, which names every control here. */
     label: string
     /**
+     * The media's own url, when it is not the url the element loads.
+     *
+     * A local file is resolved to a streaming url part way through a mount, so
+     * the element's source is not a stable name for the recording. The same
+     * recording is drawn by two players (the conversation and the viewer), and
+     * the frame one leaves for the other is filed under this key, which is the
+     * url both of them know it by.
+     */
+    sourceKey?: string
+    /**
      * Where playback starts, in seconds.
      *
      * The inline player hands over the frame it had reached, so opening the
@@ -150,6 +165,7 @@
   let {
     src,
     label,
+    sourceKey,
     startAt,
     onExpand,
     onError,
@@ -165,6 +181,18 @@
   }: Props = $props()
 
   let video = $state<HTMLVideoElement | null>(null)
+  /**
+   * The second this element should land on once it can seek.
+   *
+   * The element's metadata can arrive more than once, because a local file's
+   * source is swapped to a streaming url mid-mount and because a read that failed
+   * is repaired in place. Each of those reloads the element and resets its clock,
+   * so a position applied only on the first `loadedmetadata` is lost on the
+   * second, and the recording jumps back to where it was handed over. The value
+   * here is the newest second this player knows about, so a reload restores the
+   * reader's own place instead of the hand-over one.
+   */
+  let lastKnownSeconds: number | null = null
   /** Intrinsic width/height, as soon as this element's metadata reports it. */
   let measuredRatio = $state<number | null>(null)
   let playing = $state(false)
@@ -215,6 +243,56 @@
   const inlineBoxStyle = $derived(
     fit === 'fill' ? undefined : `aspect-ratio: ${ratio}; width: 100%`
   )
+
+  /** The recording this player is drawing, which both of its surfaces agree on. */
+  const playheadKey = $derived(sourceKey ?? src)
+
+  /**
+   * Leave this player's frame for the surface that draws the same recording.
+   *
+   * Only the fullscreen surface publishes. It is the one the reader is looking at
+   * while the conversation's own player sits paused behind it, so its clock is
+   * the authority for as long as it is open, and the player left behind takes the
+   * frame up when that surface goes away.
+   */
+  function publishPlayhead(): void {
+    if (fit !== 'fill') return
+    const element = video
+    if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return
+    mediaPlayheadState.handBack(playheadKey, element.currentTime, !element.paused && !element.ended)
+  }
+
+  onDestroy(() => {
+    clearTimeout(seekTimer)
+    publishPlayhead()
+  })
+
+  /**
+   * Take up the frame the fullscreen surface was closed on.
+   *
+   * The checkpoint is applied once per record, so the reader's own presses stay
+   * authoritative afterwards. Playback is only continued when this player was
+   * already in use: a recording mounted for the first time and merely carrying an
+   * old frame must not start playing in a conversation the reader is scrolling.
+   */
+  let adoptedCheckpoint: MediaPlayheadCheckpoint | null = null
+  $effect(() => {
+    if (fit === 'fill') return
+    const checkpoint = mediaPlayheadState.checkpoint(playheadKey)
+    const element = video
+    const known = duration
+    if (!checkpoint || !element || known <= 0 || adoptedCheckpoint === checkpoint) return
+    adoptedCheckpoint = checkpoint
+    const target = Math.min(checkpoint.seconds, Math.max(0, known - 0.05))
+    // A whole second of drift is worth a seek; a frame or two is not, and the
+    // element's own clock is the better authority when the two nearly agree.
+    if (Math.abs(target - element.currentTime) > 1) {
+      element.currentTime = target
+      currentTime = target
+      lastKnownSeconds = target
+    }
+    if (checkpoint.playing && started && element.paused) void element.play().catch(() => {})
+  })
 
   /** `m:ss.cc`: hundredths, so moving one frame is visible in the readout. */
   function timecode(seconds: number): string {
@@ -388,6 +466,7 @@
     started = false
     duration = 0
     currentTime = 0
+    lastKnownSeconds = 0
     video?.load()
   }
 
@@ -436,12 +515,17 @@
           measuredRatios.set(src, measuredRatio)
         }
         duration = element.duration
-        // A caller that opened this from an inline player hands over the frame it
-        // had reached; playback resumes there rather than at the beginning.
-        if (startAt && startAt > 0 && startAt < element.duration) {
-          element.currentTime = startAt
-          currentTime = startAt
+        // The frame to land on: the second this player already knows (its own, on
+        // a reload, or the hand-over one on the first metadata), so a source that
+        // was repaired in place does not throw the reader back to where the
+        // recording was opened.
+        const resume = lastKnownSeconds ?? (startAt !== undefined && startAt > 0 ? startAt : null)
+        if (resume !== null && resume > 0 && resume < element.duration) {
+          element.currentTime = resume
+          currentTime = resume
+          onTime?.(resume)
         }
+        lastKnownSeconds = resume
         if (autoPlay) void element.play().catch(() => {})
       }}
       ondurationchange={(event) => {
@@ -451,22 +535,30 @@
       ontimeupdate={(event) => {
         if (scrubbing) return
         currentTime = event.currentTarget.currentTime
+        lastKnownSeconds = currentTime
         onTime?.(currentTime)
       }}
       onseeked={(event) => {
         settleSeek()
         if (scrubbing) return
         currentTime = event.currentTarget.currentTime
+        lastKnownSeconds = currentTime
         onTime?.(currentTime)
       }}
       onplay={() => {
         playing = true
         started = true
       }}
-      onpause={() => (playing = false)}
+      onpause={() => {
+        playing = false
+        // A pause is where the reader leaves the recording, so it is the frame the
+        // conversation's own player takes up as soon as this surface closes.
+        if (!scrubbing) publishPlayhead()
+      }}
       onended={() => {
         playing = false
         currentTime = duration
+        publishPlayhead()
       }}
       onerror={(event) => {
         seekInFlight = false
