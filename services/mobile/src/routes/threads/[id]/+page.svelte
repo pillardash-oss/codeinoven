@@ -8,7 +8,7 @@
   import { api, ApiError } from '#lib/api/client'
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
   import { arrive } from '#lib/motion'
-  import type { Message, Thread } from '#lib/api/types'
+  import type { Message, Project, Thread } from '#lib/api/types'
 
   /**
    * One thread, read on a phone. The screen has three parts and no fourth: what
@@ -34,6 +34,8 @@
   let threadId = $derived(page.params.id ?? '')
 
   let thread = $state<Thread | null>(null)
+  /** The thread's project, so the composer can name where a message is written. */
+  let project = $state<Project | null>(null)
   let messages = $state<Message[]>([])
   let queued = $state<QueuedTurn[]>([])
   let loading = $state(true)
@@ -60,7 +62,9 @@
     thread
       ? [
           { label: 'Status', value: statusSkin(thread.status).label },
-          { label: 'Project', value: thread.projectId },
+          { label: 'Project', value: project?.name ?? thread.projectId },
+          ...(thread.model ? [{ label: 'Model', value: thread.model }] : []),
+          ...(thread.harness ? [{ label: 'Harness', value: thread.harness }] : []),
           { label: 'Messages', value: String(thread.messageCount) },
           { label: 'Created', value: formatAge(thread.createdAt) },
           { label: 'Updated', value: formatAge(thread.updatedAt) }
@@ -139,6 +143,15 @@
     return cause instanceof ApiError ? cause.message : 'Cannot reach CodeInOven right now.'
   }
 
+  /** The project is one quiet read: a failure leaves the composer without it. */
+  function loadProject(id: string): void {
+    if (id.length === 0) return
+    api
+      .project(id)
+      .then((next) => (project = next))
+      .catch(() => (project = null))
+  }
+
   async function load(): Promise<void> {
     if (threadId.length === 0) {
       loading = false
@@ -154,6 +167,7 @@
       ])
       thread = nextThread
       messages = transcript.items
+      loadProject(nextThread.projectId)
     } catch (cause) {
       error = failure(cause)
     } finally {
@@ -296,7 +310,7 @@
 
   <div class="slot">
     {#if threadId.length > 0}
-      <Composer {threadId} onqueued={handleQueued} />
+      <Composer {threadId} {thread} {project} onqueued={handleQueued} />
     {/if}
   </div>
 

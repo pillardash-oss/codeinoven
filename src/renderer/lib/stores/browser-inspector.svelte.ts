@@ -230,11 +230,27 @@ already have come and gone, which is why the list is watched rather than read
     return this.armed.has(tabId)
   }
 
-  /** The pins this tab's page draws, in the composer's own numbering. */
+  /**
+   * The pins this tab's page draws, in the composer's own numbering.
+   *
+   * The conversation that owns the tab is asked first, because that is the list
+   * its composer shows. A design screen tab has an id derived from the screen,
+   * so opening the same screen from another conversation moves the tab there
+   * while the comments already written stay with the conversation that wrote
+   * them. Asking only the owner made those comments unpinnable the moment it
+   * happened, with no page left that could bring them back, so a tab whose owner
+   * holds nothing is answered by whichever conversation does hold comments for
+   * it.
+   */
   markersFor(tabId: string): BrowserInspectorMarker[] {
     const owner = this.ownerOf(tabId)
-    if (!owner) return []
-    return this.markersForOwner(owner, tabId)
+    if (owner) {
+      const owned = this.markersForOwner(owner, tabId)
+      if (owned.length > 0) return owned
+    }
+    return responseReferencesState
+      .forTab(tabId)
+      .flatMap(({ projectId, threadId }) => this.markersForOwner({ projectId, threadId }, tabId))
   }
 
   /** The pins one conversation's references draw on one tab. */
@@ -280,17 +296,26 @@ already have come and gone, which is why the list is watched rather than read
     const editing = this.editing.get(tabId)
     if (!editing) return null
     const owner = this.ownerOf(tabId)
-    if (!owner) return null
-    const reference = responseReferencesState
-      .forThread(owner.projectId, owner.threadId)
-      .find((candidate) => candidate.id === editing.referenceId)
-    if (!reference) return null
+    const reference = owner
+      ? responseReferencesState
+          .forThread(owner.projectId, owner.threadId)
+          .find((candidate) => candidate.id === editing.referenceId)
+      : undefined
+    // The tab can have been re-scoped to another conversation since the comment
+    // was written (a screen tab's id is derived from the screen, so one screen
+    // opened twice is one tab). The comment belongs to the conversation that
+    // wrote it, and that is the one its edit has to land in, so a miss against
+    // the owner falls back to wherever the reference actually lives rather than
+    // closing a bubble the reader is looking at.
+    const held = reference ? null : responseReferencesState.findById(editing.referenceId)
+    const found = reference ?? held?.reference
+    if (!found) return null
     return {
       referenceId: editing.referenceId,
       anchor: editing.anchor,
-      projectId: owner.projectId,
-      threadId: owner.threadId,
-      reference
+      projectId: owner && reference ? owner.projectId : (held?.projectId ?? owner?.projectId ?? ''),
+      threadId: owner && reference ? owner.threadId : (held?.threadId ?? owner?.threadId ?? ''),
+      reference: found
     }
   }
 
@@ -611,11 +636,12 @@ already have come and gone, which is why the list is watched rather than read
     this.armed.add(tabId)
     const theme = this.themeTokens()
     await invoke('browser:inspectSetArmed', tabId, true, theme ?? undefined)
-    // A reopened page's tab can be newer than the sidebar's own tab list, so the
-    // pins come from the conversation the caller named rather than from a lookup
-    // of the tab. Without an owner there is nothing to publish and the pins arrive
-    // with the page's own state report.
-    if (owner) await invoke('browser:inspectMarkers', tabId, this.markersForOwner(owner, tabId))
+    // The pins come from every place a comment on this tab can live, not only from
+    // the conversation that owns the tab now: a screen tab keeps its id across a
+    // re-scope, and the comment being focused was written by another conversation.
+    // Markers the session can name at all are published here, so a reopened page
+    // never waits for a state report to draw them.
+    if (owner) await invoke('browser:inspectMarkers', tabId, this.markersFor(tabId))
     await invoke('browser:inspectFocus', tabId, referenceId, true)
   }
 
@@ -700,17 +726,29 @@ already have come and gone, which is why the list is watched rather than read
    * comment whose reference is gone closes with it.
    */
   private onReferencesChanged(projectId: string, threadId: string): void {
-    const references = responseReferencesState.forThread(projectId, threadId)
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
-      if (tab.projectId !== projectId || tab.threadId !== threadId) continue
-      // An open bubble whose reference is gone (removed from the composer) closes
-      // with it, exactly as the page's own card used to.
-      const editing = this.editing.get(tab.id)
-      if (editing && !references.some((reference) => reference.id === editing.referenceId)) {
-        this.editing.delete(tab.id)
+      // Pins are published for every tab of the conversation that changed, and
+      // for a tab whose own owner no longer holds its comments the pass below
+      // is what re-draws them, so this is not gated on the tab's owner.
+      if (tab.projectId === projectId && tab.threadId === threadId) this.publishMarkers(tab.id)
+    }
+    // An open bubble whose reference is gone (removed from the composer) closes
+    // with it, exactly as the page's own card used to. Asked of every
+    // conversation rather than of the tab's owner, because a tab that moved on
+    // from the conversation that wrote the comment must still close when that
+    // comment is removed there.
+    for (const tabId of [...this.editing.keys()]) {
+      const editing = this.editing.get(tabId)
+      if (editing && !responseReferencesState.findById(editing.referenceId)) {
+        this.editing.delete(tabId)
       }
-      this.publishMarkers(tab.id)
+    }
+    for (const tab of contextSidebarState.browserTabs) {
+      if (tab.kind !== 'browser') continue
+      if (this.ownerOf(tab.id) === null && responseReferencesState.forTab(tab.id).length > 0) {
+        this.publishMarkers(tab.id)
+      }
     }
   }
 
@@ -725,8 +763,12 @@ already have come and gone, which is why the list is watched rather than read
    * never asked about.
    */
   private publishMarkers(tabId: string): void {
-    if (!this.ownerOf(tabId)) return
-    void invoke('browser:inspectMarkers', tabId, this.markersFor(tabId)).catch(() => {})
+    const markers = this.markersFor(tabId)
+    // A tab with no owner and no comments for it is not published at all, so an
+    // unknown tab is never asked about; one the sidebar can still answer for, or
+    // one whose comments live in another conversation, is.
+    if (!this.ownerOf(tabId) && markers.length === 0) return
+    void invoke('browser:inspectMarkers', tabId, markers).catch(() => {})
   }
 
   /** Re-theme every overlay currently on screen after the app theme changed. */

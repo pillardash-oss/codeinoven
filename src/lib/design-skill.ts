@@ -119,6 +119,14 @@ Design interfaces as plain HTML, then look at them in this app while the turn is
 
 ${authoredWorkCheckpointGuidance('design')}
 
+## Going back
+
+The folder keeps its own timeline. Operation \`history\` reads the points it holds: what each one changed, which point the folder sits at now, the number to pass back, every screen the folder has touched with the points that changed it, and, when you name a \`page\`, that screen's own line through the history. A screen's line is real work of its own: one screen can be rewound without moving the rest. Operation \`restore\` moves the folder to one of those points, and \`restore\` with \`page\` rewrites only that screen and leaves every other screen where it is.
+
+Reach for it when your own work went wrong: an edit that broke a layout, a file you removed and meant to keep, a direction the user rejected. Read \`history\` first, restore the point that worked, then continue from there. Restoring captures the state you are leaving before it writes, so the rewind is a step of its own and the board's Undo shows it.
+
+Say which point you restored and what it brought back. Never rebuild an old screen from memory while the timeline holds the state that worked, and never rewind over a change the user made themselves without telling them. When Git already tracks the folder the app keeps no timeline of its own, and both operations say so: the work is in Git, and Git is where you go back.
+
 ## Starting from nothing
 
 First call \`read-contract\`. It reads DESIGN.md or DESIGNS.md case-insensitively at the project root, apps and src, without searching the rest of the tree. Root takes precedence. Read every returned contract and use the applicable one as the design's contract. Read the project's CSS for its actual tokens, fonts and spacing, and components.json when present for the existing component conventions. Reuse those components and tokens.

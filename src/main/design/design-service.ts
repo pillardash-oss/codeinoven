@@ -49,6 +49,12 @@ import { listProjectWorkFolders } from './design-listing'
 import { listDesignScreens } from './design-screens'
 import { readScreenCanvasState, readScreenCanvas, screenCanvasScreen } from './screen-canvas-page'
 import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
+import {
+  resolveDesignRevisionId,
+  summarizeDesignHistory,
+  type DesignHistoryCapabilityResult,
+  type DesignRestoreCapabilityResult
+} from './design-history-capability'
 import { openDesignPreview } from './design-preview-session'
 import { PreviewTargetRegistry } from './preview-target-registry'
 import {
@@ -669,6 +675,99 @@ export class DesignService {
         gitBacked: state.gitBacked
       }
     })
+  }
+
+  /**
+   * The design capability's `history`: the folder's timeline, as an agent reads it.
+   *
+   * Reading captures whatever is on disk first, so a state the app has not seen
+   * becomes a revision before the timeline is answered, and the rewind therefore
+   * has a point to return to. The board reads the same timeline; this is the
+   * agent's own door to it, so a turn that broke a screen can go back without the
+   * user doing it by hand.
+   */
+  async historyCapability(
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>
+  ): Promise<DesignHistoryCapabilityResult> {
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(
+        projectId,
+        threadId,
+        await this.historyDirectory(threadId, input['directory'])
+      )
+      const state = await this.history.state(target, 'agent')
+      const page = input['page']
+      if (typeof page !== 'string' || !page.trim()) return summarizeDesignHistory(state)
+      return summarizeDesignHistory(state, await this.history.pageState(target, requirePath(page)))
+    })
+  }
+
+  /**
+   * The design capability's `restore`: the board's Undo, reachable by an agent.
+   *
+   * Whole folder, or one page when `page` is named, exactly as the two timeline
+   * buttons do. The current state is captured before anything is written, so a
+   * rewind is a step of its own and never a loss.
+   */
+  async restoreCapability(
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>
+  ): Promise<DesignRestoreCapabilityResult> {
+    const page = input['page'] === undefined ? undefined : requirePath(input['page'])
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(
+        projectId,
+        threadId,
+        await this.historyDirectory(threadId, input['directory'])
+      )
+      const before = await this.history.state(target, 'agent')
+      if (before.gitBacked) {
+        throw new Error(
+          'Git already tracks this folder, so the app keeps no timeline to rewind. Read and rewind this folder with Git.'
+        )
+      }
+      const revisionId = resolveDesignRevisionId(before.revisions, input['revision'])
+      if (!revisionId) {
+        throw new Error(
+          `No revision named "${String(input['revision'] ?? '')}" in ${target.directory}. Call the history operation for this folder to read the points it holds, then pass one revision number or revisionId.`
+        )
+      }
+      const point = before.revisions.find((revision) => revision.id === revisionId)
+      const sequence = point?.sequence ?? 0
+      if (page) {
+        const result = await this.history.restoreFile(target, revisionId, page)
+        this.options.onHistoryChanged?.(projectId, target.directory)
+        return {
+          directory: target.directory,
+          restored: { revision: sequence, revisionId, page },
+          history: summarizeDesignHistory(result.history, result.page)
+        }
+      }
+      const restored = await this.history.restore(target, revisionId)
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return {
+        directory: target.directory,
+        restored: { revision: sequence, revisionId },
+        history: summarizeDesignHistory(restored)
+      }
+    })
+  }
+
+  /**
+   * The folder a history or restore call is about.
+   *
+   * An agent that names no folder means the design this thread is working in, not
+   * the root every design lives under: snapshotting the root would put every
+   * other design in the same timeline as this one. The root remains the answer
+   * for a thread that has previewed nothing yet.
+   */
+  private async historyDirectory(threadId: string, directory: unknown): Promise<unknown> {
+    if (directory !== undefined) return directory
+    const current = await this.designs.forThreadViaWorker(threadId)
+    return current?.directory
   }
 
   /** One page's own line through a folder's history. */

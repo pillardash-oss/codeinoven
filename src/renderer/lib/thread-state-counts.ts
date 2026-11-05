@@ -16,8 +16,18 @@ import { threadWorkingForIndicator } from '$lib/components/layout/app-header-thr
 export interface ThreadStateCounts {
   /** Threads producing live work right now. */
   working: number
-  /** Threads that finished and that the user has not opened yet. */
+  /** Distinct threads that finished and that the user has not opened yet. */
   unread: number
+  /**
+   * The ids behind {@link unread}.
+   *
+   * The number alone cannot answer how many rows are unread for a surface that
+   * also holds notices for the same family: one thread raises more than one
+   * notice (its own completed run plus a side chat's response), so the notice
+   * count and this count overlap. Carrying the ids lets the rail count the union
+   * of both sources once per thread instead of guessing with a maximum.
+   */
+  unreadThreadIds: Set<string>
   /** Threads parked on the user (a permission, question, secret, or review). */
   attention: number
   /**
@@ -52,7 +62,22 @@ export interface ThreadStateCounts {
 export type ThreadStateBucket = 'working' | 'attention' | 'spec' | 'retry' | 'error' | 'settled'
 
 export function emptyThreadStateCounts(): ThreadStateCounts {
-  return { working: 0, unread: 0, attention: 0, spec: 0, retry: 0, error: 0 }
+  return {
+    working: 0,
+    unread: 0,
+    unreadThreadIds: new Set(),
+    attention: 0,
+    spec: 0,
+    retry: 0,
+    error: 0
+  }
+}
+
+/** Record one unread thread once: `unread` is the number of distinct threads. */
+function markUnreadThread(counts: ThreadStateCounts, threadId: string): void {
+  if (counts.unreadThreadIds.has(threadId)) return
+  counts.unreadThreadIds.add(threadId)
+  counts.unread += 1
 }
 
 /**
@@ -104,7 +129,7 @@ function addThreadStateCount(counts: ThreadStateCounts, thread: Thread, now: num
   // once), and it is the one unread rule the rail and the strips share: only a
   // completed run nobody has opened is unread, never a failure, a parked card,
   // a ready spec or a run still in flight (see `canMarkThreadUnread`).
-  if (settledThreadReadsUnread(thread, thread.read)) counts.unread += 1
+  if (settledThreadReadsUnread(thread, thread.read)) markUnreadThread(counts, thread.id)
 }
 
 /**
@@ -112,6 +137,10 @@ function addThreadStateCount(counts: ThreadStateCounts, thread: Thread, now: num
  * retry, and error are mutually exclusive: a thread lands in exactly one of
  * them, so a thread is never double-counted. Unread is the separate axis
  * described above.
+ *
+ * Unread counts one thread once however many rows or children stand for it, and
+ * it carries the ids behind the number so a surface holding notices for the same
+ * family can count the union of both sources ({@link ThreadStateCounts.unreadThreadIds}).
  *
  * Error counts every failed thread, read or not. Working reads the same rule the
  * rail's badge does, so a row's badge can never disagree with the rail, and
@@ -196,7 +225,7 @@ export function countThreadStatesByGroup<K>(
     // child only decides whether the row counts once, never twice.
     if (settledThreadReadsUnread(thread, thread.read)) continue
     const counts = groups.get(groupOf(thread))
-    if (counts) counts.unread += 1
+    if (counts) markUnreadThread(counts, thread.id)
   }
   return groups
 }

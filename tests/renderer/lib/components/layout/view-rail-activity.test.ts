@@ -11,7 +11,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  */
 const rail = vi.hoisted(() => ({
   attention: null as { count: number; label: string } | null,
-  unread: null as { count: number; label: string; colors: string[] } | null
+  unread: null as {
+    count: number
+    threadIds: string[]
+    label: string
+    colors: string[]
+  } | null
 }))
 
 vi.mock('$lib/ipc.svelte', () => ({ invoke: vi.fn(), subscribe: vi.fn() }))
@@ -41,13 +46,22 @@ vi.mock('$lib/thread-state-counts', () => ({
   emptyThreadStateCounts: () => ({
     working: 0,
     unread: 0,
+    unreadThreadIds: new Set<string>(),
     attention: 0,
     spec: 0,
     retry: 0,
     error: 0
   }),
   countThreadStatesByGroup: () => new Map(),
-  countThreadStates: () => ({ working: 0, unread: 0, attention: 0, spec: 0, retry: 0, error: 0 })
+  countThreadStates: () => ({
+    working: 0,
+    unread: 0,
+    unreadThreadIds: new Set<string>(),
+    attention: 0,
+    spec: 0,
+    retry: 0,
+    error: 0
+  })
 }))
 
 import { emptyThreadStateCounts } from '$lib/thread-state-counts'
@@ -116,6 +130,38 @@ describe('the rail badge for a view', () => {
     const badges = viewBadgesFor('projects', 'projects', counts({ working: 4 }), NO_TRANSFERS)
     expect(badges.activity?.tone).toBe('working')
     expect(badges.activity?.count).toBe(4)
+  })
+
+  it('counts an unread thread once when a notice and a row report the same thread', () => {
+    rail.unread = {
+      count: 1,
+      threadIds: ['thread-1'],
+      label: '1 unread project',
+      colors: ['var(--color-chat-success)', 'var(--color-success)']
+    }
+    const badges = viewBadgesFor(
+      'projects',
+      'projects',
+      counts({ unread: 1, unreadThreadIds: new Set(['thread-1']) }),
+      NO_TRANSFERS
+    )
+    expect(badges.unread?.count).toBe(1)
+  })
+
+  it('counts two unread threads when each source knows one the other does not', () => {
+    rail.unread = {
+      count: 1,
+      threadIds: ['thread-2'],
+      label: '1 unread project',
+      colors: ['var(--color-success)']
+    }
+    const badges = viewBadgesFor(
+      'projects',
+      'projects',
+      counts({ unread: 1, unreadThreadIds: new Set(['thread-1']) }),
+      NO_TRANSFERS
+    )
+    expect(badges.unread?.count).toBe(2)
   })
 
   it('keeps the project badge on one option only', () => {

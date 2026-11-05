@@ -46,11 +46,15 @@ answers some requests and drops the rest, which reads as a broken app.
 
 The Actions panel carries the same two ends separately, so each keeps its own log:
 **Mobile · Backend** runs `backend-dev.sh` in the foreground, **Mobile · Android App**
-runs `android-app.sh`. Start the backend, then the app. On the command line:
+runs `android-app.sh` and then stays attached to the app's own device log, so the run
+keeps showing what the app does while you use it. Stopping the run ends the log and
+leaves the emulator and the app running. Start the backend, then the app. On the
+command line:
 
 ```sh
 bun run services:mobile:backend             # terminal 1: the service and its log
-bun run services:mobile:app                 # terminal 2: build, install, launch
+bun run services:mobile:app                 # terminal 2: build, install, launch, follow the app log
+bun run services:mobile:app -- --no-follow  # install and launch, then return
 bun run services:mobile:backend -- --seed   # seed the demo account and content first
 bun run services:mobile:app -- --port 8090  # follow a service moved off 8081
 ```
@@ -65,6 +69,11 @@ cd services/mobile && bun run dev   # terminal 2, http://127.0.0.1:5174
 
 The dev server proxies `/api/*` to the backend, so the browser build and the
 native build ask for the same paths.
+
+The Android build needs a JDK 21 or newer. `android-emulator-dev.sh` resolves one
+itself (Android Studio's JBR, then `java_home`, then `CIO_JAVA_HOME`) and prints
+which it chose, because a shell profile that pins an older `JAVA_HOME` makes Gradle
+fail with `invalid source release: 21`.
 
 Sign in with Google, GitHub, or the seeded demo account
 (`bun run services:backend:seed` prints it).
@@ -114,15 +123,15 @@ them.
 
 ## Files that matter
 
-| Path | Owns |
-| --- | --- |
-| `src/app.css` | The whole brand sheet, ported from the approved design |
-| `src/lib/api/client.ts` | The only place a request is built; every screen goes through it |
-| `src/lib/api/types.ts` | The wire types, named exactly like the desktop's |
-| `src/lib/api/status.ts` | Thread status to label, tone, icon and inbox group |
-| `src/lib/stores/session.svelte.ts` | The token, the account, and signing in and out |
-| `src/lib/components/` | The shared chrome: bar, navigation, project mark, thread row |
-| `src/routes/` | Projects, threads, conversation, account, sign-in |
+| Path                               | Owns                                                            |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `src/app.css`                      | The whole brand sheet, ported from the approved design          |
+| `src/lib/api/client.ts`            | The only place a request is built; every screen goes through it |
+| `src/lib/api/types.ts`             | The wire types, named exactly like the desktop's                |
+| `src/lib/api/status.ts`            | Thread status to label, tone, icon and inbox group              |
+| `src/lib/stores/session.svelte.ts` | The token, the account, and signing in and out                  |
+| `src/lib/components/`              | The shared chrome: bar, navigation, project mark, thread row    |
+| `src/routes/`                      | Projects, threads, conversation, account, sign-in               |
 
 `#lib/*` resolves to `src/lib/*` (SvelteKit 3 replaced the `$lib` alias).
 

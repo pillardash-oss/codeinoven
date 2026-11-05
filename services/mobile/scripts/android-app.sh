@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # The phone app alone: boot the emulator, build the web bundle against the running
-# service, install the APK and launch it. The service is not started here, so its
-# log stays in its own terminal.
+# service, install the APK and launch it, then stay attached to the app's own log
+# so the run shows what the app does. The service is not started here, so its log
+# stays in its own terminal.
 #
-#   bun run dev:app                  # against http://10.0.2.2:8081
+#   bun run dev:app                  # against http://10.0.2.2:8081, then follow the log
 #   bun run dev:app -- --port 8090   # against a service running on another port
 #   bun run dev:app -- --no-build    # reinstall the bundle that is already built
+#   bun run dev:app -- --no-follow   # install, launch and return
 set -euo pipefail
 
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -13,9 +15,10 @@ cd "$(dirname "$0")/.."
 
 API_BASE="http://10.0.2.2:8081"
 BUILD=true
+FOLLOW=true
 
 usage() {
-  sed -n '2,8p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
+  sed -n '2,10p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -23,6 +26,7 @@ while [ $# -gt 0 ]; do
     --api) API_BASE="$2"; shift 2 ;;
     --port) API_BASE="http://10.0.2.2:$2"; shift 2 ;;
     --no-build) BUILD=false; shift ;;
+    --no-follow) FOLLOW=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -38,8 +42,11 @@ if ! curl -fsS "http://127.0.0.1:$HOST_PORT/v1/auth/providers" >/dev/null 2>&1; 
   echo "         start the Backend action first, or the app will open with no data." >&2
 fi
 
-if [ "$BUILD" = true ]; then
-  bash scripts/android-emulator-dev.sh --api "$API_BASE"
-else
-  bash scripts/android-emulator-dev.sh --api "$API_BASE" --no-build
+emulator_args=(--api "$API_BASE")
+if [ "$BUILD" = false ]; then
+  emulator_args+=(--no-build)
 fi
+if [ "$FOLLOW" = true ]; then
+  emulator_args+=(--follow)
+fi
+bash scripts/android-emulator-dev.sh "${emulator_args[@]}"

@@ -33,6 +33,10 @@ export interface DesignPreviewExecutorOptions {
     threadId: string,
     input: Record<string, unknown>
   ) => Promise<unknown>
+  /** The folder's timeline, as the design capability's `history` operation answers it. */
+  history: (projectId: string, threadId: string, input: Record<string, unknown>) => Promise<unknown>
+  /** The board's Undo, as the design capability's `restore` operation runs it. */
+  restore: (projectId: string, threadId: string, input: Record<string, unknown>) => Promise<unknown>
   browser: () => BrowserService | null
   record: (input: {
     projectId: string
@@ -83,6 +87,11 @@ export function createDesignPreviewExecutor(
     }
     if (operation === 'checkpoint')
       return options.checkpoint(context.projectId, context.threadId, input)
+    // The timeline the board offers as Undo is the agent's too: a turn that broke
+    // a screen after a checkpoint reads the points with `history` and returns to
+    // one with `restore`, instead of leaving the user to rewind it by hand.
+    if (operation === 'history' || operation === 'restore')
+      return options[operation](context.projectId, context.threadId, input)
     // The board's groups are the user's arrangement of the designs, and the agent
     // reaches them through the same capability as the designs themselves: reading
     // them, and moving designs between them without touching a folder.
@@ -96,7 +105,7 @@ export function createDesignPreviewExecutor(
       )
     if (operation !== 'preview') {
       throw new Error(
-        `The design preview executor handles preview and checkpoint, and no operation named "${operation}".`
+        `The design preview executor handles preview, checkpoint, history and restore, and no operation named "${operation}".`
       )
     }
     const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)

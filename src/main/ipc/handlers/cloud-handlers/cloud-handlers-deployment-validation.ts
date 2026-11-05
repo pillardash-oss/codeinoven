@@ -19,7 +19,13 @@ const CLOUD_DEPLOYMENT_PROVIDER_KINDS = new Set<string>(CLOUD_DEPLOYMENT_PROVIDE
  * in a single tick on the main thread.
  */
 export const OWNERSHIP_SCAN_BATCH = 8
-const CLOUD_DEPLOYMENT_STATUSES = new Set<string>(['building', 'success', 'failed', 'unknown'])
+const CLOUD_DEPLOYMENT_STATUSES = new Set<string>([
+  'building',
+  'success',
+  'failed',
+  'cancelled',
+  'unknown'
+])
 const CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH = 16_384
 
 export function validateCloudDeploymentProviderKind(
@@ -36,7 +42,7 @@ export function validateCloudDeploymentProviderKind(
 
 function validateCloudDeploymentStatus(value: unknown, label: string): CloudDeploymentStatus {
   if (typeof value !== 'string' || !CLOUD_DEPLOYMENT_STATUSES.has(value)) {
-    throw new TypeError(`${label} status must be building, success, failed, or unknown`)
+    throw new TypeError(`${label} status must be building, success, failed, cancelled, or unknown`)
   }
   return value as CloudDeploymentStatus
 }

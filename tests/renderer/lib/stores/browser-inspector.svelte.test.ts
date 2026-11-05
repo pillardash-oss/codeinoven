@@ -212,3 +212,86 @@ describe('the open comment', () => {
     expect(browserInspector.commentFor(TAB)).toBeNull()
   })
 })
+
+describe('a tab that moved to another conversation', () => {
+  /** The same screen opened from a second conversation moves its one tab there. */
+  const OTHER_PROJECT = 'project-two'
+  const OTHER_THREAD = 'thread-two'
+
+  function movedTab(session: Awaited<ReturnType<typeof freshSession>>): void {
+    session.sidebar.contextSidebarState.browserTabs = [
+      { ...tab, projectId: OTHER_PROJECT, threadId: OTHER_THREAD }
+    ]
+  }
+
+  it('still draws the pins of the conversation that wrote the comment', async () => {
+    const session = await freshSession()
+    const { browserInspector, responseReferencesState } = session
+    browserInspector.start()
+    invoke.mockClear()
+    responseReferencesState.setForThread(PROJECT, THREAD, [designReference('marker-one')])
+    movedTab(session)
+    invoke.mockClear()
+
+    expect(browserInspector.markersFor(TAB)).toEqual([
+      { id: 'marker-one', number: 1, comment: '', selector: 'div#otp' }
+    ])
+    browserInspector.focusComment(TAB, 'marker-one')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invoke).toHaveBeenCalledWith('browser:inspectMarkers', TAB, [
+      { id: 'marker-one', number: 1, comment: '', selector: 'div#otp' }
+    ])
+  })
+
+  it('keeps its open comment resolvable, in the conversation that wrote it', async () => {
+    const session = await freshSession()
+    const { browserInspector, responseReferencesState } = session
+    responseReferencesState.setForThread(PROJECT, THREAD, [designReference('marker-one')])
+    browserInspector.start()
+    invoke.mockImplementation((channel: string) =>
+      channel === 'browser:pageState'
+        ? Promise.resolve({
+            tabId: TAB,
+            design: { directory: '.cio/designs/authorize-device', origin: 'http://127.0.0.1:52035' }
+          })
+        : Promise.resolve(undefined)
+    )
+
+    const pick = handlers.get('browser:inspector')
+    pick?.(TAB, {
+      kind: 'open',
+      id: 'marker-one',
+      anchor: { x: 10, y: 20, width: 30, height: 40 }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // The screen is opened again from a second conversation, which takes the
+    // one tab for it with it.
+    movedTab(session)
+
+    const open = browserInspector.commentFor(TAB)
+    expect(open?.referenceId).toBe('marker-one')
+    expect(open?.projectId).toBe(PROJECT)
+    expect(open?.threadId).toBe(THREAD)
+  })
+
+  it('closes the comment when it is removed from the conversation that wrote it', async () => {
+    const session = await freshSession()
+    const { browserInspector, responseReferencesState } = session
+    responseReferencesState.setForThread(PROJECT, THREAD, [designReference('marker-one')])
+    browserInspector.start()
+    movedTab(session)
+    const pick = handlers.get('browser:inspector')
+    pick?.(TAB, {
+      kind: 'open',
+      id: 'marker-one',
+      anchor: { x: 10, y: 20, width: 30, height: 40 }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(browserInspector.commentFor(TAB)).not.toBeNull()
+
+    responseReferencesState.setForThread(PROJECT, THREAD, [])
+    flushSync()
+    expect(browserInspector.commentFor(TAB)).toBeNull()
+  })
+})

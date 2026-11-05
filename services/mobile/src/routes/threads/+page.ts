@@ -1,5 +1,6 @@
 import type { PageLoad } from './$types'
 import { api } from '#lib/api/client'
+import { rememberWorkView } from '#lib/work-view'
 
 /**
  * The thread panel's data. It loads through the router rather than in an effect
@@ -8,6 +9,8 @@ import { api } from '#lib/api/client'
  */
 export const load: PageLoad = async ({ url, parent }) => {
   await parent()
+  // The dock's single work square reopens whichever reading was used last.
+  void rememberWorkView('threads')
   const project = url.searchParams.get('project') ?? ''
   try {
     const [threadPage, projectPage] = await Promise.all([

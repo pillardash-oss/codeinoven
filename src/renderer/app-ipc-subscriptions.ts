@@ -3,6 +3,8 @@ import { appConfirm } from '$lib/stores/app-confirm.svelte'
 import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
+import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { isThreadExecutionActiveStatus } from '$shared/thread-status-policy'
 import {
   captureError,
   errorHeadline,
@@ -264,6 +266,21 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
       clearDraftLabelCookie(thread.id)
     }
     scopeState.updateThread(thread)
+    // A persisted status that no longer means a turn in flight is the one fact
+    // that settles this window's run entry: the turn finalizer writes it when
+    // the turn ends, so an idle event this window never received (a rebound or
+    // replaced session id, a background step that owned the entry, a part that
+    // re-armed busy after the terminal event) must not leave a finished turn
+    // reading as work in progress on the row, the header and the rail. A parked
+    // retry keeps its own entry so its clock survives, and `completeSession`
+    // still yields the entry to a background workflow that owns it.
+    if (
+      thread.status !== 'working-paused' &&
+      !isThreadExecutionActiveStatus(thread.status) &&
+      agentRuns.isBusy(thread.projectId, thread.id)
+    ) {
+      agentRuns.completeSession(thread.projectId, thread.id)
+    }
     const selected = workspaceState.selectedThread
     const onScreen = selected?.projectId === thread.projectId && selected.id === thread.id
     if (onScreen) {

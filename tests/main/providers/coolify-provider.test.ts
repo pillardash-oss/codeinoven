@@ -250,7 +250,7 @@ describe('CoolifyProvider', () => {
       expect(container?.status).toBe('building')
     })
 
-    it('maps a failed deployment to failed', async () => {
+    it('maps a cancelled deployment to cancelled, not failed', async () => {
       fetchMock
         .mockResolvedValueOnce(jsonResponse({ uuid: 'app-1', name: 'My App', status: 'running' }))
         .mockResolvedValueOnce(
@@ -259,9 +259,9 @@ describe('CoolifyProvider', () => {
 
       const container = await makeProvider().getStatus('app-1')
 
-      // A running container whose last deployment failed: the deployment outcome
-      // and the runtime state stay independent.
-      expect(container).toMatchObject({ status: 'failed', runtimeStatus: 'success' })
+      // A stopped deployment is its own outcome: the runtime state says the
+      // container is up, and the cancellation says nothing about the build.
+      expect(container).toMatchObject({ status: 'cancelled', runtimeStatus: 'success' })
     })
   })
 

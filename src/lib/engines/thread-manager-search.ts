@@ -9,7 +9,12 @@ import {
 } from '../../main/database/repositories/thread-repo'
 import { Logger } from '../../main/system/logger'
 import { mergeHybridThreadSearchResults } from '../search/hybrid-merge'
-import { evidenceFtsQuery, hasQueryEvidence } from '../search/query-evidence'
+import {
+  evidenceAnyFtsQuery,
+  queryConceptCoverage,
+  queryConcepts,
+  requiredEvidenceConcepts
+} from '../search/query-evidence'
 import type { IntentThreadMatch } from '../search/types'
 import type { ThreadSearchResult } from '../types'
 
@@ -35,6 +40,22 @@ export type IntentSearchProvider = (
  * "still searching" ceiling: the IPC hop and the row build have to fit after it.
  */
 const INTERACTIVE_SEARCH_DEADLINE_MS = 1200
+
+/**
+ * Tokens of one message the evidence pass reads to judge concept coverage.
+ *
+ * The displayed snippet stays short, but coverage measured over 64 tokens called
+ * a long answer that carried most of the question unmatching, because its
+ * concepts sat past the window.
+ */
+const EVIDENCE_SNIPPET_TOKENS = 400
+
+/** The indexed excerpt a candidate row carries, for coverage scoring. */
+function snippetTextOf(row: unknown): string {
+  if (typeof row !== 'object' || row === null) return ''
+  const snippet = (row as { snippet_text?: unknown }).snippet_text
+  return typeof snippet === 'string' ? snippet : ''
+}
 
 /**
  * Search across thread titles and conversation content (user messages + agent
@@ -146,7 +167,15 @@ export class ThreadSearchService {
     if (!raw) return { results: [], semantic: false }
     const { results: keyword, limit } = await this.keywordSearch(raw, options)
     const provider = this.intentProvider
-    if (!provider) return { results: keyword, semantic: false }
+    // The evidence pass is the part that does not need a model: it re-reads the
+    // index with the query's concepts OR-ed together and keeps the passages that
+    // carry most of them. Running it without a provider is what stops a
+    // sentence-shaped question from being answered with "no threads found" on a
+    // machine where the embedding model is off or unready.
+    if (!provider) {
+      const evidence = await this.conversationEvidence(raw, options, limit)
+      return { results: mergeHybridThreadSearchResults(keyword, evidence, limit), semantic: false }
+    }
 
     let timer: ReturnType<typeof setTimeout> | undefined
     const timedOut = new Promise<null>((resolve) => {
@@ -207,22 +236,40 @@ export class ThreadSearchService {
     options: ThreadSearchOptions,
     limit: number
   ): Promise<ThreadSearchResult[]> {
-    const query = evidenceFtsQuery(raw)
+    const query = evidenceAnyFtsQuery(raw)
     if (!query) return []
-    const built = buildThreadSearchSql(raw, options, this.db.isSearchMetaReady(), query)
+    const required = requiredEvidenceConcepts(queryConcepts(raw).length)
+    const built = buildThreadSearchSql(
+      raw,
+      options,
+      this.db.isSearchMetaReady(),
+      query,
+      EVIDENCE_SNIPPET_TOKENS
+    )
     if (!built.fts) return []
-    // Never scan transcripts or fall back to the main connection for this pass.
+    // The same bounded FTS read the keyword pass runs, with the worker and the
+    // primary connection as its two homes: this is a ranking read, not a
+    // transcript scan, so it follows `keywordSearch`'s degradation instead of
+    // answering "no threads found" on an instance whose worker is down.
     const candidates = await this.db.queryViaWorker(
       built.fts.sql,
       built.fts.params,
-      threadSearchMessageLimit(limit),
-      { allowPrimaryFallback: false }
+      threadSearchMessageLimit(limit) * 2
     )
     if (!candidates.ok) return []
-    const verified = candidates.rows.filter(
-      (row) => typeof row.snippet_text === 'string' && hasQueryEvidence(raw, row.snippet_text)
+    const scored = candidates.rows
+      .map((row) => ({
+        row,
+        coverage: queryConceptCoverage(raw, snippetTextOf(row))
+      }))
+      .filter((candidate) => candidate.coverage >= required)
+      .sort((left, right) => right.coverage - left.coverage)
+    return mergeThreadSearchResults(
+      [],
+      scored.map((candidate) => candidate.row),
+      raw,
+      limit
     )
-    return mergeThreadSearchResults([], verified, raw, limit)
   }
 
   private async keywordSearch(

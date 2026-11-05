@@ -135,12 +135,23 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
     return pendingContinuationRequest(this.root.loadOlderMessages.messages)
   }
 
-  /** Retry after an error or a paused provider retry   replace the live turn first. */
+  /**
+   * Retry after an error or a paused provider retry - replace the live turn first.
+   *
+   * A thread parked on a provider wait is not `busy`: nothing is being produced,
+   * so its run reads as settled while the harness still owns the turn it is
+   * retrying (see `agentRuns.setWaiting`). Retrying on that reading skipped the
+   * abort and the request was steered into the paused run, so the retrying card
+   * stayed up and the message waited in a queue the failed account never drained.
+   * The card on screen is the signal that an attempt is still held, so it replaces
+   * that turn exactly like a busy one does.
+   */
   async retryConnection(): Promise<void> {
     if (this.providerRetrying) return
     this.providerRetrying = true
     try {
-      if (this.root.switchProject.busy) {
+      const pausedTurn = this.root.handleAgentEvent.providerStatus !== null
+      if (this.root.switchProject.busy || pausedTurn) {
         this.userRequestedStop = true
         if (this.root.props.controller) {
           // Controller conversations (temporary chats) run on their own

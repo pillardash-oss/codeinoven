@@ -1,14 +1,17 @@
 <script lang="ts">
-  import { invalidateAll } from '$app/navigation'
+  import { goto, invalidateAll } from '$app/navigation'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
+  import TitleMenu from '#lib/components/TitleMenu.svelte'
   import type { PageData } from './$types'
 
   /**
    * The thread panel: every thread of the project in scope, newest and most
-   * urgent first, grouped only by which ones are pinned. The dock's project
-   * sheet chooses the scope; this screen never grows a second list.
+   * urgent first, grouped only by which ones are pinned. Projects is the other
+   * reading of this same list and the header's title switches between them, so
+   * this screen never grows a second list.
    *
    * A long project is drawn as it is scrolled, because a hundred and twenty rows
    * laid out at once is a stall on a phone, not a list.
@@ -76,11 +79,30 @@
 </script>
 
 <PanelBar
-  title={scope ? scope.name : 'Threads'}
-  subtitle={scope ? `${data.threads.length} threads in this project` : null}
-  count={scope ? null : data.threads.length}
+  title="Threads"
+  subtitle={scope ? `${data.threads.length} threads in ${scope.name}` : null}
 >
+  {#snippet titleControl()}
+    <TitleMenu
+      view="threads"
+      title="Threads"
+      count={scope ? null : data.threads.length}
+      threads={data.threads.length}
+      projects={data.projects.length}
+    />
+  {/snippet}
   {#snippet actions()}
+    {#if scope}
+      <button
+        class="icon-btn"
+        type="button"
+        aria-label="Show threads from every project"
+        title="Show threads from every project"
+        onclick={() => void goto('/threads')}
+      >
+        <CioClose size={20} />
+      </button>
+    {/if}
     <button
       class="icon-btn"
       type="button"

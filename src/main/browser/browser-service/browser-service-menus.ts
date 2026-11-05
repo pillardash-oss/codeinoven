@@ -48,6 +48,7 @@ export interface MenusHost {
   readonly navigateTo: BrowserService['navigateTo']
   readonly openNewTabFor: BrowserService['openNewTabFor']
   readonly openPeekFrom: BrowserService['openPeekFrom']
+  readonly openSideWindow: BrowserService['openSideWindow']
   readonly parkTab: BrowserService['parkTab']
   readonly peekTabs: BrowserService['peekTabs']
   readonly requireTab: BrowserService['requireTab']
@@ -247,6 +248,30 @@ export class BrowserServiceMenus {
                 return
               }
               this.host.openPeekFrom(owner, current, target, frame, point, media ?? null)
+            },
+            openLinkInSidePanel: (url: string): void => {
+              if (this.host.window.isDestroyed()) return
+              let target: string
+              try {
+                target = validateBrowserUrl(url)
+              } catch (error: unknown) {
+                Logger.error('Browser context menu refused a link for the side panel:', error)
+                return
+              }
+              // The rail reveals the window this hosts, exactly as it does for a
+              // page that opens one of its own: opening it here is the whole job.
+              void this.host
+                .openSideWindow(owner, target)
+                .then((popupId) => {
+                  if (popupId !== null || !liveWindowContents(this.host.window)) return
+                  sendToRenderer(liveWindowContents(this.host.window), 'app:toast', {
+                    message: 'This link could not be opened in the side panel.',
+                    type: 'error'
+                  })
+                })
+                .catch((error: unknown) => {
+                  Logger.error('Browser context menu could not open a link beside the page:', error)
+                })
             }
           }
         : {}),

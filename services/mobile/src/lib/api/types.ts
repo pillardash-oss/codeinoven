@@ -88,6 +88,10 @@ export interface Thread {
   pinned: boolean
   archived: boolean
   drafting: boolean
+  /** The model and harness that answer this thread, as the desktop states them
+   *  in its own composer. Both are optional in the store. */
+  model: string | null
+  harness: string | null
   lastError: string | null
   messageCount: number
   lastMessagePreview: string | null

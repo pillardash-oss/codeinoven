@@ -199,3 +199,101 @@
 .head-account:hover {
   background: var(--color-overlay);
 }
+
+/* The list's title is the control that switches the list: threads or projects.
+   The caret sits inside the title's own line, and the menu hangs under it, so the
+   list underneath never moves to make room. */
+.title-switch {
+  position: relative;
+}
+
+.title-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.75rem;
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.title-btn h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-btn svg {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--ink-meta);
+  transition: transform 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.title-btn[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.title-menu {
+  position: absolute;
+  top: 3rem;
+  left: 0;
+  z-index: 30;
+  min-width: 13.5rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  box-shadow: 0 0.75rem 1.5rem -0.75rem rgb(8 24 37 / 0.28);
+}
+
+.title-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.title-menu-item + .title-menu-item {
+  border-top: 1px solid var(--color-border);
+}
+
+.title-menu-item:hover {
+  background: var(--color-elevated);
+}
+
+.title-menu-item svg {
+  flex: none;
+  width: 1.0625rem;
+  height: 1.0625rem;
+  color: var(--color-muted);
+}
+
+.title-menu-item .n {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.title-menu-item .tick {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--color-accent);
+}

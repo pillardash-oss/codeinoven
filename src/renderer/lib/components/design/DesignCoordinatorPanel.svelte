@@ -238,7 +238,10 @@
     {@const copyLabel = board.gallery.video
       ? `Copy the path of this ${board.gallery.noun}`
       : `Copy ${board.gallery.noun} screen: ${screen.name}`}
-    <ContextMenu.Root bind:open={board.menus.menus.card}>
+    <ContextMenu.Root
+      open={board.menus.cardMenuEntry === screen.entry}
+      onOpenChange={(open) => board.menus.setCardMenu(screen.entry, open)}
+    >
       <ContextMenu.Trigger class={full ? 'col-span-full' : ''}>
         <div
           class="flex flex-col overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen

@@ -162,8 +162,9 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ThreadStateC
  * ever double-counted.
  *
  * The unread axis lives inside the same counts: the mark under the activity pill
- * reads `counts[family].unread`, so the rail and every project strip count the
- * same threads on the same rule.
+ * reads the union of `counts[family].unreadThreadIds` and the notices the bell
+ * holds, so the rail and every project strip count the same threads on the same
+ * rule.
  */
 export class ViewRailActivity {
   mediaFor(
@@ -302,9 +303,11 @@ export class ViewRailActivity {
  * it rides the same option the family's badge does, so a view that is working and
  * playing sound shows both without either hiding the other.
  *
- * The unread mark carries the family's unread count, read off the same counts
- * ({@link ThreadStateCounts.unread}), so it counts only a completed run nobody
- * has opened and never doubles as a failure, a parked card, or a ready spec.
+ * The unread mark carries the family's unread count, read as the union of the
+ * notices the bell holds and the unread rows in the family
+ * ({@link ThreadStateCounts.unreadThreadIds}), counted once per thread, so it
+ * never counts one thread twice (a settled turn plus the side chat that answered
+ * on it) and never hides one of two unread threads behind a maximum.
  */
 export function viewBadgesFor(
   optionId: HeaderViewOptionId,
@@ -330,8 +333,17 @@ export function viewBadgesFor(
   // option its activity badge does; Chats and Assistant own their single view.
   const playing = audio.families.has(family)
   const unread = notificationPanelState.unreadRailSummary(family)
-  const threadUnreadCount = counts[family].unread
-  const unreadCount = Math.max(unread?.count ?? 0, threadUnreadCount)
+  // One thread can be unread in both sources the rail reads (its own completed
+  // run, and a side chat that answered on it), and a notice can outlive the row
+  // it reported. Only the union by thread id makes the number on the rail the
+  // number of unread rows behind it: a maximum of two counts that measure
+  // different things both overshot (two notices for one thread) and undershot
+  // (one unread row in the slice, one notice for a row outside it).
+  const unreadThreadIds = [...counts[family].unreadThreadIds]
+  for (const threadId of unread?.threadIds ?? []) {
+    if (!unreadThreadIds.includes(threadId)) unreadThreadIds.push(threadId)
+  }
+  const unreadCount = unreadThreadIds.length
   const unreadBadge: ViewBadge | null =
     unreadCount > 0
       ? {
